@@ -40,6 +40,8 @@ python3 harness/controller.py tick
 
 작업이 READY가 되면 Cloud diff를 받아 임시 bare Git 저장소의 index에 적용한다. 조정기에서 제출된 코드를 checkout하거나 실행하지 않는다. 별도 브랜치와 PR을 만들고 다음 마커를 실제 head SHA에 결합한다.
 
+수집 전에 기록된 작업 ID와 응답의 `environment_id`가 각각 정확히 일치해야 한다. `codex cloud list --env`의 필터나 환경 이름만으로 환경 소속이 확인되었다고 간주하지 않는다. 환경 ID가 누락·null·빈 값이면 상태·diff 조회와 게시를 중단한다. 2026-09-13 실제 CLI 점검에서 다른 환경 이름과 null ID가 반환된 사례를 확인했으므로, 해당 응답 형식에서는 자동 수집을 완료할 수 없다. 환경 생성과 초기화 성공은 작업의 환경 식별이나 제출·수집 전체 경로 검증을 의미하지 않는다.
+
 ```text
 <!-- zeropw:ready-for-review -->
 <!-- zeropw-ready-sha:실제_40자리_commit_SHA -->
@@ -82,6 +84,8 @@ python3 harness/zeropw_harness.py publish --pr PR번호 --sha 검토한_SHA
 조정기는 검토된 하네스 checkout을 유지한다. Cloud 결과를 조정기 작업 디렉터리에 적용하거나 Cloud가 수정한 하네스를 자동으로 실행하지 않는다. 제품 또는 하네스 변경의 자동 병합은 제공하지 않으며, 검증·인수 후 사람이 선택한 버전으로 조정기를 갱신한다.
 
 ## 현재 구현 범위와 근거
+
+2026-09-13에 ZeroPW 전용 Codex Cloud 환경을 생성하고 저장소 checkout, Python 3.12.13, Git·SSH와 초기화 스크립트 실행을 확인했다. 실제 비밀과 사용자 환경변수는 등록하지 않았고 에이전트 인터넷 접근은 꺼 두었다. main에 하네스가 아직 없는 초기 단계에도 환경을 검증할 수 있도록, 현재 환경 설정에는 런타임 확인과 하네스가 있을 때의 격리 모드 컴파일을 인라인으로 지정했다. 테스트는 setup에서 실행하지 않는다. 환경 ID와 실제 설정·검증 근거는 Git에서 제외된 `.zeropw-harness/cloud-environment.json`에 보존한다. Cloud 기본 구현 모델 사용 결정과 실제 작업의 환경 식별 검증은 별도 대기 조건이다.
 
 HTTP 인증 중계 첫 구현 작업 프롬프트는 `prompts/m1-cloud.txt`에 있다. SSH 서명 위임은 다음 구현 단계이며 제품의 핵심 기능에서 제외하지 않는다. 본 하네스는 개발 흐름을 연결하며 원본 키를 격리하는 ZeroPW 제품 자체를 구현한 것은 아니다.
 

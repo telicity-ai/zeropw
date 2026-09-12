@@ -292,10 +292,10 @@ def _find_task(task_id: str, environment: str, run: Callable[..., str]) -> dict[
         for item in items:
             if str(item.get("id")) == task_id:
                 item_env = item.get("environment_id")
-                if item_env is not None and item_env != environment:
+                if not isinstance(item_env, str) or not item_env:
+                    raise CloudRunnerError("cloud task environment_id is unavailable")
+                if item_env != environment:
                     raise CloudRunnerError("cloud task environment mismatch")
-                if item_env is None:
-                    item = {**item, "environment_binding": "list --env filter (task field null)"}
                 return item
         cursor = None if isinstance(page, list) else page.get("cursor", page.get("next_cursor", page.get("nextCursor")))
         if not cursor:

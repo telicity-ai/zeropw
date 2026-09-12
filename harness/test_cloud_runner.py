@@ -36,14 +36,25 @@ def setup_root(folder):
 class CloudRunnerTests(unittest.TestCase):
     def test_cloud_list_cursor_and_environment_binding(self):
         run = FakeRun([
-            ("--cursor next", json.dumps({"tasks": [{"id": "wanted", "environment_id": "env-1"}], "cursor": None})),
-            ("cloud list --env env-1 --json --limit 20", json.dumps({"tasks": [], "cursor": "next"})),
+            ("--cursor next", json.dumps({"tasks": [
+                {"id": "wanted", "environment_id": "env-1"}], "cursor": None})),
+            ("cloud list --env env-1 --json --limit 20", json.dumps({"tasks": [
+                {"id": "unrelated", "environment_id": "other-env"}], "cursor": "next"})),
         ])
         self.assertEqual(c._find_task("wanted", "env-1", run)["id"], "wanted")
         mismatch = FakeRun([("cloud list", json.dumps({
             "tasks": [{"id": "wanted", "environment_id": "other"}], "cursor": None}))])
         with self.assertRaisesRegex(c.CloudRunnerError, "environment mismatch"):
             c._find_task("wanted", "env-1", mismatch)
+
+    def test_target_without_proven_environment_fails_closed(self):
+        for missing_value in (None, "", 123):
+            item = {"id": "wanted"}
+            if missing_value is not None:
+                item["environment_id"] = missing_value
+            run = FakeRun([("cloud list", json.dumps({"tasks": [item], "cursor": None}))])
+            with self.assertRaisesRegex(c.CloudRunnerError, "environment_id is unavailable"):
+                c._find_task("wanted", "env-1", run)
 
     def test_uncertain_submit_blocks_identical_redispatch(self):
         with tempfile.TemporaryDirectory() as td:
@@ -125,10 +136,27 @@ class CloudRunnerTests(unittest.TestCase):
             (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps({
                 "run_id": run_id, "status": "submitted", "task_id": "task-1", "environment": "env-1"
             }))
-            run = FakeRun([("cloud list", json.dumps({"items": [{"id": "task-1"}]})),
+            run = FakeRun([("cloud list", json.dumps({"items": [
+                {"id": "task-1", "environment_id": "env-1"}]})),
                            ("cloud status", "[RUNNING] work")])
             self.assertTrue(c.collect(root, run_id, run)["pending"])
             self.assertFalse(any("cloud diff" in " ".join(x[0]) for x in run.calls))
+
+    def test_collect_stops_before_status_when_environment_id_is_missing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, _ = setup_root(td)
+            run_id = "00000000-0000-0000-0000-000000000011"
+            (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps({
+                "run_id": run_id, "status": "submitted", "task_id": "task-11",
+                "environment": "env-1"
+            }))
+            run = FakeRun([("cloud list", json.dumps({
+                "tasks": [{"id": "task-11", "environment_id": None}], "cursor": None}))])
+            with self.assertRaisesRegex(c.CloudRunnerError, "environment_id is unavailable"):
+                c.collect(root, run_id, run)
+            self.assertFalse(any(any(name in " ".join(call[0])
+                                     for name in ("cloud status", "cloud diff", "git push"))
+                                 for call in run.calls))
 
     def test_missing_task_id_fails_closed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -194,7 +222,8 @@ class CloudRunnerTests(unittest.TestCase):
             record = {"run_id": run_id, "status": "submitted", "task_id": "task-8",
                       "environment": "env-1", "branch": "main", "base_sha": "a" * 40, "pr": None}
             (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps(record))
-            run = FakeRun([("cloud list", json.dumps({"tasks": [{"id": "task-8"}], "cursor": None})),
+            run = FakeRun([("cloud list", json.dumps({"tasks": [
+                {"id": "task-8", "environment_id": "env-1"}], "cursor": None})),
                            ("cloud status", "[READY] done"),
                            (f"harness/cloud-{run_id}", ""),
                            ("cloud diff", "diff --git a/harness/x b/harness/x\n"),
@@ -228,7 +257,8 @@ class CloudRunnerTests(unittest.TestCase):
             pr = {"number": 9, "head": {"sha": head},
                   "body": c.READY + "\n" + c.READY_SHA.format(sha=head) +
                           f"\n<!-- zeropw-run:{run_id} -->"}
-            run = FakeRun([("cloud list", json.dumps({"items": [{"id": "task-5"}]})),
+            run = FakeRun([("cloud list", json.dumps({"items": [
+                {"id": "task-5", "environment_id": "env-1"}]})),
                            ("cloud status", "[READY] done"),
                            (f"refs/heads/{branch}", f"{head}\trefs/heads/{branch}\n"),
                            ("pulls?state=open", json.dumps([pr]))])
