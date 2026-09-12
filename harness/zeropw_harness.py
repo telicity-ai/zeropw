@@ -23,6 +23,8 @@ REPO = "handlecusion/zeropw"
 READY_MARKER = "<!-- zeropw:ready-for-review -->"
 READY_SHA_PREFIX = "<!-- zeropw-ready-sha:"
 MODEL_PREFIX = "claude-opus-5"
+REVIEW_EFFORT = "medium"
+REVIEW_TIMEOUT_SECONDS = 1200
 MAX_FILE_BYTES = 300_000
 MAX_INPUT_BYTES = 2_000_000
 TRUSTED_DOCS = ("docs/product-intent.md", "docs/security-design.md", "docs/harness.md")
@@ -414,13 +416,20 @@ def invoke_claude(snapshot: dict[str, Any], run: Callable[..., str], harness_dir
         raise HarnessError("review prompt too large; refusing truncation")
     with tempfile.TemporaryDirectory(prefix="zeropw-opus-") as cwd:
         argv = [
-            "claude", "-p", "--model", MODEL_PREFIX, "--effort", "high", "--output-format", "stream-json", "--verbose",
+            "claude", "-p", "--model", MODEL_PREFIX, "--effort", REVIEW_EFFORT, "--output-format", "stream-json", "--verbose",
             "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
             "--setting-sources", "", "--settings", '{"disableAllHooks":true}',
             "--disable-slash-commands", "--no-session-persistence", "--json-schema", json.dumps(schema),
             "--system-prompt", DEFAULT_SYSTEM,
         ]
-        raw = run(argv, stdin=payload, cwd=cwd, timeout=600)
+        try:
+            raw = run(argv, stdin=payload, cwd=cwd, timeout=REVIEW_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            partial = exc.stdout if exc.stdout is not None else exc.output
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", errors="replace")
+            atomic_text(raw_path, partial or "")
+            raise HarnessError("review timed out; partial response retained") from exc
     atomic_text(raw_path, raw)
     raw_bytes = raw.encode()
     events = []
@@ -457,6 +466,7 @@ def invoke_claude(snapshot: dict[str, Any], run: Callable[..., str], harness_dir
         "modelUsage": usage, "verified_init_model": init_models[0],
         "verified_assistant_models": assistant_models, "assistant_event_count": len(assistant_raw),
         "model_usage_keys": usage_models,
+        "requested_effort": REVIEW_EFFORT, "timeout_seconds": REVIEW_TIMEOUT_SECONDS,
         "raw_response": {"path": str(raw_path), "sha256": hashlib.sha256(raw_bytes).hexdigest(), "bytes": len(raw_bytes)},
     }
 
@@ -483,14 +493,16 @@ def review(repo: str, number: int, root: Path, run: Callable[..., str] = Command
     except FileExistsError as exc:
         raise HarnessError("review is inflight or crashed; manual reconciliation required") from exc
     try:
-        os.write(fd, json.dumps({"pid": os.getpid(), "started": int(time.time())}).encode()); os.close(fd)
+        os.write(fd, json.dumps({"pid": os.getpid(), "started": int(time.time()), "requested_model": MODEL_PREFIX,
+                                 "requested_effort": REVIEW_EFFORT,
+                                 "timeout_seconds": REVIEW_TIMEOUT_SECONDS}).encode()); os.close(fd)
         digest = snapshot_hash(snapshot)
+        atomic_json(folder / "input.json", snapshot)
         raw_path = folder / "attempt" / "raw-response.jsonl"
         finding, metadata = invoke_claude(snapshot, run, root / "harness", raw_path)
         metadata["raw_response"]["path"] = str(raw_path.relative_to(root))
         record = {"repo": repo, "pr": number, "head_sha": sha, "base_sha": snapshot["base_sha"],
                   "input_sha256": digest, "review": finding, **metadata}
-        atomic_json(folder / "input.json", snapshot)
         atomic_json(result_path, record)
         lock_path.unlink()
         return record

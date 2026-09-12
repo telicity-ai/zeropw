@@ -1,5 +1,6 @@
 import base64
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -193,6 +194,36 @@ class HarnessTests(unittest.TestCase):
         self.assertTrue(kwargs["cwd"].startswith("/"))
         self.assertIn("stream-json", argv)
         self.assertIn("--verbose", argv)
+        self.assertIn(h.REVIEW_EFFORT, argv)
+        self.assertEqual(kwargs["timeout"], h.REVIEW_TIMEOUT_SECONDS)
+
+    def test_timeout_preserves_partial_raw_response(self):
+        partial = '{"type":"system","subtype":"init"}\n'
+        def timeout(_argv, _kwargs):
+            raise subprocess.TimeoutExpired("claude", h.REVIEW_TIMEOUT_SECONDS, output=partial)
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td); trusted_files(folder)
+            raw_path = folder / "attempt" / "raw.jsonl"
+            with self.assertRaisesRegex(h.HarnessError, "partial response retained"):
+                h.invoke_claude({"x": 1}, FakeRun([("claude -p --model", timeout)]), folder, raw_path)
+            self.assertEqual(raw_path.read_text(), partial)
+            self.assertEqual(raw_path.stat().st_mode & 0o777, 0o600)
+
+    def test_review_persists_input_before_claude_invocation(self):
+        body = h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}head -->"
+        snapshot = {"repo": h.REPO, "pr": 7, "head_sha": "head", "base_sha": "base",
+                    "body": body, "draft": False, "files": [], "trusted_docs": {}}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); install_workflow(root)
+            run = FakeRun([("git/trees", workflow_tree(root)), ("check-runs", checks(check()))])
+            def fail_after_check(_snapshot, _run, _harness_dir, _raw_path):
+                input_path = h._review_paths(root, 7, "head")[0] / "input.json"
+                self.assertTrue(input_path.is_file())
+                self.assertEqual(json.loads(input_path.read_text())["head_sha"], "head")
+                raise h.HarnessError("stop")
+            with patch.object(h, "build_snapshot", return_value=snapshot), patch.object(h, "invoke_claude", side_effect=fail_after_check):
+                with self.assertRaisesRegex(h.HarnessError, "stop"):
+                    h.review(h.REPO, 7, root, run)
 
     def test_stream_missing_duplicate_result_and_truncated_json_rejected_after_raw_save(self):
         with tempfile.TemporaryDirectory() as td:
