@@ -270,6 +270,9 @@ def _handle_pr(root: Path, item: dict[str, Any], events: Events) -> None:
         verdict = record and record["review"].get("verdict")
         published = status == "REVIEWED" or item.get("review_published") is True
         scanned_verdict = item.get("local_verdict")
+        if record is None:
+            events.add("attention", pr=pr, sha=sha, reason="trusted local review result is missing")
+            return
         if item.get("review_published") is True and scanned_verdict != verdict:
             raise ControllerError("scan and trusted local review verdict disagree")
         if verdict == "PASS" and published:
@@ -281,6 +284,8 @@ def _handle_pr(root: Path, item: dict[str, Any], events: Events) -> None:
             events.add("attention", pr=pr, sha=sha, reason=f"Opus BLOCKED: {summary}")
         elif status == "NEEDS_FIX":
             events.add("attention", pr=pr, sha=sha, reason="PR needs a current published review or new ready marker")
+        else:
+            events.add("attention", pr=pr, sha=sha, reason="trusted local review verdict is unrecognized")
         return
     if status != "READY":
         return

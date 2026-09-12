@@ -151,10 +151,29 @@ class CloudRunnerTests(unittest.TestCase):
             self.assertEqual(saved["status"], "branch-raced")
 
     def test_unsafe_patch_paths_and_modes(self):
-        bad = ["diff --git a/../x b/../x\n", "diff --git a/x b/x\nnew file mode 120000\n"]
+        bad = [
+            "diff --git a/../x b/../x\n",
+            "diff --git a/x b/x\nnew file mode 120000\n",
+            "diff --git a/x b/x\nold file mode 160000\n",
+            "diff --git a/x b/x\nold mode 100644\nnew mode 120000\n",
+            "diff --git a/x b/x\nold mode 120000\nnew mode 100644\n",
+        ]
         for value in bad:
             with self.assertRaises(c.CloudRunnerError):
                 c.validate_patch(value)
+
+    def test_git_binary_patch_rejected_and_text_patch_allowed(self):
+        binary = ("diff --git a/blob.bin b/blob.bin\nnew file mode 100644\n"
+                  "index 0000000..1234567\nGIT binary patch\nliteral 3\nKcmZQzU|?Vb0000\n\n"
+                  "literal 0\nHcmV?d00001\n")
+        with self.assertRaisesRegex(c.CloudRunnerError, "binary"):
+            c.validate_patch(binary)
+        disguised_hunk = "diff --git a/x b/x\nliteral 12\nencoded-data\n"
+        with self.assertRaisesRegex(c.CloudRunnerError, "binary"):
+            c.validate_patch(disguised_hunk)
+        normal = ("diff --git a/a.txt b/a.txt\nindex 7898192..6178079 100644\n"
+                  "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n")
+        c.validate_patch(normal)
 
     def test_applied_diff_paths_cover_delete_rename_and_unquoted_names(self):
         raw = ("D\0.github/workflows/old.yml\0R100\0safe.py\0harness/new name.py\0"

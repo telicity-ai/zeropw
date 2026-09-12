@@ -309,7 +309,10 @@ def validate_patch(patch: str) -> None:
     raw = patch.encode()
     if not raw or len(raw) > MAX_PATCH_BYTES or b"\0" in raw:
         raise CloudRunnerError("empty, binary, or oversized patch")
-    if re.search(r"^(?:new|old) file mode (?:120000|160000)$", patch, re.MULTILINE):
+    if (re.search(r"^GIT binary patch$", patch, re.MULTILINE) or
+            re.search(r"^(?:literal|delta) \d+$", patch, re.MULTILINE)):
+        raise CloudRunnerError("Git binary patches are forbidden")
+    if re.search(r"^(?:new|old)(?: file)? mode (?:120000|160000)$", patch, re.MULTILINE):
         raise CloudRunnerError("symlink and gitlink patches are forbidden")
     paths = re.findall(r"^diff --git a/(.+?) b/(.+)$", patch, re.MULTILINE)
     if not paths:

@@ -88,6 +88,28 @@ class ControllerTests(unittest.TestCase):
                 result = c.tick(root)
             self.assertIn("Opus BLOCKED", result["events"][0]["reason"])
 
+    def test_reviewed_missing_local_result_is_attention_and_exit_two(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); reviewed = item("REVIEWED")
+            reviewed.update(review_published=True, local_verdict="PASS")
+            with patch.object(c.zeropw_harness, "scan", return_value=[reviewed]):
+                result = c.tick(root)
+                output = io.StringIO()
+                with patch.object(c.Path, "cwd", return_value=root), redirect_stdout(output):
+                    self.assertEqual(c.main(["tick"]), 2)
+            self.assertTrue(result["attention"])
+            self.assertEqual(result["events"][0]["reason"], "trusted local review result is missing")
+
+    def test_reviewed_unrecognized_local_verdict_is_attention(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); record = review(root, "UNKNOWN")
+            reviewed = item("REVIEWED"); reviewed.update(review_published=True, local_verdict="UNKNOWN")
+            with patch.object(c.zeropw_harness, "scan", return_value=[reviewed]):
+                result = c.tick(root)
+            self.assertEqual(record["review"]["verdict"], "UNKNOWN")
+            self.assertTrue(result["attention"])
+            self.assertEqual(result["events"][0]["reason"], "trusted local review verdict is unrecognized")
+
     def test_attention_reason_change_is_new_event(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
