@@ -360,6 +360,18 @@ class HarnessTests(unittest.TestCase):
             self.assertTrue(result["duplicate"])
             self.assertFalse(any("-X POST" in " ".join(c[0]) for c in run.calls))
 
+    def test_pre_post_publish_failure_releases_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); self._stored(root)
+            heads = iter([pr(), pr("new")])
+            run = FakeRun([("pulls/7/reviews", [[]]), ("git/trees", workflow_tree(root)),
+                           ("check-runs", checks(check())),
+                           ("pulls/7", lambda *_: json.dumps(next(heads)))])
+            with self.assertRaisesRegex(h.HarnessError, "changed immediately before publish"):
+                h.publish(h.REPO, 7, "head", root, run)
+            self.assertFalse((root / ".zeropw-harness" / "reviews" / "7" / "head" / "publish.lock").exists())
+            self.assertFalse(any("-X POST" in " ".join(call[0]) for call in run.calls))
+
     def test_publish_comment_preserves_severity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); self._stored(root)

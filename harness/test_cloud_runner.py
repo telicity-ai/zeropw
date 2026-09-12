@@ -152,17 +152,38 @@ class CloudRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(c.CloudRunnerError, "unknown run"):
                 c.collect(Path(td), "00000000-0000-0000-0000-000000000000", FakeRun([]))
 
-    def test_pending_task_does_not_fetch_diff(self):
+    def test_recognized_active_task_does_not_fetch_diff(self):
         with tempfile.TemporaryDirectory() as td:
             root, _ = setup_root(td)
             run_id = "00000000-0000-0000-0000-000000000001"
             (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps({
                 "run_id": run_id, "status": "submitted", "task_id": "task-1", "environment": "env-1"
             }))
-            run = FakeRun([("cloud list", json.dumps({"items": [
-                {"id": "task-1", "environment_id": "env-1"}]})),
-                           ("cloud status", "[RUNNING] work")])
-            self.assertTrue(c.collect(root, run_id, run)["pending"])
+            for status in ("[RUNNING] work", "[PENDING] queued", "[QUEUED] waiting"):
+                with self.subTest(status=status):
+                    run = FakeRun([("cloud list", json.dumps({"items": [
+                        {"id": "task-1", "environment_id": "env-1"}]})),
+                                   ("cloud status", status)])
+                    self.assertTrue(c.collect(root, run_id, run)["pending"])
+                    self.assertFalse(any("cloud diff" in " ".join(x[0]) for x in run.calls))
+
+    def test_unrecognized_cloud_status_is_recorded_and_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, _ = setup_root(td)
+            run_id = "00000000-0000-0000-0000-000000000012"
+            ledger = root / ".zeropw-harness" / "runs" / f"{run_id}.json"
+            ledger.write_text(json.dumps({
+                "run_id": run_id, "status": "submitted", "task_id": "task-12",
+                "environment": "env-1"
+            }))
+            run = FakeRun([("cloud list", json.dumps({"tasks": [
+                {"id": "task-12", "environment_id": "env-1"}]})),
+                           ("cloud status", "[EXPIRED] needs operator input")])
+            with self.assertRaisesRegex(c.CloudRunnerError, "unrecognized cloud task status"):
+                c.collect(root, run_id, run)
+            saved = json.loads(ledger.read_text())
+            self.assertEqual(saved["status"], "cloud-status-unknown")
+            self.assertEqual(saved["cloud_status"], "[EXPIRED] needs operator input")
             self.assertFalse(any("cloud diff" in " ".join(x[0]) for x in run.calls))
 
     def test_collect_stops_before_status_when_environment_id_is_missing(self):
@@ -254,6 +275,8 @@ class CloudRunnerTests(unittest.TestCase):
         mixed_case = [".GitHub/workflows/x.yml", "Harness/tool.py", "agents.MD",
                       "Docs/Security-Design.md"]
         self.assertEqual(c._control_paths(mixed_case), mixed_case)
+        nested_agents = ["tests/AGENTS.md", "src/worker/agents.MD"]
+        self.assertEqual(c._control_paths(nested_agents), nested_agents)
 
     def test_control_plane_patch_returns_needs_approval_without_push(self):
         with tempfile.TemporaryDirectory() as td:
