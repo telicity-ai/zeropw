@@ -362,6 +362,19 @@ def _control_paths(paths: list[str]) -> list[str]:
             path.casefold().startswith("harness/")]
 
 
+def _reconciled_control_paths(record: dict[str, Any], head: str, run: Callable[..., str]) -> list[str]:
+    """Read-only tree comparison before accepting a pre-existing worker branch."""
+    origin = run(["git", "remote", "get-url", "origin"]).strip()
+    if origin not in {"https://github.com/handlecusion/zeropw.git", "git@github.com:handlecusion/zeropw.git"}:
+        raise CloudRunnerError("origin URL is not the exact trusted repository")
+    with tempfile.TemporaryDirectory(prefix="zeropw-reconcile-") as folder:
+        bare = Path(folder) / "repo.git"
+        run(["git", "init", "--bare", str(bare)])
+        run(["git", "--git-dir", str(bare), "fetch", "--no-tags", origin, record["base_sha"], head])
+        raw = run(["git", "--git-dir", str(bare), "diff-tree", "--no-commit-id", "--name-status", "-r", "-z", record["base_sha"], head])
+    return _control_paths(_changed_paths_from_diff_tree(raw))
+
+
 def _materialize(record: dict[str, Any], patch: str, branch: str,
                  run: Callable[..., str]) -> str:
     validate_patch(patch)
@@ -450,6 +463,12 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
         branch = record["branch"] if record.get("pr") else f"harness/cloud-{run_id}"
         published_head = _remote_head_optional(branch, run)
         if published_head and published_head != record["base_sha"]:
+            protected = _reconciled_control_paths(record, published_head, run)
+            if protected:
+                record.update(status="needs-approval", reason="reconciled branch changes trusted control-plane files",
+                              approval_paths=protected[:100])
+                _atomic(path, record)
+                return {**record, "attention_required": True}
             if record.get("pr"):
                 candidates = [_pr_info(record["pr"], run)]
             else:
@@ -457,8 +476,10 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
                                          "--paginate", "--slurp"]), "PR list")
             marker = READY_SHA.format(sha=published_head)
             run_marker = f"<!-- zeropw-run:{run_id} -->"
-            matches = [pr for pr in candidates if isinstance(pr.get("head"), dict) and
-                       pr["head"].get("sha") == published_head and
+            matches = [pr for pr in candidates if isinstance(pr.get("head"), dict) and isinstance(pr.get("base"), dict) and
+                       isinstance(pr["head"].get("repo"), dict) and isinstance(pr["base"].get("repo"), dict) and
+                       pr["head"].get("sha") == published_head and pr["head"]["repo"].get("full_name") == REPO and
+                       pr["base"]["repo"].get("full_name") == REPO and pr["base"].get("ref") == "main" and
                        READY in (pr.get("body") or "") and marker in (pr.get("body") or "") and
                        run_marker in (pr.get("body") or "")]
             if len(matches) == 1:

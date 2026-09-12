@@ -396,6 +396,12 @@ def snapshot_hash(snapshot: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def review_content_hash(snapshot: dict[str, Any]) -> str:
+    """Bind cached reviews to immutable reviewed content, not mutable PR metadata."""
+    keys = ("repo", "pr", "head_sha", "base_sha", "merge_base_sha", "files", "trusted_docs")
+    return snapshot_hash({key: snapshot.get(key) for key in keys})
+
+
 def validate_review(value: Any, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"verdict", "summary", "findings"}:
         raise HarnessError("review does not match schema")
@@ -445,7 +451,7 @@ def load_review_record(root: Path, repo: str, number: int, sha: str) -> tuple[di
     try:
         if (record.get("head_sha") != sha or record.get("pr") != number or record.get("repo") != repo
                 or snapshot.get("head_sha") != sha or snapshot.get("pr") != number or snapshot.get("repo") != repo
-                or snapshot_hash(snapshot) != record.get("input_sha256")):
+                or review_content_hash(snapshot) != record.get("input_sha256")):
             raise HarnessError("stored review input binding mismatch")
         validate_review(record.get("review"), snapshot)
     except HarnessError:
@@ -587,7 +593,7 @@ def review(repo: str, number: int, root: Path, run: Callable[..., str] = Command
     folder, result_path, lock_path = _review_paths(root, number, sha)
     if result_path.exists():
         cached, stored_snapshot = load_review_record(root, repo, number, sha)
-        if snapshot_hash(stored_snapshot) != snapshot_hash(snapshot):
+        if review_content_hash(stored_snapshot) != review_content_hash(snapshot):
             raise HarnessError("cached review input hash mismatch")
         return cached
     folder.mkdir(parents=True, exist_ok=True)
@@ -599,7 +605,7 @@ def review(repo: str, number: int, root: Path, run: Callable[..., str] = Command
         os.write(fd, json.dumps({"pid": os.getpid(), "started": int(time.time()), "requested_model": MODEL_PREFIX,
                                  "requested_effort": REVIEW_EFFORT,
                                  "timeout_seconds": REVIEW_TIMEOUT_SECONDS}).encode()); os.close(fd)
-        digest = snapshot_hash(snapshot)
+        digest = review_content_hash(snapshot)
         atomic_json(folder / "input.json", snapshot)
         raw_path = folder / "attempt" / "raw-response.jsonl"
         finding, metadata = invoke_claude(snapshot, run, root / "harness", raw_path)

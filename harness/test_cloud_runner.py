@@ -317,7 +317,8 @@ class CloudRunnerTests(unittest.TestCase):
                       "environment": "env-1", "branch": "main", "base_sha": "a" * 40, "pr": None}
             (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps(record))
             branch = f"harness/cloud-{run_id}"
-            pr = {"number": 9, "head": {"sha": head},
+            pr = {"number": 9, "head": {"sha": head, "repo": {"full_name": c.REPO}},
+                  "base": {"ref": "main", "repo": {"full_name": c.REPO}},
                   "body": c.READY + "\n" + c.READY_SHA.format(sha=head) +
                           f"\n<!-- zeropw-run:{run_id} -->"}
             run = FakeRun([("cloud list", json.dumps({"items": [
@@ -325,7 +326,8 @@ class CloudRunnerTests(unittest.TestCase):
                            ("cloud status", "[READY] done"),
                            (f"refs/heads/{branch}", f"{head}\trefs/heads/{branch}\n"),
                            ("pulls?state=open", json.dumps([pr]))])
-            result = c.collect(root, run_id, run)
+            with patch.object(c, "_reconciled_control_paths", return_value=[]):
+                result = c.collect(root, run_id, run)
             self.assertTrue(result["reconciled"])
             self.assertFalse(any("cloud diff" in " ".join(x[0]) for x in run.calls))
 

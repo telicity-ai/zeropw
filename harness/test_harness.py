@@ -337,7 +337,7 @@ class HarnessTests(unittest.TestCase):
         install_workflow(root)
         folder, result, _ = h._review_paths(root, 7, sha); folder.mkdir(parents=True)
         snapshot = {"repo": h.REPO, "pr": 7, "head_sha": sha, "base_sha": "base", "files": [{"path": "a", "head": "x", "base": "x"}], "trusted_docs": {}}
-        digest = h.snapshot_hash(snapshot)
+        digest = h.review_content_hash(snapshot)
         (folder / "input.json").write_text(json.dumps(snapshot))
         record = {"repo": h.REPO, "pr": 7, "head_sha": sha, "base_sha": "base", "input_sha256": digest,
                   "review": {"verdict": "REVISE", "summary": "summary", "findings": [{"id": "F1", "severity": "high", "file": "a", "line": 1, "description": "d", "required_change": "r"}]}}
