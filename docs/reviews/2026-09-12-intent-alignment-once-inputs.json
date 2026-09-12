@@ -1,0 +1,13 @@
+{
+  "created_at": "2026-09-12T12:21:43.657888+00:00",
+  "requested_model": "claude-opus-5",
+  "review_rounds_requested": 1,
+  "criterion": "검토 기준은 사용자가 방금 지칭한 최신 제품 설명이다:\nZeroPW는 에이전트에게 비밀값을 주지 않고 CLI·API를 사용하게 하는 개인용 클라우드 금고다.\n서비스와 자격증명을 한 번 연결하면, 에이전트는 작업별 등록 없이 지원하는 CLI·API를 사용한다.\n인증은 ZeroPW가 대신 처리하고, 에이전트와 실행 코드에는 원본 키를 주지 않는다.\n주요 기능: 환경변수·API 키·비밀번호의 암호화 보관과 프로젝트별 관리, API 인증 중계와 SSH 서명 위임,\n접근 권한·만료 설정, 즉시 회수, 사용 기록 확인.\n추가 사용자 맥락: 제품과 개발 하네스 모두 클라우드. 기획/PO/문서는 Astra, 자료 조사/구현 서브에이전트는 Sol,\n적대적 리뷰는 Claude Opus. 사용자는 작업별 사전등록 UX를 명시적으로 거부했고, 그것이 비밀 보호 요구 완화는 아니다.\n지원 범위를 검증해야 하며 모든 CLI와 일반 환경변수에 무조건 투명 적용된다는 약속은 없다.\n",
+  "input_sha256": {
+    "docs/product-intent.md": "faa17717f82f05117d3ecf06774fd1b707f8e1e29fcb635d39f48827544c29ce",
+    "docs/security-design.md": "888cef3b3ece5f21e87991963477c0e2596083b91a7e7e2cdb72a4fbe055c571",
+    "docs/harness.md": "e9a4a524a727db15cb3d9fa65daf1f2fc8e414958a7b468f67d8a488aa4b40fb",
+    "docs/reviews/review-summary.md": "5eb161f7fc3593b7d9be36ab7742e073e6a3d9373e8871ac52c4ed26de17aece",
+    "output/pdf/zeropw-product-definition.pdf": "9ef00fdedcd49d24d007051c10ca3af8909c488f04436f1e6e5e8d5e7409018f"
+  }
+}

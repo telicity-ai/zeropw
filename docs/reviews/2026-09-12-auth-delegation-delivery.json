@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-09-12T12:48:35.118891+00:00",
+  "scope": "2026-09-12 의도 정렬 단일 검토 후 문서 수정과 PDF 재생성",
+  "page_count": 10,
+  "checks": {
+    "all_current_source_text_in_pdf": true,
+    "obsolete_positive_contract_removed": true,
+    "all_page_dates_current": true,
+    "auth_delegation_diagram_present": true,
+    "sol_read_only_cross_document_consistency": "no mismatch reported"
+  },
+  "review_status": "Prior Opus verdict REVISE preserved; no new Opus review or PASS asserted.",
+  "implementation_security_tests": "not run; documentation-only change",
+  "sha256": {
+    "docs/product-intent.md": "cc5d31d4f455ae82152280e788e21bffa3e4fa0797b3615b23649d54cbab776d",
+    "docs/security-design.md": "9966c4c6da5a68d0b50d8678f5cd072a3ed2b780864ec20c867cf21eaf9f3d55",
+    "docs/harness.md": "f7eb503b7b2c46bfc2c729f68068ed56a8e9f1d77d8f2c0c0cfdad9fccc18754",
+    "docs/reviews/review-summary.md": "1175d77255d65d78fff4e1d3200e6d8b4aa3f0135d3f1e2d1c875f5c7b97233a",
+    "README.md": "6e761c26960b73205364cd818ea18aff8c58cdf483ce4edcfae61065f5927e7f",
+    "tmp/pdfs/build_product_pdf.py": "3f4c5d256cef17b8c6d4fedf0be5d7c2823bb857f62c28e560de37bcbb90da39",
+    "output/pdf/zeropw-product-definition.pdf": "2f4425bf90cf896ca14cb09eb9ccdd1eac6aa06455cdb4208e75d93420cbf9fe"
+  },
+  "visual_qa": {
+    "pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "result": "All pages visually inspected; no clipped text, overlaps, missing Korean glyphs, or split tables. Final pages 1–4 pixel-identical to inspected renders.",
+    "render_dpi": 100,
+    "sha256": {
+      "tmp/pdfs/auth-delegation-qa-01.png": "f5eec612ea058fbbc74f95725f29437b73e9220d385e11096ded8813bf32330d",
+      "tmp/pdfs/auth-delegation-qa-02.png": "0a86e1f0c1d50f9968b5e08db9a8d87bae47fd4cfdfdf9919a335a532878a5b0",
+      "tmp/pdfs/auth-delegation-qa-03.png": "f9b1834818caaf526b56b9b7af6f5ff9ab36ca8f9bd42e7d1c11c926af4a1aaa",
+      "tmp/pdfs/auth-delegation-qa-04.png": "675efa0fb5ccdea4943e675ac8f897a59529f923b5f4a914b949839f5717931f",
+      "tmp/pdfs/auth-delegation-qa-05.png": "547fb829f53ef8609fe07525f37f283defb9fc4c6eb2a8b95ea0a5071534d100",
+      "tmp/pdfs/auth-delegation-qa-06.png": "9105e4229e8cd608e436f032e69524611d7e843407119b711eebb9d50ea33c5c",
+      "tmp/pdfs/auth-delegation-qa-07.png": "265b03dffd3c14ff5e12b93ac1e866a8438b4ffdb8f0a7c8e936a09217b29d90",
+      "tmp/pdfs/auth-delegation-qa-08.png": "dbe37071f347bafbd3aa7e1a243533b98e521f7862ff0bc86214220e4fef8e7c",
+      "tmp/pdfs/auth-delegation-qa-09.png": "87edb163943c010c31884f06144979c53cadc375f285d60a290322216fe0d8c2",
+      "tmp/pdfs/auth-delegation-qa-10.png": "4400f13cf48fc9d1a95bfef8b9bc7855e1397abfd50b2b49025d7d11cad49caa"
+    }
+  }
+}

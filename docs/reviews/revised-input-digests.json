@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-09-11T06:48:43.732093+00:00",
+  "review": "opus-revised",
+  "documents": {
+    "product-intent.md": "58d902e2fa17be281f78d67bb9763ffea3f2360f0527f56f9862e802250e350d",
+    "security-design.md": "f7fdf230163899a18a539d0715dadbb414490d6d8629abd9aee5c98dea849f9e",
+    "harness.md": "f45f08c2cc8ab954660f6a0741fac243b35f9fb72abafdc677f4076b8e0a9bda"
+  },
+  "note": "Recorded while revised review runs; document contents unchanged after dispatch"
+}

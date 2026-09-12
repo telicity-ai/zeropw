@@ -1,0 +1,22 @@
+{
+  "docs/product-intent.md": {
+    "archived_as": "docs/archive/2026-09-12-before-auth-delegation/product-intent.md",
+    "sha256": "faa17717f82f05117d3ecf06774fd1b707f8e1e29fcb635d39f48827544c29ce"
+  },
+  "docs/security-design.md": {
+    "archived_as": "docs/archive/2026-09-12-before-auth-delegation/security-design.md",
+    "sha256": "888cef3b3ece5f21e87991963477c0e2596083b91a7e7e2cdb72a4fbe055c571"
+  },
+  "docs/harness.md": {
+    "archived_as": "docs/archive/2026-09-12-before-auth-delegation/harness.md",
+    "sha256": "e9a4a524a727db15cb3d9fa65daf1f2fc8e414958a7b468f67d8a488aa4b40fb"
+  },
+  "docs/reviews/review-summary.md": {
+    "archived_as": "docs/archive/2026-09-12-before-auth-delegation/review-summary.md",
+    "sha256": "5eb161f7fc3593b7d9be36ab7742e073e6a3d9373e8871ac52c4ed26de17aece"
+  },
+  "output/pdf/zeropw-product-definition.pdf": {
+    "archived_as": "docs/archive/2026-09-12-before-auth-delegation/zeropw-product-definition.pdf",
+    "sha256": "9ef00fdedcd49d24d007051c10ca3af8909c488f04436f1e6e5e8d5e7409018f"
+  }
+}

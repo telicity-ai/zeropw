@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+.zeropw-harness/
+tmp/
+node_modules/
+.pytest_cache/
+dist/
+coverage/

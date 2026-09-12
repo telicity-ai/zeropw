@@ -1,0 +1,11 @@
+{
+  "recorded_at": "2026-09-11T06:53:31.769622+00:00",
+  "review": "final",
+  "documents": {
+    "product-intent.md": "62916aaa29656bcb8acd2a35afb63041f29e7e1658b33e9ad59781241c40505c",
+    "security-design.md": "2afd268fcc07ad7a66213773fe53303189200e1a9c038bd60a4802716fd7dc63",
+    "harness.md": "e7d3c6516a22766ba4159e4c758062d3961cb65a2360e548b6490e6bc96c9026",
+    "reviews/source-check.md": "34ed01ecd211110de6293d2afbe54676c4aaf7375c6b11c41163d03315aa1917",
+    "reviews/revision-response.md": "d865ac90a3e2aa9c4f0f18341754dbf9ed6150aa5166a4bcad0e50ca5ab53d50"
+  }
+}
