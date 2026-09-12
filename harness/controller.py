@@ -31,6 +31,26 @@ class ControllerBusy(ControllerError):
     pass
 
 
+def _fallback_attention(reason: str, *, lock_retained: bool) -> dict[str, Any]:
+    bounded = reason[:500] if isinstance(reason, str) and reason else "controller failure"
+    event = {"state": "controller_attention", "reason": bounded, "lock_retained": lock_retained}
+    return {"changed": True, "events": [event], "lock_retained": lock_retained}
+
+
+def _best_effort_attention(events: "Events | None", reason: str, *, lock_retained: bool) -> dict[str, Any]:
+    """Record attention if the ledger is usable, otherwise return a stdout-safe result."""
+    if events is None:
+        return _fallback_attention(reason, lock_retained=lock_retained)
+    try:
+        events.add("controller_attention", reason=reason, lock_retained=lock_retained)
+        events.save()
+        return {"changed": bool(events.new), "events": events.new, "lock_retained": lock_retained}
+    except Exception:
+        # The event ledger may itself be the corrupt/unwritable component. Never
+        # replace it here; main can still print this minimal structured result.
+        return _fallback_attention(reason, lock_retained=lock_retained)
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
@@ -288,11 +308,14 @@ def tick(root: Path, repo: str = REPO) -> dict[str, Any]:
         events.save()
         result = {"changed": bool(events.new), "events": events.new}
     except (ControllerError, cloud_runner.CloudRunnerError, zeropw_harness.HarnessError) as exc:
-        if events is None:
-            events = Events(root)
-        events.add("controller_attention", reason=str(exc))
-        events.save()
-        result = {"changed": bool(events.new), "events": events.new}
+        result = _best_effort_attention(events, str(exc), lock_retained=False)
+        lock.unlink()
+        return result
+    except Exception as exc:
+        # An unexpected failure can occur after a remote write. Preserve the lock
+        # until a human reconciles external state, but always return structured JSON.
+        reason = f"unexpected {type(exc).__name__}; controller lock retained for manual reconciliation"
+        return _best_effort_attention(events, reason, lock_retained=True)
     lock.unlink()
     return result
 
@@ -310,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
         result = tick(Path.cwd(), args.repo)
     except ControllerBusy as exc:
         print(json.dumps({"changed": True, "events": [{"state": "controller_busy", "reason": str(exc)}]}))
+        return 2
+    except Exception as exc:
+        result = _fallback_attention(f"controller startup failed: {type(exc).__name__}", lock_retained=False)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -137,6 +139,47 @@ class ControllerTests(unittest.TestCase):
             lock.parent.mkdir(); lock.write_text("crashed")
             with self.assertRaises(c.ControllerBusy): c.tick(root)
             self.assertEqual(lock.read_text(), "crashed")
+
+    def test_unexpected_exception_returns_attention_and_retains_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(c.zeropw_harness, "scan", side_effect=KeyError("bad remote response")):
+                result = c.tick(root)
+            self.assertTrue((root / ".zeropw-harness/controller.lock").exists())
+            self.assertTrue(result["lock_retained"])
+            self.assertTrue(result["events"][0]["lock_retained"])
+            self.assertIn("lock retained", result["events"][0]["reason"])
+
+    def test_malformed_event_ledger_is_preserved_and_returns_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); state = root / ".zeropw-harness"; state.mkdir()
+            ledger = state / "controller-events.json"; ledger.write_text("{broken")
+            result = c.tick(root)
+            self.assertEqual(ledger.read_text(), "{broken")
+            self.assertFalse((state / "controller.lock").exists())
+            self.assertEqual(result["events"][0]["state"], "controller_attention")
+            self.assertFalse(result["lock_retained"])
+
+    def test_main_prints_fallback_json_for_malformed_event_ledger(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); state = root / ".zeropw-harness"; state.mkdir()
+            ledger = state / "controller-events.json"; ledger.write_text("{broken")
+            output = io.StringIO()
+            with patch.object(c.Path, "cwd", return_value=root), redirect_stdout(output):
+                self.assertEqual(c.main(["tick"]), 0)
+            value = json.loads(output.getvalue())
+            self.assertEqual(value["events"][0]["state"], "controller_attention")
+            self.assertEqual(ledger.read_text(), "{broken")
+
+    def test_event_save_failure_still_returns_attention_and_retains_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with patch.object(c.zeropw_harness, "scan", return_value=[]), \
+                 patch.object(c.Events, "save", side_effect=OSError("disk unavailable")):
+                result = c.tick(root)
+            self.assertTrue((root / ".zeropw-harness/controller.lock").exists())
+            self.assertEqual(result["events"][0]["state"], "controller_attention")
+            self.assertTrue(result["lock_retained"])
 
     def test_submitted_cloud_pending_is_quiet(self):
         with tempfile.TemporaryDirectory() as td:

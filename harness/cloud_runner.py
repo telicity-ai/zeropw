@@ -61,12 +61,38 @@ def _atomic(path: Path, value: dict[str, Any]) -> None:
             os.unlink(name)
 
 
+def _json_dict(raw: str, context: str) -> dict[str, Any]:
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise CloudRunnerError(f"malformed {context}") from exc
+    if not isinstance(value, dict):
+        raise CloudRunnerError(f"malformed {context}: expected object")
+    return value
+
+
+def _read_json_dict(path: Path, context: str) -> dict[str, Any]:
+    try:
+        return _json_dict(path.read_text(), context)
+    except OSError as exc:
+        raise CloudRunnerError(f"missing or unreadable {context}") from exc
+
+
+def _run_record(path: Path, context: str = "run ledger") -> dict[str, Any]:
+    value = _read_json_dict(path, context)
+    if not isinstance(value.get("status"), str):
+        raise CloudRunnerError(f"malformed {context}: status must be a string")
+    typed = {"run_id": str, "repo": str, "environment": str, "branch": str,
+             "base_sha": str, "task_id": str, "pr": int, "review_sha": str}
+    for key, expected in typed.items():
+        if key in value and value[key] is not None and not isinstance(value[key], expected):
+            raise CloudRunnerError(f"malformed {context}: invalid {key}")
+    return value
+
+
 def load_config(root: Path) -> dict[str, Any]:
     path = root / ".zeropw-harness" / "config.json"
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CloudRunnerError("missing or malformed cloud config") from exc
+    value = _read_json_dict(path, "cloud config")
     required = {
         "repo": REPO,
         "worker_mode": "codex-cloud-default",
@@ -116,10 +142,11 @@ def _task_id(output: str) -> tuple[str, str]:
 
 def _pr_info(number: int, run: Callable[..., str]) -> dict[str, Any]:
     raw = run(["gh", "api", f"repos/{REPO}/pulls/{number}"])
-    try:
-        pr = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise CloudRunnerError("malformed PR response") from exc
+    pr = _json_dict(raw, "PR response")
+    if (not isinstance(pr.get("head"), dict) or not isinstance(pr.get("base"), dict) or
+            not isinstance(pr["head"].get("repo"), dict) or
+            not isinstance(pr["base"].get("repo"), dict)):
+        raise CloudRunnerError("malformed PR response: invalid head/base")
     if (pr.get("state") != "open" or pr.get("base", {}).get("ref") != "main" or
             pr.get("head", {}).get("repo", {}).get("full_name") != REPO or
             pr.get("base", {}).get("repo", {}).get("full_name") != REPO):
@@ -130,12 +157,17 @@ def _pr_info(number: int, run: Callable[..., str]) -> dict[str, Any]:
 def _pages(raw: str, context: str) -> list[dict[str, Any]]:
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (TypeError, json.JSONDecodeError) as exc:
         raise CloudRunnerError(f"malformed {context}") from exc
     if isinstance(value, list) and value and all(isinstance(x, list) for x in value):
-        return [item for page in value for item in page]
+        flattened = [item for page in value for item in page]
+        if all(isinstance(item, dict) for item in flattened):
+            return flattened
+        raise CloudRunnerError(f"malformed {context}: expected objects")
     if isinstance(value, list):
-        return value
+        if all(isinstance(item, dict) for item in value):
+            return value
+        raise CloudRunnerError(f"malformed {context}: expected objects")
     raise CloudRunnerError(f"malformed {context}")
 
 
@@ -147,11 +179,13 @@ def _fingerprint(fields: dict[str, Any]) -> str:
 def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = None,
            review_sha: str | None = None, run: Callable[..., str] = CommandRunner()) -> dict[str, Any]:
     config = load_config(root)
+    root_resolved = root.resolve()
     try:
-        prompt = prompt_file.resolve(strict=True).read_text()
+        resolved_prompt = (root_resolved / prompt_file).resolve(strict=True) if not prompt_file.is_absolute() else prompt_file.resolve(strict=True)
+        prompt = resolved_prompt.read_text()
     except OSError as exc:
         raise CloudRunnerError("trusted prompt file is unavailable") from exc
-    if not prompt_file.resolve().is_relative_to(root.resolve()):
+    if not resolved_prompt.is_relative_to(root_resolved):
         raise CloudRunnerError("prompt file must be inside the repository")
     if pr_number is not None:
         if not review_sha:
@@ -161,10 +195,9 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
         if pr["head"]["sha"] != review_sha:
             raise CloudRunnerError("fix review SHA is stale")
         result_path = root / ".zeropw-harness" / "reviews" / str(pr_number) / review_sha / "result.json"
-        try:
-            local_review = json.loads(result_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise CloudRunnerError("trusted local REVISE review is required") from exc
+        local_review = _read_json_dict(result_path, "trusted local REVISE review")
+        if not isinstance(local_review.get("review"), dict):
+            raise CloudRunnerError("trusted local REVISE review binding mismatch")
         if (local_review.get("repo") != REPO or local_review.get("pr") != pr_number or
                 local_review.get("head_sha") != review_sha or
                 local_review.get("review", {}).get("verdict") != "REVISE"):
@@ -173,12 +206,13 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
                               "--paginate", "--slurp"]), "PR reviews")
         marker = f"<!-- zeropw-opus:{review_sha} -->"
         verdict_line = "ZeroPW Opus verdict: **REVISE**"
-        if not any(x.get("user", {}).get("login") == "handlecusion" and
+        if not any(isinstance(x.get("user"), dict) and
+                   x["user"].get("login") == "handlecusion" and
                    x.get("commit_id") == review_sha and marker in (x.get("body") or "") and
                    verdict_line in (x.get("body") or "") for x in reviews):
             raise CloudRunnerError("published REVISE review for current head is required")
         prior = list((root / ".zeropw-harness" / "runs").glob("*.json"))
-        records = [json.loads(p.read_text()) for p in prior]
+        records = [_run_record(p, f"run ledger {p.name}") for p in prior]
         if any(x.get("pr") == pr_number and x.get("status") in
                {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}
                for x in records):
@@ -194,12 +228,14 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
                 "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
     fingerprint = _fingerprint(identity)
     for prior_path in (root / ".zeropw-harness" / "runs").glob("*.json"):
-        prior = json.loads(prior_path.read_text())
+        prior = _run_record(prior_path, f"run ledger {prior_path.name}")
         if prior.get("input_fingerprint") == fingerprint and prior.get("status") in {
                 "prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}:
             return {**prior, "duplicate": True}
     run_id = str(uuid.uuid4())
     path = _run_path(root, run_id)
+    query = (f"ZeroPW trusted run {run_id}. Follow the trusted instructions included inline below. "
+             "Never expose product credentials or secret values.\n\n" + prompt)
     record = {"run_id": run_id, "repo": REPO, "environment": config["cloud_environment_id"],
               "branch": branch, "base_sha": base, "pr": pr_number, "review_sha": review_sha,
               "prompt_sha256": identity["prompt_sha256"], "input_fingerprint": fingerprint,
@@ -207,8 +243,6 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
     _atomic(path, record)
     record["status"] = "submitting"
     _atomic(path, record)
-    query = (f"ZeroPW trusted run {run_id}. Follow {prompt_file.relative_to(root)} and trusted docs refs. "
-             "Never expose product credentials or secret values.\n\n" + prompt)
     try:
         output = run(["codex", "cloud", "exec", "--env", config["cloud_environment_id"],
                       "--branch", branch, "--attempts", "1", query])
@@ -243,9 +277,13 @@ def _find_task(task_id: str, environment: str, run: Callable[..., str]) -> dict[
             argv += ["--cursor", cursor]
         try:
             page = json.loads(run(argv))
-        except json.JSONDecodeError as exc:
+        except (TypeError, json.JSONDecodeError) as exc:
             raise CloudRunnerError("malformed cloud task list") from exc
+        if not isinstance(page, (dict, list)):
+            raise CloudRunnerError("malformed cloud task list: expected object or list")
         items = page if isinstance(page, list) else page.get("tasks", page.get("items", []))
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise CloudRunnerError("malformed cloud task items")
         for item in items:
             if str(item.get("id")) == task_id:
                 item_env = item.get("environment_id")
@@ -302,8 +340,9 @@ def _changed_paths_from_diff_tree(raw: str) -> list[str]:
 
 
 def _control_paths(paths: list[str]) -> list[str]:
-    return [path for path in paths if path == "AGENTS.md" or
-            path == "docs/harness.md" or path.startswith(".github/") or
+    protected_docs = {"docs/harness.md", "docs/product-intent.md", "docs/security-design.md"}
+    return [path for path in paths if path == "AGENTS.md" or path in protected_docs or
+            path.startswith(".github/") or
             path.startswith("harness/")]
 
 
@@ -363,9 +402,9 @@ def _materialize(record: dict[str, Any], patch: str, branch: str,
 def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) -> dict[str, Any]:
     path = _run_path(root, run_id)
     try:
-        record = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise CloudRunnerError("unknown run") from exc
+        record = _run_record(path)
+    except CloudRunnerError as exc:
+        raise CloudRunnerError("unknown run or malformed ledger") from exc
     if record.get("status") == "published":
         return {**record, "duplicate": True}
     if record.get("status") != "submitted" or not record.get("task_id"):
@@ -398,7 +437,8 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
                                          "--paginate", "--slurp"]), "PR list")
             marker = READY_SHA.format(sha=published_head)
             run_marker = f"<!-- zeropw-run:{run_id} -->"
-            matches = [pr for pr in candidates if pr.get("head", {}).get("sha") == published_head and
+            matches = [pr for pr in candidates if isinstance(pr.get("head"), dict) and
+                       pr["head"].get("sha") == published_head and
                        READY in (pr.get("body") or "") and marker in (pr.get("body") or "") and
                        run_marker in (pr.get("body") or "")]
             if len(matches) == 1:
@@ -432,9 +472,11 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
                  "-f", f"body={body.rstrip()}\n\n{marker}"])
             pr_number = record["pr"]
         else:
-            response = json.loads(run(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls", "-f",
+            response = _json_dict(run(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls", "-f",
                                    f"head={branch}", "-f", "base=main", "-f", f"title=Codex Cloud {run_id}",
-                                   "-f", f"body={marker}"]))
+                                   "-f", f"body={marker}"]), "PR creation response")
+            if not isinstance(response.get("number"), int):
+                raise CloudRunnerError("malformed PR creation response: missing number")
             pr_number = response["number"]
         record.update(status="published", commit_sha=commit, publication_branch=branch, pr=pr_number)
         _atomic(path, record)

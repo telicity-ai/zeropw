@@ -61,6 +61,26 @@ class CloudRunnerTests(unittest.TestCase):
             self.assertTrue(duplicate["duplicate"])
             self.assertEqual((before, after), (1, 1))
 
+    def test_relative_prompt_first_submit_uses_inline_instructions(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, _ = setup_root(td)
+            run = FakeRun([("ls-remote", "a" * 40 + "\trefs/heads/main\n"),
+                           ("cloud exec", "https://chatgpt.com/codex/tasks/task-relative")])
+            result = c.submit(root, Path("prompt.txt"), "main", run=run)
+            self.assertEqual(result["status"], "submitted")
+            command = next(call[0] for call in run.calls if "cloud" in call[0] and "exec" in call[0])
+            self.assertIn("trusted instructions included inline", command[-1])
+            self.assertNotIn("Follow prompt.txt", command[-1])
+
+    def test_malformed_existing_ledger_blocks_submit(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, prompt = setup_root(td)
+            (root / ".zeropw-harness" / "runs" / "bad.json").write_text("[]")
+            run = FakeRun([("ls-remote", "a" * 40 + "\trefs/heads/main\n")])
+            with self.assertRaisesRegex(c.CloudRunnerError, "expected object"):
+                c.submit(root, prompt, "main", run=run)
+            self.assertFalse(any("cloud exec" in " ".join(call[0]) for call in run.calls))
+
     def test_unparseable_submit_output_is_uncertain(self):
         with tempfile.TemporaryDirectory() as td:
             root, prompt = setup_root(td)
@@ -123,6 +143,8 @@ class CloudRunnerTests(unittest.TestCase):
         paths = c._changed_paths_from_diff_tree(raw)
         self.assertEqual(c._control_paths(paths), [
             ".github/workflows/old.yml", "AGENTS.md", "docs/harness.md", "harness/new name.py"])
+        self.assertEqual(c._control_paths(["docs/product-intent.md", "docs/security-design.md"]),
+                         ["docs/product-intent.md", "docs/security-design.md"])
 
     def test_control_plane_patch_returns_needs_approval_without_push(self):
         with tempfile.TemporaryDirectory() as td:

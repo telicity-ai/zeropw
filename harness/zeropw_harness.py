@@ -129,7 +129,17 @@ def trusted_ci_workflow(repo: str, sha: str, root: Path, run: Callable[..., str]
         return False
     if not data or len(data) > MAX_FILE_BYTES or b"\0" in data:
         return False
-    entry = _tree(repo, sha, run).get(CI_WORKFLOW)
+    tree = _tree(repo, sha, run)
+    workflow_paths = []
+    for path in tree:
+        if path.startswith(".github/workflows/"):
+            parsed = Path(path)
+            if path.startswith("/") or ".." in parsed.parts or path != parsed.as_posix():
+                return False
+            workflow_paths.append(path)
+    if workflow_paths != [CI_WORKFLOW]:
+        return False
+    entry = tree.get(CI_WORKFLOW)
     return bool(entry and entry.get("type") == "blob" and entry.get("mode") not in {"120000", "160000"}
                 and entry.get("sha") == git_blob_sha(data))
 

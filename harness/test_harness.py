@@ -101,6 +101,16 @@ class HarnessTests(unittest.TestCase):
             self.assertTrue(item["attention"])
             self.assertEqual(item["reason"], "malformed_local_review_state")
 
+    def test_extra_workflow_shadowing_harness_tests_is_attention(self):
+        tree = workflow_tree()
+        tree["tree"].append({"path": ".github/workflows/shadow.yml", "type": "blob",
+                             "mode": "100644", "sha": "1" * 40})
+        run = FakeRun([("pulls?state=open", [[pr()]]), ("git/trees", tree)])
+        item = h.scan(h.REPO, run, root=PROJECT)[0]
+        self.assertEqual(item["status"], "ATTENTION")
+        self.assertEqual(item["reason"], "untrusted_ci_workflow")
+        self.assertFalse(any("check-runs" in " ".join(call[0]) for call in run.calls))
+
     def test_review_refuses_failed_or_pending_ci(self):
         for item, expected in [(check("queued", None), "pending"), (check(conclusion="failure"), "failed")]:
             run = FakeRun([("git/trees", workflow_tree()), ("check-runs", checks(item))])
