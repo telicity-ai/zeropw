@@ -75,6 +75,15 @@ def stream(structured=None, assistant_model=h.MODEL_PREFIX, result_count=1, mixe
 
 
 class HarnessTests(unittest.TestCase):
+    def test_command_runner_preserves_nonzero_process_evidence(self):
+        completed = subprocess.CompletedProcess(["gh"], 3, stdout="stdout evidence", stderr="stderr evidence")
+        with patch.object(subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(h.CommandError, "exit 3") as raised:
+                h.CommandRunner()(["gh", "api", "endpoint"])
+        self.assertEqual(raised.exception.returncode, 3)
+        self.assertEqual(raised.exception.stdout, "stdout evidence")
+        self.assertEqual(raised.exception.stderr, "stderr evidence")
+
     def test_scan_pending_and_failed_ci(self):
         for item, expected in [(check("queued", None), "CI_PENDING"), (check(conclusion="failure"), "CI_FAILED")]:
             run = FakeRun([("pulls?state=open", [[pr()]]), ("git/trees", workflow_tree()), ("check-runs", checks(item))])
@@ -234,6 +243,43 @@ class HarnessTests(unittest.TestCase):
                 h.invoke_claude({"x": 1}, FakeRun([("claude -p --model", timeout)]), folder, raw_path)
             self.assertEqual(raw_path.read_text(), partial)
             self.assertEqual(raw_path.stat().st_mode & 0o777, 0o600)
+
+    def test_nonzero_claude_preserves_private_evidence_and_rejects_false_pass(self):
+        false_pass = stream()
+        def fail(argv, _kwargs):
+            raise h.CommandError(argv, 17, false_pass, "private diagnostic")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); trusted_files(root)
+            raw_path = root / "attempt" / "raw.jsonl"
+            with self.assertRaisesRegex(h.HarnessError, "exit code 17") as raised:
+                h.invoke_claude({"x": 1}, FakeRun([("claude -p --model", fail)]), root, raw_path)
+            failure_path = raw_path.parent / "failure.json"
+            evidence = json.loads(failure_path.read_text())
+            self.assertEqual(raw_path.read_text(), false_pass)
+            self.assertEqual(evidence["exit_code"], 17)
+            self.assertEqual(evidence["stderr"], "private diagnostic")
+            self.assertEqual(raw_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(failure_path.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("private diagnostic", str(raised.exception))
+
+    def test_nonzero_false_pass_never_creates_review_result(self):
+        body = h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}head -->"
+        snapshot = {"repo": h.REPO, "pr": 7, "head_sha": "head", "base_sha": "base",
+                    "body": body, "draft": False, "files": [], "trusted_docs": {}}
+        false_pass = stream()
+        def fail(argv, _kwargs):
+            raise h.CommandError(argv, 9, false_pass, "")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); trusted_files(root / "harness"); install_workflow(root)
+            run = FakeRun([("check-runs", checks(check())), ("claude -p --model", fail)])
+            with patch.object(h, "build_snapshot", return_value=snapshot), \
+                 patch.object(h, "trusted_ci_workflow", return_value=True):
+                with self.assertRaisesRegex(h.HarnessError, "exit code 9"):
+                    h.review(h.REPO, 7, root, run)
+            folder, result_path, lock_path = h._review_paths(root, 7, "head")
+            self.assertFalse(result_path.exists())
+            self.assertTrue(lock_path.exists())
+            self.assertEqual((folder / "attempt" / "raw-response.jsonl").read_text(), false_pass)
 
     def test_review_persists_input_before_claude_invocation(self):
         body = h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}head -->"

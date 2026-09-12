@@ -37,6 +37,17 @@ class HarnessError(RuntimeError):
     pass
 
 
+class CommandError(HarnessError):
+    def __init__(self, argv: list[str], returncode: int, stdout: str, stderr: str):
+        self.argv = list(argv)
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        detail = stderr.strip()[:500]
+        suffix = f": {detail}" if detail else ""
+        super().__init__(f"command failed ({argv[0]}, exit {returncode}){suffix}")
+
+
 class CommandRunner:
     def __call__(self, argv: list[str], *, stdin: str | None = None, cwd: str | None = None,
                  timeout: int = 600) -> str:
@@ -47,7 +58,7 @@ class CommandRunner:
             env=clean_env, timeout=timeout,
         )
         if proc.returncode:
-            raise HarnessError(f"command failed ({argv[0]}): {proc.stderr.strip()[:500]}")
+            raise CommandError(argv, proc.returncode, proc.stdout, proc.stderr)
         return proc.stdout
 
 
@@ -506,6 +517,22 @@ def invoke_claude(snapshot: dict[str, Any], run: Callable[..., str], harness_dir
                 partial = partial.decode("utf-8", errors="replace")
             atomic_text(raw_path, partial or "")
             raise HarnessError("review timed out; partial response retained") from exc
+        except CommandError as exc:
+            atomic_text(raw_path, exc.stdout)
+            raw_bytes = exc.stdout.encode()
+            atomic_json(raw_path.parent / "failure.json", {
+                "exit_code": exc.returncode,
+                "stderr": exc.stderr,
+                "raw_response": {
+                    "path": str(raw_path),
+                    "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                    "bytes": len(raw_bytes),
+                },
+            })
+            raise HarnessError(
+                f"review command failed with exit code {exc.returncode}; "
+                "raw response and failure metadata retained"
+            ) from exc
     atomic_text(raw_path, raw)
     raw_bytes = raw.encode()
     events = []
