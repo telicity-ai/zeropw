@@ -648,6 +648,7 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
         os.close(fd)
     except FileExistsError as exc:
         raise HarnessError("publish is inflight or crashed; manual reconciliation required") from exc
+    post_attempted = False
     try:
         marker = f"<!-- zeropw-opus:{sha} -->"
         reviews = validate_remote_reviews(gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True))
@@ -663,11 +664,14 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
             raise HarnessError("CI workflow changed immediately before publish")
         if _ci_state(check_runs(repo, sha, run)) != "passed":
             raise HarnessError("CI changed immediately before publish")
+        post_attempted = True
         response = gh_json(run, f"repos/{repo}/pulls/{number}/reviews", "-X", "POST", "-f", "event=COMMENT",
                            "-f", f"commit_id={sha}", "-f", f"body={body}")
         publish_lock.unlink()
         return {"published": True, "review_id": response.get("id"), "pr": number, "sha": sha}
     except Exception:
+        if not post_attempted:
+            publish_lock.unlink()
         # A failed/uncertain POST must be reconciled against GitHub before retry.
         raise
 
