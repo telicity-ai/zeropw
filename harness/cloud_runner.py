@@ -19,6 +19,7 @@ REPO = "handlecusion/zeropw"
 READY = "<!-- zeropw:ready-for-review -->"
 READY_SHA = "<!-- zeropw-ready-sha:{sha} -->"
 MAX_PATCH_BYTES = 2_000_000
+ACTIVE_CLOUD_STATUS_PREFIXES = ("[RUNNING]", "[PENDING]", "[QUEUED]")
 
 
 class CloudRunnerError(RuntimeError):
@@ -355,7 +356,7 @@ def _changed_paths_from_diff_tree(raw: str) -> list[str]:
 def _control_paths(paths: list[str]) -> list[str]:
     protected_docs = {"docs/harness.md", "docs/product-intent.md", "docs/security-design.md"}
     protected_docs_folded = {path.casefold() for path in protected_docs}
-    return [path for path in paths if path.casefold() == "agents.md" or
+    return [path for path in paths if PurePosixPath(path).name.casefold() == "agents.md" or
             path.casefold() in protected_docs_folded or
             path.casefold().startswith(".github/") or
             path.casefold().startswith("harness/")]
@@ -439,9 +440,13 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
             record.update(status="cloud-failed", cloud_status=status[:500])
             _atomic(path, record)
             raise CloudRunnerError("cloud task ended without a retrievable patch")
-        if not status.startswith("[READY]"):
+        if status.startswith(ACTIVE_CLOUD_STATUS_PREFIXES):
             return {**record, "pending": True,
                     "environment_binding": task.get("environment_binding", "task.environment_id")}
+        if not status.startswith("[READY]"):
+            record.update(status="cloud-status-unknown", cloud_status=status[:500])
+            _atomic(path, record)
+            raise CloudRunnerError("unrecognized cloud task status")
         branch = record["branch"] if record.get("pr") else f"harness/cloud-{run_id}"
         published_head = _remote_head_optional(branch, run)
         if published_head and published_head != record["base_sha"]:
