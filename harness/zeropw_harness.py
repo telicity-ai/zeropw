@@ -26,6 +26,7 @@ MODEL_PREFIX = "claude-opus-5"
 MAX_FILE_BYTES = 300_000
 MAX_INPUT_BYTES = 2_000_000
 TRUSTED_DOCS = ("docs/product-intent.md", "docs/security-design.md", "docs/harness.md")
+CI_WORKFLOW = ".github/workflows/harness-ci.yml"
 SEVERITIES = {"critical", "high", "medium", "low"}
 VERDICTS = {"PASS", "REVISE", "BLOCKED"}
 
@@ -118,8 +119,24 @@ def has_ready_markers(body: str, sha: str) -> bool:
     return READY_MARKER in body and f"{READY_SHA_PREFIX}{sha} -->" in body
 
 
+def trusted_ci_workflow(repo: str, sha: str, root: Path, run: Callable[..., str]) -> bool:
+    local = root / CI_WORKFLOW
+    if not local.is_file() or local.is_symlink():
+        return False
+    try:
+        data = local.read_bytes()
+    except OSError:
+        return False
+    if not data or len(data) > MAX_FILE_BYTES or b"\0" in data:
+        return False
+    entry = _tree(repo, sha, run).get(CI_WORKFLOW)
+    return bool(entry and entry.get("type") == "blob" and entry.get("mode") not in {"120000", "160000"}
+                and entry.get("sha") == git_blob_sha(data))
+
+
 def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None = None) -> list[dict[str, Any]]:
     assert_repo(repo)
+    root = root or Path.cwd()
     pulls = gh_json(run, f"repos/{repo}/pulls?state=open&per_page=100", paginate=True)
     output = []
     for pr in pulls:
@@ -131,10 +148,26 @@ def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None
                            "review_published": False, "local_verdict": None})
             continue
         sha = head.get("sha")
-        checks = check_runs(repo, sha, run)
-        ci = _ci_state(checks)
         body = pr.get("body") or ""
-        if pr.get("draft") or not has_ready_markers(body, sha):
+        trusted_review = False
+        local_verdict = None
+        local_state_error = False
+        try:
+            workflow_ok = trusted_ci_workflow(repo, sha, root, run)
+        except (HarnessError, OSError, TypeError, ValueError):
+            workflow_ok = False
+        if not workflow_ok:
+            ci = "untrusted"
+            status = "ATTENTION"
+        else:
+            try:
+                ci = _ci_state(check_runs(repo, sha, run))
+            except (HarnessError, OSError, TypeError, ValueError):
+                ci = "untrusted"
+                status = "ATTENTION"
+        if ci == "untrusted":
+            pass
+        elif pr.get("draft") or not has_ready_markers(body, sha):
             status = "NEEDS_FIX"
         elif ci == "pending":
             status = "CI_PENDING"
@@ -144,24 +177,28 @@ def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None
             reviews = gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True)
             marker = f"<!-- zeropw-opus:{sha} -->"
             expected = None
-            local_verdict = None
-            result_path = _review_paths(root or Path.cwd(), number, sha)[1]
+            result_path = _review_paths(root, number, sha)[1]
             if result_path.exists():
                 try:
-                    local_record = json_load(result_path.read_text(), str(result_path))
+                    local_record, _ = load_review_record(root, repo, number, sha)
                     expected = render_review(local_record)
-                    local_verdict = local_record.get("review", {}).get("verdict")
-                except HarnessError:
-                    expected = None
+                    local_verdict = local_record["review"]["verdict"]
+                except (HarnessError, OSError, KeyError, TypeError, AttributeError, ValueError):
+                    local_state_error = True
             trusted_review = any(
                 r.get("user", {}).get("login") == "handlecusion" and r.get("commit_id") == sha
                 and marker in (r.get("body") or "") and expected is not None and r.get("body") == expected
                 for r in reviews
             )
-            status = ("REVIEWED" if local_verdict == "PASS" else "NEEDS_FIX") if trusted_review else "READY"
+            if local_state_error:
+                status = "ATTENTION"
+            else:
+                status = ("REVIEWED" if local_verdict == "PASS" else "NEEDS_FIX") if trusted_review else "READY"
         output.append({"pr": number, "head_sha": sha, "draft": bool(pr.get("draft")), "ci": ci,
-                       "status": status, "review_published": bool(trusted_review) if ci == "passed" and has_ready_markers(body, sha) and not pr.get("draft") else False,
-                       "local_verdict": local_verdict if ci == "passed" and has_ready_markers(body, sha) and not pr.get("draft") else None})
+                       "status": status, "review_published": trusted_review,
+                       "local_verdict": local_verdict, "attention": local_state_error or ci == "untrusted",
+                       "reason": ("untrusted_ci_workflow" if ci == "untrusted" else
+                                  "malformed_local_review_state" if local_state_error else None)})
     return output
 
 
@@ -297,6 +334,28 @@ def _review_paths(root: Path, pr: int, sha: str) -> tuple[Path, Path, Path]:
     return folder, folder / "result.json", folder / "inflight.lock"
 
 
+def load_review_record(root: Path, repo: str, number: int, sha: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    _, result_path, _ = _review_paths(root, number, sha)
+    input_path = result_path.parent / "input.json"
+    if not result_path.is_file() or not input_path.is_file():
+        raise HarnessError("stored review result/input not found")
+    record = json_load(result_path.read_text(), str(result_path))
+    snapshot = json_load(input_path.read_text(), str(input_path))
+    if not isinstance(record, dict) or not isinstance(snapshot, dict):
+        raise HarnessError("stored review state must contain JSON objects")
+    try:
+        if (record.get("head_sha") != sha or record.get("pr") != number or record.get("repo") != repo
+                or snapshot.get("head_sha") != sha or snapshot.get("pr") != number or snapshot.get("repo") != repo
+                or snapshot_hash(snapshot) != record.get("input_sha256")):
+            raise HarnessError("stored review input binding mismatch")
+        validate_review(record.get("review"), snapshot)
+    except HarnessError:
+        raise
+    except (KeyError, TypeError, AttributeError, ValueError) as exc:
+        raise HarnessError("malformed stored review state") from exc
+    return record, snapshot
+
+
 def atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
@@ -365,13 +424,15 @@ def invoke_claude(snapshot: dict[str, Any], run: Callable[..., str], harness_dir
     init = [e for e in events if e.get("type") == "system" and e.get("subtype") == "init"]
     top_assistants = [e for e in events if e.get("type") == "assistant" and e.get("parent_tool_use_id") is None]
     results = [e for e in events if e.get("type") == "result"]
-    init_models = _safe_models(e.get("model") for e in init)
-    assistant_models = _safe_models((e.get("message") or {}).get("model") for e in top_assistants)
+    init_raw = [e.get("model") for e in init]
+    assistant_raw = [(e.get("message") or {}).get("model") for e in top_assistants]
+    init_models = _safe_models(init_raw)
+    assistant_models = _safe_models(assistant_raw)
     result_usage = results[0].get("modelUsage") if len(results) == 1 else None
     usage_models = _safe_models(result_usage.keys()) if isinstance(result_usage, dict) else []
-    if len(init) != 1 or init_models != [MODEL_PREFIX]:
+    if len(init_raw) != 1 or init_raw != [MODEL_PREFIX]:
         raise HarnessError(f"unexpected init model: {init_models or ['unavailable']}; modelUsage={usage_models or ['unavailable']}")
-    if not top_assistants or len(assistant_models) != len(top_assistants) or any(m != MODEL_PREFIX for m in assistant_models):
+    if not assistant_raw or any(not isinstance(m, str) or m != MODEL_PREFIX for m in assistant_raw):
         raise HarnessError(f"unexpected assistant model: {assistant_models or ['unavailable']}; modelUsage={usage_models or ['unavailable']}")
     if len(results) != 1:
         raise HarnessError(f"expected one Claude result event, got {len(results)}")
@@ -384,7 +445,8 @@ def invoke_claude(snapshot: dict[str, Any], run: Callable[..., str], harness_dir
         structured = json_load(envelope["result"], "claude result")
     return validate_review(structured, snapshot), {
         "modelUsage": usage, "verified_init_model": init_models[0],
-        "verified_assistant_models": assistant_models, "model_usage_keys": usage_models,
+        "verified_assistant_models": assistant_models, "assistant_event_count": len(assistant_raw),
+        "model_usage_keys": usage_models,
         "raw_response": {"path": str(raw_path), "sha256": hashlib.sha256(raw_bytes).hexdigest(), "bytes": len(raw_bytes)},
     }
 
@@ -394,13 +456,15 @@ def review(repo: str, number: int, root: Path, run: Callable[..., str] = Command
     sha = snapshot["head_sha"]
     if snapshot["draft"] or not has_ready_markers(snapshot["body"], sha):
         raise HarnessError("PR is not marked ready for review")
+    if not trusted_ci_workflow(repo, sha, root, run):
+        raise HarnessError("head CI workflow does not match trusted coordinator copy")
     ci = _ci_state(check_runs(repo, sha, run))
     if ci != "passed":
         raise HarnessError(f"required harness-tests CI is {ci}")
     folder, result_path, lock_path = _review_paths(root, number, sha)
     if result_path.exists():
-        cached = json_load(result_path.read_text(), str(result_path))
-        if cached.get("input_sha256") != snapshot_hash(snapshot):
+        cached, stored_snapshot = load_review_record(root, repo, number, sha)
+        if snapshot_hash(stored_snapshot) != snapshot_hash(snapshot):
             raise HarnessError("cached review input hash mismatch")
         return cached
     folder.mkdir(parents=True, exist_ok=True)
@@ -443,6 +507,8 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
         raise HarnessError("stale review: PR head changed")
     if pr.get("draft") or not has_ready_markers(pr.get("body") or "", sha):
         raise HarnessError("PR is not marked ready for this head")
+    if not trusted_ci_workflow(repo, sha, root, run):
+        raise HarnessError("head CI workflow does not match trusted coordinator copy")
     if _ci_state(check_runs(repo, sha, run)) != "passed":
         raise HarnessError("current trusted GitHub Actions checks have not passed")
     _, result_path, lock_path = _review_paths(root, number, sha)
@@ -450,17 +516,7 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
         raise HarnessError("review inflight/crashed; manual reconciliation required")
     if not result_path.exists():
         raise HarnessError("review result not found")
-    record = json_load(result_path.read_text(), str(result_path))
-    if record.get("head_sha") != sha or record.get("pr") != number or record.get("repo") != repo:
-        raise HarnessError("stored review binding mismatch")
-    input_path = result_path.parent / "input.json"
-    if not input_path.is_file():
-        raise HarnessError("stored review input not found")
-    snapshot = json_load(input_path.read_text(), str(input_path))
-    if (snapshot_hash(snapshot) != record.get("input_sha256") or snapshot.get("head_sha") != sha
-            or snapshot.get("pr") != number or snapshot.get("repo") != repo):
-        raise HarnessError("stored review input binding mismatch")
-    validate_review(record.get("review"), snapshot)
+    record, snapshot = load_review_record(root, repo, number, sha)
     publish_lock = result_path.parent / "publish.lock"
     try:
         fd = os.open(publish_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -478,6 +534,8 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
         latest = _pr(repo, number, run)
         if latest["head"]["sha"] != sha or latest.get("draft") or not has_ready_markers(latest.get("body") or "", sha):
             raise HarnessError("PR changed immediately before publish")
+        if not trusted_ci_workflow(repo, sha, root, run):
+            raise HarnessError("CI workflow changed immediately before publish")
         if _ci_state(check_runs(repo, sha, run)) != "passed":
             raise HarnessError("CI changed immediately before publish")
         response = gh_json(run, f"repos/{repo}/pulls/{number}/reviews", "-X", "POST", "-f", "event=COMMENT",

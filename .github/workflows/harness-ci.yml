@@ -32,3 +32,9 @@ jobs:
 
       - name: Run harness unit tests
         run: python -m unittest discover -s harness -p 'test_*.py' -v
+
+      - name: Run product tests when present
+        run: |
+          if [ -d tests ]; then
+            python -m unittest discover -s tests -p 'test_*.py' -v
+          fi

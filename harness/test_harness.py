@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import zeropw_harness as h
 
+PROJECT = Path(__file__).resolve().parents[1]
+
 
 def content_obj(text="x"):
     raw = text.encode()
@@ -47,6 +49,17 @@ def trusted_files(root):
     (root / "review.schema.json").write_text(json.dumps({"type": "object"}))
 
 
+def install_workflow(root):
+    target = root / h.CI_WORKFLOW
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes((PROJECT / h.CI_WORKFLOW).read_bytes())
+
+
+def workflow_tree(root=PROJECT):
+    data = (root / h.CI_WORKFLOW).read_bytes()
+    return {"truncated": False, "tree": [{"path": h.CI_WORKFLOW, "type": "blob", "mode": "100644", "sha": h.git_blob_sha(data)}]}
+
+
 def stream(structured=None, assistant_model=h.MODEL_PREFIX, result_count=1, mixed_usage=False):
     structured = structured or {"verdict": "PASS", "summary": "s", "findings": []}
     events = [
@@ -63,19 +76,37 @@ def stream(structured=None, assistant_model=h.MODEL_PREFIX, result_count=1, mixe
 class HarnessTests(unittest.TestCase):
     def test_scan_pending_and_failed_ci(self):
         for item, expected in [(check("queued", None), "CI_PENDING"), (check(conclusion="failure"), "CI_FAILED")]:
-            run = FakeRun([("pulls?state=open", [[pr()]]), ("check-runs", checks(item))])
+            run = FakeRun([("pulls?state=open", [[pr()]]), ("git/trees", workflow_tree()), ("check-runs", checks(item))])
             self.assertEqual(h.scan(h.REPO, run)[0]["status"], expected)
 
     def test_scan_requires_head_bound_ready_marker(self):
         item = pr(); item["body"] = h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}old -->"
-        run = FakeRun([("pulls?state=open", [[item]]), ("check-runs", checks(check()))])
+        run = FakeRun([("pulls?state=open", [[item]]), ("git/trees", workflow_tree()), ("check-runs", checks(check()))])
         self.assertEqual(h.scan(h.REPO, run)[0]["status"], "NEEDS_FIX")
+
+    def test_scan_untrusted_workflow_and_malformed_local_state_need_attention(self):
+        wrong_tree = {"truncated": False, "tree": [{"path": h.CI_WORKFLOW, "type": "blob", "mode": "100644", "sha": "0" * 40}]}
+        run = FakeRun([("pulls?state=open", [[pr()]]), ("git/trees", wrong_tree)])
+        item = h.scan(h.REPO, run, root=PROJECT)[0]
+        self.assertEqual((item["status"], item["ci"], item["attention"]), ("ATTENTION", "untrusted", True))
+        self.assertEqual(item["reason"], "untrusted_ci_workflow")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); install_workflow(root)
+            folder, result, _ = h._review_paths(root, 7, "head"); folder.mkdir(parents=True)
+            result.write_text('{"review":null}')
+            run = FakeRun([("pulls?state=open", [[pr()]]), ("git/trees", workflow_tree(root)),
+                           ("check-runs", checks(check())), ("pulls/7/reviews", [[]])])
+            item = h.scan(h.REPO, run, root=root)[0]
+            self.assertEqual(item["status"], "ATTENTION")
+            self.assertTrue(item["attention"])
+            self.assertEqual(item["reason"], "malformed_local_review_state")
 
     def test_review_refuses_failed_or_pending_ci(self):
         for item, expected in [(check("queued", None), "pending"), (check(conclusion="failure"), "failed")]:
-            run = FakeRun([("check-runs", checks(item))])
+            run = FakeRun([("git/trees", workflow_tree()), ("check-runs", checks(item))])
             body = h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}head -->"
             with tempfile.TemporaryDirectory() as td, patch.object(h, "build_snapshot", return_value={"head_sha": "head", "body": body, "draft": False}):
+                install_workflow(Path(td))
                 with self.assertRaisesRegex(h.HarnessError, expected):
                     h.review(h.REPO, 7, Path(td), run)
 
@@ -164,17 +195,33 @@ class HarnessTests(unittest.TestCase):
                     h.invoke_claude({"x": 1}, run, folder, raw_path)
                 self.assertEqual(raw_path.read_text(), raw)
 
+    def test_more_than_ten_opus_assistant_events_are_validated_without_display_limit_bug(self):
+        events = [{"type": "system", "subtype": "init", "model": h.MODEL_PREFIX}]
+        events += [{"type": "assistant", "parent_tool_use_id": None, "message": {"model": h.MODEL_PREFIX}} for _ in range(11)]
+        events += [{"type": "result", "subtype": "success", "is_error": False,
+                    "structured_output": {"verdict": "PASS", "summary": "s", "findings": []},
+                    "modelUsage": {h.MODEL_PREFIX: {}}}]
+        raw = "\n".join(json.dumps(e) for e in events)
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td); trusted_files(folder)
+            run = FakeRun([("claude -p --model", lambda _a, _k: raw)])
+            _, metadata = h.invoke_claude({"x": 1}, run, folder, folder / "raw.jsonl")
+            self.assertEqual(metadata["assistant_event_count"], 11)
+            self.assertEqual(len(metadata["verified_assistant_models"]), 10)
+
     def test_crash_lock_requires_manual_reconciliation(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); folder, _, lock = h._review_paths(root, 7, "head")
+            install_workflow(root)
             folder.mkdir(parents=True); lock.write_text("crashed")
             good = {"head_sha": "head", "body": h.READY_MARKER + f"\n{h.READY_SHA_PREFIX}head -->", "draft": False}
             check_pages = checks(check())
             with patch.object(h, "build_snapshot", return_value=good):
                 with self.assertRaisesRegex(h.HarnessError, "manual reconciliation"):
-                    h.review(h.REPO, 7, root, FakeRun([("check-runs", check_pages)]))
+                    h.review(h.REPO, 7, root, FakeRun([("git/trees", workflow_tree(root)), ("check-runs", check_pages)]))
 
     def _stored(self, root, sha="head"):
+        install_workflow(root)
         folder, result, _ = h._review_paths(root, 7, sha); folder.mkdir(parents=True)
         snapshot = {"repo": h.REPO, "pr": 7, "head_sha": sha, "base_sha": "base", "files": [{"path": "a", "head": "x", "base": "x"}], "trusted_docs": {}}
         digest = h.snapshot_hash(snapshot)
@@ -195,7 +242,7 @@ class HarnessTests(unittest.TestCase):
             root = Path(td); record = self._stored(root)
             body = h.render_review(record)
             remote = {"body": body, "commit_id": "head", "user": {"login": "handlecusion"}}
-            run = FakeRun([("pulls/7/reviews", [[remote]]), ("check-runs", checks(check())), ("pulls/7", pr())])
+            run = FakeRun([("pulls/7/reviews", [[remote]]), ("git/trees", workflow_tree(root)), ("check-runs", checks(check())), ("pulls/7", pr())])
             result = h.publish(h.REPO, 7, "head", root, run)
             self.assertTrue(result["duplicate"])
             self.assertFalse(any("-X POST" in " ".join(c[0]) for c in run.calls))
@@ -203,7 +250,7 @@ class HarnessTests(unittest.TestCase):
     def test_publish_comment_preserves_severity(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); self._stored(root)
-            run = FakeRun([("-X POST", {"id": 9}), ("pulls/7/reviews", [[]]), ("check-runs", checks(check())), ("pulls/7", pr())])
+            run = FakeRun([("-X POST", {"id": 9}), ("pulls/7/reviews", [[]]), ("git/trees", workflow_tree(root)), ("check-runs", checks(check())), ("pulls/7", pr())])
             self.assertTrue(h.publish(h.REPO, 7, "head", root, run)["published"])
             post = next(c for c in run.calls if "-X" in c[0])
             self.assertIn("HIGH", " ".join(post[0]))

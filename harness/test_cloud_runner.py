@@ -117,6 +117,32 @@ class CloudRunnerTests(unittest.TestCase):
             with self.assertRaises(c.CloudRunnerError):
                 c.validate_patch(value)
 
+    def test_applied_diff_paths_cover_delete_rename_and_unquoted_names(self):
+        raw = ("D\0.github/workflows/old.yml\0R100\0safe.py\0harness/new name.py\0"
+               "M\0AGENTS.md\0M\0docs/harness.md\0")
+        paths = c._changed_paths_from_diff_tree(raw)
+        self.assertEqual(c._control_paths(paths), [
+            ".github/workflows/old.yml", "AGENTS.md", "docs/harness.md", "harness/new name.py"])
+
+    def test_control_plane_patch_returns_needs_approval_without_push(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, _ = setup_root(td)
+            run_id = "00000000-0000-0000-0000-000000000008"
+            record = {"run_id": run_id, "status": "submitted", "task_id": "task-8",
+                      "environment": "env-1", "branch": "main", "base_sha": "a" * 40, "pr": None}
+            (root / ".zeropw-harness" / "runs" / f"{run_id}.json").write_text(json.dumps(record))
+            run = FakeRun([("cloud list", json.dumps({"tasks": [{"id": "task-8"}], "cursor": None})),
+                           ("cloud status", "[READY] done"),
+                           (f"harness/cloud-{run_id}", ""),
+                           ("cloud diff", "diff --git a/harness/x b/harness/x\n"),
+                           ("refs/heads/main", "a" * 40 + "\trefs/heads/main\n")])
+            with patch.object(c, "_materialize", side_effect=c.ApprovalRequired(["harness/x"])):
+                result = c.collect(root, run_id, run)
+            self.assertEqual(result["status"], "needs-approval")
+            self.assertTrue(result["attention_required"])
+            self.assertEqual(result["approval_paths"], ["harness/x"])
+            self.assertFalse(any("git push" in " ".join(call[0]) for call in run.calls))
+
     def test_duplicate_collect_has_no_commands(self):
         with tempfile.TemporaryDirectory() as td:
             root, _ = setup_root(td)
@@ -155,6 +181,27 @@ class CloudRunnerTests(unittest.TestCase):
             run = FakeRun([("pulls/7", json.dumps(pr))])
             with self.assertRaisesRegex(c.CloudRunnerError, "stale"):
                 c.submit(root, prompt, "main", 7, "old", run)
+
+    def test_fix_remote_branch_must_equal_review_sha(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, prompt = setup_root(td)
+            review_sha = "a" * 40
+            folder = root / ".zeropw-harness" / "reviews" / "7" / review_sha
+            folder.mkdir(parents=True)
+            folder.joinpath("result.json").write_text(json.dumps({
+                "repo": c.REPO, "pr": 7, "head_sha": review_sha,
+                "review": {"verdict": "REVISE"},
+            }))
+            pr = {"state": "open", "number": 7,
+                  "base": {"ref": "main", "repo": {"full_name": c.REPO}},
+                  "head": {"sha": review_sha, "ref": "fix", "repo": {"full_name": c.REPO}}}
+            review = {"user": {"login": "handlecusion"}, "commit_id": review_sha,
+                      "body": f"<!-- zeropw-opus:{review_sha} -->\nZeroPW Opus verdict: **REVISE**"}
+            run = FakeRun([("pulls/7/reviews", json.dumps([[review]])),
+                           ("pulls/7", json.dumps(pr)),
+                           ("ls-remote", "b" * 40 + "\trefs/heads/fix\n")])
+            with self.assertRaisesRegex(c.CloudRunnerError, "no longer matches"):
+                c.submit(root, prompt, "main", 7, review_sha, run)
 
 
 if __name__ == "__main__":

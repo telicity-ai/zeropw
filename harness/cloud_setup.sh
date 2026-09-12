@@ -17,5 +17,8 @@ fi
 cd "$REPO_ROOT"
 python3 -m compileall -q harness
 python3 -m unittest discover -s harness -p 'test_*.py' -v
+if [ -d tests ]; then
+  python3 -m unittest discover -s tests -p 'test_*.py' -v
+fi
 
 echo "ZeroPW harness smoke check passed."

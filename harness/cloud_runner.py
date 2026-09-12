@@ -25,6 +25,12 @@ class CloudRunnerError(RuntimeError):
     pass
 
 
+class ApprovalRequired(CloudRunnerError):
+    def __init__(self, paths: list[str]):
+        super().__init__("Cloud patch changes trusted control-plane files")
+        self.paths = paths
+
+
 class CommandRunner:
     def __call__(self, argv: list[str], *, cwd: str | None = None,
                  env: dict[str, str] | None = None) -> str:
@@ -174,13 +180,15 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
         prior = list((root / ".zeropw-harness" / "runs").glob("*.json"))
         records = [json.loads(p.read_text()) for p in prior]
         if any(x.get("pr") == pr_number and x.get("status") in
-               {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced"}
+               {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}
                for x in records):
             raise CloudRunnerError("a fix run for this PR is already active or uncertain")
         rounds = sum(1 for x in records if x.get("pr") == pr_number)
         if rounds >= 3:
             raise CloudRunnerError("automatic fix round limit reached")
     base = _remote_head(branch, run)
+    if pr_number is not None and base != review_sha:
+        raise CloudRunnerError("fix branch base no longer matches the reviewed SHA")
     identity = {"repo": REPO, "environment": config["cloud_environment_id"], "branch": branch,
                 "base_sha": base, "pr": pr_number, "review_sha": review_sha,
                 "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
@@ -188,7 +196,7 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
     for prior_path in (root / ".zeropw-harness" / "runs").glob("*.json"):
         prior = json.loads(prior_path.read_text())
         if prior.get("input_fingerprint") == fingerprint and prior.get("status") in {
-                "prepared", "submitting", "submit-uncertain", "submitted", "branch-raced"}:
+                "prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}:
             return {**prior, "duplicate": True}
     run_id = str(uuid.uuid4())
     path = _run_path(root, run_id)
@@ -270,6 +278,35 @@ def validate_patch(patch: str) -> None:
                 raise CloudRunnerError("unsafe patch path")
 
 
+def _changed_paths_from_diff_tree(raw: str) -> list[str]:
+    """Parse `git diff-tree --name-status -z`; -z disables Git path quoting."""
+    fields = raw.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    paths: list[str] = []
+    index = 0
+    while index < len(fields):
+        status = fields[index]
+        index += 1
+        if not re.fullmatch(r"[ACDMRTUXB](?:\d{1,3})?", status):
+            raise CloudRunnerError("unparseable changed-path status")
+        count = 2 if status[0] in {"R", "C"} else 1
+        if index + count > len(fields):
+            raise CloudRunnerError("truncated changed-path record")
+        paths.extend(fields[index:index + count])
+        index += count
+    if any(not path or path.startswith("/") or ".." in PurePosixPath(path).parts or
+           ".git" in PurePosixPath(path).parts for path in paths):
+        raise CloudRunnerError("unsafe path in applied tree difference")
+    return sorted(set(paths))
+
+
+def _control_paths(paths: list[str]) -> list[str]:
+    return [path for path in paths if path == "AGENTS.md" or
+            path == "docs/harness.md" or path.startswith(".github/") or
+            path.startswith("harness/")]
+
+
 def _materialize(record: dict[str, Any], patch: str, branch: str,
                  run: Callable[..., str]) -> str:
     validate_patch(patch)
@@ -310,6 +347,12 @@ def _materialize(record: dict[str, Any], patch: str, branch: str,
             parts = PurePosixPath(result_path).parts
             if mode in {"120000", "160000"} or result_path.startswith("/") or ".." in parts or ".git" in parts:
                 raise CloudRunnerError("unsafe path or mode in result tree")
+        changed_raw = run(["git", "--git-dir", str(bare), "diff-tree", "--no-commit-id",
+                           "--name-status", "-r", "-z", record["base_sha"], tree])
+        changed_paths = _changed_paths_from_diff_tree(changed_raw)
+        protected = _control_paths(changed_paths)
+        if protected:
+            raise ApprovalRequired(protected)
         commit = run(["git", "--git-dir", str(bare), "commit-tree", tree, "-p", record["base_sha"],
                       "-m", f"Codex Cloud run {record['run_id']}"], env=env).strip()
         run(["git", "--git-dir", str(bare), "push", origin,
@@ -370,7 +413,14 @@ def collect(root: Path, run_id: str, run: Callable[..., str] = CommandRunner()) 
             raise CloudRunnerError("remote branch moved since submit")
         if record.get("pr") and _pr_info(record["pr"], run)["head"]["sha"] != record["base_sha"]:
             raise CloudRunnerError("fix PR head moved before push")
-        commit = _materialize(record, patch, branch, run)
+        try:
+            commit = _materialize(record, patch, branch, run)
+        except ApprovalRequired as exc:
+            record.update(status="needs-approval",
+                          reason="Cloud patch changes trusted control-plane files; automatic push blocked",
+                          approval_paths=exc.paths[:100])
+            _atomic(path, record)
+            return {**record, "attention_required": True}
         marker = READY + "\n" + READY_SHA.format(sha=commit) + f"\n<!-- zeropw-run:{run_id} -->"
         if record.get("pr"):
             pr = _pr_info(record["pr"], run)
