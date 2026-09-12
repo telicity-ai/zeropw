@@ -166,7 +166,7 @@ class ControllerTests(unittest.TestCase):
             ledger = state / "controller-events.json"; ledger.write_text("{broken")
             output = io.StringIO()
             with patch.object(c.Path, "cwd", return_value=root), redirect_stdout(output):
-                self.assertEqual(c.main(["tick"]), 0)
+                self.assertEqual(c.main(["tick"]), 2)
             value = json.loads(output.getvalue())
             self.assertEqual(value["events"][0]["state"], "controller_attention")
             self.assertEqual(ledger.read_text(), "{broken")
@@ -180,6 +180,30 @@ class ControllerTests(unittest.TestCase):
             self.assertTrue((root / ".zeropw-harness/controller.lock").exists())
             self.assertEqual(result["events"][0]["state"], "controller_attention")
             self.assertTrue(result["lock_retained"])
+
+    def test_malformed_run_object_is_known_attention_and_releases_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); runs = root / ".zeropw-harness" / "runs"; runs.mkdir(parents=True)
+            bad = runs / "bad.json"; bad.write_text("[]")
+            result = c.tick(root)
+            self.assertEqual(result["events"][0]["state"], "controller_attention")
+            self.assertIn("expected object", result["events"][0]["reason"])
+            self.assertFalse(result["lock_retained"])
+            self.assertFalse((root / ".zeropw-harness/controller.lock").exists())
+            with self.assertRaises(c.cloud_runner.CloudRunnerError):
+                c._active_fix(root, 7)
+
+    def test_main_failure_exit_survives_deduped_attention(self):
+        result = {"changed": False, "events": [], "attention": True, "lock_retained": False}
+        output = io.StringIO()
+        with patch.object(c, "tick", return_value=result), redirect_stdout(output):
+            self.assertEqual(c.main(["tick"]), 2)
+        self.assertEqual(json.loads(output.getvalue()), result)
+
+    def test_main_lock_retained_is_failure_even_without_event(self):
+        result = {"changed": False, "events": [], "lock_retained": True}
+        with patch.object(c, "tick", return_value=result), redirect_stdout(io.StringIO()):
+            self.assertEqual(c.main(["tick"]), 2)
 
     def test_submitted_cloud_pending_is_quiet(self):
         with tempfile.TemporaryDirectory() as td:

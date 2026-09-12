@@ -34,7 +34,7 @@ class ControllerBusy(ControllerError):
 def _fallback_attention(reason: str, *, lock_retained: bool) -> dict[str, Any]:
     bounded = reason[:500] if isinstance(reason, str) and reason else "controller failure"
     event = {"state": "controller_attention", "reason": bounded, "lock_retained": lock_retained}
-    return {"changed": True, "events": [event], "lock_retained": lock_retained}
+    return {"changed": True, "events": [event], "attention": True, "lock_retained": lock_retained}
 
 
 def _best_effort_attention(events: "Events | None", reason: str, *, lock_retained: bool) -> dict[str, Any]:
@@ -44,7 +44,8 @@ def _best_effort_attention(events: "Events | None", reason: str, *, lock_retaine
     try:
         events.add("controller_attention", reason=reason, lock_retained=lock_retained)
         events.save()
-        return {"changed": bool(events.new), "events": events.new, "lock_retained": lock_retained}
+        return {"changed": bool(events.new), "events": events.new,
+                "attention": True, "lock_retained": lock_retained}
     except Exception:
         # The event ledger may itself be the corrupt/unwritable component. Never
         # replace it here; main can still print this minimal structured result.
@@ -174,7 +175,7 @@ def _active_fix(root: Path, pr: int) -> bool:
     if not runs.exists():
         return False
     for path in runs.glob("*.json"):
-        record = _read_json(path)
+        record = cloud_runner._run_record(path, f"run ledger {path.name}")
         if record.get("pr") == pr and record.get("status") in ACTIVE_RUN_STATES:
             return True
     return False
@@ -202,7 +203,7 @@ def _collect_runs(root: Path, events: Events) -> None:
     if not runs.exists():
         return
     for path in sorted(runs.glob("*.json")):
-        record = _read_json(path)
+        record = cloud_runner._run_record(path, f"run ledger {path.name}")
         status, run_id = record.get("status"), record.get("run_id", path.stem)
         if status == "submitted":
             try:
@@ -339,7 +340,10 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0
+    critical = (result.get("lock_retained") is True or result.get("attention") is True
+                or any(event.get("state") == "controller_attention"
+                       for event in result.get("events", []) if isinstance(event, dict)))
+    return 2 if critical else 0
 
 
 if __name__ == "__main__":
