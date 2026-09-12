@@ -47,6 +47,19 @@ def trusted_files(root):
     (root / "review.schema.json").write_text(json.dumps({"type": "object"}))
 
 
+def stream(structured=None, assistant_model=h.MODEL_PREFIX, result_count=1, mixed_usage=False):
+    structured = structured or {"verdict": "PASS", "summary": "s", "findings": []}
+    events = [
+        {"type": "system", "subtype": "init", "model": h.MODEL_PREFIX},
+        {"type": "assistant", "parent_tool_use_id": None, "message": {"model": assistant_model}},
+    ]
+    usage = {h.MODEL_PREFIX: {}}
+    if mixed_usage: usage["claude-haiku-4-5-20251001"] = {}
+    events += [{"type": "result", "subtype": "success", "is_error": False,
+                "structured_output": structured, "modelUsage": usage}] * result_count
+    return "\n".join(json.dumps(e) for e in events) + "\n"
+
+
 class HarnessTests(unittest.TestCase):
     def test_scan_pending_and_failed_ci(self):
         for item, expected in [(check("queued", None), "CI_PENDING"), (check(conclusion="failure"), "CI_FAILED")]:
@@ -119,21 +132,37 @@ class HarnessTests(unittest.TestCase):
         snapshot = {"x": 1}
         with tempfile.TemporaryDirectory() as td:
             trusted_files(Path(td))
-            run = FakeRun([("claude -p --model", {"modelUsage": {"claude-sonnet-4": {}}, "structured_output": {"verdict": "PASS", "summary": "s", "findings": []}})])
+            raw = stream(assistant_model="claude-sonnet-4")
+            run = FakeRun([("claude -p --model", lambda _a, _k, raw=raw: raw)])
             with self.assertRaisesRegex(h.HarnessError, "unexpected"):
-                h.invoke_claude(snapshot, run, Path(td))
+                h.invoke_claude(snapshot, run, Path(td), Path(td) / "raw.jsonl")
 
     def test_invoke_claude_has_no_tools_hooks_or_mcp(self):
-        envelope = {"modelUsage": {"claude-opus-5-202609": {}}, "structured_output": {"verdict": "PASS", "summary": "s", "findings": []}}
-        run = FakeRun([("claude -p --model", envelope)])
+        raw = stream(mixed_usage=True)
+        run = FakeRun([("claude -p --model", lambda _a, _k: raw)])
         with tempfile.TemporaryDirectory() as td:
             trusted_files(Path(td))
-            h.invoke_claude({"x": 1}, run, Path(td))
+            raw_path = Path(td) / "raw.jsonl"
+            h.invoke_claude({"x": 1}, run, Path(td), raw_path)
+            self.assertEqual(raw_path.stat().st_mode & 0o777, 0o600)
         argv, kwargs = run.calls[0]
         joined = " ".join(argv)
         for fragment in ("--tools ", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "disableAllHooks"):
             self.assertIn(fragment, joined)
         self.assertTrue(kwargs["cwd"].startswith("/"))
+        self.assertIn("stream-json", argv)
+        self.assertIn("--verbose", argv)
+
+    def test_stream_missing_duplicate_result_and_truncated_json_rejected_after_raw_save(self):
+        with tempfile.TemporaryDirectory() as td:
+            folder = Path(td); trusted_files(folder)
+            cases = [(stream(result_count=0), "got 0"), (stream(result_count=2), "got 2"), ('{"type":"system"\n', "malformed JSON")]
+            for index, (raw, message) in enumerate(cases):
+                raw_path = folder / f"raw-{index}.jsonl"
+                run = FakeRun([("claude -p --model", lambda _a, _k, raw=raw: raw)])
+                with self.assertRaisesRegex(h.HarnessError, message):
+                    h.invoke_claude({"x": 1}, run, folder, raw_path)
+                self.assertEqual(raw_path.read_text(), raw)
 
     def test_crash_lock_requires_manual_reconciliation(self):
         with tempfile.TemporaryDirectory() as td:
