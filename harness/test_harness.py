@@ -128,6 +128,15 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(h.HarnessError, "cross-repository"):
             h.build_snapshot(h.REPO, 7, run)
 
+    def test_scan_rejects_non_main_base_before_ci_or_review_queries(self):
+        item = pr()
+        item["base"]["ref"] = "release"
+        run = FakeRun([("pulls?state=open", [[item]])])
+        result = h.scan(h.REPO, run)[0]
+        self.assertEqual(result["status"], "UNSUPPORTED")
+        self.assertEqual(result["reason"], "non-main base branch")
+        self.assertEqual(len(run.calls), 1)
+
     def test_truncated_content_rejected(self):
         bad = content_obj(); bad["truncated"] = True
         run = FakeRun([("contents/a.py", bad)])

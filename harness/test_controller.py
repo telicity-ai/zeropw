@@ -80,6 +80,50 @@ class ControllerTests(unittest.TestCase):
             submit.assert_called_once()
             self.assertEqual({e["state"] for e in result["events"]}, {"ready_for_acceptance", "fix_delegated"})
 
+    def test_failed_first_ready_allows_later_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            first = item(sha="a" * 40)
+            second = {**item(sha="b" * 40), "pr": 8}
+            second_record = {"repo": c.REPO, "pr": 8, "head_sha": "b" * 40,
+                             "base_sha": "c" * 40,
+                             "review": {"verdict": "PASS", "summary": "ok", "findings": []}}
+            with patch.object(c.zeropw_harness, "scan", return_value=[first, second]), \
+                 patch.object(c.zeropw_harness, "review",
+                              side_effect=[c.zeropw_harness.HarnessError("bad first PR"), second_record]) as run_review, \
+                 patch.object(c.zeropw_harness, "publish") as publish:
+                result = c.tick(root)
+            self.assertEqual(run_review.call_count, 2)
+            publish.assert_called_once_with(c.REPO, 8, "b" * 40, root.resolve())
+            self.assertEqual([(event["state"], event["pr"]) for event in result["events"]],
+                             [("attention", 7), ("ready_for_acceptance", 8)])
+            self.assertIn("bad first PR", result["events"][0]["reason"])
+
+    def test_known_non_ready_failure_does_not_stop_later_items(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            review(root, "PASS")
+            bad = item("REVIEWED")
+            bad.update(review_published=True, local_verdict="REVISE")
+            later = {**item("CI_FAILED", sha="b" * 40), "pr": 8}
+            with patch.object(c.zeropw_harness, "scan", return_value=[bad, later]):
+                result = c.tick(root)
+            self.assertEqual([(event["state"], event["pr"]) for event in result["events"]],
+                             [("attention", 7), ("CI_attention", 8)])
+            self.assertEqual(result["events"][0]["reason"],
+                             "scan and trusted local review verdict disagree")
+
+    def test_unexpected_pr_failure_retains_lock_and_stops_loop(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            later = {**item("CI_FAILED", sha="b" * 40), "pr": 8}
+            with patch.object(c.zeropw_harness, "scan", return_value=[item(), later]), \
+                 patch.object(c.zeropw_harness, "review", side_effect=KeyError("unexpected")):
+                result = c.tick(root)
+            self.assertTrue(result["lock_retained"])
+            self.assertTrue((root / ".zeropw-harness" / "controller.lock").exists())
+            self.assertFalse(any(event.get("pr") == 8 for event in result["events"]))
+
     def test_blocked_review_reports_explicit_reason(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); review(root, "BLOCKED")
@@ -280,7 +324,8 @@ class ControllerTests(unittest.TestCase):
                  patch.object(c.cloud_runner, "submit") as submit:
                 result = c.tick(root)
             submit.assert_not_called()
-            self.assertEqual(result["events"][0]["state"], "controller_attention")
+            self.assertEqual(result["events"][0]["state"], "attention")
+            self.assertEqual(result["events"][0]["pr"], 7)
             self.assertIn("too large", result["events"][0]["reason"])
 
     def test_needs_approval_not_recollected_or_resubmitted(self):

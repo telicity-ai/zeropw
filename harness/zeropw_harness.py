@@ -208,6 +208,10 @@ def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None
             output.append({"pr": number, "status": "UNSUPPORTED", "reason": "cross-repository PR",
                            "review_published": False, "local_verdict": None})
             continue
+        if base.get("ref") != "main":
+            output.append({"pr": number, "status": "UNSUPPORTED", "reason": "non-main base branch",
+                           "review_published": False, "local_verdict": None})
+            continue
         sha = head.get("sha")
         if not isinstance(number, int) or isinstance(number, bool) or not isinstance(sha, str):
             raise HarnessError("malformed pull request identity")

@@ -86,6 +86,29 @@ class CloudRunnerTests(unittest.TestCase):
             self.assertIs(result["cloud_default_model_accepted"], True)
             self.assertEqual(result["observed_cloud_model_id"], "unknown")
 
+    def test_prompt_outside_repository_is_rejected_before_read_or_submit(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            root, _ = setup_root(workspace / "repo")
+            outside = workspace / "outside.txt"
+            outside.write_text("must not be read")
+            symlink = root / "linked-prompt.txt"
+            symlink.symlink_to(outside)
+            original_read_text = Path.read_text
+
+            def reject_outside_read(path, *args, **kwargs):
+                if path.resolve() == outside.resolve():
+                    raise AssertionError("outside prompt was read")
+                return original_read_text(path, *args, **kwargs)
+
+            for prompt_path in (outside, Path("../outside.txt"), symlink):
+                run = FakeRun([])
+                with self.subTest(prompt_path=prompt_path), patch.object(
+                        Path, "read_text", new=reject_outside_read):
+                    with self.assertRaisesRegex(c.CloudRunnerError, "inside the repository"):
+                        c.submit(root, prompt_path, "main", run=run)
+                self.assertEqual(run.calls, [])
+
     def test_worker_policy_changes_submit_fingerprint(self):
         fields = {"repo": c.REPO, "worker_mode": "codex-cloud-default",
                   "cloud_default_model_accepted": True}
@@ -202,6 +225,23 @@ class CloudRunnerTests(unittest.TestCase):
         normal = ("diff --git a/a.txt b/a.txt\nindex 7898192..6178079 100644\n"
                   "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n")
         c.validate_patch(normal)
+
+    def test_quoted_diff_headers_are_rejected_before_materialize_commands(self):
+        quoted_first = ('diff --git "a/name with space.txt" b/name.txt\n'
+                        '--- "a/name with space.txt"\n+++ b/name.txt\n')
+        quoted_second = ('diff --git a/name.txt "b/name with space.txt"\n'
+                         '--- a/name.txt\n+++ "b/name with space.txt"\n')
+        normal = ("diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n"
+                  "@@ -1 +1 @@\n-a\n+b\n")
+        for value in (quoted_first, quoted_second, normal + quoted_first):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    c.CloudRunnerError, "quoted Git diff paths"):
+                c.validate_patch(value)
+            run = FakeRun([])
+            with self.assertRaisesRegex(c.CloudRunnerError, "quoted Git diff paths"):
+                c._materialize({"base_sha": "a" * 40, "run_id": "run"}, value,
+                               "branch", run)
+            self.assertEqual(run.calls, [])
 
     def test_applied_diff_paths_cover_delete_rename_and_unquoted_names(self):
         raw = ("D\0.github/workflows/old.yml\0R100\0safe.py\0harness/new name.py\0"

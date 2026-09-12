@@ -182,11 +182,14 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
     root_resolved = root.resolve()
     try:
         resolved_prompt = (root_resolved / prompt_file).resolve(strict=True) if not prompt_file.is_absolute() else prompt_file.resolve(strict=True)
-        prompt = resolved_prompt.read_text()
     except OSError as exc:
         raise CloudRunnerError("trusted prompt file is unavailable") from exc
     if not resolved_prompt.is_relative_to(root_resolved):
         raise CloudRunnerError("prompt file must be inside the repository")
+    try:
+        prompt = resolved_prompt.read_text()
+    except OSError as exc:
+        raise CloudRunnerError("trusted prompt file is unavailable") from exc
     if pr_number is not None:
         if not review_sha:
             raise CloudRunnerError("--review-sha is required for a fix")
@@ -314,6 +317,8 @@ def validate_patch(patch: str) -> None:
         raise CloudRunnerError("Git binary patches are forbidden")
     if re.search(r"^(?:new|old)(?: file)? mode (?:120000|160000)$", patch, re.MULTILINE):
         raise CloudRunnerError("symlink and gitlink patches are forbidden")
+    if re.search(r'^diff --git (?:"|a/[^\n]*\s+")', patch, re.MULTILINE):
+        raise CloudRunnerError("quoted Git diff paths are unsupported")
     paths = re.findall(r"^diff --git a/(.+?) b/(.+)$", patch, re.MULTILINE)
     if not paths:
         raise CloudRunnerError("patch has no file paths")

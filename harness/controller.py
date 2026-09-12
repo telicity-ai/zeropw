@@ -328,8 +328,15 @@ def tick(root: Path, repo: str = REPO) -> dict[str, Any]:
             if item.get("status") == "READY":
                 if ready_handled:
                     continue
+            try:
+                _handle_pr(root, item, events)
+            except (ControllerError, cloud_runner.CloudRunnerError,
+                    zeropw_harness.HarnessError) as exc:
+                events.add("attention", pr=item.get("pr"), sha=item.get("head_sha"),
+                           reason=str(exc))
+                continue
+            if item.get("status") == "READY":
                 ready_handled = True
-            _handle_pr(root, item, events)
         events.save()
         result = events.result()
     except (ControllerError, cloud_runner.CloudRunnerError, zeropw_harness.HarnessError) as exc:
