@@ -218,7 +218,7 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
         prior = list((root / ".zeropw-harness" / "runs").glob("*.json"))
         records = [_run_record(p, f"run ledger {p.name}") for p in prior]
         if any(x.get("pr") == pr_number and x.get("status") in
-               {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}
+               {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval", "cloud-failed", "cloud-status-unknown"}
                for x in records):
             raise CloudRunnerError("a fix run for this PR is already active or uncertain")
         rounds = sum(1 for x in records if x.get("pr") == pr_number)
@@ -236,7 +236,7 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
     for prior_path in (root / ".zeropw-harness" / "runs").glob("*.json"):
         prior = _run_record(prior_path, f"run ledger {prior_path.name}")
         if prior.get("input_fingerprint") == fingerprint and prior.get("status") in {
-                "prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}:
+                "prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval", "cloud-failed", "cloud-status-unknown"}:
             return {**prior, "duplicate": True}
     run_id = str(uuid.uuid4())
     path = _run_path(root, run_id)

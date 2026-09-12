@@ -18,8 +18,8 @@ import cloud_runner
 import zeropw_harness
 
 REPO = zeropw_harness.REPO
-ACTIVE_RUN_STATES = {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}
-TERMINAL_ATTENTION_STATES = {"prepared", "submitting", "submit-uncertain", "branch-raced", "cloud-failed"}
+ACTIVE_RUN_STATES = {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval", "cloud-failed", "cloud-status-unknown"}
+TERMINAL_ATTENTION_STATES = {"prepared", "submitting", "submit-uncertain", "branch-raced", "cloud-failed", "cloud-status-unknown"}
 MAX_FIX_PROMPT_BYTES = 200_000
 ATTENTION_STATES = {
     "attention",
