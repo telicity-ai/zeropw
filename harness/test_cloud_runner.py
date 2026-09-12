@@ -71,6 +71,25 @@ class CloudRunnerTests(unittest.TestCase):
             command = next(call[0] for call in run.calls if "cloud" in call[0] and "exec" in call[0])
             self.assertIn("trusted instructions included inline", command[-1])
             self.assertNotIn("Follow prompt.txt", command[-1])
+            self.assertEqual(result["worker_mode"], "codex-cloud-default")
+            self.assertIs(result["cloud_default_model_accepted"], True)
+            self.assertEqual(result["observed_cloud_model_id"], "unknown")
+
+    def test_worker_policy_changes_submit_fingerprint(self):
+        fields = {"repo": c.REPO, "worker_mode": "codex-cloud-default",
+                  "cloud_default_model_accepted": True}
+        changed = {**fields, "cloud_default_model_accepted": False}
+        self.assertNotEqual(c._fingerprint(fields), c._fingerprint(changed))
+
+    def test_unaccepted_cloud_default_model_remains_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, _ = setup_root(td)
+            config_path = root / ".zeropw-harness" / "config.json"
+            config = json.loads(config_path.read_text())
+            config["cloud_default_model_accepted"] = False
+            config_path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(c.CloudRunnerError, "not accepted"):
+                c.load_config(root)
 
     def test_malformed_existing_ledger_blocks_submit(self):
         with tempfile.TemporaryDirectory() as td:
@@ -145,6 +164,9 @@ class CloudRunnerTests(unittest.TestCase):
             ".github/workflows/old.yml", "AGENTS.md", "docs/harness.md", "harness/new name.py"])
         self.assertEqual(c._control_paths(["docs/product-intent.md", "docs/security-design.md"]),
                          ["docs/product-intent.md", "docs/security-design.md"])
+        mixed_case = [".GitHub/workflows/x.yml", "Harness/tool.py", "agents.MD",
+                      "Docs/Security-Design.md"]
+        self.assertEqual(c._control_paths(mixed_case), mixed_case)
 
     def test_control_plane_patch_returns_needs_approval_without_push(self):
         with tempfile.TemporaryDirectory() as td:

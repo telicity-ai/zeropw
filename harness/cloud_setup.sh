@@ -15,10 +15,6 @@ if ! command -v ssh >/dev/null 2>&1; then
 fi
 
 cd "$REPO_ROOT"
-python3 -m compileall -q harness
-python3 -m unittest discover -s harness -p 'test_*.py' -v
-if [ -d tests ]; then
-  python3 -m unittest discover -s tests -p 'test_*.py' -v
-fi
+python3 -I -m compileall -q harness
 
-echo "ZeroPW harness smoke check passed."
+echo "ZeroPW setup prerequisites and compile check passed. Run tests in CI or the worker phase."

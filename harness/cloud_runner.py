@@ -225,7 +225,9 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
         raise CloudRunnerError("fix branch base no longer matches the reviewed SHA")
     identity = {"repo": REPO, "environment": config["cloud_environment_id"], "branch": branch,
                 "base_sha": base, "pr": pr_number, "review_sha": review_sha,
-                "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+                "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+                "worker_mode": config["worker_mode"],
+                "cloud_default_model_accepted": config["cloud_default_model_accepted"]}
     fingerprint = _fingerprint(identity)
     for prior_path in (root / ".zeropw-harness" / "runs").glob("*.json"):
         prior = _run_record(prior_path, f"run ledger {prior_path.name}")
@@ -239,6 +241,9 @@ def submit(root: Path, prompt_file: Path, branch: str, pr_number: int | None = N
     record = {"run_id": run_id, "repo": REPO, "environment": config["cloud_environment_id"],
               "branch": branch, "base_sha": base, "pr": pr_number, "review_sha": review_sha,
               "prompt_sha256": identity["prompt_sha256"], "input_fingerprint": fingerprint,
+              "worker_mode": identity["worker_mode"],
+              "cloud_default_model_accepted": identity["cloud_default_model_accepted"],
+              "observed_cloud_model_id": "unknown",
               "status": "prepared"}
     _atomic(path, record)
     record["status"] = "submitting"
@@ -341,9 +346,11 @@ def _changed_paths_from_diff_tree(raw: str) -> list[str]:
 
 def _control_paths(paths: list[str]) -> list[str]:
     protected_docs = {"docs/harness.md", "docs/product-intent.md", "docs/security-design.md"}
-    return [path for path in paths if path == "AGENTS.md" or path in protected_docs or
-            path.startswith(".github/") or
-            path.startswith("harness/")]
+    protected_docs_folded = {path.casefold() for path in protected_docs}
+    return [path for path in paths if path.casefold() == "agents.md" or
+            path.casefold() in protected_docs_folded or
+            path.casefold().startswith(".github/") or
+            path.casefold().startswith("harness/")]
 
 
 def _materialize(record: dict[str, Any], patch: str, branch: str,

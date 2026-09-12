@@ -21,6 +21,16 @@ REPO = zeropw_harness.REPO
 ACTIVE_RUN_STATES = {"prepared", "submitting", "submit-uncertain", "submitted", "branch-raced", "needs-approval"}
 TERMINAL_ATTENTION_STATES = {"prepared", "submitting", "submit-uncertain", "branch-raced", "cloud-failed"}
 MAX_FIX_PROMPT_BYTES = 200_000
+ATTENTION_STATES = {
+    "attention",
+    "CI_attention",
+    "cloud_run_attention",
+    "cloud_collect_attention",
+    "cloud_change_needs_approval",
+    "fix_submit_failed",
+    "fix_pending_configuration",
+    "controller_attention",
+}
 
 
 class ControllerError(RuntimeError):
@@ -91,10 +101,13 @@ class Events:
         else:
             self.seen: set[str] = set()
         self.new: list[dict[str, Any]] = []
+        self.attention = False
 
     def add(self, state: str, *, pr: int | None = None, sha: str | None = None,
             run_id: str | None = None, reason: str | None = None, **details: Any) -> None:
         event = {"state": state}
+        if state in ATTENTION_STATES:
+            self.attention = True
         if pr is not None:
             event["pr"] = pr
         if sha is not None:
@@ -112,6 +125,12 @@ class Events:
     def save(self) -> None:
         if self.new:
             _atomic_json(self.path, {"fingerprints": sorted(self.seen), "updated_at": int(time.time())})
+
+    def result(self) -> dict[str, Any]:
+        result = {"changed": bool(self.new), "events": self.new}
+        if self.attention:
+            result["attention"] = True
+        return result
 
 
 def _local_review(root: Path, pr: int, sha: str) -> dict[str, Any] | None:
@@ -307,7 +326,7 @@ def tick(root: Path, repo: str = REPO) -> dict[str, Any]:
                 ready_handled = True
             _handle_pr(root, item, events)
         events.save()
-        result = {"changed": bool(events.new), "events": events.new}
+        result = events.result()
     except (ControllerError, cloud_runner.CloudRunnerError, zeropw_harness.HarnessError) as exc:
         result = _best_effort_attention(events, str(exc), lock_retained=False)
         lock.unlink()
@@ -341,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     critical = (result.get("lock_retained") is True or result.get("attention") is True
-                or any(event.get("state") == "controller_attention"
+                or any(event.get("state") in ATTENTION_STATES
                        for event in result.get("events", []) if isinstance(event, dict)))
     return 2 if critical else 0
 

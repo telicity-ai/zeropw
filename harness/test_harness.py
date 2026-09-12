@@ -153,6 +153,23 @@ class HarnessTests(unittest.TestCase):
         untrusted = check(ident=4); untrusted["app"] = {"slug": "other"}
         self.assertEqual(h._ci_state([untrusted]), "pending")
 
+    def test_null_and_malformed_check_run_apps_are_normalized(self):
+        self.assertEqual(h._ci_state([{"app": None}]), "pending")
+        with self.assertRaisesRegex(h.HarnessError, "check-run app"):
+            h._ci_state([{"app": []}])
+        for malformed in ([{"total_count": 1, "check_runs": None}],
+                          [{"total_count": 1, "check_runs": [None]}]):
+            run = FakeRun([("check-runs", malformed)])
+            with self.assertRaises(h.HarnessError):
+                h.check_runs(h.REPO, "head", run)
+
+    def test_malformed_tree_shapes_are_harness_errors(self):
+        for value in (None, [], {"truncated": False, "tree": [None]},
+                      {"truncated": False, "tree": [{"path": None}]}):
+            run = FakeRun([("git/trees", value)])
+            with self.assertRaises(h.HarnessError):
+                h._tree(h.REPO, "head", run)
+
     def test_review_schema_rejects_duplicate_ids_bool_line_and_unknown_location(self):
         snapshot = {"files": [{"path": "a.py", "head": "one\ntwo", "base": "one"}], "trusted_docs": {}}
         finding = {"id": "F1", "severity": "high", "file": "a.py", "line": 2,

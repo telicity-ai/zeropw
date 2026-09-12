@@ -110,7 +110,7 @@ class ControllerTests(unittest.TestCase):
             with patch.object(c.zeropw_harness, "scan", return_value=[changed_item]):
                 changed = c.tick(root)
             self.assertEqual(first["events"][0]["reason"], "trusted CI workflow blob differs")
-            self.assertEqual(unchanged, {"changed": False, "events": []})
+            self.assertEqual(unchanged, {"changed": False, "events": [], "attention": True})
             self.assertEqual(changed["events"][0]["reason"], "local review record is malformed")
 
     def test_blocked_run_not_retried_and_deduped(self):
@@ -121,7 +121,7 @@ class ControllerTests(unittest.TestCase):
                 first, second = c.tick(root), c.tick(root)
             collect.assert_not_called()
             self.assertTrue(first["changed"])
-            self.assertEqual(second, {"changed": False, "events": []})
+            self.assertEqual(second, {"changed": False, "events": [], "attention": True})
 
     def test_duplicate_fix_delegate(self):
         with tempfile.TemporaryDirectory() as td:
@@ -204,6 +204,24 @@ class ControllerTests(unittest.TestCase):
         result = {"changed": False, "events": [], "lock_retained": True}
         with patch.object(c, "tick", return_value=result), redirect_stdout(io.StringIO()):
             self.assertEqual(c.main(["tick"]), 2)
+
+    def test_all_attention_states_survive_dedupe_and_exit_nonzero(self):
+        for state in sorted(c.ATTENTION_STATES):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                events = c.Events(root); events.add(state, pr=7, sha="a" * 40); events.save()
+                repeated = c.Events(root); repeated.add(state, pr=7, sha="a" * 40)
+                result = repeated.result()
+                self.assertEqual(result, {"changed": False, "events": [], "attention": True})
+                with patch.object(c, "tick", return_value=result), redirect_stdout(io.StringIO()):
+                    self.assertEqual(c.main(["tick"]), 2)
+
+    def test_pass_and_pending_results_exit_zero(self):
+        for result in ({"changed": False, "events": []},
+                       {"changed": True, "events": [{"state": "ready_for_acceptance", "pr": 7}]}):
+            with self.subTest(result=result), patch.object(c, "tick", return_value=result), \
+                 redirect_stdout(io.StringIO()):
+                self.assertEqual(c.main(["tick"]), 0)
 
     def test_submitted_cloud_pending_is_quiet(self):
         with tempfile.TemporaryDirectory() as td:

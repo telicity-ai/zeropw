@@ -58,6 +58,26 @@ def json_load(raw: str, context: str) -> Any:
         raise HarnessError(f"malformed JSON from {context}") from exc
 
 
+def require_dict(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HarnessError(f"malformed object from {context}")
+    return value
+
+
+def require_dict_list(value: Any, context: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise HarnessError(f"malformed object list from {context}")
+    return value
+
+
+def validate_remote_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for item in require_dict_list(reviews, "pull request reviews"):
+        if (not isinstance(item.get("user"), dict) or not isinstance(item.get("body"), (str, type(None)))
+                or not isinstance(item.get("commit_id"), (str, type(None)))):
+            raise HarnessError("malformed pull request review item")
+    return reviews
+
+
 def gh_json(run: Callable[..., str], endpoint: str, *args: str, paginate: bool = False) -> Any:
     argv = ["gh", "api", endpoint, *args]
     if paginate:
@@ -66,7 +86,7 @@ def gh_json(run: Callable[..., str], endpoint: str, *args: str, paginate: bool =
     if paginate:
         if not isinstance(data, list) or not all(isinstance(page, list) for page in data):
             raise HarnessError(f"incomplete pagination shape for {endpoint}")
-        return [item for page in data for item in page]
+        return require_dict_list([item for page in data for item in page], endpoint)
     return data
 
 
@@ -76,7 +96,17 @@ def check_runs(repo: str, sha: str, run: Callable[..., str]) -> list[dict[str, A
     pages = json_load(run(argv), endpoint)
     if not isinstance(pages, list) or not all(isinstance(p, dict) for p in pages):
         raise HarnessError("incomplete check-run pagination shape")
-    checks = [item for page in pages for item in page.get("check_runs", [])]
+    checks = []
+    for page in pages:
+        if not isinstance(page.get("total_count"), int) or isinstance(page.get("total_count"), bool):
+            raise HarnessError("malformed check-run total count")
+        runs = page.get("check_runs")
+        if not isinstance(runs, list):
+            raise HarnessError("malformed check-runs page")
+        for item in runs:
+            if not isinstance(item, dict) or not (item.get("app") is None or isinstance(item.get("app"), dict)):
+                raise HarnessError("malformed check-run item")
+            checks.append(item)
     totals = {page.get("total_count") for page in pages}
     if len(totals) != 1 or totals.pop() != len(checks):
         raise HarnessError("check-run pagination incomplete")
@@ -104,7 +134,20 @@ def doctor(run: Callable[..., str] = CommandRunner()) -> dict[str, Any]:
 
 
 def _ci_state(checks: list[dict[str, Any]]) -> str:
-    trusted = [x for x in checks if x.get("app", {}).get("slug") == "github-actions"]
+    if not isinstance(checks, list):
+        raise HarnessError("malformed check-runs collection")
+    trusted = []
+    for item in checks:
+        if not isinstance(item, dict):
+            raise HarnessError("malformed check-run item")
+        app = item.get("app")
+        if app is not None and not isinstance(app, dict):
+            raise HarnessError("malformed check-run app")
+        if isinstance(app, dict) and app.get("slug") == "github-actions":
+            if (not isinstance(item.get("id"), int) or isinstance(item.get("id"), bool)
+                    or not isinstance(item.get("name"), str) or not isinstance(item.get("status"), str)):
+                raise HarnessError("malformed trusted check-run")
+            trusted.append(item)
     latest: dict[str, dict[str, Any]] = {}
     for check in trusted:
         name = check.get("name")
@@ -152,14 +195,22 @@ def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None
     pulls = gh_json(run, f"repos/{repo}/pulls?state=open&per_page=100", paginate=True)
     output = []
     for pr in pulls:
+        if not isinstance(pr, dict):
+            raise HarnessError("malformed pull request item")
         number = pr.get("number")
         head = pr.get("head") or {}
         base = pr.get("base") or {}
+        if not isinstance(head, dict) or not isinstance(base, dict):
+            raise HarnessError("malformed pull request refs")
+        if not isinstance(head.get("repo"), dict) or not isinstance(base.get("repo"), dict):
+            raise HarnessError("malformed pull request repositories")
         if head.get("repo", {}).get("full_name") != repo or base.get("repo", {}).get("full_name") != repo:
             output.append({"pr": number, "status": "UNSUPPORTED", "reason": "cross-repository PR",
                            "review_published": False, "local_verdict": None})
             continue
         sha = head.get("sha")
+        if not isinstance(number, int) or isinstance(number, bool) or not isinstance(sha, str):
+            raise HarnessError("malformed pull request identity")
         body = pr.get("body") or ""
         trusted_review = False
         local_verdict = None
@@ -186,7 +237,7 @@ def scan(repo: str, run: Callable[..., str] = CommandRunner(), root: Path | None
         elif ci == "failed":
             status = "CI_FAILED"
         else:
-            reviews = gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True)
+            reviews = validate_remote_reviews(gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True))
             marker = f"<!-- zeropw-opus:{sha} -->"
             expected = None
             result_path = _review_paths(root, number, sha)[1]
@@ -219,10 +270,18 @@ def git_blob_sha(content: bytes) -> str:
 
 
 def _tree(repo: str, ref: str, run: Callable[..., str]) -> dict[str, dict[str, Any]]:
-    obj = gh_json(run, f"repos/{repo}/git/trees/{ref}?recursive=1")
+    obj = require_dict(gh_json(run, f"repos/{repo}/git/trees/{ref}?recursive=1"), "git tree")
     if obj.get("truncated") is not False or not isinstance(obj.get("tree"), list):
         raise HarnessError("repository tree is truncated or malformed")
-    return {entry.get("path"): entry for entry in obj["tree"] if isinstance(entry.get("path"), str)}
+    tree: dict[str, dict[str, Any]] = {}
+    for entry in obj["tree"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise HarnessError("malformed repository tree entry")
+        path = entry["path"]
+        if path in tree:
+            raise HarnessError("duplicate repository tree path")
+        tree[path] = entry
+    return tree
 
 
 def _content(repo: str, path: str, ref: str, run: Callable[..., str], tree: dict[str, dict[str, Any]]) -> tuple[bytes, str]:
@@ -230,11 +289,13 @@ def _content(repo: str, path: str, ref: str, run: Callable[..., str], tree: dict
     if not entry or entry.get("type") != "blob" or entry.get("mode") in {"120000", "160000"}:
         raise HarnessError(f"unsupported non-regular file: {path}")
     encoded = urllib.parse.quote(path, safe="/")
-    obj = gh_json(run, f"repos/{repo}/contents/{encoded}?ref={ref}")
+    obj = require_dict(gh_json(run, f"repos/{repo}/contents/{encoded}?ref={ref}"), "repository contents")
     if obj.get("type") != "file" or obj.get("target") is not None:
         raise HarnessError(f"unsupported non-regular file: {path}")
     if obj.get("encoding") != "base64" or obj.get("truncated"):
         raise HarnessError(f"truncated or unsupported content: {path}")
+    if not isinstance(obj.get("content"), str) or not isinstance(obj.get("sha"), str):
+        raise HarnessError(f"malformed content for {path}")
     try:
         encoded_content = re.sub(r"\s+", "", obj["content"])
         data = base64.b64decode(encoded_content, validate=True)
@@ -254,7 +315,11 @@ def _content(repo: str, path: str, ref: str, run: Callable[..., str], tree: dict
 
 
 def _pr(repo: str, number: int, run: Callable[..., str]) -> dict[str, Any]:
-    pr = gh_json(run, f"repos/{repo}/pulls/{number}")
+    pr = require_dict(gh_json(run, f"repos/{repo}/pulls/{number}"), "pull request")
+    if not isinstance(pr.get("head"), dict) or not isinstance(pr.get("base"), dict):
+        raise HarnessError("malformed pull request refs")
+    if not isinstance(pr["head"].get("repo"), dict) or not isinstance(pr["base"].get("repo"), dict):
+        raise HarnessError("malformed pull request repositories")
     if pr.get("state") != "open":
         raise HarnessError("PR is not open")
     if pr.get("head", {}).get("repo", {}).get("full_name") != repo:
@@ -263,6 +328,8 @@ def _pr(repo: str, number: int, run: Callable[..., str]) -> dict[str, Any]:
         raise HarnessError("unexpected base repository")
     if pr.get("base", {}).get("ref") != "main":
         raise HarnessError("PR base branch must be main")
+    if not isinstance(pr["head"].get("sha"), str) or not isinstance(pr["base"].get("sha"), str):
+        raise HarnessError("malformed pull request SHAs")
     return pr
 
 
@@ -270,8 +337,11 @@ def build_snapshot(repo: str, number: int, run: Callable[..., str]) -> dict[str,
     assert_repo(repo)
     pr = _pr(repo, number, run)
     head, main_base = pr["head"]["sha"], pr["base"]["sha"]
-    comparison = gh_json(run, f"repos/{repo}/compare/{main_base}...{head}")
-    merge_base = comparison.get("merge_base_commit", {}).get("sha")
+    comparison = require_dict(gh_json(run, f"repos/{repo}/compare/{main_base}...{head}"), "comparison")
+    merge_obj = comparison.get("merge_base_commit")
+    if not isinstance(merge_obj, dict):
+        raise HarnessError("missing or malformed merge base")
+    merge_base = merge_obj.get("sha")
     if not isinstance(merge_base, str) or not re.fullmatch(r"[0-9a-f]{40}", merge_base):
         raise HarnessError("missing or malformed merge base")
     head_tree, merge_tree, main_tree = _tree(repo, head, run), _tree(repo, merge_base, run), _tree(repo, main_base, run)
@@ -281,6 +351,8 @@ def build_snapshot(repo: str, number: int, run: Callable[..., str]) -> dict[str,
     collected = []
     total = 0
     for f in files:
+        if not isinstance(f, dict):
+            raise HarnessError("malformed changed-file item")
         path = f.get("filename", "")
         if not path or path.startswith("/") or ".." in Path(path).parts:
             raise HarnessError("unsafe changed path")
@@ -547,7 +619,7 @@ def publish(repo: str, number: int, sha: str, root: Path, run: Callable[..., str
         raise HarnessError("publish is inflight or crashed; manual reconciliation required") from exc
     try:
         marker = f"<!-- zeropw-opus:{sha} -->"
-        reviews = gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True)
+        reviews = validate_remote_reviews(gh_json(run, f"repos/{repo}/pulls/{number}/reviews?per_page=100", paginate=True))
         body = render_review(record)
         if any(r.get("user", {}).get("login") == "handlecusion" and r.get("commit_id") == sha
                and r.get("body") == body and marker in (r.get("body") or "") for r in reviews):
