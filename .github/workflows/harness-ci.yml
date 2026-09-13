@@ -1,0 +1,40 @@
+name: Harness CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Compile harness modules
+        run: python -m compileall -q harness
+
+      - name: Run harness unit tests
+        run: python -m unittest discover -s harness -p 'test_*.py' -v
+
+      - name: Run product tests when present
+        run: |
+          if [ -d tests ]; then
+            python -m unittest discover -s tests -p 'test_*.py' -v
+          fi
