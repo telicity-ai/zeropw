@@ -24,7 +24,7 @@ import json
 import re
 import time
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .errors import AuditUnavailable, InvalidInput
 from .store import StateDir, iso
@@ -43,8 +43,10 @@ EVENTS = frozenset({
     "grant_create", "grant_revoke", "grant_regrant", "grant_stale",
     "stop_all", "resume", "approval_request", "approval_grant", "approval_consume",
     "handle_issue", "tools_list_connections", "tools_request", "tools_exec", "tools_status", "tools_cancel",
+    "tools_unknown",
     "http_relay", "ssh_bind", "ssh_sign", "ssh_agent_refused", "run_start", "run_finish", "run_cancel",
     "backup", "restore", "restore_ack", "recover", "rotation", "unsupported", "auth_failed",
+    "incident_open", "incident_widen", "incident_close", "incident_notify",
 })
 
 EXTRA_KEYS = frozenset({
@@ -52,6 +54,7 @@ EXTRA_KEYS = frozenset({
     "exit_code", "program", "secret_id", "version", "grant", "principal", "digest", "state",
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
+    "incident_id", "scope", "runtime", "rule", "tier",
 })
 
 # Anomalies that mean a credential or handle nearly left the trusted boundary (alerted every time).
@@ -157,6 +160,11 @@ class Audit:
         reason = record.get("reason")
         if record["event"] == "secret_reveal":
             self._alert("secret_reveal", record, "administrator revealed a single secret version")
+        if record["event"] == "incident_open":
+            self._alert("intrusion", record,
+                        f"incident opened: scope={record.get('scope')} reason={reason or 'unknown'}")
+        if record["event"] == "incident_widen":
+            self._alert("intrusion", record, f"incident widened to scope={record.get('scope')}")
         if reason == "credential_reflection_blocked":
             self._alert("credential_reflection", record, "upstream response reflected the credential; blocked")
         if reason in CREDENTIAL_EXPOSURE_REASONS:
@@ -183,6 +191,20 @@ class Audit:
     def tail(self, limit: int = 50) -> list[dict[str, Any]]:
         lines = [l for l in self.state.read_lines(AUDIT_FILE, None) if l]
         return [json.loads(line) for line in lines[-limit:]]
+
+    def iter_records(self) -> Iterator[dict[str, Any]]:
+        """Every parsed record in the log, in order.  Unlike ``tail`` this is not capped:
+        used by the compromise-response exposure assessment, which must see the whole
+        history from a principal's token creation onward.  Unparseable lines are skipped."""
+        for line in self.state.read_lines(AUDIT_FILE, None):
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                yield record
 
     def alerts(self, limit: int = 50) -> list[dict[str, Any]]:
         lines = [l for l in self.state.read_lines(ALERT_FILE, None) if l]

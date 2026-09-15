@@ -409,7 +409,7 @@ class AdminCliTestCase(unittest.TestCase):
         self.assertTrue(token.startswith("zpwc_"))
         self.assertEqual(self.ctx().policy.authenticate(token).id, "agent-1")
         listing = self.ok("principal", "list")
-        self.assertEqual(listing["principals"], [{"id": "agent-1", "status": "active",
+        self.assertEqual(listing["principals"], [{"id": "agent-1", "status": "active", "runtime": "default",
                                                   "created_at": listing["principals"][0]["created_at"]}])
         self.assertNotIn(token, json.dumps(listing))
         self.assertNotIn(P.hash_token(token), json.dumps(listing))
@@ -468,7 +468,7 @@ class AdminCliTestCase(unittest.TestCase):
         self.ok("principal", "create", "--id", "agent-1")
         self.ok("grant", "create", "--principal", "agent-1", "--connection", "gh")
         stopped = self.ok("stop-all")
-        self.assertEqual(stopped, {"stopped": True, "restore_pending": False})
+        self.assertEqual(stopped, {"stopped": True, "restore_pending": False, "incident_open": None})
         policy = self.ctx().policy
         self.assertTrue(policy.is_stopped())
         self.assertEqual(policy.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos")).reason, "global_stop")
@@ -929,7 +929,7 @@ class AdminCliTestCase(unittest.TestCase):
         self.assertFalse(policy.restore_pending())
         self.assertEqual(policy.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos")).reason, "global_stop")
         self.assertEqual(policy.usable_connections("agent-1"), [])
-        self.assertEqual(self.ok("resume"), {"stopped": False, "restore_pending": False})
+        self.assertEqual(self.ok("resume"), {"stopped": False, "restore_pending": False, "incident_open": None})
         self.assertTrue(self.ctx().policy.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos")).allowed)
         # resume before restore-ack lifts only the stop; restore_pending still closes execution.
         self.ok("stop-all")

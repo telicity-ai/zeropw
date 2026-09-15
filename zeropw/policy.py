@@ -467,6 +467,7 @@ class Principal:
     token_hash: str
     status: str
     created_at: str
+    runtime: str = "default"
 
 
 @dataclass(frozen=True)
@@ -720,18 +721,28 @@ class Policy:
         return [after for after, _ in changed]
 
     # principals -------------------------------------------------------------
-    def create_principal(self, principal_id: str) -> str:
+    def create_principal(self, principal_id: str, runtime: str = "default") -> str:
         validate_name(principal_id, "principal_id")
+        validate_name(runtime, "runtime")
         token = "zpwc_" + secrets.token_urlsafe(32)
         with self.state.lock():
             doc = self._principals()
             if principal_id in doc:
                 raise InvalidInput("principal_exists")
-            doc[principal_id] = {"token_hash": hash_token(token), "status": "active", "created_at": iso(self.clock())}
+            doc[principal_id] = {"token_hash": hash_token(token), "status": "active", "created_at": iso(self.clock()),
+                                 "runtime": runtime}
             self.state.write_json(PRINCIPALS, doc)
         return token
 
-    def disable_principal(self, principal_id: str) -> None:
+    def disable_principal(self, principal_id: str, *, notify: bool = True) -> None:
+        """Permanently invalidate a principal's token.
+
+        ``notify=False`` skips the ``_notify_revoke`` fan-out (which would
+        cancel *every* active run/socket, not just this principal's -- see
+        ``RunRegistry.on_revoke``).  The compromise-response incident module
+        uses this to disable a principal without over-cancelling other
+        principals' work; it does its own precise per-principal cancellation.
+        """
         with self.state.lock():
             doc = self._principals()
             if principal_id not in doc:
@@ -740,16 +751,22 @@ class Policy:
             doc[principal_id]["status"] = "disabled"
             self.state.write_json(PRINCIPALS, doc)
             self._invalidate_approvals(lambda e: e.get("caller") == principal_id, "principal_disabled")
-        self._notify_revoke("principal", None)
+        if notify:
+            self._notify_revoke("principal", None)
 
     def get_principal(self, principal_id: str) -> Principal:
         entry = self._principals().get(principal_id)
         if entry is None:
             raise NotFound("principal_not_found")
-        return Principal(principal_id, entry["token_hash"], entry["status"], entry["created_at"])
+        return Principal(principal_id, entry["token_hash"], entry["status"], entry["created_at"],
+                         entry.get("runtime", "default"))
 
     def list_principals(self) -> list[Principal]:
-        return [Principal(pid, e["token_hash"], e["status"], e["created_at"]) for pid, e in sorted(self._principals().items())]
+        return [Principal(pid, e["token_hash"], e["status"], e["created_at"], e.get("runtime", "default"))
+                for pid, e in sorted(self._principals().items())]
+
+    def principals_in_runtime(self, runtime: str) -> list[Principal]:
+        return [p for p in self.list_principals() if p.runtime == runtime]
 
     def authenticate(self, token: str) -> Principal:
         if not isinstance(token, str) or not token.startswith("zpwc_") or len(token) > 256:
@@ -759,7 +776,8 @@ class Policy:
             if secrets.compare_digest(entry["token_hash"], digest):
                 if entry["status"] != "active":
                     raise AuthFailed("principal_disabled")
-                return Principal(pid, entry["token_hash"], entry["status"], entry["created_at"])
+                return Principal(pid, entry["token_hash"], entry["status"], entry["created_at"],
+                                 entry.get("runtime", "default"))
         raise AuthFailed("caller_token_invalid")
 
     # connections ------------------------------------------------------------
@@ -957,6 +975,30 @@ class Policy:
         self._notify_revoke("all", None)
         return count
 
+    def revoke_grants_of(self, principal_id: str) -> int:
+        """Revoke every active/stale grant of one principal; notify per grant for precise cancellation.
+
+        Used by the compromise-response incident module (``principal`` scope):
+        unlike ``revoke_all``, this only touches one principal's grants, and
+        the per-grant ``_notify_revoke("grant", grant_id)`` cancels exactly
+        that grant's runs/signer sockets instead of every active one.
+        """
+        revoked_ids: list[str] = []
+        with self.state.lock():
+            doc = self._grants()
+            for grant_id, entry in doc.items():
+                if entry.get("principal") == principal_id and entry.get("status") in ("active", "stale"):
+                    append_revocation(self.state, "grant", id=grant_id)
+                    entry["status"] = "revoked"
+                    entry["revoked_at"] = iso(self.clock())
+                    revoked_ids.append(grant_id)
+            if revoked_ids:
+                self.state.write_json(GRANTS, doc)
+                self._invalidate_approvals(lambda e: e.get("caller") == principal_id, "grant_revoked")
+        for grant_id in revoked_ids:
+            self._notify_revoke("grant", grant_id)
+        return len(revoked_ids)
+
     def regrant(self, grant_id: str) -> Grant:
         """Issue a fresh grant with the same limits at the current policy version."""
         with self.state.lock():
@@ -992,11 +1034,27 @@ class Policy:
     def resume(self) -> None:
         with self.state.lock():
             control = self._control()
+            open_incident = control.get("incident_open")
+            if open_incident:
+                raise InvalidInput("incident_open", open_incident)
             control["stopped"] = False
             self.state.write_json(CONTROL, control)
 
     def is_stopped(self) -> bool:
         return bool(self._control().get("stopped"))
+
+    # compromise-response incidents (docs/compromise-response.md) ------------
+    def open_incident_id(self) -> str | None:
+        """The currently open incident's id, or ``None`` while resume() is allowed."""
+        value = self._control().get("incident_open")
+        return value if isinstance(value, str) and value else None
+
+    def set_open_incident(self, incident_id: str | None) -> None:
+        """Record (or clear) the open incident.  While set, ``resume`` is refused."""
+        with self.state.lock():
+            control = self._control()
+            control["incident_open"] = incident_id
+            self.state.write_json(CONTROL, control)
 
     def set_restore_pending(self, pending: bool) -> None:
         with self.state.lock():
