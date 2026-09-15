@@ -149,6 +149,13 @@ def _sanitize_and_write(ctx: Any, incident: Incident) -> None:
     ctx.state.write_json(_path_for(incident.id), incident.to_dict())
 
 
+def save_incident(ctx: Any, incident: Incident) -> None:
+    """Public wrapper around the value-free write, for other trusted modules (``zeropw.notify``)
+    that mutate an already-open ``Incident`` (its ``notification`` field) and need to persist
+    that change without duplicating the vault scan."""
+    _sanitize_and_write(ctx, incident)
+
+
 # ------------------------------------------------------------------- lookups
 def get_incident(ctx: Any, incident_id: str) -> Incident:
     data = ctx.state.read_json(_path_for(incident_id), None)
@@ -317,6 +324,25 @@ def _safe_assess(ctx: Any, incident: Incident, principals: list[str], scope: str
         return incident.assessment or {}
 
 
+def _deliver_notification(ctx: Any, incident: Incident) -> None:
+    """§4.4 step 8: send (or re-send, on widen) the replacement-guidance email.
+
+    Lazily imported so ``zeropw.notify`` (which imports this module at the top level to build
+    and persist the ``Incident`` it renders) never has to import back into ``zeropw.incident``.
+    A failure -- notify.py unavailable, or ``deliver`` itself raising despite its own internal
+    try/except -- is recorded in ``failed_steps`` and never blocks step 9.
+    """
+    try:
+        from . import notify
+    except ImportError:
+        incident.actions.setdefault("failed_steps", []).append("notify_unavailable")
+        return
+    try:
+        notify.deliver(ctx, incident)
+    except Exception:
+        incident.actions.setdefault("failed_steps", []).append("notify")
+
+
 def _audit_incident(ctx: Any, event: str, incident: Incident, *, reason: str | None) -> None:
     try:
         ctx.audit.record(event, result="ok", reason=reason,
@@ -362,7 +388,7 @@ def open_incident(ctx: Any, *, scope: str, principals: Iterable[str] | None = No
 
     _apply_lockdown(ctx, incident, resolved, scope=scope, runtime=runtime)   # steps 2-6
     incident.assessment = _safe_assess(ctx, incident, resolved, scope)       # step 7
-    # step 8: incident.notification stays {"status": "not_configured", ...} -- stage 4's job.
+    _deliver_notification(ctx, incident)                                    # step 8
     _sanitize_and_write(ctx, incident)
     _audit_incident(ctx, "incident_open", incident, reason=incident.trigger)  # step 9
     return incident
@@ -388,6 +414,7 @@ def widen_incident(ctx: Any, incident_id: str, *, scope: str, runtime: str | Non
 
     _apply_lockdown(ctx, incident, new_ids, scope=scope, runtime=runtime)
     incident.assessment = _safe_assess(ctx, incident, incident.principals, scope)
+    _deliver_notification(ctx, incident)   # §4.4 last paragraph: widening re-sends the email
     _sanitize_and_write(ctx, incident)
     _audit_incident(ctx, "incident_widen", incident, reason="widen")
     return incident

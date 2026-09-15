@@ -16,6 +16,12 @@ Design rules (docs/security-design.md §6):
   (TLS server identity, unavailable credential), use under revoked/stale/
   stopped policy, and repeated denials -- counted per caller, and per event
   and reason for unauthenticated requests such as forged handles.
+* ``subscribe(listener)`` (docs/compromise-response.md §4.1, stage 3) lets a
+  trusted in-process component -- the intrusion detector -- observe every
+  record synchronously, right after it is persisted and after ``_maybe_alert``
+  has run.  A listener never sees a record before it is durable.  A listener
+  exception is swallowed (never breaks ``record`` for its caller) and counted
+  on ``listener_errors`` for diagnostics.
 """
 
 from __future__ import annotations
@@ -95,6 +101,22 @@ class Audit:
         self.state = state
         self.clock = clock
         self._recent_denials: dict[str, deque] = {}
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
+        self.listener_errors = 0
+
+    # ------------------------------------------------------------ subscribe
+    def subscribe(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """Register a listener called synchronously at the end of every ``record`` call,
+        after the line is durable.  Exceptions from a listener are swallowed here so a
+        detection bug can never take down the audit log itself."""
+        self._listeners.append(listener)
+
+    def _notify_listeners(self, record: dict[str, Any]) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(record)
+            except Exception:
+                self.listener_errors += 1
 
     # ---------------------------------------------------------------- record
     def record(self, event: str, *, caller: str | None = None, connection: str | None = None,
@@ -130,6 +152,7 @@ class Audit:
         except Exception as exc:  # any failure to persist must stop the caller
             raise AuditUnavailable("audit_write_failed") from exc
         self._maybe_alert(record)
+        self._notify_listeners(record)
         return record
 
     def require_writable(self) -> None:

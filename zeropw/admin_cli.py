@@ -83,6 +83,8 @@ from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
 from . import incident as I
+from . import intrusion as IN
+from . import notify as N
 from . import policy as P
 from .audit import ALERT_FILE, AUDIT_FILE
 from .context import HANDLE_KEY, Config, Context
@@ -917,6 +919,13 @@ def cmd_incident_close(args: argparse.Namespace) -> dict[str, Any]:
     return inc.to_dict()
 
 
+def cmd_incident_notify_test(args: argparse.Namespace) -> dict[str, Any]:
+    """Send a short message through the configured SMTP path (docs/compromise-response.md
+    §6.1) without declaring an incident, so an operator can verify ``notify.json`` works."""
+    ctx = _open(args, mutating=True)
+    return N.send_test_message(ctx)
+
+
 def _read_log(ctx: Context, name: str, limit: int) -> tuple[list[dict[str, Any]], int]:
     """The last ``limit`` parseable records of an append-only JSONL log plus the number of lines
     that did not parse: one truncated line must not make the whole log unreadable."""
@@ -1014,6 +1023,16 @@ def _enforce_withdrawn_permissions(ctx: Context, quiet: bool) -> None:
                     _notice(f"signer revocation check failed: {type(exc).__name__}")
 
 
+def _retry_notifications(ctx: Context, quiet: bool) -> None:
+    """Retry any ``pending`` incident email whose backoff has elapsed (docs/compromise-response.md
+    §6.1).  Wrapped like the other poll steps: a notification failure must never take ``serve`` down."""
+    try:
+        N.retry_pending(ctx, ctx.clock())
+    except Exception as exc:  # notify.py already swallows its own send failures; this guards the poll loop
+        if not quiet:
+            _notice(f"notification retry failed: {type(exc).__name__}")
+
+
 def _reload_handle_key(ctx: Context, current: bytes | None) -> bytes | None:
     """Pick up a handle key rotated by another process (restore, recover): old handles stop verifying."""
     try:
@@ -1061,6 +1080,7 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
         signer_state = "unavailable"
     if signer is not None:
         signer.install(ctx)
+    IN.install(ctx)  # stage 3: subscribe the intrusion detector to ctx.audit
 
     server = ZeroPWServer(ctx, quiet=quiet)
     set_public_url = getattr(tools, "set_public_url", None)
@@ -1101,6 +1121,7 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
                 _cancel_runs(ctx, "restore_pending", quiet)
             was_stopped, was_pending = now_stopped, now_pending
             _enforce_withdrawn_permissions(ctx, quiet)
+            _retry_notifications(ctx, quiet)
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -1291,6 +1312,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--id", required=True)
     p = _add(inc, "close", cmd_incident_close, "close an incident (admin re-auth; does not resume)")
     p.add_argument("--id", required=True)
+    _add(inc, "notify-test", cmd_incident_notify_test,
+        "send a short test message through the configured SMTP path (docs/compromise-response.md §6.1)")
 
     audit = _group(sub, "audit", "audit log (administrator only)")
     p = _add(audit, "tail", cmd_audit_tail, "print the last records")
