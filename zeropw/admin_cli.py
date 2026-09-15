@@ -29,6 +29,16 @@ tools API, and the CLI never hands anything to an agent.
 * ``serve`` binds loopback addresses only.  The prototype's trusted process
   must not be exposed on a network interface; the production isolation
   boundary is a separate host/identity, not a listen address.
+* ``serve --team-listen HOST:PORT`` (docs/team-sync.md section 6.1) opens a
+  *second*, separate socket for team sync only -- never implied by, and
+  never sharing a port with, the tools/relay listener above.  This one is
+  explicitly LAN/VPN-facing: team members' devices are not all on loopback,
+  and there is no default (omit the flag and no team socket is opened at
+  all, whether or not this node has any shared environment).  Every
+  connection to it must complete the mutual-authentication handshake of
+  section 6.2 before any other byte is accepted; a failure closes the
+  socket without returning anything, and the tools/relay listener's
+  loopback restriction is unrelated to and unaffected by this flag.
 
 Limitations (prototype)
 -----------------------
@@ -974,15 +984,41 @@ def _shutdown_runs(ctx: Context, quiet: bool) -> None:
             _notice(f"run shutdown failed: {type(exc).__name__}")
 
 
+def _start_team_sync(ctx: Context, team_listen: str) -> Any:
+    """Construct the TCP transport and ``TeamSync``, and start listening on ``team_listen``.
+
+    A device key is created on first use (``team init`` from docs/team-sync.md
+    section 12 is the stage-3 CLI entry point for this; ``serve
+    --team-listen`` does not require it to have been run first, so that this
+    flag is independently testable in stage 2).
+    """
+    from .team.identity import DeviceKey
+    from .team.sync import TeamSync
+    from .team.transport import TcpTransport
+
+    device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+    transport = TcpTransport(device, max_connections=64)
+    sync = TeamSync(ctx, transport, device)
+    sync.start(team_listen)
+    return sync
+
+
 def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, quiet: bool = False,
-              stop_event: threading.Event | None = None, install_signals: bool = True) -> dict[str, Any]:
+              stop_event: threading.Event | None = None, install_signals: bool = True,
+              team_listen: str | None = None) -> dict[str, Any]:
     """Start the trusted server and block until SIGINT/SIGTERM (or ``stop_event``).
 
     Returns the startup payload that was printed.  ``zeropw.tools`` is required;
     ``zeropw.signer`` is optional and its absence is reported explicitly.
+    ``team_listen`` (``--team-listen HOST:PORT``) starts team sync on a
+    separate, LAN/VPN-facing socket (docs/team-sync.md section 6.1); omitted,
+    no team socket is opened and no dial is ever attempted.
     """
     host, port = _parse_listen(listen)
     _require_loopback(host)
+    team_host = team_port = None
+    if team_listen is not None:
+        team_host, team_port = _parse_listen(team_listen)   # format-checked only; LAN/VPN addresses are allowed
     try:
         tools = importlib.import_module("zeropw.tools")
     except ImportError as exc:
@@ -999,6 +1035,9 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
     if signer is not None:
         signer.install(ctx)
 
+    team_sync = _start_team_sync(ctx, team_listen) if team_listen is not None else None
+    ctx.team = team_sync
+
     server = ZeroPWServer(ctx, quiet=quiet)
     set_public_url = getattr(tools, "set_public_url", None)
     if callable(set_public_url):
@@ -1008,7 +1047,7 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
     server.serve_in_thread()
 
     payload: dict[str, Any] = {"url": server.url, "pid": os.getpid(), "ssh_signer": signer_state,
-                               "state_dir": str(ctx.state.path), **_control_view(ctx)}
+                               "state_dir": str(ctx.state.path), "team_listen": team_listen, **_control_view(ctx)}
     _emit(payload, compact=True)
 
     stop = stop_event or threading.Event()
@@ -1038,6 +1077,12 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
                 _cancel_runs(ctx, "restore_pending", quiet)
             was_stopped, was_pending = now_stopped, now_pending
             _enforce_withdrawn_permissions(ctx, quiet)
+            if team_sync is not None:
+                try:
+                    team_sync.poll()
+                except Exception as exc:
+                    if not quiet:
+                        _notice(f"team sync poll failed: {type(exc).__name__}")
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -1050,12 +1095,18 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
             except Exception as exc:
                 if not quiet:
                     _notice(f"signer shutdown failed: {type(exc).__name__}")
+        if team_sync is not None:
+            try:
+                team_sync.stop()
+            except Exception as exc:
+                if not quiet:
+                    _notice(f"team sync shutdown failed: {type(exc).__name__}")
         server.stop()
     return payload
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
-    run_serve(_state_dir(args), args.listen, args.quiet)
+    run_serve(_state_dir(args), args.listen, args.quiet, team_listen=args.team_listen)
     return None
 
 
@@ -1219,6 +1270,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = _add(sub, "serve", cmd_serve, "run the trusted server (tools API, relay, signer) until SIGINT/SIGTERM")
     p.add_argument("--listen", default=DEFAULT_LISTEN, metavar="HOST:PORT",
                    help="IPv4 loopback only (127.0.0.1 or localhost); port 0 = ephemeral")
+    p.add_argument("--team-listen", default=None, metavar="HOST:PORT",
+                   help="start team sync on a separate LAN/VPN-facing socket (default: team sync off)")
     p.add_argument("--quiet", action="store_true", help="no request log lines on stderr")
     return parser
 

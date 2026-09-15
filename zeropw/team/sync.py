@@ -1,0 +1,1020 @@
+"""Team sync: session management, message loop, and the commit/fact apply
+pipeline for every shared environment a node has (docs/team-sync.md sections
+6.3-6.6, 7.4).
+
+``TeamSync`` is attached to a running ``Context`` as ``ctx.team``.  It owns:
+
+* a per-environment ``CommitStore`` (reused from ``zeropw/team/commit.py``)
+  and an in-memory ``Facts`` accumulator (``zeropw/team/fold.py``) rebuilt
+  from ``team/<env_id>/facts.jsonl`` at startup;
+* the address book (``team/<env_id>/peers.json``) and the live/backoff state
+  of one outbound session per known active member, plus inbound sessions
+  accepted from the listener;
+* the ``VECTOR``/``COMMIT``/``FACT``/``PEERS``/``INCIDENT`` message loop
+  (section 6.3) and the fold-and-derive apply step (section 6.5) that runs
+  every time a commit is accepted or a fact is applied.
+
+Nothing here decides *whether* to run a team listener -- that is
+``zeropw/admin_cli.py``'s ``--team-listen`` flag.  A ``TeamSync`` with no
+listener address still dials every known peer address and answers to
+whatever ``Transport`` it was given (the in-process transport in tests never
+needs a real socket).
+
+Facts (section 7.4)
+--------------------
+Stage 1 (``zeropw/team/fold.py``) already defines ``Facts`` as an in-memory,
+order-independent input to ``fold()``.  This module adds the wire format, the
+signature, the append-only ``facts.jsonl`` persistence, and the role checks
+at receipt time so a monotone fact keeps applying across restarts and
+independently of which commits a node happens to have.  ``member_removed``
+is the one exception to "the author must currently be an active member": two
+admins removing each other at the same time must both take effect (section
+7.4's worked example), so its role check reads the author's role from the
+document's ``members`` entry (retained, with its role, even after the
+member's status flips to ``removed``) rather than requiring the author still
+be *active*.  Every other fact kind requires the author to be a presently
+active admin/owner.
+
+Thread model
+------------
+One poll thread per ``TeamSync`` drives dialing, periodic ``VECTOR``
+exchange, deferred-commit release and session re-keying (``poll()``, also
+callable directly by ``zeropw/admin_cli.py``'s ``serve`` loop so both a
+standalone ``TeamSync`` and one embedded in ``serve`` behave the same way).
+Each open session gets its own daemon receive thread.  All on-disk state
+mutation happens under ``ctx.state.lock()``; all in-memory bookkeeping
+(sessions, address candidates, backoff timers) is under a separate
+``threading.RLock`` so a slow dial or a fold never blocks the other.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import re
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable
+
+from ..errors import AuditUnavailable, InvalidInput, NotFound, PolicyDenied
+from ..store import iso
+from ..crypto import ed25519
+from . import commit as C
+from . import fold as F
+from .commit import Hlc
+from .identity import DeviceKey, DeviceRecord
+from .transport import Session, SessionClosed
+
+FACT_FORMAT = "zeropw-team-fact-v1"
+FACT_KINDS = ("connection_disabled", "secret_version_revoked", "member_removed", "incident")
+MAX_INCIDENT_FIELDS = 20
+_SEEN_CAPACITY = 4096
+_DISCOVERY_INTERVAL_SECONDS = 1.0
+_RECV_POLL_SECONDS = 1.0
+
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_FINGERPRINT_RE = re.compile(r"^[a-z2-7]{26}$")
+_TOKEN_RE = re.compile(r"^[0-9a-f]{16,64}$")
+
+
+def _valid_id(value: Any, max_len: int = 64) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= max_len and not _CONTROL_RE.search(value)
+
+
+def _valid_fingerprint(value: Any) -> bool:
+    return isinstance(value, str) and bool(_FINGERPRINT_RE.fullmatch(value))
+
+
+def _valid_token(value: Any) -> bool:
+    return isinstance(value, str) and bool(_TOKEN_RE.fullmatch(value))
+
+
+def _canon(obj: dict) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+# ---------------------------------------------------------------------- facts
+def _validate_fact_target(kind: str, target: Any) -> None:
+    if not isinstance(target, dict):
+        raise InvalidInput("team_fact_target_invalid")
+    if kind == "connection_disabled":
+        if set(target) != {"connection_id"} or not _valid_id(target["connection_id"], 64):
+            raise InvalidInput("team_fact_target_invalid")
+    elif kind == "secret_version_revoked":
+        if set(target) != {"secret_id", "version_id"} or not _valid_id(target["secret_id"], 64) \
+                or not _valid_token(target["version_id"]):
+            raise InvalidInput("team_fact_target_invalid")
+    elif kind == "member_removed":
+        if set(target) != {"fingerprint"} or not _valid_fingerprint(target["fingerprint"]):
+            raise InvalidInput("team_fact_target_invalid")
+    elif kind == "incident":
+        if len(target) > MAX_INCIDENT_FIELDS:
+            raise InvalidInput("team_fact_target_invalid")
+        for key, value in target.items():
+            if not isinstance(key, str) or not _valid_id(key, 64) or not isinstance(value, str) \
+                    or len(value) > 200 or _CONTROL_RE.search(value):
+                raise InvalidInput("team_fact_target_invalid")
+    else:
+        raise InvalidInput("team_fact_kind_unknown")
+
+
+@dataclass(frozen=True)
+class Fact:
+    """A signed, order-independent statement (docs/team-sync.md section 7.4)."""
+
+    format: str
+    env_id: str
+    kind: str
+    target: dict
+    author: str
+    hlc: str
+    sig: str
+
+    def _canonical(self, include_sig: bool) -> dict:
+        data = {"format": self.format, "env_id": self.env_id, "kind": self.kind,
+                "target": dict(sorted(self.target.items())), "author": self.author, "hlc": self.hlc}
+        if include_sig:
+            data["sig"] = self.sig
+        return data
+
+    def canonical_json(self, include_sig: bool) -> bytes:
+        return _canon(self._canonical(include_sig))
+
+    @property
+    def hash(self) -> str:
+        return hashlib.sha256(self.canonical_json(True)).hexdigest()
+
+    def to_dict(self) -> dict:
+        return self._canonical(True)
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "Fact":
+        if not isinstance(data, dict):
+            raise InvalidInput("team_fact_malformed")
+        try:
+            target = {str(k): v for k, v in dict(data["target"]).items()}
+            return cls(format=str(data["format"]), env_id=str(data["env_id"]), kind=str(data["kind"]),
+                       target=target, author=str(data["author"]), hlc=str(data["hlc"]), sig=str(data["sig"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidInput("team_fact_malformed") from exc
+
+
+def sign_fact(device: DeviceKey, env_id: str, kind: str, target: dict, hlc_value: str) -> Fact:
+    _validate_fact_target(kind, target)
+    unsigned = Fact(FACT_FORMAT, env_id, kind, dict(target), device.fingerprint, hlc_value, "")
+    sig = base64.b64encode(device.sign(unsigned.canonical_json(False))).decode("ascii")
+    return replace(unsigned, sig=sig)
+
+
+def verify_fact(fact: Fact, author_record: DeviceRecord) -> bool:
+    if fact.format != FACT_FORMAT or fact.author != author_record.fingerprint or fact.kind not in FACT_KINDS:
+        return False
+    try:
+        _validate_fact_target(fact.kind, fact.target)
+        Hlc.parse(fact.hlc)
+        sig = base64.b64decode(fact.sig, validate=True)
+    except (InvalidInput, ValueError, TypeError):
+        return False
+    return ed25519.verify(author_record.sign_pub, fact.canonical_json(False), sig)
+
+
+def _apply_fact_to_facts(facts: F.Facts, fact: Fact) -> None:
+    if fact.kind == "connection_disabled":
+        facts.disabled_connections.add(fact.target["connection_id"])
+    elif fact.kind == "secret_version_revoked":
+        facts.revoked_versions.add((fact.target["secret_id"], fact.target["version_id"]))
+    elif fact.kind == "member_removed":
+        facts.removed_members.add(fact.target["fingerprint"])
+    elif fact.kind == "incident":
+        facts.incidents.append(dict(fact.target))
+
+
+def _is_admin(doc: dict, fp: str) -> bool:
+    member = doc.get("members", {}).get(fp)
+    if not member or member.get("status") != "active":
+        return False
+    return fp == doc.get("owner") or member.get("role") == "admin"
+
+
+def _fact_role_ok(doc: dict, kind: str, author_fp: str, target: dict) -> bool:
+    """Section 7.4's role check, done at receipt time against the current folded document.
+
+    ``member_removed`` alone is exempt from requiring the author still be
+    *active*: two admins removing each other in the same instant must both
+    take effect, so this checks the author's recorded ``role`` (retained
+    after removal) rather than their current status.
+    """
+    members = doc.get("members", {})
+    if kind == "member_removed":
+        target_fp = target.get("fingerprint")
+        if target_fp == doc.get("owner"):
+            return False  # the owner is never a removal target (docs/team-sync.md sections 4.4, 8)
+        member = members.get(author_fp)
+        privileged = author_fp == doc.get("owner") or (member is not None and member.get("role") == "admin")
+        return privileged or author_fp == target_fp
+    return _is_admin(doc, author_fp)
+
+
+# ------------------------------------------------------------------- discover
+def discover_envs(state: Any) -> list[str]:
+    root = state.path / "team"
+    if not root.is_dir():
+        return []
+    found = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or not C.valid_env_id(child.name):
+            continue
+        if (child / "commits").is_dir() or (child / "snapshots").is_dir() or (child / "facts.jsonl").exists():
+            found.append(child.name)
+    return found
+
+
+class _LruSet:
+    """A bounded set used to dedupe rebroadcast of already-seen commit/fact hashes."""
+
+    def __init__(self, capacity: int = _SEEN_CAPACITY) -> None:
+        self._capacity = capacity
+        self._data: "OrderedDict[str, None]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def add_if_new(self, key: str) -> bool:
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+                return False
+            self._data[key] = None
+            if len(self._data) > self._capacity:
+                self._data.popitem(last=False)
+            return True
+
+
+@dataclass
+class _EnvState:
+    env_id: str
+    store: C.CommitStore
+    facts: F.Facts = field(default_factory=F.Facts)
+    fact_hashes: set = field(default_factory=set)
+    hlc: Hlc = field(default_factory=Hlc)
+    document: dict = field(default_factory=dict)
+    version_index: dict = field(default_factory=dict)
+    sessions: dict = field(default_factory=dict)               # fingerprint -> Session
+    candidate_addresses: dict = field(default_factory=dict)    # fingerprint -> set[str]
+    backoff: dict = field(default_factory=dict)                # fingerprint -> seconds
+    next_attempt: dict = field(default_factory=dict)           # fingerprint -> monotonic time
+    last_vector_sent: dict = field(default_factory=dict)       # fingerprint -> monotonic time
+    synced_at: float | None = None
+    # target fingerprint -> set of fingerprints that authored a member_removed fact naming it.
+    # Built from facts.jsonl at load time and kept live as new member_removed facts are stored;
+    # used only to evaluate the precise section 7.4 mutual-removal exemption (see
+    # ``_document_for_removal_author_check``), never to decide anything else.
+    removal_authors: dict = field(default_factory=dict)
+
+
+INCIDENT_ALLOWED_KEYS = frozenset({
+    "incident_id", "ts", "scope", "rule", "secret_ids", "connection_ids", "first_used_at", "last_used_at", "uses",
+})
+
+
+class TeamSync:
+    """Section 6/7.4's runtime, attached to a ``Context`` as ``ctx.team``.
+
+    ``transport``'s ``membership`` and ``on_handshake_failed`` hooks are
+    rebound to this instance's own methods here -- the transport is
+    constructed first (so ``serve --team-listen`` can pick TCP vs. a test's
+    in-process transport) but its handshake decisions always need this
+    node's *current* view of membership across every shared environment, not
+    a snapshot fixed at construction time.
+    """
+
+    def __init__(self, ctx: Any, transport: Any, device: DeviceKey) -> None:
+        self.ctx = ctx
+        self.transport = transport
+        self.device = device
+        transport.membership = self._membership
+        transport.on_handshake_failed = self._on_handshake_failed
+        self._envs: dict[str, _EnvState] = {}
+        self._lock = threading.RLock()
+        self._commit_seen = _LruSet()
+        self._fact_seen = _LruSet()
+        self._stop = threading.Event()
+        self._poll_thread: threading.Thread | None = None
+        self._session_threads: list[threading.Thread] = []
+        self._listen_address: str | None = None
+        self._tick_seconds = 0.05
+        self._last_discovery = 0.0
+
+    # ------------------------------------------------------------- lifecycle
+    def start(self, listen_address: str | None = None) -> None:
+        with self._lock:
+            self._discover_locked()
+        if listen_address is not None:
+            self.transport.listen(listen_address, self._on_inbound_session)
+            self._listen_address = listen_address
+        self._stop.clear()
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True, name="team-sync-poll")
+        self._poll_thread.start()
+
+    def _poll_loop(self) -> None:
+        while not self._stop.wait(self._tick_seconds):
+            try:
+                self.poll()
+            except Exception:
+                pass  # a transient failure must never kill the sync loop; the next tick retries
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread, self._poll_thread = self._poll_thread, None
+        if thread is not None:
+            thread.join(timeout=5)
+        close = getattr(self.transport, "close", None)
+        if callable(close):
+            close()
+        else:
+            unlisten = getattr(self.transport, "unlisten", None)
+            if callable(unlisten):
+                unlisten()
+        with self._lock:
+            all_sessions = []
+            for env in self._envs.values():
+                all_sessions.extend(env.sessions.values())
+                env.sessions.clear()
+        for session in all_sessions:
+            session.close()
+        threads, self._session_threads = self._session_threads, []
+        for t in threads:
+            t.join(timeout=5)
+
+    def known_envs(self) -> list[str]:
+        with self._lock:
+            return sorted(self._envs.keys())
+
+    # --------------------------------------------------------------- loading
+    def _discover_locked(self) -> None:
+        for env_id in discover_envs(self.ctx.state):
+            if env_id not in self._envs:
+                self._load_env_locked(env_id)
+
+    def _load_env_locked(self, env_id: str) -> _EnvState:
+        facts, hashes, removal_authors = self._read_facts(env_id)
+        env = _EnvState(env_id=env_id, store=C.CommitStore(self.ctx.state, env_id), facts=facts, fact_hashes=hashes,
+                        removal_authors=removal_authors)
+        for fp, addrs in self._read_peers(env_id).items():
+            if _valid_fingerprint(fp) and isinstance(addrs, list):
+                env.candidate_addresses[fp] = {a for a in addrs if isinstance(a, str)}
+        self._envs[env_id] = env
+        self._refold(env_id)
+        return env
+
+    def register_env(self, env_id: str) -> None:
+        """Pick up a shared environment that appeared on disk after ``start()`` without waiting a tick."""
+        with self._lock:
+            if env_id not in self._envs:
+                self._load_env_locked(env_id)
+
+    # -------------------------------------------------------------- facts io
+    def _facts_path(self, env_id: str) -> str:
+        return f"team/{env_id}/facts.jsonl"
+
+    def _read_facts(self, env_id: str) -> tuple[F.Facts, set, dict]:
+        facts = F.Facts()
+        hashes: set = set()
+        removal_authors: dict[str, set] = {}
+        for line in self.ctx.state.read_lines(self._facts_path(env_id), None) or []:
+            if not line:
+                continue
+            try:
+                fact = Fact.from_dict(json.loads(line))
+            except (ValueError, InvalidInput):
+                continue
+            if fact.hash in hashes:
+                continue
+            hashes.add(fact.hash)
+            _apply_fact_to_facts(facts, fact)
+            if fact.kind == "member_removed":
+                removal_authors.setdefault(fact.target["fingerprint"], set()).add(fact.author)
+        return facts, hashes, removal_authors
+
+    def _read_peers(self, env_id: str) -> dict:
+        return self.ctx.state.read_json(f"team/{env_id}/peers.json", {}) or {}
+
+    def _persist_peer_address(self, env_id: str, fp: str, address: str) -> None:
+        with self.ctx.state.lock():
+            doc = self._read_peers(env_id)
+            addrs = list(doc.get(fp, []))
+            if address not in addrs:
+                addrs.append(address)
+            doc[fp] = addrs
+            self.ctx.state.write_json(f"team/{env_id}/peers.json", doc)
+
+    def set_peer_address(self, env_id: str, fingerprint: str, address: str) -> None:
+        """Explicit address-book management (``team peers --add``): trusted immediately, unlike a
+        gossiped ``PEERS`` address, which is only a dial candidate until a handshake confirms it."""
+        if not _valid_fingerprint(fingerprint) or not isinstance(address, str) or not address:
+            raise InvalidInput("team_invalid_peer_address")
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                raise InvalidInput("team_env_unknown")
+            env.candidate_addresses.setdefault(fingerprint, set()).add(address)
+        self._persist_peer_address(env_id, fingerprint, address)
+
+    # ------------------------------------------------------------- fold/apply
+    def _refold(self, env_id: str) -> None:
+        env = self._envs[env_id]
+        # The whole read-fold-derive-assign sequence is one atomic unit under the SAME lock:
+        # ``ctx.state.lock()`` is a real cross-thread mutex (docs/store.py), so two concurrent
+        # ``_refold`` calls (e.g. one node's own ``publish_fact`` racing its session-receiver
+        # thread applying a peer's commit or fact) complete one at a time, in acquisition order.
+        # Splitting the "compute" and "assign env.document" steps across two separate lock
+        # acquisitions would let the slower of two concurrent folds overwrite ``env.document``
+        # with a stale result completed after a faster, more-up-to-date one.
+        with self.ctx.state.lock():
+            commits = env.store.all_commits()
+            result = F.fold(env_id, commits, env.facts, audit=self.ctx.audit)
+            version_index = F.derive_local(result, self.ctx.state, self.ctx.vault, self.ctx.policy, self.ctx.audit,
+                                           device=self.device)
+            with self._lock:
+                env.document = result.document
+                env.version_index = version_index
+
+    def _membership(self, env_id: str, fingerprint: str) -> DeviceRecord | None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            doc = env.document if env is not None else None
+        if doc is None:
+            return None
+        member = doc.get("members", {}).get(fingerprint)
+        if not member or member.get("status") != "active":
+            return None
+        try:
+            record = DeviceRecord.from_dict(member["device"])
+        except (KeyError, InvalidInput):
+            return None
+        return record if record.fingerprint == fingerprint else None
+
+    def _relaxed_document(self, env_id: str) -> dict:
+        """The folded document with ``removed_members``'s retroactive erasure of the member entry
+        (section 7.2/7.4: an out-of-band, persisted fact is fed into every fold from its very
+        start, so ``member.add``'s own "never let a removed fingerprint (re)exist" check --
+        section 5.3 -- also skips the ORIGINAL add, not just a later re-add) turned off, so a
+        removed member's device record stays resolvable for SIGNATURE VERIFICATION only.  Never
+        use this for an authorization decision: it un-removes everyone, unconditionally.  The
+        precise, authorization-safe version of "who may still act despite being removed" is
+        ``_document_for_removal_author_check``.
+
+        NOTE (re-fold cost): this re-folds the whole commit log on every call, and
+        ``_known_device_record`` calls it once per inbound FACT and once per inbound handshake.
+        The concurrent-connection cap (``TcpTransport``'s ``max_connections``) bounds how often
+        that can happen at once; stage 3's persisted snapshot / a cached document would remove
+        the need to re-fold from scratch here at all.
+        """
+        env = self._envs[env_id]
+        relaxed_facts = env.facts.copy()
+        relaxed_facts.removed_members = set()
+        return F.fold(env_id, env.store.all_commits(), relaxed_facts).document
+
+    def _document_for_removal_author_check(self, env_id: str, author_fp: str, target_fp: str) -> dict:
+        """The document to authorize "author_fp removes target_fp" against (section 7.4).
+
+        Two admins removing each other in the same instant must both succeed: evaluating
+        "author_fp removes target_fp" must not treat author_fp as disqualified-by-removal when
+        the ONLY fact that removed author_fp was itself authored by target_fp.  This drops
+        author_fp from ``removed_members`` for THIS check alone, and only under that exact
+        condition -- an author removed by anyone ELSE (or by nobody) is unaffected: removal by a
+        third party is never undone, so a fingerprint removed by Z can never go on to remove
+        someone else by exploiting this exemption.
+        """
+        env = self._envs[env_id]
+        removed_by = env.removal_authors.get(author_fp, ())
+        if author_fp not in env.facts.removed_members or set(removed_by) != {target_fp}:
+            return env.document  # removed by anyone other than the target (too): no exemption
+        relaxed_facts = env.facts.copy()
+        relaxed_facts.removed_members = set(relaxed_facts.removed_members) - {author_fp}
+        return F.fold(env_id, env.store.all_commits(), relaxed_facts).document
+
+    def _known_device_record(self, env_id: str, fingerprint: str) -> DeviceRecord | None:
+        env = self._envs.get(env_id)
+        if env is None:
+            return None
+        member = self._relaxed_document(env_id).get("members", {}).get(fingerprint)
+        if member is None:
+            return None
+        try:
+            record = DeviceRecord.from_dict(member["device"])
+        except (KeyError, InvalidInput):
+            return None
+        return record if record.fingerprint == fingerprint else None
+
+    def _active_member_fps(self, env_id: str) -> list[str]:
+        doc = self._envs[env_id].document
+        return [fp for fp, m in doc.get("members", {}).items() if m.get("status") == "active"]
+
+    # -------------------------------------------------------------- sessions
+    def _accept_or_replace_session(self, env_id: str, session: Session, *, inbound: bool) -> bool:
+        """Resolve a same-peer session collision deterministically; returns whether ``session``
+        becomes (or stays) the canonical one.
+
+        Two nodes maintaining "one outbound session per known peer" (section
+        6.4) while both also accept inbound sessions can each complete a
+        connection to the other at almost the same moment.  Rather than
+        coordinate that over the wire, both sides apply the same rule
+        independently: the fingerprint that sorts lower keeps its own
+        outbound dial; the higher one keeps the inbound connection accepted
+        from the lower one.  A one-directional setup (this node only ever
+        dials out, or only ever listens) never collides at all, so this is a
+        no-op there.
+        """
+        fp = session.peer.fingerprint
+        prefer_outbound = self.device.fingerprint < fp
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return False
+            current = env.sessions.get(fp)
+            if current is None or current is session:
+                env.sessions[fp] = session
+                return True
+            keep_new = (not inbound) if prefer_outbound else inbound
+            if keep_new:
+                env.sessions[fp] = session
+            losing = session if not keep_new else current
+        losing.close()
+        return keep_new
+
+    def _on_inbound_session(self, session: Session) -> None:
+        env_id = session.env_id
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                session.close()
+                return
+        if not self._accept_or_replace_session(env_id, session, inbound=True):
+            return
+        self._audit_session_open(env_id, session.peer.fingerprint)
+        self._start_receiver(env_id, session)
+        self._send_vector(env_id, session)
+        self._send_peers(env_id, session)
+
+    def _start_receiver(self, env_id: str, session: Session) -> None:
+        def loop() -> None:
+            try:
+                while True:
+                    try:
+                        message = session.recv(_RECV_POLL_SECONDS)
+                    except SessionClosed:
+                        return
+                    except Exception:
+                        return
+                    if message is None:
+                        continue
+                    try:
+                        self._handle_message(env_id, session, message)
+                    except Exception:
+                        return
+            finally:
+                self._drop_session(env_id, session.peer.fingerprint, session)
+
+        thread = threading.Thread(target=loop, daemon=True, name="team-session-recv")
+        with self._lock:
+            self._session_threads.append(thread)
+        thread.start()
+
+    def _drop_session(self, env_id: str, fp: str, session: Session | None = None) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return
+            current = env.sessions.get(fp)
+            if current is None or (session is not None and current is not session):
+                return
+            env.sessions.pop(fp, None)
+        current.close()
+        self._audit_session_close(env_id, fp)
+
+    def _close_session(self, env_id: str, fp: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            session = env.sessions.pop(fp, None) if env is not None else None
+        if session is not None:
+            session.close()
+            self._audit_session_close(env_id, fp)
+
+    def _drop_member_sessions(self, env_id: str, fp: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            session = env.sessions.pop(fp, None) if env is not None else None
+            if env is not None:
+                env.candidate_addresses.pop(fp, None)
+                env.backoff.pop(fp, None)
+                env.next_attempt.pop(fp, None)
+        if session is not None:
+            session.close()
+            self._audit_session_close(env_id, fp)
+
+    # ------------------------------------------------------------ messaging
+    def _send_vector(self, env_id: str, session: Session) -> None:
+        vector = self._envs[env_id].store.vector()
+        try:
+            session.send({"type": "VECTOR", "vector": vector})
+        except (SessionClosed, InvalidInput):
+            self._drop_session(env_id, session.peer.fingerprint, session)
+            return
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is not None:
+                env.last_vector_sent[session.peer.fingerprint] = time.monotonic()
+        self._mark_synced(env_id)
+
+    def _send_peers(self, env_id: str, session: Session) -> None:
+        peers_doc = self._read_peers(env_id)
+        payload = {fp: sorted(a for a in addrs if isinstance(a, str)) for fp, addrs in peers_doc.items()
+                  if isinstance(addrs, list)}
+        try:
+            session.send({"type": "PEERS", "peers": payload})
+        except (SessionClosed, InvalidInput):
+            self._drop_session(env_id, session.peer.fingerprint, session)
+
+    def _broadcast(self, env_id: str, message: dict, exclude_fp: str | None = None) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return
+            sessions = [(fp, s) for fp, s in env.sessions.items() if fp != exclude_fp]
+        for fp, session in sessions:
+            try:
+                session.send(message)
+            except (SessionClosed, InvalidInput):
+                self._drop_session(env_id, fp, session)
+
+    def _mark_synced(self, env_id: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is not None:
+                env.synced_at = self.ctx.clock()
+
+    def _handle_message(self, env_id: str, session: Session, message: dict) -> None:
+        mtype = message.get("type") if isinstance(message, dict) else None
+        if mtype == "VECTOR":
+            self._handle_vector(env_id, session, message)
+        elif mtype == "COMMIT":
+            self._handle_commit(env_id, session, message)
+        elif mtype == "FACT":
+            self._handle_fact(env_id, session, message)
+        elif mtype == "PEERS":
+            self._handle_peers(env_id, session, message)
+        elif mtype == "INCIDENT":
+            self._handle_incident(env_id, session, message)
+        # an unrecognised type is ignored, not a protocol error: forward compatibility.
+
+    def _handle_vector(self, env_id: str, session: Session, message: dict) -> None:
+        peer_vector = message.get("vector")
+        if not isinstance(peer_vector, dict):
+            return
+        env = self._envs[env_id]
+        local_vector = env.store.vector()
+        to_send: list[C.Commit] = []
+        for fp, last_seq in sorted(local_vector.items()):
+            their_seq = peer_vector.get(fp, 0)
+            if not isinstance(their_seq, int) or isinstance(their_seq, bool) or their_seq < 0:
+                their_seq = 0
+            for seq in range(their_seq + 1, last_seq + 1):
+                found = env.store.get(fp, seq)
+                if found is not None:
+                    to_send.append(found)
+        sent = 0
+        for found in to_send:
+            try:
+                session.send({"type": "COMMIT", "commit": found.to_dict()})
+                sent += 1
+            except (SessionClosed, InvalidInput):
+                self._drop_session(env_id, session.peer.fingerprint, session)
+                break
+        if sent:
+            self._audit_vector(env_id, session.peer.fingerprint, sent)
+        self._mark_synced(env_id)
+
+    def _handle_commit(self, env_id: str, session: Session, message: dict) -> None:
+        raw = message.get("commit")
+        if not isinstance(raw, dict):
+            return
+        try:
+            commit_obj = C.Commit.from_dict(raw)
+        except InvalidInput:
+            return
+        if commit_obj.env_id != env_id:
+            return
+        env = self._envs[env_id]
+        with self.ctx.state.lock():
+            result = C.receive_commit(env.store, commit_obj, C.now_ms(), audit=self.ctx.audit)
+        if result != "accepted":
+            return
+        self._refold(env_id)
+        if self._commit_seen.add_if_new(commit_obj.hash):
+            self._broadcast(env_id, {"type": "COMMIT", "commit": commit_obj.to_dict()},
+                            exclude_fp=session.peer.fingerprint)
+
+    def submit_commit(self, env_id: str, commit_obj: C.Commit) -> str:
+        """Locally originate (or re-inject) one commit: validate, store, fold+derive, broadcast.
+
+        This is the entry point docs/team-sync.md section 12's stage-3
+        ``connection``/``secret``/``rotation`` commands will call once their
+        target is a shared environment.  Returns ``receive_commit``'s
+        outcome (``"accepted"``, ``"duplicate"``, ``"deferred"`` or
+        ``"rejected"``) so a caller can report it back to whoever issued the
+        command.
+        """
+        env = self._envs.get(env_id)
+        if env is None:
+            raise InvalidInput("team_env_unknown")
+        with self.ctx.state.lock():
+            result = C.receive_commit(env.store, commit_obj, C.now_ms(), audit=self.ctx.audit)
+        if result == "accepted":
+            self._refold(env_id)
+            if self._commit_seen.add_if_new(commit_obj.hash):
+                self._broadcast(env_id, {"type": "COMMIT", "commit": commit_obj.to_dict()})
+        return result
+
+    def _handle_fact(self, env_id: str, session: Session, message: dict) -> None:
+        raw = message.get("fact")
+        if not isinstance(raw, dict):
+            return
+        try:
+            fact = Fact.from_dict(raw)
+        except InvalidInput:
+            return
+        if fact.env_id != env_id or fact.kind not in FACT_KINDS:
+            return
+        self._apply_remote_fact(env_id, fact, exclude_fp=session.peer.fingerprint)
+
+    def _apply_remote_fact(self, env_id: str, fact: Fact, exclude_fp: str | None) -> None:
+        env = self._envs[env_id]
+        if fact.hash in env.fact_hashes:
+            return
+        try:
+            _validate_fact_target(fact.kind, fact.target)
+        except InvalidInput:
+            self._audit_fact_rejected(env_id, fact, "team_fact_target_invalid")
+            return
+        author_record = self._known_device_record(env_id, fact.author)
+        if author_record is None or not verify_fact(fact, author_record):
+            self._audit_fact_rejected(env_id, fact, "team_fact_signature_invalid")
+            return
+        if fact.kind == "member_removed":
+            role_doc = self._document_for_removal_author_check(env_id, fact.author, fact.target["fingerprint"])
+        else:
+            role_doc = env.document
+        if not _fact_role_ok(role_doc, fact.kind, fact.author, fact.target):
+            self._audit_fact_rejected(env_id, fact, "team_fact_not_authorized")
+            return
+        # store_fact (mutates the shared, unlocked env.facts) and refold (reads it) must be one
+        # atomic unit relative to another thread doing the same for a DIFFERENT, concurrently
+        # arriving fact (this node's own two session-receiver threads, one per peer, are exactly
+        # such a pair) -- otherwise a refold that started just before the other fact's mutation
+        # lands can finish and overwrite env.document with a result that is missing it.
+        with self.ctx.state.lock():
+            self._store_fact(env_id, fact)
+            self._refold(env_id)
+        self._audit_fact_apply(env_id, fact)
+        # Broadcast BEFORE dropping the removed member's own session: in a two-node mesh that
+        # session may be the only path left to tell them (and to relay onward through them) that
+        # they were removed, and closing it first would silently swallow the fact.
+        self._broadcast(env_id, {"type": "FACT", "fact": fact.to_dict()}, exclude_fp=exclude_fp)
+        if fact.kind == "member_removed":
+            self._drop_member_sessions(env_id, fact.target["fingerprint"])
+
+    def _store_fact(self, env_id: str, fact: Fact) -> None:
+        env = self._envs[env_id]
+        with self.ctx.state.lock():
+            self.ctx.state.append_line(self._facts_path(env_id), json.dumps(fact.to_dict(), sort_keys=True,
+                                                                             separators=(",", ":")))
+        env.fact_hashes.add(fact.hash)
+        _apply_fact_to_facts(env.facts, fact)
+        if fact.kind == "member_removed":
+            env.removal_authors.setdefault(fact.target["fingerprint"], set()).add(fact.author)
+
+    def publish_fact(self, env_id: str, kind: str, **target: Any) -> dict:
+        """Locally originate, sign, apply and broadcast one fact (the ``team ...`` CLI's future entry point)."""
+        if kind not in FACT_KINDS:
+            raise InvalidInput("team_fact_kind_unknown")
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                raise InvalidInput("team_env_unknown")
+            hlc_value = env.hlc.tick()
+        if kind == "member_removed":
+            try:
+                _validate_fact_target(kind, target)
+            except InvalidInput as exc:
+                raise InvalidInput("team_fact_target_invalid") from exc
+            role_doc = self._document_for_removal_author_check(env_id, self.device.fingerprint,
+                                                                target["fingerprint"])
+        else:
+            role_doc = env.document
+        if not _fact_role_ok(role_doc, kind, self.device.fingerprint, target):
+            raise PolicyDenied("team_fact_not_authorized")
+        fact = sign_fact(self.device, env_id, kind, dict(target), hlc_value)
+        with self.ctx.state.lock():
+            self._store_fact(env_id, fact)
+            self._refold(env_id)
+        self._audit_fact_apply(env_id, fact)
+        self._broadcast(env_id, {"type": "FACT", "fact": fact.to_dict()})
+        if kind == "member_removed":
+            self._drop_member_sessions(env_id, target["fingerprint"])
+        return fact.to_dict()
+
+    def _handle_peers(self, env_id: str, session: Session, message: dict) -> None:
+        peers = message.get("peers")
+        if not isinstance(peers, dict):
+            return
+        env = self._envs[env_id]
+        active_fps = set(self._active_member_fps(env_id))
+        with self._lock:
+            for fp, addrs in peers.items():
+                if not isinstance(fp, str) or fp == self.device.fingerprint or fp not in active_fps:
+                    continue
+                if not isinstance(addrs, list):
+                    continue
+                bucket = env.candidate_addresses.setdefault(fp, set())
+                for addr in addrs:
+                    if isinstance(addr, str) and 0 < len(addr) <= 128:
+                        bucket.add(addr)
+
+    def _handle_incident(self, env_id: str, session: Session, message: dict) -> None:
+        payload = message.get("incident")
+        if not isinstance(payload, dict):
+            return
+        env = self._envs[env_id]
+        if not _is_admin(env.document, self.device.fingerprint):
+            return  # section 9: incident summaries are stored only by admin nodes
+        incident_id = payload.get("incident_id")
+        if not _valid_id(incident_id, 64):
+            return
+        clean = {k: payload[k] for k in INCIDENT_ALLOWED_KEYS if k in payload}
+        path = f"team/{env_id}/incidents/{session.peer.fingerprint}-{incident_id}.json"
+        self.ctx.state.write_json(path, clean)
+
+    def send_incident(self, env_id: str, summary: dict) -> None:
+        """Broadcast hook stage 4 wires up: today it fans an INCIDENT message out to every open
+        session for ``env_id``.  Queueing until an admin node is reachable (section 9) is stage 4's
+        job; this only fixes the call site and the wire message it will use."""
+        self._broadcast(env_id, {"type": "INCIDENT", "incident": dict(summary)})
+
+    # --------------------------------------------------------------- polling
+    def poll(self) -> None:
+        now = time.monotonic()
+        if now - self._last_discovery > _DISCOVERY_INTERVAL_SECONDS or not self._envs:
+            self._last_discovery = now
+            with self._lock:
+                self._discover_locked()
+        now_ms_value = C.now_ms()
+        with self._lock:
+            env_ids = list(self._envs.keys())
+        for env_id in env_ids:
+            self._poll_env(env_id, now, now_ms_value)
+
+    def _poll_env(self, env_id: str, now: float, now_ms_value: int) -> None:
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+        released = env.store.release_deferred(now_ms_value)
+        if released:
+            self._refold(env_id)
+            for released_commit in released:
+                if self._commit_seen.add_if_new(released_commit.hash):
+                    self._broadcast(env_id, {"type": "COMMIT", "commit": released_commit.to_dict()})
+        with self._lock:
+            dead = [fp for fp, s in env.sessions.items() if s.closed]
+        for fp in dead:
+            self._drop_session(env_id, fp)
+        max_age = self.ctx.config.team_session_max_age_seconds
+        with self._lock:
+            aged = [fp for fp, s in env.sessions.items() if now - s.created_at > max_age]
+        for fp in aged:
+            self._close_session(env_id, fp)
+        members = self._active_member_fps(env_id)
+        self_fp = self.device.fingerprint
+        with self._lock:
+            need_dial = [fp for fp in members if fp != self_fp and fp not in env.sessions
+                        and env.candidate_addresses.get(fp) and now >= env.next_attempt.get(fp, 0.0)]
+        for fp in need_dial:
+            self._dial_attempt(env_id, fp)
+        interval = self._sync_interval(env_id)
+        with self._lock:
+            sessions = list(env.sessions.items())
+        for fp, session in sessions:
+            last = env.last_vector_sent.get(fp, 0.0)
+            if now - last >= interval:
+                self._send_vector(env_id, session)
+
+    def _sync_interval(self, env_id: str) -> float:
+        override = self.ctx.config.team_sync_interval_seconds
+        if override is not None:
+            return override
+        settings = self._envs[env_id].document.get("settings", {})
+        value = settings.get("sync_interval_seconds")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 \
+            else F.DEFAULT_SYNC_INTERVAL_SECONDS
+
+    def _dial_attempt(self, env_id: str, fp: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None or fp in env.sessions:
+                return
+            addrs = sorted(env.candidate_addresses.get(fp, ()))
+        if not addrs:
+            return
+        address = addrs[0]
+        try:
+            session = self.transport.dial(address, env_id)
+        except Exception:
+            self._record_dial_failure(env_id, fp)
+            return
+        if session.peer.fingerprint != fp:
+            session.close()
+            self._record_dial_failure(env_id, fp)
+            return
+        with self._lock:
+            env.backoff.pop(fp, None)
+            env.next_attempt.pop(fp, None)
+        self._persist_peer_address(env_id, fp, address)   # the address worked, regardless of the race below
+        if not self._accept_or_replace_session(env_id, session, inbound=False):
+            return
+        self._audit_session_open(env_id, fp)
+        self._start_receiver(env_id, session)
+        self._send_vector(env_id, session)
+        self._send_peers(env_id, session)
+
+    def _record_dial_failure(self, env_id: str, fp: str) -> None:
+        min_backoff, max_backoff = self.ctx.config.team_dial_backoff
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return
+            current = env.backoff.get(fp)
+            next_backoff = min_backoff if current is None else min(current * 2, max_backoff)
+            env.backoff[fp] = next_backoff
+            env.next_attempt[fp] = time.monotonic() + next_backoff
+
+    # ------------------------------------------------------------- handshake
+    def _on_handshake_failed(self, reason: str, fingerprint: str | None) -> None:
+        try:
+            extra = {"fingerprint": fingerprint} if fingerprint else None
+            self.ctx.audit.record("team_handshake_failed", result="denied", reason=reason, extra=extra)
+        except AuditUnavailable:
+            pass
+
+    # ---------------------------------------------------------------- status
+    def status(self, env_id: str) -> dict:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                raise NotFound("team_env_unknown")
+            return {
+                "env_id": env_id,
+                "vector": dict(env.store.vector()),
+                "sessions": sorted(env.sessions.keys()),
+                "synced_at": iso(env.synced_at) if env.synced_at is not None else None,
+                "pending_deferred": len(env.store.deferred_commits()),
+            }
+
+    def synced_at(self, env_id: str) -> str | None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            return iso(env.synced_at) if env is not None and env.synced_at is not None else None
+
+    # --------------------------------------------------------------- audit
+    def _audit_session_open(self, env_id: str, fp: str) -> None:
+        try:
+            self.ctx.audit.record("team_session_open", result="ok", extra={"env_id": env_id, "fingerprint": fp})
+        except AuditUnavailable:
+            pass
+
+    def _audit_session_close(self, env_id: str, fp: str) -> None:
+        try:
+            self.ctx.audit.record("team_session_close", result="ok", extra={"env_id": env_id, "fingerprint": fp})
+        except AuditUnavailable:
+            pass
+
+    def _audit_vector(self, env_id: str, fp: str, count: int) -> None:
+        try:
+            self.ctx.audit.record("team_sync_vector", result="ok",
+                                  extra={"env_id": env_id, "fingerprint": fp, "commits": count})
+        except AuditUnavailable:
+            pass
+
+    def _audit_fact_apply(self, env_id: str, fact: Fact) -> None:
+        try:
+            self.ctx.audit.record("team_fact_apply", result="ok",
+                                  extra={"env_id": env_id, "kind": fact.kind, "fingerprint": fact.author})
+        except AuditUnavailable:
+            pass
+
+    def _audit_fact_rejected(self, env_id: str, fact: Fact, reason: str) -> None:
+        try:
+            self.ctx.audit.record("team_fact_rejected", result="denied", reason=reason,
+                                  extra={"env_id": env_id, "kind": fact.kind, "fingerprint": fact.author})
+        except AuditUnavailable:
+            pass

@@ -491,7 +491,9 @@ def _derive_connections(document: dict[str, Any], state: StateDir, env_id: str,
                         version_index: dict[str, dict[str, int]], policy: Any, audit: Any) -> None:
     local = state.read_json(P.CONNECTIONS, {}) or {}
     now_iso = iso()
+    seen_ids: set[str] = set()
     for conn_id, entry in document["connections"].items():
+        seen_ids.add(conn_id)
         existing_raw = local.get(conn_id)
         # F3: never let a shared connection overwrite a pre-existing LOCAL entry (or one derived
         # from a *different* shared environment) that merely happens to share this id -- that
@@ -522,6 +524,26 @@ def _derive_connections(document: dict[str, Any], state: StateDir, env_id: str,
                                 updated_at=before.updated_at)
         else:
             after = replace(after, policy_version=1, created_at=entry.get("created_at", now_iso), updated_at=now_iso)
+        raw = after.to_dict()
+        raw["shared_env"] = env_id
+        local[conn_id] = raw
+    # A connection this node previously derived from THIS environment can vanish from the folded
+    # document on a later fold even though nothing removed it directly: a bare, out-of-band
+    # ``connection_disabled`` FACT (section 7.4) is fed into every fold from the very start, so
+    # ``_op_connection_create``'s "never let a disabled id (re)exist" check (section 5.3) then
+    # retroactively skips that connection's own creation op too.  Left alone, the stale local
+    # entry would still read "active" forever, silently defeating section 6.5's "연결 비활성화:
+    # 즉시 거부, 실행 취소, 소켓 닫기" guarantee for exactly the FACT-only path (a
+    # ``connection.disable`` COMMIT does not hit this, since it flips an already-present entry's
+    # status in place instead of removing it).  Treat a vanished shared connection exactly like an
+    # ordinary disable: it always narrows to nothing, so grants are always staled.
+    for conn_id, existing_raw in local.items():
+        if existing_raw.get("shared_env") != env_id or conn_id in seen_ids or existing_raw.get("status") == "disabled":
+            continue
+        before = P.Connection.from_dict(existing_raw)
+        after = replace(before, status="disabled", policy_version=before.policy_version + 1, updated_at=now_iso)
+        policy._reevaluate_grants(conn_id, after.policy_version, True, None)
+        policy._invalidate_approvals(lambda e, cid=conn_id: e.get("connection") == cid, "connection_disabled")
         raw = after.to_dict()
         raw["shared_env"] = env_id
         local[conn_id] = raw

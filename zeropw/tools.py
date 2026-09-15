@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .errors import AuditUnavailable, InvalidInput, NotFound, PolicyDenied, StateError, Unsupported, ZeroPWError
-from .policy import HEADER_NAME_RE, HTTP_METHODS, Action, Connection, Grant, SshTarget
+from .policy import CONNECTIONS, HEADER_NAME_RE, HTTP_METHODS, Action, Connection, Grant, SshTarget
 from .projects import validate_name
 from .runs import RunRegistry, contains_sensitive, credential_patterns
 from .store import iso
@@ -278,11 +278,37 @@ def _target_label(connection: Connection) -> str | None:
 
 
 # --------------------------------------------------------- list_connections
+def _shared_env_view(ctx: Any, raw_connections: dict[str, Any], connection_id: str) -> dict[str, Any]:
+    """``synced_at`` for a shared connection (docs/team-sync.md section 6.6): field only, never a value.
+
+    ``ctx.policy.usable_connections`` returns ``Connection`` dataclasses built
+    via ``Connection.from_dict``, which does not carry the derived
+    ``shared_env`` tag (``zeropw/team/fold.py``'s ``_derive_connections``);
+    the raw policy document does, so it is consulted here instead.  A local
+    (non-shared) connection gets no ``synced_at`` key at all.
+    """
+    env_id = (raw_connections.get(connection_id) or {}).get("shared_env")
+    if not env_id:
+        return {}
+    team = getattr(ctx, "team", None)
+    synced_at = None
+    getter = getattr(team, "synced_at", None) if team is not None else None
+    if callable(getter):
+        try:
+            synced_at = getter(env_id)
+        except Exception:
+            synced_at = None
+    return {"synced_at": synced_at}
+
+
 def list_connections(ctx: Any, caller: str) -> dict[str, Any]:
     usable = ctx.policy.usable_connections(caller)
     ctx.audit.record("tools_list_connections", caller=caller, action="list", result="ok",
                      extra={"count": len(usable)})
-    return {"connections": [{**connection.public_view(), "grant": grant.public_view()} for connection, grant in usable]}
+    raw_connections = ctx.state.read_json(CONNECTIONS, {}) or {}
+    return {"connections": [{**connection.public_view(), "grant": grant.public_view(),
+                             **_shared_env_view(ctx, raw_connections, connection.id)}
+                            for connection, grant in usable]}
 
 
 # ------------------------------------------------------------------ request

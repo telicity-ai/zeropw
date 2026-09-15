@@ -46,6 +46,8 @@ EVENTS = frozenset({
     "http_relay", "ssh_bind", "ssh_sign", "ssh_agent_refused", "run_start", "run_finish", "run_cancel",
     "backup", "restore", "restore_ack", "recover", "rotation", "unsupported", "auth_failed",
     "team_commit_apply", "team_commit_rejected", "team_op_skipped",
+    "team_handshake_failed", "team_session_open", "team_session_close",
+    "team_fact_apply", "team_fact_rejected", "team_sync_vector",
 })
 
 EXTRA_KEYS = frozenset({
@@ -53,7 +55,7 @@ EXTRA_KEYS = frozenset({
     "exit_code", "program", "secret_id", "version", "grant", "principal", "digest", "state",
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
-    "author_seq", "op", "env_id",
+    "author_seq", "op", "env_id", "commits",
 })
 
 # Anomalies that mean a credential or handle nearly left the trusted boundary (alerted every time).
