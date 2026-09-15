@@ -1447,5 +1447,186 @@ class AdminCliTestCase(unittest.TestCase):
                 self.assertEqual(error["reason"], reason)
 
 
+class TeamCliTestCase(AdminCliTestCase):
+    """``team`` commands and shared-environment awareness in ``connection``/``secret``/``rotation``
+    (docs/team-sync.md section 12; stage-3 test list in section 13): commit/fact output shape,
+    value-free CLI output (json and yaml), and cross-process pickup (one ``Context`` driving the
+    CLI, a second live ``TeamSync`` over the same state dir standing in for a running ``serve``).
+    """
+
+    def _share(self) -> str:
+        self.seed_project()
+        self.put_secret()
+        self.create_http()
+        from zeropw.team import membership as team_membership
+
+        env_id = team_membership.share_environment(self.ctx(), None, "demo", "dev", "owner", ADMIN)["env_id"]
+        return env_id
+
+    def test_team_init_refuses_second_time(self) -> None:
+        self.init()
+        payload = self.ok("team", "init")
+        self.assertIn("fingerprint", payload)
+        self.fail("team", "init")
+
+    def test_team_share_cli_reports_not_shared_connection(self) -> None:
+        """H1 regression through the CLI: `team share` output surfaces a connection left behind
+        because its secret was not carried over, instead of silently disabling it."""
+        self.seed_project()
+        self.put_secret()  # "gh-token", active
+        self.create_http()  # "gh", references gh-token: the happy path
+        self.put_secret(secret_id="dead-token", value="synthetic-dead-token-value")
+        self.ok("connection", "create-http", "--id", "dead", "--project", "demo", "--environment", "dev",
+               "--service", "deadsvc", "--secret-id", "dead-token", "--target", "https://dead.example.com",
+               "--auth", "bearer")
+        self.ok("secret", "revoke", "--id", "dead-token", "--version", "1")  # no active/staged version left
+
+        payload = self.ok("team", "share", "--project", "demo", "--environment", "dev")
+        self.assertEqual(payload["not_shared"], [{"connection": "dead", "reason": "secret_not_shared"}])
+        still_local = self.ok("connection", "show", "--id", "dead")
+        self.assertEqual(still_local["status"], "active")
+        raw = self.ctx().state.read_json(P.CONNECTIONS, {}) or {}
+        self.assertNotIn("shared_env", raw["dead"])
+        self.assertEqual(raw["gh"].get("shared_env"), payload["env_id"])
+
+    def test_team_share_status_members_log_show(self) -> None:
+        env_id = self._share()
+        status = self.ok("team", "status", "--env", "demo/dev")
+        self.assertEqual(status["env_id"], env_id)
+        self.assertGreaterEqual(status["commits_folded"], 1)
+        self.assertEqual(status["rejected_commits"], 0)
+
+        members = self.ok("team", "members", "--env", "demo/dev")
+        self.assertEqual(len(members["members"]), 1)
+        self.assertTrue(members["members"][0]["owner"])
+
+        log = self.ok("team", "log", "--env", "demo/dev")
+        self.assertTrue(any("env.init" in entry["ops"] for entry in log["log"]))
+
+        show = self.ok("team", "show", "--env", "demo/dev")
+        self.assertEqual(show["env_id"], env_id)
+        blob = json.dumps(show)
+        for forbidden in ("ciphertext", "nonce", "\"sig\"", "wraps", SYNTHETIC):
+            self.assertNotIn(forbidden, blob)
+
+    def test_team_show_yaml_has_no_ciphertext_or_wraps(self) -> None:
+        self._share()
+        code, out, err = self.run_cli("team", "show", "--env", "demo/dev", "--format", "yaml")
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        for forbidden in ("ciphertext", "nonce", "sig:", "wraps", SYNTHETIC):
+            self.assertNotIn(forbidden, out)
+        self.assertIn("env_id:", out)
+        # NOT valid JSON: proves this really is the YAML writer, not json.dumps under another name.
+        with self.assertRaises(ValueError):
+            json.loads(out)
+
+    def test_team_invite_warns_and_join_rejects_malformed_invite(self) -> None:
+        self._share()
+        payload = self.ok("team", "invite", "--env", "demo/dev", "--role", "user", "--name", "bob")
+        self.assertIn("warning", payload)
+        self.assertIn("invite", payload)
+        error = self.fail("team", "join", "not-a-real-invite-string")
+        self.assertEqual(error["reason"], "invite_malformed")
+
+    def test_team_diff_between_two_commits(self) -> None:
+        env_id = self._share()
+        log = self.ok("team", "log", "--env", "demo/dev")
+        self.assertGreaterEqual(len(log["log"]), 1)
+        from zeropw.team import commit as team_commit_mod
+
+        store = team_commit_mod.CommitStore(self.ctx().state, env_id)
+        commits = team_commit_mod.sort_total_order(store.all_commits())
+        left, right = commits[0].hash[:12], commits[-1].hash[:12]
+        diff = self.ok("team", "diff", "--env", "demo/dev", left, right)
+        self.assertIn("left", diff)
+        self.assertIn("right", diff)
+        blob = json.dumps(diff)
+        for forbidden in ("ciphertext", "nonce", "\"sig\"", SYNTHETIC):
+            self.assertNotIn(forbidden, blob)
+
+    def test_team_peers_add_and_list(self) -> None:
+        self._share()
+        fake_fp = "b" * 26
+        added = self.ok("team", "peers", "--env", "demo/dev", "--add", "127.0.0.1:9999", "--device", fake_fp)
+        self.assertIn(fake_fp, added["peers"])
+        self.assertIn("127.0.0.1:9999", added["peers"][fake_fp])
+
+    def test_team_compact_no_op_when_too_young(self) -> None:
+        self._share()
+        payload = self.ok("team", "compact", "--env", "demo/dev")
+        self.assertEqual(payload["removed"], 0)
+
+    def test_team_set_role_and_transfer_owner_are_commits(self) -> None:
+        self._share()
+        fake_fp = "c" * 26
+        role_payload = self.ok("team", "set-role", "--env", "demo/dev", "--device", fake_fp, "--role", "admin")
+        self.assertIn("commit", role_payload)
+        transfer_payload = self.ok("team", "transfer-owner", "--env", "demo/dev", "--device", fake_fp)
+        self.assertIn("commit", transfer_payload)
+
+    def test_connection_create_secret_put_are_commits_with_propagated_to(self) -> None:
+        env_id = self._share()
+        create_payload = self.ok("connection", "create-http", "--id", "gh2", "--project", "demo",
+                                 "--environment", "dev", "--service", "svc2", "--secret-id", "gh-token",
+                                 "--target", "https://api.github.com", "--auth", "bearer")
+        self.assertIn("commit", create_payload)
+        self.assertEqual(create_payload["propagated_to"], 0)  # this one-shot CLI holds no live session
+        put_payload = self.ok("secret", "put", "--id", "gh-token", "--kind", "api_key", "--project", "demo",
+                              "--environment", "dev", "--stdin", stdin_bytes=(SYNTHETIC_V2 + "\n").encode())
+        self.assertIn("commit", put_payload)
+        self.assertNotIn("version", put_payload)  # a shared secret is keyed by its version id, not a local int
+        self.assertIn("version_id", put_payload)
+
+    def test_connection_disable_and_secret_revoke_are_facts(self) -> None:
+        self._share()
+        disable_payload = self.ok("connection", "disable", "--id", "gh")
+        self.assertIn("fact", disable_payload)
+        self.assertNotIn("commit", disable_payload)
+        revoke_payload = self.ok("secret", "revoke", "--id", "gh-token", "--version", "1")
+        self.assertIn("fact", revoke_payload)
+        self.assertNotIn("commit", revoke_payload)
+
+    def test_cli_commits_and_facts_visible_on_second_node_after_poll(self) -> None:
+        """docs/team-sync.md section 12: the admin CLI is a separate process from ``serve``.  A
+        second, independent ``Context``/``TeamSync`` over the SAME state directory stands in for a
+        separately-running ``serve --team-listen`` -- it must pick up, on its next ``poll()``, both
+        a commit (``secret put``) and a fact (``connection disable``) the CLI wrote directly.
+        """
+        env_id = self._share()
+        from zeropw.team.identity import DeviceKey
+        from zeropw.team.sync import TeamSync
+        from zeropw.team.transport import InProcessTransport
+
+        serve_ctx = Context.open(self.state)
+        device = DeviceKey.load_or_create(serve_ctx.state, serve_ctx.kms)
+        serve_sync = TeamSync(serve_ctx, InProcessTransport(device), device)
+        serve_sync.register_env(env_id)
+        self.addCleanup(serve_sync.stop)
+
+        put_payload = self.ok("secret", "put", "--id", "gh-token", "--kind", "api_key", "--project", "demo",
+                              "--environment", "dev", "--stdin", stdin_bytes=(SYNTHETIC_V2 + "\n").encode())
+        self.assertIn("commit", put_payload)
+        update_payload = self.ok("connection", "update", "--id", "gh", "--methods", "GET,POST")
+        self.assertIn("commit", update_payload)
+
+        serve_sync.poll()
+        doc = serve_sync.document(env_id)
+        self.assertEqual(len(doc["secrets"]["gh-token"]["versions"]), 2)
+        self.assertEqual(sorted(doc["connections"]["gh"]["http_scope"]["methods"]), ["GET", "POST"])
+
+        disable_payload = self.ok("connection", "disable", "--id", "gh")
+        self.assertIn("fact", disable_payload)
+        serve_sync.poll()
+        # A bare fact-only disable (no accompanying commit) retroactively skips "gh"'s own
+        # connection.create in every full refold from now on (docs/team-sync.md section 5.3's
+        # "never let a disabled id (re)exist" rule applied from the very start of the fold), so it
+        # is entirely ABSENT from the raw folded document -- not present with status "disabled".
+        # The derived local view is where "disabled" actually shows (fold.py's vanished-connection
+        # handling retains a disabled marker there instead of deleting the entry).
+        self.assertNotIn("gh", serve_sync.document(env_id)["connections"])
+        self.assertEqual(self.ok("connection", "show", "--id", "gh")["status"], "disabled")
+
+
 if __name__ == "__main__":
     unittest.main()

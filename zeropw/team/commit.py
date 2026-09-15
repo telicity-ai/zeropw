@@ -452,6 +452,15 @@ def _validate_secret_activate(op: dict[str, Any]) -> None:
         raise InvalidInput("invalid_version_id")
 
 
+def _valid_member_add_wraps(value: Any) -> bool:
+    """Optional per-generation DEK wraps FOR THE NEW MEMBER ONLY (docs/team-sync.md section 5.3's
+    "DEK 감싸기" column, stage 3): ``{generation_id: wrap}``, one wrap (not a fingerprint-keyed map
+    like ``dek.rotate``'s/``env.init``'s ``wraps`` -- the recipient is implicit, the device this
+    same op is adding) per currently-known generation the admin's node can itself unwrap.
+    """
+    return isinstance(value, dict) and all(_valid_token(gen_id) and _valid_wrap(wrap) for gen_id, wrap in value.items())
+
+
 def _validate_member_add(op: dict[str, Any]) -> None:
     device = op.get("device")
     if not isinstance(device, dict):
@@ -461,6 +470,8 @@ def _validate_member_add(op: dict[str, Any]) -> None:
         raise InvalidInput("invalid_member_name")
     if op.get("role") not in ("admin", "user"):
         raise InvalidInput("invalid_role")
+    if "wraps" in op and not _valid_member_add_wraps(op["wraps"]):
+        raise InvalidInput("invalid_wraps")
 
 
 def _validate_member_set_role(op: dict[str, Any]) -> None:
@@ -553,16 +564,43 @@ class CommitStore:
     def _commit_path(self, fingerprint: str, seq: int) -> str:
         return f"{self.root}/commits/{fingerprint}/{seq}.json"
 
+    def _snapshot_floor(self) -> dict[str, int]:
+        """The vector of the newest snapshot on disk, or ``{}`` if there is none (section 7.3).
+
+        ``team compact`` (stage 3) deletes a prefix of each author's commit
+        files once a snapshot already covers them; ``vector()``/``last_seq()``
+        must still report the true historical high-water mark for such an
+        author (whose ``commits/<fp>/`` directory may now be empty, or start
+        above 1) so that ``append()``'s contiguity check does not see a false
+        gap and refuse that author's next, perfectly sequential commit.
+        """
+        directory = self.state.path / self.root / "snapshots"
+        if not directory.is_dir():
+            return {}
+        numbers = sorted((int(p.stem) for p in directory.glob("*.json") if p.stem.isdigit()), reverse=True)
+        if not numbers:
+            return {}
+        data = self.state.read_json(f"{self.root}/snapshots/{numbers[0]}.json", None)
+        vector = (data or {}).get("vector") or {}
+        return {str(k): int(v) for k, v in vector.items() if isinstance(v, int) and not isinstance(v, bool)}
+
     def vector(self) -> dict[str, int]:
-        """Version vector: fingerprint -> highest ``author_seq`` stored (section 6.3)."""
-        result: dict[str, int] = {}
+        """Version vector: fingerprint -> highest ``author_seq`` stored (section 6.3).
+
+        At least as high, per author, as the latest snapshot's own vector
+        (see ``_snapshot_floor``) -- compaction only ever deletes a
+        contiguous prefix of an author's own files, so the true maximum is
+        never lower than what the snapshot already recorded, even if every
+        remaining on-disk file for that author was deleted.
+        """
+        result: dict[str, int] = dict(self._snapshot_floor())
         commits_dir = self.state.path / self.root / "commits"
         if not commits_dir.is_dir():
             return result
         for device_dir in sorted(p for p in commits_dir.iterdir() if p.is_dir()):
             seqs = [int(f.stem) for f in device_dir.glob("*.json") if f.stem.isdigit()]
             if seqs:
-                result[device_dir.name] = max(seqs)
+                result[device_dir.name] = max(result.get(device_dir.name, 0), max(seqs))
         return result
 
     def last_seq(self, fingerprint: str) -> int:

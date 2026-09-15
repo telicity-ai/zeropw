@@ -63,6 +63,7 @@ from ..errors import AuditUnavailable, InvalidInput, NotFound, PolicyDenied
 from ..store import iso
 from ..crypto import ed25519
 from . import commit as C
+from . import envelope
 from . import fold as F
 from .commit import Hlc
 from .identity import DeviceKey, DeviceRecord
@@ -74,6 +75,54 @@ MAX_INCIDENT_FIELDS = 20
 _SEEN_CAPACITY = 4096
 _DISCOVERY_INTERVAL_SECONDS = 1.0
 _RECV_POLL_SECONDS = 1.0
+# Stage 3 (docs/team-sync.md section 7.3, section 14 item 1): a snapshot is saved every this-many
+# newly-folded commits, in addition to whenever ``team compact`` explicitly asks for one.
+SNAPSHOT_INTERVAL_COMMITS = 1000
+# section 7.3's 30-day age floor for a commit to even be a compaction candidate.
+COMPACT_MIN_AGE_MS = 30 * 24 * 3600 * 1000
+# Ops that must never be deleted by compaction, regardless of age/coverage: membership and DEK
+# history is small (bounded by team size, not by how many secrets/connections churn over time) and
+# ``commit.receive_commit``'s device registry / this module's ``_relaxed_document`` both reconstruct
+# device records by re-folding *raw* commits (snapshot-oblivious, by design -- a snapshot's own
+# document has already had ``member_removed`` facts erase a removed member's ``member.add`` per
+# ``_relaxed_document``'s docstring below), so keeping these files forever is what keeps signature
+# verification working for old commits after everything else around them has been compacted away.
+_PROTECTED_OPS = frozenset({"env.init", "member.add", "member.set_role", "member.remove", "owner.transfer",
+                            "dek.rotate"})
+ENVS_MAP_PATH = "team/envs.json"
+
+
+def _commit_is_protected(commit_obj: C.Commit) -> bool:
+    return any(op.get("op") in _PROTECTED_OPS for op in commit_obj.ops)
+
+
+# ------------------------------------------------------------- env name mapping
+def read_env_mapping(state: Any) -> dict[str, dict[str, str]]:
+    """The node-local ``env_id -> {project, environment}`` map (docs/team-sync.md section 12's
+    ``--env P/E`` resolution), written by ``zeropw.team.membership.share_environment``/``join``."""
+    doc = state.read_json(ENVS_MAP_PATH, {})
+    return doc if isinstance(doc, dict) else {}
+
+
+def write_env_mapping(state: Any, env_id: str, project: str, environment: str) -> None:
+    with state.lock():
+        doc = read_env_mapping(state)
+        doc[env_id] = {"project": project, "environment": environment}
+        state.write_json(ENVS_MAP_PATH, doc)
+
+
+def env_project_environment(state: Any, env_id: str) -> tuple[str | None, str | None]:
+    entry = read_env_mapping(state).get(env_id)
+    if not isinstance(entry, dict):
+        return None, None
+    return entry.get("project"), entry.get("environment")
+
+
+def resolve_env_id(state: Any, project: str, environment: str) -> str | None:
+    for env_id, entry in read_env_mapping(state).items():
+        if isinstance(entry, dict) and entry.get("project") == project and entry.get("environment") == environment:
+            return env_id
+    return None
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _FINGERPRINT_RE = re.compile(r"^[a-z2-7]{26}$")
@@ -219,6 +268,30 @@ def _fact_role_ok(doc: dict, kind: str, author_fp: str, target: dict) -> bool:
 
 
 # ------------------------------------------------------------------- discover
+def load_facts(state: Any, env_id: str) -> tuple["F.Facts", set, dict]:
+    """Rebuild ``Facts`` plus the raw hash set and ``member_removed`` authorship map from
+    ``team/<env_id>/facts.jsonl`` (module-level so both ``TeamSync`` and
+    ``zeropw.team.membership``'s node-local, no-live-``TeamSync`` command path can load the exact
+    same monotone state without either one needing a live ``TeamSync`` instance)."""
+    facts = F.Facts()
+    hashes: set = set()
+    removal_authors: dict[str, set] = {}
+    for line in state.read_lines(f"team/{env_id}/facts.jsonl", None) or []:
+        if not line:
+            continue
+        try:
+            fact = Fact.from_dict(json.loads(line))
+        except (ValueError, InvalidInput):
+            continue
+        if fact.hash in hashes:
+            continue
+        hashes.add(fact.hash)
+        _apply_fact_to_facts(facts, fact)
+        if fact.kind == "member_removed":
+            removal_authors.setdefault(fact.target["fingerprint"], set()).add(fact.author)
+    return facts, hashes, removal_authors
+
+
 def discover_envs(state: Any) -> list[str]:
     root = state.path / "team"
     if not root.is_dir():
@@ -271,6 +344,29 @@ class _EnvState:
     # used only to evaluate the precise section 7.4 mutual-removal exemption (see
     # ``_document_for_removal_author_check``), never to decide anything else.
     removal_authors: dict = field(default_factory=dict)
+    # Stage 3 additions -----------------------------------------------------------------------
+    # fingerprint -> the last VECTOR that peer sent us, persisted to peer_vectors.json; used only
+    # by ``compact()`` to decide whether every active member is known to already have a commit.
+    peer_vectors: dict = field(default_factory=dict)
+    # The version vector as of the last time this env's on-disk CommitStore was inspected for
+    # commits this process did not itself just accept via ``_handle_commit``/``submit_commit`` --
+    # i.e. commits a *different* process (the admin CLI) wrote directly.  ``poll()`` compares the
+    # current store vector against this to notice and broadcast them (section 12: "commits it
+    # creates must be ... applied locally; the running serve's TeamSync must pick it up on next
+    # poll() ... and broadcast them").
+    last_known_vector: dict = field(default_factory=dict)
+    # Number of facts.jsonl lines already processed, for the same reason as ``last_known_vector``
+    # but for facts (a `connection disable`/`secret revoke` issued through the admin CLI on a
+    # shared environment while a separate `serve` is running).
+    known_fact_lines: int = 0
+    # Total commits (sum of the vector) reflected in the last snapshot this process saved/loaded;
+    # a new snapshot is saved once ``poll()``'s running total exceeds this by
+    # ``SNAPSHOT_INTERVAL_COMMITS`` (section 7.3) or when ``compact()`` saves one explicitly.
+    last_snapshot_total: int = 0
+    # A cheap cache for ``_relaxed_document``: (sorted store-vector items, document) -- re-folding
+    # every known commit on every inbound FACT/handshake is wasteful once the vector has not moved
+    # since the last time it was computed.
+    relaxed_cache: tuple | None = None
 
 
 INCIDENT_ALLOWED_KEYS = frozenset({
@@ -295,6 +391,7 @@ class TeamSync:
         self.device = device
         transport.membership = self._membership
         transport.on_handshake_failed = self._on_handshake_failed
+        transport.invite_check = self._invite_check
         self._envs: dict[str, _EnvState] = {}
         self._lock = threading.RLock()
         self._commit_seen = _LruSet()
@@ -305,6 +402,11 @@ class TeamSync:
         self._listen_address: str | None = None
         self._tick_seconds = 0.05
         self._last_discovery = 0.0
+        # env_id -> {joining device fingerprint -> {"role", "name"}}, populated by ``_invite_check``
+        # (docs/team-sync.md section 6.2's msg3 invite proof, verified on the *responder* side) and
+        # consumed by ``_maybe_admit_invited_member`` right after that same handshake completes and
+        # the session is accepted, to author the ``member.add`` commit (section 4.3 step 3).
+        self._pending_invite_grants: dict[str, dict[str, dict]] = {}
 
     # ------------------------------------------------------------- lifecycle
     def start(self, listen_address: str | None = None) -> None:
@@ -364,8 +466,18 @@ class TeamSync:
         for fp, addrs in self._read_peers(env_id).items():
             if _valid_fingerprint(fp) and isinstance(addrs, list):
                 env.candidate_addresses[fp] = {a for a in addrs if isinstance(a, str)}
+        peer_vectors_doc = self.ctx.state.read_json(f"team/{env_id}/peer_vectors.json", {}) or {}
+        for fp, vector in peer_vectors_doc.items():
+            if _valid_fingerprint(fp) and isinstance(vector, dict):
+                env.peer_vectors[fp] = {str(k): int(v) for k, v in vector.items()
+                                        if isinstance(v, int) and not isinstance(v, bool)}
+        env.known_fact_lines = len(self.ctx.state.read_lines(self._facts_path(env_id), None) or [])
+        snapshot = F.load_latest_snapshot(self.ctx.state, env_id)
+        if snapshot is not None:
+            env.last_snapshot_total = sum((snapshot.get("vector") or {}).values())
         self._envs[env_id] = env
         self._refold(env_id)
+        env.last_known_vector = dict(env.store.vector())
         return env
 
     def register_env(self, env_id: str) -> None:
@@ -379,23 +491,7 @@ class TeamSync:
         return f"team/{env_id}/facts.jsonl"
 
     def _read_facts(self, env_id: str) -> tuple[F.Facts, set, dict]:
-        facts = F.Facts()
-        hashes: set = set()
-        removal_authors: dict[str, set] = {}
-        for line in self.ctx.state.read_lines(self._facts_path(env_id), None) or []:
-            if not line:
-                continue
-            try:
-                fact = Fact.from_dict(json.loads(line))
-            except (ValueError, InvalidInput):
-                continue
-            if fact.hash in hashes:
-                continue
-            hashes.add(fact.hash)
-            _apply_fact_to_facts(facts, fact)
-            if fact.kind == "member_removed":
-                removal_authors.setdefault(fact.target["fingerprint"], set()).add(fact.author)
-        return facts, hashes, removal_authors
+        return load_facts(self.ctx.state, env_id)
 
     def _read_peers(self, env_id: str) -> dict:
         return self.ctx.state.read_json(f"team/{env_id}/peers.json", {}) or {}
@@ -408,6 +504,12 @@ class TeamSync:
                 addrs.append(address)
             doc[fp] = addrs
             self.ctx.state.write_json(f"team/{env_id}/peers.json", doc)
+
+    def _persist_peer_vectors(self, env_id: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            snapshot = {fp: dict(v) for fp, v in env.peer_vectors.items()} if env is not None else {}
+        self.ctx.state.write_json(f"team/{env_id}/peer_vectors.json", snapshot)
 
     def set_peer_address(self, env_id: str, fingerprint: str, address: str) -> None:
         """Explicit address-book management (``team peers --add``): trusted immediately, unlike a
@@ -433,12 +535,18 @@ class TeamSync:
         # with a stale result completed after a faster, more-up-to-date one.
         with self.ctx.state.lock():
             commits = env.store.all_commits()
-            result = F.fold(env_id, commits, env.facts, audit=self.ctx.audit)
+            result = F.fold_with_snapshot(env_id, commits, self.ctx.state, env.facts, audit=self.ctx.audit)
+            project, environment = env_project_environment(self.ctx.state, env_id)
             version_index = F.derive_local(result, self.ctx.state, self.ctx.vault, self.ctx.policy, self.ctx.audit,
-                                           device=self.device)
+                                           device=self.device, project=project, environment=environment)
             with self._lock:
                 env.document = result.document
                 env.version_index = version_index
+                env.relaxed_cache = None
+            total = sum(result.vector.values())
+            if total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS:
+                F.save_snapshot(self.ctx.state, env_id, total, result)
+                env.last_snapshot_total = total
 
     def _membership(self, env_id: str, fingerprint: str) -> DeviceRecord | None:
         with self._lock:
@@ -465,16 +573,25 @@ class TeamSync:
         precise, authorization-safe version of "who may still act despite being removed" is
         ``_document_for_removal_author_check``.
 
-        NOTE (re-fold cost): this re-folds the whole commit log on every call, and
-        ``_known_device_record`` calls it once per inbound FACT and once per inbound handshake.
-        The concurrent-connection cap (``TcpTransport``'s ``max_connections``) bounds how often
-        that can happen at once; stage 3's persisted snapshot / a cached document would remove
-        the need to re-fold from scratch here at all.
+        Cached by the store's version vector (stage 3): as long as no new commit has been accepted
+        for this environment since the last call, the previous result is reused instead of
+        re-folding the whole commit log again -- ``_known_device_record`` calls this once per
+        inbound FACT and once per inbound handshake, so this matters under the
+        ``TcpTransport.max_connections`` concurrency cap.  Deliberately snapshot-oblivious (always
+        folds every *raw* commit, never a compacted snapshot's document): ``compact()`` never
+        deletes a commit whose op could affect this fold (``sync._PROTECTED_OPS``), specifically so
+        that this reconstruction keeps working after compaction.
         """
         env = self._envs[env_id]
+        vector_key = tuple(sorted(env.store.vector().items()))
+        cached = env.relaxed_cache
+        if cached is not None and cached[0] == vector_key:
+            return cached[1]
         relaxed_facts = env.facts.copy()
         relaxed_facts.removed_members = set()
-        return F.fold(env_id, env.store.all_commits(), relaxed_facts).document
+        document = F.fold(env_id, env.store.all_commits(), relaxed_facts).document
+        env.relaxed_cache = (vector_key, document)
+        return document
 
     def _document_for_removal_author_check(self, env_id: str, author_fp: str, target_fp: str) -> dict:
         """The document to authorize "author_fp removes target_fp" against (section 7.4).
@@ -553,10 +670,70 @@ class TeamSync:
                 return
         if not self._accept_or_replace_session(env_id, session, inbound=True):
             return
+        self._maybe_admit_invited_member(env_id, session.peer)
         self._audit_session_open(env_id, session.peer.fingerprint)
         self._start_receiver(env_id, session)
         self._send_vector(env_id, session)
         self._send_peers(env_id, session)
+
+    # ------------------------------------------------------------ invites (section 4.3)
+    def _invite_check(self, env_id: str, initiator_record: DeviceRecord, transcript_hash: bytes,
+                      proof: bytes) -> bool:
+        """``transport.invite_check`` (section 6.2 msg3): verify a joining device's invite proof and,
+        on success, remember its granted role/name for ``_maybe_admit_invited_member`` to turn into
+        a ``member.add`` commit once the handshake finishes.  Never raises: any failure to look up
+        or unwrap an invite is indistinguishable from "no matching invite" to the caller.
+        """
+        from . import membership as M  # lazy: membership builds on sync (TeamSync), not vice versa
+
+        try:
+            info = M.consume_invite(self.ctx, env_id, transcript_hash, proof)
+        except Exception:
+            return False
+        if info is None:
+            return False
+        with self._lock:
+            self._pending_invite_grants.setdefault(env_id, {})[initiator_record.fingerprint] = info
+        return True
+
+    def _maybe_admit_invited_member(self, env_id: str, record: DeviceRecord) -> None:
+        with self._lock:
+            pending = self._pending_invite_grants.get(env_id, {}).pop(record.fingerprint, None)
+        if pending is None:
+            return  # an ordinary reconnect from an already-known member, not a fresh join
+        self._admit_member(env_id, record, pending["role"], pending["name"])
+
+    def _admit_member(self, env_id: str, record: DeviceRecord, role: str, name: str) -> None:
+        """Author and submit the ``member.add`` commit (section 4.3 step 3): the new device record,
+        its invited name/role, and a wrap of every DEK generation this node can itself unwrap (so
+        the new member can decrypt every existing shared secret version, not only future ones)."""
+        from ..kms import WrappedKey  # lazy: sync.py otherwise has no need of the KMS wrapper type
+
+        env = self._envs[env_id]
+        wraps: dict[str, Any] = {}
+        for gen_id in env.document.get("dek", {}).get("generations", {}):
+            wrapped = self.ctx.state.read_json(f"team/{env_id}/dek/{gen_id}.json", None)
+            if not wrapped:
+                continue
+            try:
+                dek = self.ctx.kms.unwrap(WrappedKey.from_dict(wrapped))
+            except Exception:
+                continue
+            wraps[gen_id] = envelope.wrap_dek(dek, env_id, gen_id, record)
+        op: dict[str, Any] = {"op": "member.add", "device": record.to_dict(), "name": name, "role": role}
+        if wraps:
+            op["wraps"] = wraps
+        with self._lock:
+            seq = env.store.last_seq(self.device.fingerprint) + 1
+            hlc_value = env.hlc.tick()
+            vector = env.store.vector()
+        commit_obj = C.sign_commit(self.device, env_id, seq, hlc_value, vector, [op])
+        self.submit_commit(env_id, commit_obj)
+        try:
+            self.ctx.audit.record("team_member_add", result="ok",
+                                  extra={"env_id": env_id, "fingerprint": record.fingerprint, "role": role})
+        except AuditUnavailable:
+            pass
 
     def _start_receiver(self, env_id: str, session: Session) -> None:
         def loop() -> None:
@@ -674,6 +851,11 @@ class TeamSync:
         if not isinstance(peer_vector, dict):
             return
         env = self._envs[env_id]
+        clean_peer_vector = {k: v for k, v in peer_vector.items()
+                             if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0}
+        with self._lock:
+            env.peer_vectors[session.peer.fingerprint] = clean_peer_vector
+        self._persist_peer_vectors(env_id)
         local_vector = env.store.vector()
         to_send: list[C.Commit] = []
         for fp, last_seq in sorted(local_vector.items()):
@@ -749,25 +931,32 @@ class TeamSync:
             return
         self._apply_remote_fact(env_id, fact, exclude_fp=session.peer.fingerprint)
 
-    def _apply_remote_fact(self, env_id: str, fact: Fact, exclude_fp: str | None) -> None:
+    def _validate_incoming_fact(self, env_id: str, fact: Fact) -> bool:
+        """Section 7.4's receipt checks, shared by an inbound wire ``FACT`` and one this process
+        notices another local process (the admin CLI) already appended to ``facts.jsonl``."""
         env = self._envs[env_id]
         if fact.hash in env.fact_hashes:
-            return
+            return False
         try:
             _validate_fact_target(fact.kind, fact.target)
         except InvalidInput:
             self._audit_fact_rejected(env_id, fact, "team_fact_target_invalid")
-            return
+            return False
         author_record = self._known_device_record(env_id, fact.author)
         if author_record is None or not verify_fact(fact, author_record):
             self._audit_fact_rejected(env_id, fact, "team_fact_signature_invalid")
-            return
+            return False
         if fact.kind == "member_removed":
             role_doc = self._document_for_removal_author_check(env_id, fact.author, fact.target["fingerprint"])
         else:
             role_doc = env.document
         if not _fact_role_ok(role_doc, fact.kind, fact.author, fact.target):
             self._audit_fact_rejected(env_id, fact, "team_fact_not_authorized")
+            return False
+        return True
+
+    def _apply_remote_fact(self, env_id: str, fact: Fact, exclude_fp: str | None) -> None:
+        if not self._validate_incoming_fact(env_id, fact):
             return
         # store_fact (mutates the shared, unlocked env.facts) and refold (reads it) must be one
         # atomic unit relative to another thread doing the same for a DIFFERENT, concurrently
@@ -785,15 +974,22 @@ class TeamSync:
         if fact.kind == "member_removed":
             self._drop_member_sessions(env_id, fact.target["fingerprint"])
 
-    def _store_fact(self, env_id: str, fact: Fact) -> None:
+    def _remember_fact(self, env_id: str, fact: Fact) -> None:
+        """Update this process's in-memory ``Facts``/dedup bookkeeping only -- no disk write.  Used
+        for a fact already persisted by whoever wrote it (``_store_fact`` covers writing it too)."""
         env = self._envs[env_id]
-        with self.ctx.state.lock():
-            self.ctx.state.append_line(self._facts_path(env_id), json.dumps(fact.to_dict(), sort_keys=True,
-                                                                             separators=(",", ":")))
         env.fact_hashes.add(fact.hash)
         _apply_fact_to_facts(env.facts, fact)
         if fact.kind == "member_removed":
             env.removal_authors.setdefault(fact.target["fingerprint"], set()).add(fact.author)
+
+    def _store_fact(self, env_id: str, fact: Fact) -> None:
+        with self.ctx.state.lock():
+            self.ctx.state.append_line(self._facts_path(env_id), json.dumps(fact.to_dict(), sort_keys=True,
+                                                                             separators=(",", ":")))
+            env = self._envs[env_id]
+            env.known_fact_lines += 1
+        self._remember_fact(env_id, fact)
 
     def publish_fact(self, env_id: str, kind: str, **target: Any) -> dict:
         """Locally originate, sign, apply and broadcast one fact (the ``team ...`` CLI's future entry point)."""
@@ -879,6 +1075,8 @@ class TeamSync:
         env = self._envs.get(env_id)
         if env is None:
             return
+        self._pick_up_local_commits(env_id)
+        self._pick_up_local_facts(env_id)
         released = env.store.release_deferred(now_ms_value)
         if released:
             self._refold(env_id)
@@ -908,6 +1106,75 @@ class TeamSync:
             last = env.last_vector_sent.get(fp, 0.0)
             if now - last >= interval:
                 self._send_vector(env_id, session)
+
+    def _pick_up_local_commits(self, env_id: str) -> None:
+        """Notice and broadcast commits a *different* process (the admin CLI, on a shared
+        environment: docs/team-sync.md section 12) wrote directly to this env's ``CommitStore``
+        since the last poll tick, by diffing the on-disk vector against ``last_known_vector``.
+        """
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+        current_vector = env.store.vector()
+        with self._lock:
+            baseline = dict(env.last_known_vector)
+        new_commits: list[C.Commit] = []
+        for fp, seq_hi in current_vector.items():
+            seq_lo = baseline.get(fp, 0)
+            if seq_hi <= seq_lo:
+                continue
+            for seq in range(seq_lo + 1, seq_hi + 1):
+                found = env.store.get(fp, seq)
+                if found is not None:
+                    new_commits.append(found)
+        if not new_commits:
+            with self._lock:
+                env.last_known_vector = current_vector
+            return
+        with self._lock:
+            env.last_known_vector = current_vector
+        self._refold(env_id)
+        for found in new_commits:
+            if self._commit_seen.add_if_new(found.hash):
+                self._broadcast(env_id, {"type": "COMMIT", "commit": found.to_dict()})
+
+    def _pick_up_local_facts(self, env_id: str) -> None:
+        """The FACT-side twin of ``_pick_up_local_commits``: a ``connection disable``/``secret
+        revoke`` issued through the admin CLI on a shared environment writes straight to
+        ``facts.jsonl``; broadcast anything appended there since the last poll tick.
+        """
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+        lines = self.ctx.state.read_lines(self._facts_path(env_id), None) or []
+        if len(lines) <= env.known_fact_lines:
+            env.known_fact_lines = len(lines)
+            return
+        new_lines = lines[env.known_fact_lines:]
+        env.known_fact_lines = len(lines)
+        for line in new_lines:
+            if not line:
+                continue
+            try:
+                fact = Fact.from_dict(json.loads(line))
+            except (ValueError, InvalidInput):
+                continue
+            if fact.env_id != env_id or fact.kind not in FACT_KINDS or fact.hash in env.fact_hashes:
+                continue
+            self._absorb_local_fact(env_id, fact)
+
+    def _absorb_local_fact(self, env_id: str, fact: "Fact") -> None:
+        """Apply (without re-appending -- it is already on disk) and broadcast a fact this process
+        did not itself author, exactly like an inbound ``FACT`` message except for that."""
+        if not self._validate_incoming_fact(env_id, fact):
+            return
+        with self.ctx.state.lock():
+            self._remember_fact(env_id, fact)
+            self._refold(env_id)
+        self._audit_fact_apply(env_id, fact)
+        self._broadcast(env_id, {"type": "FACT", "fact": fact.to_dict()})
+        if fact.kind == "member_removed":
+            self._drop_member_sessions(env_id, fact.target["fingerprint"])
 
     def _sync_interval(self, env_id: str) -> float:
         override = self.ctx.config.team_sync_interval_seconds
@@ -939,6 +1206,11 @@ class TeamSync:
         with self._lock:
             env.backoff.pop(fp, None)
             env.next_attempt.pop(fp, None)
+        self._wire_dialed_session(env_id, fp, address, session)
+
+    def _wire_dialed_session(self, env_id: str, fp: str, address: str, session: Session) -> None:
+        """Common tail of every successful outbound dial: persist the address, resolve a same-peer
+        collision against a concurrently accepted inbound session, then start gossiping."""
         self._persist_peer_address(env_id, fp, address)   # the address worked, regardless of the race below
         if not self._accept_or_replace_session(env_id, session, inbound=False):
             return
@@ -946,6 +1218,31 @@ class TeamSync:
         self._start_receiver(env_id, session)
         self._send_vector(env_id, session)
         self._send_peers(env_id, session)
+
+    def adopt_outbound_session(self, env_id: str, session: Session, address: str) -> None:
+        """Hand a session this caller dialed itself into the ordinary gossip machinery.
+
+        ``zeropw.team.membership.join`` must dial with an ``invite_proof`` --  a parameter
+        ``TeamSync``'s own periodic ``_dial_attempt`` never passes, since it only ever reconnects to
+        an *already*-member peer -- so it cannot go through ``_dial_attempt`` itself.  This is the
+        rest of that same tail (``_wire_dialed_session``), exposed for that one caller.
+        """
+        self._wire_dialed_session(env_id, session.peer.fingerprint, address, session)
+
+    def is_active_member(self, env_id: str, fingerprint: str) -> bool:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return False
+            member = env.document.get("members", {}).get(fingerprint)
+            return bool(member) and member.get("status") == "active"
+
+    def document(self, env_id: str) -> dict:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                raise NotFound("team_env_unknown")
+            return env.document
 
     def _record_dial_failure(self, env_id: str, fp: str) -> None:
         min_backoff, max_backoff = self.ctx.config.team_dial_backoff
@@ -979,6 +1276,68 @@ class TeamSync:
                 "synced_at": iso(env.synced_at) if env.synced_at is not None else None,
                 "pending_deferred": len(env.store.deferred_commits()),
             }
+
+    # -------------------------------------------------------------- compact
+    def compact(self, env_id: str) -> dict:
+        """``team compact`` (docs/team-sync.md section 7.3): delete commits older than
+        ``COMPACT_MIN_AGE_MS`` once every active member's last-known ``VECTOR`` (``peer_vectors``,
+        section 6.3) already covers them, saving a snapshot first so ``fold_with_snapshot`` still
+        reconstructs the exact same document.  Never deletes a commit carrying a ``_PROTECTED_OPS``
+        op (membership/DEK history), regardless of age or coverage, so signature verification of
+        older commits and ``_relaxed_document`` keep working after compaction (see their
+        docstrings).  Returns ``{"removed": N, "blocked_by": [...]}``; a non-empty ``blocked_by``
+        means no commit was old *and* universally-covered enough, and names the lagging members.
+        """
+        with self._lock:
+            env = self._envs.get(env_id)
+        if env is None:
+            raise NotFound("team_env_unknown")
+        commits = env.store.all_commits()
+        if not commits:
+            return {"env_id": env_id, "removed": 0, "blocked_by": []}
+        now_ms_value = C.now_ms()
+        cutoff_index = -1
+        for index, commit_obj in enumerate(commits):
+            wall_ms, _ = Hlc.parse(commit_obj.hlc)
+            if now_ms_value - wall_ms < COMPACT_MIN_AGE_MS:
+                break
+            cutoff_index = index
+        if cutoff_index < 0:
+            return {"env_id": env_id, "removed": 0, "blocked_by": [], "reason": "no_commit_old_enough"}
+        candidate_vector: dict[str, int] = {}
+        for commit_obj in commits[: cutoff_index + 1]:
+            candidate_vector[commit_obj.author] = max(candidate_vector.get(commit_obj.author, 0), commit_obj.author_seq)
+        with self._lock:
+            peer_vectors = {fp: dict(v) for fp, v in env.peer_vectors.items()}
+        blocked = sorted(
+            fp for fp in self._active_member_fps(env_id)
+            if fp != self.device.fingerprint
+            and any(peer_vectors.get(fp, {}).get(author, 0) < seq for author, seq in candidate_vector.items())
+        )
+        if blocked:
+            return {"env_id": env_id, "removed": 0, "blocked_by": blocked}
+        snapshot_result = F.fold(env_id, commits[: cutoff_index + 1], env.facts, audit=self.ctx.audit)
+        total = sum(candidate_vector.values())
+        F.save_snapshot(self.ctx.state, env_id, total, snapshot_result)
+        removed = 0
+        with self.ctx.state.lock():
+            for commit_obj in commits[: cutoff_index + 1]:
+                if _commit_is_protected(commit_obj):
+                    continue
+                path = self.ctx.state.path / env.store._commit_path(commit_obj.author, commit_obj.author_seq)
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        with self._lock:
+            env.last_snapshot_total = total
+        self._refold(env_id)
+        try:
+            self.ctx.audit.record("team_compact", result="ok", extra={"env_id": env_id, "count": removed})
+        except AuditUnavailable:
+            pass
+        return {"env_id": env_id, "removed": removed, "blocked_by": []}
 
     def synced_at(self, env_id: str) -> str | None:
         with self._lock:

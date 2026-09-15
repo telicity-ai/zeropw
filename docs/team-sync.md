@@ -82,8 +82,8 @@
 
 ### 4.3 초대와 가입
 
-1. admin이 `team invite --env <project>/<env> --role user|admin --name <표시 이름>`을 실행한다. 노드는 일회용 초대를 만든다. 초대에는 환경 ID, 초대한 기기의 지문과 연결 주소 목록, 32바이트 초대 비밀, 만료 시각(기본 24시간), 역할과 이름이 들어간다. 초대는 base32 문자열로 출력되고, 그 해시와 역할·이름·만료만 노드에 `team/<env-id>/invites.json`으로 남는다.
-2. 초대받는 사람은 자기 기기에서 `team join <초대 문자열>`을 실행한다. 노드는 기기 키가 없으면 만들고, 초대에 적힌 주소로 초대한 노드에 연결한다. 핸드셰이크(§6.2)에서 자기 기기 기록을 보내고, 초대 비밀로 만든 HMAC(전사 해시 위)로 초대를 증명한다.
+1. admin이 `team invite --env <project>/<env> --role user|admin --name <표시 이름>`을 실행한다. 노드는 일회용 초대를 만든다. 초대에는 환경 ID, 초대한 기기의 지문과 연결 주소 목록, 32바이트 초대 비밀, 만료 시각(기본 24시간), 역할과 이름이 들어간다. 초대는 base32 문자열로 출력된다. 초대한 노드는 초대 비밀을 로컬 KMS로 감싸 역할·이름·만료·사용 여부와 함께 `team/<env-id>/invites.json`(0600)에 둔다. 가입 증명이 초대 비밀을 키로 한 HMAC이므로 검증하려면 비밀 자체가 필요하고, 이 비밀은 금고 값이 아니라 기기 키와 같은 부트스트랩 자료로 취급한다.
+2. 초대받는 사람은 자기 기기에서 `team join <초대 문자열>`을 실행한다. 노드는 기기 키가 없으면 만들고, 초대에 적힌 주소로 초대한 노드에 연결한다. 핸드셰이크(§6.2)의 세 번째 메시지에 초대 ID(초대 비밀의 SHA-256 앞 16바이트)와 초대 비밀로 만든 HMAC(전사 해시 위)를 실어 초대를 증명한다. 초대한 노드는 그 ID의 초대를 찾아 비밀을 풀고 HMAC을 확인한 뒤, 상태 잠금 안에서 초대를 사용됨으로 표시하고 나서야 `member.add`를 만든다.
 3. 초대한 노드는 초대 해시가 있고 만료·사용 전이면 초대를 소진하고, `member.add` 커밋(기기 기록, 이름, 역할, 현재 모든 세대의 DEK 감싸기)을 만들어 즉시 적용·전파한다. 사람의 승인 단계는 없다. 초대 문자열이 곧 승인이다.
 4. 가입한 노드는 커밋 이력 전체를 받아 접고, 로컬 프로젝트·환경으로 만든다. 프로젝트·환경 이름은 초대에 적힌 것을 기본값으로 쓰되 로컬에서 바꿀 수 있다.
 
@@ -154,11 +154,11 @@
 | `secret.put_version` | 비밀 ID, 종류, 세대 ID, 버전 ID, 암호문, 공개 메타데이터 | admin | 새 버전 `staged`. 세대가 문서에 없으면 건너뛴다 |
 | `secret.set_status` | 비밀 ID, 버전 ID, `active`·`retired` | admin | `revoked`는 이 연산이 아니라 긴급 사실 |
 | `secret.activate` | 비밀 ID, 버전 ID | admin | 활성 버전 교체, 비고정 연결 재바인딩 |
-| `member.add` | 기기 기록, 이름, 역할, DEK 감싸기 | admin | 같은 지문이 `removed`면 건너뛴다(재가입은 새 기기 키로) |
+| `member.add` | 기기 기록, 이름, 역할, 세대별 DEK 감싸기 | admin | 같은 지문이 `removed`면 건너뛴다(재가입은 새 기기 키로). 감싸기는 초대한 노드가 풀 수 있는 모든 세대에 대해 새 기기용으로 만든다 |
 | `member.set_role` | 지문, 역할 | admin(대상이 owner가 아닐 때) | |
 | `member.remove` | 지문 | admin(대상이 owner가 아닐 때), 본인 | 긴급 사실 |
 | `owner.transfer` | 지문 | owner | |
-| `dek.rotate` | 새 세대의 감싸기 목록 | admin | 세대 ID는 커밋 해시. 순서상 뒤의 세대가 `current` |
+| `dek.rotate` | 세대 ID(128비트 무작위 16진수), 새 세대의 감싸기 목록 | admin | 순서상 뒤의 세대가 `current` |
 | `settings.update` | 동기화 값 | admin | |
 
 user 역할은 어떤 연산도 커밋하지 못한다. user의 권한 부여는 노드 로컬 `grant create`이며 커밋이 아니다.
@@ -277,7 +277,7 @@ class Session(Protocol):
 
 ### 7.3 압축
 
-노드는 `team/<env-id>/snapshots/`에 접기 결과와 그 시점의 버전 벡터를 주기적으로 저장한다. 모든 활성 팀원의 벡터(`VECTOR` 교환으로 안다)가 어떤 커밋을 포함하고 그 커밋이 30일 이상 지났으면, 그 커밋 앞의 이력은 스냅샷으로 대체해도 어느 노드의 접기 결과도 바뀌지 않는다. `team compact`가 이 조건을 확인하고 지운다. 조건을 만족하지 않으면(오래 안 보인 팀원이 있으면) 지우지 않고 그 팀원을 알린다.
+노드는 `team/<env-id>/snapshots/`에 접기 결과와 그 시점의 버전 벡터를 주기적으로 저장한다. 모든 활성 팀원의 벡터(`VECTOR` 교환으로 안다)가 어떤 커밋을 포함하고 그 커밋이 30일 이상 지났으면, 그 커밋 앞의 이력은 스냅샷으로 대체해도 어느 노드의 접기 결과도 바뀌지 않는다. `team compact`가 이 조건을 확인하고 지운다. 조건을 만족하지 않으면(오래 안 보인 팀원이 있으면) 지우지 않고 그 팀원을 알린다. 팀원 목록과 DEK 세대를 바꾸는 커밋(`env.init`, `member.*`, `owner.transfer`, `dek.rotate`)은 나이와 무관하게 지우지 않는다. 커밋 서명 검증이 기기 기록을 원본 커밋에서 재구성하기 때문이며, 이 이력은 팀 규모에 비례해 작다. 압축 뒤에 처음 붙는 노드나 오래 떨어져 있던 노드는 지워진 커밋을 받을 수 없다. 스냅샷 전송 메시지는 이 명세에 없으며 후속 범위다.
 
 ### 7.4 긴급 사실
 
@@ -352,19 +352,19 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 | 명령 | 동작 |
 | --- | --- |
 | `team init` | 기기 키 생성. 이미 있으면 거부. 지문 출력. |
-| `team share --project P --env E` | 로컬 환경을 공유 환경으로 승격. 환경 ID·첫 DEK 세대 생성, 기존 비밀을 환경 DEK로 다시 암호화, 첫 커밋 생성. 관리자 패스프레이즈 재인증. |
+| `team share --project P --environment E [--name N]` | 로컬 환경을 공유 환경으로 승격. 환경 ID·첫 DEK 세대 생성, 기존 비밀의 활성·대기 버전을 환경 DEK로 다시 암호화, 연결을 커밋으로 재발행. 공유되는 비밀을 참조하지 않는 연결은 로컬에 남기고 `not_shared`로 출력. 관리자 패스프레이즈 재인증. 로컬 연결의 기존 권한은 신뢰 경계가 바뀌었으므로 `stale`이 된다. |
 | `team invite --env P/E --role R --name N [--ttl 24h]` | 일회용 초대 문자열 출력. |
-| `team join <초대> [--project P --env E]` | 초대한 노드에 연결해 가입. 두 지문 출력. |
+| `team join <초대> [--project P --environment E]` | 초대한 노드에 연결해 가입. 두 지문 출력. 이후 다른 노드가 이 노드에 붙게 하려면 `serve --team-listen`을 켠다. |
 | `team members --env P/E` | 팀원 목록(지문, 이름, 역할, 상태, 마지막 동기화). |
 | `team remove --env P/E --device 지문` | 팀원 제거(긴급 사실)와 DEK 새 세대. owner 제거 불가. |
 | `team set-role`, `team transfer-owner` | §5.3. |
 | `team status --env P/E` | 버전 벡터, 접은 커밋 수, 건너뛴·거부된 연산 수, 세션 있는 노드, 마지막 동기화 시각, 보류 중 커밋. |
 | `team log`, `team show`, `team diff` | §5.5. |
-| `team peers --env P/E [--add host:port]` | 주소 목록 관리. |
+| `team peers --env P/E [--add host:port --device 지문]` | 주소 목록 관리. 주소는 항상 특정 기기에 속한다. |
 | `team compact --env P/E` | §7.3. |
 | `serve --team-listen host:port` | 팀 리스너 활성화. |
 
-기존 `connection *`, `secret *`, `rotation *` 명령은 대상이 공유 환경이면 커밋을 만들어 즉시 적용·전파한다. 명령 인터페이스는 바뀌지 않으며 출력에 `commit: {author_seq, hlc}`와 `propagated_to: <세션 수>`가 추가된다. 세션이 0이면 커밋은 로컬에 남아 다음 연결 때 전달된다. `grant *`, `principal *`, `approvals *`는 그대로 노드 로컬이다. `connection update-scope`는 `connection update`로 이름을 넓히되 기존 이름은 별칭으로 남긴다.
+기존 `connection *`, `secret *`, `rotation *` 명령은 대상이 공유 환경이면 커밋(되돌릴 수 있는 변경) 또는 긴급 사실(`connection disable`, `secret revoke`)을 만들어 즉시 적용한다. 명령 인터페이스는 바뀌지 않으며 출력에 `commit: {author_seq, hlc}` 또는 `fact: {hash}`와 `propagated_to: <세션 수>`가 추가된다. 관리 CLI는 `serve`와 별도 프로세스라 세션을 갖지 않으므로 `propagated_to`는 0이고, 떠 있는 `serve`가 다음 폴링에서 커밋 저장소와 사실 파일의 새 항목을 읽어 전파한다. 공유 환경의 `secret put`·`rotation start` 출력은 정수 번호 대신 `version_id`를 보인다. `grant *`, `principal *`, `approvals *`는 그대로 노드 로컬이다. `connection update-scope`는 `connection update`로 이름을 넓히되 기존 이름은 별칭으로 남긴다.
 
 ## 13. 구현 계획
 

@@ -114,7 +114,11 @@ _NONCE_TAG_I2R = b"I2R\x00"
 _NONCE_TAG_R2I = b"R2I\x00"
 
 MembershipCheck = Callable[[str, str], "DeviceRecord | None"]
-InviteCheck = Callable[[DeviceRecord, bytes, bytes], bool]
+# Extended (stage 3) from the illustrative 3-argument sketch: the responder needs to know WHICH
+# environment's invites to consult (one transport/TeamSync serves every shared environment a node
+# has, section 6.1), so ``env_id`` is the first argument -- initiator record, transcript hash, and
+# the raw ``invite_proof`` bytes from msg3 follow, unchanged.
+InviteCheck = Callable[[str, DeviceRecord, bytes, bytes], bool]
 HandshakeFailedHook = Callable[[str, "str | None"], None]
 
 
@@ -303,9 +307,15 @@ class _SocketChannel:
     def send(self, data: bytes) -> None:
         if len(data) > _WIRE_FRAME_LIMIT:
             raise InvalidInput("team_frame_too_large")
+        if self._closed:
+            raise SessionClosed("channel_closed")
         header = len(data).to_bytes(_LENGTH_BYTES, "big")
-        self._sock.settimeout(SOCKET_OP_TIMEOUT_SECONDS)
+        # settimeout() itself (not just sendall()) can raise a raw OSError (EBADF) if a concurrent
+        # receiver thread's close() (e.g. it just discovered the peer hung up) wins a race against
+        # this call -- section 6.1's "one receive thread per session" means exactly this pair can
+        # run at once, so both socket operations, not just sendall(), must fold into SessionClosed.
         try:
+            self._sock.settimeout(SOCKET_OP_TIMEOUT_SECONDS)
             self._sock.sendall(header + data)
         except OSError as exc:
             self.close()
@@ -317,8 +327,8 @@ class _SocketChannel:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _Timeout()
-            self._sock.settimeout(min(remaining, SOCKET_OP_TIMEOUT_SECONDS))
             try:
+                self._sock.settimeout(min(remaining, SOCKET_OP_TIMEOUT_SECONDS))
                 chunk = self._sock.recv(n - len(buf))
             except socket.timeout:
                 raise _Timeout()
@@ -440,7 +450,7 @@ def _respond(channel: Any, device: DeviceKey, membership: MembershipCheck,
     if member is None:
         proof_raw = msg3.get("invite_proof")
         proof = _b64d(proof_raw) if proof_raw is not None else b""
-        if invite_check is None or not invite_check(initiator_record, transcript_hash, proof):
+        if invite_check is None or not invite_check(env_id, initiator_record, transcript_hash, proof):
             raise HandshakeFailed("invite_invalid", initiator_fp)
     key_i2r, key_r2i = _session_keys(shared, transcript_hash)
     return _EncryptedSession(channel, initiator_record, env_id, send_key=key_r2i, recv_key=key_i2r,
@@ -448,8 +458,18 @@ def _respond(channel: Any, device: DeviceKey, membership: MembershipCheck,
 
 
 def _initiate(channel: Any, device: DeviceKey, env_id: str, membership: MembershipCheck,
-             invite_proof: bytes | None = None) -> _EncryptedSession:
-    """Run the initiator side of the handshake to completion, or raise ``HandshakeFailed``."""
+             invite_proof: "bytes | Callable[[bytes], bytes] | None" = None) -> _EncryptedSession:
+    """Run the initiator side of the handshake to completion, or raise ``HandshakeFailed``.
+
+    ``invite_proof`` is either the raw HMAC bytes (stage-2 callers that never
+    join, or already know the transcript for some other reason) or -- as
+    stage 3's ``zeropw.team.membership.join`` needs -- a callable taking the
+    transcript hash and returning the proof.  The transcript (and therefore
+    its hash) only exists once this function has received msg2, so a joining
+    caller cannot compute ``HMAC(invite_secret, transcript_hash)`` ahead of
+    time; the callable defers that computation to here, after ``transcript``
+    is known but before msg3 is sent.
+    """
     deadline = time.monotonic() + HANDSHAKE_TIMEOUT_SECONDS
     ea_private = x25519.generate_private()
     ea_pub = x25519.public_key(ea_private)
@@ -470,21 +490,23 @@ def _initiate(channel: Any, device: DeviceKey, env_id: str, membership: Membersh
     sig2 = _b64d(msg2.get("sig"))
     if not ed25519.verify(responder_record.sign_pub, HANDSHAKE_RESPONDER_CONTEXT + transcript, sig2):
         raise HandshakeFailed("signature_invalid", responder_record.fingerprint)
-    if membership(env_id, responder_record.fingerprint) is None:
+    joining = invite_proof is not None
+    if not joining and membership(env_id, responder_record.fingerprint) is None:
         raise HandshakeFailed("responder_not_member", responder_record.fingerprint)
     try:
         shared = x25519.shared_secret(ea_private, eb_pub)
     except InvalidInput as exc:
         raise HandshakeFailed("low_order_point", responder_record.fingerprint) from exc
+    transcript_hash = hashlib.sha256(transcript).digest()
     sig3 = device.sign(HANDSHAKE_INITIATOR_CONTEXT + transcript)
     msg3: dict[str, Any] = {"sig": _b64e(sig3)}
     if invite_proof is not None:
-        msg3["invite_proof"] = _b64e(invite_proof)
+        proof = invite_proof(transcript_hash) if callable(invite_proof) else invite_proof
+        msg3["invite_proof"] = _b64e(proof)
     try:
         channel.send(_canon(msg3))
     except SessionClosed as exc:
         raise HandshakeFailed("handshake_channel_closed") from exc
-    transcript_hash = hashlib.sha256(transcript).digest()
     key_i2r, key_r2i = _session_keys(shared, transcript_hash)
     return _EncryptedSession(channel, responder_record, env_id, send_key=key_i2r, recv_key=key_r2i,
                              tag_out=_NONCE_TAG_I2R, tag_in=_NONCE_TAG_R2I)
@@ -525,7 +547,8 @@ class InProcessTransport:
                 InProcessTransport._listeners.pop(target, None)
                 self._own_addresses.discard(target)
 
-    def dial(self, address: str, env_id: str) -> Session:
+    def dial(self, address: str, env_id: str,
+            invite_proof: "bytes | Callable[[bytes], bytes] | None" = None) -> Session:
         with InProcessTransport._registry_lock:
             entry = InProcessTransport._listeners.get(address)
         if entry is None:
@@ -550,7 +573,7 @@ class InProcessTransport:
 
         threading.Thread(target=run_responder, daemon=True, name="team-inprocess-responder").start()
         try:
-            return _initiate(initiator_channel, self.device, env_id, self.membership)
+            return _initiate(initiator_channel, self.device, env_id, self.membership, invite_proof)
         except HandshakeFailed as exc:
             initiator_channel.close()
             if self.on_handshake_failed is not None:
@@ -656,7 +679,8 @@ class TcpTransport:
         session.close = close_and_release  # type: ignore[method-assign]
         on_session(session)
 
-    def dial(self, address: str, env_id: str) -> Session:
+    def dial(self, address: str, env_id: str,
+            invite_proof: "bytes | Callable[[bytes], bytes] | None" = None) -> Session:
         host, port = self._parse_address(address)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(SOCKET_OP_TIMEOUT_SECONDS)
@@ -670,7 +694,7 @@ class TcpTransport:
             raise SessionClosed("team_dial_failed") from exc
         channel = _SocketChannel(sock)
         try:
-            return _initiate(channel, self.device, env_id, self.membership)
+            return _initiate(channel, self.device, env_id, self.membership, invite_proof)
         except HandshakeFailed as exc:
             channel.close()
             if self.on_handshake_failed is not None:

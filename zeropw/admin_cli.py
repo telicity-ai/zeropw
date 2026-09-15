@@ -79,11 +79,13 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import importlib
 import ipaddress
 import json
 import os
 import re
+import secrets
 import signal
 import sys
 import threading
@@ -413,6 +415,83 @@ def _control_view(ctx: Context) -> dict[str, Any]:
     return {"stopped": ctx.policy.is_stopped(), "restore_pending": ctx.policy.restore_pending()}
 
 
+# ------------------------------------------------------- team sync (docs/team-sync.md section 12)
+def _connection_shared_env(ctx: Context, connection_id: str) -> str | None:
+    doc = ctx.state.read_json(P.CONNECTIONS, {}) or {}
+    entry = doc.get(connection_id)
+    return entry.get("shared_env") if isinstance(entry, dict) else None
+
+
+def _secret_shared_env(ctx: Context, secret_id: str) -> str | None:
+    from .vault import VAULT_DOC
+
+    doc = ctx.state.read_json(VAULT_DOC, {}) or {}
+    entry = (doc.get("secrets") or {}).get(secret_id)
+    return entry.get("shared_env") if isinstance(entry, dict) else None
+
+
+def _project_env_shared_env(ctx: Context, project: str, environment: str) -> str | None:
+    from .team import sync as team_sync_mod
+
+    return team_sync_mod.resolve_env_id(ctx.state, project, environment)
+
+
+def _shared_version_id(ctx: Context, secret_id: str, local_version: int) -> str:
+    """The environment document's own version id for a locally-numbered shared secret version
+    (docs/team-sync.md section 5.1: the integer is a node-local display convenience derived at
+    fold time; commits and connection definitions always address a version by its real id)."""
+    from .vault import VAULT_DOC
+
+    doc = ctx.state.read_json(VAULT_DOC, {}) or {}
+    entry = (doc.get("secrets") or {}).get(secret_id) or {}
+    record = (entry.get("versions") or {}).get(str(local_version))
+    if not isinstance(record, dict) or "version_id" not in record:
+        raise NotFound("secret_version_not_found")
+    return record["version_id"]
+
+
+def _current_generation_dek(ctx: Context, env_id: str) -> tuple[str, bytes]:
+    from .kms import WrappedKey
+    from .team import membership as M
+
+    doc = M.load_environment(ctx, env_id).document
+    generation_id = doc.get("dek", {}).get("current")
+    if not generation_id:
+        raise InvalidInput("team_env_no_generation")
+    wrapped = ctx.state.read_json(f"team/{env_id}/dek/{generation_id}.json", None)
+    if not wrapped:
+        raise InvalidInput("team_dek_generation_missing")
+    dek = ctx.kms.unwrap(WrappedKey.from_dict(wrapped))
+    return generation_id, dek
+
+
+def _team_commit_output(ctx: Context, env_id: str, ops: list[dict[str, Any]]) -> tuple[dict[str, Any], Any]:
+    """Author one commit against a shared environment from this (separate, one-shot) admin CLI
+    process; a running ``serve``'s own ``TeamSync`` picks it up and broadcasts it on its next poll
+    (docs/team-sync.md section 12).  This process holds no live session of its own, so
+    ``propagated_to`` is always 0 here -- never a live broadcast count."""
+    from .team import membership as M
+
+    commit_obj = M.author_commit(ctx, None, env_id, ops)
+    return {"commit": {"author_seq": commit_obj.author_seq, "hlc": commit_obj.hlc}, "propagated_to": 0}, commit_obj
+
+
+def _team_fact_output(ctx: Context, env_id: str, kind: str, **target: Any) -> dict[str, Any]:
+    from .team import membership as M
+
+    fact = M.author_fact(ctx, None, env_id, kind, **target)
+    fact_hash = hashlib.sha256(json.dumps(fact, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {"fact": {"hash": fact_hash}, "propagated_to": 0}
+
+
+def _connection_to_share_op(connection: P.Connection, conn_id: str, secret_version_id: str | None) -> dict[str, Any]:
+    data = connection.to_dict()
+    for key in ("id", "policy_version", "status", "created_at", "updated_at"):
+        data.pop(key, None)
+    data["secret_version"] = secret_version_id
+    return {"op": "connection.create", "id": conn_id, **data}
+
+
 # ------------------------------------------------------------------ commands
 def cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     admin = _check_passphrase_strength(_passphrase(ADMIN_PASSPHRASE_ENV, "Administrator passphrase: "), "administrator")
@@ -437,9 +516,30 @@ def cmd_project_list(args: argparse.Namespace) -> dict[str, Any]:
                          for p in ctx.projects.list()]}
 
 
+def _shared_secret_put(ctx: Context, env_id: str, args: argparse.Namespace, value: bytes) -> dict[str, Any]:
+    from .team import envelope as team_envelope
+    from .vault import Vault
+
+    generation_id, dek = _current_generation_dek(ctx, env_id)
+    public = Vault._public_metadata(args.kind, value)
+    version_id = secrets.token_hex(8)
+    ciphertext = team_envelope.encrypt_secret(dek, env_id, args.id, version_id, value)
+    put_op = {"op": "secret.put_version", "secret_id": args.id, "kind": args.kind, "generation_id": generation_id,
+             "version_id": version_id, "ciphertext": ciphertext, "public": public}
+    result, _ = _team_commit_output(ctx, env_id, [put_op])
+    if not args.staged:
+        result, _ = _team_commit_output(ctx, env_id, [{"op": "secret.activate", "secret_id": args.id,
+                                                       "version_id": version_id}])
+    return {"id": args.id, "version_id": version_id, "status": "staged" if args.staged else "active",
+           "kind": args.kind, "project": args.project, "environment": args.environment, **result}
+
+
 def cmd_secret_put(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
     value = _read_secret_value(args, args.kind)
+    env_id = _project_env_shared_env(ctx, args.project, args.environment)
+    if env_id is not None:
+        return _shared_secret_put(ctx, env_id, args, value)
     with ctx.state.lock():  # check and write in one critical section (a concurrent connection save waits)
         _refuse_value_in_existing_cli_env(ctx, args.id, value, "secret_put")
         version = ctx.vault.put_secret(args.id, args.kind, value, args.project, args.environment,
@@ -499,11 +599,23 @@ def _retire_version(ctx: Context, secret_id: str, version: int) -> dict[str, Any
 
 def cmd_secret_retire(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _secret_shared_env(ctx, args.id)
+    if env_id is not None:
+        version_id = _shared_version_id(ctx, args.id, args.version)
+        result, _ = _team_commit_output(ctx, env_id, [{"op": "secret.set_status", "secret_id": args.id,
+                                                       "version_id": version_id, "status": "retired"}])
+        return {"secret_id": args.id, "version": args.version, "status": "retired", **result}
     return _retire_version(ctx, args.id, args.version)
 
 
 def cmd_secret_revoke(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _secret_shared_env(ctx, args.id)
+    if env_id is not None:
+        version_id = _shared_version_id(ctx, args.id, args.version)
+        result = _team_fact_output(ctx, env_id, "secret_version_revoked", secret_id=args.id, version_id=version_id)
+        return {"secret_id": args.id, "version": args.version, "status": "revoked",
+               "provider_revocation_required": True, "reminder": PROVIDER_REMINDER, **result}
     meta = ctx.vault.get_meta(args.id)
     affected = _connections_pinned_to(ctx, args.id, args.version)
     if meta.active_version == args.version:
@@ -596,6 +708,13 @@ def cmd_connection_create_http(args: argparse.Namespace) -> dict[str, Any]:
         http_target=http_target, http_auth=http_auth, http_scope=http_scope, ssh_target=None, cli=cli,
         policy_version=0, status="active", created_at="", updated_at="",
     )
+    env_id = _project_env_shared_env(ctx, args.project, args.environment)
+    if env_id is not None:
+        secret_version_id = (_shared_version_id(ctx, args.secret_id, args.secret_version)
+                             if args.secret_version is not None else None)
+        op = _connection_to_share_op(connection, args.id, secret_version_id)
+        result, _ = _team_commit_output(ctx, env_id, [op])
+        return {**_connection_view(ctx.policy.get_connection(args.id)), **result}
     stamped = _create_connection(ctx, connection, http_target.origin,
                                  {"scheme": scheme, "host": host, "port": port, "method": args.auth})
     return _connection_view(stamped)
@@ -624,8 +743,17 @@ def cmd_connection_create_ssh(args: argparse.Namespace) -> dict[str, Any]:
         http_target=None, http_auth=None, http_scope=None, ssh_target=ssh_target, cli=cli,
         policy_version=0, status="active", created_at="", updated_at="",
     )
-    stamped = _create_connection(ctx, connection, f"{ssh_target.host}:{ssh_target.port}",
-                                 {"host": ssh_target.host, "port": ssh_target.port, "username": ssh_target.username})
+    env_id = _project_env_shared_env(ctx, args.project, args.environment)
+    if env_id is not None:
+        secret_version_id = (_shared_version_id(ctx, args.secret_id, args.secret_version)
+                             if args.secret_version is not None else None)
+        op = _connection_to_share_op(connection, args.id, secret_version_id)
+        result, _ = _team_commit_output(ctx, env_id, [op])
+        stamped = ctx.policy.get_connection(args.id)
+    else:
+        stamped = _create_connection(ctx, connection, f"{ssh_target.host}:{ssh_target.port}",
+                                     {"host": ssh_target.host, "port": ssh_target.port, "username": ssh_target.username})
+        result = {}
     view = _connection_view(stamped)
     meta = ctx.vault.get_meta(stamped.secret_id)
     resolved = ctx.vault.resolve_version(stamped.secret_id, stamped.secret_version) if (
@@ -634,6 +762,7 @@ def cmd_connection_create_ssh(args: argparse.Namespace) -> dict[str, Any]:
         if item.version == resolved:
             view["public_key"] = item.public.get("public_key")
             view["fingerprint"] = item.public.get("fingerprint")
+    view.update(result)
     return view
 
 
@@ -657,6 +786,15 @@ def cmd_connection_update_scope(args: argparse.Namespace) -> dict[str, Any]:
     scope = P.HttpScope(_methods(args.methods, before.http_scope.methods),
                         _path_prefixes(args.path_prefixes, before.http_scope.path_prefixes),
                         _confirm_methods(args.confirm_methods, before.http_scope.confirm_methods))
+    env_id = _connection_shared_env(ctx, args.id)
+    if env_id is not None:
+        from dataclasses import asdict as _asdict
+
+        op = {"op": "connection.update", "id": args.id, "http_scope": _asdict(scope)}
+        result, _ = _team_commit_output(ctx, env_id, [op])
+        after = ctx.policy.get_connection(args.id)
+        return {"id": after.id, "policy_version": after.policy_version, "scope": after.public_view().get("scope"),
+               **result}
     after, widened = ctx.policy.update_connection(args.id, http_scope=scope)
     _admin_record(ctx, "connection_update", connection=after.id, result="ok", policy_version=after.policy_version,
                   extra={"detail": "scope", "state": "widened" if widened else "narrowed"})
@@ -681,6 +819,16 @@ def _switch_credential(ctx: Context, connection_id: str, version: int) -> P.Conn
 
 def cmd_connection_switch_credential(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _connection_shared_env(ctx, args.id)
+    if env_id is not None:
+        connection = ctx.policy.get_connection(args.id)
+        version_id = _shared_version_id(ctx, connection.secret_id, args.version)
+        op = {"op": "connection.switch_credential", "id": args.id, "secret_id": connection.secret_id,
+             "secret_version": version_id}
+        result, _ = _team_commit_output(ctx, env_id, [op])
+        after = ctx.policy.get_connection(args.id)
+        return {"id": after.id, "secret_id": after.secret_id, "secret_version": after.secret_version,
+               "policy_version": after.policy_version, **result}
     after = _switch_credential(ctx, args.id, args.version)
     return {"id": after.id, "secret_id": after.secret_id, "secret_version": after.secret_version,
             "policy_version": after.policy_version}
@@ -688,6 +836,11 @@ def cmd_connection_switch_credential(args: argparse.Namespace) -> dict[str, Any]
 
 def cmd_connection_disable(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _connection_shared_env(ctx, args.id)
+    if env_id is not None:
+        result = _team_fact_output(ctx, env_id, "connection_disabled", connection_id=args.id)
+        after = ctx.policy.get_connection(args.id)
+        return {"id": after.id, "status": after.status, "policy_version": after.policy_version, **result}
     after = ctx.policy.disable_connection(args.id)
     _admin_record(ctx, "connection_disable", connection=after.id, result="ok", policy_version=after.policy_version)
     return {"id": after.id, "status": after.status, "policy_version": after.policy_version}
@@ -778,10 +931,43 @@ def cmd_approvals_approve(args: argparse.Namespace) -> dict[str, Any]:
     return {"digest": args.digest, **entry}
 
 
+def _shared_rotation_start(ctx: Context, env_id: str, secret_id: str, meta: Any, value: bytes) -> dict[str, Any]:
+    from .team import envelope as team_envelope
+    from .vault import Vault
+
+    generation_id, dek = _current_generation_dek(ctx, env_id)
+    public = Vault._public_metadata(meta.kind, value)
+    version_id = secrets.token_hex(8)
+    ciphertext = team_envelope.encrypt_secret(dek, env_id, secret_id, version_id, value)
+    put_op = {"op": "secret.put_version", "secret_id": secret_id, "kind": meta.kind, "generation_id": generation_id,
+             "version_id": version_id, "ciphertext": ciphertext, "public": public}
+    result, _ = _team_commit_output(ctx, env_id, [put_op])
+    local_version = _local_version_for(ctx, secret_id, version_id)
+    return {"secret_id": secret_id, "version_id": version_id, "version": local_version, "status": "staged",
+           "previous_active": meta.active_version,
+           "next": "rotation activate --connection <id> --version %s" % (local_version if local_version is not None
+                                                                          else version_id),
+           **result}
+
+
+def _local_version_for(ctx: Context, secret_id: str, version_id: str) -> int | None:
+    from .vault import VAULT_DOC
+
+    doc = ctx.state.read_json(VAULT_DOC, {}) or {}
+    entry = (doc.get("secrets") or {}).get(secret_id) or {}
+    for local_str, record in (entry.get("versions") or {}).items():
+        if isinstance(record, dict) and record.get("version_id") == version_id:
+            return int(local_str)
+    return None
+
+
 def cmd_rotation_start(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
     meta = ctx.vault.get_meta(args.secret_id)
     value = _read_secret_value(args, meta.kind)
+    env_id = _secret_shared_env(ctx, args.secret_id)
+    if env_id is not None:
+        return _shared_rotation_start(ctx, env_id, args.secret_id, meta, value)
     with ctx.state.lock():  # check and write in one critical section
         _refuse_value_in_existing_cli_env(ctx, args.secret_id, value, "rotation")
         version = ctx.vault.put_secret(args.secret_id, meta.kind, value, meta.project, meta.environment,
@@ -791,8 +977,28 @@ def cmd_rotation_start(args: argparse.Namespace) -> dict[str, Any]:
             "next": "rotation activate --connection <id> --version %d" % version}
 
 
+def _shared_rotation_activate(ctx: Context, env_id: str, connection_id: str, local_version: int) -> dict[str, Any]:
+    connection = ctx.policy.get_connection(connection_id)
+    secret_id = connection.secret_id
+    version_id = _shared_version_id(ctx, secret_id, local_version)
+    previous_active = ctx.vault.get_meta(secret_id).active_version
+    _team_commit_output(ctx, env_id, [{"op": "connection.switch_credential", "id": connection_id,
+                                       "secret_id": secret_id, "secret_version": version_id}])
+    result, _ = _team_commit_output(ctx, env_id, [{"op": "secret.activate", "secret_id": secret_id,
+                                                   "version_id": version_id}])
+    after = ctx.policy.get_connection(connection_id)
+    others = [cid for cid in _connections_using(ctx, secret_id) if cid != connection_id]
+    return {"connection": after.id, "secret_id": after.secret_id, "version": local_version,
+            "previous_active": previous_active, "policy_version": after.policy_version, "other_connections": others,
+            "next": "verify the new credential works, then: rotation finish --secret-id %s --version %s"
+                    % (secret_id, previous_active if previous_active is not None else "<old>"), **result}
+
+
 def cmd_rotation_activate(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _connection_shared_env(ctx, args.connection)
+    if env_id is not None:
+        return _shared_rotation_activate(ctx, env_id, args.connection, args.version)
     connection = ctx.policy.get_connection(args.connection)
     meta = ctx.vault.get_meta(connection.secret_id)
     previous = meta.active_version
@@ -810,6 +1016,14 @@ def cmd_rotation_activate(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_rotation_finish(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
+    env_id = _secret_shared_env(ctx, args.secret_id)
+    if env_id is not None:
+        version_id = _shared_version_id(ctx, args.secret_id, args.version)
+        result, _ = _team_commit_output(ctx, env_id, [{"op": "secret.set_status", "secret_id": args.secret_id,
+                                                       "version_id": version_id, "status": "retired"}])
+        result.update({"secret_id": args.secret_id, "version": args.version, "status": "retired",
+                       "provider_revocation_required": True, "reminder": PROVIDER_REMINDER})
+        return result
     result = _retire_version(ctx, args.secret_id, args.version)
     result.update({"provider_revocation_required": True, "reminder": PROVIDER_REMINDER})
     return result
@@ -894,6 +1108,225 @@ def cmd_alerts(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args)
     alerts, unparseable = _read_log(ctx, ALERT_FILE, args.limit)
     return {"alerts": alerts, "unparseable_lines": unparseable}
+
+
+# --------------------------------------------------------------- team (section 12)
+def _team_env_id(ctx: Context, env_ref: str) -> str:
+    """Resolve a ``--env PROJECT/ENVIRONMENT`` reference to its env id via the node-local
+    ``team/envs.json`` map (written by ``team share``/``team join``)."""
+    from .team import sync as team_sync_mod
+
+    project, sep, environment = env_ref.partition("/")
+    if not sep or not project or not environment:
+        raise InvalidInput("invalid_env_ref", "use PROJECT/ENVIRONMENT")
+    env_id = team_sync_mod.resolve_env_id(ctx.state, project, environment)
+    if env_id is None:
+        raise NotFound("team_env_not_found")
+    return env_id
+
+
+class _NoopTeamTransport:
+    """A transport stand-in for offline ``team`` subcommands (``compact``, ``peers --add``) that
+    only need ``TeamSync``'s on-disk bookkeeping (facts, peer vectors, snapshots) and never call
+    ``listen``/``dial`` -- there is no network here, only local state."""
+
+
+def _offline_team_sync(ctx: Context) -> Any:
+    from .team.identity import DeviceKey
+    from .team.sync import TeamSync
+
+    device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+    return TeamSync(ctx, _NoopTeamTransport(), device)
+
+
+def cmd_team_init(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team.identity import DeviceKey
+
+    device = DeviceKey.create(ctx.state, ctx.kms)
+    return {"fingerprint": device.fingerprint}
+
+
+def cmd_team_share(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+
+    passphrase = _passphrase(ADMIN_PASSPHRASE_ENV, "Administrator passphrase: ")
+    try:
+        result = M.share_environment(ctx, None, args.project, args.environment, args.name or "owner", passphrase)
+    except AuthFailed as exc:
+        _record_auth_failure(ctx, exc.reason, project=args.project, environment=args.environment)
+        raise
+    return {"env_id": result["env_id"], "project": args.project, "environment": args.environment,
+            "not_shared": result["not_shared"]}
+
+
+def cmd_team_invite(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    ttl_seconds = _parse_ttl(args.ttl) if args.ttl else M.DEFAULT_INVITE_TTL_SECONDS
+    invite = M.create_invite(ctx, env_id, args.role, args.name, ttl_seconds, list(args.address or []))
+    return {"env_id": env_id, "invite": invite, "role": args.role, "name": args.name,
+            "warning": "this string is a secret: never paste it into chat, issues, tickets, or logs"}
+
+
+def cmd_team_join(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+    from .team.identity import DeviceKey
+    from .team.sync import TeamSync
+    from .team.transport import TcpTransport
+
+    device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+    transport = TcpTransport(device)
+    team_sync = TeamSync(ctx, transport, device)
+    team_sync.start(None)  # no listen address: this call only needs to dial out and catch up
+    try:
+        return M.join(ctx, args.invite, transport, team_sync, project=args.project, environment=args.environment)
+    finally:
+        team_sync.stop()
+
+
+def cmd_team_members(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    doc = M.load_environment(ctx, env_id).document
+    members = [{"fingerprint": fp, "name": m.get("name"), "role": m.get("role"), "status": m.get("status"),
+               "owner": fp == doc.get("owner")} for fp, m in sorted(doc.get("members", {}).items())]
+    return {"env_id": env_id, "members": members}
+
+
+def cmd_team_remove(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    return M.remove_member(ctx, None, env_id, args.device)
+
+
+def cmd_team_set_role(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    commit_obj = M.author_commit(ctx, None, env_id, [{"op": "member.set_role", "fingerprint": args.device,
+                                                      "role": args.role}])
+    return {"env_id": env_id, "fingerprint": args.device, "role": args.role,
+            "commit": {"author_seq": commit_obj.author_seq, "hlc": commit_obj.hlc}}
+
+
+def cmd_team_transfer_owner(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    commit_obj = M.author_commit(ctx, None, env_id, [{"op": "owner.transfer", "fingerprint": args.device}])
+    return {"env_id": env_id, "new_owner": args.device,
+            "commit": {"author_seq": commit_obj.author_seq, "hlc": commit_obj.hlc}}
+
+
+def cmd_team_status(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    from .team import commit as team_commit_mod
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    store = team_commit_mod.CommitStore(ctx.state, env_id)
+    fold_result = M.load_environment(ctx, env_id)
+    vector = store.vector()
+    rejected_dir = ctx.state.path / "team" / env_id / "rejected"
+    rejected = len(list(rejected_dir.glob("*.json"))) if rejected_dir.is_dir() else 0
+    return {"env_id": env_id, "vector": vector, "commits_folded": sum(vector.values()),
+            "skipped_ops": len(fold_result.skipped), "rejected_commits": rejected,
+            "pending_deferred": len(store.deferred_commits()),
+            "note": "sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"}
+
+
+def cmd_team_log(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    from .team import commit as team_commit_mod
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    store = team_commit_mod.CommitStore(ctx.state, env_id)
+    commits = team_commit_mod.sort_total_order(store.all_commits())
+    fold_result = M.load_environment(ctx, env_id)
+    skip_by_hash: dict[str, list[str]] = {}
+    for commit_hash, _index, reason in fold_result.skipped:
+        skip_by_hash.setdefault(commit_hash, []).append(reason)
+    entries = [{"author": c.author, "author_seq": c.author_seq, "hlc": c.hlc,
+               "ops": [op.get("op") for op in c.ops], "skipped": skip_by_hash.get(c.hash, [])}
+              for c in commits]
+    return {"env_id": env_id, "log": entries}
+
+
+def cmd_team_show(args: argparse.Namespace) -> None | dict[str, Any]:
+    ctx = _open(args)
+    from .team import humanview
+    from .team import membership as M
+
+    env_id = _team_env_id(ctx, args.env)
+    view = humanview.strip_document(M.load_environment(ctx, env_id).document)
+    if args.format == "yaml":
+        sys.stdout.write(humanview.to_yaml(view))
+        sys.stdout.flush()
+        return None
+    return view
+
+
+def cmd_team_diff(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    from .team import commit as team_commit_mod
+    from .team import fold as team_fold_mod
+    from .team import humanview
+    from .team import sync as team_sync_mod
+
+    env_id = _team_env_id(ctx, args.env)
+    store = team_commit_mod.CommitStore(ctx.state, env_id)
+    commits = team_commit_mod.sort_total_order(store.all_commits())
+    facts, _, _ = team_sync_mod.load_facts(ctx.state, env_id)
+
+    def find(prefix: str):
+        matches = [c for c in commits if c.hash.startswith(prefix)]
+        if not matches:
+            raise NotFound("commit_hash_not_found")
+        if len(matches) > 1:
+            raise InvalidInput("commit_hash_ambiguous")
+        return matches[0]
+
+    def view_upto(commit_obj: Any) -> dict[str, Any]:
+        index = commits.index(commit_obj)
+        result = team_fold_mod.fold(env_id, commits[: index + 1], facts)
+        return humanview.strip_document(result.document)
+
+    left_commit, right_commit = find(args.left), find(args.right)
+    return {"env_id": env_id, "left": {"hash": left_commit.hash, "view": view_upto(left_commit)},
+            "right": {"hash": right_commit.hash, "view": view_upto(right_commit)}}
+
+
+def cmd_team_peers(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=bool(args.add))
+    env_id = _team_env_id(ctx, args.env)
+    if args.add:
+        if not args.device:
+            raise InvalidInput("peer_add_needs_device", "use --device FP with --add")
+        team_sync = _offline_team_sync(ctx)
+        team_sync.register_env(env_id)
+        team_sync.set_peer_address(env_id, args.device, args.add)
+    doc = ctx.state.read_json(f"team/{env_id}/peers.json", {}) or {}
+    return {"env_id": env_id, "peers": doc}
+
+
+def cmd_team_compact(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    env_id = _team_env_id(ctx, args.env)
+    team_sync = _offline_team_sync(ctx)
+    team_sync.register_env(env_id)
+    return team_sync.compact(env_id)
 
 
 # -------------------------------------------------------------------- serve
@@ -1204,11 +1637,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add(connection, "list", cmd_connection_list, "list connections")
     p = _add(connection, "show", cmd_connection_show, "show one connection")
     p.add_argument("--id", required=True)
-    p = _add(connection, "update-scope", cmd_connection_update_scope, "change the HTTP scope (widening stales grants)")
-    p.add_argument("--id", required=True)
-    p.add_argument("--methods", metavar="GET,POST|all")
-    p.add_argument("--path-prefixes", metavar="/a,/b|all")
-    p.add_argument("--confirm-methods", metavar="DELETE|none")
+    # "update" is the primary name (docs/team-sync.md section 12); "update-scope" is kept as an alias.
+    for _update_name in ("update", "update-scope"):
+        p = _add(connection, _update_name, cmd_connection_update_scope, "change the HTTP scope (widening stales grants)")
+        p.add_argument("--id", required=True)
+        p.add_argument("--methods", metavar="GET,POST|all")
+        p.add_argument("--path-prefixes", metavar="/a,/b|all")
+        p.add_argument("--confirm-methods", metavar="DELETE|none")
     p = _add(connection, "switch-credential", cmd_connection_switch_credential, "pin the connection to a secret version")
     p.add_argument("--id", required=True)
     p.add_argument("--version", type=int, required=True)
@@ -1266,6 +1701,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=_positive_int, default=50, metavar="N", help="last N records (default 50)")
     p = _add(sub, "alerts", cmd_alerts, "print the last alerts")
     p.add_argument("--limit", type=_positive_int, default=50, metavar="N", help="last N alerts (default 50)")
+
+    team = _group(sub, "team", "team sync: environment sharing between teammate nodes (docs/team-sync.md)")
+    _add(team, "init", cmd_team_init, "create this node's device key; refuses if one already exists")
+    p = _add(team, "share", cmd_team_share, "promote a local project/environment to a shared one (admin re-auth)")
+    p.add_argument("--project", required=True)
+    p.add_argument("--environment", required=True)
+    p.add_argument("--name", help="this node's displayed member name (default: owner)")
+    p = _add(team, "invite", cmd_team_invite, "print a one-time invite string (never paste it into chat/issues)")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--role", required=True, choices=("admin", "user"))
+    p.add_argument("--name", required=True, help="display name for the invited member")
+    p.add_argument("--ttl", help="30m, 1h, 3600s, 86400 (default: 24h)")
+    p.add_argument("--address", action="append", metavar="HOST:PORT", help="this node's reachable address (repeatable)")
+    p = _add(team, "join", cmd_team_join, "dial the inviter, prove the invite, and join")
+    p.add_argument("invite")
+    p.add_argument("--project", help="local project name (default: derived from the inviter)")
+    p.add_argument("--environment", help="local environment name (default: shared)")
+    p = _add(team, "members", cmd_team_members, "list team members")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p = _add(team, "remove", cmd_team_remove, "remove a team member (fact) and rotate the DEK if applicable")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--device", required=True, metavar="FINGERPRINT")
+    p = _add(team, "set-role", cmd_team_set_role, "change a member's role")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--device", required=True, metavar="FINGERPRINT")
+    p.add_argument("--role", required=True, choices=("admin", "user"))
+    p = _add(team, "transfer-owner", cmd_team_transfer_owner, "transfer ownership to another active admin/member")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--device", required=True, metavar="FINGERPRINT")
+    p = _add(team, "status", cmd_team_status, "version vector, folded/skipped/rejected/pending counts")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p = _add(team, "log", cmd_team_log, "commits in fold order, with skip reasons (no values)")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p = _add(team, "show", cmd_team_show, "render the environment document (no ciphertext/wraps/signatures)")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--format", choices=("json", "yaml"), default="json")
+    p = _add(team, "diff", cmd_team_diff, "compare the folded view at two commit hashes (prefixes accepted)")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("left", metavar="COMMIT-HASH-PREFIX")
+    p.add_argument("right", metavar="COMMIT-HASH-PREFIX")
+    p = _add(team, "peers", cmd_team_peers, "list, or (with --device) add, a peer's known address")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p.add_argument("--add", metavar="HOST:PORT")
+    p.add_argument("--device", metavar="FINGERPRINT", help="required with --add")
+    p = _add(team, "compact", cmd_team_compact, "delete commits every active member's vector already covers")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
 
     p = _add(sub, "serve", cmd_serve, "run the trusted server (tools API, relay, signer) until SIGINT/SIGTERM")
     p.add_argument("--listen", default=DEFAULT_LISTEN, metavar="HOST:PORT",

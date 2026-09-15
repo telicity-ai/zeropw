@@ -48,6 +48,8 @@ EVENTS = frozenset({
     "team_commit_apply", "team_commit_rejected", "team_op_skipped",
     "team_handshake_failed", "team_session_open", "team_session_close",
     "team_fact_apply", "team_fact_rejected", "team_sync_vector",
+    "team_share", "team_invite_create", "team_join", "team_member_add", "team_member_remove",
+    "team_dek_rotate", "team_compact",
 })
 
 EXTRA_KEYS = frozenset({
@@ -55,7 +57,7 @@ EXTRA_KEYS = frozenset({
     "exit_code", "program", "secret_id", "version", "grant", "principal", "digest", "state",
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
-    "author_seq", "op", "env_id", "commits",
+    "author_seq", "op", "env_id", "commits", "role",
 })
 
 # Anomalies that mean a credential or handle nearly left the trusted boundary (alerted every time).
@@ -70,6 +72,8 @@ FAILURE_ALERT_REASONS = {
     "upstream_tls_failed": "upstream TLS server identity could not be verified; request refused",
     "credential_unavailable": "the connection's credential is unavailable (revoked, retired or corrupt)",
     "local_id_conflict": "a shared environment tried to derive a connection or secret id already used locally",
+    "member_removed_rotation_recommended": "a team member was removed; this environment's active "
+                                           "secrets should be rotated at the provider",
 }
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")

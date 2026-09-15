@@ -260,6 +260,16 @@ def _op_member_add(doc, commit, facts, op) -> str | None:
     if existing is not None:
         return "member_exists"
     doc["members"][fp] = {"name": op["name"], "role": op["role"], "status": "active", "device": record.to_dict()}
+    # Stage 3 addition (docs/team-sync.md section 5.3's "DEK 감싸기" column): a per-generation wrap
+    # for the new device alone, for every generation this op's author currently knows.  Silently
+    # skips a generation id the document does not have (same "unknown generation -> skip, don't
+    # fail the whole op" posture as secret.put_version's F1 check) rather than failing member.add
+    # itself over it -- the member still joins; a missing wrap only means it cannot yet decrypt
+    # that one generation's secrets, exactly like a member who joined before a later dek.rotate.
+    for gen_id, wrap in (op.get("wraps") or {}).items():
+        generation = doc["dek"]["generations"].get(gen_id)
+        if generation is not None:
+            generation["wraps"][fp] = wrap
     return None
 
 
