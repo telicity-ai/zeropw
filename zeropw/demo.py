@@ -16,7 +16,11 @@ acts as an agent that only holds a caller token.  It shows:
   arbitrary data, unknown destinations and forwarding;
 * revocation and global stop take effect immediately;
 * the synthetic credential appears nowhere the agent can see: tool
-  responses, CLI output, the run environment, the audit log, server logs.
+  responses, CLI output, the run environment, the audit log, server logs;
+* compromise response (docs/compromise-response.md): two calls to a tool
+  ZeroPW never registered trip the automatic detector, which disables the
+  caller, revokes its grants and opens an incident on its own -- and after
+  the administrator closes it and issues a new caller, service resumes.
 
 Everything runs on 127.0.0.1 and is deleted afterwards.  Exit status 0 means
 every check passed.  This is a demonstration of the prototype's behaviour,
@@ -38,11 +42,12 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from . import agent_cli, policy as P, signer, sshwire, tools
+from . import agent_cli, incident as I, intrusion as IN, notify, policy as P, signer, sshwire, tools
 from .context import Config, Context
 from .crypto import ed25519
 from .fake_upstream import FakeUpstream
 from .server import ZeroPWServer
+from .store import iso
 
 ADMIN_PASSPHRASE = "demo-admin-passphrase"
 RECOVERY_PASSPHRASE = "demo-recovery-passphrase"
@@ -276,6 +281,57 @@ class Demo:
         alerts = self.ctx.audit.alerts()
         self.say(f"    알림 {len(alerts)}건: {sorted(set(a['alert'] for a in alerts))}")
 
+    def intrusion_demo(self) -> None:
+        self.say("[7] 침입 시뮬레이션: 미제공 도구 반복 호출 -> 자동 봉쇄")
+        # 탐지기는 이 단계에서만 설치한다: 앞선 [2]-[6] 단계의 거부(승인 대기, 회수 등)가 만든
+        # 약한 신호와 섞이지 않고, 두 번의 미제공 도구 호출만으로 강한 신호 임계(2회)에 도달하는
+        # 모습을 깨끗하게 보여주기 위함이다.
+        IN.install(self.ctx)
+
+        status, body = self.call("reveal_secret", {})
+        self.check(status == 404 and body.get("reason") == "tool_not_found", "미제공 도구 1차 호출 -> tool_not_found")
+        self.check(self.ctx.policy.open_incident_id() is None, "1차 호출만으로는 아직 봉쇄되지 않음 (강한 신호 임계 2회)")
+
+        status, body = self.call("reveal_secret", {})
+        self.check(status == 404 and body.get("reason") == "tool_not_found", "미제공 도구 2차 호출 -> tool_not_found")
+
+        incident_id = self.ctx.policy.open_incident_id()
+        self.check(incident_id is not None, "2차 호출로 사건 자동 개설 (같은 호출 안에서 봉쇄까지 완료)")
+        incident = I.get_incident(self.ctx, incident_id) if incident_id else None
+        if incident is not None:
+            self.check(incident.scope == "principal", f"봉쇄 범위: {incident.scope}")
+            self.check(incident.rule == "unknown_tool", f"판정 규칙: {incident.rule}")
+            self.say(f"    사건 {incident.id}: 범위={incident.scope} 규칙={incident.rule} 판정 방식={incident.trigger}")
+
+        status, body = self.call("list_connections", {})
+        self.check(status == 401 and body.get("reason") == "principal_disabled",
+                  "봉쇄 뒤 같은 호출 주체의 다음 호출 -> principal_disabled")
+
+        alerts = self.ctx.audit.alerts()
+        intrusion_alerts = [a for a in alerts if a.get("alert") == "intrusion"]
+        self.check(len(intrusion_alerts) >= 1, f"침입 알림 {len(intrusion_alerts)}건")
+
+        if incident is not None:
+            self.check(incident.notification.get("status") == "not_configured",
+                      "notify.json을 설정하지 않은 데모: notification=not_configured (이메일 없이도 봉쇄는 완전함)")
+            subject, body_text = notify.render_incident_email(incident, now=iso(self.ctx.clock()))
+            self.say("    렌더링된 교체 안내 이메일 (notify.json 미설정이라 실제로 발송하지는 않음):")
+            self.say(f"    제목: {subject}")
+            for line in body_text.splitlines():
+                self.say(f"      {line}")
+
+            self.say("[8] 복구: 사건을 닫고 새 호출 주체로 재개")
+            I.close_incident(self.ctx, incident.id)
+            new_token = self.ctx.policy.create_principal("agent-2")
+            self.ctx.policy.create_grant("agent-2", "gh", 600, 10)
+            self.ctx.policy.resume()
+            old_token, self.caller_token = self.caller_token, new_token
+            status, body = self.call("request", {"connection": "gh", "method": "GET", "path": "/repos"})
+            self.check(status == 200 and body.get("status") == 200, "사건을 닫고 새 호출 주체로 재개한 뒤 request 다시 성공")
+            self.caller_token = old_token
+            status, body = self.call("list_connections", {})
+            self.check(status == 401 and body.get("reason") == "principal_disabled", "비활성화된 예전 호출 주체는 그대로 거부됨")
+
     def teardown(self) -> None:
         try:
             if getattr(self.ctx, "runs", None) is not None:
@@ -299,6 +355,7 @@ class Demo:
             self.ssh_demo()
             self.revocation()
             self.sweep()
+            self.intrusion_demo()
         finally:
             self.teardown()
         if self.failures:
