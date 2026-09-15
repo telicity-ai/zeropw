@@ -200,7 +200,13 @@ class SignerTestCase(unittest.TestCase):
         sock.settimeout(5)
         sock.connect(str(self.binding.socket_path))
         sock.sendall(sshwire.encode_uint32(sshwire.MAX_AGENT_MESSAGE + 1) + b"\x0d")
-        self.assertEqual(sock.recv(1024), b"")
+        # The signer drops the connection without reading the oversized payload.  With the unread
+        # byte still queued, Linux reports the close as a reset while macOS reports a clean EOF.
+        try:
+            reply = sock.recv(1024)
+        except ConnectionResetError:
+            reply = b""
+        self.assertEqual(reply, b"")
         sock.close()
         with self.connect() as conn:
             self.assertEqual(conn.request(bytes([sshwire.SSH_AGENTC_SIGN_REQUEST]) + b"\xff\xff"), sshwire.build_failure())
