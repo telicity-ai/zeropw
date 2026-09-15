@@ -45,6 +45,7 @@ EVENTS = frozenset({
     "handle_issue", "tools_list_connections", "tools_request", "tools_exec", "tools_status", "tools_cancel",
     "http_relay", "ssh_bind", "ssh_sign", "ssh_agent_refused", "run_start", "run_finish", "run_cancel",
     "backup", "restore", "restore_ack", "recover", "rotation", "unsupported", "auth_failed",
+    "team_commit_apply", "team_commit_rejected", "team_op_skipped",
 })
 
 EXTRA_KEYS = frozenset({
@@ -52,6 +53,7 @@ EXTRA_KEYS = frozenset({
     "exit_code", "program", "secret_id", "version", "grant", "principal", "digest", "state",
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
+    "author_seq", "op", "env_id",
 })
 
 # Anomalies that mean a credential or handle nearly left the trusted boundary (alerted every time).
@@ -65,6 +67,7 @@ CREDENTIAL_EXPOSURE_REASONS = {
 FAILURE_ALERT_REASONS = {
     "upstream_tls_failed": "upstream TLS server identity could not be verified; request refused",
     "credential_unavailable": "the connection's credential is unavailable (revoked, retired or corrupt)",
+    "local_id_conflict": "a shared environment tried to derive a connection or secret id already used locally",
 }
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
