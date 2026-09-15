@@ -51,6 +51,10 @@ class Config:
     handle_ttl_seconds: int = 900
     max_request_body_bytes: int = 8 * 1024 * 1024
     exec_timeout_seconds: float = 600.0
+    # Overrides for zeropw.intrusion.DetectorConfig (docs/compromise-response.md §4.2): window
+    # length, weak/strong thresholds, per-rule weak points, enumeration and burst parameters.
+    # ``None`` (the default) means "use DetectorConfig's own defaults".
+    intrusion: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -68,9 +72,10 @@ class Context:
         self.admin = admin
         self.config = config
         self.clock = clock
-        # Set by the tools / signer modules when a server is running.
+        # Set by the tools / signer / intrusion modules when a server is running.
         self.runs: Any = None
         self.signer_manager: Any = None
+        self.intrusion: Any = None
         # Temporary directories this context created for run_dir / socket_dir (removed by close()).
         self._owned_dirs: list[Path] = []
 
