@@ -58,6 +58,16 @@ Identical, unless listed in §3:
    globals (e.g. `gateway._getaddrinfo`) → an injectable trait or function field; `weakref` sets →
    explicit registration; duck-typed `ctx: Any` → the concrete `Context`.
 
+5. Coordinator ruling (2026-09-17): where Python lets a *built-in* exception escape uncaught (`TypeError`,
+   `ValueError`, `UnicodeEncodeError`, `IndexError`, `json.JSONDecodeError`, ... — anything not from
+   `errors.py` or a module's own documented error types), that escape is not specified behaviour. Rust
+   returns the closest ZeroPW error a caller of that function already handles (fail closed), recorded in
+   `DEVIATIONS.md` citing §3.5. This does not cover documented error types or any case where Python
+   *returns* a value.
+6. Coordinator ruling (2026-09-17): JSON strings containing lone UTF-16 surrogate escapes (`"\ud800"`)
+   cannot be represented as Rust `String`; Rust rejects them as malformed input (state file →
+   `state_corrupt`, peer/agent message → that path's malformed-input error), recorded under §3.6.
+
 Anything else that differs must be recorded in `DEVIATIONS.md` (module, Python behaviour, Rust
 behaviour, why). An unrecorded difference is a defect.
 
