@@ -163,110 +163,6 @@ impl From<WireError> for crate::Error {
 }
 
 // ---------------------------------------------------------------------------
-// Python `repr(str)` emulation (for `!r` error-message formatting)
-// ---------------------------------------------------------------------------
-
-/// Emulate Python's `repr()` for a `str`: pick the quote character the way
-/// CPython does (`'` unless the string contains `'` and not `"`, in which
-/// case `"`), then escape backslash, the chosen quote, `\n`/`\r`/`\t`, and
-/// every character `str.isprintable()` excludes, as `\xNN`/`\uNNNN`/
-/// `\UNNNNNNNN` (2/4/8 lowercase hex digits, matching CPython's width
-/// choice by codepoint size). Every other character -- including
-/// non-ASCII letters, symbols and emoji -- is copied through literally,
-/// matching Python.
-///
-/// `sshwire.py` formats every wire-supplied string it rejects with `!r`
-/// (`f"unsupported key type {key_type!r}"` and friends); this reproduces
-/// that formatting so the error message text matches byte-for-byte.
-pub(crate) fn py_repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for c in s.chars() {
-        if c == quote || c == '\\' {
-            out.push('\\');
-            out.push(c);
-        } else if c == '\n' {
-            out.push_str("\\n");
-        } else if c == '\r' {
-            out.push_str("\\r");
-        } else if c == '\t' {
-            out.push_str("\\t");
-        } else if py_str_is_printable(c) {
-            out.push(c);
-        } else {
-            let cp = c as u32;
-            if cp <= 0xFF {
-                out.push_str(&format!("\\x{cp:02x}"));
-            } else if cp <= 0xFFFF {
-                out.push_str(&format!("\\u{cp:04x}"));
-            } else {
-                out.push_str(&format!("\\U{cp:08x}"));
-            }
-        }
-    }
-    out.push(quote);
-    out
-}
-
-/// Approximation of Python's `str.isprintable()` per character: `false`
-/// for Unicode categories Cc (control), Cf (format), Zl (line separator),
-/// Zp (paragraph separator), Zs other than U+0020 (other space
-/// separators), and the private-use ranges (Co); `true` otherwise.
-/// `char::is_control()` already matches Cc exactly (it is documented as
-/// "a C0 or C1 control code", the same definition CPython uses for Cc);
-/// Zs/Zl/Zp are a short, complete, closed set enumerated directly; Cf/Co
-/// are covered by explicit ranges for every codepoint reachable through
-/// this module's inputs (SSH protocol names, algorithm identifiers,
-/// comments, fingerprints). This does not enumerate the full Unicode
-/// Cf/Cn tables (no such crate is available in the offline build used for
-/// this port; see `DEVIATIONS.md`), so an obscure unassigned or exotic
-/// format codepoint could format differently than CPython; every
-/// character this module's own tests and oracle checks exercise is
-/// covered exactly.
-fn py_str_is_printable(c: char) -> bool {
-    if c == ' ' {
-        return true;
-    }
-    if c.is_control() {
-        return false; // Cc: 0x00-0x1F, 0x7F-0x9F
-    }
-    let cp = c as u32;
-    let non_printable = matches!(cp, 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000) // Zs (not space)
-            || cp == 0x2028 // Zl
-            || cp == 0x2029 // Zp
-            || matches!(
-                cp,
-                0x00AD
-                    | 0x0600..=0x0605
-                    | 0x061C
-                    | 0x06DD
-                    | 0x070F
-                    | 0x08E2
-                    | 0x180E
-                    | 0x200B..=0x200F
-                    | 0x202A..=0x202E
-                    | 0x2060..=0x2064
-                    | 0x2066..=0x206F
-                    | 0xFEFF
-                    | 0xFFF9..=0xFFFB
-                    | 0x110BD
-                    | 0x110CD
-                    | 0x13430..=0x13438
-                    | 0x1BCA0..=0x1BCA3
-                    | 0x1D173..=0x1D17A
-                    | 0xE0001
-                    | 0xE0020..=0xE007F
-            ) // Cf (common format controls)
-            || matches!(cp, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD); // Co
-    !non_printable
-}
-
-// ---------------------------------------------------------------------------
 // RFC 4251 wire primitives
 // ---------------------------------------------------------------------------
 
@@ -729,7 +625,7 @@ pub fn parse_public_key_blob(blob: &[u8]) -> Result<Ed25519PublicKey, WireError>
     if key_type != ED25519_KEY_TYPE {
         return Err(WireError::unsupported(format!(
             "unsupported key type {}",
-            py_repr_str(&key_type)
+            crate::pystr::repr_str(&key_type)
         )));
     }
     let key_bytes = r.string()?;
@@ -789,14 +685,6 @@ const AUTHORIZED_KEYS_BLANK: [char; 2] = [' ', '\t'];
 
 fn strip_blank(s: &str) -> &str {
     s.trim_matches(|c| AUTHORIZED_KEYS_BLANK.contains(&c))
-}
-
-/// Approximation of Python's `str.isspace()`: Unicode whitespace plus the
-/// ASCII information-separator controls (`\x1c`-`\x1f`), which Python's
-/// definition includes (bidirectional class `B`) but Rust's
-/// `char::is_whitespace` does not. See `DEVIATIONS.md`.
-fn py_isspace(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
 /// Split on runs of ASCII space/tab only, never on other whitespace, with
@@ -899,7 +787,7 @@ pub fn parse_authorized_key_entry(line: &str) -> Result<AuthorizedKeyEntry, Wire
     }
     if stripped
         .chars()
-        .any(|c| py_isspace(c) && !AUTHORIZED_KEYS_BLANK.contains(&c))
+        .any(|c| crate::pystr::is_space(c) && !AUTHORIZED_KEYS_BLANK.contains(&c))
     {
         return Err(WireError::new(
             "authorized_keys line contains whitespace other than space or tab",
@@ -929,7 +817,7 @@ pub fn parse_authorized_key_entry(line: &str) -> Result<AuthorizedKeyEntry, Wire
     if key_type != ED25519_KEY_TYPE {
         return Err(WireError::unsupported(format!(
             "unsupported key type {}",
-            py_repr_str(key_type)
+            crate::pystr::repr_str(key_type)
         )));
     }
     if parts.len() < 2 {
@@ -1081,8 +969,8 @@ impl fmt::Debug for Ed25519PrivateKey {
         write!(
             f,
             "Ed25519PrivateKey(public={}, comment={})",
-            py_repr_str(&self.public.fingerprint()),
-            py_repr_str(&self.comment)
+            crate::pystr::repr_str(&self.public.fingerprint()),
+            crate::pystr::repr_str(&self.comment)
         )
     }
 }
@@ -1302,7 +1190,7 @@ pub fn parse_ssh_signature(blob: &[u8]) -> Result<Vec<u8>, WireError> {
     if algorithm != ED25519_KEY_TYPE {
         return Err(WireError::new(format!(
             "unexpected signature algorithm {}",
-            py_repr_str(&algorithm)
+            crate::pystr::repr_str(&algorithm)
         )));
     }
     let signature = r.string()?;
@@ -1736,7 +1624,7 @@ pub fn parse_userauth_request(
     if service != SSH_CONNECTION_SERVICE {
         return Err(WireError::new(format!(
             "unexpected service {}",
-            py_repr_str(&service)
+            crate::pystr::repr_str(&service)
         )));
     }
     let method = r.text()?;
@@ -1747,7 +1635,7 @@ pub fn parse_userauth_request(
     } else {
         return Err(WireError::new(format!(
             "unexpected authentication method {}",
-            py_repr_str(&method)
+            crate::pystr::repr_str(&method)
         )));
     };
     let has_signature = r.boolean()?;
@@ -2273,7 +2161,7 @@ print(key.to_openssh_private_key(), end="")
     // -----------------------------------------------------------------
 
     #[test]
-    fn py_repr_str_matches_python_repr_for_tricky_strings() {
+    fn repr_str_matches_python_repr_for_tricky_strings() {
         let cases = [
             "it's",
             "say \"hi\"",
@@ -2288,11 +2176,76 @@ print(key.to_openssh_private_key(), end="")
             "musical\u{1D11E}clef",
         ];
         for s in cases {
-            let ours = py_repr_str(s);
+            let ours = crate::pystr::repr_str(s);
             let byte_list: Vec<u8> = s.as_bytes().to_vec();
             let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
             let theirs = python(&script).trim().to_string();
             assert_eq!(ours, theirs, "input {s:?}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C-R2-1: `crate::pystr::is_printable` exactness for Cn (unassigned)
+    // and Cf (format) codepoints the old sshwire-local approximation got
+    // wrong (it never treated Cn as non-printable and hand-listed Cf).
+    // Sampled from the finding: U+0378 (Cn), U+0890/U+1343A (Cf, missed
+    // by the old hand-enumerated ranges), U+E0080 (Cn, inside the tag
+    // block but past the Cf sub-range), U+10FFFF (Cn), plus U+FFFE,
+    // U+200B, U+FEFF which the old approximation already handled (kept
+    // here as a regression check now that they go through `pystr`).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn parse_public_key_blob_unsupported_type_repr_matches_python_for_cn_cf_codepoints() {
+        for cp in [
+            0x0378u32, 0x0890, 0x1343A, 0xE0080, 0x10FFFF, 0xFFFE, 0x200B, 0xFEFF,
+        ] {
+            let key_type = char::from_u32(cp).expect("valid scalar value").to_string();
+            let mut blob = encode_string(&key_type).unwrap();
+            blob.extend(encode_string(vec![0u8; PUBLIC_KEY_SIZE]).unwrap());
+            let err = parse_public_key_blob(&blob).unwrap_err();
+            assert!(err.is_unsupported(), "cp {cp:#x}");
+
+            let script = format!(
+                "from zeropw import sshwire as w\nkey_type = chr({cp})\nblob = w.encode_string(key_type) + w.encode_string(bytes(32))\ntry:\n    w.parse_public_key_blob(blob)\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n"
+            );
+            let theirs = python(&script);
+            assert_eq!(
+                theirs.trim(),
+                format!("UnsupportedKeyType:{}", err.message()),
+                "cp {cp:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_userauth_request_unexpected_service_repr_matches_python_for_cn_cf_codepoints() {
+        for cp in [
+            0x0378u32, 0x0890, 0x1343A, 0xE0080, 0x10FFFF, 0xFFFE, 0x200B, 0xFEFF,
+        ] {
+            let service = char::from_u32(cp).expect("valid scalar value").to_string();
+            let key = Ed25519PublicKey::new(vec![7u8; PUBLIC_KEY_SIZE]).unwrap();
+            let request = build_userauth_request(
+                b"session",
+                "alice",
+                ED25519_KEY_TYPE,
+                &key.blob(),
+                &service,
+                None,
+            );
+            let err = parse_userauth_request(&request, true).unwrap_err();
+            assert!(err.is_wire_error(), "cp {cp:#x}");
+
+            let script = format!(
+                "from zeropw import sshwire as w\nkey = w.Ed25519PublicKey(bytes([7] * 32))\nservice = chr({cp})\nreq = w.build_userauth_request(b'session', 'alice', {key_type:?}, key.blob(), service, host_key_blob=None)\ntry:\n    w.parse_userauth_request(req, allow_hostbound=True)\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n",
+                key_type = ED25519_KEY_TYPE,
+            );
+            let theirs = python(&script);
+            assert_eq!(
+                theirs.trim(),
+                format!("WireError:{}", err.message()),
+                "cp {cp:#x}"
+            );
         }
     }
 

@@ -12,6 +12,7 @@ pub mod secret;
 
 pub mod pybase64;
 pub mod pyjson;
+pub mod pystr;
 pub mod store;
 
 pub mod crypto;
