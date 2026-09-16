@@ -499,9 +499,13 @@ class FactsTestCase(unittest.TestCase):
         self.assertIn(carol.device.fingerprint, self.a.sync.status(self.env_id)["sessions"],
                      "carol's session was closed immediately instead of draining")
         # The fact itself is legitimately delivered on the way out (broadcast happens before the
-        # session is marked draining -- see ``_drop_member_sessions``'s docstring): that is the
-        # one send this test does not fault; everything from here on must add nothing further.
-        self.assertEqual(len(sent), 1, "expected exactly the outgoing member_removed FACT so far")
+        # session is marked draining -- see ``_drop_member_sessions``'s docstring).  A periodic
+        # VECTOR/PEERS may also have gone out between installing the spy and the publish (the
+        # session was not draining yet), so only the presence of the FACT is asserted here; from
+        # this point on -- the session IS draining now -- nothing further may be sent.
+        self.assertTrue(any(m.get("type") == "FACT" and m.get("fact", {}).get("kind") == "member_removed"
+                            for m in sent), "the outgoing member_removed FACT was not sent to carol")
+        sent.clear()
 
         # A COMMIT and a VECTOR arriving on carol's still-open session during the drain must be
         # ignored: no store mutation, no reply, nothing sent back.
@@ -512,7 +516,7 @@ class FactsTestCase(unittest.TestCase):
         self.a.sync._handle_message(self.env_id, session_to_carol, {"type": "VECTOR", "vector": {}})
         self.assertIsNone(env.store.get(self.a.device.fingerprint, 99),
                           "a COMMIT arriving on a draining session must not be accepted")
-        self.assertEqual(len(sent), 1, "nothing must be sent to a draining peer, not even a VECTOR reply")
+        self.assertEqual(sent, [], "nothing must be sent to a draining peer, not even a VECTOR reply")
 
         # A member_removed FACT from carol is still processed -- self-removal is always permitted
         # regardless of role or removed status (see test_self_removal_by_user_role_still_works),
@@ -523,8 +527,7 @@ class FactsTestCase(unittest.TestCase):
                                     {"type": "FACT", "fact": self_removal.to_dict()})
         self.assertIn(self_removal.hash, env.fact_hashes,
                       "a member_removed FACT must still be applied during the drain window")
-        self.assertEqual(len(sent), 1,
-                         "applying the accepted FACT must still send nothing to the draining peer")
+        self.assertEqual(sent, [], "applying the accepted FACT must still send nothing to the draining peer")
 
     def test_removed_by_third_party_cannot_then_remove_someone_else(self) -> None:
         """G1 regression: X removed by Z must never be able to remove anyone else, even though
