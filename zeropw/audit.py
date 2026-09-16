@@ -156,11 +156,18 @@ class Audit:
                     value = strip_query(value)  # query strings never enter the log
                 record[key] = _clean(value)
         line = json.dumps(record, sort_keys=True, separators=(",", ":"))
-        try:
-            self.state.append_line(AUDIT_FILE, line)
-        except Exception as exc:  # any failure to persist must stop the caller
-            raise AuditUnavailable("audit_write_failed") from exc
-        self._maybe_alert(record)
+        # The record and any alert it triggers are written under the SAME state lock so the two
+        # files are never observed half-updated by another thread/process: without this, one
+        # thread's record line can land on disk while a concurrent record()'s alert write (or its
+        # own, a moment later) interleaves, so a reader that wakes up right after seeing the
+        # record can still find the alerts file one line short (seen under CI load: a test that
+        # waited only for the record, then read alerts() immediately, occasionally lost the race).
+        with self.state.lock():
+            try:
+                self.state.append_line(AUDIT_FILE, line)
+            except Exception as exc:  # any failure to persist must stop the caller
+                raise AuditUnavailable("audit_write_failed") from exc
+            self._maybe_alert(record)
         self._notify_listeners(record)
         return record
 

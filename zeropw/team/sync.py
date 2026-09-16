@@ -457,6 +457,13 @@ class _EnvState:
     # used only to evaluate the precise section 7.4 mutual-removal exemption (see
     # ``_document_for_removal_author_check``), never to decide anything else.
     removal_authors: dict = field(default_factory=dict)
+    # fingerprint -> monotonic deadline (sections 4.4/7.4): set when this node learns that
+    # fingerprint was removed and it still has a live session open to it.  While a fingerprint is
+    # in here its session is receive-only (``_handle_message``'s drain gate) and excluded from
+    # every send path (``_broadcast``, ``_send_vector``, ``_send_peers``, incident delivery);
+    # ``poll()`` closes the session once its deadline passes.  Never populated for a fingerprint
+    # with no live session -- there is nothing to drain.
+    draining: dict = field(default_factory=dict)
     # Stage 3 additions -----------------------------------------------------------------------
     # fingerprint -> the last VECTOR that peer sent us, persisted to peer_vectors.json; used only
     # by ``compact()`` to decide whether every active member is known to already have a commit.
@@ -945,6 +952,7 @@ class TeamSync:
             if current is None or (session is not None and current is not session):
                 return
             env.sessions.pop(fp, None)
+            env.draining.pop(fp, None)
         current.close()
         self._audit_session_close(env_id, fp)
 
@@ -952,25 +960,41 @@ class TeamSync:
         with self._lock:
             env = self._envs.get(env_id)
             session = env.sessions.pop(fp, None) if env is not None else None
+            if env is not None:
+                env.draining.pop(fp, None)
         if session is not None:
             session.close()
             self._audit_session_close(env_id, fp)
 
     def _drop_member_sessions(self, env_id: str, fp: str) -> None:
+        """Sections 4.4/7.4: on learning ``fp`` was removed, forget it as a dial/discovery
+        candidate immediately (addresses, backoff) -- there is nothing to be gained from ever
+        contacting it again, and any handshake it initiates is refused independently
+        (``_membership``).  A LIVE session to it is not closed here: it is marked ``draining``
+        instead (``team_removed_drain_seconds``), so the removed peer's own ``member_removed``
+        fact, possibly arriving on that same session at this same instant (the mutual-removal
+        race this exists to fix), still has a chance to land before the session closes.  See
+        ``_handle_message`` for the receive-only gate and ``poll()`` for the eventual close.
+        """
         with self._lock:
             env = self._envs.get(env_id)
-            session = env.sessions.pop(fp, None) if env is not None else None
-            if env is not None:
-                env.candidate_addresses.pop(fp, None)
-                env.backoff.pop(fp, None)
-                env.next_attempt.pop(fp, None)
-        if session is not None:
-            session.close()
-            self._audit_session_close(env_id, fp)
+            if env is None:
+                return
+            env.candidate_addresses.pop(fp, None)
+            env.backoff.pop(fp, None)
+            env.next_attempt.pop(fp, None)
+            if fp in env.sessions:
+                env.draining[fp] = time.monotonic() + self.ctx.config.team_removed_drain_seconds
 
     # ------------------------------------------------------------ messaging
     def _send_vector(self, env_id: str, session: Session) -> None:
-        vector = self._envs[env_id].store.vector()
+        env = self._envs.get(env_id)
+        if env is None:
+            return
+        with self._lock:
+            if session.peer.fingerprint in env.draining:
+                return  # sections 4.4/7.4: nothing is sent to a draining (removed) peer
+        vector = env.store.vector()
         try:
             session.send({"type": "VECTOR", "vector": vector})
         except (SessionClosed, InvalidInput):
@@ -983,6 +1007,10 @@ class TeamSync:
         self._mark_synced(env_id)
 
     def _send_peers(self, env_id: str, session: Session) -> None:
+        env = self._envs.get(env_id)
+        with self._lock:
+            if env is not None and session.peer.fingerprint in env.draining:
+                return  # sections 4.4/7.4: nothing is sent to a draining (removed) peer
         peers_doc = self._read_peers(env_id)
         payload = {fp: sorted(a for a in addrs if isinstance(a, str)) for fp, addrs in peers_doc.items()
                   if isinstance(addrs, list)}
@@ -996,7 +1024,9 @@ class TeamSync:
             env = self._envs.get(env_id)
             if env is None:
                 return
-            sessions = [(fp, s) for fp, s in env.sessions.items() if fp != exclude_fp]
+            # sections 4.4/7.4: a draining (removed) peer's session is receive-only -- excluded
+            # from every send path, exactly like one already closed.
+            sessions = [(fp, s) for fp, s in env.sessions.items() if fp != exclude_fp and fp not in env.draining]
         for fp, session in sessions:
             try:
                 session.send(message)
@@ -1011,6 +1041,21 @@ class TeamSync:
 
     def _handle_message(self, env_id: str, session: Session, message: dict) -> None:
         mtype = message.get("type") if isinstance(message, dict) else None
+        with self._lock:
+            env = self._envs.get(env_id)
+            draining = env is not None and session.peer.fingerprint in env.draining
+        if draining:
+            # Sections 4.4/7.4's drain window: this peer was just learned to be removed, so its
+            # session stays open receive-only for a few seconds -- the ONE thing still accepted is
+            # a member_removed FACT from it (still fully validated below, including the mutual-
+            # removal exemption), so a mutual removal racing in on this exact session at this exact
+            # instant still lands. Everything else (VECTOR, COMMIT, PEERS, INCIDENT, any other FACT
+            # kind) is ignored silently: no reply, no processing, no audit noise.
+            if mtype == "FACT":
+                raw = message.get("fact")
+                if isinstance(raw, dict) and raw.get("kind") == "member_removed":
+                    self._handle_fact(env_id, session, message)
+            return
         if mtype == "VECTOR":
             self._handle_vector(env_id, session, message)
         elif mtype == "COMMIT":
@@ -1324,7 +1369,7 @@ class TeamSync:
             if env is None:
                 return 0
             targets = [(fp, s) for fp, s in env.sessions.items()
-                      if fp != self.device.fingerprint and _is_admin(env.document, fp)]
+                      if fp != self.device.fingerprint and fp not in env.draining and _is_admin(env.document, fp)]
         sent = 0
         for fp, session in targets:
             try:
@@ -1438,6 +1483,12 @@ class TeamSync:
             dead = [fp for fp, s in env.sessions.items() if s.closed]
         for fp in dead:
             self._drop_session(env_id, fp)
+        with self._lock:
+            drained = [fp for fp, deadline in env.draining.items() if now >= deadline]
+        for fp in drained:
+            # Sections 4.4/7.4: the receive-only grace period for a removed peer's session is
+            # over -- close it now (same audit trail as any other session close).
+            self._close_session(env_id, fp)
         max_age = self.ctx.config.team_session_max_age_seconds
         with self._lock:
             aged = [fp for fp, s in env.sessions.items() if now - s.created_at > max_age]
@@ -1582,7 +1633,8 @@ class TeamSync:
         the outbox retry exists for."""
         with self._lock:
             env = self._envs.get(env_id)
-            if env is None or not env.incident_outbox or not _is_admin(env.document, session.peer.fingerprint):
+            if (env is None or not env.incident_outbox or session.peer.fingerprint in env.draining
+                    or not _is_admin(env.document, session.peer.fingerprint)):
                 return
             pending = list(env.incident_outbox.values())
         for fact in pending:

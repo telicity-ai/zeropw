@@ -397,7 +397,25 @@ class FactsTestCase(unittest.TestCase):
         wait_until(lambda: carol.device.fingerprint in self.b.sync.status(self.env_id)["sessions"],
                   msg="B never connected to carol")
 
+        # Force the exact race that failed in CI (docs/team-sync.md section 7.4's worked example):
+        # make B's "B removes carol" fact land and get fully applied on A -- including marking
+        # carol's session draining, the step that used to close it immediately and discard
+        # whatever arrived on it next -- BEFORE carol's own "carol removes B" fact is even
+        # published, so it is guaranteed to arrive on that already-draining session rather than a
+        # session that might close before it gets there.
+        b_fact_applied_on_a = threading.Event()
+        original_apply_remote_fact = self.a.sync._apply_remote_fact
+
+        def spy_apply_remote_fact(env_id, fact, exclude_fp):
+            original_apply_remote_fact(env_id, fact, exclude_fp)
+            if (fact.kind == "member_removed" and fact.author == self.b.device.fingerprint
+                    and fact.target.get("fingerprint") == carol.device.fingerprint):
+                b_fact_applied_on_a.set()
+
+        self.a.sync._apply_remote_fact = spy_apply_remote_fact
+
         self.b.sync.publish_fact(self.env_id, "member_removed", fingerprint=carol.device.fingerprint)
+        wait_until(lambda: b_fact_applied_on_a.is_set(), msg="A never applied B's removal of carol")
         carol.sync.publish_fact(self.env_id, "member_removed", fingerprint=self.b.device.fingerprint)
 
         def converged(node: _Node) -> bool:
@@ -428,13 +446,88 @@ class FactsTestCase(unittest.TestCase):
         self.assertEqual(json.dumps(doc_b, sort_keys=True), json.dumps(doc_c, sort_keys=True))
 
     def test_member_removed_fact_closes_session_and_refuses_future_dial(self) -> None:
+        # Sections 4.4/7.4: the session is no longer dropped in the same beat as the fact -- it
+        # drains receive-only first. Use a tiny drain so this test still observes the eventual
+        # close quickly instead of waiting out the 5s production default.
+        self.a.ctx.config.team_removed_drain_seconds = 0.05
         self.a.sync.publish_fact(self.env_id, "member_removed", fingerprint=self.b.device.fingerprint)
+        # Nothing is sent to B from the instant the fact is applied, but the session itself is
+        # still open, receive-only, for the drain window.
+        self.assertIn(self.b.device.fingerprint, self.a.sync._envs[self.env_id].draining,
+                     "B's session was not marked draining immediately")
         wait_until(lambda: self.b.device.fingerprint not in self.a.sync.status(self.env_id)["sessions"],
-                  msg="A did not drop B's session after removing B")
+                  msg="A never closed B's session once the drain window passed", timeout=5.0)
         # B's own dial back to A must not re-establish either, since A no longer considers B a
         # member and refuses the handshake.
         time.sleep(0.3)
-        self.assertNotIn(self.a.device.fingerprint, self.a.sync.status(self.env_id)["sessions"])
+        self.assertNotIn(self.b.device.fingerprint, self.a.sync.status(self.env_id)["sessions"])
+
+    def test_removed_peer_session_is_receive_only_during_drain(self) -> None:
+        """Sections 4.4/7.4: once A learns a peer was removed it stops sending to that peer's
+        session at once, but the session itself stays open, receive-only, for the drain window --
+        a COMMIT or VECTOR arriving on it must be ignored outright (no reply, no processing), while
+        a member_removed FACT from that same peer is still validated and applied normally (the one
+        case the drain window exists for -- see test_mutual_simultaneous_member_removal_converges).
+        """
+        carol = _Node(self.root, "carol")
+        self.addCleanup(carol.stop)
+        c4 = member_add_commit(self.env_id, self.a.device, 4, "4000-0000", carol.device, "admin", name="carol")
+        self.assertEqual(self.a.sync.submit_commit(self.env_id, c4), "accepted")
+        wait_until(lambda: self.b.store(self.env_id).last_seq(self.a.device.fingerprint) >= 4)
+        seed_commits(carol, self.env_id, self.a.store(self.env_id).all_commits())
+        carol.start()
+        carol.peer(self.a, self.env_id)
+        self.a.peer(carol, self.env_id)
+        wait_until(lambda: carol.device.fingerprint in self.a.sync.status(self.env_id)["sessions"])
+
+        # Ample headroom: this test drives the drain window's timing itself (no wait_until on the
+        # eventual close), so a short default would make it flaky under load rather than faster.
+        self.a.ctx.config.team_removed_drain_seconds = 5.0
+        env = self.a.sync._envs[self.env_id]
+        session_to_carol = env.sessions[carol.device.fingerprint]
+        sent: list = []
+        original_send = session_to_carol.send
+
+        def spy_send(message):
+            sent.append(message)
+            return original_send(message)
+
+        session_to_carol.send = spy_send
+
+        self.a.sync.publish_fact(self.env_id, "member_removed", fingerprint=carol.device.fingerprint)
+        self.assertIn(carol.device.fingerprint, env.draining, "carol's session was not marked draining")
+        self.assertIn(carol.device.fingerprint, self.a.sync.status(self.env_id)["sessions"],
+                     "carol's session was closed immediately instead of draining")
+        # The fact itself is legitimately delivered on the way out (broadcast happens before the
+        # session is marked draining -- see ``_drop_member_sessions``'s docstring).  A periodic
+        # VECTOR/PEERS may also have gone out between installing the spy and the publish (the
+        # session was not draining yet), so only the presence of the FACT is asserted here; from
+        # this point on -- the session IS draining now -- nothing further may be sent.
+        self.assertTrue(any(m.get("type") == "FACT" and m.get("fact", {}).get("kind") == "member_removed"
+                            for m in sent), "the outgoing member_removed FACT was not sent to carol")
+        sent.clear()
+
+        # A COMMIT and a VECTOR arriving on carol's still-open session during the drain must be
+        # ignored: no store mutation, no reply, nothing sent back.
+        stray_commit = connection_create_commit(self.env_id, self.a.device, 99, "9999-0000",
+                                                conn_id="ignored-during-drain")
+        self.a.sync._handle_message(self.env_id, session_to_carol,
+                                    {"type": "COMMIT", "commit": stray_commit.to_dict()})
+        self.a.sync._handle_message(self.env_id, session_to_carol, {"type": "VECTOR", "vector": {}})
+        self.assertIsNone(env.store.get(self.a.device.fingerprint, 99),
+                          "a COMMIT arriving on a draining session must not be accepted")
+        self.assertEqual(sent, [], "nothing must be sent to a draining peer, not even a VECTOR reply")
+
+        # A member_removed FACT from carol is still processed -- self-removal is always permitted
+        # regardless of role or removed status (see test_self_removal_by_user_role_still_works),
+        # so this needs no mutual-exemption setup to exercise the accept path.
+        self_removal = S.sign_fact(carol.device, self.env_id, "member_removed",
+                                   {"fingerprint": carol.device.fingerprint}, "9999-0001")
+        self.a.sync._handle_message(self.env_id, session_to_carol,
+                                    {"type": "FACT", "fact": self_removal.to_dict()})
+        self.assertIn(self_removal.hash, env.fact_hashes,
+                      "a member_removed FACT must still be applied during the drain window")
+        self.assertEqual(sent, [], "applying the accepted FACT must still send nothing to the draining peer")
 
     def test_removed_by_third_party_cannot_then_remove_someone_else(self) -> None:
         """G1 regression: X removed by Z must never be able to remove anyone else, even though
@@ -1128,9 +1221,16 @@ class OverrideAlertTestCase(unittest.TestCase):
         def a_alerted() -> bool:
             return any(rec["event"] == "team_op_overridden" for rec in self.a.ctx.audit.tail(200))
 
+        def a_alert_filed() -> bool:
+            return any(al["alert"] == "team_op_overridden" for al in self.a.ctx.audit.alerts(200))
+
         wait_until(a_alerted, msg="A was never alerted that its edit was overridden")
         self.assertFalse(any(rec["event"] == "team_op_overridden" for rec in self.b.ctx.audit.tail(200)),
                          "B (the winner) must not be alerted")
+        # ``Audit.record`` appends the audit-log record before the alerts file line: on a slow
+        # (CI) runner ``a_alerted()`` above can observe the record a moment before the alert line
+        # is durable, so wait for the alert itself too instead of assuming it is already there.
+        wait_until(a_alert_filed, msg="A's audit record landed but the alert line never followed")
         alerts = {al["alert"] for al in self.a.ctx.audit.alerts(200)}
         self.assertIn("team_op_overridden", alerts)
 
