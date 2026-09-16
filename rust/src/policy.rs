@@ -381,14 +381,9 @@ fn python_int_from_str(s: &str) -> Option<i64> {
 
 // --------------------------------------------------------------------- models
 
-// TODO(pystr): switch to `crate::pystr::is_space` once it lands (verified
-// equal to Python `str.isspace()` over all code points: Rust's
-// `char::is_whitespace()` -- the Unicode `White_Space` property -- already
-// covers everything Python's `str.isspace()` does except the four
-// bidirectional-class-`B`/`S` ASCII separators `\x1c`-`\x1f`, which Python
-// also treats as whitespace).
+/// Python `str.isspace()`.
 fn is_python_whitespace(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+    crate::pystr::is_space(c)
 }
 
 /// `str.strip()` with CPython's exact `str.isspace()` predicate (see
