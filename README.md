@@ -15,6 +15,7 @@ python3.12 -m zeropw.demo                                       # 원커맨드 �
 - [인증 중계와 보안 경계](docs/security-design.md)
 - [클라우드 개발 하네스](docs/harness.md)
 - [v1 프로토타입 구현 현황](docs/implementation.md)
+- [팀 공유: 서버 없는 환경 복제와 노드 간 동기화](docs/team-sync.md) — 리더 없는 P2P 커밋 전파. 설계 명세와 4단계(키·커밋·접기, 전송·동기화, 초대·제거·긴급 사실, 사건 공유·종단 시험) 구현. 구현 현황은 [v1 프로토타입 구현 현황](docs/implementation.md) §10 참고. Opus 리뷰 통과를 뜻하지 않는다
 - [실행 환경 침해 대응 설계와 구현 계획](docs/compromise-response.md) — 자동 봉쇄와 교체 안내 이메일. 합성 자격증명으로 시험한 프로토타입 구현 포함
 - [개정 반영 현황](docs/reviews/review-summary.md)
 - [제품 정의 PDF](output/pdf/zeropw-product-definition.pdf) — 2026-09-12 세션 연계 하네스 결정 전의 제품 설명 스냅샷. 현재 개발 운영 방식은 Markdown을 따른다.

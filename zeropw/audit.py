@@ -52,6 +52,11 @@ EVENTS = frozenset({
     "tools_unknown",
     "http_relay", "ssh_bind", "ssh_sign", "ssh_agent_refused", "run_start", "run_finish", "run_cancel",
     "backup", "restore", "restore_ack", "recover", "rotation", "unsupported", "auth_failed",
+    "team_commit_apply", "team_commit_rejected", "team_op_skipped", "team_op_overridden",
+    "team_handshake_failed", "team_session_open", "team_session_close",
+    "team_fact_apply", "team_fact_rejected", "team_sync_vector",
+    "team_share", "team_invite_create", "team_join", "team_member_add", "team_member_remove",
+    "team_dek_rotate", "team_compact", "team_incident_received",
     "incident_open", "incident_widen", "incident_close", "incident_notify",
 })
 
@@ -60,6 +65,7 @@ EXTRA_KEYS = frozenset({
     "exit_code", "program", "secret_id", "version", "grant", "principal", "digest", "state",
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
+    "author_seq", "op", "env_id", "commits", "role",
     "incident_id", "scope", "runtime", "rule", "tier",
 })
 
@@ -74,6 +80,9 @@ CREDENTIAL_EXPOSURE_REASONS = {
 FAILURE_ALERT_REASONS = {
     "upstream_tls_failed": "upstream TLS server identity could not be verified; request refused",
     "credential_unavailable": "the connection's credential is unavailable (revoked, retired or corrupt)",
+    "local_id_conflict": "a shared environment tried to derive a connection or secret id already used locally",
+    "member_removed_rotation_recommended": "a team member was removed; this environment's active "
+                                           "secrets should be rotated at the provider",
 }
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -183,6 +192,12 @@ class Audit:
         reason = record.get("reason")
         if record["event"] == "secret_reveal":
             self._alert("secret_reveal", record, "administrator revealed a single secret version")
+        if record["event"] == "team_incident_received":
+            self._alert("team_incident_received", record,
+                        "a shared environment received an incident summary; check rotation flags")
+        if record["event"] == "team_op_overridden":
+            self._alert("team_op_overridden", record,
+                        "a later commit from another device overrode this node's change to the same target")
         if record["event"] == "incident_open":
             self._alert("intrusion", record,
                         f"incident opened: scope={record.get('scope')} reason={reason or 'unknown'}")

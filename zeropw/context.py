@@ -51,6 +51,17 @@ class Config:
     handle_ttl_seconds: int = 900
     max_request_body_bytes: int = 8 * 1024 * 1024
     exec_timeout_seconds: float = 600.0
+    # Team sync (docs/team-sync.md section 6.6, section 14 item 1): ``None`` means "use the
+    # folded environment document's own settings.sync_interval_seconds"; tests override it to a
+    # short interval.  Session re-key age and dial backoff bounds are node-local operational
+    # knobs, not shared state, so they live here rather than in the environment document.
+    team_sync_interval_seconds: float | None = None
+    team_session_max_age_seconds: float = 600.0
+    team_dial_backoff: tuple[float, float] = (5.0, 300.0)
+    # Section 9's incident outbox retry (``TeamSync._poll_incident_outbox``): same shape as
+    # ``team_dial_backoff``, kept separate since redelivering a queued incident to an admin peer is
+    # a different concern from reconnecting a dropped session and tests vary them independently.
+    team_incident_retry_backoff: tuple[float, float] = (5.0, 300.0)
     # Overrides for zeropw.intrusion.DetectorConfig (docs/compromise-response.md §4.2): window
     # length, weak/strong thresholds, per-rule weak points, enumeration and burst parameters.
     # ``None`` (the default) means "use DetectorConfig's own defaults".

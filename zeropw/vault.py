@@ -190,10 +190,42 @@ class Vault:
         return {"nonce": _b64e(nonce), "ciphertext": _b64e(aead.encrypt(self._dek, nonce, value, self._aad(secret_id, version)))}
 
     def _decrypt(self, secret_id: str, version: int, entry: dict[str, Any]) -> bytes:
+        if entry.get("shared_env"):
+            return self._decrypt_shared(secret_id, entry)
         try:
             return aead.decrypt(self._dek, _b64d(entry["nonce"]), _b64d(entry["ciphertext"]), self._aad(secret_id, version))
         except (aead.AuthenticationError, KeyError, ValueError) as exc:
             raise StateError("secret_corrupt", secret_id) from exc
+
+    def _decrypt_shared(self, secret_id: str, entry: dict[str, Any]) -> bytes:
+        """Decrypt a team-sync shared-environment secret version (docs/team-sync.md sections 4.2, 6.5).
+
+        Shared secrets are encrypted under the environment DEK generation
+        that was active when the version was written, not the local vault
+        DEK.  The generation key was unwrapped once (``zeropw.team.fold``,
+        ``_derive_dek_generations``) and re-wrapped under this node's own
+        KMS at ``team/<env-id>/dek/<generation-id>.json``; it is looked up
+        again here on every decrypt rather than cached.
+        """
+        from .team import envelope  # lazy: avoid an import cycle (team builds on vault, not the reverse)
+
+        try:
+            env_id = str(entry["shared_env"])
+            generation_id = str(entry["generation"])
+            version_id = str(entry["version_id"])
+        except KeyError as exc:
+            raise StateError("secret_corrupt", secret_id) from exc
+        key = self._generation_key(env_id, generation_id)
+        try:
+            return envelope.decrypt_secret(key, env_id, secret_id, version_id, entry)
+        except InvalidInput as exc:
+            raise StateError("secret_corrupt", secret_id) from exc
+
+    def _generation_key(self, env_id: str, generation_id: str) -> bytes:
+        doc = self.state.read_json(f"team/{env_id}/dek/{generation_id}.json", None)
+        if not doc:
+            raise StateError("team_dek_generation_missing")
+        return self.kms.unwrap(WrappedKey.from_dict(doc))
 
     @staticmethod
     def _public_metadata(kind: str, value: bytes) -> dict[str, Any]:

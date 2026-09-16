@@ -34,6 +34,13 @@ python3.12 -m zeropw.demo                                       # 원커맨드 �
 | `zeropw/notify.py` | 교체 안내 이메일 렌더링과 `smtplib` 발송, 실패 시 재시도(§6) | 신뢰 프로세스 |
 | `zeropw/admin_cli.py` | 관리자 CLI (별도 신원, 패스프레이즈 재인증) | 관리자 |
 | `zeropw/fake_upstream.py`, `zeropw/demo.py` | 합성 토큰을 검증하는 시험용 외부 API와 원커맨드 데모 | 시험·시연 전용 |
+| `zeropw/crypto/x25519.py` | RFC 7748 X25519. 순수 Python, RFC 시험 벡터로 검증 | 신뢰 프로세스 |
+| `zeropw/team/identity.py`, `zeropw/team/envelope.py` | 기기 키(서명+합의)와 지문, 환경 DEK 세대 감싸기·풀기(HKDF+ChaCha20-Poly1305) | 신뢰 프로세스 |
+| `zeropw/team/commit.py`, `zeropw/team/fold.py` | 커밋 서명·검증·저장, 하이브리드 논리 시계, 전순서 접기와 노드 로컬 파생, 스냅샷 | 신뢰 프로세스 |
+| `zeropw/team/transport.py` | 전송 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(SIGMA류 핸드셰이크, 프레임) | 신뢰 프로세스 |
+| `zeropw/team/sync.py` | 세션 관리, VECTOR·COMMIT·FACT·PEERS·INCIDENT·INCIDENT_ACK 메시지 루프, 접기 적용, 사건 공유 발신·수신 | 신뢰 프로세스 |
+| `zeropw/team/membership.py` | 초대 생성·소진, 가입, 팀원 제거와 DEK 교체, `team share` | 신뢰 프로세스 |
+| `zeropw/admin_cli.py`의 `team *` 명령군, `serve --team-listen` | 팀 공유 CLI([팀 공유](team-sync.md) §12)와 팀 리스너 | 관리자 / 신뢰 프로세스 |
 
 에이전트 프로세스가 받는 것은 게이트웨이 URL과 자기 호출 토큰(`zpwc_...`)이다. `exec`로 실행되는 CLI는 여기에 더해 연결 핸들이 들어간 base URL(`.../h/zpw1....`) 또는 서명기 소켓 경로를 받는다. 이 중 어느 것도 금고 값이 아니다. 핸들은 호출 주체·연결·권한·정책 버전에 묶인 짧은 수명의 사용 권한이며, 유출되면 회수 전까지 허용 범위 안에서 사용될 수 있다. 이는 제품 문서가 말한 "허용된 사용 권한과 원본 자격증명은 다르다"는 구분 그대로다.
 
@@ -219,3 +226,36 @@ $ python3.12 -m zeropw.agent_cli list-connections
 ```
 
 위 흐름은 2026-09-14에 이 절의 명령을 그대로 쓰고 자리표시자와 상태 디렉터리 경로만 실제 값으로 바꿔 실행해 확인했고, 같은 흐름을 `tests/test_cli_e2e.py`가 별도 프로세스로 자동 시험한다. 전체 흐름을 한 번에 보려면 `python3.12 -m zeropw.demo`를 실행한다.
+
+## 10. 팀 공유 (docs/team-sync.md)
+
+작성일 2026-09-16. [팀 공유](team-sync.md) 명세의 4단계(§13) 모두 코드로 옮겼다. 이 절도 §1의 원칙 그대로 시험 통과 범위이며 Opus 리뷰 통과나 배포 준비를 뜻하지 않는다.
+
+### 10.1 구현한 것과 시험
+
+| 단계 | 구현 | 시험 |
+| --- | --- | --- |
+| 1 (§13 단계 1): 키·봉투·커밋·접기, 네트워크 없음 | `zeropw/crypto/x25519.py`, `zeropw/team/identity.py`, `zeropw/team/envelope.py`, `zeropw/team/commit.py`, `zeropw/team/fold.py` | `tests/test_team_envelope.py`, `tests/test_team_identity.py`, `tests/test_team_commit.py`, `tests/test_team_fold.py` |
+| 2 (§13 단계 2): 전송과 동기화 | `zeropw/team/transport.py`(인프로세스·TCP), `zeropw/team/sync.py`의 세션·VECTOR/COMMIT/FACT/PEERS 루프, `serve --team-listen` | `tests/test_team_transport.py`, `tests/test_team_sync.py` |
+| 3 (§13 단계 3): 초대·가입·제거, 긴급 사실, CLI | `zeropw/team/membership.py`, `zeropw/team/sync.py`의 `Fact`/`facts.jsonl`, `admin_cli.py`의 `team *`와 공유 환경의 `connection *`·`secret *`·`rotation *` | `tests/test_team_membership.py`, `tests/test_team_facts.py`, `tests/test_team_snapshot.py`(§7.3 압축), `tests/test_admin_cli.py::TeamCliTestCase` |
+| 4 (§13 단계 4): 사건 공유와 종단 시험 | `zeropw/team/sync.py`의 `send_incident`/`send_incident_for_all_envs`(`on_incident_open`)·`INCIDENT`/`INCIDENT_ACK`·`incident_outbox.jsonl`, `admin_cli.py`의 `team incidents`, §7.2 `team_op_overridden` 알림(`zeropw/team/fold.py`의 `overridden` 감지 + `sync.py`의 알림) | `tests/test_team_sync.py::IncidentSharingTestCase`(정제·서명·admin 전용 전달·ack 큐잉·재시도·교체 표시), `tests/test_team_sync.py::OverrideAlertTestCase`(진 쪽 1회 알림, 이긴 쪽 알림 없음), `tests/test_team_e2e.py`(별도 OS 프로세스 3개, §1 흐름 전체) |
+
+`team_op_overridden` 알림은 명세 §7.2에 있었으나 3단계까지 구현이 없었던 항목이라 이번에 `fold.py`(같은 대상에 대한 연속된 성공 연산 사이의 작성자 전환 감지)와 `sync.py`(이 기기가 진 경우만, 재접기마다 중복 없이 1회) 양쪽에 추가했다.
+
+### 10.2 사건 공유 (§9)
+
+`send_incident`는 요약을 `INCIDENT_ALLOWED_KEYS`(문자열·정수·문자열 목록만, 길이 제한, 제어 문자 없음)로 정제하고 `Fact`(종류 `incident`)로 서명해 `facts.jsonl`에 다른 사실처럼 남긴다. `incident_id`는 그대로 `team/<env-id>/incidents/<지문>-<사건 ID>.json` 경로의 일부가 되므로, 다른 필드보다 좁게 `version_id`·세대 ID와 같은 16진수 토큰 형식만 받는다(그 밖의 형식은 `sanitize_incident_summary`가 통째로 거부한다) — 자유 문자열을 그대로 받으면 `..`나 `/`가 든 값으로 경로를 벗어나는 구멍이 열리기 때문이다. 전달은 그 순간 세션이 열려 있는 admin 팀원에게만 하는 단발 메시지(`INCIDENT`)이며, 일반 `FACT`처럼 전체 메시로 재중계하지 않는다(admin에게만 전파한다는 §3.1/§9 그대로). 세션이 열려 있어도 유실될 수 있으므로 admin 하나가 `INCIDENT_ACK`(사실 해시)를 보낼 때까지 `team/<env-id>/incident_outbox.jsonl`에 남아 `poll()`이 지수 백오프로 재시도한다. 받은 admin 노드는 `team/<env-id>/incidents/<지문>-<사건 ID>.json`에 두고, 요약의 `secret_ids_mandatory`/`secret_ids_recommended`를 `team/<env-id>/rotation_flags.json`에 `rotation_required`/`rotation_recommended`로 남기며 `team_incident_received` 알림을 남긴다. admin이 아닌 노드는 조용히 무시한다(ack도 저장도 하지 않는다).
+
+`zeropw/incident.py`의 `open_incident`(침해 대응 기능)가 사건을 열 때 `ctx.team.send_incident_for_all_envs(summary_by_env)`를 부르는 배선은 이 저장소에 아직 없다. 그 기능은 `feature/compromise-response-plan` 브랜치에 있고 이 작업의 바탕인 `main`에는 없기 때문이다. 그 브랜치가 병합되면 `open_incident`에서 `getattr(ctx, "team", None)`이 있을 때 그 호출을 추가하면 된다. `send_incident_for_all_envs`는 그 호출부를 위해 미리 만든 훅이며 지금은 시험 말고는 호출하는 곳이 없다.
+
+`team incidents --env P/E`는 받은 사건 요약(값 없음)과 `rotation_flags.json`을 함께 보여 준다.
+
+### 10.3 남은 한계
+
+- **스냅샷 전송 없음.** §7.3의 압축(`team compact`)은 노드 로컬이며, 압축 뒤 처음 붙는 노드나 오래 떨어져 있던 노드에 스냅샷을 전송하는 메시지는 명세에도 이 구현에도 없다(§7.3 "스냅샷 전송 메시지는 이 명세에 없으며 후속 범위다"). 그런 노드는 지워진 커밋을 받지 못한다.
+- **LAN 멀티캐스트 발견 없음.** §6.4의 UDP 멀티캐스트 신호(`239.192.47.42:47420`)는 구현하지 않았다. 주소는 초대의 `--address`와 `team peers --add`로만 전달되며, `PEERS` 메시지로 이미 연결된 팀원 사이에서만 더 퍼진다.
+- **사건 발신 훅 배선 지연.** 위 §10.2대로 `zeropw/incident.py`가 병합되기 전까지 `send_incident_for_all_envs`는 실제 침해 대응 흐름에서 호출되지 않는다.
+- **LAN·VPN 안 직접 연결만.** NAT 통과, 공개 인터넷, 중계 서버는 없다(§11).
+- **모든 팀원 노드가 환경 DEK를 받는다.** admin/user 구분은 정책적 통제이지 암호학적 통제가 아니다(§10). user 역할 팀원도 자기 기기에서 값을 꺼낼 수 있다.
+- **`INCIDENT`는 중계하지 않는다.** 명세 §6.3의 메시지 표가 `INCIDENT`를 "노드 → admin 노드"로만 적어, 이 구현은 admin과 직접 세션이 없는 노드의 사건 요약을 전달하지 못한다(재시도 큐는 세션이 나중에 열리는 경우만 돕는다). 팀 규모가 작고 전체 연결 그래프를 가정하는 §6.4의 전제 안에서는 대개 문제가 되지 않는다.
+- **`team_op_overridden`은 연결 갱신·자격증명 전환, 팀원 역할 변경, 비밀 활성화 대상만 본다.** 생성·비활성화·폐기·제거처럼 그 자체로 긴급 사실이 되거나 재사용을 막는 연산은 "같은 대상의 뒤엣것이 이긴다"는 경합이 성립하지 않으므로 대상에서 뺐다(§7.2 참고).
