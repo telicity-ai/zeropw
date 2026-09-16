@@ -31,6 +31,8 @@ pub mod signer;
 
 pub mod fake_upstream;
 
+pub mod team;
+
 #[cfg(test)]
 pub(crate) mod oracle;
 

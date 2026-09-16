@@ -12,15 +12,16 @@ and its tests.
 | Work unit | Rust files | Python sources | Python tests to port |
 | --- | --- | --- | --- |
 | A foundation | `pyjson.rs`, `store.rs`, `projects.rs`, `audit.rs`, `handles.rs` | `json` usage, `store.py`, `projects.py`, `audit.py`, `handles.py` | `test_core_audit_handles.py`, store/projects cases elsewhere |
-| B crypto+kms | `crypto/chacha20poly1305.rs`, `crypto/ed25519.rs`, `kms.rs` | `crypto/*.py`, `kms.py` | `test_crypto_chacha20poly1305.py`, `test_crypto_ed25519.py`, kms cases in `test_core_vault.py` |
+| B crypto+kms | `crypto/chacha20poly1305.rs`, `crypto/ed25519.rs`, `crypto/x25519.rs`, `kms.rs` | `crypto/*.py`, `kms.py` | `test_crypto_chacha20poly1305.py`, `test_crypto_ed25519.py`, `test_x25519.py`, kms cases in `test_core_vault.py` |
 | C sshwire | `sshwire.rs` | `sshwire.py` | `test_sshwire.py` |
 | D policy | `policy.rs` | `policy.py` | `test_core_policy.py` |
 | E vault+context | `vault.rs`, `context.rs` | `vault.py`, `context.py` | `test_core_vault.py` |
 | F gateway | `gateway.rs`, `fake_upstream.rs` | `gateway.py`, `fake_upstream.py` | `test_gateway.py`, `test_fake_upstream.py` |
 | G signer | `signer.rs` | `signer.py` | `test_signer.py` |
+| H team data | `team/{identity,envelope,commit,fold,humanview}.rs` | `team/identity.py`, `envelope.py`, `commit.py`, `fold.py`, `humanview.py` | `test_team_identity.py`, `test_team_envelope.py`, `test_team_commit.py`, `test_team_fold.py`, `test_team_facts.py` (data-layer cases) |
 
 Not in this half: `runs`, `tools`, `server`, `incident`, `intrusion`, `notify`, `admin_cli`, `agent_cli`,
-`demo`. Where an in-scope Python module lazily imports one of those, port the in-scope behaviour and
+`demo`, `team/transport`, `team/sync`, `team/membership`. Where an in-scope Python module lazily imports one of those, port the in-scope behaviour and
 leave a `// SECOND-HALF: <what>` note at the seam; do not invent the missing module.
 
 Shared contract already in place (do not rewrite): `errors.rs`, `secret.rs`, `clock.rs`, `oracle.rs`.
