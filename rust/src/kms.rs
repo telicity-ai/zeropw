@@ -15,7 +15,7 @@ use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 
 use crate::crypto::chacha20poly1305 as aead;
 use crate::errors::{Error, ErrorClass, Result};
@@ -95,51 +95,105 @@ impl WrappedKey {
 /// Port of Python's `str()` applied to a parsed JSON value, as
 /// `WrappedKey.from_dict` does for `key_id` (`key_id=str(value["key_id"])`).
 ///
-/// Scalars match Python exactly: a string passes through unchanged; an
-/// integer's decimal digits (`Value::Number::as_str()` is already that,
-/// since `pyjson` parses with `arbitrary_precision`); a float through
-/// [`python_float_repr`] (`str(float)` and `repr(float)` are the same
-/// function in Python); `true`/`false` as `"True"`/`"False"`; `null` as
-/// `"None"`.
+/// Scalars match Python exactly: a string passes through unchanged; numbers
+/// through [`python_number_str`] (see that function's doc comment for the
+/// integer/float split, including overflow); `true`/`false` as
+/// `"True"`/`"False"`; `null` as `"None"`.
 ///
 /// Arrays and objects fall back to [`python_repr`] (Python's `str()` of a
-/// container is its `repr()`). See that function's doc comment for the two
-/// known deviations recorded in `DEVIATIONS.md` (finding B-2): object key
-/// order, and simplified string-escaping.
+/// container is its `repr()`). See that function's doc comment for the
+/// (now narrowed) known deviation recorded in `DEVIATIONS.md` (finding B-2).
 fn python_str(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::Null => "None".to_string(),
-        Value::Number(n) => {
-            if n.is_f64() {
-                python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
+        Value::Number(n) => python_number_str(n),
         Value::Array(_) | Value::Object(_) => python_repr(value),
     }
+}
+
+/// Python `str()`/`repr()` of a single JSON number token (`str()` and
+/// `repr()` agree for both `int` and `float` in Python). Used by
+/// [`python_str`] directly, and -- through that function's scalar fallback
+/// -- by [`python_repr`] for a number nested inside an array/object.
+///
+/// Classified by the raw literal text, exactly like
+/// `pyjson::reject_non_finite_numbers`/`write_number` do: a token
+/// containing `.`, `e` or `E` is Python `float` syntax, anything else is
+/// Python `int` syntax. This deliberately does *not* branch on
+/// `Number::is_f64()`: under `arbitrary_precision`, `is_f64()` parses the
+/// token and checks `f64::is_finite()` itself, so it is already `false` for
+/// an overflowing float literal like `"1E400"` -- branching on it would
+/// send that token down the integer arm and echo the raw literal text back
+/// unchanged (`"1E400"`) instead of Python's `"inf"`.
+///
+/// This also does not assume the value came through [`crate::pyjson::loads`]
+/// (which, since work unit A's fix, now rejects an overflowing float
+/// literal and a lone-surrogate string escape outright): a
+/// `serde_json::Value` can still hold an overflowing `Number` if built
+/// another way (a hand-crafted `Value` in a test, or a JSON document
+/// written by something other than this crate), and `WrappedKey::from_dict`
+/// must coerce it exactly like Python's `str(value["key_id"])` would --
+/// CPython's `float()` silently overflows to `inf`/`-inf` rather than
+/// raising, for both `json.loads` (which calls `float()` as its
+/// `parse_float`) and a plain float literal in source.
+///
+/// - No `.`/`e`/`E`: a JSON integer token, already Python's canonical `int`
+///   decimal string (any size, thanks to `arbitrary_precision`).
+/// - Otherwise a float token, parsed as `f64`: finite -> [`python_float_repr`]
+///   (this also covers *underflow* to `0.0`/`-0.0` -- still finite, and
+///   exactly what Python's `float("1e-400")`/`float("-1e-400")` produce);
+///   non-finite -> `"inf"`/`"-inf"` by sign, matching
+///   `str(float("1E400"))` == `"inf"` / `str(float("-1E400"))` == `"-inf"`.
+fn python_number_str(n: &Number) -> String {
+    let raw = n.as_str();
+    if !is_float_literal(raw) {
+        return raw.to_string();
+    }
+    match raw.parse::<f64>() {
+        Ok(f) if f.is_finite() => python_float_repr(f),
+        Ok(f) if f.is_sign_negative() => "-inf".to_string(),
+        Ok(_) => "inf".to_string(),
+        // Unreachable for any token that actually matches the JSON number
+        // grammar (the only kind of input this is ever called with, per
+        // `pyjson`'s parser and every constructor `serde_json::Number`
+        // exposes); a plain fallback instead of `.expect(...)` so a
+        // hypothetical malformed token degrades to inert text rather than
+        // panicking.
+        Err(_) => raw.to_string(),
+    }
+}
+
+/// Whether a JSON number's raw literal text is Python `float` syntax
+/// (contains `.`, `e` or `E`) rather than plain `int` syntax. Mirrors
+/// `pyjson::is_float_literal`, which is private to that module and so is
+/// reimplemented here (the check itself is one line).
+fn is_float_literal(raw: &str) -> bool {
+    raw.contains(['.', 'e', 'E'])
 }
 
 /// Python's `repr()` of a parsed JSON value, used by [`python_str`] for
 /// arrays/objects (`str(list)`/`str(dict)` delegate to `repr`, and `repr` of
 /// each element/value in turn).
 ///
-/// Known deviations from CPython (finding B-2, `DEVIATIONS.md`): object keys
-/// are emitted in sorted order rather than Python's insertion order (this
-/// crate's `serde_json::Map` has no insertion-order feature available
-/// offline -- the same limitation `pyjson.rs` already documents), and string
-/// escaping only reproduces the common cases (backslash, the chosen quote
-/// character, `\n`/`\r`/`\t`, and other C0 control bytes as `\xHH`) rather
-/// than CPython's full `unicode_repr` (which also escapes non-printable
-/// non-ASCII categories). Neither gap is reachable through this crate's own
-/// `WrappedKey::to_dict`, which never emits `key_id` as anything but a
-/// string.
+/// Object keys are emitted in insertion order (`serde_json::Map`'s
+/// `preserve_order` feature), matching Python `dict.__repr__`'s insertion
+/// order exactly -- this closes the "object key order" half of finding B-2
+/// (`DEVIATIONS.md`), the same feature flag that already closed the
+/// equivalent gap in `pyjson.rs`. String escaping reuses
+/// [`crate::sshwire::py_repr_str`] (`pub(crate)`), which reproduces
+/// CPython's `unicode_repr` quote choice and escaping exactly except for
+/// its own documented residual: an approximation of `str.isprintable()`'s
+/// Unicode format (Cf) and private-use (Co) categories, which can only
+/// differ from CPython for an obscure unassigned or exotic codepoint (see
+/// `DEVIATIONS.md`'s `sshwire` `py_repr_str` row) -- the other half of
+/// finding B-2, now narrowed to precisely that residue rather than the
+/// previous much coarser "only the common cases" approximation.
 fn python_repr(value: &Value) -> String {
     match value {
-        Value::String(s) => python_str_repr(s),
+        Value::String(s) => crate::sshwire::py_repr_str(s),
         Value::Array(items) => {
             let parts: Vec<String> = items.iter().map(python_repr).collect();
             format!("[{}]", parts.join(", "))
@@ -147,42 +201,12 @@ fn python_repr(value: &Value) -> String {
         Value::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", python_str_repr(k), python_repr(v)))
+                .map(|(k, v)| format!("{}: {}", crate::sshwire::py_repr_str(k), python_repr(v)))
                 .collect();
             format!("{{{}}}", parts.join(", "))
         }
         other => python_str(other),
     }
-}
-
-/// `repr(str)`: single-quoted unless the string contains a `'` and no `"`,
-/// in which case double-quoted (CPython's `unicode_repr` quote choice).
-fn python_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for ch in s.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
 }
 
 /// Port of `zeropw.kms.Kms` (a Python `Protocol`, i.e. structural interface).
@@ -629,9 +653,24 @@ mod tests {
     /// Cross-checks [`python_str`]'s scalar coercion against
     /// `str(value["key_id"])` in the Python prototype for a spread of JSON
     /// scalar types, matching finding B-2's examples (`123 -> "123"`,
-    /// `None -> "None"`, `["x"] -> "['x']"`).
+    /// `None -> "None"`, `["x"] -> "['x']"`), plus (finding B-R2-1) a float
+    /// overflowing/underflowing to `inf`/`-inf`/`0.0`/`-0.0`, both bare and
+    /// nested inside an array/object, via `Value`s built directly with
+    /// [`number_literal`] rather than through [`crate::pyjson::loads`]
+    /// (which, since work unit A's fix, now rejects an overflowing literal
+    /// outright -- this crate's own parser can never hand `python_str` one,
+    /// but a hand-crafted or foreign-written JSON document still can).
+    ///
+    /// Every case round-trips through a real JSON file and Python's own
+    /// `json.loads` (via [`oracle_str_of_json_loads`]), not a hand-built
+    /// Python literal: `json.loads` calls `float()` as its `parse_float`,
+    /// so it silently overflows an out-of-range literal to `inf`/`-inf`
+    /// exactly like Python's own `float("1E400")` does, giving the oracle
+    /// value the same way loading a real corrupted/foreign-written vault
+    /// file would.
     #[test]
     fn oracle_key_id_coercion_matches_python() {
+        let dir = tempdir();
         let cases = [
             serde_json::json!(123),
             serde_json::json!(-7),
@@ -645,41 +684,99 @@ mod tests {
             serde_json::json!(["x"]),
             serde_json::json!(["a", 1, null, true]),
             serde_json::json!({"a": 1, "b": "two"}),
+            // B-R2-1: overflow -> inf/-inf, underflow -> 0.0/-0.0.
+            number_literal("1E400"),
+            number_literal("-1E400"),
+            number_literal("1E-400"),
+            number_literal("-1E-400"),
+            Value::Array(vec![
+                number_literal("1E400"),
+                Value::String("x".to_string()),
+            ]),
+            {
+                let mut m = Map::new();
+                m.insert("a".to_string(), number_literal("-1E400"));
+                m.insert("b".to_string(), Value::String("y".to_string()));
+                Value::Object(m)
+            },
         ];
-        for case in cases {
+        for (i, case) in cases.into_iter().enumerate() {
             let rust = python_str(&case);
-            let script = format!(
-                "value = {}\nprint(str(value))",
-                json_to_python_literal(&case)
-            );
-            let python = crate::oracle::python(&script);
-            assert_eq!(rust, python.trim_end_matches('\n'), "mismatch for {case:?}");
+            let python = oracle_str_of_json_loads(&dir, i, &case);
+            assert_eq!(rust, python, "mismatch for {case:?}");
         }
     }
 
-    /// JSON -> Python literal for arbitrary (not just plain string-keyed)
-    /// values, unlike [`python_dict_literal`] (which only needs to handle
-    /// `WrappedKey.to_dict()`'s always-string values, where JSON and Python
-    /// literal syntax coincide). Used only to build oracle test scripts.
-    fn json_to_python_literal(value: &Value) -> String {
-        match value {
-            Value::Null => "None".to_string(),
-            Value::Bool(true) => "True".to_string(),
-            Value::Bool(false) => "False".to_string(),
-            Value::Number(n) => n.to_string(),
-            Value::String(s) => format!("{s:?}"), // Rust's Debug quoting is valid Python too
-            Value::Array(items) => {
-                let parts: Vec<String> = items.iter().map(json_to_python_literal).collect();
-                format!("[{}]", parts.join(", "))
-            }
-            Value::Object(map) => {
-                let parts: Vec<String> = map
-                    .iter()
-                    .map(|(k, v)| format!("{k:?}: {}", json_to_python_literal(v)))
-                    .collect();
-                format!("{{{}}}", parts.join(", "))
-            }
+    /// Oracle differential for the array/object branch of [`python_repr`]
+    /// (finding B-2's other half, and PO follow-up B-R2-1): nested
+    /// lists/dicts whose string elements exercise `repr`'s quote-choice
+    /// switching, backslash escaping, C0 control bytes, and non-ASCII text,
+    /// plus a dict whose keys are deliberately out of sorted order --
+    /// insertion order must be preserved, matching Python's
+    /// `dict.__repr__` (now that `serde_json::Map`'s `preserve_order`
+    /// feature is enabled, closing that half of the finding).
+    #[test]
+    fn oracle_key_id_coercion_nested_containers_match_python() {
+        let dir = tempdir();
+        let cases = [
+            // Insertion order, not sorted order.
+            serde_json::json!({"z": 1, "a": 2, "m": 3}),
+            // Quote-choice switching: a string with `'` but no `"` picks
+            // double quotes; one with both picks single quotes and escapes
+            // the embedded `'`.
+            serde_json::json!(["it's", "quote\"here", "both ' and \" here"]),
+            // Backslash escaping.
+            serde_json::json!(["back\\slash", "c:\\path\\to\\file"]),
+            // C0 control bytes: the `\n`/`\r`/`\t` short forms and a
+            // generic `\xHH` control byte (BEL, 0x07).
+            serde_json::json!(["line\nbreak", "cr\rreturn", "tab\ttab", "bell\u{7}here"]),
+            // Non-ASCII text stays literal (printable), not escaped.
+            serde_json::json!(["caf\u{e9}", "\u{4e2d}\u{6587}", "\u{1f600}"]),
+            // Nested list/dict combining all of the above, with
+            // insertion-ordered keys.
+            serde_json::json!({
+                "z-key\"with'quotes": ["a'b", "c\\d", "e\nf", "caf\u{e9}"],
+                "a-key": {"inner-z": 1, "inner-a": ["x", "y"]},
+                "m-key": null,
+            }),
+        ];
+        for (i, case) in cases.into_iter().enumerate() {
+            let rust = python_str(&case);
+            let python = oracle_str_of_json_loads(&dir, i, &case);
+            assert_eq!(rust, python, "mismatch for {case:?}");
         }
+    }
+
+    /// Builds a `Value::Number` directly from a raw numeric token,
+    /// bypassing [`crate::pyjson::loads`] (which, since work unit A's fix,
+    /// rejects a literal that overflows to a non-finite `f64`). Exercises
+    /// [`python_number_str`]'s handling of a `Value::Number` built another
+    /// way -- this crate's own parser can never produce one, but a
+    /// hand-crafted or foreign-written JSON document still can.
+    fn number_literal(raw: &str) -> Value {
+        Value::Number(serde_json::from_str(raw).expect("valid JSON number literal"))
+    }
+
+    /// Writes `value` to `<dir>/case-<i>.json` as raw JSON text -- via
+    /// plain `serde_json::to_string`, not [`crate::pyjson::dumps`] (which
+    /// would itself reject a non-finite number) -- and returns Python's
+    /// `str(json.loads(...))` for it, trimmed of the trailing newline
+    /// `print` adds. Going through a real file sidesteps having to build a
+    /// Python source literal by hand for strings with control bytes or
+    /// exotic escapes, which no longer round-trips cleanly through Rust's
+    /// `Debug` quoting the way the plain scalar cases used to.
+    fn oracle_str_of_json_loads(dir: &tempfile::TempDir, i: usize, value: &Value) -> String {
+        let path = dir.path().join(format!("case-{i}.json"));
+        fs::write(&path, serde_json::to_string(value).expect("serialize")).unwrap();
+        let script = format!(
+            "import json\n\
+             from pathlib import Path\n\
+             value = json.loads(Path({path:?}).read_text(encoding='utf-8'))\n\
+             print(str(value))"
+        );
+        crate::oracle::python(&script)
+            .trim_end_matches('\n')
+            .to_string()
     }
 
     #[test]

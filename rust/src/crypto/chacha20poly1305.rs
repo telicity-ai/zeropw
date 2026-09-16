@@ -891,6 +891,15 @@ or to cite them other than as /\u{201c}work in progress./\u{201d}"
     /// pure-Python implementation going quadratic) has no equivalent
     /// failure mode here. The multi-block correctness check on a large
     /// message is kept.
+    ///
+    /// This is the only test in `PerformanceTests` on the Python side for
+    /// this module (`test_crypto_chacha20poly1305.py`'s `PerformanceTests`
+    /// has exactly one test method), so this one port is the complete
+    /// mapping for it; ed25519's own `PerformanceTests` test
+    /// (`test_sign_and_verify_under_50ms`) is a separate Python class in a
+    /// separate file and is ported in `crypto/ed25519.rs` instead (finding
+    /// B-R2-2) -- a small-payload chacha encrypt/decrypt loop does not
+    /// stand in for it.
     #[test]
     fn one_mebibyte_round_trips() {
         let key = vec![0x5au8; KEY_SIZE];
@@ -899,22 +908,6 @@ or to cite them other than as /\u{201c}work in progress./\u{201d}"
         let sealed = encrypt(&key, &nonce, &plaintext, b"aad").unwrap();
         assert_eq!(sealed.len(), plaintext.len() + TAG_SIZE);
         assert_eq!(decrypt(&key, &nonce, &sealed, b"aad").unwrap(), plaintext);
-    }
-
-    /// Port of `tests/test_crypto_ed25519.py`-style
-    /// `test_sign_and_verify_under_50ms`, minus the timing assertion
-    /// (finding B-6, same rationale as `one_mebibyte_round_trips` above):
-    /// exercises the same encrypt/verify-shaped call with a small payload,
-    /// without asserting on wall-clock time.
-    #[test]
-    fn encrypt_decrypt_small_payload_correctness() {
-        let key = vec![0x5bu8; KEY_SIZE];
-        let nonce = vec![0xb5u8; NONCE_SIZE];
-        let plaintext = b"performance budget check";
-        for _ in 0..5 {
-            let sealed = encrypt(&key, &nonce, plaintext, b"").unwrap();
-            assert_eq!(decrypt(&key, &nonce, &sealed, b"").unwrap(), plaintext);
-        }
     }
 
     #[test]

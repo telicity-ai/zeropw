@@ -708,6 +708,37 @@ for value in (sig, message, pk_canonical, pk_signbit):
         assert!(verify(&public_key, &message, &signature));
     }
 
+    /// Port of `tests/test_crypto_ed25519.py::PerformanceTests::
+    /// test_sign_and_verify_under_50ms` (finding B-R2-2: this had no port
+    /// anywhere in the crate -- a mislabelled test in
+    /// `crypto/chacha20poly1305.rs` claimed to be it but only exercised
+    /// AEAD encrypt/decrypt). Unlike `one_mebibyte_round_trips` in that
+    /// module (finding B-6, noted in its own doc comment: it drops the
+    /// Python timing assertion since `chacha20poly1305` is an audited,
+    /// non-Python-interpreted crate), this keeps the real `< 50ms` budget,
+    /// as this finding requires -- `ed25519-dalek` sign/verify are
+    /// microsecond-scale, so the budget is not flaky.
+    #[test]
+    fn sign_and_verify_under_50ms() {
+        let seed = generate_seed();
+        let public_key = public_key_from_seed(seed.expose()).unwrap();
+        let message = b"performance budget check";
+        let mut sign_times = Vec::with_capacity(5);
+        let mut verify_times = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            let signature = sign(seed.expose(), message).unwrap();
+            sign_times.push(start.elapsed());
+            let start = std::time::Instant::now();
+            let ok = verify(&public_key, message, &signature);
+            verify_times.push(start.elapsed());
+            assert!(ok);
+        }
+        let budget = std::time::Duration::from_millis(50);
+        assert!(sign_times.iter().min().unwrap() < &budget);
+        assert!(verify_times.iter().min().unwrap() < &budget);
+    }
+
     #[test]
     fn bad_seed_errors_do_not_leak_seed() {
         let short = [0x5au8; 31];
