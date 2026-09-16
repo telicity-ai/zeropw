@@ -68,6 +68,13 @@ Identical, unless listed in §3:
    cannot be represented as Rust `String`; Rust rejects them as malformed input (state file →
    `state_corrupt`, peer/agent message → that path's malformed-input error), recorded under §3.6.
 
+7. Coordinator ruling (2026-09-17): an input that can only exist if it was authenticated with a trusted
+   secret key (e.g. a handle payload with a valid HMAC that the issuer itself never emits) may be handled
+   more strictly than Python — rejected with the error that path already uses for malformed input — as
+   long as every value the issuer *does* emit behaves identically. Record each such case in
+   `DEVIATIONS.md` citing §3.7. This never applies to input an agent, peer or file can supply without the
+   key.
+
 Anything else that differs must be recorded in `DEVIATIONS.md` (module, Python behaviour, Rust
 behaviour, why). An unrecorded difference is a defect.
 
