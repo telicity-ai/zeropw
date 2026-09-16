@@ -1102,6 +1102,7 @@ name = "zeropw"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chacha20",
  "chacha20poly1305",
  "ed25519-dalek",
  "getrandom 0.2.17",
@@ -1109,6 +1110,7 @@ dependencies = [
  "hmac",
  "libc",
  "percent-encoding",
+ "poly1305",
  "rand",
  "rcgen",
  "regex",
@@ -1122,6 +1124,7 @@ dependencies = [
  "sha2",
  "subtle",
  "tempfile",
+ "typenum",
  "uuid",
  "zeroize",
 ]
