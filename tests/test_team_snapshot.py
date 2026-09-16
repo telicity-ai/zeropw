@@ -7,6 +7,7 @@ and a fresh fold from snapshot + remaining commits equalling the full pre-compac
 from __future__ import annotations
 
 import json
+import contextlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,12 +24,30 @@ from tests.leakcheck import find_secret_in_tree
 DAY_MS = 24 * 3600 * 1000
 
 
+@contextlib.contextmanager
+def _stopped_tempdir(testcase):
+    """A temporary directory that is removed only AFTER the test's registered cleanups ran.
+
+    ``with tempfile.TemporaryDirectory()`` removes the tree when the block exits, which is
+    before ``addCleanup``-registered ``TeamSync.stop`` calls run; a poll or session thread
+    can then still be writing under the state directory and ``rmtree`` fails with
+    "Directory not empty" (seen in CI on Linux).  Running ``doCleanups`` first stops every
+    thread and closes every socket before the directory goes away.
+    """
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        yield tmp.name
+    finally:
+        testcase.doCleanups()
+        tmp.cleanup()
+
+
 class SnapshotIntervalTestCase(unittest.TestCase):
     def test_auto_snapshot_every_n_commits(self) -> None:
         original = S.SNAPSHOT_INTERVAL_COMMITS
         S.SNAPSHOT_INTERVAL_COMMITS = 3
         try:
-            with tempfile.TemporaryDirectory() as tmp:
+            with _stopped_tempdir(self) as tmp:
                 ctx = Context.initialize(Path(tmp) / "state", "admin-pass-1", "recovery-pass-1", Config())
                 owner = DeviceKey.create(ctx.state, ctx.kms)
                 env_id = C.new_env_id(owner.fingerprint)

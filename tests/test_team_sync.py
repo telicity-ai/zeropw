@@ -37,6 +37,24 @@ PYTHON_ = __import__("sys").executable
 _ADDR_SEQ = itertools.count()
 
 
+@contextlib.contextmanager
+def _stopped_tempdir(testcase):
+    """A temporary directory that is removed only AFTER the test's registered cleanups ran.
+
+    ``with tempfile.TemporaryDirectory()`` removes the tree when the block exits, which is
+    before ``addCleanup``-registered ``TeamSync.stop`` calls run; a poll or session thread
+    can then still be writing under the state directory and ``rmtree`` fails with
+    "Directory not empty" (seen in CI on Linux).  Running ``doCleanups`` first stops every
+    thread and closes every socket before the directory goes away.
+    """
+    tmp = tempfile.TemporaryDirectory()
+    try:
+        yield tmp.name
+    finally:
+        testcase.doCleanups()
+        tmp.cleanup()
+
+
 def _addr(prefix: str = "node") -> str:
     return f"{prefix}-{next(_ADDR_SEQ)}"
 
@@ -118,7 +136,7 @@ class TwoNodeConvergenceTestCase(unittest.TestCase):
     """Bidirectional catch-up between two ``Context``s (section 13 stage-2 required test)."""
 
     def _run(self, tcp: bool) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with _stopped_tempdir(self) as tmp:
             root = Path(tmp)
             a = _Node(root, "a", tcp=tcp, sync_interval=0.1)
             b = _Node(root, "b", tcp=tcp, sync_interval=0.1)
@@ -175,7 +193,7 @@ class ThreeNodeRelayTestCase(unittest.TestCase):
     """A and C, never directly peered, still converge because both talk to B."""
 
     def test_relay_through_middle_node(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with _stopped_tempdir(self) as tmp:
             root = Path(tmp)
             a = _Node(root, "a")
             b = _Node(root, "b")
@@ -224,7 +242,7 @@ class ConcurrentEditConvergenceTestCase(unittest.TestCase):
     converges all three nodes to the identical, deterministically-ordered document."""
 
     def test_offline_concurrent_edit_then_reconnect(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with _stopped_tempdir(self) as tmp:
             root = Path(tmp)
             a = _Node(root, "a")
             b = _Node(root, "b")
@@ -732,7 +750,7 @@ class WireCaptureTestCase(unittest.TestCase):
     bytes (handshake plaintext or post-handshake ciphertext)."""
 
     def test_no_secret_or_dek_on_the_wire(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with _stopped_tempdir(self) as tmp:
             root = Path(tmp)
             a = _Node(root, "a", tcp=True, sync_interval=0.1)
             b = _Node(root, "b", tcp=True, sync_interval=0.1)
@@ -801,7 +819,7 @@ class SessionRekeyTestCase(unittest.TestCase):
     small value instead of actually waiting)."""
 
     def test_old_session_is_closed_and_replaced(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with _stopped_tempdir(self) as tmp:
             root = Path(tmp)
             cfg = Config(team_sync_interval_seconds=0.1, team_dial_backoff=(0.05, 0.2),
                         team_session_max_age_seconds=0.3)
