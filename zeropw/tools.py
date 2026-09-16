@@ -233,6 +233,10 @@ def _run_id(payload: Mapping[str, Any]) -> str:
 def dispatch(ctx: Any, name: str, caller: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Route a tools API call.  Unknown keys in ``payload`` are ignored; wrong types are refused."""
     if not isinstance(name, str) or name not in TOOL_NAMES:
+        # The caller already authenticated (server.py); the tool name itself is agent-chosen
+        # free text and is never recorded (docs/compromise-response.md §4.2 "미제공 도구 호출").
+        if isinstance(caller, str) and caller:
+            ctx.audit.record("tools_unknown", caller=caller, result="denied", reason="tool_not_found")
         raise NotFound("tool_not_found")
     if not isinstance(payload, Mapping):
         raise InvalidInput("invalid_payload")

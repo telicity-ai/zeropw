@@ -94,6 +94,9 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib.parse import urlsplit
 
+from . import incident as I
+from . import intrusion as IN
+from . import notify as N
 from . import policy as P
 from .audit import ALERT_FILE, AUDIT_FILE
 from .context import HANDLE_KEY, Config, Context
@@ -404,7 +407,8 @@ def _grant_view(grant: P.Grant) -> dict[str, Any]:
 
 
 def _principal_view(principal: P.Principal) -> dict[str, Any]:
-    return {"id": principal.id, "status": principal.status, "created_at": principal.created_at}
+    return {"id": principal.id, "status": principal.status, "created_at": principal.created_at,
+            "runtime": principal.runtime}
 
 
 def _connection_view(connection: P.Connection) -> dict[str, Any]:
@@ -412,7 +416,8 @@ def _connection_view(connection: P.Connection) -> dict[str, Any]:
 
 
 def _control_view(ctx: Context) -> dict[str, Any]:
-    return {"stopped": ctx.policy.is_stopped(), "restore_pending": ctx.policy.restore_pending()}
+    return {"stopped": ctx.policy.is_stopped(), "restore_pending": ctx.policy.restore_pending(),
+            "incident_open": ctx.policy.open_incident_id()}
 
 
 # ------------------------------------------------------- team sync (docs/team-sync.md section 12)
@@ -848,9 +853,9 @@ def cmd_connection_disable(args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_principal_create(args: argparse.Namespace) -> dict[str, Any]:
     ctx = _open(args, mutating=True)
-    token = ctx.policy.create_principal(args.id)
-    _admin_record(ctx, "principal_create", result="ok", extra={"principal": args.id})
-    return {"id": args.id, "token": token,
+    token = ctx.policy.create_principal(args.id, args.runtime)
+    _admin_record(ctx, "principal_create", result="ok", extra={"principal": args.id, "runtime": args.runtime})
+    return {"id": args.id, "runtime": args.runtime, "token": token,
             "note": "shown once; only its hash is stored. Give it to the agent runtime, never to a vault."}
 
 
@@ -1076,6 +1081,73 @@ def cmd_recover(args: argparse.Namespace) -> dict[str, Any]:
         _record_auth_failure(ctx, exc.reason, state="recover")
         raise
     return {"kms_key_id": ctx.kms.key_id, "grants_revoked": revoked, "handles_invalidated": True}
+
+
+# -------------------------------------------------------------------- incidents
+def _require_admin_reauth(ctx: Context, state: str) -> None:
+    """``--scope all`` re-authenticates like ``recover`` / ``secret reveal``: a whole-vault action."""
+    passphrase = _passphrase(ADMIN_PASSPHRASE_ENV, "Administrator passphrase: ")
+    try:
+        ctx.admin.verify(passphrase)
+    except AuthFailed as exc:
+        _record_auth_failure(ctx, exc.reason, state=state)
+        raise
+
+
+def cmd_incident_declare(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    if args.scope == "all":
+        _require_admin_reauth(ctx, "incident_declare")
+    principals = [args.principal] if args.scope == "principal" else None
+    # Remember what was open (and at what scope) before the call, so the CLI can tell the
+    # admin whether this declare found an incident already open, and whether it had to widen
+    # it (open_incident() widens in place rather than silently keeping the narrower one).
+    existing_id = ctx.policy.open_incident_id()
+    existing_scope = None
+    if existing_id:
+        try:
+            existing_scope = I.get_incident(ctx, existing_id).scope
+        except NotFound:
+            existing_id = None
+    inc = I.open_incident(ctx, scope=args.scope, principals=principals, runtime=args.runtime, trigger="manual",
+                          detail=args.reason)
+    view = inc.to_dict()
+    if existing_id:
+        view["existing"] = True
+        view["widened"] = inc.scope != existing_scope
+    return view
+
+
+def cmd_incident_escalate(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    if args.scope == "all":
+        _require_admin_reauth(ctx, "incident_escalate")
+    inc = I.widen_incident(ctx, args.id, scope=args.scope, runtime=args.runtime)
+    return inc.to_dict()
+
+
+def cmd_incident_list(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    return {"incidents": [inc.to_dict() for inc in I.list_incidents(ctx)]}
+
+
+def cmd_incident_show(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args)
+    return I.get_incident(ctx, args.id).to_dict()
+
+
+def cmd_incident_close(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _open(args, mutating=True)
+    _require_admin_reauth(ctx, "incident_close")
+    inc = I.close_incident(ctx, args.id)
+    return inc.to_dict()
+
+
+def cmd_incident_notify_test(args: argparse.Namespace) -> dict[str, Any]:
+    """Send a short message through the configured SMTP path (docs/compromise-response.md
+    §6.1) without declaring an incident, so an operator can verify ``notify.json`` works."""
+    ctx = _open(args, mutating=True)
+    return N.send_test_message(ctx)
 
 
 def _read_log(ctx: Context, name: str, limit: int) -> tuple[list[dict[str, Any]], int]:
@@ -1411,6 +1483,16 @@ def _enforce_withdrawn_permissions(ctx: Context, quiet: bool) -> None:
                     _notice(f"signer revocation check failed: {type(exc).__name__}")
 
 
+def _retry_notifications(ctx: Context, quiet: bool) -> None:
+    """Retry any ``pending`` incident email whose backoff has elapsed (docs/compromise-response.md
+    §6.1).  Wrapped like the other poll steps: a notification failure must never take ``serve`` down."""
+    try:
+        N.retry_pending(ctx, ctx.clock())
+    except Exception as exc:  # notify.py already swallows its own send failures; this guards the poll loop
+        if not quiet:
+            _notice(f"notification retry failed: {type(exc).__name__}")
+
+
 def _reload_handle_key(ctx: Context, current: bytes | None) -> bytes | None:
     """Pick up a handle key rotated by another process (restore, recover): old handles stop verifying."""
     try:
@@ -1484,6 +1566,7 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
         signer_state = "unavailable"
     if signer is not None:
         signer.install(ctx)
+    IN.install(ctx)  # stage 3: subscribe the intrusion detector to ctx.audit
 
     team_sync = _start_team_sync(ctx, team_listen) if team_listen is not None else None
     ctx.team = team_sync
@@ -1533,6 +1616,7 @@ def run_serve(state_dir: str | os.PathLike[str], listen: str = DEFAULT_LISTEN, q
                 except Exception as exc:
                     if not quiet:
                         _notice(f"team sync poll failed: {type(exc).__name__}")
+            _retry_notifications(ctx, quiet)
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -1670,6 +1754,9 @@ def build_parser() -> argparse.ArgumentParser:
     principal = _group(sub, "principal", "agent identities")
     p = _add(principal, "create", cmd_principal_create, "create a principal; prints its caller token once")
     p.add_argument("--id", required=True)
+    p.add_argument("--runtime", default="default",
+                   help="execution runtime this principal is bound to (default: default); a compromise-response "
+                        "'runtime' incident disables every principal sharing one")
     _add(principal, "list", cmd_principal_list, "list principals (no tokens, no hashes)")
     p = _add(principal, "disable", cmd_principal_disable, "disable a principal")
     p.add_argument("--id", required=True)
@@ -1712,6 +1799,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--in", dest="input", required=True, metavar="FILE")
     _add(sub, "restore-ack", cmd_restore_ack, "clear restore_pending after re-applying revocations (admin re-auth)")
     _add(sub, "recover", cmd_recover, "disaster recovery: new KMS key, grants revoked, handles rotated")
+
+    inc = _group(sub, "incident", "compromise-response incidents: lockdown and exposure assessment")
+    p = _add(inc, "declare", cmd_incident_declare, "open an incident: lock down the given scope (docs/compromise-response.md §4)")
+    p.add_argument("--scope", required=True, choices=I.SCOPES)
+    p.add_argument("--principal", help="required for --scope principal")
+    p.add_argument("--runtime", help="required for --scope runtime")
+    p.add_argument("--reason", help="admin note stored on the incident (bounded to 200 chars)")
+    p = _add(inc, "escalate", cmd_incident_escalate, "widen an open incident's scope (never narrows)")
+    p.add_argument("--id", required=True)
+    p.add_argument("--scope", required=True, choices=("runtime", "all"))
+    p.add_argument("--runtime", help="required when widening to --scope runtime")
+    _add(inc, "list", cmd_incident_list, "list incidents, newest last")
+    p = _add(inc, "show", cmd_incident_show, "show one incident, including its exposure assessment")
+    p.add_argument("--id", required=True)
+    p = _add(inc, "close", cmd_incident_close, "close an incident (admin re-auth; does not resume)")
+    p.add_argument("--id", required=True)
+    _add(inc, "notify-test", cmd_incident_notify_test,
+        "send a short test message through the configured SMTP path (docs/compromise-response.md §6.1)")
 
     audit = _group(sub, "audit", "audit log (administrator only)")
     p = _add(audit, "tail", cmd_audit_tail, "print the last records")

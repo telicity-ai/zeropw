@@ -42,8 +42,10 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from zeropw import notify as N
 from zeropw import sshwire
 from zeropw.fake_upstream import FakeUpstream
+from zeropw.runs import contains_sensitive, credential_patterns
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEMOCLI = REPO_ROOT / "examples" / "democli.py"
@@ -57,12 +59,39 @@ SERVE_STARTUP_SECONDS = 60.0
 try:  # the real-sshd helper lives next to the SSH end-to-end tests
     from tests import lifeline
     from tests.leakcheck import find_secret, find_secret_in_tree, ssh_key_material
+    from tests.test_notify import SMTP_PASSWORD, parse_message
     from tests.test_ssh_e2e import SSH, SSHD, SSH_KEYGEN, Sshd, assert_exec_children_held_no_key, write_ssh_inspector
+    from tests.fake_smtp import FakeSmtp
 except ImportError:  # pragma: no cover - discovery from another working directory
     import lifeline  # type: ignore[no-redef]
     from leakcheck import find_secret, find_secret_in_tree, ssh_key_material  # type: ignore[no-redef]
+    from test_notify import SMTP_PASSWORD, parse_message  # type: ignore[no-redef]
     from test_ssh_e2e import (SSH, SSHD, SSH_KEYGEN, Sshd, assert_exec_children_held_no_key,  # type: ignore[no-redef]
                               write_ssh_inspector)
+    from fake_smtp import FakeSmtp  # type: ignore[no-redef]
+
+# docs/compromise-response.md §9 stage 5: the attacker process gets only the two things the agent
+# runtime itself holds -- the gateway URL and its own caller token -- via environment variables,
+# exactly like zeropw.agent_cli.  Two calls to a tool ZeroPW never registered (any name works; the
+# tool name itself is never audited, docs/compromise-response.md §4.2) trip the detector's
+# ``unknown_tool`` strong rule at its threshold of 2 (zeropw/intrusion.py DEFAULT_STRONG_THRESHOLDS).
+_ATTACKER_SCRIPT = """\
+import os
+import urllib.error
+import urllib.request
+
+url = os.environ["ZEROPW_GATEWAY_URL"].rstrip("/") + "/v1/tools/reveal_secret"
+token = os.environ["ZEROPW_CALLER_TOKEN"]
+for _ in range(2):
+    request = urllib.request.Request(
+        url, data=b"{}", method="POST",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(request, timeout=10)
+    except urllib.error.HTTPError:
+        pass
+"""
 
 
 def _pid_alive(pid: int) -> bool:
@@ -84,7 +113,12 @@ def _readline_with_deadline(stream: Any, timeout: float) -> str | None:
     return box[0] if box else None
 
 
-class CliEndToEndTestCase(unittest.TestCase):
+class _CliProcessTestCase(unittest.TestCase):
+    """Shared process-driving helpers for a multi-OS-process end-to-end test: admin CLI, agent
+    CLI, and ``serve`` each their own subprocess.  Holds no ``test_`` method itself so subclasses
+    (``CliEndToEndTestCase`` below, ``CompromiseResponseEndToEndTestCase`` further down) each run
+    only their own tests, not each other's."""
+
     def setUp(self) -> None:
         # Cleanups are registered as each resource is created, so a failure anywhere still releases it.
         self.tmp = tempfile.TemporaryDirectory(prefix="zpwc-")
@@ -201,6 +235,8 @@ class CliEndToEndTestCase(unittest.TestCase):
             self.assertIsNone(find_secret(text, secrets), f"{who} output carried secret material")
         self.assertIsNone(find_secret_in_tree(self.state, secrets), "secret material in the state directory")
 
+
+class CliEndToEndTestCase(_CliProcessTestCase):
     # ------------------------------------------------------------ shared setup
     def admin_base(self) -> None:
         init = self.admin("init")
@@ -427,6 +463,199 @@ class CliEndToEndTestCase(unittest.TestCase):
         # Every exec child (two commands and three cancelled loops): run directory and environment hold no key.
         assert_exec_children_held_no_key(self, reports, private_pem, minimum_reports=5)
         self.assertEqual(list(self.agent_home.iterdir()), [], "the agent side wrote nothing to its home directory")
+
+
+class CompromiseResponseEndToEndTestCase(_CliProcessTestCase):
+    """docs/compromise-response.md §9 stage 5: the documented intrusion-response flow end to end,
+    every component its own OS process exactly as in ``CliEndToEndTestCase`` above -- admin CLI,
+    ``serve``, agent CLI, and here also the attacker (``ZEROPW_GATEWAY_URL``/``ZEROPW_CALLER_TOKEN``
+    only, like the agent) and a real SMTP receiver (``tests.fake_smtp.FakeSmtp``) for the
+    replacement-guidance email.  Covers: automatic detection and lockdown (§4), exposure assessment
+    (§5) reflected correctly into the email (§6), the ``resume``/``incident_open`` refusal, and the
+    documented recovery procedure (§7)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.smtp = FakeSmtp().start()
+        self.addCleanup(self.smtp.stop)
+
+    def write_notify_config(self) -> Path:
+        pw_path = self.root / "smtp.pass"
+        pw_path.write_text(SMTP_PASSWORD + "\n")
+        os.chmod(pw_path, 0o600)
+        notify_path = self.state / N.NOTIFY_FILE
+        notify_path.write_text(json.dumps({
+            "host": self.smtp.host, "port": self.smtp.port, "mode": "plain",
+            "sender": "zeropw@example.com", "recipients": ["admin@example.com"],
+            "username": "smtpuser", "password_file": str(pw_path),
+        }))
+        os.chmod(notify_path, 0o600)
+        return notify_path
+
+    def run_attacker(self) -> None:
+        script = self.root / "attacker.py"
+        script.write_text(_ATTACKER_SCRIPT)
+        # Only what the compromised agent runtime itself holds: the gateway URL and its own
+        # caller token, nothing else (no state directory, no admin passphrase).
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": str(self.agent_home),
+              "ZEROPW_GATEWAY_URL": self.url, "ZEROPW_CALLER_TOKEN": self.token}
+        proc = subprocess.run([PYTHON, str(script)], capture_output=True, cwd=REPO_ROOT, env=env, timeout=60)
+        out, err = proc.stdout.decode("utf-8", "replace"), proc.stderr.decode("utf-8", "replace")
+        self.transcript.append(("attacker", out + err))
+        self.assertEqual(proc.returncode, 0, f"attacker script failed: {err}")
+
+    def notification_sent(self, incident_id: str) -> dict[str, Any]:
+        def check() -> dict[str, Any] | None:
+            shown = self.admin("incident", "show", "--id", incident_id)
+            return shown if shown.get("notification", {}).get("status") == "sent" else None
+        shown = self.until(check, timeout=20)
+        self.assertIsNotNone(shown, "incident notification never reached status=sent")
+        return shown
+
+    def test_auto_lockdown_exposure_assessment_email_and_recovery(self) -> None:
+        init = self.admin("init")
+        self.assertEqual(set(init), {"state_dir", "kms_key_id"})
+        self.admin("project", "create", "demo")
+        # A dedicated runtime id, as docs/compromise-response.md §4.3 and §9's plan require
+        # (``principal create --runtime <id>``).
+        principal = self.admin("principal", "create", "--id", "agent-1b", "--runtime", "box-1")
+        self.token = principal["token"]
+        self.assertTrue(self.token.startswith("zpwc_"))
+
+        self.admin("secret", "put", "--id", "gh-token", "--kind", "api_key", "--project", "demo",
+                  "--environment", "dev", "--stdin", stdin=SYNTHETIC.encode())
+        self.admin("connection", "create-http", "--id", "gh", "--project", "demo", "--environment", "dev",
+                  "--service", "fake-code-host", "--secret-id", "gh-token",
+                  "--target", f"http://127.0.0.1:{self.upstream.port}", "--auth", "bearer",
+                  "--methods", "GET", "--path-prefixes", "/repos")
+        self.admin("grant", "create", "--principal", "agent-1b", "--connection", "gh", "--ttl", "1h",
+                  "--max-uses", "50")
+
+        jira_secret_value = "synthetic-jira-unused-0123456789"
+        self.admin("secret", "put", "--id", "jira-token", "--kind", "api_key", "--project", "demo",
+                  "--environment", "dev", "--stdin", stdin=jira_secret_value.encode())
+        self.admin("connection", "create-http", "--id", "jira", "--project", "demo", "--environment", "dev",
+                  "--service", "fake-jira", "--secret-id", "jira-token",
+                  "--target", f"http://127.0.0.1:{self.upstream.port}", "--auth", "bearer",
+                  "--methods", "GET", "--path-prefixes", "/repos")
+        # Granted but never used: the exposure assessment must call this one "recommended", not
+        # "mandatory" -- it is never touched below.
+        self.admin("grant", "create", "--principal", "agent-1b", "--connection", "jira", "--ttl", "1h")
+
+        self.write_notify_config()
+        self.start_serve()
+
+        # Normal agent use before the attack: one list, one request on the connection that will
+        # come out "mandatory" once the incident opens.
+        _code, listed = self.agent("list-connections")
+        self.assertEqual(sorted(c["id"] for c in listed["connections"]), ["gh", "jira"])
+        _code, repos = self.agent("request", "--connection", "gh", "--method", "GET", "--path", "/repos")
+        self.assertEqual(repos["status"], 200)
+
+        # The attack: two unknown-tool calls from a separate process holding only the gateway URL
+        # and this same caller token (a compromised/leaked-token scenario, docs/compromise-response.md
+        # §2's "유출된 토큰으로 밖에서 들어오는 외부 호출").  The detector runs synchronously inside
+        # ``serve`` (subscribed to ``Audit.record``), so by the time this call returns the incident,
+        # lockdown and email delivery attempt are already complete.
+        self.run_attacker()
+
+        incidents = self.admin("incident", "list")["incidents"]
+        open_incidents = [inc for inc in incidents if inc["status"] == "open"]
+        self.assertEqual(len(open_incidents), 1, incidents)
+        incident = open_incidents[0]
+        self.assertEqual(incident["scope"], "principal")
+        self.assertEqual(incident["rule"], "unknown_tool")
+        self.assertEqual(incident["trigger"], "auto")
+        self.assertEqual(incident["principals"], ["agent-1b"])
+        incident_id = incident["id"]
+
+        # The agent's own, otherwise-legitimate next calls are now refused: the token was disabled,
+        # not just the one grant.
+        code, refused = self.agent("list-connections", expect=None)
+        self.assertEqual((code != 0, refused["reason"]), (True, "principal_disabled"))
+        code, refused = self.agent("request", "--connection", "gh", "--method", "GET", "--path", "/repos",
+                                   expect=None)
+        self.assertEqual((code != 0, refused["reason"]), (True, "principal_disabled"))
+
+        # resume is refused while the incident is open.
+        resumed = self.admin("resume", expect=1)
+        self.assertEqual(resumed["reason"], "incident_open")
+
+        # The administrator sees the intrusion alert.
+        alerts = {a["alert"] for a in self.admin("alerts", "--limit", "100")["alerts"]}
+        self.assertIn("intrusion", alerts)
+
+        # The replacement-guidance email: exactly one message, sent through the configured
+        # (loopback, ``plain``-mode) SMTP path.
+        shown = self.notification_sent(incident_id)
+        self.assertEqual(shown["notification"]["status"], "sent")
+        self.assertEqual(len(self.smtp.messages), 1)
+        message = self.smtp.messages[0]
+        subject, body = parse_message(message["data"])
+        self.assertIn(incident_id, subject)
+        self.assertIn(incident_id, body)
+
+        mandatory_block, recommended_block = body.split("4. 권장 교체", 1)
+        self.assertIn("gh-token", mandatory_block)
+        self.assertNotIn("gh-token", recommended_block)
+        self.assertIn("jira-token", recommended_block)
+        self.assertNotIn("jira-token", mandatory_block)
+
+        self.assertIn("6. 복구 명령", body)
+        self.assertIn(f"incident show --id {incident_id}", body)
+        self.assertIn(f"incident close --id {incident_id}", body)
+        self.assertIn("principal create --runtime", body)
+        self.assertIn("grant create", body)
+        self.assertIn("resume", body)
+
+        for text in (subject, body):
+            self.assertNotIn("http://", text)
+            self.assertNotIn("https://", text)
+
+        secret_patterns: list[bytes] = []
+        for value in (SYNTHETIC.encode(), jira_secret_value.encode(), self.token.encode(),
+                     SMTP_PASSWORD.encode()):
+            secret_patterns.extend(credential_patterns(value))
+        self.assertFalse(contains_sensitive((subject + "\n" + body).encode("utf-8"), secret_patterns))
+
+        smtp_password_bytes = [SMTP_PASSWORD.encode()]
+        audit_path = self.state / "audit" / "audit.jsonl"
+        self.assertIsNone(find_secret(audit_path.read_bytes(), smtp_password_bytes))
+        alerts_path = self.state / "audit" / "alerts.jsonl"
+        if alerts_path.exists():
+            self.assertIsNone(find_secret(alerts_path.read_bytes(), smtp_password_bytes))
+        incident_path = self.state / "incidents" / f"{incident_id}.json"
+        self.assertIsNone(find_secret(incident_path.read_bytes(), smtp_password_bytes))
+
+        # Recovery (§7): close the incident (admin passphrase from the environment, as every
+        # ``self.admin`` call already supplies), create a fresh principal, resume.
+        closed = self.admin("incident", "close", "--id", incident_id)
+        self.assertEqual(closed["status"], "closed")
+
+        new_principal = self.admin("principal", "create", "--id", "agent-2", "--runtime", "box-1")
+        new_token = new_principal["token"]
+        self.admin("grant", "create", "--principal", "agent-2", "--connection", "gh", "--ttl", "1h")
+
+        resumed_ok = self.admin("resume")
+        self.assertEqual(resumed_ok["incident_open"], None)
+        self.assertFalse(resumed_ok["stopped"])
+
+        old_token = self.token
+        self.token = new_token
+        _code, ok_request = self.agent("request", "--connection", "gh", "--method", "GET", "--path", "/repos")
+        self.assertEqual(ok_request["status"], 200)
+
+        self.token = old_token
+        code, still_refused = self.agent("request", "--connection", "gh", "--method", "GET", "--path", "/repos",
+                                         expect=None)
+        self.assertEqual((code != 0, still_refused["reason"]), (True, "principal_disabled"))
+        self.token = new_token
+
+        code, serve_output = self.stop_serve()
+        self.assertEqual(code, 0, serve_output)
+        self.assertIsNone(find_secret(serve_output, smtp_password_bytes))
+        self.assert_no_secret_anywhere(None)
+        self.assertIsNone(find_secret_in_tree(self.state, smtp_password_bytes))
 
 
 if __name__ == "__main__":

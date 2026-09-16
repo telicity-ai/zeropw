@@ -62,6 +62,10 @@ class Config:
     # ``team_dial_backoff``, kept separate since redelivering a queued incident to an admin peer is
     # a different concern from reconnecting a dropped session and tests vary them independently.
     team_incident_retry_backoff: tuple[float, float] = (5.0, 300.0)
+    # Overrides for zeropw.intrusion.DetectorConfig (docs/compromise-response.md §4.2): window
+    # length, weak/strong thresholds, per-rule weak points, enumeration and burst parameters.
+    # ``None`` (the default) means "use DetectorConfig's own defaults".
+    intrusion: dict[str, Any] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -79,9 +83,10 @@ class Context:
         self.admin = admin
         self.config = config
         self.clock = clock
-        # Set by the tools / signer modules when a server is running.
+        # Set by the tools / signer / intrusion modules when a server is running.
         self.runs: Any = None
         self.signer_manager: Any = None
+        self.intrusion: Any = None
         # Temporary directories this context created for run_dir / socket_dir (removed by close()).
         self._owned_dirs: list[Path] = []
 

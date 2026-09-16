@@ -16,6 +16,12 @@ Design rules (docs/security-design.md §6):
   (TLS server identity, unavailable credential), use under revoked/stale/
   stopped policy, and repeated denials -- counted per caller, and per event
   and reason for unauthenticated requests such as forged handles.
+* ``subscribe(listener)`` (docs/compromise-response.md §4.1, stage 3) lets a
+  trusted in-process component -- the intrusion detector -- observe every
+  record synchronously, right after it is persisted and after ``_maybe_alert``
+  has run.  A listener never sees a record before it is durable.  A listener
+  exception is swallowed (never breaks ``record`` for its caller) and counted
+  on ``listener_errors`` for diagnostics.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import json
 import re
 import time
 from collections import deque
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .errors import AuditUnavailable, InvalidInput
 from .store import StateDir, iso
@@ -43,6 +49,7 @@ EVENTS = frozenset({
     "grant_create", "grant_revoke", "grant_regrant", "grant_stale",
     "stop_all", "resume", "approval_request", "approval_grant", "approval_consume",
     "handle_issue", "tools_list_connections", "tools_request", "tools_exec", "tools_status", "tools_cancel",
+    "tools_unknown",
     "http_relay", "ssh_bind", "ssh_sign", "ssh_agent_refused", "run_start", "run_finish", "run_cancel",
     "backup", "restore", "restore_ack", "recover", "rotation", "unsupported", "auth_failed",
     "team_commit_apply", "team_commit_rejected", "team_op_skipped", "team_op_overridden",
@@ -50,6 +57,7 @@ EVENTS = frozenset({
     "team_fact_apply", "team_fact_rejected", "team_sync_vector",
     "team_share", "team_invite_create", "team_join", "team_member_add", "team_member_remove",
     "team_dek_rotate", "team_compact", "team_incident_received",
+    "incident_open", "incident_widen", "incident_close", "incident_notify",
 })
 
 EXTRA_KEYS = frozenset({
@@ -58,6 +66,7 @@ EXTRA_KEYS = frozenset({
     "kind", "detail", "message_type", "extension", "scheme", "project", "environment", "service",
     "backup_id", "reviewed_sha", "run_state", "uses", "max_uses", "expires_at", "reason_code",
     "author_seq", "op", "env_id", "commits", "role",
+    "incident_id", "scope", "runtime", "rule", "tier",
 })
 
 # Anomalies that mean a credential or handle nearly left the trusted boundary (alerted every time).
@@ -101,6 +110,22 @@ class Audit:
         self.state = state
         self.clock = clock
         self._recent_denials: dict[str, deque] = {}
+        self._listeners: list[Callable[[dict[str, Any]], None]] = []
+        self.listener_errors = 0
+
+    # ------------------------------------------------------------ subscribe
+    def subscribe(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """Register a listener called synchronously at the end of every ``record`` call,
+        after the line is durable.  Exceptions from a listener are swallowed here so a
+        detection bug can never take down the audit log itself."""
+        self._listeners.append(listener)
+
+    def _notify_listeners(self, record: dict[str, Any]) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(record)
+            except Exception:
+                self.listener_errors += 1
 
     # ---------------------------------------------------------------- record
     def record(self, event: str, *, caller: str | None = None, connection: str | None = None,
@@ -136,6 +161,7 @@ class Audit:
         except Exception as exc:  # any failure to persist must stop the caller
             raise AuditUnavailable("audit_write_failed") from exc
         self._maybe_alert(record)
+        self._notify_listeners(record)
         return record
 
     def require_writable(self) -> None:
@@ -172,6 +198,11 @@ class Audit:
         if record["event"] == "team_op_overridden":
             self._alert("team_op_overridden", record,
                         "a later commit from another device overrode this node's change to the same target")
+        if record["event"] == "incident_open":
+            self._alert("intrusion", record,
+                        f"incident opened: scope={record.get('scope')} reason={reason or 'unknown'}")
+        if record["event"] == "incident_widen":
+            self._alert("intrusion", record, f"incident widened to scope={record.get('scope')}")
         if reason == "credential_reflection_blocked":
             self._alert("credential_reflection", record, "upstream response reflected the credential; blocked")
         if reason in CREDENTIAL_EXPOSURE_REASONS:
@@ -198,6 +229,20 @@ class Audit:
     def tail(self, limit: int = 50) -> list[dict[str, Any]]:
         lines = [l for l in self.state.read_lines(AUDIT_FILE, None) if l]
         return [json.loads(line) for line in lines[-limit:]]
+
+    def iter_records(self) -> Iterator[dict[str, Any]]:
+        """Every parsed record in the log, in order.  Unlike ``tail`` this is not capped:
+        used by the compromise-response exposure assessment, which must see the whole
+        history from a principal's token creation onward.  Unparseable lines are skipped."""
+        for line in self.state.read_lines(AUDIT_FILE, None):
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                yield record
 
     def alerts(self, limit: int = 50) -> list[dict[str, Any]]:
         lines = [l for l in self.state.read_lines(ALERT_FILE, None) if l]
