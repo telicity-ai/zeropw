@@ -15,12 +15,12 @@ use std::io::Write as _;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Map, Value};
 
 use crate::crypto::chacha20poly1305 as aead;
 use crate::errors::{Error, ErrorClass, Result};
+use crate::pybase64;
+use crate::pyjson::python_float_repr;
 use crate::secret::SecretBytes;
 
 /// `zeropw.kms.MASTER_KEY_SIZE`.
@@ -51,10 +51,13 @@ impl WrappedKey {
     pub fn to_dict(&self) -> Value {
         let mut map = Map::new();
         map.insert("key_id".into(), Value::String(self.key_id.clone()));
-        map.insert("nonce".into(), Value::String(BASE64.encode(&self.nonce)));
+        map.insert(
+            "nonce".into(),
+            Value::String(pybase64::b64encode(&self.nonce)),
+        );
         map.insert(
             "ciphertext".into(),
-            Value::String(BASE64.encode(&self.ciphertext)),
+            Value::String(pybase64::b64encode(&self.ciphertext)),
         );
         Value::Object(map)
     }
@@ -62,12 +65,23 @@ impl WrappedKey {
     /// Port of `WrappedKey.from_dict`. Any missing field, wrong type or
     /// invalid base64 becomes `StateError("wrapped_key_malformed")`, exactly
     /// as Python maps `KeyError | TypeError | ValueError` there.
+    ///
+    /// `key_id` is coerced with Python's `str()`, not required to already be
+    /// a JSON string: `str(123) == "123"`, `str(None) == "None"`,
+    /// `str(1.5) == "1.5"`, `str(True) == "True"`. `nonce`/`ciphertext` are
+    /// not coerced -- Python's `base64.b64decode` itself requires a `str` or
+    /// bytes-like value (`TypeError` otherwise, caught the same way as a bad
+    /// decode), so they must already be JSON strings. Base64 decoding uses
+    /// [`pybase64::b64decode`], matching Python's lenient
+    /// (`validate=False`) decoder (finding B-2): embedded whitespace,
+    /// non-alphabet junk and irregular padding are tolerated rather than
+    /// rejected.
     pub fn from_dict(value: &Value) -> Result<Self> {
         (|| -> Option<Self> {
             let obj = value.as_object()?;
-            let key_id = obj.get("key_id")?.as_str()?.to_string();
-            let nonce = BASE64.decode(obj.get("nonce")?.as_str()?).ok()?;
-            let ciphertext = BASE64.decode(obj.get("ciphertext")?.as_str()?).ok()?;
+            let key_id = python_str(obj.get("key_id")?);
+            let nonce = pybase64::b64decode(obj.get("nonce")?.as_str()?).ok()?;
+            let ciphertext = pybase64::b64decode(obj.get("ciphertext")?.as_str()?).ok()?;
             Some(WrappedKey {
                 key_id,
                 nonce,
@@ -76,6 +90,99 @@ impl WrappedKey {
         })()
         .ok_or_else(|| Error::state("wrapped_key_malformed"))
     }
+}
+
+/// Port of Python's `str()` applied to a parsed JSON value, as
+/// `WrappedKey.from_dict` does for `key_id` (`key_id=str(value["key_id"])`).
+///
+/// Scalars match Python exactly: a string passes through unchanged; an
+/// integer's decimal digits (`Value::Number::as_str()` is already that,
+/// since `pyjson` parses with `arbitrary_precision`); a float through
+/// [`python_float_repr`] (`str(float)` and `repr(float)` are the same
+/// function in Python); `true`/`false` as `"True"`/`"False"`; `null` as
+/// `"None"`.
+///
+/// Arrays and objects fall back to [`python_repr`] (Python's `str()` of a
+/// container is its `repr()`). See that function's doc comment for the two
+/// known deviations recorded in `DEVIATIONS.md` (finding B-2): object key
+/// order, and simplified string-escaping.
+fn python_str(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Null => "None".to_string(),
+        Value::Number(n) => {
+            if n.is_f64() {
+                python_float_repr(n.as_f64().unwrap_or(0.0))
+            } else {
+                n.as_str().to_string()
+            }
+        }
+        Value::Array(_) | Value::Object(_) => python_repr(value),
+    }
+}
+
+/// Python's `repr()` of a parsed JSON value, used by [`python_str`] for
+/// arrays/objects (`str(list)`/`str(dict)` delegate to `repr`, and `repr` of
+/// each element/value in turn).
+///
+/// Known deviations from CPython (finding B-2, `DEVIATIONS.md`): object keys
+/// are emitted in sorted order rather than Python's insertion order (this
+/// crate's `serde_json::Map` has no insertion-order feature available
+/// offline -- the same limitation `pyjson.rs` already documents), and string
+/// escaping only reproduces the common cases (backslash, the chosen quote
+/// character, `\n`/`\r`/`\t`, and other C0 control bytes as `\xHH`) rather
+/// than CPython's full `unicode_repr` (which also escapes non-printable
+/// non-ASCII categories). Neither gap is reachable through this crate's own
+/// `WrappedKey::to_dict`, which never emits `key_id` as anything but a
+/// string.
+fn python_repr(value: &Value) -> String {
+    match value {
+        Value::String(s) => python_str_repr(s),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(python_repr).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", python_str_repr(k), python_repr(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        other => python_str(other),
+    }
+}
+
+/// `repr(str)`: single-quoted unless the string contains a `'` and no `"`,
+/// in which case double-quoted (CPython's `unicode_repr` quote choice).
+fn python_str_repr(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
 }
 
 /// Port of `zeropw.kms.Kms` (a Python `Protocol`, i.e. structural interface).
@@ -92,6 +199,22 @@ pub trait Kms {
 /// `name` is `"KmsError"` rather than `"StateError"` (`type(exc).__name__`).
 fn kms_error(reason: &'static str, detail: impl Into<String>) -> Error {
     Error::subclass(ErrorClass::StateError, "KmsError", reason, detail)
+}
+
+/// `key_id.encode("ascii")`, checked explicitly. Python performs this
+/// implicitly at three call sites (`create`, `wrap`, `unwrap`) and lets a
+/// non-ASCII `key_id` raise an *unwrapped* `UnicodeEncodeError` there (not a
+/// `KmsError` -- see `DEVIATIONS.md` finding B-4 for the chosen `KmsError`
+/// shape used here instead, and for `create`'s additional behavioural
+/// difference: Python's failure happens after the file is already created
+/// on disk (0 bytes, via `os.open(..., O_CREAT | O_EXCL)`), where this
+/// checks first and writes nothing).
+fn require_ascii_key_id(key_id: &str) -> Result<()> {
+    if key_id.is_ascii() {
+        Ok(())
+    } else {
+        Err(kms_error("kms_key_id_not_ascii", key_id.to_string()))
+    }
 }
 
 /// Port of `zeropw.kms.LocalFileKms`: development KMS with a master key in a
@@ -131,6 +254,7 @@ impl LocalFileKms {
         if path.exists() {
             return Err(kms_error("kms_exists", path.display().to_string()));
         }
+        require_ascii_key_id(key_id)?;
         let mut master_bytes = [0u8; MASTER_KEY_SIZE];
         getrandom::getrandom(&mut master_bytes).expect("OS CSPRNG must be available");
         let master = SecretBytes::from_slice(&master_bytes);
@@ -148,7 +272,7 @@ impl LocalFileKms {
         let mut contents = Vec::with_capacity(key_id.len() + 1 + 44 + 1);
         contents.extend_from_slice(key_id.as_bytes());
         contents.push(b'\n');
-        contents.extend_from_slice(BASE64.encode(master.expose()).as_bytes());
+        contents.extend_from_slice(pybase64::b64encode(master.expose()).as_bytes());
         contents.push(b'\n');
         file.write_all(&contents)
             .map_err(|e| kms_error("kms_create_failed", e.to_string()))?;
@@ -161,7 +285,16 @@ impl LocalFileKms {
         LocalFileKms::create(path, DEFAULT_KEY_ID)
     }
 
-    /// Port of `LocalFileKms.load`.
+    /// Port of `LocalFileKms.load`. Python's `raw.split(b"\n")[:2]` splits on
+    /// every `\n` in the file and keeps the first two pieces -- equivalent
+    /// to taking the first two elements of a 3-way `splitn` here, including
+    /// leaving a trailing `\r` (from a CRLF line ending) attached to
+    /// whichever piece it was in, since only `\n` is a separator. Decoding
+    /// uses [`pybase64::b64decode_bytes`] (finding B-3): Python's decode
+    /// here runs on raw file `bytes`, not a `str`, so unlike
+    /// [`WrappedKey::from_dict`] there is no ASCII precheck, and it is
+    /// lenient the same way (a trailing `\r`, embedded whitespace or excess
+    /// padding on the master-key line is tolerated rather than rejected).
     pub fn load(path: &Path) -> Result<Self> {
         let raw =
             fs::read(path).map_err(|_| kms_error("kms_missing", path.display().to_string()))?;
@@ -178,8 +311,7 @@ impl LocalFileKms {
         }
         let key_id = String::from_utf8(key_id_line.to_vec())
             .map_err(|_| kms_error("kms_corrupt", path.display().to_string()))?;
-        let master_bytes = BASE64
-            .decode(master_line)
+        let master_bytes = pybase64::b64decode_bytes(master_line)
             .map_err(|_| kms_error("kms_corrupt", path.display().to_string()))?;
 
         LocalFileKms::new(path.to_path_buf(), key_id, SecretBytes::new(master_bytes))
@@ -199,6 +331,7 @@ impl Kms for LocalFileKms {
     }
 
     fn wrap(&self, data_key: &[u8]) -> Result<WrappedKey> {
+        require_ascii_key_id(&self.key_id)?;
         let mut nonce = [0u8; aead::NONCE_SIZE];
         getrandom::getrandom(&mut nonce).expect("OS CSPRNG must be available");
         // Sizes are internally guaranteed (master validated at construction,
@@ -221,6 +354,7 @@ impl Kms for LocalFileKms {
         if wrapped.key_id != self.key_id {
             return Err(kms_error("kms_key_id_mismatch", ""));
         }
+        require_ascii_key_id(&self.key_id)?;
         let plaintext = aead::decrypt(
             self.master.expose(),
             &wrapped.nonce,
@@ -449,5 +583,222 @@ mod tests {
         // Minimal JSON -> Python literal: valid Python syntax for the plain
         // string-keyed, string-valued dict `to_dict()` produces.
         serde_json::to_string(value).expect("serialize")
+    }
+
+    // --- B-2: WrappedKey.from_dict key_id coercion & lenient base64 -------
+
+    #[test]
+    fn from_dict_coerces_scalar_key_id_like_python_str() {
+        let base = |key_id: Value| serde_json::json!({"key_id": key_id, "nonce": "AAAA", "ciphertext": "AAAA"});
+        assert_eq!(
+            WrappedKey::from_dict(&base(serde_json::json!(123)))
+                .unwrap()
+                .key_id,
+            "123"
+        );
+        assert_eq!(
+            WrappedKey::from_dict(&base(Value::Null)).unwrap().key_id,
+            "None"
+        );
+        assert_eq!(
+            WrappedKey::from_dict(&base(serde_json::json!(true)))
+                .unwrap()
+                .key_id,
+            "True"
+        );
+        assert_eq!(
+            WrappedKey::from_dict(&base(serde_json::json!(false)))
+                .unwrap()
+                .key_id,
+            "False"
+        );
+        assert_eq!(
+            WrappedKey::from_dict(&base(serde_json::json!(1.5)))
+                .unwrap()
+                .key_id,
+            "1.5"
+        );
+        assert_eq!(
+            WrappedKey::from_dict(&base(serde_json::json!(["x"])))
+                .unwrap()
+                .key_id,
+            "['x']"
+        );
+    }
+
+    /// Cross-checks [`python_str`]'s scalar coercion against
+    /// `str(value["key_id"])` in the Python prototype for a spread of JSON
+    /// scalar types, matching finding B-2's examples (`123 -> "123"`,
+    /// `None -> "None"`, `["x"] -> "['x']"`).
+    #[test]
+    fn oracle_key_id_coercion_matches_python() {
+        let cases = [
+            serde_json::json!(123),
+            serde_json::json!(-7),
+            serde_json::json!(0),
+            Value::Null,
+            serde_json::json!(true),
+            serde_json::json!(false),
+            serde_json::json!(1.5),
+            serde_json::json!(-0.25),
+            serde_json::json!("already-a-string"),
+            serde_json::json!(["x"]),
+            serde_json::json!(["a", 1, null, true]),
+            serde_json::json!({"a": 1, "b": "two"}),
+        ];
+        for case in cases {
+            let rust = python_str(&case);
+            let script = format!(
+                "value = {}\nprint(str(value))",
+                json_to_python_literal(&case)
+            );
+            let python = crate::oracle::python(&script);
+            assert_eq!(rust, python.trim_end_matches('\n'), "mismatch for {case:?}");
+        }
+    }
+
+    /// JSON -> Python literal for arbitrary (not just plain string-keyed)
+    /// values, unlike [`python_dict_literal`] (which only needs to handle
+    /// `WrappedKey.to_dict()`'s always-string values, where JSON and Python
+    /// literal syntax coincide). Used only to build oracle test scripts.
+    fn json_to_python_literal(value: &Value) -> String {
+        match value {
+            Value::Null => "None".to_string(),
+            Value::Bool(true) => "True".to_string(),
+            Value::Bool(false) => "False".to_string(),
+            Value::Number(n) => n.to_string(),
+            Value::String(s) => format!("{s:?}"), // Rust's Debug quoting is valid Python too
+            Value::Array(items) => {
+                let parts: Vec<String> = items.iter().map(json_to_python_literal).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            Value::Object(map) => {
+                let parts: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| format!("{k:?}: {}", json_to_python_literal(v)))
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
+        }
+    }
+
+    #[test]
+    fn from_dict_lenient_base64_matches_finding_b2_examples() {
+        // "AB==" (non-canonical trailing bits) and embedded junk/whitespace
+        // that `base64` (strict) would reject but Python's default decoder
+        // accepts.
+        for nonce in ["AB==", "AA AA", "\nAAAA\n"] {
+            let value = serde_json::json!({"key_id": "k1", "nonce": nonce, "ciphertext": "AAAA"});
+            assert!(
+                WrappedKey::from_dict(&value).is_ok(),
+                "expected lenient accept for nonce={nonce:?}"
+            );
+        }
+    }
+
+    // --- B-3: LocalFileKms.load lenient base64 / CRLF -----------------------
+
+    #[test]
+    fn load_accepts_lenient_base64_and_crlf_like_python() {
+        let dir = tempdir();
+        let path = dir.path().join("lenient.key");
+        // A master line with embedded whitespace, which `base64` (strict)
+        // rejects but Python's `base64.b64decode` (non-strict) accepts by
+        // skipping it -- as long as the *decoded* bytes still amount to a
+        // valid 32-byte master key.
+        let master = [0x11u8; MASTER_KEY_SIZE];
+        let mut encoded = pybase64::b64encode(&master);
+        // Splice a space into the middle of the encoded master key; the
+        // lenient decoder must skip it and recover the same bytes.
+        let mid = encoded.len() / 2;
+        encoded.insert(mid, ' ');
+        fs::write(&path, format!("lenient-kms\n{encoded}\n")).unwrap();
+
+        let loaded = LocalFileKms::load(&path).unwrap();
+        assert_eq!(loaded.key_id(), "lenient-kms");
+    }
+
+    #[test]
+    fn load_crlf_key_id_line_keeps_trailing_cr_like_python() {
+        // Python's `raw.split(b"\n")[:2]` only splits on `\n`, so a CRLF
+        // line ending leaves the `\r` attached to the key_id piece --
+        // reproduced here byte-for-byte (see `LocalFileKms::load`'s doc
+        // comment) rather than trimmed away.
+        let dir = tempdir();
+        let path = dir.path().join("crlf.key");
+        let master = [0x22u8; MASTER_KEY_SIZE];
+        let encoded = pybase64::b64encode(&master);
+        fs::write(&path, format!("crlf-kms\r\n{encoded}\n")).unwrap();
+
+        let loaded = LocalFileKms::load(&path).unwrap();
+        assert_eq!(loaded.key_id(), "crlf-kms\r");
+    }
+
+    /// Oracle differential: a KMS file with a master line containing
+    /// embedded whitespace and excess padding, written directly (not via
+    /// `create`), must load identically in both implementations.
+    #[test]
+    fn oracle_load_lenient_base64_matches_python() {
+        let dir = tempdir();
+        let path = dir.path().join("oracle-lenient.key");
+        let master = [0x33u8; MASTER_KEY_SIZE];
+        let mut encoded = pybase64::b64encode(&master);
+        encoded.push_str("=="); // excess padding, tolerated non-strictly
+        fs::write(&path, format!("oracle-kms\n{encoded}\n")).unwrap();
+
+        let loaded = LocalFileKms::load(&path).unwrap();
+        assert_eq!(loaded.key_id(), "oracle-kms");
+
+        let script = format!(
+            "from pathlib import Path\n\
+             from zeropw.kms import LocalFileKms\n\
+             kms = LocalFileKms.load(Path({path:?}))\n\
+             print(kms.key_id)\n\
+             print(kms._master.hex())",
+            path = path,
+        );
+        let out = crate::oracle::python(&script);
+        let mut lines = out.lines();
+        assert_eq!(lines.next().unwrap(), "oracle-kms");
+        assert_eq!(lines.next().unwrap(), hex::encode(master));
+    }
+
+    // --- B-4: non-ASCII key_id rejected up front ---------------------------
+
+    #[test]
+    fn create_rejects_non_ascii_key_id_without_writing_anything() {
+        let dir = tempdir();
+        let path = dir.path().join("sub").join("master.key");
+        let err = LocalFileKms::create(&path, "caf\u{e9}").unwrap_err();
+        assert_eq!(err.name, "KmsError");
+        assert_eq!(err.reason, "kms_key_id_not_ascii");
+        assert!(!path.exists(), "no file should be written");
+        assert!(
+            !path.parent().unwrap().exists(),
+            "no directory should be created"
+        );
+    }
+
+    #[test]
+    fn wrap_rejects_non_ascii_key_id() {
+        // Bypass `create`'s own check to build a KMS with a non-ASCII
+        // key_id directly, the way Python's `__init__` allows (it never
+        // validates ASCII itself -- only `create`/`wrap`/`unwrap` do).
+        let bad =
+            LocalFileKms::new("x.key", "caf\u{e9}", SecretBytes::from_slice(&[0u8; 32])).unwrap();
+        let err = bad.wrap(b"data-key-32-bytes-aaaaaaaaaaaaaa").unwrap_err();
+        assert_eq!(err.name, "KmsError");
+        assert_eq!(err.reason, "kms_key_id_not_ascii");
+    }
+
+    #[test]
+    fn unwrap_rejects_non_ascii_key_id_after_key_id_match() {
+        let dir = tempdir();
+        let master = SecretBytes::from_slice(&[0u8; 32]);
+        let bad = LocalFileKms::new(dir.path().join("x.key"), "caf\u{e9}", master.clone()).unwrap();
+        let wrapped = WrappedKey::new("caf\u{e9}", vec![0u8; aead::NONCE_SIZE], vec![0u8; 16]);
+        let err = bad.unwrap(&wrapped).unwrap_err();
+        assert_eq!(err.name, "KmsError");
+        assert_eq!(err.reason, "kms_key_id_not_ascii");
     }
 }

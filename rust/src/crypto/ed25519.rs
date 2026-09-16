@@ -14,13 +14,22 @@
 //! and recomputes `R` and compares *compressed* points byte-for-byte, which
 //! (per that function's own doc comment) "does not accept non-canonically
 //! encoded R values" -- matching `zeropw`'s hand-written `_point_decode`
-//! rejecting `y >= p` and the `x == 0` / sign-bit-set encoding. Critically,
-//! plain `verify` does *not* reject small-order public keys or `R` values --
-//! only `verify_strict` adds that `is_small_order()` check -- which matches
-//! the Python docstring: "Small-order or mixed-order public keys and R
-//! values are not rejected beyond what the RFC requires". Using
+//! rejecting `y >= p` and the `x == 0` / sign-bit-set encoding for `R`.
+//! Critically, plain `verify` does *not* reject small-order public keys or
+//! `R` values -- only `verify_strict` adds that `is_small_order()` check --
+//! which matches the Python docstring: "Small-order or mixed-order public
+//! keys and R values are not rejected beyond what the RFC requires". Using
 //! `verify_strict` here would be *stricter* than Python and so would itself
 //! be an undocumented deviation; plain `verify` is the correct match.
+//!
+//! `VerifyingKey::from_bytes` (the public-key decode `verify` starts from)
+//! is a *different* story: unlike `R`, it is never checked against a
+//! recomputed value, so `curve25519-dalek`'s lenient `decompress` (which
+//! reduces `y` mod p and accepts `x == 0` with either sign bit) leaks
+//! straight through, accepting encodings `_point_decode` rejects. `verify`
+//! below adds an explicit canonical-encoding check (decompress, recompress,
+//! compare) to close that gap; see its doc comment and `DEVIATIONS.md`
+//! finding B-1.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
@@ -99,6 +108,22 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
     let Ok(verifying_key) = VerifyingKey::from_bytes(&public_key) else {
         return false;
     };
+    // Reject non-canonical public-key encodings. `VerifyingKey::from_bytes`
+    // stores the input bytes verbatim (`compressed: CompressedEdwardsY(*bytes)`)
+    // and merely checks the point decompresses (curve25519-dalek's
+    // `decompress` reduces `y` mod p and silently accepts `x == 0` with
+    // either sign bit), so it accepts encodings Python's `_point_decode`
+    // rejects: `y >= p` and `x == 0` with the sign bit set. A canonical
+    // encoding is exactly one that round-trips through decompress+recompress
+    // unchanged (recompressing always produces the unique canonical bytes
+    // for the point, i.e. the reduced `y` and the sign bit matching the
+    // recovered `x`'s actual parity), so comparing against the original
+    // bytes catches both cases in one check, and can never reject an
+    // encoding Python would accept -- Python's own encoder only ever
+    // produces canonical bytes for a valid point.
+    if verifying_key.to_edwards().compress().to_bytes() != public_key {
+        return false;
+    }
     let signature = Signature::from_bytes(&signature);
     verifying_key.verify(message, &signature).is_ok()
 }
@@ -424,6 +449,92 @@ mod tests {
                 assert!(!verify(&bad_key, &f.message, &f.signature));
             }
         }
+        // The check above uses `tamper_fixture`'s signature, which was made
+        // under an unrelated key and so would never satisfy the group
+        // equation for *any* of these bad keys -- it would pass even if
+        // `verify` didn't reject non-canonical encodings at all, so on its
+        // own it doesn't prove the canonicality check does anything.
+        // `P_PLUS_1_BYTES` (y = p + 1) reduces mod p to y = 1, i.e. the
+        // *identity* point: for the identity, `[S]B == R + [k]*O == R`
+        // holds for *any* message and *any* `k`, so `(R, S) = ([5]B, 5)` is
+        // a signature that genuinely satisfies the equation for the
+        // point this bad encoding decodes to. Confirm both that Python
+        // rejects it (oracle) and that our `verify` does too.
+        forged_non_canonical_identity_rejected();
+    }
+
+    /// See the comment in `public_key_y_not_below_p_rejected`: builds a
+    /// signature that satisfies the Ed25519 equation for the identity point
+    /// -- `(R, S) = (encode([5]B), 5)`, valid for identity for any message
+    /// -- via the Python prototype's own internal point-arithmetic helpers
+    /// (`_scalar_mult`, `_point_encode`), and confirms:
+    /// - it verifies under the *canonical* identity encoding (`y = 1`,
+    ///   sign clear) in both implementations (not a bug: small-order keys
+    ///   are accepted per the module doc comment);
+    /// - it is rejected under every non-canonical encoding that decodes to
+    ///   the same point (`y = 1` with the sign bit set; `y = p + 1`, sign
+    ///   clear or set) -- the exact forged-signature evidence from
+    ///   `DEVIATIONS.md` finding B-1.
+    fn forged_non_canonical_identity_rejected() {
+        let script = r#"
+from zeropw.crypto import ed25519 as m
+
+P = m._P
+B = m._B
+
+
+def encode_y(y_int, sign):
+    b = bytearray(y_int.to_bytes(32, "little"))
+    assert b[31] & 0x80 == 0
+    if sign:
+        b[31] |= 0x80
+    return bytes(b)
+
+
+R = m._point_encode(m._scalar_mult(5, B))
+S = (5).to_bytes(32, "little")
+sig = R + S
+message = b"forged under a non-canonical identity encoding"
+
+pk_canonical = (1).to_bytes(32, "little")
+pk_signbit = encode_y(1, True)
+pk_p_plus_1 = encode_y(P + 1, False)
+pk_p_plus_1_signbit = encode_y(P + 1, True)
+
+assert m.verify(pk_canonical, message, sig) is True
+assert m.verify(pk_signbit, message, sig) is False
+assert m.verify(pk_p_plus_1, message, sig) is False
+assert m.verify(pk_p_plus_1_signbit, message, sig) is False
+
+for value in (sig, message, pk_canonical, pk_signbit, pk_p_plus_1, pk_p_plus_1_signbit):
+    print(value.hex())
+"#;
+        let out = crate::oracle::python(script);
+        let mut lines = out.lines();
+        let mut next_hex = move || hex(lines.next().expect("oracle line"));
+        let sig = next_hex();
+        let message = next_hex();
+        let pk_canonical = next_hex();
+        let pk_signbit = next_hex();
+        let pk_p_plus_1 = next_hex();
+        let pk_p_plus_1_signbit = next_hex();
+
+        assert!(
+            verify(&pk_canonical, &message, &sig),
+            "canonical identity must still verify (small-order keys are accepted)"
+        );
+        assert!(
+            !verify(&pk_signbit, &message, &sig),
+            "y=1 with sign bit set (non-canonical identity) must be rejected"
+        );
+        assert!(
+            !verify(&pk_p_plus_1, &message, &sig),
+            "y=p+1 (non-canonical identity) must be rejected"
+        );
+        assert!(
+            !verify(&pk_p_plus_1_signbit, &message, &sig),
+            "y=p+1 with sign bit set must be rejected"
+        );
     }
 
     #[test]
@@ -452,6 +563,78 @@ mod tests {
             &f.message,
             &f.signature
         ));
+        // As in `public_key_y_not_below_p_rejected`, the assertions above use
+        // a signature made under an unrelated key, so they pass regardless
+        // of whether the canonicality check exists. Prove it actually does
+        // something with signatures that genuinely satisfy the equation for
+        // the *specific* points these bad encodings decode to.
+        forged_non_canonical_identity_rejected();
+        forged_non_canonical_order2_point_rejected();
+    }
+
+    /// Companion to `forged_non_canonical_identity_rejected`, for the order-2
+    /// point (0, -1) (encoded as `y = p - 1`, `x = 0`). Unlike the identity,
+    /// `[k]*A` only vanishes for this `A` when `k` is *even* (since `2*A ==
+    /// O`), so a signature can't be built for an arbitrary message the way
+    /// the identity one can -- the Python oracle fixes `R = encode(B)`,
+    /// `S = 1` and searches short synthetic messages for one whose
+    /// `_sha512_mod_l(R, bad_pk, message)` challenge happens to be even
+    /// (~50% of messages qualify, so this terminates immediately).
+    fn forged_non_canonical_order2_point_rejected() {
+        let script = r#"
+from zeropw.crypto import ed25519 as m
+
+P = m._P
+B = m._B
+
+
+def encode_y(y_int, sign):
+    b = bytearray(y_int.to_bytes(32, "little"))
+    assert b[31] & 0x80 == 0
+    if sign:
+        b[31] |= 0x80
+    return bytes(b)
+
+
+p_minus_1 = P - 1
+pk_canonical = encode_y(p_minus_1, False)
+pk_signbit = encode_y(p_minus_1, True)
+
+R = m._point_encode(B)
+S = (1).to_bytes(32, "little")
+
+message = None
+for i in range(10_000):
+    candidate = f"order2-forge-{i}".encode()
+    k = m._sha512_mod_l(R, pk_signbit, candidate)
+    if k % 2 == 0:
+        message = candidate
+        break
+assert message is not None, "no even-challenge message found"
+sig = R + S
+
+assert m.verify(pk_canonical, message, sig) is True
+assert m.verify(pk_signbit, message, sig) is False
+
+for value in (sig, message, pk_canonical, pk_signbit):
+    print(value.hex())
+"#;
+        let out = crate::oracle::python(script);
+        let mut lines = out.lines();
+        let mut next_hex = move || hex(lines.next().expect("oracle line"));
+        let sig = next_hex();
+        let message = next_hex();
+        let pk_canonical = next_hex();
+        let pk_signbit = next_hex();
+
+        assert!(
+            verify(&pk_canonical, &message, &sig),
+            "canonical order-2 point must still verify (small-order keys are accepted)"
+        );
+        assert!(
+            !verify(&pk_signbit, &message, &sig),
+            "y=p-1 with sign bit set (non-canonical order-2 point) must be rejected"
+        );
     }
 
     #[test]
@@ -570,5 +753,456 @@ mod tests {
             hex::encode(rust_sig),
         );
         assert_eq!(crate::oracle::python(&verify_script).trim(), "True");
+    }
+
+    /// Port of `tests/test_crypto_ed25519.py::OpenSSHInteropTests` (and its
+    /// module-local wire helpers, lines 69-218 and 487-558): interop with
+    /// OpenSSH's `ssh-keygen` in both directions. Skipped (like the Python
+    /// `unittest.skipIf`) when `ssh-keygen` is not on `PATH`.
+    ///
+    /// These helpers deliberately re-implement just enough of the
+    /// openssh-key-v1 and SSHSIG wire formats to drive `ssh-keygen`, rather
+    /// than using `crate::sshwire` -- same rationale as the Python test's
+    /// own module doc comment: this suite stays independent of sibling
+    /// modules/work units.
+    mod openssh_interop {
+        use std::io::Write as _;
+        use std::path::Path;
+        use std::process::{Command, Output, Stdio};
+
+        use sha2::{Digest, Sha256, Sha512};
+
+        use super::*;
+
+        const NAMESPACE: &[u8] = b"zeropw-test";
+
+        fn ssh_keygen_available() -> bool {
+            Command::new("ssh-keygen").arg("-h").output().is_ok()
+        }
+
+        fn ssh_uint32(n: u32) -> [u8; 4] {
+            n.to_be_bytes()
+        }
+
+        fn ssh_string(data: &[u8]) -> Vec<u8> {
+            let mut out = ssh_uint32(data.len() as u32).to_vec();
+            out.extend_from_slice(data);
+            out
+        }
+
+        /// Strict big-endian SSH wire reader, matching the Python test's `_Reader`.
+        struct Reader<'a> {
+            data: &'a [u8],
+            pos: usize,
+        }
+
+        impl<'a> Reader<'a> {
+            fn new(data: &'a [u8]) -> Self {
+                Reader { data, pos: 0 }
+            }
+
+            fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+                if self.pos + n > self.data.len() {
+                    return Err("truncated SSH wire data".to_string());
+                }
+                let chunk = &self.data[self.pos..self.pos + n];
+                self.pos += n;
+                Ok(chunk)
+            }
+
+            fn uint32(&mut self) -> Result<u32, String> {
+                let bytes = self.take(4)?;
+                Ok(u32::from_be_bytes(bytes.try_into().unwrap()))
+            }
+
+            fn string(&mut self) -> Result<&'a [u8], String> {
+                let n = self.uint32()? as usize;
+                self.take(n)
+            }
+
+            fn rest(&self) -> &'a [u8] {
+                &self.data[self.pos..]
+            }
+        }
+
+        fn dearmor(text: &str, label: &str) -> Result<Vec<u8>, String> {
+            use base64::Engine as _;
+            let lines: Vec<&str> = text.trim().lines().map(str::trim).collect();
+            let begin = format!("-----BEGIN {label}-----");
+            let end = format!("-----END {label}-----");
+            if lines.first() != Some(&begin.as_str()) || lines.last() != Some(&end.as_str()) {
+                return Err(format!("not a {label} block"));
+            }
+            let joined: String = lines[1..lines.len() - 1].concat();
+            // Python's `_dearmor` passes `validate=True`: a strict decode,
+            // matching the `base64` crate's default (unlike `pybase64`,
+            // which is deliberately lenient for KMS's own use).
+            base64::engine::general_purpose::STANDARD
+                .decode(joined)
+                .map_err(|e| e.to_string())
+        }
+
+        fn armor(blob: &[u8], label: &str) -> String {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(blob);
+            let mut body = String::new();
+            for chunk in b64.as_bytes().chunks(70) {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                body.push_str(std::str::from_utf8(chunk).unwrap());
+            }
+            format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+        }
+
+        fn parse_ed25519_public_blob(blob: &[u8]) -> Result<[u8; 32], String> {
+            let mut reader = Reader::new(blob);
+            if reader.string()? != b"ssh-ed25519" {
+                return Err("not an ssh-ed25519 blob".to_string());
+            }
+            let key = reader.string()?;
+            if key.len() != 32 || !reader.rest().is_empty() {
+                return Err("malformed ssh-ed25519 blob".to_string());
+            }
+            Ok(key.try_into().unwrap())
+        }
+
+        /// Returns `(seed, public_key)` from an unencrypted openssh-key-v1
+        /// ed25519 key.
+        fn parse_openssh_private_key(pem: &str) -> Result<([u8; 32], [u8; 32]), String> {
+            let blob = dearmor(pem, "OPENSSH PRIVATE KEY")?;
+            let magic = b"openssh-key-v1\x00";
+            if !blob.starts_with(magic) {
+                return Err("bad openssh-key-v1 magic".to_string());
+            }
+            let mut reader = Reader::new(&blob[magic.len()..]);
+            let cipher = reader.string()?.to_vec();
+            let kdf = reader.string()?.to_vec();
+            let _kdf_options = reader.string()?;
+            if cipher != b"none" || kdf != b"none" {
+                return Err("encrypted keys are not supported by this test parser".to_string());
+            }
+            if reader.uint32()? != 1 {
+                return Err("expected exactly one key".to_string());
+            }
+            let public_from_header = parse_ed25519_public_blob(reader.string()?)?;
+            let mut private = Reader::new(reader.string()?);
+            let c1 = private.uint32()?;
+            let c2 = private.uint32()?;
+            if c1 != c2 {
+                return Err("checkint mismatch".to_string());
+            }
+            if private.string()? != b"ssh-ed25519" {
+                return Err("not an ed25519 private key".to_string());
+            }
+            let public = private.string()?.to_vec();
+            let secret = private.string()?.to_vec();
+            let _comment = private.string()?;
+            let padding = private.rest();
+            let expected_padding: Vec<u8> = (1..=padding.len() as u32).map(|i| i as u8).collect();
+            if padding != expected_padding.as_slice() {
+                return Err("bad private section padding".to_string());
+            }
+            if public.len() != 32 || secret.len() != 64 || secret[32..] != public[..] {
+                return Err("malformed ed25519 private section".to_string());
+            }
+            if public != public_from_header {
+                return Err("public key mismatch between header and private section".to_string());
+            }
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&secret[..32]);
+            Ok((seed, public_from_header))
+        }
+
+        fn hash_digest(name: &[u8], message: &[u8]) -> Vec<u8> {
+            match name {
+                b"sha256" => {
+                    let mut h = Sha256::new();
+                    h.update(message);
+                    h.finalize().to_vec()
+                }
+                b"sha512" => {
+                    let mut h = Sha512::new();
+                    h.update(message);
+                    h.finalize().to_vec()
+                }
+                other => panic!(
+                    "unsupported hash algorithm: {:?}",
+                    String::from_utf8_lossy(other)
+                ),
+            }
+        }
+
+        fn sshsig_signed_data(namespace: &[u8], hash_algorithm: &[u8], message: &[u8]) -> Vec<u8> {
+            let digest = hash_digest(hash_algorithm, message);
+            let mut out = b"SSHSIG".to_vec();
+            out.extend(ssh_string(namespace));
+            out.extend(ssh_string(b""));
+            out.extend(ssh_string(hash_algorithm));
+            out.extend(ssh_string(&digest));
+            out
+        }
+
+        /// `(public_key, namespace, hash_algorithm, raw_signature64)`.
+        type SshsigParts = ([u8; 32], Vec<u8>, Vec<u8>, Vec<u8>);
+
+        fn parse_sshsig(text: &str) -> Result<SshsigParts, String> {
+            let blob = dearmor(text, "SSH SIGNATURE")?;
+            if !blob.starts_with(b"SSHSIG") {
+                return Err("bad SSHSIG magic".to_string());
+            }
+            let mut reader = Reader::new(&blob[6..]);
+            if reader.uint32()? != 1 {
+                return Err("unsupported SSHSIG version".to_string());
+            }
+            let public_key = parse_ed25519_public_blob(reader.string()?)?;
+            let namespace = reader.string()?.to_vec();
+            let reserved = reader.string()?.to_vec();
+            let hash_algorithm = reader.string()?.to_vec();
+            let mut sig_reader = Reader::new(reader.string()?);
+            if !reserved.is_empty() || !reader.rest().is_empty() {
+                return Err("malformed SSHSIG".to_string());
+            }
+            if sig_reader.string()? != b"ssh-ed25519" {
+                return Err("SSHSIG inner signature is not ssh-ed25519".to_string());
+            }
+            let raw_signature = sig_reader.string()?.to_vec();
+            if !sig_reader.rest().is_empty() {
+                return Err("trailing data in SSHSIG signature".to_string());
+            }
+            Ok((public_key, namespace, hash_algorithm, raw_signature))
+        }
+
+        fn build_sshsig(
+            public_key: &[u8],
+            namespace: &[u8],
+            hash_algorithm: &[u8],
+            raw_signature: &[u8],
+        ) -> String {
+            let mut key_blob = ssh_string(b"ssh-ed25519");
+            key_blob.extend(ssh_string(public_key));
+            let mut sig_blob = ssh_string(b"ssh-ed25519");
+            sig_blob.extend(ssh_string(raw_signature));
+
+            let mut blob = b"SSHSIG".to_vec();
+            blob.extend(ssh_uint32(1));
+            blob.extend(ssh_string(&key_blob));
+            blob.extend(ssh_string(namespace));
+            blob.extend(ssh_string(b""));
+            blob.extend(ssh_string(hash_algorithm));
+            blob.extend(ssh_string(&sig_blob));
+            armor(&blob, "SSH SIGNATURE")
+        }
+
+        fn run_ssh_keygen(args: &[&str], cwd: &Path, stdin: Option<&[u8]>) -> Output {
+            let mut command = Command::new("ssh-keygen");
+            command.args(args).current_dir(cwd);
+            if stdin.is_some() {
+                command.stdin(Stdio::piped());
+            }
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = command.spawn().expect("spawn ssh-keygen");
+            if let Some(data) = stdin {
+                child
+                    .stdin
+                    .take()
+                    .expect("stdin pipe")
+                    .write_all(data)
+                    .expect("write ssh-keygen stdin");
+            }
+            child.wait_with_output().expect("wait for ssh-keygen")
+        }
+
+        struct Fixture {
+            dir: tempfile::TempDir,
+            key_path: std::path::PathBuf,
+            seed: [u8; 32],
+            public_key: [u8; 32],
+        }
+
+        fn setup() -> Fixture {
+            let dir = tempfile::Builder::new()
+                .prefix("zeropw-ed25519-")
+                .tempdir()
+                .expect("tempdir");
+            let key_path = dir.path().join("key");
+            let out = run_ssh_keygen(
+                &[
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-C",
+                    "zeropw interop",
+                    "-f",
+                    key_path.to_str().unwrap(),
+                ],
+                dir.path(),
+                None,
+            );
+            assert!(
+                out.status.success(),
+                "ssh-keygen key generation failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let pem = std::fs::read_to_string(&key_path).expect("read generated key");
+            let (seed, public_key) = parse_openssh_private_key(&pem).expect("parse generated key");
+            Fixture {
+                dir,
+                key_path,
+                seed,
+                public_key,
+            }
+        }
+
+        #[test]
+        fn derived_public_key_matches_openssh() {
+            if !ssh_keygen_available() {
+                eprintln!("skipping: ssh-keygen not installed");
+                return;
+            }
+            let f = setup();
+            use base64::Engine as _;
+            let pub_text =
+                std::fs::read_to_string(f.dir.path().join("key.pub")).expect("read key.pub");
+            let mut fields = pub_text.split_whitespace();
+            assert_eq!(fields.next(), Some("ssh-ed25519"));
+            let blob = base64::engine::general_purpose::STANDARD
+                .decode(fields.next().expect("public key field"))
+                .expect("valid base64");
+            let pub_from_file = parse_ed25519_public_blob(&blob).expect("valid public blob");
+            assert_eq!(pub_from_file, f.public_key);
+            assert_eq!(public_key_from_seed(&f.seed).unwrap(), f.public_key);
+        }
+
+        #[test]
+        fn verify_signature_made_by_ssh_keygen() {
+            if !ssh_keygen_available() {
+                eprintln!("skipping: ssh-keygen not installed");
+                return;
+            }
+            let f = setup();
+            let data_path = f.dir.path().join("data");
+            let mut message = b"zeropw ed25519 interop message\n".to_vec();
+            let mut extra = [0u8; 100];
+            getrandom::getrandom(&mut extra).expect("OS CSPRNG must be available");
+            message.extend_from_slice(&extra);
+            std::fs::write(&data_path, &message).expect("write data file");
+
+            let namespace = std::str::from_utf8(NAMESPACE).unwrap();
+            let out = run_ssh_keygen(
+                &[
+                    "-Y",
+                    "sign",
+                    "-f",
+                    f.key_path.to_str().unwrap(),
+                    "-n",
+                    namespace,
+                    data_path.to_str().unwrap(),
+                ],
+                f.dir.path(),
+                None,
+            );
+            assert!(
+                out.status.success(),
+                "ssh-keygen -Y sign failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let sig_text =
+                std::fs::read_to_string(f.dir.path().join("data.sig")).expect("read data.sig");
+            let (public_key, namespace_out, hash_algorithm, raw_signature) =
+                parse_sshsig(&sig_text).expect("parse SSHSIG armor");
+            assert_eq!(public_key, f.public_key);
+            assert_eq!(namespace_out, NAMESPACE);
+            assert!(hash_algorithm == b"sha512" || hash_algorithm == b"sha256");
+            assert_eq!(raw_signature.len(), 64);
+
+            let signed = sshsig_signed_data(&namespace_out, &hash_algorithm, &message);
+            assert!(verify(&public_key, &signed, &raw_signature));
+
+            let mut tampered_message = message.clone();
+            tampered_message.push(b'!');
+            let tampered_signed =
+                sshsig_signed_data(&namespace_out, &hash_algorithm, &tampered_message);
+            assert!(!verify(&public_key, &tampered_signed, &raw_signature));
+
+            let other_namespace_signed = sshsig_signed_data(b"other", &hash_algorithm, &message);
+            assert!(!verify(
+                &public_key,
+                &other_namespace_signed,
+                &raw_signature
+            ));
+
+            let tampered_sig = flip_bit(&raw_signature, 3);
+            assert!(!verify(&public_key, &signed, &tampered_sig));
+        }
+
+        #[test]
+        fn ssh_keygen_accepts_our_signature() {
+            if !ssh_keygen_available() {
+                eprintln!("skipping: ssh-keygen not installed");
+                return;
+            }
+            let f = setup();
+            let message = b"signed by zeropw's pure-python ed25519\n".to_vec();
+            let signed = sshsig_signed_data(NAMESPACE, b"sha512", &message);
+            let raw_signature = sign(&f.seed, &signed).unwrap();
+            let sig_path = f.dir.path().join("ours.sig");
+            std::fs::write(
+                &sig_path,
+                build_sshsig(&f.public_key, NAMESPACE, b"sha512", &raw_signature),
+            )
+            .expect("write signature armor");
+
+            let namespace = std::str::from_utf8(NAMESPACE).unwrap();
+            let good = run_ssh_keygen(
+                &[
+                    "-Y",
+                    "check-novalidate",
+                    "-n",
+                    namespace,
+                    "-s",
+                    sig_path.to_str().unwrap(),
+                ],
+                f.dir.path(),
+                Some(&message),
+            );
+            assert!(
+                good.status.success(),
+                "check-novalidate rejected our signature: {}",
+                String::from_utf8_lossy(&good.stderr)
+            );
+
+            let mut bad_message = message.clone();
+            bad_message.push(b'x');
+            let bad_message_result = run_ssh_keygen(
+                &[
+                    "-Y",
+                    "check-novalidate",
+                    "-n",
+                    namespace,
+                    "-s",
+                    sig_path.to_str().unwrap(),
+                ],
+                f.dir.path(),
+                Some(&bad_message),
+            );
+            assert!(!bad_message_result.status.success());
+
+            let bad_namespace_result = run_ssh_keygen(
+                &[
+                    "-Y",
+                    "check-novalidate",
+                    "-n",
+                    "wrong-namespace",
+                    "-s",
+                    sig_path.to_str().unwrap(),
+                ],
+                f.dir.path(),
+                Some(&message),
+            );
+            assert!(!bad_namespace_result.status.success());
+        }
     }
 }

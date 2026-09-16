@@ -10,6 +10,7 @@ pub mod clock;
 pub mod errors;
 pub mod secret;
 
+pub mod pybase64;
 pub mod pyjson;
 pub mod store;
 

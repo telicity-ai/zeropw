@@ -869,6 +869,54 @@ or to cite them other than as /\u{201c}work in progress./\u{201d}"
         assert_eq!(decrypt(&key, &nonce, &sealed, b"").unwrap(), plaintext);
     }
 
+    /// Port of `tests/test_crypto_chacha20poly1305.py::
+    /// test_round_trip_empty_plaintext_and_empty_aad`.
+    #[test]
+    fn round_trip_empty_plaintext_and_empty_aad() {
+        let key = vec![0xabu8; KEY_SIZE];
+        let nonce = vec![0xcdu8; NONCE_SIZE];
+        let sealed = encrypt(&key, &nonce, b"", b"").unwrap();
+        assert_eq!(sealed.len(), TAG_SIZE);
+        assert_eq!(
+            decrypt(&key, &nonce, &sealed, b"").unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    /// Port of `tests/test_crypto_chacha20poly1305.py::
+    /// PerformanceTests::test_one_mebibyte_encrypts_in_reasonable_time`,
+    /// minus its timing budget (finding B-6): this crate's encrypt/decrypt
+    /// are backed by audited, non-Python-interpreted crates, so the
+    /// "reasonable time" assertion the Python prototype needs (to catch its
+    /// pure-Python implementation going quadratic) has no equivalent
+    /// failure mode here. The multi-block correctness check on a large
+    /// message is kept.
+    #[test]
+    fn one_mebibyte_round_trips() {
+        let key = vec![0x5au8; KEY_SIZE];
+        let nonce = vec![0xa5u8; NONCE_SIZE];
+        let plaintext = vec![0x99u8; 1024 * 1024];
+        let sealed = encrypt(&key, &nonce, &plaintext, b"aad").unwrap();
+        assert_eq!(sealed.len(), plaintext.len() + TAG_SIZE);
+        assert_eq!(decrypt(&key, &nonce, &sealed, b"aad").unwrap(), plaintext);
+    }
+
+    /// Port of `tests/test_crypto_ed25519.py`-style
+    /// `test_sign_and_verify_under_50ms`, minus the timing assertion
+    /// (finding B-6, same rationale as `one_mebibyte_round_trips` above):
+    /// exercises the same encrypt/verify-shaped call with a small payload,
+    /// without asserting on wall-clock time.
+    #[test]
+    fn encrypt_decrypt_small_payload_correctness() {
+        let key = vec![0x5bu8; KEY_SIZE];
+        let nonce = vec![0xb5u8; NONCE_SIZE];
+        let plaintext = b"performance budget check";
+        for _ in 0..5 {
+            let sealed = encrypt(&key, &nonce, plaintext, b"").unwrap();
+            assert_eq!(decrypt(&key, &nonce, &sealed, b"").unwrap(), plaintext);
+        }
+    }
+
     #[test]
     fn encryption_is_deterministic_and_nonce_dependent() {
         let key = vec![0x55u8; KEY_SIZE];
