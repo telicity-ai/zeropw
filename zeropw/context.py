@@ -62,6 +62,12 @@ class Config:
     # ``team_dial_backoff``, kept separate since redelivering a queued incident to an admin peer is
     # a different concern from reconnecting a dropped session and tests vary them independently.
     team_incident_retry_backoff: tuple[float, float] = (5.0, 300.0)
+    # Sections 4.4/7.4: once a node learns of a member's removal it stops sending to that
+    # member's session at once, but keeps the session open, receive-only, for this many seconds
+    # so a mutual ``member_removed`` fact the removed peer is sending back at the same instant
+    # still lands, instead of being discarded with an immediately-closed session (see
+    # ``TeamSync._drop_member_sessions``/``poll()``). Tests override it to a tiny value.
+    team_removed_drain_seconds: float = 5.0
     # Overrides for zeropw.intrusion.DetectorConfig (docs/compromise-response.md §4.2): window
     # length, weak/strong thresholds, per-rule weak points, enumeration and burst parameters.
     # ``None`` (the default) means "use DetectorConfig's own defaults".
