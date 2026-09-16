@@ -1328,6 +1328,61 @@ fn test_parse_key_made_by_ssh_keygen() {
 }
 
 #[test]
+fn test_parse_key_made_by_ssh_keygen_with_non_utf8_comment() {
+    if !ssh_keygen_available() {
+        eprintln!("skipping: ssh-keygen not available");
+        return;
+    }
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nonutf8");
+    // "caf\xe9" is not valid UTF-8; ssh-keygen -C copies argv bytes
+    // verbatim, so pass it as a raw OsStr the way Python's test passes raw
+    // bytes in argv.
+    let comment = std::ffi::OsStr::from_bytes(b"caf\xe9");
+    let out = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C"])
+        .arg(comment)
+        .arg("-f")
+        .arg(&path)
+        .output()
+        .unwrap();
+    if !out.status.success() {
+        eprintln!(
+            "skipping: ssh-keygen refused a non-UTF-8 comment: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return;
+    }
+    let key = w::parse_openssh_private_key(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(key.comment, "caf\u{fffd}");
+    let pub_bytes = std::fs::read(path.with_extension("pub")).unwrap();
+    let mut pub_fields = pub_bytes.split(|&b| b == b' ');
+    assert_eq!(pub_fields.next().unwrap(), b"ssh-ed25519");
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(pub_fields.next().unwrap())
+        .unwrap();
+    assert_eq!(key.public, w::parse_public_key_blob(&decoded).unwrap());
+    // ssh-keygen -y agrees on the public key for the very same file.
+    let y_out = Command::new("ssh-keygen")
+        .args(["-y", "-f"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        y_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&y_out.stderr)
+    );
+    let stdout_fields: Vec<&[u8]> = y_out.stdout.split(|&b| b == b' ').take(2).collect();
+    let expected = key.public.to_authorized_key("").unwrap();
+    let expected_fields: Vec<&[u8]> = expected.as_bytes().split(|&b| b == b' ').take(2).collect();
+    assert_eq!(stdout_fields, expected_fields);
+}
+
+#[test]
 fn test_fingerprint_matches_ssh_keygen() {
     if !ssh_keygen_available() {
         eprintln!("skipping: ssh-keygen not available");
