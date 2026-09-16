@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 from zeropw import admin_cli
 from zeropw.context import Config, Context
-from zeropw.errors import NotFound, PolicyDenied
+from zeropw.errors import InvalidInput, NotFound, PolicyDenied
 from zeropw.store import StateDir
 from zeropw.team import commit as C
 from zeropw.team import envelope
@@ -910,6 +910,216 @@ class ServeTeamListenTestCase(unittest.TestCase):
         ctx, payload = self._serve(team_listen=None)
         self.assertIsNone(payload["team_listen"])
         self.assertIsNone(ctx.team)
+
+
+class IncidentSharingTestCase(unittest.TestCase):
+    """Section 9/deliverable 1: sanitizing, signing, admin-only delivery, the ack-gated outbox, and
+    the rotation flags an admin node derives from a received incident summary."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.a = _Node(self.root, "a")   # owner/admin
+        self.b = _Node(self.root, "b")   # admin
+        self.addCleanup(self.a.stop)
+        self.addCleanup(self.b.stop)
+        self.env_id = C.new_env_id(self.a.device.fingerprint)
+        dek = bytes(range(32))
+        c1 = env_init_commit(self.env_id, self.a.device, dek)
+        c2 = member_add_commit(self.env_id, self.a.device, 2, "2000-0000", self.b.device, "admin", name="bob")
+        for node in (self.a, self.b):
+            seed_commits(node, self.env_id, [c1, c2])
+        self.a.start()
+        self.b.start()
+        self.a.peer(self.b, self.env_id)
+        self.b.peer(self.a, self.env_id)
+        wait_until(lambda: self.b.device.fingerprint in self.a.sync.status(self.env_id)["sessions"])
+        wait_until(lambda: self.a.device.fingerprint in self.b.sync.status(self.env_id)["sessions"])
+
+    def _summary(self, incident_id: str = "a1a1a1a1a1a1a1a1", **extra) -> dict:
+        base = {"incident_id": incident_id, "ts": "2026-09-16T00:00:00Z", "scope": "device",
+               "secret_ids_mandatory": ["gh-token"], "secret_ids_recommended": ["dead-token"],
+               "not_a_real_field": "dropped-not-raised", "uses": 3}
+        base.update(extra)
+        return base
+
+    def test_summary_sanitized_unknown_keys_and_bad_values_dropped(self) -> None:
+        clean = S.sanitize_incident_summary(self._summary(uses="not-an-int", also_bad=object()))
+        self.assertNotIn("not_a_real_field", clean)
+        self.assertNotIn("also_bad", clean)
+        self.assertNotIn("uses", clean)  # wrong type: dropped, not raised
+        self.assertEqual(clean["incident_id"], "a1a1a1a1a1a1a1a1")
+        self.assertEqual(clean["secret_ids_mandatory"], ["gh-token"])
+
+    def test_summary_missing_incident_id_raises(self) -> None:
+        with self.assertRaises(InvalidInput):
+            S.sanitize_incident_summary({"ts": "2026-09-16T00:00:00Z"})
+        with self.assertRaises(InvalidInput):
+            S.sanitize_incident_summary("not-even-a-dict")
+
+    def test_summary_non_token_incident_id_raises(self) -> None:
+        """incident_id becomes a literal path component (``team/<env>/incidents/<fp>-<id>.json``);
+        a free-form string (path separators, ``..``) must be refused, not merely sanitized."""
+        for bad in ("../../etc/passwd", "inc-1", "a" * 15, "A1A1A1A1A1A1A1A1", ""):
+            with self.assertRaises(InvalidInput):
+                S.sanitize_incident_summary(self._summary(incident_id=bad))
+
+    def test_user_role_member_may_also_send_an_incident(self) -> None:
+        eve = _Node(self.root, "eve")
+        self.addCleanup(eve.stop)
+        c3 = member_add_commit(self.env_id, self.a.device, 3, "3000-0000", eve.device, "user", name="eve")
+        self.assertEqual(self.a.sync.submit_commit(self.env_id, c3), "accepted")
+        wait_until(lambda: self.b.store(self.env_id).last_seq(self.a.device.fingerprint) >= 3)
+        seed_commits(eve, self.env_id, self.a.store(self.env_id).all_commits())
+        eve.start()
+        eve.peer(self.a, self.env_id)
+        wait_until(lambda: self.a.device.fingerprint in eve.sync.status(self.env_id)["sessions"])
+        fact = eve.sync.send_incident(self.env_id, self._summary(incident_id="a2a2a2a2a2a2a2a2"))
+        wait_until(lambda: self.a.ctx.state.exists(
+            f"team/{self.env_id}/incidents/{eve.device.fingerprint}-a2a2a2a2a2a2a2a2.json"))
+        wait_until(lambda: fact["hash"] not in eve.sync._envs[self.env_id].incident_outbox)
+
+    def test_incident_delivered_and_acked_clears_outbox_and_flags_rotation(self) -> None:
+        fact = self.b.sync.send_incident(self.env_id, self._summary())
+        wait_until(lambda: fact["hash"] not in self.b.sync._envs[self.env_id].incident_outbox,
+                  msg="B's outbox entry was never acknowledged")
+        path = f"team/{self.env_id}/incidents/{self.b.device.fingerprint}-a1a1a1a1a1a1a1a1.json"
+        record = self.a.ctx.state.read_json(path, None)
+        self.assertIsNotNone(record, "A never stored the received incident")
+        self.assertEqual(record["secret_ids_mandatory"], ["gh-token"])
+        self.assertNotIn("not_a_real_field", record)
+        flags = self.a.ctx.state.read_json(f"team/{self.env_id}/rotation_flags.json", {})
+        self.assertEqual(flags["gh-token"]["reason"], "rotation_required")
+        self.assertEqual(flags["dead-token"]["reason"], "rotation_recommended")
+        events = {r["event"] for r in self.a.ctx.audit.tail(200)}
+        self.assertIn("team_incident_received", events)
+        alerts = {al["alert"] for al in self.a.ctx.audit.alerts(200)}
+        self.assertIn("team_incident_received", alerts)
+        # B, the sender, is never an admin RECEIVER of its own incident and must not store one.
+        self.assertFalse(self.b.ctx.state.exists(path.replace(self.b.device.fingerprint, "nobody")))
+        blob = json.dumps(record, sort_keys=True)
+        for forbidden in ("ciphertext", "\"sig\"", "wraps"):
+            self.assertNotIn(forbidden, blob)
+
+    def test_mandatory_rotation_reason_is_never_downgraded_by_a_later_recommended(self) -> None:
+        first = self.b.sync.send_incident(self.env_id, self._summary(
+            incident_id="a3a3a3a3a3a3a3a3", secret_ids_mandatory=["gh-token"], secret_ids_recommended=[]))
+        wait_until(lambda: first["hash"] not in self.b.sync._envs[self.env_id].incident_outbox)
+        second = self.b.sync.send_incident(self.env_id, self._summary(
+            incident_id="a4a4a4a4a4a4a4a4", secret_ids_mandatory=[], secret_ids_recommended=["gh-token"]))
+        wait_until(lambda: second["hash"] not in self.b.sync._envs[self.env_id].incident_outbox)
+        flags = self.a.ctx.state.read_json(f"team/{self.env_id}/rotation_flags.json", {})
+        self.assertEqual(flags["gh-token"]["reason"], "rotation_required")
+
+    def test_non_admin_recipient_ignores_incident_and_sends_no_ack(self) -> None:
+        """Defence in depth: even if an INCIDENT message somehow reached a non-admin node (its role
+        was demoted after the message was already in flight, say), that node must store nothing
+        and must not ack -- the sender's outbox is only cleared by an ACTUAL admin's ack."""
+
+        class _FakeSession:
+            def __init__(self, peer_fp: str) -> None:
+                self.peer = type("Peer", (), {"fingerprint": peer_fp})()
+                self.sent: list[dict] = []
+
+            def send(self, message: dict) -> None:
+                self.sent.append(message)
+
+        eve = _Node(self.root, "eve")
+        self.addCleanup(eve.stop)
+        c3 = member_add_commit(self.env_id, self.a.device, 3, "3000-0000", eve.device, "user", name="eve")
+        self.assertEqual(self.a.sync.submit_commit(self.env_id, c3), "accepted")
+        wait_until(lambda: self.b.store(self.env_id).last_seq(self.a.device.fingerprint) >= 3)
+        seed_commits(eve, self.env_id, self.a.store(self.env_id).all_commits())
+        eve.start()
+        eve.peer(self.a, self.env_id)
+        wait_until(lambda: self.a.device.fingerprint in eve.sync.status(self.env_id)["sessions"])
+
+        fact = self.b.sync.send_incident(self.env_id, self._summary(incident_id="a5a5a5a5a5a5a5a5"))
+        fake_session = _FakeSession(self.b.device.fingerprint)
+        eve.sync._handle_incident(self.env_id, fake_session, {"type": "INCIDENT", "fact": fact})
+        self.assertEqual(fake_session.sent, [], "a non-admin must never send an INCIDENT_ACK")
+        self.assertFalse(eve.ctx.state.exists(
+            f"team/{self.env_id}/incidents/{self.b.device.fingerprint}-a5a5a5a5a5a5a5a5.json"))
+
+    def test_outbox_persists_when_no_route_to_an_admin(self) -> None:
+        """A member with no known peer address at all can still queue an incident; it survives a
+        process restart (a fresh ``TeamSync`` over the same state directory) undelivered."""
+        carol = _Node(self.root, "carol")
+        self.addCleanup(carol.stop)
+        c3 = member_add_commit(self.env_id, self.a.device, 3, "3000-0000", carol.device, "admin", name="carol")
+        self.assertEqual(self.a.sync.submit_commit(self.env_id, c3), "accepted")
+        wait_until(lambda: self.b.store(self.env_id).last_seq(self.a.device.fingerprint) >= 3)
+        seed_commits(carol, self.env_id, self.a.store(self.env_id).all_commits())
+        carol.start(listen=False)  # never peered with anyone: no route to any admin at all
+
+        fact = carol.sync.send_incident(self.env_id, self._summary(incident_id="a6a6a6a6a6a6a6a6"))
+        time.sleep(0.3)  # several poll ticks: prove nothing happens without a route
+        self.assertIn(fact["hash"], carol.sync._envs[self.env_id].incident_outbox)
+        lines = carol.ctx.state.read_lines(f"team/{self.env_id}/incident_outbox.jsonl", None)
+        self.assertTrue(any(lines), "the outbox file was never written")
+
+        reloaded = S.TeamSync(carol.ctx, T.InProcessTransport(carol.device), carol.device)
+        reloaded.register_env(self.env_id)
+        self.assertIn(fact["hash"], reloaded._envs[self.env_id].incident_outbox,
+                     "a fresh TeamSync over the same state dir must reload the pending outbox entry")
+
+
+class OverrideAlertTestCase(unittest.TestCase):
+    """Section 7.2's ``team_op_overridden`` alert: the loser of a same-target concurrent edit is
+    told, exactly once, that another device's later commit won."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.a = _Node(self.root, "a")
+        self.b = _Node(self.root, "b")
+        self.addCleanup(self.a.stop)
+        self.addCleanup(self.b.stop)
+        self.env_id = C.new_env_id(self.a.device.fingerprint)
+        dek = bytes(range(32))
+        c1 = env_init_commit(self.env_id, self.a.device, dek)
+        c2 = member_add_commit(self.env_id, self.a.device, 2, "2000-0000", self.b.device, "admin", name="bob")
+        c3 = connection_create_commit(self.env_id, self.a.device, 3, "3000-0000", conn_id="gh")
+        for node in (self.a, self.b):
+            seed_commits(node, self.env_id, [c1, c2, c3])
+        self.a.start()
+        self.b.start()
+        self.a.peer(self.b, self.env_id)
+        self.b.peer(self.a, self.env_id)
+        wait_until(lambda: self.b.device.fingerprint in self.a.sync.status(self.env_id)["sessions"])
+        wait_until(lambda: self.a.device.fingerprint in self.b.sync.status(self.env_id)["sessions"])
+
+    def test_loser_is_alerted_once_winner_is_not(self) -> None:
+        # A edits first; B observes A's commit (via the live session) before authoring its own, so
+        # section 5.2's clock rule (hlc strictly increases with what a node has seen) puts B's edit
+        # after A's in every node's total order -- A's is overridden.
+        a_edit = C.sign_commit(self.a.device, self.env_id, 4, "4000-0000", {},
+                               [{"op": "connection.update", "id": "gh",
+                                 "http_scope": {"methods": ["GET", "POST"], "path_prefixes": None}}])
+        self.assertEqual(self.a.sync.submit_commit(self.env_id, a_edit), "accepted")
+        wait_until(lambda: self.b.store(self.env_id).last_seq(self.a.device.fingerprint) >= 4)
+
+        b_edit = C.sign_commit(self.b.device, self.env_id, 1, "5000-0000", {},
+                               [{"op": "connection.update", "id": "gh",
+                                 "http_scope": {"methods": None, "path_prefixes": ["/repos"]}}])
+        self.assertEqual(self.b.sync.submit_commit(self.env_id, b_edit), "accepted")
+        wait_until(lambda: self.a.store(self.env_id).last_seq(self.b.device.fingerprint) >= 1)
+
+        def a_alerted() -> bool:
+            return any(rec["event"] == "team_op_overridden" for rec in self.a.ctx.audit.tail(200))
+
+        wait_until(a_alerted, msg="A was never alerted that its edit was overridden")
+        self.assertFalse(any(rec["event"] == "team_op_overridden" for rec in self.b.ctx.audit.tail(200)),
+                         "B (the winner) must not be alerted")
+        alerts = {al["alert"] for al in self.a.ctx.audit.alerts(200)}
+        self.assertIn("team_op_overridden", alerts)
+
+        # Every poll tick re-folds unconditionally; the alert must not be written more than once.
+        time.sleep(0.3)
+        count = sum(1 for rec in self.a.ctx.audit.tail(500) if rec["event"] == "team_op_overridden")
+        self.assertEqual(count, 1)
 
 
 if __name__ == "__main__":

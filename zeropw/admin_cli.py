@@ -1329,6 +1329,23 @@ def cmd_team_compact(args: argparse.Namespace) -> dict[str, Any]:
     return team_sync.compact(env_id)
 
 
+def cmd_team_incidents(args: argparse.Namespace) -> dict[str, Any]:
+    """``team incidents`` (docs/team-sync.md section 9/12): every incident summary this node has
+    received (value-free -- a summary never carries a secret value, only ids/timestamps/counts) and
+    the rotation flags derived from them or from a ``team remove``'s DEK rotation."""
+    ctx = _open(args)
+    env_id = _team_env_id(ctx, args.env)
+    incidents_dir = ctx.state.path / "team" / env_id / "incidents"
+    incidents = []
+    if incidents_dir.is_dir():
+        for path in sorted(incidents_dir.glob("*.json")):
+            record = ctx.state.read_json(f"team/{env_id}/incidents/{path.name}", None)
+            if isinstance(record, dict):
+                incidents.append({"id": path.stem, **record})
+    rotation_flags = ctx.state.read_json(f"team/{env_id}/rotation_flags.json", {}) or {}
+    return {"env_id": env_id, "incidents": incidents, "rotation_flags": rotation_flags}
+
+
 # -------------------------------------------------------------------- serve
 def _cancel_runs(ctx: Context, reason: str, quiet: bool) -> None:
     cancel_all = getattr(ctx.runs, "cancel_all", None)
@@ -1746,6 +1763,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--add", metavar="HOST:PORT")
     p.add_argument("--device", metavar="FINGERPRINT", help="required with --add")
     p = _add(team, "compact", cmd_team_compact, "delete commits every active member's vector already covers")
+    p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
+    p = _add(team, "incidents", cmd_team_incidents, "list received incident summaries and rotation flags")
     p.add_argument("--env", required=True, metavar="PROJECT/ENVIRONMENT")
 
     p = _add(sub, "serve", cmd_serve, "run the trusted server (tools API, relay, signer) until SIGINT/SIGTERM")

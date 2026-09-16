@@ -75,6 +75,13 @@ class FoldResult:
     skipped: list[tuple[str, int, str]]
     version_order: dict[str, list[str]]
     vector: dict[str, int]
+    # Section 7.2's "same target, later wins" transitions this fold observed: one entry per pair of
+    # consecutive (in total order) successful ops on the same target authored by two DIFFERENT
+    # devices.  Each entry is {"author", "author_seq", "hash": <the overridden op's commit>,
+    # "target_kind", "target_id", "by_author", "by_seq", "by_hash": <the op that overrode it>}.
+    # ``zeropw.team.sync.TeamSync`` turns the ones this device authored into a ``team_op_overridden``
+    # alert (docs/team-sync.md section 7.2); ``fold()`` only detects the transition.
+    overridden: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _commit_time(commit: Commit) -> str:
@@ -383,6 +390,23 @@ def _apply_op(doc: dict[str, Any], commit: Commit, facts: Facts, op: dict[str, A
     return handler(doc, commit, facts, op)
 
 
+# Ops eligible for section 7.2's "same target, later wins" override alert: creating something (a
+# fresh id) or a one-way fact-triggering op (disable, revoke, remove) is excluded on purpose --
+# those either cannot collide with a prior op on the SAME already-existing target, or are
+# monotonic and therefore never really "overridden" in the sense the alert means.  ``connection``
+# covers a widened/narrowed scope or a swapped target/auth/CLI profile; ``member_role`` a role
+# flip; ``secret_active`` which version answers "the" active one.
+def _override_target(op: dict[str, Any]) -> tuple[str, Any] | None:
+    kind = op.get("op")
+    if kind in ("connection.update", "connection.switch_credential"):
+        return ("connection", op.get("id"))
+    if kind == "member.set_role":
+        return ("member_role", op.get("fingerprint"))
+    if kind == "secret.activate":
+        return ("secret_active", op.get("secret_id"))
+    return None
+
+
 def _reapply_facts(doc: dict[str, Any], facts: Facts) -> None:
     """Force the monotone facts onto the fold result once more (section 7.4).
 
@@ -427,6 +451,8 @@ def fold(env_id: str, commits: Iterable[Commit], facts: Facts | None = None, *,
     working_facts = facts.copy() if facts is not None else Facts()
     skipped: list[tuple[str, int, str]] = []
     ordered = sort_total_order(c for c in commits if c.env_id == env_id)
+    last_target_author: dict[tuple[str, Any], tuple[str, int, str]] = {}
+    overridden: list[dict[str, Any]] = []
     for commit in ordered:
         for index, op in enumerate(commit.ops):
             reason = _apply_op(doc, commit, working_facts, op)
@@ -436,12 +462,23 @@ def fold(env_id: str, commits: Iterable[Commit], facts: Facts | None = None, *,
                     audit.record("team_op_skipped", result="skipped", reason=reason,
                                  extra={"env_id": env_id, "fingerprint": commit.author,
                                         "author_seq": commit.author_seq, "op": str(op.get("op", ""))[:64]})
+                continue
+            target = _override_target(op)
+            if target is None:
+                continue
+            previous = last_target_author.get(target)
+            if previous is not None and previous[0] != commit.author:
+                overridden.append({"author": previous[0], "author_seq": previous[1], "hash": previous[2],
+                                   "target_kind": target[0], "target_id": target[1],
+                                   "by_author": commit.author, "by_seq": commit.author_seq, "by_hash": commit.hash})
+            last_target_author[target] = (commit.author, commit.author_seq, commit.hash)
     _reapply_facts(doc, working_facts)
     version_order = doc.pop("_version_order")
     vector: dict[str, int] = {}
     for commit in ordered:
         vector[commit.author] = max(vector.get(commit.author, 0), commit.author_seq)
-    return FoldResult(document=doc, skipped=skipped, version_order=version_order, vector=vector)
+    return FoldResult(document=doc, skipped=skipped, version_order=version_order, vector=vector,
+                      overridden=overridden)
 
 
 # --------------------------------------------------------------------- snapshots

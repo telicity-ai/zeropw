@@ -32,8 +32,50 @@ admins removing each other at the same time must both take effect (section
 7.4's worked example), so its role check reads the author's role from the
 document's ``members`` entry (retained, with its role, even after the
 member's status flips to ``removed``) rather than requiring the author still
-be *active*.  Every other fact kind requires the author to be a presently
+be *active*.  ``incident`` is the other exception -- any presently active
+member, admin or user, may author one, since the compromise-response
+intrusion detector this hooks into (see below) runs on every node, not only
+admin ones.  Every other fact kind requires the author to be a presently
 active admin/owner.
+
+Incident sharing (section 9)
+-----------------------------
+``send_incident``/``send_incident_for_all_envs`` (the latter aliased as
+``on_incident_open``, the name the future caller hook is documented under)
+are the sender side.  The summary is sanitized against
+``INCIDENT_ALLOWED_KEYS`` -- unknown keys and out-of-shape values are
+dropped, not merely rejected, since a caller building this from several
+value-free sources should not have the whole report thrown away over one bad
+field -- then signed as a ``Fact`` of kind ``"incident"`` so it is deduped
+and durably persisted in ``facts.jsonl`` exactly like a disable/revoke/
+removal fact (``_store_fact``).  Unlike those, it is never broadcast to the
+whole mesh: section 3.1 shares incident summaries with admin nodes only, so
+it is instead handed directly to every session whose peer is presently an
+active admin, using the dedicated ``INCIDENT`` message (section 6.3) rather
+than the general ``FACT`` gossip/relay path -- there is deliberately no
+multi-hop relay for it, matching the spec's message table, which describes
+``INCIDENT`` as node-to-admin-node only. Because a session-only send reaches
+nobody who is not connected at that exact moment, with no catch-up
+mechanism for a peer that connects later (unlike commits, facts have no
+version-vector backfill), delivery alone is not enough for something this
+security-sensitive: the signed fact is also queued in
+``team/<env_id>/incident_outbox.jsonl`` and retried with exponential backoff
+from ``poll()`` until at least one admin peer sends back an ``INCIDENT_ACK``
+naming its hash. A receiving admin node persists the summary under
+``team/<env_id>/incidents/<sender fingerprint>-<incident id>.json``, folds
+its ``secret_ids_mandatory``/``secret_ids_recommended`` into
+``team/<env_id>/rotation_flags.json`` as ``rotation_required``/
+``rotation_recommended``, and raises a ``team_incident_received`` audit
+alert; a non-admin node that happens to receive one (its role changed after
+the message was already in flight) does nothing and sends no ack.
+
+This module has no caller for ``on_incident_open`` yet: ``zeropw/incident.py``
+and its ``open_incident`` live on ``feature/compromise-response-plan``, not
+merged into this branch's base.  Once merged, ``open_incident`` should call
+``ctx.team.send_incident_for_all_envs(summary_by_env)`` (guarded by
+``getattr(ctx, "team", None) is not None``, since a node with no shared
+environment attaches no ``TeamSync``) with one summary per shared
+environment the compromise's exposure assessment touched.
 
 Thread model
 ------------
@@ -71,7 +113,6 @@ from .transport import Session, SessionClosed
 
 FACT_FORMAT = "zeropw-team-fact-v1"
 FACT_KINDS = ("connection_disabled", "secret_version_revoked", "member_removed", "incident")
-MAX_INCIDENT_FIELDS = 20
 _SEEN_CAPACITY = 4096
 _DISCOVERY_INTERVAL_SECONDS = 1.0
 _RECV_POLL_SECONDS = 1.0
@@ -145,6 +186,63 @@ def _canon(obj: dict) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+# -------------------------------------------------------------------- incidents
+# Section 9's incident summary schema.  Deliberately split "mandatory" from "recommended" secret
+# ids (rather than one list plus a severity tag) so the value shape stays "str/int/list-of-str
+# only" per this stage's brief, with no nested objects to bound separately.
+INCIDENT_ALLOWED_KEYS = frozenset({
+    "incident_id", "ts", "scope", "rule", "secret_ids_mandatory", "secret_ids_recommended",
+    "connection_ids", "first_used_at", "last_used_at", "uses",
+})
+_INCIDENT_STR_KEYS = frozenset({"incident_id", "ts", "scope", "rule", "first_used_at", "last_used_at"})
+_INCIDENT_INT_KEYS = frozenset({"uses"})
+_INCIDENT_LIST_KEYS = frozenset({"secret_ids_mandatory", "secret_ids_recommended", "connection_ids"})
+MAX_INCIDENT_STR_LENGTH = 200
+MAX_INCIDENT_LIST_ITEMS = 100
+MAX_INCIDENT_UNIT = 2**31 - 1
+
+
+def _valid_incident_str(value: Any) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= MAX_INCIDENT_STR_LENGTH and not _CONTROL_RE.search(value)
+
+
+def _valid_incident_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_INCIDENT_UNIT
+
+
+def _valid_incident_list(value: Any) -> bool:
+    return (isinstance(value, list) and len(value) <= MAX_INCIDENT_LIST_ITEMS
+            and all(isinstance(v, str) and 0 < len(v) <= 64 and not _CONTROL_RE.search(v) for v in value))
+
+
+def sanitize_incident_summary(summary: Any) -> dict[str, Any]:
+    """Section 9/deliverable 1's sender-side sanitizer: keep only ``INCIDENT_ALLOWED_KEYS``, drop
+    (never raise on) any key outside that set or any value that is not str/int/list-of-str within
+    its bounds -- a caller assembling this from several value-free sources should not lose the
+    whole report over one malformed field.  ``incident_id`` is the sole exception: it identifies
+    the on-disk record and the outbox/ack entry, so a missing or malformed one is a hard error --
+    and it is held to ``_valid_token``'s stricter hex-only shape (matching ``version_id``,
+    ``generation_id``), not the looser ``_valid_id``, because it becomes a literal path component
+    (``_incident_record_path``): a free-form string here would open a path-traversal hole no other
+    id-shaped field in this module has to guard against.
+    """
+    if not isinstance(summary, dict) or not _valid_token(summary.get("incident_id")):
+        raise InvalidInput("team_incident_summary_invalid")
+    clean: dict[str, Any] = {"incident_id": summary["incident_id"]}
+    for key, value in summary.items():
+        if key == "incident_id" or key not in INCIDENT_ALLOWED_KEYS:
+            continue
+        if key in _INCIDENT_STR_KEYS and _valid_incident_str(value):
+            clean[key] = value
+        elif key in _INCIDENT_INT_KEYS and _valid_incident_int(value):
+            clean[key] = value
+        elif key in _INCIDENT_LIST_KEYS and _valid_incident_list(value):
+            deduped = sorted(set(value))[:MAX_INCIDENT_LIST_ITEMS]
+            if deduped:
+                clean[key] = deduped
+    return clean
+
+
 # ---------------------------------------------------------------------- facts
 def _validate_fact_target(kind: str, target: Any) -> None:
     if not isinstance(target, dict):
@@ -160,11 +258,20 @@ def _validate_fact_target(kind: str, target: Any) -> None:
         if set(target) != {"fingerprint"} or not _valid_fingerprint(target["fingerprint"]):
             raise InvalidInput("team_fact_target_invalid")
     elif kind == "incident":
-        if len(target) > MAX_INCIDENT_FIELDS:
+        # incident_id becomes a literal path component (_incident_record_path): hold it to
+        # _valid_token's hex-only shape, not the looser _valid_id, to rule out path traversal.
+        if not _valid_token(target.get("incident_id")) or not set(target).issubset(INCIDENT_ALLOWED_KEYS):
             raise InvalidInput("team_fact_target_invalid")
         for key, value in target.items():
-            if not isinstance(key, str) or not _valid_id(key, 64) or not isinstance(value, str) \
-                    or len(value) > 200 or _CONTROL_RE.search(value):
+            if key in _INCIDENT_STR_KEYS:
+                ok = _valid_incident_str(value)
+            elif key in _INCIDENT_INT_KEYS:
+                ok = _valid_incident_int(value)
+            elif key in _INCIDENT_LIST_KEYS:
+                ok = _valid_incident_list(value)
+            else:
+                ok = False
+            if not ok:
                 raise InvalidInput("team_fact_target_invalid")
     else:
         raise InvalidInput("team_fact_kind_unknown")
@@ -254,7 +361,10 @@ def _fact_role_ok(doc: dict, kind: str, author_fp: str, target: dict) -> bool:
     ``member_removed`` alone is exempt from requiring the author still be
     *active*: two admins removing each other in the same instant must both
     take effect, so this checks the author's recorded ``role`` (retained
-    after removal) rather than their current status.
+    after removal) rather than their current status.  ``incident`` is looser
+    in the other direction: any presently active member (admin or user) may
+    author one -- the intrusion detector it reports from runs on every node,
+    not only admin ones (section 9 names no role restriction on the sender).
     """
     members = doc.get("members", {})
     if kind == "member_removed":
@@ -264,6 +374,9 @@ def _fact_role_ok(doc: dict, kind: str, author_fp: str, target: dict) -> bool:
         member = members.get(author_fp)
         privileged = author_fp == doc.get("owner") or (member is not None and member.get("role") == "admin")
         return privileged or author_fp == target_fp
+    if kind == "incident":
+        member = members.get(author_fp)
+        return member is not None and member.get("status") == "active"
     return _is_admin(doc, author_fp)
 
 
@@ -367,11 +480,21 @@ class _EnvState:
     # every known commit on every inbound FACT/handshake is wasteful once the vector has not moved
     # since the last time it was computed.
     relaxed_cache: tuple | None = None
-
-
-INCIDENT_ALLOWED_KEYS = frozenset({
-    "incident_id", "ts", "scope", "rule", "secret_ids", "connection_ids", "first_used_at", "last_used_at", "uses",
-})
+    # Stage 4 additions -----------------------------------------------------------------------
+    # Section 9's outbox: fact hash -> the signed incident Fact, for every incident this node has
+    # originated (or is relaying on behalf of a caller -- there is only one, this node itself,
+    # since incidents are not relayed) that no admin peer has acknowledged yet.  Persisted to
+    # ``team/<env_id>/incident_outbox.jsonl`` so it survives a restart; ``incident_backoff``/
+    # ``incident_next_attempt`` are purely in-memory retry bookkeeping, mirroring ``backoff``/
+    # ``next_attempt`` above.
+    incident_outbox: dict = field(default_factory=dict)         # fact hash -> Fact
+    incident_backoff: dict = field(default_factory=dict)        # fact hash -> seconds
+    incident_next_attempt: dict = field(default_factory=dict)   # fact hash -> monotonic time
+    # Section 7.2's "team_op_overridden" alert bookkeeping: signatures of (my overridden commit
+    # hash, the commit hash that overrode it) already alerted on, so a repeat _refold (every poll
+    # tick re-folds unconditionally) does not write the same alert over and over.  Persisted to
+    # ``team/<env_id>/overridden_alerted.json``.
+    alerted_overrides: set = field(default_factory=set)
 
 
 class TeamSync:
@@ -475,6 +598,17 @@ class TeamSync:
         snapshot = F.load_latest_snapshot(self.ctx.state, env_id)
         if snapshot is not None:
             env.last_snapshot_total = sum((snapshot.get("vector") or {}).values())
+        for line in self.ctx.state.read_lines(self._incident_outbox_path(env_id), None) or []:
+            if not line:
+                continue
+            try:
+                fact = Fact.from_dict(json.loads(line))
+            except (ValueError, InvalidInput):
+                continue
+            if fact.env_id == env_id and fact.kind == "incident":
+                env.incident_outbox[fact.hash] = fact
+        alerted = self.ctx.state.read_json(self._overridden_alerted_path(env_id), []) or []
+        env.alerted_overrides = {s for s in alerted if isinstance(s, str)}
         self._envs[env_id] = env
         self._refold(env_id)
         env.last_known_vector = dict(env.store.vector())
@@ -489,6 +623,12 @@ class TeamSync:
     # -------------------------------------------------------------- facts io
     def _facts_path(self, env_id: str) -> str:
         return f"team/{env_id}/facts.jsonl"
+
+    def _incident_outbox_path(self, env_id: str) -> str:
+        return f"team/{env_id}/incident_outbox.jsonl"
+
+    def _overridden_alerted_path(self, env_id: str) -> str:
+        return f"team/{env_id}/overridden_alerted.json"
 
     def _read_facts(self, env_id: str) -> tuple[F.Facts, set, dict]:
         return load_facts(self.ctx.state, env_id)
@@ -547,6 +687,42 @@ class TeamSync:
             if total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS:
                 F.save_snapshot(self.ctx.state, env_id, total, result)
                 env.last_snapshot_total = total
+        self._record_overrides(env_id, result.overridden)
+
+    def _record_overrides(self, env_id: str, overridden: list[dict[str, Any]]) -> None:
+        """Section 7.2's ``team_op_overridden`` alert: for every override ``fold()`` found where
+        THIS device authored the losing op, alert exactly once (``alerted_overrides``, persisted,
+        since every ``_refold`` recomputes the whole ``overridden`` list from scratch)."""
+        self_fp = self.device.fingerprint
+        newly_alerted: list[dict[str, Any]] = []
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return
+            for entry in overridden:
+                if entry["author"] != self_fp:
+                    continue
+                signature = f'{entry["hash"]}:{entry["by_hash"]}'
+                if signature in env.alerted_overrides:
+                    continue
+                env.alerted_overrides.add(signature)
+                newly_alerted.append(entry)
+        if not newly_alerted:
+            return
+        with self._lock:
+            env = self._envs.get(env_id)
+            snapshot = sorted(env.alerted_overrides) if env is not None else []
+        self.ctx.state.write_json(self._overridden_alerted_path(env_id), snapshot)
+        for entry in newly_alerted:
+            extra: dict[str, Any] = {"env_id": env_id, "author_seq": entry["author_seq"],
+                                     "fingerprint": entry["by_author"]}
+            connection_id = entry["target_id"] if entry["target_kind"] == "connection" else None
+            if entry["target_kind"] == "secret_active":
+                extra["secret_id"] = entry["target_id"]
+            try:
+                self.ctx.audit.record("team_op_overridden", result="ok", connection=connection_id, extra=extra)
+            except AuditUnavailable:
+                pass
 
     def _membership(self, env_id: str, fingerprint: str) -> DeviceRecord | None:
         with self._lock:
@@ -675,6 +851,7 @@ class TeamSync:
         self._start_receiver(env_id, session)
         self._send_vector(env_id, session)
         self._send_peers(env_id, session)
+        self._retry_pending_incidents_to(env_id, session)
 
     # ------------------------------------------------------------ invites (section 4.3)
     def _invite_check(self, env_id: str, initiator_record: DeviceRecord, transcript_hash: bytes,
@@ -844,6 +1021,8 @@ class TeamSync:
             self._handle_peers(env_id, session, message)
         elif mtype == "INCIDENT":
             self._handle_incident(env_id, session, message)
+        elif mtype == "INCIDENT_ACK":
+            self._handle_incident_ack(env_id, session, message)
         # an unrecognised type is ignored, not a protocol error: forward compatibility.
 
     def _handle_vector(self, env_id: str, session: Session, message: dict) -> None:
@@ -927,7 +1106,10 @@ class TeamSync:
             fact = Fact.from_dict(raw)
         except InvalidInput:
             return
-        if fact.env_id != env_id or fact.kind not in FACT_KINDS:
+        # An "incident" fact travels only as a direct, single-hop INCIDENT message (module
+        # docstring, section 9): never accept or relay one that arrives wrapped as an ordinary
+        # FACT, which would defeat the "admin nodes only, no mesh-wide relay" delivery model.
+        if fact.env_id != env_id or fact.kind not in FACT_KINDS or fact.kind == "incident":
             return
         self._apply_remote_fact(env_id, fact, exclude_fp=session.peer.fingerprint)
 
@@ -1038,25 +1220,193 @@ class TeamSync:
                     if isinstance(addr, str) and 0 < len(addr) <= 128:
                         bucket.add(addr)
 
+    def _incident_record_path(self, env_id: str, sender_fp: str, incident_id: str) -> str:
+        return f"team/{env_id}/incidents/{sender_fp}-{incident_id}.json"
+
+    def _apply_incident_rotation_flags(self, env_id: str, target: dict) -> None:
+        """Section 9's admin-side rotation marker: fold an incident's ``secret_ids_mandatory``/
+        ``secret_ids_recommended`` into the SAME ``rotation_flags.json`` ``team remove``'s DEK
+        rotation already writes to (``rotation_flags_path`` there), so ``team incidents`` has one
+        place to read either source from.  ``rotation_required`` always outranks a later, weaker
+        ``rotation_recommended`` for the same secret id; it is never downgraded."""
+        from . import membership as M  # lazy: avoids a sync<->membership import cycle (see _invite_check)
+
+        mandatory = target.get("secret_ids_mandatory") or []
+        recommended = target.get("secret_ids_recommended") or []
+        now = iso(self.ctx.clock())
+        with self.ctx.state.lock():
+            flags = self.ctx.state.read_json(M._rotation_flags_path(env_id), {}) or {}
+            for secret_id in mandatory:
+                if isinstance(secret_id, str):
+                    flags[secret_id] = {"reason": "rotation_required", "flagged_at": now}
+            for secret_id in recommended:
+                if isinstance(secret_id, str) and flags.get(secret_id, {}).get("reason") != "rotation_required":
+                    flags[secret_id] = {"reason": "rotation_recommended", "flagged_at": now}
+            self.ctx.state.write_json(M._rotation_flags_path(env_id), flags)
+
     def _handle_incident(self, env_id: str, session: Session, message: dict) -> None:
-        payload = message.get("incident")
-        if not isinstance(payload, dict):
+        """Receiver side of section 9's ``INCIDENT`` message.  Verifies the embedded ``Fact`` (any
+        active member may author one -- see ``_fact_role_ok``) exactly like an inbound ``FACT``
+        would, but never relays it (there is no multi-hop path for incidents; see the module
+        docstring) and only a currently-admin node stores it, flags rotation, and alerts -- a
+        non-admin node does nothing and sends no ack, so a demoted-since-queued sender's outbox
+        entry simply keeps retrying until it reaches an actual admin.
+        """
+        raw = message.get("fact")
+        if not isinstance(raw, dict):
+            return
+        try:
+            fact = Fact.from_dict(raw)
+        except InvalidInput:
+            return
+        if fact.env_id != env_id or fact.kind != "incident" or fact.author != session.peer.fingerprint:
+            return  # section 9/6.3: INCIDENT is a direct, single-hop message; never a relay
+        author_record = self._known_device_record(env_id, fact.author)
+        if author_record is None or not verify_fact(fact, author_record):
+            self._audit_fact_rejected(env_id, fact, "team_fact_signature_invalid")
             return
         env = self._envs[env_id]
-        if not _is_admin(env.document, self.device.fingerprint):
-            return  # section 9: incident summaries are stored only by admin nodes
-        incident_id = payload.get("incident_id")
-        if not _valid_id(incident_id, 64):
+        if not _fact_role_ok(env.document, "incident", fact.author, fact.target):
+            self._audit_fact_rejected(env_id, fact, "team_fact_not_authorized")
             return
-        clean = {k: payload[k] for k in INCIDENT_ALLOWED_KEYS if k in payload}
-        path = f"team/{env_id}/incidents/{session.peer.fingerprint}-{incident_id}.json"
-        self.ctx.state.write_json(path, clean)
+        if _is_admin(env.document, self.device.fingerprint):
+            incident_id = fact.target.get("incident_id")
+            path = self._incident_record_path(env_id, fact.author, incident_id) if _valid_token(incident_id) else None
+            if path is not None and not self.ctx.state.exists(path):
+                if fact.hash not in env.fact_hashes:
+                    self._store_fact(env_id, fact)
+                record = dict(fact.target)
+                record["received_from"] = fact.author
+                record["received_at"] = iso(self.ctx.clock())
+                self.ctx.state.write_json(path, record)
+                self._apply_incident_rotation_flags(env_id, fact.target)
+                try:
+                    self.ctx.audit.record("team_incident_received", result="ok",
+                                          extra={"env_id": env_id, "fingerprint": fact.author})
+                except AuditUnavailable:
+                    pass
+            # An admin acks even a duplicate delivery (a retry that crossed with an earlier ack):
+            # idempotent storage above means re-processing costs nothing, and the sender's outbox
+            # entry must be able to clear on ANY ack, not only the first.
+            try:
+                session.send({"type": "INCIDENT_ACK", "hash": fact.hash})
+            except (SessionClosed, InvalidInput):
+                self._drop_session(env_id, session.peer.fingerprint, session)
+        # else: section 9/3.1 -- a non-admin recipient ignores an incident summary entirely.
 
-    def send_incident(self, env_id: str, summary: dict) -> None:
-        """Broadcast hook stage 4 wires up: today it fans an INCIDENT message out to every open
-        session for ``env_id``.  Queueing until an admin node is reachable (section 9) is stage 4's
-        job; this only fixes the call site and the wire message it will use."""
-        self._broadcast(env_id, {"type": "INCIDENT", "incident": dict(summary)})
+    def _handle_incident_ack(self, env_id: str, session: Session, message: dict) -> None:
+        fact_hash = message.get("hash")
+        if not isinstance(fact_hash, str):
+            return
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None or fact_hash not in env.incident_outbox:
+                return
+            env.incident_outbox.pop(fact_hash, None)
+            env.incident_backoff.pop(fact_hash, None)
+            env.incident_next_attempt.pop(fact_hash, None)
+        self._persist_incident_outbox(env_id)
+
+    def _persist_incident_outbox(self, env_id: str) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            pending = list(env.incident_outbox.values()) if env is not None else []
+        lines = [json.dumps(fact.to_dict(), sort_keys=True, separators=(",", ":")) for fact in pending]
+        blob = ("\n".join(lines) + "\n") if lines else ""
+        self.ctx.state.write_bytes(self._incident_outbox_path(env_id), blob.encode("utf-8"))
+
+    def _deliver_incident(self, env_id: str, fact: "Fact") -> int:
+        """Send ``fact`` (an ``INCIDENT`` message) to every currently open session whose peer is an
+        active admin member other than this device.  Returns how many sends succeeded -- never a
+        promise of receipt; only an ``INCIDENT_ACK`` is that."""
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                return 0
+            targets = [(fp, s) for fp, s in env.sessions.items()
+                      if fp != self.device.fingerprint and _is_admin(env.document, fp)]
+        sent = 0
+        for fp, session in targets:
+            try:
+                session.send({"type": "INCIDENT", "fact": fact.to_dict()})
+                sent += 1
+            except (SessionClosed, InvalidInput):
+                self._drop_session(env_id, fp, session)
+        return sent
+
+    def send_incident(self, env_id: str, summary: dict) -> dict:
+        """Sender side of section 9 (deliverable 1): sanitize, sign as a ``Fact`` of kind
+        ``"incident"``, persist it exactly like any other fact, queue it for guaranteed admin
+        delivery, and make a first delivery attempt to whichever admin sessions are open right now.
+        Returns the signed fact (its ``hash`` is what an ``INCIDENT_ACK`` will name).
+        """
+        clean = sanitize_incident_summary(summary)
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None:
+                raise InvalidInput("team_env_unknown")
+            hlc_value = env.hlc.tick()
+            doc = env.document
+        if not _fact_role_ok(doc, "incident", self.device.fingerprint, clean):
+            raise PolicyDenied("team_fact_not_authorized")
+        fact = sign_fact(self.device, env_id, "incident", clean, hlc_value)
+        with self.ctx.state.lock():
+            self._store_fact(env_id, fact)
+        with self._lock:
+            env.incident_outbox[fact.hash] = fact
+            env.incident_backoff.pop(fact.hash, None)
+            env.incident_next_attempt.pop(fact.hash, None)
+        self._persist_incident_outbox(env_id)
+        self._deliver_incident(env_id, fact)
+        result = fact.to_dict()
+        result["hash"] = fact.hash  # convenience for a caller correlating this with an INCIDENT_ACK
+        return result
+
+    def send_incident_for_all_envs(self, summary_by_env: dict) -> dict:
+        """The hook a future ``zeropw/incident.py``'s ``open_incident`` (``feature/compromise-
+        response-plan``, not yet merged into this branch's base) is expected to call once per
+        shared environment its exposure assessment touched: ``{env_id: summary}``.  Returns
+        ``{env_id: "queued"}`` for each summary that was signed and queued, or
+        ``{env_id: "error:<reason>"}`` for one this node could not send (unknown environment, or
+        this device is not presently an active member of it).  Never raises: a caller iterating
+        several environments should not lose the rest over one bad one."""
+        results: dict[str, str] = {}
+        for env_id, summary in summary_by_env.items():
+            try:
+                self.send_incident(env_id, summary)
+                results[env_id] = "queued"
+            except (InvalidInput, PolicyDenied, NotFound) as exc:
+                results[env_id] = f"error:{getattr(exc, 'reason', type(exc).__name__)}"
+        return results
+
+    # Alias: docs/team-sync.md section 9 documents this call site under the name
+    # ``on_incident_open``; the implementation is identical to ``send_incident_for_all_envs``.
+    on_incident_open = send_incident_for_all_envs
+
+    def _poll_incident_outbox(self, env_id: str, now: float) -> None:
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None or not env.incident_outbox:
+                return
+            due = [h for h in env.incident_outbox if now >= env.incident_next_attempt.get(h, 0.0)]
+        if not due:
+            return
+        min_backoff, max_backoff = self.ctx.config.team_incident_retry_backoff
+        for fact_hash in due:
+            with self._lock:
+                env = self._envs.get(env_id)
+                fact = env.incident_outbox.get(fact_hash) if env is not None else None
+            if fact is None:
+                continue
+            self._deliver_incident(env_id, fact)
+            with self._lock:
+                env = self._envs.get(env_id)
+                if env is None or fact_hash not in env.incident_outbox:
+                    continue
+                current = env.incident_backoff.get(fact_hash)
+                next_backoff = min_backoff if current is None else min(current * 2, max_backoff)
+                env.incident_backoff[fact_hash] = next_backoff
+                env.incident_next_attempt[fact_hash] = now + next_backoff
 
     # --------------------------------------------------------------- polling
     def poll(self) -> None:
@@ -1077,6 +1427,7 @@ class TeamSync:
             return
         self._pick_up_local_commits(env_id)
         self._pick_up_local_facts(env_id)
+        self._poll_incident_outbox(env_id, now)
         released = env.store.release_deferred(now_ms_value)
         if released:
             self._refold(env_id)
@@ -1161,6 +1512,11 @@ class TeamSync:
                 continue
             if fact.env_id != env_id or fact.kind not in FACT_KINDS or fact.hash in env.fact_hashes:
                 continue
+            if fact.kind == "incident":
+                # Written by this same process's own ``send_incident``/``_handle_incident``, which
+                # already keep ``known_fact_lines`` in step -- never reached in practice, but an
+                # "incident" line must never be broadcast mesh-wide as a FACT (see ``_handle_fact``).
+                continue
             self._absorb_local_fact(env_id, fact)
 
     def _absorb_local_fact(self, env_id: str, fact: "Fact") -> None:
@@ -1218,6 +1574,23 @@ class TeamSync:
         self._start_receiver(env_id, session)
         self._send_vector(env_id, session)
         self._send_peers(env_id, session)
+        self._retry_pending_incidents_to(env_id, session)
+
+    def _retry_pending_incidents_to(self, env_id: str, session: Session) -> None:
+        """Give a freshly-opened session to an admin peer an immediate shot at every outstanding
+        incident, instead of waiting out that entry's backoff -- reconnection is exactly the event
+        the outbox retry exists for."""
+        with self._lock:
+            env = self._envs.get(env_id)
+            if env is None or not env.incident_outbox or not _is_admin(env.document, session.peer.fingerprint):
+                return
+            pending = list(env.incident_outbox.values())
+        for fact in pending:
+            try:
+                session.send({"type": "INCIDENT", "fact": fact.to_dict()})
+            except (SessionClosed, InvalidInput):
+                self._drop_session(env_id, session.peer.fingerprint, session)
+                return
 
     def adopt_outbound_session(self, env_id: str, session: Session, address: str) -> None:
         """Hand a session this caller dialed itself into the ordinary gossip machinery.

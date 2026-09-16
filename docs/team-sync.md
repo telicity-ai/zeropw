@@ -219,7 +219,8 @@ class Session(Protocol):
 | `VECTOR` | 양방향, 세션 시작 시와 주기적으로 | 자기 버전 벡터. 받은 쪽은 상대에게 없는 커밋을 `COMMIT`으로 보낸다. |
 | `COMMIT` | 양방향 | 커밋 하나. 새로 만든 커밋은 즉시 모든 세션에 보내고, 받은 커밋은 검증 뒤 보낸 노드를 제외한 세션에 다시 보낸다(같은 해시는 한 번만). |
 | `FACT` | 양방향 | 긴급 사실. §7.4. |
-| `INCIDENT` | 노드 → admin 노드 | 사건 요약. §9. |
+| `INCIDENT` | 노드 → admin 노드 | 사건 요약. §9. 재중계하지 않는다. |
+| `INCIDENT_ACK` | admin 노드 → 노드 | 받은 `INCIDENT`의 사실 해시. 받을 때까지 보낸 노드가 outbox에서 재시도한다. §9. |
 | `PEERS` | 양방향 | 자기가 아는 팀원 노드 주소 목록. 발견에 쓴다. |
 
 메시지의 자유 문자열 필드는 없다. 이름·설명 같은 admin이 정한 값은 기존 감사 기록과 같은 문자 제한(제어 문자 없음, 길이 200)을 거친다.
@@ -311,6 +312,8 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 
 사건 요약은 사건이 닫혀도 지우지 않는다. 사용 기록(`http_relay`, `ssh_sign`, `run_*`)은 사건 요약에 담긴 집계 외에는 노드를 떠나지 않는다.
 
+전달은 그 순간 admin 노드에 열린 세션으로만 하는 단발 메시지이며 §6.3의 `FACT`처럼 다른 노드를 거쳐 재중계하지 않는다. 세션이 없거나 전달이 끊겨도 잃지 않도록, 보낸 노드는 서명한 사건 요약(§7.4의 `Fact`와 같은 서명·중복 제거 방식을 쓰되 admin 여부와 무관하게 아무 활성 팀원이나 보낼 수 있다)을 `team/<env-id>/incident_outbox.jsonl`에 두고 admin 하나가 사건 해시를 담은 `INCIDENT_ACK`를 보낼 때까지 `poll()`이 지수 백오프로 다시 보낸다. `INCIDENT`/`INCIDENT_ACK`는 §6.3의 메시지 표에 있다.
+
 ## 10. 보안 경계와 위협
 
 **유지되는 것.** 원본 비밀은 어느 노드에서도 에이전트·실행 코드·도구 응답·감사 기록에 나가지 않는다. 노드 사이 통신은 팀원 기기 키로 상호 인증되고 암호화되며, 어떤 메시지에도 평문 비밀이나 감싸지 않은 DEK가 없다. 모든 노드가 모든 커밋을 스스로 검증하고 접으므로, 어떤 노드도 자기 역할 이상을 다른 노드에 강제할 수 없다.
@@ -378,26 +381,28 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 - `zeropw/team/commit.py`: 커밋 모델, 서명, 형식 검증(§5.4), 하이브리드 논리 시계, 기기별 순번 저장.
 - `zeropw/team/fold.py`: 전순서 접기(§7.2), 긴급 사실 재적용, 스냅샷, 로컬 정책·금고 문서로의 파생과 정책 버전·`stale` 판정.
 - `zeropw/vault.py`: 공유 환경 비밀의 세대 키 선택과 버전 ID ↔ 정수 번호 대응.
-- 시험 `tests/test_team_commit.py`, `tests/test_team_fold.py`: 역할별 연산 허용·건너뜀, 서명·순번·환경 ID 불일치 거부, 시계 5분 초과 보류, 같은 커밋 집합을 다른 도착 순서로 접어도 같은 문서(무작위 순열 시험), 늦게 끼어든 커밋으로 다시 접기와 정책 버전 단조 증가, 넓어짐의 로컬 권한 `stale`, 긴급 사실이 순서와 무관하게 이김, 비밀 암호문의 세대 키 사용과 로컬 DEK로 복호화 불가, 파생 문서 손수정이 덮어써짐, 커밋·문서·스냅샷에 금고 값(모든 인코딩)이 없음.
+- 시험 `tests/test_team_commit.py`, `tests/test_team_fold.py`(`tests/test_team_envelope.py`, `tests/test_team_identity.py`가 봉투·기기 키를 따로 다룬다): 역할별 연산 허용·건너뜀, 서명·순번·환경 ID 불일치 거부, 시계 5분 초과 보류, 같은 커밋 집합을 다른 도착 순서로 접어도 같은 문서(무작위 순열 시험), 늦게 끼어든 커밋으로 다시 접기와 정책 버전 단조 증가, 넓어짐의 로컬 권한 `stale`, 긴급 사실이 순서와 무관하게 이김, 비밀 암호문의 세대 키 사용과 로컬 DEK로 복호화 불가, 파생 문서 손수정이 덮어써짐, 커밋·문서·스냅샷에 금고 값(모든 인코딩)이 없음. **구현 완료.**
 
 ### 단계 2 — 전송과 동기화
 
 - `zeropw/team/transport.py`: 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(핸드셰이크·프레임).
-- `zeropw/team/sync.py`: 세션 관리, `VECTOR`·`COMMIT`·`FACT`·`PEERS`, 재전파와 중복 제거, 적용(§6.5), 주기 동기화, 재시도, 멀티캐스트 신호.
+- `zeropw/team/sync.py`: 세션 관리, `VECTOR`·`COMMIT`·`FACT`·`PEERS`, 재전파와 중복 제거, 적용(§6.5), 주기 동기화, 재시도.
 - `serve --team-listen`.
-- 시험 `tests/test_team_transport.py`, `tests/test_team_sync.py`: 핸드셰이크 상호 인증(팀원 아님·제거됨·서명 불일치·환경 ID 불일치 거부, 재생 불가), 프레임 변조 거부, 두 `Context` 사이의 양방향 따라잡기, 세 노드에서 직접 닿지 않는 두 노드 사이의 전달, 동시 편집 뒤 세 노드가 같은 문서, 적용 시 실행 취소·소켓 닫기(기존 시험 패턴 재사용), 와이어 캡처에 평문 값·DEK 없음.
+- 시험 `tests/test_team_transport.py`, `tests/test_team_sync.py`: 핸드셰이크 상호 인증(팀원 아님·제거됨·서명 불일치·환경 ID 불일치 거부, 재생 불가), 프레임 변조 거부, 두 `Context` 사이의 양방향 따라잡기, 세 노드에서 직접 닿지 않는 두 노드 사이의 전달, 동시 편집 뒤 세 노드가 같은 문서, 적용 시 실행 취소·소켓 닫기(기존 시험 패턴 재사용), 와이어 캡처에 평문 값·DEK 없음. **구현 완료. §6.4의 UDP 멀티캐스트 발견은 구현하지 않았다**([구현 현황](implementation.md) §10.3): 주소는 초대·`team peers --add`·`PEERS` 재전파로만 퍼진다.
 
 ### 단계 3 — 초대·가입·제거, 긴급 사실, CLI
 
 - `zeropw/team/membership.py`: 초대 생성·소진, 가입 핸드셰이크 확장, `member.*`, `dek.rotate`.
-- `zeropw/team/facts.py`: 긴급 사실 생성·검증·전파·재적용, `facts.jsonl`.
+- 긴급 사실 생성·검증·전파·재적용, `facts.jsonl`은 (`zeropw/team/facts.py`가 아니라) `zeropw/team/sync.py`에 있다: 서명·전파·재적용은 세션·동기화 상태와 얽혀 있어 별도 모듈로 나누기보다 그 상태를 이미 쥔 `TeamSync`에 두는 쪽이 더 간단했다.
 - `team` CLI 명령군과 기존 `connection *`·`secret *`·`rotation *`의 커밋 생성.
-- 시험 `tests/test_team_membership.py`, `tests/test_team_facts.py`, `tests/test_admin_cli.py` 확장: 초대 일회성·만료, 가입 뒤 이력 수신과 접기, 제거 즉시 세션 종료와 재접속 거부, 새 세대 뒤 새 버전 복호화 불가(제거된 노드), 서로 동시 제거, 긴급 사실의 중복 처리, 복원 뒤 사실 재적용, CLI 출력에 값 없음.
+- 시험 `tests/test_team_membership.py`, `tests/test_team_facts.py`, `tests/test_team_snapshot.py`(§7.3 압축), `tests/test_admin_cli.py::TeamCliTestCase`: 초대 일회성·만료, 가입 뒤 이력 수신과 접기, 제거 즉시 세션 종료와 재접속 거부, 새 세대 뒤 새 버전 복호화 불가(제거된 노드), 서로 동시 제거, 긴급 사실의 중복 처리, 복원 뒤 사실 재적용, CLI 출력에 값 없음. **구현 완료.**
 
 ### 단계 4 — 사건 공유와 종단 시험
 
-- `zeropw/incident.py`에서 `INCIDENT` 발신과 큐, admin 노드의 수신·표시·알림.
-- `tests/test_team_e2e.py`: 별도 OS 프로세스 세 개(`serve` × 3)와 각자의 관리 CLI·에이전트 CLI로 §1의 흐름 전체. 한 노드의 범위 축소가 다른 노드의 진행 중 실행을 취소하고, 두 노드가 오프라인에서 같은 연결을 고친 뒤 재연결하면 세 노드가 같은 상태가 되며 진 쪽에 알림이 남고, 사건이 admin 노드의 `alerts`에 나타나는지 확인. 모든 노드의 상태 디렉터리·출력·와이어 캡처에서 금고 값 부재 확인.
+- `zeropw/team/sync.py`의 `send_incident`/`send_incident_for_all_envs`(공개 별칭 `on_incident_open`)와 `incident_outbox.jsonl`, `INCIDENT`/`INCIDENT_ACK`, admin 노드의 수신·표시(`team/<env-id>/incidents/`)·`rotation_flags.json`·알림(`zeropw/incident.py`가 아니다: [침해 대응](compromise-response.md)의 `open_incident`는 아직 이 브랜치의 바탕인 `main`에 없는 별도 브랜치에 있고, 그 병합 전까지는 `send_incident_for_all_envs`를 부르는 배선도 없다 — [구현 현황](implementation.md) §10.2).
+- §7.2의 `team_op_overridden` 알림(3단계까지 미구현이던 항목)을 `zeropw/team/fold.py`(감지)와 `zeropw/team/sync.py`(이 기기가 진 경우만 1회 알림)에 추가.
+- `zeropw/admin_cli.py`의 `team incidents --env P/E`.
+- `tests/test_team_e2e.py`: 별도 OS 프로세스 세 개(`serve` × 3)와 각자의 관리 CLI·에이전트 CLI로 §1의 흐름 전체. 한 노드의 범위 축소로 다른 노드의 그 경로 요청이 거부되고 그 경로를 계속 부르던 진행 중 실행도 다음 중계에서 같이 거부되어 끝나며(§6.5: 좁아짐은 진행 중 실행을 직접 취소하지 않고 다음 중계·서명에서 새 범위로 판정한다 — 명세 그대로), 두 노드가 오프라인에서 같은 연결을 고친 뒤 재연결하면 세 노드가 같은 상태가 되며 진 쪽에 `team_op_overridden` 알림이 남고, 팀원 제거 뒤 제거된 노드가 새 비밀 버전의 세대 키를 갖지 못하는지 확인. 모든 노드의 상태 디렉터리·출력·와이어 캡처(§6.1을 실제로 지나간 원시 바이트, `ZEROPW_TEAM_WIRE_CAPTURE` 시험 전용 환경변수로 켠다)에서 금고 값 부재 확인. `tests/test_team_sync.py::IncidentSharingTestCase`·`OverrideAlertTestCase`가 사건 공유·`team_op_overridden`을 더 세밀하게 다룬다. **구현 완료.**
 
 ## 14. 확정한 세부와 남은 확인
 

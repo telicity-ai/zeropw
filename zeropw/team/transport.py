@@ -86,6 +86,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import os
 import queue
 import secrets
 import socket
@@ -103,6 +104,26 @@ from .identity import DeviceKey, DeviceRecord
 PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 4 * 1024 * 1024          # plaintext cap per frame (section 6.1)
 _WIRE_FRAME_LIMIT = MAX_FRAME_BYTES + aead.TAG_SIZE + 4096   # ciphertext + slack for handshake JSON
+
+# Test-only wire recorder (docs/team-sync.md section 13 stage 4's leak sweep needs raw bytes that
+# actually crossed a real TCP socket, handshake plaintext included, not just the message dicts
+# ``Session.send``/``recv`` see).  Off by default; a test sets this env var to a file path before
+# starting a ``TcpTransport``, and every byte string ``_SocketChannel`` puts on or takes off the
+# wire is appended there as one hex-encoded line (never raw bytes, so the file stays a clean
+# newline-delimited text format for ``tests/leakcheck.py`` to scan).  Never wired into anything a
+# production ``serve`` process sets on its own.
+_WIRE_CAPTURE_ENV = "ZEROPW_TEAM_WIRE_CAPTURE"
+
+
+def _capture_wire(direction: str, data: bytes) -> None:
+    path = os.environ.get(_WIRE_CAPTURE_ENV)
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="ascii") as stream:
+            stream.write(f"{direction} {data.hex()}\n")
+    except OSError:
+        pass  # a test-only recorder must never take a real session down
 _LENGTH_BYTES = 4
 SOCKET_OP_TIMEOUT_SECONDS = 15.0
 HANDSHAKE_TIMEOUT_SECONDS = 15.0
@@ -309,6 +330,7 @@ class _SocketChannel:
             raise InvalidInput("team_frame_too_large")
         if self._closed:
             raise SessionClosed("channel_closed")
+        _capture_wire("send", data)
         header = len(data).to_bytes(_LENGTH_BYTES, "big")
         # settimeout() itself (not just sendall()) can raise a raw OSError (EBADF) if a concurrent
         # receiver thread's close() (e.g. it just discovered the peer hung up) wins a race against
@@ -354,10 +376,12 @@ class _SocketChannel:
             self.close()
             raise SessionClosed("frame_too_large")
         try:
-            return self._recv_exact(length, deadline + SOCKET_OP_TIMEOUT_SECONDS)
+            payload = self._recv_exact(length, deadline + SOCKET_OP_TIMEOUT_SECONDS)
         except _Timeout:
             self.close()
             raise SessionClosed("frame_incomplete")
+        _capture_wire("recv", payload)
+        return payload
 
     def close(self) -> None:
         if not self._closed:
