@@ -69,10 +69,23 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
     /// `Class(reason, detail)`; an empty `reason` falls back to the class default,
     /// exactly like Python's `if reason: self.reason = reason`.
-    pub fn new(class: ErrorClass, reason: impl Into<Cow<'static, str>>, detail: impl Into<String>) -> Self {
+    pub fn new(
+        class: ErrorClass,
+        reason: impl Into<Cow<'static, str>>,
+        detail: impl Into<String>,
+    ) -> Self {
         let reason = reason.into();
-        let reason = if reason.is_empty() { Cow::Borrowed(class.default_reason()) } else { reason };
-        Error { class, name: Cow::Borrowed(class.class_name()), reason, detail: detail.into() }
+        let reason = if reason.is_empty() {
+            Cow::Borrowed(class.default_reason())
+        } else {
+            reason
+        };
+        Error {
+            class,
+            name: Cow::Borrowed(class.class_name()),
+            reason,
+            detail: detail.into(),
+        }
     }
 
     /// A subclass instance: `name` differs from the base class name.
@@ -120,7 +133,11 @@ impl Error {
 
     /// `str(exc)`: `reason` or `reason: detail`.
     pub fn message(&self) -> String {
-        if self.detail.is_empty() { self.reason.to_string() } else { format!("{}: {}", self.reason, self.detail) }
+        if self.detail.is_empty() {
+            self.reason.to_string()
+        } else {
+            format!("{}: {}", self.reason, self.detail)
+        }
     }
 
     /// `ZeroPWError.to_dict()`.

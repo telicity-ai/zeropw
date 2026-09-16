@@ -11,7 +11,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().expect("repo root").to_path_buf()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .to_path_buf()
 }
 
 pub fn python(script: &str) -> String {

@@ -26,8 +26,8 @@ pub mod vault;
 pub mod context;
 
 pub mod gateway;
-pub mod sshwire;
 pub mod signer;
+pub mod sshwire;
 
 pub mod fake_upstream;
 
