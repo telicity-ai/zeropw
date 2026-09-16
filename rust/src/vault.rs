@@ -444,18 +444,24 @@ impl<'a> Vault<'a> {
     /// Decrypt a team-sync shared-environment secret version (docs/team-sync.md
     /// sections 4.2, 6.5).
     ///
-    /// SECOND-HALF: `zeropw.team.envelope.decrypt_secret` (unit H's data
-    /// layer, `rust/src/team/envelope.rs`) is still an unimplemented stub as
-    /// of this port. The generation-key lookup below (`generation_key`,
-    /// port of `vault.py`'s `_generation_key`) needs nothing from
-    /// `team::envelope` and is fully ported; only the final
-    /// AEAD-under-team-envelope decrypt call is deferred. No write path in
-    /// this crate's scope (`Vault::put_secret`) ever creates a `shared_env`
-    /// version -- only `zeropw.team.fold` (also unit H, also unimplemented)
-    /// does -- so this path is unreachable through any test in
-    /// `tests/test_core_vault.py`, and fails closed (`secret_corrupt`)
-    /// rather than guessing at `envelope.decrypt_secret`'s implementation
-    /// ahead of unit H landing.
+    /// Shared secrets are encrypted under the environment DEK generation
+    /// that was active when the version was written, not the local vault
+    /// DEK. The generation key was unwrapped once (`zeropw.team.fold`'s
+    /// `_derive_dek_generations`, `team::fold::derive_local` here) and
+    /// re-wrapped under this node's own KMS at
+    /// `team/<env-id>/dek/<generation-id>.json`; it is looked up again here
+    /// on every decrypt rather than cached. `entry` is passed straight
+    /// through to `team::envelope::decrypt_secret` as the ciphertext
+    /// record: that function only reads its own `nonce`/`ciphertext`
+    /// fields, ignoring the rest (`status`, `generation`, `shared_env`,
+    /// ...), exactly like Python's `envelope.decrypt_secret(key, env_id,
+    /// secret_id, version_id, entry)` passing the same dict along
+    /// unfiltered. Wired here (rather than left as unit H's own seam)
+    /// because `team::envelope::decrypt_secret`'s signature is a drop-in
+    /// match for this call site; no write path in this crate's scope
+    /// (`Vault::put_secret`) ever creates a `shared_env` version --
+    /// only `team::fold` does -- so this path is exercised by unit H's own
+    /// tests, not `tests/test_core_vault.py`.
     fn decrypt_shared(
         &self,
         secret_id: &str,
@@ -470,12 +476,19 @@ impl<'a> Vault<'a> {
             .get("generation")
             .and_then(Value::as_str)
             .ok_or_else(corrupt)?;
-        let _version_id = entry
+        let version_id = entry
             .get("version_id")
             .and_then(Value::as_str)
             .ok_or_else(corrupt)?;
-        let _generation_key = self.generation_key(env_id, generation_id)?;
-        Err(corrupt())
+        let generation_key = self.generation_key(env_id, generation_id)?;
+        crate::team::envelope::decrypt_secret(
+            generation_key.expose(),
+            env_id,
+            secret_id,
+            version_id,
+            entry,
+        )
+        .map_err(|_| corrupt())
     }
 
     /// Port of `vault.py`'s `Vault._generation_key`.
