@@ -36,22 +36,6 @@
 //!   connection policy version in use. Approvals expire, are invalidated by
 //!   revocation or policy changes, and a used or dead approval starts a new
 //!   cycle instead of blocking the request forever.
-//!
-//! ## SSH host key canonicalisation
-//!
-//! `zeropw/policy.py`'s `_canonical_host_key` lazily imports `zeropw.sshwire`
-//! (a *different*, in-scope but not-yet-landed work unit -- see
-//! `rust/PORTING.md` §1, unit C) purely to parse one `authorized_keys` /
-//! `.pub` line and re-serialise it canonically. Depending on `crate::sshwire`
-//! here would make this module fail to build until unit C lands, and this
-//! unit may only edit `policy.rs`. [`canonical_host_key`] below is therefore
-//! a small, self-contained reimplementation of exactly the subset of
-//! `sshwire.parse_authorized_key_entry` / `Ed25519PublicKey.to_authorized_key`
-//! that `SshTarget` needs (single `ssh-ed25519` line, no options field
-//! possible because the caller already requires the `"ssh-ed25519 "`
-//! prefix). It should be deleted in favour of calling `crate::sshwire` once
-//! unit C lands; the doc comment on [`canonical_host_key`] spells out the
-//! exact Python source it mirrors so that swap is mechanical.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -59,7 +43,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::{self, ThreadId};
 
 use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -120,22 +103,303 @@ static ENV_NAME_RE: LazyLock<Regex> =
 /// `pattern.fullmatch(s)`: the whole string must match, not merely a prefix.
 /// The `regex` crate's `^`/`$` anchors already stop at the true end of the
 /// haystack (unlike Python's `$`, which also accepts a single trailing
-/// `"\n"` in `.match()`/`.search()`) -- see `rust/DEVIATIONS.md` for the one
-/// place that distinction is observable.
+/// `"\n"` in `.match()`/`.search()` -- see [`matches_with_trailing_newline`]
+/// for the call sites that need that quirk reproduced).
 fn fullmatch(re: &Regex, s: &str) -> bool {
     re.find(s)
         .is_some_and(|m| m.start() == 0 && m.end() == s.len())
+}
+
+/// `pattern.match(s)` for a pattern of the form `^...$` (no other use of
+/// `$`, no `re.MULTILINE`, and a body that cannot itself match `"\n"` --
+/// true of every pattern this is used with). CPython's `$` in that mode
+/// matches at the true end of the string *or* immediately before a single
+/// trailing `"\n"`; `.match()` only anchors the start, so the whole pattern
+/// ends up accepting one trailing newline that `fullmatch` (and the `regex`
+/// crate's own `$`) would reject. Used for `HEADER_NAME_RE`/`ENV_NAME_RE`,
+/// which are matched with `.match()` in Python with no preceding `.strip()`;
+/// `HOST_RE` and the SSH username pattern don't need this (the former is
+/// only ever matched after `.strip()` removes a trailing newline, the latter
+/// is matched with `.fullmatch()` in Python already).
+fn matches_with_trailing_newline(re: &Regex, s: &str) -> bool {
+    if fullmatch(re, s) {
+        return true;
+    }
+    match s.strip_suffix('\n') {
+        Some(rest) => fullmatch(re, rest),
+        None => false,
+    }
+}
+
+/// `policy.HEADER_NAME_RE.match(name)`, including its CPython trailing-newline
+/// quirk (see [`matches_with_trailing_newline`]). Exposed for reuse by the
+/// header-name checks in this module and by a future port of `tools.py`,
+/// which calls `HEADER_NAME_RE.match` directly on caller-supplied header names.
+pub fn header_name_matches(name: &str) -> bool {
+    matches_with_trailing_newline(&HEADER_NAME_RE, name)
+}
+
+/// `re.match(r"^[A-Z][A-Z0-9_]{0,63}$", name)` as used by `CliProfile`'s
+/// `base_url_env`/`extra_env` validation (`policy.py:361,364`), including the
+/// same trailing-newline quirk.
+fn env_name_matches(name: &str) -> bool {
+    matches_with_trailing_newline(&ENV_NAME_RE, name)
 }
 
 fn matches_host_re(s: &str) -> bool {
     (1..=253).contains(&s.len()) && fullmatch(&HOST_RE, s)
 }
 
+/// Python truthiness of a control-flag read as `dict.get(key)` (`None` when
+/// the key is absent), e.g. `if control.get("stopped")` /
+/// `if control.get("restore_pending")` in `zeropw/policy.py`. Falsy:
+/// missing/`null`, `false`, any numeric zero (`0`, `0.0`), `""`, `[]`, `{}`.
+/// Truthy: everything else, including non-zero numbers (`1`, `-1`, `0.5`),
+/// non-empty strings (`"true"`), and non-empty arrays/objects (`[1]`) -- a
+/// stored control document is never generated with those shapes by this
+/// crate itself, but a hand-edited or foreign-written one must still be
+/// judged the way Python's `if` statement would.
+fn json_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+    }
+}
+
+// ------------------------------------------------ stored-field JSON validation
+//
+// `Connection.from_dict` (and the nested-model `build()` closure inside it)
+// reconstructs each dataclass by calling its normal constructor, so a
+// malformed *value* for a field Python still validates raises the same
+// documented `InvalidInput` reason a bad value passed to the public
+// constructor would; only a field Python's own code never `isinstance`- or
+// pattern-checks (so a bad *type* reaches a built-in operation that raises
+// uncaught, or a required key is simply absent) falls back to
+// `state_corrupt` (PORTING.md §3.5). The helpers below take the raw
+// `serde_json::Value` for one field -- not the already-narrowed Rust type --
+// so they can reproduce Python's `isinstance` checks exactly instead of
+// bailing out with a generic `state_corrupt` before that check ever runs.
+
+/// `_validate_host(host)` when `host` may not even be a JSON string:
+/// Python's own first line is `if not isinstance(host, str): raise
+/// InvalidInput("invalid_host")`.
+fn validate_host_value(v: &Value) -> Result<String, Error> {
+    match v.as_str() {
+        Some(s) => validate_host(s),
+        None => Err(Error::invalid_input("invalid_host")),
+    }
+}
+
+/// Whether a JSON number's literal source text has integer form (no `.`,
+/// `e`/`E`) -- i.e. whether CPython's `json` module would have produced an
+/// `int` rather than a `float` for it. `serde_json`'s `arbitrary_precision`
+/// feature (enabled by this crate) preserves the exact source text via
+/// `Number`'s `Display`, which is what this inspects; verified directly
+/// (`cargo test number_is_python_int_matches_json_literal_form`) against
+/// `"8080"` (integer), `"8080.0"` (float) and an out-of-`i64`-range integer
+/// literal (still integer form, just not representable by `as_i64`).
+fn number_is_python_int(n: &serde_json::Number) -> bool {
+    !n.to_string().contains(['.', 'e', 'E'])
+}
+
+/// `_validate_port(port)`: `isinstance(port, bool) or not isinstance(port,
+/// int) or not 1 <= port <= 65535` -- every one of those disjuncts raises
+/// the same `invalid_port`, so *any* JSON shape other than an in-range
+/// integer (never a JSON bool, even though `bool` is an `int` subclass in
+/// Python -- that is exactly what the first disjunct excludes) is rejected
+/// the same way, with no separate uncaught-exception case.
+fn validate_port_value(v: &Value) -> Result<i64, Error> {
+    let bad = || Error::invalid_input("invalid_port");
+    match v {
+        Value::Number(n) if number_is_python_int(n) => match n.as_i64() {
+            Some(i) if (1..=65535).contains(&i) => Ok(i),
+            _ => Err(bad()),
+        },
+        _ => Err(bad()),
+    }
+}
+
+/// `HttpTarget.__post_init__`'s `if not isinstance(self.allow_private_network,
+/// bool): raise InvalidInput(...)`. Unlike `port`/`host`, a *missing* key
+/// here is not an error: `HttpTarget(**value, check_address=False)` simply
+/// falls back to the dataclass default (`False`, itself a valid `bool`) when
+/// the kwarg is absent, whereas an explicit JSON `null` *is* passed through
+/// and fails `isinstance(None, bool)`.
+fn validate_allow_private_network_value(v: Option<&Value>) -> Result<bool, Error> {
+    match v {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(Error::invalid_input("invalid_allow_private_network")),
+    }
+}
+
+/// `SshTarget.__post_init__`'s `if not isinstance(self.username, str) or not
+/// _SSH_USERNAME_RE.fullmatch(self.username): raise
+/// InvalidInput("invalid_ssh_username")` -- a non-string username is
+/// rejected with the same reason as a badly-formed one.
+fn validate_ssh_username_value(v: &Value) -> Result<String, Error> {
+    match v.as_str() {
+        Some(s) if fullmatch(&SSH_USERNAME_RE, s) => Ok(s.to_string()),
+        _ => Err(Error::invalid_input("invalid_ssh_username")),
+    }
+}
+
+/// One raw `host_keys` element, canonicalised exactly like
+/// `_canonical_host_key(line)`: `if not isinstance(line, str) or not
+/// line.startswith(...)` rejects a non-string element with
+/// `unsupported_host_key`, the same reason a wrong-type-but-string value
+/// gets, before `canonical_host_key` itself ever runs.
+fn host_keys_from_elements<'a>(
+    items: impl Iterator<Item = &'a Value>,
+) -> Result<Vec<String>, Error> {
+    let mut out = Vec::new();
+    for item in items {
+        let line = item
+            .as_str()
+            .ok_or_else(|| Error::invalid_input("unsupported_host_key"))?;
+        out.push(canonical_host_key(line)?);
+    }
+    if out.is_empty() {
+        return Err(Error::invalid_input("ssh_host_keys_required"));
+    }
+    Ok(out)
+}
+
+/// `tuple(value["host_keys"])` followed by `SshTarget.__post_init__`'s
+/// `isinstance(..., (str, bytes)) or not host_keys` check and per-element
+/// `_canonical_host_key`, exactly as `Connection.from_dict`'s nested
+/// `build()` constructs it. Python's `tuple(x)` iterates whatever `x` is:
+///
+/// * a JSON string yields its individual *characters* as one-character
+///   `str`s; every one is far too short to start with `"ssh-ed25519 "`, so a
+///   non-empty string host_keys deterministically fails on the first
+///   character with `unsupported_host_key` -- **not** `ssh_host_keys_required`
+///   -- and only an *empty* string (`tuple("") == ()`) is falsy enough for
+///   that reason. Verified directly against `python3.12`
+///   (`SshTarget("h", 22, "u", tuple("somestring"))` raises
+///   `unsupported_host_key`; `tuple("")` raises `ssh_host_keys_required`).
+/// * a JSON array is iterated element by element (the existing, expected
+///   case).
+/// * a JSON object is iterated over its *keys* (Python `dict` iteration),
+///   each already a JSON string, so it reduces to the array case.
+/// * anything else (`null`, a number, a bool) is not iterable at all in
+///   Python, raising an uncaught `TypeError` (`state_corrupt`, PORTING.md
+///   §3.5).
+fn ssh_host_keys_from_value(v: &Value) -> Result<Vec<String>, Error> {
+    match v {
+        Value::String(s) if s.is_empty() => Err(Error::invalid_input("ssh_host_keys_required")),
+        // Any non-empty string: every "character" is a one-codepoint `str`,
+        // which can never start with a 12-codepoint prefix, so Python's
+        // generator raises on the very first element.
+        Value::String(_) => Err(Error::invalid_input("unsupported_host_key")),
+        Value::Array(items) => host_keys_from_elements(items.iter()),
+        Value::Object(map) => {
+            let keys: Vec<Value> = map.keys().cloned().map(Value::String).collect();
+            host_keys_from_elements(keys.iter())
+        }
+        _ => Err(Error::state("state_corrupt").with_detail("ssh_target")),
+    }
+}
+
+// Note on `CliProfile.base_url_env`: unlike `_validate_host`/`_validate_port`/
+// the SSH username check, `re.match(r"^[A-Z][A-Z0-9_]{0,63}$", value)` has no
+// preceding `isinstance` guard in Python, so a non-string, present
+// `base_url_env` reaches `re.match` directly and raises an uncaught
+// `TypeError` (verified against python3.12: `CliProfile("git", "http", 5,
+// {})` raises `TypeError`, not `InvalidInput`) -- `state_corrupt`, PORTING.md
+// §3.5, exactly what `CliProfile::from_value`'s `Some(_) => return
+// Err(bad())` arm for `base_url_env` already does. Every `extra_env` *key*
+// is a JSON object key and therefore always a string, so this never applies
+// there.
+
+/// `int(x)` (`Connection.from_dict`'s `policy_version=int(data["policy_version"])`),
+/// covering every JSON shape CPython's `int()` builtin accepts without
+/// raising: an integer (unchanged), a float (truncated toward zero --
+/// `int(3.7) == 3`), a bool (`int(True) == 1`, `int(False) == 0`, since
+/// `bool` is an `int` subclass), or a string `int()` itself parses (optional
+/// sign, ASCII digits, single underscores between digits, surrounding
+/// `str.isspace()` whitespace). Anything else -- `null`, a list, a dict, a
+/// non-numeric string -- raises `TypeError`/`ValueError` in Python, uncaught
+/// (PORTING.md §3.5). A magnitude Python's arbitrary-precision `int` can
+/// hold but Rust's `i64` cannot (from a huge literal, numeric string, or
+/// float) is also `None` here; see `rust/DEVIATIONS.md`.
+fn python_int_coerce(v: &Value) -> Option<i64> {
+    match v {
+        Value::Bool(b) => Some(i64::from(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i)
+            } else if number_is_python_int(n) {
+                None // integer-shaped but outside i64 range
+            } else {
+                n.as_f64()
+                    .filter(|f| f.is_finite() && f.abs() < 9.223_372_036_854_775e18)
+                    .map(|f| f.trunc() as i64)
+            }
+        }
+        Value::String(s) => python_int_from_str(s),
+        _ => None,
+    }
+}
+
+/// The numeric-literal grammar CPython's `int(str)` accepts: optional
+/// `str.isspace()` padding, an optional `+`/`-` sign, then one or more ASCII
+/// digits with single, non-leading/trailing underscores allowed between them
+/// (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`).
+fn python_int_from_str(s: &str) -> Option<i64> {
+    let trimmed = python_strip(s);
+    let (negative, digits_part) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
+        return None;
+    }
+    let mut cleaned = String::with_capacity(digits_part.len());
+    let mut prev_underscore = false;
+    for c in digits_part.chars() {
+        if c == '_' {
+            if prev_underscore {
+                return None;
+            }
+            prev_underscore = true;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        prev_underscore = false;
+        cleaned.push(c);
+    }
+    let magnitude: i64 = cleaned.parse().ok()?;
+    Some(if negative { -magnitude } else { magnitude })
+}
+
 // --------------------------------------------------------------------- models
+
+// TODO(pystr): switch to `crate::pystr::is_space` once it lands (verified
+// equal to Python `str.isspace()` over all code points: Rust's
+// `char::is_whitespace()` -- the Unicode `White_Space` property -- already
+// covers everything Python's `str.isspace()` does except the four
+// bidirectional-class-`B`/`S` ASCII separators `\x1c`-`\x1f`, which Python
+// also treats as whitespace).
+fn is_python_whitespace(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
+/// `str.strip()` with CPython's exact `str.isspace()` predicate (see
+/// [`is_python_whitespace`]), not Rust's narrower `char::is_whitespace()`.
+fn python_strip(s: &str) -> &str {
+    s.trim_matches(is_python_whitespace)
+}
 
 /// `policy._validate_host`.
 fn validate_host(host: &str) -> Result<String, Error> {
-    let lowered = host.trim().to_lowercase();
+    let lowered = python_strip(host).to_lowercase();
     if parse_ip_literal(&lowered).is_some() {
         return Ok(lowered);
     }
@@ -572,23 +836,43 @@ impl HttpTarget {
         })
     }
 
+    /// `HttpTarget(**value, check_address=False)` in `Connection.from_dict`.
+    /// A field Python's `__post_init__` still validates (`scheme`, `host`,
+    /// `port`, `allow_private_network`) raises the same documented
+    /// `InvalidInput` reason for a wrong-type stored value that it would for
+    /// a wrong *value*, not `state_corrupt`; only a missing required key
+    /// (`scheme`/`host`/`port` have no dataclass default, so kwarg
+    /// unpacking raises an uncaught `TypeError` for them) falls back to
+    /// `state_corrupt` (PORTING.md §3.5).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("http_target"))?;
-        let bad = || Error::state("state_corrupt").with_detail("http_target");
-        let scheme = obj.get("scheme").and_then(Value::as_str).ok_or_else(bad)?;
-        let host = obj.get("host").and_then(Value::as_str).ok_or_else(bad)?;
-        let port = obj.get("port").and_then(Value::as_i64).ok_or_else(bad)?;
+        let missing = || Error::state("state_corrupt").with_detail("http_target");
+        let scheme_v = obj.get("scheme").ok_or_else(missing)?;
+        let scheme = match scheme_v.as_str() {
+            // `self.scheme not in ("http", "https")`: a plain equality
+            // check, no `isinstance` guard, so any non-matching type is
+            // rejected the same documented way as a non-matching string.
+            Some(s) if s == "http" || s == "https" => s.to_string(),
+            _ => return Err(Error::invalid_input("invalid_scheme")),
+        };
+        let host = validate_host_value(obj.get("host").ok_or_else(missing)?)?;
+        let port = validate_port_value(obj.get("port").ok_or_else(missing)?)?;
         let ca_file = match obj.get("ca_file") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.clone()),
-            Some(_) => return Err(bad()),
+            // Python's `ca_file: str | None = None` field has no
+            // `__post_init__` check at all: a non-string, non-null stored
+            // value loads successfully and is kept verbatim. Rust's typed
+            // `Option<String>` cannot represent that value; rejecting it is
+            // a genuine, documented residual (see DEVIATIONS.md),
+            // unreachable via any writer in this crate or the matching
+            // Python code path (both only ever store a string or null).
+            Some(_) => return Err(Error::state("state_corrupt").with_detail("http_target")),
         };
-        let allow_private_network = obj
-            .get("allow_private_network")
-            .and_then(Value::as_bool)
-            .ok_or_else(bad)?;
+        let allow_private_network =
+            validate_allow_private_network_value(obj.get("allow_private_network"))?;
         Self::from_stored(scheme, host, port, ca_file, allow_private_network)
     }
 }
@@ -615,7 +899,7 @@ impl HttpAuth {
         if mode == "header" {
             let ok_name = header_name
                 .as_deref()
-                .is_some_and(|n| !n.is_empty() && fullmatch(&HEADER_NAME_RE, n));
+                .is_some_and(|n| !n.is_empty() && header_name_matches(n));
             if !ok_name {
                 return Err(Error::invalid_input("invalid_header_name"));
             }
@@ -658,24 +942,57 @@ impl HttpAuth {
         })
     }
 
+    /// `HttpAuth(**value)`. Like `HttpTarget`'s `scheme`, `self.mode not in
+    /// AUTH_MODES` is a plain equality check with no `isinstance` guard, so
+    /// a non-string, present `mode` gets the same documented
+    /// `unsupported_auth_mode` a wrong-string mode would, not
+    /// `state_corrupt`. `header_name`/`value_prefix`/`basic_username`
+    /// remain `state_corrupt` for any present non-string/non-null value:
+    /// see the `policy` row in `DEVIATIONS.md` for the residual this still
+    /// leaves (Python's own checks on those fields are considerably more
+    /// irregular -- see the `DEVIATIONS.md` row for exactly which shapes
+    /// that covers).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("http_auth"))?;
         let bad = || Error::state("state_corrupt").with_detail("http_auth");
-        let mode = obj.get("mode").and_then(Value::as_str).ok_or_else(bad)?;
-        let opt_str = |key: &str| -> Result<Option<String>, Error> {
+        let mode_v = obj.get("mode").ok_or_else(bad)?;
+        let mode = match mode_v.as_str() {
+            Some(s) if AUTH_MODES.contains(&s) => s.to_string(),
+            _ => return Err(Error::invalid_input("unsupported_auth_mode")),
+        };
+        // `header_name`/`basic_username` are only validated by Python at all
+        // when `mode` requires them (`if self.mode == "header": ...`); when
+        // it does, `if not self.header_name or not HEADER_NAME_RE.match(...)`
+        // (`self.basic_username` similarly) short-circuits on a *falsy*
+        // value before ever reaching `isinstance`/the regex, so a present
+        // but falsy non-string value (`0`, `false`, `[]`, `{}`) still gets
+        // the documented `invalid_header_name`/`invalid_basic_username`
+        // reason in Python, not an uncaught `TypeError` -- coercing it to
+        // `None` here reproduces that (`HttpAuth::new` treats a `None`
+        // `header_name`/`basic_username` the same falsy way). A *truthy*
+        // non-string value when the field applies (a number, a non-empty
+        // list/dict) still reaches Python's `re.match`/`in` and is an
+        // uncaught `TypeError` there in every case this crate's own tests
+        // exercise (`state_corrupt`, PORTING.md §3.5); when the field does
+        // not apply to this `mode` at all, Python validates it not at all,
+        // which Rust's typed `Option<String>` still cannot represent for a
+        // non-string value -- a real, narrower residual (see
+        // `DEVIATIONS.md`).
+        let opt_str = |key: &str, applies_for_mode: bool| -> Result<Option<String>, Error> {
             match obj.get(key) {
                 None | Some(Value::Null) => Ok(None),
                 Some(Value::String(s)) => Ok(Some(s.clone())),
+                Some(v) if applies_for_mode && !json_truthy(Some(v)) => Ok(None),
                 _ => Err(bad()),
             }
         };
         HttpAuth::new(
-            mode,
-            opt_str("header_name")?,
-            opt_str("value_prefix")?,
-            opt_str("basic_username")?,
+            mode.clone(),
+            opt_str("header_name", mode == "header")?,
+            opt_str("value_prefix", false)?,
+            opt_str("basic_username", mode == "basic")?,
         )
     }
 }
@@ -854,42 +1171,39 @@ impl SshTarget {
         })
     }
 
+    /// `SshTarget(value["host"], value["port"], value["username"],
+    /// tuple(value["host_keys"]))` in `Connection.from_dict`. Every field is
+    /// indexed directly (no `.get()` default), so a missing key is an
+    /// uncaught Python `KeyError` (`state_corrupt`, PORTING.md §3.5); a
+    /// present-but-wrong-type value instead reaches the same
+    /// `__post_init__` checks a bad *value* would, and gets the same
+    /// documented `InvalidInput` reason (see [`validate_host_value`],
+    /// [`validate_port_value`], [`validate_ssh_username_value`],
+    /// [`ssh_host_keys_from_value`]).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("ssh_target"))?;
-        let bad = || Error::state("state_corrupt").with_detail("ssh_target");
-        let host = obj.get("host").and_then(Value::as_str).ok_or_else(bad)?;
-        let port = obj.get("port").and_then(Value::as_i64).ok_or_else(bad)?;
-        let username = obj
-            .get("username")
-            .and_then(Value::as_str)
-            .ok_or_else(bad)?;
-        let host_keys: Vec<String> = obj
-            .get("host_keys")
-            .and_then(Value::as_array)
-            .ok_or_else(bad)?
-            .iter()
-            .map(|i| i.as_str().map(str::to_string).ok_or_else(bad))
-            .collect::<Result<_, _>>()?;
+        let missing = || Error::state("state_corrupt").with_detail("ssh_target");
+        let host = validate_host_value(obj.get("host").ok_or_else(missing)?)?;
+        let port = validate_port_value(obj.get("port").ok_or_else(missing)?)?;
+        let username = validate_ssh_username_value(obj.get("username").ok_or_else(missing)?)?;
+        let host_keys = ssh_host_keys_from_value(obj.get("host_keys").ok_or_else(missing)?)?;
         SshTarget::new(host, port, username, host_keys)
     }
 }
 
-/// A scoped reimplementation of `sshwire.parse_authorized_key_entry` +
-/// `Ed25519PublicKey.to_authorized_key`, for exactly the shape
-/// `SshTarget.__post_init__`'s `_canonical_host_key` needs -- see the module
-/// doc comment for why this does not simply call `crate::sshwire`.
-///
-/// Mirrors `policy._canonical_host_key` (`zeropw/policy.py`): the line must
-/// start with `"ssh-ed25519 "` (checked by the caller in Python via
-/// `startswith`; replicated here) and contain no ASCII control character
-/// (`\x00`-`\x1f`, `\x7f`). Because the type token is then always
-/// `"ssh-ed25519"` -- which `sshwire._KEY_TYPE_RE` matches unconditionally --
-/// `AuthorizedKeyEntry.options` is always empty on this path, so unlike the
-/// general-purpose `sshwire` parser this port does not implement the
-/// options-field grammar at all (`entry.options: raise "invalid_host_key"`
-/// in Python is dead code on this call path).
+/// `policy._canonical_host_key` (`zeropw/policy.py`): the line must start
+/// with `"ssh-ed25519 "` and contain no ASCII control character
+/// (`\x00`-`\x1f`, `\x7f`), then parses via `crate::sshwire`'s
+/// general-purpose `authorized_keys` parser and re-serialises canonically.
+/// Python wraps the parse/serialise step in `except (sshwire.WireError,
+/// ValueError)`; since `sshwire.WireError` is itself a `ValueError`
+/// subclass, that catches every error either call can raise, tagged or not
+/// (`crate::sshwire::WireError`'s three-way `kind` -- see its doc comment --
+/// so `is_wire_error()`/`is_unsupported()` distinguish those cases for
+/// *other* callers, but `_canonical_host_key` itself does not care which
+/// kind it got).
 fn canonical_host_key(line: &str) -> Result<String, Error> {
     if !line.starts_with("ssh-ed25519 ") {
         return Err(Error::invalid_input("unsupported_host_key"));
@@ -898,84 +1212,14 @@ fn canonical_host_key(line: &str) -> Result<String, Error> {
         return Err(Error::invalid_input("invalid_host_key"));
     }
     let bad = || Error::invalid_input("invalid_host_key");
-    // `line.strip(_AUTHORIZED_KEYS_BLANK + "\r\n")`: control chars (incl.
-    // tab/\r/\n) are already excluded above, so this only trims spaces.
-    let stripped = line.trim_matches(' ');
-    if stripped.chars().any(|c| c != ' ' && c.is_whitespace()) {
+    let entry = crate::sshwire::parse_authorized_key_entry(line).map_err(|_| bad())?;
+    if !entry.options.is_empty() {
         return Err(bad());
     }
-    let parts = split_on_space_runs(stripped, 2);
-    if parts.len() < 2 {
-        return Err(bad());
-    }
-    if parts[0] != "ssh-ed25519" {
-        return Err(bad());
-    }
-    let blob = BASE64_STANDARD.decode(parts[1]).map_err(|_| bad())?;
-    if blob.len() < 4 {
-        return Err(bad());
-    }
-    let mut pos = 0usize;
-    let key_type = read_wire_string(&blob, &mut pos).ok_or_else(bad)?;
-    if key_type != b"ssh-ed25519" {
-        return Err(bad());
-    }
-    let key_bytes = read_wire_string(&blob, &mut pos).ok_or_else(bad)?;
-    if key_bytes.len() != 32 {
-        return Err(bad());
-    }
-    if pos != blob.len() {
-        return Err(bad());
-    }
-    let comment = parts.get(2).map(|c| c.trim_matches(' ')).unwrap_or("");
-    let mut canonical_blob = Vec::with_capacity(4 + 11 + 4 + 32);
-    canonical_blob.extend_from_slice(&(11u32).to_be_bytes());
-    canonical_blob.extend_from_slice(b"ssh-ed25519");
-    canonical_blob.extend_from_slice(&(32u32).to_be_bytes());
-    canonical_blob.extend_from_slice(key_bytes);
-    let b64 = BASE64_STANDARD.encode(canonical_blob);
-    Ok(if comment.is_empty() {
-        format!("ssh-ed25519 {b64}")
-    } else {
-        format!("ssh-ed25519 {b64} {comment}")
-    })
-}
-
-fn read_wire_string<'a>(buf: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
-    if *pos + 4 > buf.len() {
-        return None;
-    }
-    let len = u32::from_be_bytes(buf[*pos..*pos + 4].try_into().ok()?) as usize;
-    *pos += 4;
-    if *pos + len > buf.len() {
-        return None;
-    }
-    let s = &buf[*pos..*pos + len];
-    *pos += len;
-    Some(s)
-}
-
-/// `re.split(r"[ \t]+", text, maxsplit)` restricted to plain spaces (the
-/// caller has already excluded tabs via the control-character check): splits
-/// at the first `maxsplit` runs of one-or-more spaces, leaving the remainder
-/// (which may itself contain spaces, e.g. a multi-word comment) as the last
-/// element.
-fn split_on_space_runs(s: &str, maxsplit: usize) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut remaining = s;
-    while result.len() < maxsplit {
-        match remaining.find(' ') {
-            None => break,
-            Some(idx) => {
-                result.push(&remaining[..idx]);
-                let after = &remaining[idx..];
-                let run_len = after.chars().take_while(|&c| c == ' ').count();
-                remaining = &after[run_len..];
-            }
-        }
-    }
-    result.push(remaining);
-    result
+    entry
+        .key
+        .to_authorized_key(&entry.comment)
+        .map_err(|_| bad())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1002,11 +1246,11 @@ impl CliProfile {
         if program.is_empty() || program.contains('\0') {
             return Err(Error::invalid_input("invalid_cli_program"));
         }
-        if !ENV_NAME_RE.is_match(&base_url_env) {
+        if !env_name_matches(&base_url_env) {
             return Err(Error::invalid_input("invalid_env_name"));
         }
         for (key, value) in &extra_env {
-            if !ENV_NAME_RE.is_match(key) || key == "SSH_AUTH_SOCK" || key == &base_url_env {
+            if !env_name_matches(key) || key == "SSH_AUTH_SOCK" || key == &base_url_env {
                 return Err(Error::invalid_input("invalid_env_name"));
             }
             if value.contains('\0') {
@@ -1028,29 +1272,49 @@ impl CliProfile {
         })
     }
 
+    /// `CliProfile(value["program"], value["kind"], value.get("base_url_env",
+    /// "ZEROPW_API_BASE_URL"), dict(value.get("extra_env") or {}))` in
+    /// `Connection.from_dict`. `base_url_env` reaches `re.match` with no
+    /// preceding `isinstance` guard, so a non-string *present* value raises
+    /// an uncaught `TypeError` in Python, same as a missing `program`/`kind`
+    /// key does (`Value::as_str`/`ok_or_else` below already reproduces both
+    /// as `state_corrupt`, PORTING.md §3.5); `extra_env`'s per-entry *value*
+    /// does have a documented `isinstance(value, str)` check
+    /// (`invalid_env_value`), and a falsy (not just missing) `extra_env`
+    /// itself is replaced with `{}` by Python's `... or {}` before `dict()`
+    /// ever runs.
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("cli"))?;
         let bad = || Error::state("state_corrupt").with_detail("cli");
         let program = obj.get("program").and_then(Value::as_str).ok_or_else(bad)?;
-        let kind = obj.get("kind").and_then(Value::as_str).ok_or_else(bad)?;
+        // `self.kind not in CONNECTION_KINDS`: a plain equality check, no
+        // `isinstance` guard (same shape as `HttpTarget.scheme` and
+        // `HttpAuth.mode` above), so a non-string, present `kind` gets the
+        // documented `invalid_cli_kind`, not `state_corrupt`; `CliProfile::new`
+        // below still does the actual membership check.
+        let kind = match obj.get("kind").ok_or_else(bad)?.as_str() {
+            Some(s) => s.to_string(),
+            None => return Err(Error::invalid_input("invalid_cli_kind")),
+        };
         let base_url_env = match obj.get("base_url_env") {
             None => None,
             Some(Value::String(s)) => Some(s.clone()),
-            _ => return Err(bad()),
+            Some(_) => return Err(bad()),
         };
         let extra_env = match obj.get("extra_env") {
-            None | Some(Value::Null) => std::collections::BTreeMap::new(),
+            None => std::collections::BTreeMap::new(),
             Some(Value::Object(m)) => m
                 .iter()
                 .map(|(k, val)| {
                     val.as_str()
                         .map(|s| (k.clone(), s.to_string()))
-                        .ok_or_else(bad)
+                        .ok_or_else(|| Error::invalid_input("invalid_env_value"))
                 })
                 .collect::<Result<_, _>>()?,
-            _ => return Err(bad()),
+            Some(other) if !json_truthy(Some(other)) => std::collections::BTreeMap::new(),
+            Some(_) => return Err(bad()),
         };
         CliProfile::new(program, kind, base_url_env, extra_env)
     }
@@ -1278,26 +1542,54 @@ impl Connection {
                 .map(str::to_string)
                 .ok_or_else(bad)
         };
+        // `self.kind not in CONNECTION_KINDS`: a plain equality check, no
+        // `isinstance` guard (same shape as `HttpTarget.scheme`,
+        // `HttpAuth.mode` and `CliProfile.kind` above), so a non-string,
+        // present `kind` gets the documented `invalid_connection_kind`, not
+        // `state_corrupt`; `Connection::new` below still does the actual
+        // membership check.
+        let kind = match obj.get("kind").ok_or_else(bad)?.as_str() {
+            Some(s) => s.to_string(),
+            None => return Err(Error::invalid_input("invalid_connection_kind")),
+        };
         let opt_val = |key: &str| -> Option<&Value> {
             match obj.get(key) {
                 Some(Value::Null) | None => None,
                 Some(v) => Some(v),
             }
         };
+        // `secret_version=data.get("secret_version")`: Python stores this
+        // field completely untyped -- there is no `__post_init__` check on
+        // it at all, so any JSON shape loads successfully and is kept
+        // verbatim (a string, a list, a bool, a float, an out-of-`i64`-range
+        // integer, ...). Every writer in this crate -- and the matching
+        // Python write paths -- only ever stores an integer or `null`;
+        // anything else here can only come from a hand-edited state file,
+        // and Rust's typed `Option<i64>` (used throughout this module for
+        // credential-version comparisons) cannot represent the untyped
+        // Python value, so it is rejected as `state_corrupt` -- a real,
+        // documented residual (see DEVIATIONS.md), not a §3.5 case (Python
+        // itself raises nothing here).
         let secret_version = match obj.get("secret_version") {
             None | Some(Value::Null) => None,
             Some(v) => Some(v.as_i64().ok_or_else(bad)?),
         };
+        // `policy_version=int(data["policy_version"])`: a missing key is an
+        // uncaught `KeyError`, and any shape `int()` itself would raise on
+        // (`None`, a list, a non-numeric string, a magnitude too large for
+        // `i64`) is an uncaught `TypeError`/`ValueError` -- both §3.5,
+        // `state_corrupt` either way. [`python_int_coerce`] reproduces
+        // exactly the shapes `int()` *does* accept (see its doc comment).
         let policy_version = obj
             .get("policy_version")
-            .and_then(Value::as_i64)
+            .and_then(python_int_coerce)
             .ok_or_else(bad)?;
         Connection::new(
             str_field("id")?,
             str_field("project")?,
             str_field("environment")?,
             str_field("service")?,
-            str_field("kind")?,
+            kind,
             str_field("secret_id")?,
             secret_version,
             obj.get("description")
@@ -1316,7 +1608,15 @@ impl Connection {
                 .transpose()?,
             opt_val("cli").map(CliProfile::from_value).transpose()?,
             policy_version,
-            str_field("status")?,
+            // `self.status not in ("active", "disabled")`: another plain
+            // equality check, same shape as `kind` above -- a non-string,
+            // present `status` gets the documented `invalid_status`, not
+            // `state_corrupt`; `Connection::new` still does the membership
+            // check itself.
+            match obj.get("status").ok_or_else(bad)?.as_str() {
+                Some(s) => s.to_string(),
+                None => return Err(Error::invalid_input("invalid_status")),
+            },
             str_field("created_at")?,
             str_field("updated_at")?,
         )
@@ -1351,8 +1651,15 @@ impl Connection {
             view.insert(
                 "scope".into(),
                 json!({
-                    "methods": match &scope.methods { Some(m) => Value::from(m.clone()), None => Value::String("all".into()) },
-                    "path_prefixes": match &scope.path_prefixes { Some(p) => Value::from(p.clone()), None => Value::String("all".into()) },
+                    // Python: `list(...) if self.http_scope.methods else "all"`
+                    // -- falsy, not `is None`: an explicitly empty
+                    // `methods`/`path_prefixes` (legal for `methods`; only
+                    // reachable for `path_prefixes` via a hand-corrupted
+                    // stored document, since `HttpScope.__post_init__`
+                    // rejects an empty `path_prefixes`) also displays as
+                    // `"all"`.
+                    "methods": match &scope.methods { Some(m) if !m.is_empty() => Value::from(m.clone()), _ => Value::String("all".into()) },
+                    "path_prefixes": match &scope.path_prefixes { Some(p) if !p.is_empty() => Value::from(p.clone()), _ => Value::String("all".into()) },
                     "confirm_methods": scope.confirm_methods,
                 }),
             );
@@ -2689,11 +2996,7 @@ impl<'a> Policy<'a> {
     }
 
     pub fn is_stopped(&self) -> Result<bool, Error> {
-        Ok(self
-            .control()?
-            .get("stopped")
-            .and_then(Value::as_bool)
-            .unwrap_or(false))
+        Ok(json_truthy(self.control()?.get("stopped")))
     }
 
     // ------------------ compromise-response incidents (docs/compromise-response.md)
@@ -2736,11 +3039,7 @@ impl<'a> Policy<'a> {
     }
 
     pub fn restore_pending(&self) -> Result<bool, Error> {
-        Ok(self
-            .control()?
-            .get("restore_pending")
-            .and_then(Value::as_bool)
-            .unwrap_or(false))
+        Ok(json_truthy(self.control()?.get("restore_pending")))
     }
 
     // ------------------------------------------------------------ approvals
@@ -2827,13 +3126,22 @@ impl<'a> Policy<'a> {
         }
     }
 
-    fn usable_grant_id(&self, caller: &str, connection_id: &str) -> Option<String> {
-        let decision = self.decide(caller, connection_id, None, None).ok()?;
-        if decision.allowed {
+    /// `_usable_grant_id`: unlike most of this module's internal helpers,
+    /// Python's `_decide(...)` here is *not* wrapped in a `try`/`except` --
+    /// an exception (e.g. `StateError` on corrupt state) propagates straight
+    /// out of `_usable_grant_id` and out of `request_approval`, which writes
+    /// nothing in that case. `.ok()?` previously swallowed every error the
+    /// same way a caught-and-discarded exception would, which is wrong: it
+    /// let `request_approval` silently write an approval with `"grant":
+    /// null` instead of failing (matching Python's `AttributeError`-adjacent
+    /// crash-and-write-nothing behaviour).
+    fn usable_grant_id(&self, caller: &str, connection_id: &str) -> Result<Option<String>, Error> {
+        let decision = self.decide(caller, connection_id, None, None)?;
+        Ok(if decision.allowed {
             decision.grant.map(|g| g.id)
         } else {
             None
-        }
+        })
     }
 
     /// Open (or return the open) approval for `digest`.
@@ -2893,7 +3201,7 @@ impl<'a> Policy<'a> {
         }
         let grant = match &evaluated {
             Some(ev) => Some(ev.grant.clone()),
-            None => self.usable_grant_id(caller, connection),
+            None => self.usable_grant_id(caller, connection)?,
         };
         let entry = json!({
             "caller": caller, "connection": connection, "method": method, "path": path,
@@ -3259,18 +3567,10 @@ impl<'a> Policy<'a> {
         grant_id: Option<&str>,
     ) -> Result<Decision, Error> {
         let control = self.control()?;
-        if control
-            .get("restore_pending")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if json_truthy(control.get("restore_pending")) {
             return Ok(Decision::denied("restore_pending"));
         }
-        if control
-            .get("stopped")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if json_truthy(control.get("stopped")) {
             return Ok(Decision::denied("global_stop"));
         }
         let principal = match self.get_principal(caller) {
@@ -3441,15 +3741,7 @@ impl<'a> Policy<'a> {
     /// each.
     pub fn usable_connections(&self, caller: &str) -> Result<Vec<(Connection, Grant)>, Error> {
         let control = self.control()?;
-        if control
-            .get("restore_pending")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            || control
-                .get("stopped")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        {
+        if json_truthy(control.get("restore_pending")) || json_truthy(control.get("stopped")) {
             return Ok(Vec::new());
         }
         let mut result = Vec::new();
@@ -3478,6 +3770,23 @@ mod tests {
 
     use super::*;
 
+    /// Documents the `serde_json` `arbitrary_precision` behaviour
+    /// [`number_is_python_int`] and [`validate_port_value`]/
+    /// [`python_int_coerce`] rely on: an integer-literal token (even one too
+    /// large for `i64`) round-trips through `Number`'s exact source text,
+    /// while a float-literal token (containing `.`/`e`/`E`) is
+    /// distinguishable from it.
+    #[test]
+    fn number_is_python_int_matches_json_literal_form() {
+        let int_tok: Value = serde_json::from_str("8080").unwrap();
+        let float_tok: Value = serde_json::from_str("8080.0").unwrap();
+        let huge_int_tok: Value = serde_json::from_str("1180591620717411303424").unwrap();
+        assert!(number_is_python_int(int_tok.as_number().unwrap()));
+        assert!(!number_is_python_int(float_tok.as_number().unwrap()));
+        assert!(number_is_python_int(huge_int_tok.as_number().unwrap()));
+        assert_eq!(huge_int_tok.as_i64(), None);
+    }
+
     fn new_state_and_clock() -> (TempDir, StateDir, Arc<Mutex<f64>>) {
         let tmp = TempDir::new().unwrap();
         let state = StateDir::new(tmp.path().join("state"));
@@ -3498,6 +3807,32 @@ mod tests {
         let token = policy.create_principal("agent-1", "default").unwrap();
         policy.create_connection(http_connection("gh")).unwrap();
         (tmp, state, clock_val, token)
+    }
+
+    /// `with self.assertRaises(InvalidInput): ...`: the class matters, not
+    /// just that construction failed somehow.
+    fn assert_invalid_input<T: std::fmt::Debug>(r: Result<T, Error>) {
+        assert!(r.unwrap_err().is(ErrorClass::InvalidInput));
+    }
+
+    /// `assert_consume_denied` (`tests/test_core_policy.py`): `consume`
+    /// must both raise `PolicyDenied` and carry the expected `reason` --
+    /// not just fail somehow.
+    #[allow(clippy::too_many_arguments)]
+    fn assert_consume_denied(
+        policy: &Policy,
+        grant_id: &str,
+        caller: Option<&str>,
+        connection_id: Option<&str>,
+        action: Option<Action>,
+        policy_version: Option<i64>,
+        reason: &str,
+    ) {
+        let err = policy
+            .consume(grant_id, caller, connection_id, action, policy_version)
+            .unwrap_err();
+        assert!(err.is(ErrorClass::PolicyDenied), "{err:?}");
+        assert_eq!(err.reason, reason);
     }
 
     /// `http_connection(cid="gh", **overrides)` for the common case (no
@@ -3615,13 +3950,24 @@ mod tests {
         let text =
             std::fs::read_to_string(state.path.join("policy").join("principals.json")).unwrap();
         assert!(!text.contains(&token));
-        assert!(policy.authenticate(&format!("{token}x")).is_err());
+        assert!(
+            policy
+                .authenticate(&format!("{token}x"))
+                .unwrap_err()
+                .is(ErrorClass::AuthFailed)
+        );
         assert!(
             policy
                 .authenticate(&format!("zpwc_{}", "a".repeat(43)))
-                .is_err()
+                .unwrap_err()
+                .is(ErrorClass::AuthFailed)
         );
-        assert!(policy.authenticate("").is_err());
+        assert!(
+            policy
+                .authenticate("")
+                .unwrap_err()
+                .is(ErrorClass::AuthFailed)
+        );
     }
 
     #[test]
@@ -3632,7 +3978,12 @@ mod tests {
             .create_grant("agent-1", "gh", Some(3600), None)
             .unwrap();
         policy.disable_principal("agent-1", true).unwrap();
-        assert!(policy.authenticate(&token).is_err());
+        assert!(
+            policy
+                .authenticate(&token)
+                .unwrap_err()
+                .is(ErrorClass::AuthFailed)
+        );
         let decision = policy
             .evaluate("agent-1", "gh", &Action::http("GET", "/repos"), None)
             .unwrap();
@@ -3650,7 +4001,7 @@ mod tests {
             .unwrap();
         assert!(!decision.allowed);
         assert_eq!(decision.reason, "no_grant");
-        assert!(decision.require().is_err());
+        assert!(decision.require().unwrap_err().is(ErrorClass::PolicyDenied));
     }
 
     #[test]
@@ -3820,10 +4171,15 @@ mod tests {
             .unwrap();
         policy.consume(&grant.id, None, None, None, None).unwrap();
         policy.consume(&grant.id, None, None, None, None).unwrap();
-        let err = policy
-            .consume(&grant.id, None, None, None, None)
-            .unwrap_err();
-        assert_eq!(err.reason, "grant_exhausted");
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            None,
+            None,
+            "grant_exhausted",
+        );
         assert_eq!(
             policy
                 .evaluate("agent-1", "gh", &Action::http("GET", "/repos"), None)
@@ -3858,13 +4214,23 @@ mod tests {
                 .reason,
             "grant_revoked"
         );
-        assert!(policy.consume(&grant.id, None, None, None, None).is_err());
+        assert!(
+            policy
+                .consume(&grant.id, None, None, None, None)
+                .unwrap_err()
+                .is(ErrorClass::PolicyDenied)
+        );
         assert!(
             seen.lock()
                 .unwrap()
                 .contains(&("grant".to_string(), Some(grant.id.clone())))
         );
-        assert!(policy.revoke_grant("g-missing").is_err());
+        assert!(
+            policy
+                .revoke_grant("g-missing")
+                .unwrap_err()
+                .is(ErrorClass::NotFound)
+        );
     }
 
     #[test]
@@ -4041,7 +4407,8 @@ mod tests {
         assert!(
             policy
                 .create_grant("agent-1", "gh", Some(10), None)
-                .is_err()
+                .unwrap_err()
+                .is(ErrorClass::InvalidInput)
         );
     }
 
@@ -4067,9 +4434,19 @@ mod tests {
                 .consume_approval(&digest, "agent-1", "gh", None, None)
                 .unwrap()
         );
-        assert!(policy.approve(&"0".repeat(64)).is_err());
+        assert!(
+            policy
+                .approve(&"0".repeat(64))
+                .unwrap_err()
+                .is(ErrorClass::NotFound)
+        );
         policy.approve(&digest).unwrap();
-        assert!(policy.approve(&digest).is_err());
+        assert!(
+            policy
+                .approve(&digest)
+                .unwrap_err()
+                .is(ErrorClass::InvalidInput)
+        );
         assert!(
             !policy
                 .consume_approval(&digest, "agent-2", "gh", None, None)
@@ -4087,65 +4464,131 @@ mod tests {
         );
     }
 
+    /// D-8: `_usable_grant_id`'s `_decide(...)` call is not wrapped in Python
+    /// (unlike almost every other internal use of `_decide`/`decide`), so an
+    /// exception propagates straight out of `request_approval`, which writes
+    /// nothing. The Rust port previously used `.ok()?`, silently treating a
+    /// corrupt-state error exactly like "no usable grant" and writing an
+    /// approval with `"grant": null` anyway -- this pins the fix: a corrupt
+    /// grant for the very caller/connection being approved must fail
+    /// `request_approval` outright, and the approval must not appear in
+    /// `control.json` afterwards.
+    #[test]
+    fn request_approval_propagates_corrupt_state_instead_of_writing_a_grantless_approval() {
+        let (_tmp, state, clock_val, _token) = setup();
+        let policy = Policy::new(&state, make_clock(&clock_val));
+        let grant = policy
+            .create_grant("agent-1", "gh", Some(3600), None)
+            .unwrap();
+        // Corrupt this grant's `status` field (a JSON number instead of a
+        // string): `list_grants` -- called by `_decide`/`decide` when no
+        // `grant_id` is given, exactly the path `_usable_grant_id` takes --
+        // parses every grant belonging to this caller, so this makes
+        // `decide` itself fail with `state_corrupt`, not merely
+        // `NotFound`/`no_grant`.
+        let mut doc = state.read_json(GRANTS, json!({})).unwrap();
+        doc.as_object_mut().unwrap()[&grant.id]["status"] = json!(5);
+        state.write_json(GRANTS, &doc).unwrap();
+
+        let digest = approval_digest("agent-1", "gh", "DELETE", "/repos/demo", b"");
+        // No preceding `evaluate()`: `recall_pair` finds nothing remembered,
+        // so `request_approval` must fall back to `usable_grant_id`, which is
+        // exactly the path under test.
+        let err = policy
+            .request_approval(&digest, "agent-1", "gh", "DELETE", "/repos/demo")
+            .unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        let control = state.read_json(CONTROL, json!({})).unwrap();
+        let approvals = control.get("approvals").and_then(Value::as_object);
+        assert!(
+            approvals.is_none_or(|a| !a.contains_key(&digest)),
+            "no approval should have been written for a corrupt-state failure"
+        );
+    }
+
     // ------------------------------------------------------------ validation
     #[test]
     fn connection_validation_rejects_bad_targets() {
-        assert!(HttpTarget::new("ftp", "example.com", 21, None, false).is_err());
-        assert!(HttpTarget::new("https", "http://example.com", 443, None, false).is_err());
-        assert!(HttpTarget::new("https", "example.com/path", 443, None, false).is_err());
-        assert!(HttpTarget::new("https", "user@example.com", 443, None, false).is_err());
-        assert!(HttpTarget::new("https", "example.com", 0, None, false).is_err());
-        assert!(HttpAuth::new("query", None, None, None).is_err());
-        assert!(HttpAuth::new("header", Some("Host".into()), None, None).is_err());
-        assert!(HttpAuth::new("header", Some("X Bad".into()), None, None).is_err());
-        assert!(HttpAuth::new("basic", None, None, Some("a:b".into())).is_err());
-        assert!(
-            HttpScope::new(Some(vec!["GET".into()]), Some(vec!["repos".into()]), vec![]).is_err()
-        );
-        assert!(
-            HttpScope::new(
-                Some(vec!["GET".into()]),
-                Some(vec!["/repos/../admin".into()]),
-                vec![]
-            )
-            .is_err()
-        );
-        assert!(SshTarget::new("host", 22, "deploy", vec!["ssh-rsa AAAA".into()]).is_err());
-        assert!(SshTarget::new("host", 22, "Deploy!", vec!["ssh-ed25519 AAAA".into()]).is_err());
+        assert_invalid_input(HttpTarget::new("ftp", "example.com", 21, None, false));
+        assert_invalid_input(HttpTarget::new(
+            "https",
+            "http://example.com",
+            443,
+            None,
+            false,
+        ));
+        assert_invalid_input(HttpTarget::new(
+            "https",
+            "example.com/path",
+            443,
+            None,
+            false,
+        ));
+        assert_invalid_input(HttpTarget::new(
+            "https",
+            "user@example.com",
+            443,
+            None,
+            false,
+        ));
+        assert_invalid_input(HttpTarget::new("https", "example.com", 0, None, false));
+        assert_invalid_input(HttpAuth::new("query", None, None, None));
+        assert_invalid_input(HttpAuth::new("header", Some("Host".into()), None, None));
+        assert_invalid_input(HttpAuth::new("header", Some("X Bad".into()), None, None));
+        assert_invalid_input(HttpAuth::new("basic", None, None, Some("a:b".into())));
+        assert_invalid_input(HttpScope::new(
+            Some(vec!["GET".into()]),
+            Some(vec!["repos".into()]),
+            vec![],
+        ));
+        assert_invalid_input(HttpScope::new(
+            Some(vec!["GET".into()]),
+            Some(vec!["/repos/../admin".into()]),
+            vec![],
+        ));
+        assert_invalid_input(SshTarget::new(
+            "host",
+            22,
+            "deploy",
+            vec!["ssh-rsa AAAA".into()],
+        ));
+        assert_invalid_input(SshTarget::new(
+            "host",
+            22,
+            "Deploy!",
+            vec!["ssh-ed25519 AAAA".into()],
+        ));
         let mut extra = std::collections::BTreeMap::new();
         extra.insert("SSH_AUTH_SOCK".to_string(), "/x".to_string());
-        assert!(CliProfile::new("prog", "http", None, extra).is_err());
+        assert_invalid_input(CliProfile::new("prog", "http", None, extra));
         // `http_connection(http_target=None)`: build directly, omitting
         // `http_target`.
-        assert!(
-            Connection::new(
-                "gh",
-                "demo",
-                "dev",
-                "fake-github",
-                "http",
-                "gh-token",
-                None,
-                "demo connection",
-                None,
-                Some(HttpAuth::bearer()),
-                Some(
-                    HttpScope::new(
-                        Some(vec!["GET".into(), "POST".into()]),
-                        Some(vec!["/repos".into(), "/me".into()]),
-                        vec!["DELETE".into()]
-                    )
-                    .unwrap()
-                ),
-                None,
-                None,
-                0,
-                "active",
-                "",
-                "",
-            )
-            .is_err()
-        );
+        assert_invalid_input(Connection::new(
+            "gh",
+            "demo",
+            "dev",
+            "fake-github",
+            "http",
+            "gh-token",
+            None,
+            "demo connection",
+            None,
+            Some(HttpAuth::bearer()),
+            Some(
+                HttpScope::new(
+                    Some(vec!["GET".into(), "POST".into()]),
+                    Some(vec!["/repos".into(), "/me".into()]),
+                    vec!["DELETE".into()],
+                )
+                .unwrap(),
+            ),
+            None,
+            None,
+            0,
+            "active",
+            "",
+            "",
+        ));
     }
 
     #[test]
@@ -4207,17 +4650,9 @@ mod tests {
     fn grant_limits_validated() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
-        assert!(policy.create_grant("agent-1", "gh", Some(0), None).is_err());
-        assert!(
-            policy
-                .create_grant("agent-1", "gh", Some(3600), Some(0))
-                .is_err()
-        );
-        assert!(
-            policy
-                .create_grant("agent-1", "gh", Some(MAX_GRANT_TTL + 1), None)
-                .is_err()
-        );
+        assert_invalid_input(policy.create_grant("agent-1", "gh", Some(0), None));
+        assert_invalid_input(policy.create_grant("agent-1", "gh", Some(3600), Some(0)));
+        assert_invalid_input(policy.create_grant("agent-1", "gh", Some(MAX_GRANT_TTL + 1), None));
     }
 
     #[test]
@@ -4256,13 +4691,7 @@ mod tests {
                 .allowed
         );
         other().stop_all().unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "global_stop"
-        );
+        assert_consume_denied(&policy, &grant.id, None, None, None, None, "global_stop");
         other().resume().unwrap();
 
         assert!(
@@ -4277,12 +4706,14 @@ mod tests {
                 .allowed
         );
         other().set_restore_pending(true).unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "restore_pending"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            None,
+            None,
+            "restore_pending",
         );
         other().set_restore_pending(false).unwrap();
 
@@ -4318,12 +4749,14 @@ mod tests {
                 .allowed
         );
         other().disable_principal("agent-1", true).unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "principal_disabled"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            None,
+            None,
+            "principal_disabled",
         );
 
         policy.create_principal("agent-2", "default").unwrap();
@@ -4343,12 +4776,14 @@ mod tests {
                 .allowed
         );
         other().disable_connection("gh2").unwrap();
-        assert_eq!(
-            policy
-                .consume(&other_grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "connection_disabled"
+        assert_consume_denied(
+            &policy,
+            &other_grant.id,
+            None,
+            None,
+            None,
+            None,
+            "connection_disabled",
         );
         assert_eq!(policy.get_grant(&other_grant.id).unwrap().uses, 0);
     }
@@ -4381,12 +4816,14 @@ mod tests {
         other()
             .update_connection("gh", ConnectionChanges::new().http_scope(Some(scope)))
             .unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "method_not_allowed"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            None,
+            None,
+            "method_not_allowed",
         );
 
         assert!(
@@ -4403,54 +4840,44 @@ mod tests {
         other()
             .update_connection("gh", ConnectionChanges::new().description("renamed"))
             .unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "grant_stale"
-        );
+        assert_consume_denied(&policy, &grant.id, None, None, None, None, "grant_stale");
 
-        assert_eq!(
-            policy
-                .consume(
-                    &grant.id,
-                    None,
-                    None,
-                    Some(Action::http("PUT", "/repos")),
-                    None
-                )
-                .unwrap_err()
-                .reason,
-            "method_not_allowed"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            Some(Action::http("PUT", "/repos")),
+            None,
+            "method_not_allowed",
         );
-        assert_eq!(
-            policy
-                .consume(
-                    &grant.id,
-                    None,
-                    None,
-                    Some(Action::http("GET", "/admin")),
-                    None
-                )
-                .unwrap_err()
-                .reason,
-            "path_not_allowed"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            Some(Action::http("GET", "/admin")),
+            None,
+            "path_not_allowed",
         );
         let current = policy.get_connection("gh").unwrap().policy_version;
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, Some(current - 1))
-                .unwrap_err()
-                .reason,
-            "grant_stale"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            None,
+            Some(current - 1),
+            "grant_stale",
         );
-        assert_eq!(
-            policy
-                .consume(&grant.id, Some("agent-2"), None, None, None)
-                .unwrap_err()
-                .reason,
-            "grant_mismatch"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            Some("agent-2"),
+            None,
+            None,
+            None,
+            "grant_mismatch",
         );
         assert_eq!(policy.get_grant(&grant.id).unwrap().uses, 0);
         assert_eq!(
@@ -4547,20 +4974,16 @@ mod tests {
                 .allowed
         );
         other().stop_all().unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, None, None)
-                .unwrap_err()
-                .reason,
-            "global_stop"
-        );
+        assert_consume_denied(&policy, &grant.id, None, None, None, None, "global_stop");
         other().resume().unwrap();
-        assert_eq!(
-            policy
-                .consume(&grant.id, None, None, Some(Action::ssh("root")), None)
-                .unwrap_err()
-                .reason,
-            "ssh_user_mismatch"
+        assert_consume_denied(
+            &policy,
+            &grant.id,
+            None,
+            None,
+            Some(Action::ssh("root")),
+            None,
+            "ssh_user_mismatch",
         );
     }
 
@@ -4633,6 +5056,7 @@ mod tests {
         ];
         for line in bad_lines {
             let err = SshTarget::new("127.0.0.1", 22, "deploy", vec![line.clone()]).unwrap_err();
+            assert!(err.is(ErrorClass::InvalidInput), "line={line:?}");
             assert_eq!(err.reason, "invalid_host_key", "line={line:?}");
         }
         // Python also checks that passing a bare `str` instead of a tuple
@@ -4642,6 +5066,7 @@ mod tests {
         // there is no Rust case to port for it.
         for username in ["deploy\n", "deploy\r", "deploy\x00", "\ndeploy"] {
             let err = SshTarget::new("127.0.0.1", 22, username, vec![good.clone()]).unwrap_err();
+            assert!(err.is(ErrorClass::InvalidInput), "username={username:?}");
             assert_eq!(err.reason, "invalid_ssh_username", "username={username:?}");
         }
         let target = SshTarget::new("127.0.0.1", 22, "deploy", vec![format!("{good}  ")]).unwrap();
@@ -4660,6 +5085,7 @@ mod tests {
         let digest = approval_helper(&policy, "/repos/demo");
         *clock_val.lock().unwrap() += APPROVAL_TTL_SECONDS;
         let err = policy.approve(&digest).unwrap_err();
+        assert!(err.is(ErrorClass::InvalidInput));
         assert_eq!(err.reason, "approval_expired");
         let digest = approval_helper(&policy, "/repos/demo");
         assert_eq!(policy.list_approvals().unwrap()[&digest]["cycle"], json!(2));
