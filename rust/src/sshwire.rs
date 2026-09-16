@@ -61,28 +61,52 @@ use crate::secret::SecretBytes;
 ///
 /// Python models this as `WireError(ValueError)` with a subclass
 /// `UnsupportedKeyType` for "well-formed input that uses a key type or key
-/// format ZeroPW does not support". Rust keeps a single error type with a
-/// tag so callers can still distinguish the two cases (`is_unsupported`),
-/// the way Python callers use `except UnsupportedKeyType` vs `except
-/// WireError`.
+/// format ZeroPW does not support". A handful of call sites in
+/// `sshwire.py` instead raise a *bare* `ValueError` -- not a `WireError`
+/// instance at all, so a Python `except WireError` does **not** catch it
+/// (see `Ed25519PublicKey.to_authorized_key` and `encode_string`, and
+/// `DEVIATIONS.md`). Rust keeps a single error type with a three-way tag
+/// so callers can reproduce both distinctions Python callers rely on:
+/// `is_unsupported()` for `except UnsupportedKeyType` vs `except
+/// WireError`, and `is_wire_error()` for "is this even a `WireError`".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WireErrorKind {
+    Wire,
+    Unsupported,
+    /// A bare Python `ValueError`, not a `WireError`/`UnsupportedKeyType`
+    /// instance.
+    ValueError,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WireError {
     message: String,
-    unsupported: bool,
+    kind: WireErrorKind,
 }
 
 impl WireError {
     pub fn new(message: impl Into<String>) -> Self {
         WireError {
             message: message.into(),
-            unsupported: false,
+            kind: WireErrorKind::Wire,
         }
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {
         WireError {
             message: message.into(),
-            unsupported: true,
+            kind: WireErrorKind::Unsupported,
+        }
+    }
+
+    /// A bare Python `ValueError` site (not `WireError`/`UnsupportedKeyType`):
+    /// see the type doc comment and `DEVIATIONS.md`. A caller that wants to
+    /// reproduce Python's `except WireError` scope must check
+    /// [`WireError::is_wire_error`], not just match on this type.
+    pub fn value_error(message: impl Into<String>) -> Self {
+        WireError {
+            message: message.into(),
+            kind: WireErrorKind::ValueError,
         }
     }
 
@@ -93,15 +117,22 @@ impl WireError {
     /// True when this is the `UnsupportedKeyType` case: well-formed input
     /// using a key type or key format ZeroPW does not support.
     pub fn is_unsupported(&self) -> bool {
-        self.unsupported
+        matches!(self.kind, WireErrorKind::Unsupported)
+    }
+
+    /// True unless this is the bare-`ValueError` case ([`WireError::value_error`]):
+    /// whether a Python `except WireError` (or `except UnsupportedKeyType`)
+    /// would catch the equivalent Python exception.
+    pub fn is_wire_error(&self) -> bool {
+        !matches!(self.kind, WireErrorKind::ValueError)
     }
 
     /// `type(exc).__name__` in Python.
     pub fn class_name(&self) -> &'static str {
-        if self.unsupported {
-            "UnsupportedKeyType"
-        } else {
-            "WireError"
+        match self.kind {
+            WireErrorKind::Unsupported => "UnsupportedKeyType",
+            WireErrorKind::Wire => "WireError",
+            WireErrorKind::ValueError => "ValueError",
         }
     }
 }
@@ -132,6 +163,110 @@ impl From<WireError> for crate::Error {
 }
 
 // ---------------------------------------------------------------------------
+// Python `repr(str)` emulation (for `!r` error-message formatting)
+// ---------------------------------------------------------------------------
+
+/// Emulate Python's `repr()` for a `str`: pick the quote character the way
+/// CPython does (`'` unless the string contains `'` and not `"`, in which
+/// case `"`), then escape backslash, the chosen quote, `\n`/`\r`/`\t`, and
+/// every character `str.isprintable()` excludes, as `\xNN`/`\uNNNN`/
+/// `\UNNNNNNNN` (2/4/8 lowercase hex digits, matching CPython's width
+/// choice by codepoint size). Every other character -- including
+/// non-ASCII letters, symbols and emoji -- is copied through literally,
+/// matching Python.
+///
+/// `sshwire.py` formats every wire-supplied string it rejects with `!r`
+/// (`f"unsupported key type {key_type!r}"` and friends); this reproduces
+/// that formatting so the error message text matches byte-for-byte.
+pub(crate) fn py_repr_str(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote || c == '\\' {
+            out.push('\\');
+            out.push(c);
+        } else if c == '\n' {
+            out.push_str("\\n");
+        } else if c == '\r' {
+            out.push_str("\\r");
+        } else if c == '\t' {
+            out.push_str("\\t");
+        } else if py_str_is_printable(c) {
+            out.push(c);
+        } else {
+            let cp = c as u32;
+            if cp <= 0xFF {
+                out.push_str(&format!("\\x{cp:02x}"));
+            } else if cp <= 0xFFFF {
+                out.push_str(&format!("\\u{cp:04x}"));
+            } else {
+                out.push_str(&format!("\\U{cp:08x}"));
+            }
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Approximation of Python's `str.isprintable()` per character: `false`
+/// for Unicode categories Cc (control), Cf (format), Zl (line separator),
+/// Zp (paragraph separator), Zs other than U+0020 (other space
+/// separators), and the private-use ranges (Co); `true` otherwise.
+/// `char::is_control()` already matches Cc exactly (it is documented as
+/// "a C0 or C1 control code", the same definition CPython uses for Cc);
+/// Zs/Zl/Zp are a short, complete, closed set enumerated directly; Cf/Co
+/// are covered by explicit ranges for every codepoint reachable through
+/// this module's inputs (SSH protocol names, algorithm identifiers,
+/// comments, fingerprints). This does not enumerate the full Unicode
+/// Cf/Cn tables (no such crate is available in the offline build used for
+/// this port; see `DEVIATIONS.md`), so an obscure unassigned or exotic
+/// format codepoint could format differently than CPython; every
+/// character this module's own tests and oracle checks exercise is
+/// covered exactly.
+fn py_str_is_printable(c: char) -> bool {
+    if c == ' ' {
+        return true;
+    }
+    if c.is_control() {
+        return false; // Cc: 0x00-0x1F, 0x7F-0x9F
+    }
+    let cp = c as u32;
+    let non_printable = matches!(cp, 0x00A0 | 0x1680 | 0x2000..=0x200A | 0x202F | 0x205F | 0x3000) // Zs (not space)
+            || cp == 0x2028 // Zl
+            || cp == 0x2029 // Zp
+            || matches!(
+                cp,
+                0x00AD
+                    | 0x0600..=0x0605
+                    | 0x061C
+                    | 0x06DD
+                    | 0x070F
+                    | 0x08E2
+                    | 0x180E
+                    | 0x200B..=0x200F
+                    | 0x202A..=0x202E
+                    | 0x2060..=0x2064
+                    | 0x2066..=0x206F
+                    | 0xFEFF
+                    | 0xFFF9..=0xFFFB
+                    | 0x110BD
+                    | 0x110CD
+                    | 0x13430..=0x13438
+                    | 0x1BCA0..=0x1BCA3
+                    | 0x1D173..=0x1D17A
+                    | 0xE0001
+                    | 0xE0020..=0xE007F
+            ) // Cf (common format controls)
+            || matches!(cp, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD); // Co
+    !non_printable
+}
+
+// ---------------------------------------------------------------------------
 // RFC 4251 wire primitives
 // ---------------------------------------------------------------------------
 
@@ -153,7 +288,11 @@ pub fn encode_uint32(n: u32) -> [u8; 4] {
 pub fn encode_string(data: impl AsRef<[u8]>) -> Result<Vec<u8>, WireError> {
     let data = data.as_ref();
     if data.len() > u32::MAX as usize {
-        return Err(WireError::new("string too long for uint32 length prefix"));
+        // Python: bare `raise ValueError(...)`, not `WireError` (see
+        // `WireError::value_error` and `DEVIATIONS.md`).
+        return Err(WireError::value_error(
+            "string too long for uint32 length prefix",
+        ));
     }
     let mut out = Vec::with_capacity(4 + data.len());
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -627,7 +766,12 @@ impl Ed25519PublicKey {
     /// One `authorized_keys` / `.pub` line without a trailing newline.
     pub fn to_authorized_key(&self, comment: &str) -> Result<String, WireError> {
         if comment.chars().any(|c| matches!(c, '\r' | '\n' | '\0')) {
-            return Err(WireError::new(
+            // Python: bare `raise ValueError(...)`, not `WireError`. This
+            // is C-4's escape: `Vault._public_metadata` (not yet ported)
+            // catches only `sshwire.WireError`, so this must stay
+            // distinguishable via `WireError::is_wire_error`. See
+            // `WireError::value_error` and `DEVIATIONS.md`.
+            return Err(WireError::value_error(
                 "comment must not contain line breaks or NUL",
             ));
         }
@@ -658,7 +802,8 @@ pub fn parse_public_key_blob(blob: &[u8]) -> Result<Ed25519PublicKey, WireError>
     let key_type = r.text()?;
     if key_type != ED25519_KEY_TYPE {
         return Err(WireError::unsupported(format!(
-            "unsupported key type '{key_type}'"
+            "unsupported key type {}",
+            py_repr_str(&key_type)
         )));
     }
     let key_bytes = r.string()?;
@@ -684,6 +829,32 @@ fn key_type_re() -> &'static Regex {
 fn key_type_name_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9@.\-]*$").expect("static regex"))
+}
+
+/// Match `text` against `re` the way Python's `re.Pattern.match` (or
+/// `.search`) does for a pattern ending in an unescaped `$`: Python's `$`
+/// (without `re.MULTILINE`) matches at the true end of the string *or*
+/// immediately before a single trailing `\n`, so `.match()`/`.search()`
+/// accept that one extra trailing byte the pattern never mentions.
+/// `.fullmatch()` does **not** get this leniency (it still requires the
+/// whole string, `\n` included, to be consumed). Rust's `regex` crate's
+/// `$` (also without a multi-line flag) matches only the true end, so this
+/// reproduces `.match()`/`.search()` by trying the compiled `^...$`
+/// pattern against the whole text first, then, only if that fails and the
+/// text ends with exactly one `\n`, against the text with that trailing
+/// `\n` removed. `key_type_re()`/`key_type_name_re()` are both applied
+/// this way in `sshwire.py` (`_KEY_TYPE_RE.match(...)` /
+/// `_KEY_TYPE_NAME_RE.match(...)`); see `DEVIATIONS.md` if this ever needs
+/// recording as an observable difference (it currently reproduces Python
+/// exactly for every case the oracle tests below exercise).
+fn py_dollar_is_match(re: &Regex, text: &str) -> bool {
+    if re.is_match(text) {
+        return true;
+    }
+    match text.strip_suffix('\n') {
+        Some(stripped) => re.is_match(stripped),
+        None => false,
+    }
 }
 
 /// ASCII whitespace/newline chars OpenSSH treats as field separators or line
@@ -721,13 +892,13 @@ fn split_authorized_key_fields(text: &str, maxsplit: usize) -> Vec<String> {
 /// type name; in a well-formed line an options field is never followed by
 /// such a blob, so options are not mistaken for key types.
 fn is_key_type_token(token: &str, following: Option<&str>) -> bool {
-    if key_type_re().is_match(token) {
+    if py_dollar_is_match(key_type_re(), token) {
         return true;
     }
     let Some(following) = following else {
         return false;
     };
-    if !key_type_name_re().is_match(token) {
+    if !py_dollar_is_match(key_type_name_re(), token) {
         return false;
     }
     let Ok(decoded) = b64decode_strict(following, "authorized_keys line") else {
@@ -736,7 +907,7 @@ fn is_key_type_token(token: &str, following: Option<&str>) -> bool {
     let Ok(leading) = Reader::new(&decoded).text() else {
         return false;
     };
-    key_type_name_re().is_match(&leading)
+    py_dollar_is_match(key_type_name_re(), &leading)
 }
 
 /// One parsed `authorized_keys` line (options are returned verbatim).
@@ -831,7 +1002,8 @@ pub fn parse_authorized_key_entry(line: &str) -> Result<AuthorizedKeyEntry, Wire
     }
     if key_type != ED25519_KEY_TYPE {
         return Err(WireError::unsupported(format!(
-            "unsupported key type '{key_type}'"
+            "unsupported key type {}",
+            py_repr_str(key_type)
         )));
     }
     if parts.len() < 2 {
@@ -979,11 +1151,12 @@ impl Eq for Ed25519PrivateKey {}
 
 impl fmt::Debug for Ed25519PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Python: `f"Ed25519PrivateKey(public={self.public.fingerprint()!r}, comment={self.comment!r})"`.
         write!(
             f,
-            "Ed25519PrivateKey(public={:?}, comment={:?})",
-            self.public.fingerprint(),
-            self.comment
+            "Ed25519PrivateKey(public={}, comment={})",
+            py_repr_str(&self.public.fingerprint()),
+            py_repr_str(&self.comment)
         )
     }
 }
@@ -1007,9 +1180,16 @@ fn decode_openssh_pem(pem: &[u8]) -> Result<Vec<u8>, WireError> {
     if !text.is_ascii() {
         return Err(WireError::new("private key file is not ASCII text"));
     }
+    // `text` is guaranteed ASCII-only at this point (checked above, the
+    // same gate Python's `bytes(pem).decode("ascii")` applies before ever
+    // calling `str.splitlines()`/`str.strip()`), so every Unicode-only
+    // line boundary or whitespace character `str` recognises (`\x85`,
+    // U+2028, U+2029, and Unicode `Zs`) is provably unreachable here; only
+    // their ASCII-range members matter, and both helpers below enumerate
+    // those completely (see their doc comments and `DEVIATIONS.md`).
     let lines: Vec<&str> = split_pem_lines(text)
         .into_iter()
-        .map(|ln| ln.trim_matches(|c: char| c == ' ' || c == '\t' || c == '\u{b}' || c == '\u{c}'))
+        .map(strip_pem_line)
         .filter(|ln| !ln.is_empty())
         .collect();
     let Some(&first) = lines.first() else {
@@ -1036,10 +1216,13 @@ fn decode_openssh_pem(pem: &[u8]) -> Result<Vec<u8>, WireError> {
     b64decode_strict(&body, "OpenSSH private key")
 }
 
-/// Split ASCII text on `\n` or `\r\n` (Python's `str.splitlines()` also
-/// recognises a handful of other Unicode line boundaries, none of which can
-/// appear in the ASCII-only input this function receives, and none of which
-/// any PEM file or test exercises; see `DEVIATIONS.md`).
+/// Split ASCII text the way Python's `str.splitlines()` does. Python
+/// recognises `\n`, `\r`, `\r\n`, `\v` (`\x0b`), `\f` (`\x0c`), `\x1c`,
+/// `\x1d`, `\x1e` as boundaries within the ASCII range (plus `\x85`,
+/// U+2028 and U+2029, which cannot occur in the ASCII-only text
+/// `decode_openssh_pem` passes here -- see its call site). Every boundary
+/// other than `\r`/`\r\n` is a single character, not paired with a
+/// following byte the way `\r\n` is.
 fn split_pem_lines(text: &str) -> Vec<&str> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -1060,6 +1243,11 @@ fn split_pem_lines(text: &str) -> Vec<&str> {
                 }
                 start = i;
             }
+            0x0b | 0x0c | 0x1c | 0x1d | 0x1e => {
+                out.push(&text[start..i]);
+                i += 1;
+                start = i;
+            }
             _ => i += 1,
         }
     }
@@ -1067,6 +1255,21 @@ fn split_pem_lines(text: &str) -> Vec<&str> {
         out.push(&text[start..]);
     }
     out
+}
+
+/// Strip a PEM line the way Python's `str.strip()` (no arguments) does.
+/// For the ASCII-only text reachable here, `str.isspace()` is exactly
+/// `{\t, \n, \v, \f, \r, \x1c, \x1d, \x1e, \x1f, ' '}` -- note `\x1f` is
+/// stripped even though (unlike `\x1c`-`\x1e`) it is *not* a
+/// `str.splitlines()` boundary, so a header/footer line can carry a
+/// trailing `\x1f` that `split_pem_lines` leaves attached to the line.
+fn strip_pem_line(line: &str) -> &str {
+    line.trim_matches(|c: char| {
+        matches!(
+            c,
+            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | '\u{1c}'..='\u{1f}' | ' '
+        )
+    })
 }
 
 /// Parse an unencrypted `openssh-key-v1` Ed25519 private key.
@@ -1172,7 +1375,8 @@ pub fn parse_ssh_signature(blob: &[u8]) -> Result<Vec<u8>, WireError> {
     let algorithm = r.text()?;
     if algorithm != ED25519_KEY_TYPE {
         return Err(WireError::new(format!(
-            "unexpected signature algorithm '{algorithm}'"
+            "unexpected signature algorithm {}",
+            py_repr_str(&algorithm)
         )));
     }
     let signature = r.string()?;
@@ -1269,19 +1473,25 @@ pub fn frame_agent_message(payload: &[u8]) -> Result<Vec<u8>, WireError> {
 /// Read up to `n` bytes, stopping early only at EOF (empty read). Defends
 /// against a misbehaving `Read` impl reporting more bytes than the buffer
 /// it was given can hold (Python's `_read_exact` checks the same thing for
-/// a misbehaving `recv`).
+/// a misbehaving `recv`). A read interrupted by a signal
+/// (`ErrorKind::Interrupted`) is retried rather than propagated, matching
+/// `socket.recv`'s automatic EINTR retry (PEP 475) that every Python
+/// caller of this code relies on implicitly.
 fn read_exact_upto<R: Read>(source: &mut R, n: usize) -> Result<Vec<u8>, AgentError> {
     let mut buf = vec![0u8; n];
     let mut got = 0;
     while got < n {
-        let k = source.read(&mut buf[got..])?;
-        if k == 0 {
-            break;
+        match source.read(&mut buf[got..]) {
+            Ok(0) => break,
+            Ok(k) => {
+                if k > n - got {
+                    return Err(WireError::new("recv returned more data than requested").into());
+                }
+                got += k;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e.into()),
         }
-        if k > n - got {
-            return Err(WireError::new("recv returned more data than requested").into());
-        }
-        got += k;
     }
     buf.truncate(got);
     Ok(buf)
@@ -1598,7 +1808,10 @@ pub fn parse_userauth_request(
     }
     let service = r.text()?;
     if service != SSH_CONNECTION_SERVICE {
-        return Err(WireError::new(format!("unexpected service '{service}'")));
+        return Err(WireError::new(format!(
+            "unexpected service {}",
+            py_repr_str(&service)
+        )));
     }
     let method = r.text()?;
     let hostbound = if method == USERAUTH_METHOD_PUBLICKEY {
@@ -1607,7 +1820,8 @@ pub fn parse_userauth_request(
         true
     } else {
         return Err(WireError::new(format!(
-            "unexpected authentication method '{method}'"
+            "unexpected authentication method {}",
+            py_repr_str(&method)
         )));
     };
     let has_signature = r.boolean()?;
@@ -1808,6 +2022,8 @@ print(key.to_openssh_private_key(), end="")
             ("2**4096 + 12345", false),
             ("2**255", true),
             ("2**256", true),
+            ("2**256 - 1", true),
+            ("2**4096 + 12345", true),
         ];
         for (expr, negate) in cases {
             let value_expr = if negate {
@@ -1941,5 +2157,259 @@ print(key.to_openssh_private_key(), end="")
             // Newer ssh-keygen also prints the comment.
             assert_eq!(printed_fields[2], "rust-generated");
         }
+    }
+
+    // -----------------------------------------------------------------
+    // C-1: `decode_openssh_pem`/`split_pem_lines` vs Python's
+    // `str.splitlines()` + `str.strip()`.
+    // -----------------------------------------------------------------
+
+    fn substitute_pem_newlines(pem: &str, sep: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &b in pem.as_bytes() {
+            if b == b'\n' {
+                out.extend_from_slice(sep);
+            } else {
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pem_line_boundaries_match_python_splitlines() {
+        // `str.splitlines()` boundaries reachable in the ASCII-only text
+        // `decode_openssh_pem` ever sees (its `.decode("ascii")`-equivalent
+        // gate rules out every other boundary `str.splitlines()`
+        // recognises, such as `\x85`/U+2028/U+2029): `\n`, `\r`, `\r\n`,
+        // `\x0b`, `\x0c`, `\x1c`, `\x1d`, `\x1e`. `\x1f` is deliberately
+        // absent here -- it is a `str.strip()` character but not a
+        // `str.splitlines()` boundary; see the next test.
+        let key = Ed25519PrivateKey::from_seed(&seed_from(21), "line-boundary-comment").unwrap();
+        let pem = key.to_openssh_private_key();
+        let boundaries: &[(&str, &[u8])] = &[
+            ("lf", b"\n"),
+            ("cr", b"\r"),
+            ("crlf", b"\r\n"),
+            ("vt", b"\x0b"),
+            ("ff", b"\x0c"),
+            ("fs", b"\x1c"),
+            ("gs", b"\x1d"),
+            ("rs", b"\x1e"),
+        ];
+        for (name, sep) in boundaries {
+            let variant = substitute_pem_newlines(&pem, sep);
+
+            let parsed = parse_openssh_private_key(&variant)
+                .unwrap_or_else(|e| panic!("rust failed to parse {name} variant: {e}"));
+            assert_eq!(parsed.comment, "line-boundary-comment", "{name}");
+            assert_eq!(parsed.public, key.public, "{name}");
+
+            let script = format!(
+                "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
+                variant
+            );
+            let theirs = python(&script);
+            let mut lines = theirs.lines();
+            assert_eq!(lines.next().unwrap(), "line-boundary-comment", "{name}");
+            assert_eq!(lines.next().unwrap(), key.public.fingerprint(), "{name}");
+        }
+    }
+
+    #[test]
+    fn pem_trailing_x1f_is_stripped_but_not_a_line_boundary() {
+        // `\x1f` is `str.isspace()` (so `str.strip()` removes it) but NOT a
+        // `str.splitlines()` boundary. A header line ending in `\x1f` must
+        // still strip down to exactly the header text.
+        let key = Ed25519PrivateKey::from_seed(&seed_from(22), "x1f-comment").unwrap();
+        let pem = key.to_openssh_private_key();
+        let with_tail = pem.replacen(PEM_BEGIN, &format!("{PEM_BEGIN}\x1f"), 1);
+        let bytes = with_tail.into_bytes();
+
+        let parsed = parse_openssh_private_key(&bytes).expect("trailing \\x1f must still strip");
+        assert_eq!(parsed.comment, "x1f-comment");
+        assert_eq!(parsed.public, key.public);
+
+        let script = format!(
+            "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
+            bytes
+        );
+        let theirs = python(&script);
+        let mut lines = theirs.lines();
+        assert_eq!(lines.next().unwrap(), "x1f-comment");
+        assert_eq!(lines.next().unwrap(), key.public.fingerprint());
+    }
+
+    #[test]
+    fn pem_unsupported_header_with_trailing_x1f_matches_python() {
+        // Reviewer's exact probe: a non-OpenSSH `-----BEGIN ...-----`
+        // header with a trailing `\x1f` before the newline must still be
+        // recognised as "unsupported private key format", not "missing
+        // OpenSSH private key header" -- which is exactly what happens if
+        // the `\x1f` is left attached to the line instead of stripped.
+        let raw =
+            b"-----BEGIN SSH2 PUBLIC KEY-----\x1f\nZm9v\n-----END SSH2 PUBLIC KEY-----\n".to_vec();
+        let err = parse_openssh_private_key(&raw).unwrap_err();
+        assert!(err.is_unsupported());
+        assert_eq!(
+            err.message(),
+            "unsupported private key format: -----BEGIN SSH2 PUBLIC KEY-----"
+        );
+
+        let script = format!(
+            "from zeropw import sshwire as w\ntry:\n    w.parse_openssh_private_key(bytes({:?}))\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n",
+            raw
+        );
+        let theirs = python(&script);
+        assert_eq!(
+            theirs.trim(),
+            "UnsupportedKeyType:unsupported private key format: -----BEGIN SSH2 PUBLIC KEY-----"
+        );
+    }
+
+    #[test]
+    fn pem_blank_lines_and_missing_trailing_newline_match_python() {
+        // CRLF line endings throughout, a blank line inserted in the body,
+        // and no trailing newline at all at end-of-file.
+        let key = Ed25519PrivateKey::from_seed(&seed_from(23), "trailing-comment").unwrap();
+        let pem = key.to_openssh_private_key();
+        assert!(pem.ends_with('\n'));
+
+        let mut with_blank = String::new();
+        for (i, line) in pem.trim_end_matches('\n').split('\n').enumerate() {
+            with_blank.push_str(line);
+            with_blank.push_str("\r\n");
+            if i == 0 {
+                with_blank.push_str("\r\n"); // blank line right after the header
+            }
+        }
+        // Drop the final "\r\n" so the file has no trailing newline at all.
+        let variant = with_blank.strip_suffix("\r\n").unwrap().as_bytes().to_vec();
+
+        let parsed = parse_openssh_private_key(&variant).expect("rust must accept this variant");
+        assert_eq!(parsed.comment, "trailing-comment");
+        assert_eq!(parsed.public, key.public);
+
+        let script = format!(
+            "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
+            variant
+        );
+        let theirs = python(&script);
+        let mut lines = theirs.lines();
+        assert_eq!(lines.next().unwrap(), "trailing-comment");
+        assert_eq!(lines.next().unwrap(), key.public.fingerprint());
+    }
+
+    // -----------------------------------------------------------------
+    // C-2: Python `$` (no re.MULTILINE) matches before a single trailing
+    // `\n`, in `_KEY_TYPE_RE`/`_KEY_TYPE_NAME_RE`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn authorized_keys_dollar_leniency_matches_python_for_reviewer_probes() {
+        // A decoded field whose leading wire `string` is "future-alg\n"
+        // (an actual embedded newline byte) must still count as a
+        // key-type name for `_KEY_TYPE_NAME_RE`, because Python's `$`
+        // matches just before that one trailing `\n`. Both reviewer probes
+        // reuse the same base64 field: `encode_string("future-alg\n")`.
+        let following = b64encode(&encode_string("future-alg\n").unwrap());
+        let key = Ed25519PublicKey::new(vec![9u8; 32]).unwrap();
+        let real_key_field = format!("ssh-ed25519 {}", b64encode(&key.blob()));
+
+        let cases: [(&str, String); 2] = [
+            ("future-alg", format!("future-alg {following}")),
+            ("opt", format!("opt {following} {real_key_field}")),
+        ];
+        for (expected_type, line) in cases {
+            let err = parse_authorized_key_entry(&line).unwrap_err();
+            assert!(err.is_unsupported(), "{line}");
+            assert_eq!(
+                err.message(),
+                format!("unsupported key type '{expected_type}'"),
+                "{line}"
+            );
+
+            let line_bytes: Vec<u8> = line.as_bytes().to_vec();
+            let script = format!(
+                "line = bytes({line_bytes:?}).decode('utf-8')\nfrom zeropw import sshwire as w\ntry:\n    w.parse_authorized_key_entry(line)\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n"
+            );
+            let theirs = python(&script);
+            assert_eq!(
+                theirs.trim(),
+                format!("UnsupportedKeyType:unsupported key type '{expected_type}'"),
+                "{line}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C-3: `py_repr_str` vs CPython's `repr(str)`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn py_repr_str_matches_python_repr_for_tricky_strings() {
+        let cases = [
+            "it's",
+            "say \"hi\"",
+            "both ' and \" here",
+            "line\nbreak",
+            "back\\slash",
+            "\u{1}control",
+            "\u{7f}del",
+            "\u{85}nel",
+            "café",
+            "no\u{a0}break\u{a0}space",
+            "musical\u{1D11E}clef",
+        ];
+        for s in cases {
+            let ours = py_repr_str(s);
+            let byte_list: Vec<u8> = s.as_bytes().to_vec();
+            let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
+            let theirs = python(&script).trim().to_string();
+            assert_eq!(ours, theirs, "input {s:?}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // C-4: bare `ValueError` sites are tagged distinctly from `WireError`.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn to_authorized_key_bad_comment_is_a_bare_value_error_not_wire_error() {
+        // Python raises a bare ValueError here, not WireError -- a caller
+        // that only does `except WireError` (like the not-yet-ported
+        // `Vault._public_metadata`) does not catch it. Confirm both the
+        // Python exception hierarchy and the Rust WireError tag agree.
+        let key = Ed25519PublicKey::new(vec![3u8; 32]).unwrap();
+        for comment in ["bad\ncomment", "bad\x00comment", "bad\rcomment"] {
+            let err = key.to_authorized_key(comment).unwrap_err();
+            assert_eq!(err.class_name(), "ValueError");
+            assert!(!err.is_wire_error());
+            assert!(!err.is_unsupported());
+
+            let comment_bytes: Vec<u8> = comment.as_bytes().to_vec();
+            let script = format!(
+                "comment = bytes({comment_bytes:?}).decode('utf-8')\nfrom zeropw import sshwire as w\nk = w.Ed25519PublicKey(bytes([3] * 32))\ntry:\n    k.to_authorized_key(comment)\nexcept w.WireError as exc:\n    print('WireError:' + type(exc).__name__)\nexcept ValueError as exc:\n    print('ValueError:' + type(exc).__name__)\n"
+            );
+            let theirs = python(&script);
+            assert_eq!(
+                theirs.trim(),
+                "ValueError:ValueError",
+                "comment {comment:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn encode_string_over_length_is_a_bare_value_error() {
+        // `encode_string`'s over-length check is the other bare-ValueError
+        // site; it is not reachable through any in-process byte slice in
+        // practice (it would need a > 4 GiB slice), so this only checks
+        // the Rust-side tag directly (no oracle: allocating 4 GiB+1 bytes
+        // just to run the Python side is impractical for a test).
+        let err = WireError::value_error("string too long for uint32 length prefix");
+        assert_eq!(err.class_name(), "ValueError");
+        assert!(!err.is_wire_error());
+        assert!(!err.is_unsupported());
     }
 }

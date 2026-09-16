@@ -16,7 +16,7 @@
 //! has no Rust equivalent here; the real-backend equivalent lives in the
 //! oracle tests instead.
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 
 use zeropw::sshwire as w;
@@ -239,21 +239,31 @@ fn test_mpint_strictness() {
             .unwrap(),
         MpInt::from_i64(-0xDEADBEEFi64)
     );
-    assert!(Reader::new(&hex::decode("00000002ff80").unwrap())
-        .mpint()
-        .is_err());
-    assert!(Reader::new(&hex::decode("00000002ffff").unwrap())
-        .mpint()
-        .is_err());
-    assert!(Reader::new(&hex::decode("00000002007f").unwrap())
-        .mpint()
-        .is_err());
-    assert!(Reader::new(&hex::decode("0000000100").unwrap())
-        .mpint()
-        .is_err());
-    assert!(Reader::new(&hex::decode("0000000401").unwrap())
-        .mpint()
-        .is_err());
+    assert!(
+        Reader::new(&hex::decode("00000002ff80").unwrap())
+            .mpint()
+            .is_err()
+    );
+    assert!(
+        Reader::new(&hex::decode("00000002ffff").unwrap())
+            .mpint()
+            .is_err()
+    );
+    assert!(
+        Reader::new(&hex::decode("00000002007f").unwrap())
+            .mpint()
+            .is_err()
+    );
+    assert!(
+        Reader::new(&hex::decode("0000000100").unwrap())
+            .mpint()
+            .is_err()
+    );
+    assert!(
+        Reader::new(&hex::decode("0000000401").unwrap())
+            .mpint()
+            .is_err()
+    );
 }
 
 // (bytearray/memoryview don't apply: Rust's `Reader` always borrows `&[u8]`.)
@@ -293,9 +303,11 @@ fn test_blob_parse_rejections() {
 
     let mut blob = w::encode_string("ssh-ed25519-cert-v01@openssh.com").unwrap();
     blob.extend(w::encode_string(pub_bytes()).unwrap());
-    assert!(w::parse_public_key_blob(&blob)
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_public_key_blob(&blob)
+            .unwrap_err()
+            .is_unsupported()
+    );
 
     let mut blob = w::encode_string("ssh-ed25519").unwrap();
     blob.extend(w::encode_string(&pub_bytes()[..31]).unwrap());
@@ -770,6 +782,11 @@ fn test_from_seed_and_generate() {
         generated.seed().expose(),
         w::generate_ed25519_private_key("").seed().expose()
     );
+    // The generated key's public half must equal the one derived directly
+    // from its seed (Python's `test_from_seed_and_generate` checks the same
+    // invariant for `generate_ed25519_private_key`).
+    let rederived = Ed25519PrivateKey::from_seed(generated.seed().expose(), "gen").unwrap();
+    assert_eq!(rederived.public, generated.public);
 }
 
 #[test]
@@ -802,12 +819,14 @@ fn test_validation() {
     use zeropw::secret::SecretBytes;
     let seed = fixture_seed();
     let key = Ed25519PrivateKey::from_seed(&seed, "").unwrap();
-    assert!(Ed25519PrivateKey::new(
-        SecretBytes::from_slice(&[0u8; 31]),
-        key.public.clone(),
-        String::new()
-    )
-    .is_err());
+    assert!(
+        Ed25519PrivateKey::new(
+            SecretBytes::from_slice(&[0u8; 31]),
+            key.public.clone(),
+            String::new()
+        )
+        .is_err()
+    );
     assert!(Ed25519PrivateKey::from_seed(&[0u8; 33], "").is_err());
 }
 
@@ -963,19 +982,25 @@ fn test_encrypted_keys_unsupported() {
         MAGIC,
         b"",
     );
-    assert!(w::parse_openssh_private_key(pem(&c).as_bytes())
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_openssh_private_key(pem(&c).as_bytes())
+            .unwrap_err()
+            .is_unsupported()
+    );
 
     let c = container(&pub_blob, &good, "aes256-ctr", "none", b"", 1, MAGIC, b"");
-    assert!(w::parse_openssh_private_key(pem(&c).as_bytes())
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_openssh_private_key(pem(&c).as_bytes())
+            .unwrap_err()
+            .is_unsupported()
+    );
 
     let c = container(&pub_blob, &good, "none", "bcrypt", b"", 1, MAGIC, b"");
-    assert!(w::parse_openssh_private_key(pem(&c).as_bytes())
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_openssh_private_key(pem(&c).as_bytes())
+            .unwrap_err()
+            .is_unsupported()
+    );
 }
 
 #[test]
@@ -1005,9 +1030,11 @@ fn test_non_ed25519_key_unsupported() {
     let pad_len = (8 - sect.len() % 8) % 8;
     sect.extend((1..=pad_len as u8).collect::<Vec<u8>>());
     let c = default_container(&rsa_blob, &sect);
-    assert!(w::parse_openssh_private_key(pem(&c).as_bytes())
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_openssh_private_key(pem(&c).as_bytes())
+            .unwrap_err()
+            .is_unsupported()
+    );
 }
 
 #[test]
@@ -1200,9 +1227,11 @@ fn test_malformed_containers() {
         );
     }
     let c = container(&pub_blob, &good, "none", "none", b"", 2, MAGIC, b"");
-    assert!(w::parse_openssh_private_key(pem(&c).as_bytes())
-        .unwrap_err()
-        .is_unsupported());
+    assert!(
+        w::parse_openssh_private_key(pem(&c).as_bytes())
+            .unwrap_err()
+            .is_unsupported()
+    );
 }
 
 trait TapMagic {
@@ -1405,9 +1434,11 @@ fn test_fingerprint_matches_ssh_keygen() {
         .unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert!(stdout
-        .split_whitespace()
-        .any(|tok| tok == key.public.fingerprint()));
+    assert!(
+        stdout
+            .split_whitespace()
+            .any(|tok| tok == key.public.fingerprint())
+    );
 }
 
 #[test]
@@ -1721,6 +1752,40 @@ impl Read for Greedy {
 fn test_recv_returning_too_much_rejected() {
     let mut greedy = Greedy;
     assert!(w::read_agent_message(&mut greedy).is_err());
+}
+
+/// A `Read` that fails exactly once with `ErrorKind::Interrupted` (as a
+/// signal-interrupted `recv(2)` would) before ever yielding data, then
+/// reads normally from `inner`.
+struct InterruptOnceThenRead<R> {
+    interrupted: bool,
+    inner: R,
+}
+
+impl<R: Read> Read for InterruptOnceThenRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if !self.interrupted {
+            self.interrupted = true;
+            return Err(std::io::Error::from(ErrorKind::Interrupted));
+        }
+        self.inner.read(buf)
+    }
+}
+
+#[test]
+fn test_read_agent_message_retries_on_eintr() {
+    // C-5: Python's `socket.recv` retries automatically on EINTR (PEP 475);
+    // every read loop in sshwire.rs must do the same for any `Read` impl,
+    // not just sockets.
+    let framed = w::frame_agent_message(b"\x0dhello").unwrap();
+    let mut source = InterruptOnceThenRead {
+        interrupted: false,
+        inner: Cursor::new(framed),
+    };
+    let message = w::read_agent_message(&mut source)
+        .expect("Interrupted must be retried, not propagated")
+        .unwrap();
+    assert_eq!(message, b"\x0dhello".to_vec());
 }
 
 #[test]
@@ -2182,39 +2247,45 @@ fn test_parse_hostbound() {
         ("publickey", None)
     );
 
-    assert!(w::parse_userauth_request(
-        &fields(FieldsOverride {
-            method: b"publickey-hostbound-v00@openssh.com",
-            ..Default::default()
-        }),
-        true
-    )
-    .is_err());
+    assert!(
+        w::parse_userauth_request(
+            &fields(FieldsOverride {
+                method: b"publickey-hostbound-v00@openssh.com",
+                ..Default::default()
+            }),
+            true
+        )
+        .is_err()
+    );
 
     let mut empty_host = w::encode_string(b"" as &[u8]).unwrap();
-    assert!(w::parse_userauth_request(
-        &fields(FieldsOverride {
-            method: b"publickey-hostbound-v00@openssh.com",
-            extra: &std::mem::take(&mut empty_host),
-            ..Default::default()
-        }),
-        true
-    )
-    .is_err());
+    assert!(
+        w::parse_userauth_request(
+            &fields(FieldsOverride {
+                method: b"publickey-hostbound-v00@openssh.com",
+                extra: &std::mem::take(&mut empty_host),
+                ..Default::default()
+            }),
+            true
+        )
+        .is_err()
+    );
 
     let mut trailing = data.clone();
     trailing.push(0);
     assert!(w::parse_userauth_request(&trailing, true).is_err());
 
     let mut host_extra = w::encode_string(host_key_blob()).unwrap();
-    assert!(w::parse_userauth_request(
-        &fields(FieldsOverride {
-            extra: &std::mem::take(&mut host_extra),
-            ..Default::default()
-        }),
-        true
-    )
-    .is_err());
+    assert!(
+        w::parse_userauth_request(
+            &fields(FieldsOverride {
+                extra: &std::mem::take(&mut host_extra),
+                ..Default::default()
+            }),
+            true
+        )
+        .is_err()
+    );
 }
 
 #[test]
