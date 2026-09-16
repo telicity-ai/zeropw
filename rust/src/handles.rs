@@ -9,6 +9,8 @@
 //! connection within the granted scope until expiry or revocation; it never
 //! reveals a vault value.
 
+use std::fmt::Write as _;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
@@ -141,32 +143,184 @@ impl HandleIssuer {
     }
 }
 
-/// Parses and validates the handle payload (the `parts[1]` base64 segment).
-/// Python's version does `str(payload["c"])` / `int(payload["pv"])`, which
-/// coerces almost any JSON scalar (e.g. a `null` "c" field stringifies to
-/// `"None"`, a float "pv" coerces via `int()`); this port requires the exact
-/// expected JSON type (string for `c`/`n`/`g`/`jti`, integer for
-/// `v`/`pv`/`iat`/`exp`) and treats anything else as `handle_malformed`. A
-/// payload that would rely on that leniency can only be produced by someone
-/// who already holds the HMAC signing key (the signature is verified before
-/// the payload is ever parsed), so this narrows Python's forged-token
-/// behaviour without weakening the security boundary -- recorded in
-/// `rust/DEVIATIONS.md`.
+/// Python `str(value)` on a JSON-decoded scalar/container, as
+/// `HandleIssuer.verify` applies via `str(payload["c"])` etc. Never fails:
+/// `str()` succeeds for every Python object. For `str`, this is the value
+/// itself; for everything else it is `repr(value)` (`None`/`True`/`False`,
+/// the canonical number form, or a Python-style `repr` of a list/dict).
+fn python_str_coerce(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => python_repr_value(other),
+    }
+}
+
+/// `repr(value)` for a JSON-decoded value, used both by [`python_str_coerce`]
+/// for non-`str` top-level values and recursively for list/dict elements.
+fn python_repr_value(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::String(s) => python_repr_str(s),
+        Value::Number(n) => {
+            if n.is_f64() {
+                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
+            } else {
+                n.as_str().to_string()
+            }
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(python_repr_value).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", python_repr_str(k), python_repr_value(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
+/// `repr(str)`: single-quoted unless the string has a `'` and no `"`, in
+/// which case double-quoted; backslash/quote/`\n`/`\r`/`\t` get short
+/// escapes, other C0 controls and DEL get `\xNN`. Approximates CPython's
+/// full `unicodedata`-driven printable-character check (everything else is
+/// emitted literally); no field this port ever `repr()`s exercises that gap.
+fn python_repr_str(s: &str) -> String {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::new();
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Python `int(value)` coercion, as `HandleIssuer.verify` applies via
+/// `int(payload["pv"])` etc. `Err` covers every case Python's `int()` would
+/// raise `TypeError`/`ValueError` for (both caught by `verify`'s
+/// `except (KeyError, TypeError, ValueError)` and mapped to
+/// `handle_malformed`) -- `None`, a list/dict, or a non-numeric string.
+///
+/// Two narrow residual gaps versus CPython, neither reachable except via a
+/// hand-crafted token from someone who already holds the HMAC signing key:
+/// a magnitude that doesn't fit `i64` (Python `int` is unbounded; this
+/// port's `Handle` fields are `i64`) is rejected here instead of succeeding,
+/// and only ASCII `0`-`9` are accepted as digits in a numeric string (Python
+/// also accepts other Unicode decimal-digit characters). A float that is
+/// `inf`/`-inf` makes Python's `int()` raise `OverflowError`, which is *not*
+/// one of `TypeError`/`ValueError`/`KeyError` and so escapes `verify`
+/// uncaught -- PORTING.md §3.5 applies and this is folded into the same
+/// `handle_malformed` result as the other coercion failures. In practice a
+/// non-finite float payload cannot even reach this function: [`pyjson::loads`]
+/// already rejects the bare `Infinity`/`-Infinity` JSON tokens Python's
+/// decoder would have accepted (`rust/DEVIATIONS.md`, pyjson row).
+fn python_int_coerce(value: &Value) -> Result<i64, ()> {
+    match value {
+        Value::Bool(b) => Ok(i64::from(*b)),
+        Value::Number(n) => {
+            if n.is_f64() {
+                let f = n.as_f64().ok_or(())?;
+                if !f.is_finite() {
+                    return Err(());
+                }
+                let truncated = f.trunc();
+                if truncated > i64::MAX as f64 || truncated < i64::MIN as f64 {
+                    return Err(());
+                }
+                Ok(truncated as i64)
+            } else {
+                n.as_str().parse::<i64>().map_err(|_| ())
+            }
+        }
+        Value::String(s) => python_int_from_str(s),
+        Value::Null | Value::Array(_) | Value::Object(_) => Err(()),
+    }
+}
+
+/// Python `int(str)` (base 10, the implicit base `int(x)` uses): strips
+/// surrounding whitespace, an optional leading `+`/`-`, ASCII digits with
+/// single underscores allowed only strictly between two digits (`"1_000"`
+/// ok; `"_1"`, `"1_"`, `"1__0"` are not).
+fn python_int_from_str(s: &str) -> Result<i64, ()> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err(());
+    }
+    let (neg, digits_part) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits_part.is_empty() {
+        return Err(());
+    }
+    let chars: Vec<char> = digits_part.chars().collect();
+    let mut digits = String::new();
+    let mut prev_was_digit = false;
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
+            if !prev_was_digit || !next_is_digit {
+                return Err(());
+            }
+            prev_was_digit = false;
+            continue;
+        }
+        if !c.is_ascii_digit() {
+            return Err(());
+        }
+        digits.push(c);
+        prev_was_digit = true;
+    }
+    if digits.is_empty() {
+        return Err(());
+    }
+    let magnitude: i64 = digits.parse().map_err(|_| ())?;
+    Ok(if neg { -magnitude } else { magnitude })
+}
+
+/// Parses and validates the handle payload (the `parts[1]` base64 segment),
+/// reproducing `HandleIssuer.verify`'s `str(payload["c"])` / `int(payload["pv"])`
+/// coercions exactly (see [`python_str_coerce`]/[`python_int_coerce`]) rather
+/// than requiring the exact expected JSON type.
 fn parse_payload(encoded: &str) -> Result<Handle, Error> {
     let malformed = || Error::auth_failed("handle_malformed");
     let raw = b64d(encoded).map_err(|_| malformed())?;
     let text = String::from_utf8(raw).map_err(|_| malformed())?;
     let payload: Value = pyjson::loads(&text).map_err(|_| malformed())?;
+    // A non-dict payload (list/string/number/...) makes every `payload["c"]`
+    // subscript raise `TypeError` in Python -- caught, `handle_malformed`.
     let obj = payload.as_object().ok_or_else(malformed)?;
 
     let str_field = |name: &str| -> Result<String, Error> {
-        obj.get(name)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(malformed)
+        // Missing key: Python's `payload["c"]` raises `KeyError` -- caught,
+        // `handle_malformed`. Present: `str()` never fails.
+        obj.get(name).map(python_str_coerce).ok_or_else(malformed)
     };
     let int_field = |name: &str| -> Result<i64, Error> {
-        obj.get(name).and_then(Value::as_i64).ok_or_else(malformed)
+        let v = obj.get(name).ok_or_else(malformed)?;
+        python_int_coerce(v).map_err(|_| malformed())
     };
 
     let caller = str_field("c")?;
@@ -177,7 +331,20 @@ fn parse_payload(encoded: &str) -> Result<Handle, Error> {
     let expires_at = int_field("exp")?;
     let handle_id = str_field("jti")?;
 
-    if obj.get("v").and_then(Value::as_i64) != Some(1) {
+    // Python: `payload.get("v") != 1` -- equality, not identity, so
+    // `True` (`True == 1`) and `1.0` (`1.0 == 1`) both pass.
+    let v_matches_1 = match obj.get("v") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => {
+            if n.is_f64() {
+                n.as_f64() == Some(1.0)
+            } else {
+                n.as_str() == "1"
+            }
+        }
+        _ => false,
+    };
+    if !v_matches_1 {
         return Err(Error::auth_failed("handle_version"));
     }
 
@@ -317,6 +484,25 @@ mod tests {
         let err = issuer.verify(&token, Some(now)).unwrap_err();
         assert_eq!(err.reason, "handle_version");
     }
+
+    // A-9: Python's `_sign` calls `body.encode("ascii")` on the dot-joined
+    // `f"{parts[0]}.{parts[1]}"`; a non-ASCII `parts[1]` makes that raise an
+    // uncaught `UnicodeEncodeError` (coordinator ruling, PORTING.md §3.5).
+    // Rust's `sign` has no ASCII restriction, so it always computes some
+    // HMAC; pin that a non-ASCII payload segment still surfaces as an
+    // ordinary `handle_signature` failure, not a panic or a different
+    // reason.
+    #[test]
+    fn non_ascii_payload_segment_fails_as_signature_mismatch() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let token = "zpw1.café-not-base64.deadbeef";
+        let err = issuer
+            .verify(token, Some(1_700_000_000.0))
+            .expect_err("non-ASCII payload segment must not verify");
+        assert!(err.is(ErrorClass::AuthFailed));
+        assert_eq!(err.reason, "handle_signature");
+    }
 }
 
 /// Cross-language differential tests: a handle issued by one language must
@@ -419,5 +605,137 @@ with mock.patch.object(secrets, "token_bytes", return_value=bytes.fromhex("{jti_
 
     fn hex_to_b64url(hex_str: &str) -> String {
         b64e(&hex::decode(hex_str).unwrap())
+    }
+
+    // A-12: `HandleIssuer.verify`'s `str(payload["c"])` / `int(payload["pv"])`
+    // coercions, exercised end-to-end. Python signs a battery of
+    // deliberately odd-typed payloads with the shared key (bypassing
+    // `issue`, which never emits anything but well-typed payloads) and
+    // prints what `verify` did with each; Rust verifies the exact same
+    // tokens with the same key and the results/reasons must match line for
+    // line.
+    #[test]
+    fn payload_coercion_matches_python_for_crafted_tokens() {
+        let script = format!(
+            r#"
+import base64, hashlib, hmac, json
+from zeropw.handles import HandleIssuer
+
+KEY = bytes.fromhex("{KEY_HEX}")
+
+def b64e(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+def sign(body):
+    return b64e(hmac.new(KEY, body.encode("ascii"), hashlib.sha256).digest())
+
+def make_token(payload):
+    body = "zpw1." + b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    return body + "." + sign(body)
+
+base = {{"v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4, "iat": 1700000000, "exp": 1700000300, "jti": "abc"}}
+
+def variant(**overrides):
+    p = dict(base)
+    p.update(overrides)
+    return p
+
+cases = [
+    variant(),
+    variant(c=None),
+    variant(c=True),
+    variant(c=[1, 2]),
+    variant(c={{"x": 1}}),
+    variant(n=4.0),
+    variant(n=4),
+    variant(pv=True),
+    variant(pv=False),
+    variant(pv=4.9),
+    variant(pv=-4.9),
+    variant(pv="42"),
+    variant(pv=" 4_2 "),
+    variant(pv="+7"),
+    variant(pv="-7"),
+    variant(pv="abc"),
+    variant(pv=None),
+    variant(pv=[1]),
+    variant(v=True),
+    variant(v=1.0),
+    variant(v=2),
+    variant(v=False),
+]
+missing_c = dict(base)
+del missing_c["c"]
+cases.append(missing_c)
+
+issuer = HandleIssuer(KEY)
+for payload in cases:
+    token = make_token(payload)
+    print("TOKEN", token)
+    try:
+        h = issuer.verify(token, now=1700000000.0 + 10)
+        print("OK", h.caller, "|", h.connection, "|", h.grant, "|", h.policy_version, "|",
+              h.issued_at, "|", h.expires_at, "|", h.handle_id)
+    except Exception as exc:
+        print("ERR", getattr(exc, "reason", type(exc).__name__))
+"#
+        );
+        let py_out = oracle::python(&script);
+        let lines: Vec<&str> = py_out.lines().collect();
+        assert!(
+            !lines.is_empty() && lines.len().is_multiple_of(2),
+            "unexpected oracle output shape"
+        );
+
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        let now = 1_700_000_000.0 + 10.0;
+        let mut i = 0;
+        let mut checked = 0;
+        while i < lines.len() {
+            let token = lines[i]
+                .strip_prefix("TOKEN ")
+                .expect("expected a TOKEN line");
+            let result_line = lines[i + 1];
+            i += 2;
+            let rust_result = issuer.verify(token, Some(now));
+            if let Some(rest) = result_line.strip_prefix("OK ") {
+                let parts: Vec<&str> = rest.split(" | ").collect();
+                let handle = rust_result.unwrap_or_else(|e| {
+                    panic!("rust rejected a token python accepted: token={token} err={e:?}")
+                });
+                assert_eq!(handle.caller, parts[0], "caller mismatch for token {token}");
+                assert_eq!(
+                    handle.connection, parts[1],
+                    "connection mismatch for token {token}"
+                );
+                assert_eq!(handle.grant, parts[2], "grant mismatch for token {token}");
+                assert_eq!(
+                    handle.policy_version.to_string(),
+                    parts[3],
+                    "policy_version mismatch for token {token}"
+                );
+                assert_eq!(
+                    handle.issued_at.to_string(),
+                    parts[4],
+                    "issued_at mismatch for token {token}"
+                );
+                assert_eq!(
+                    handle.expires_at.to_string(),
+                    parts[5],
+                    "expires_at mismatch for token {token}"
+                );
+                assert_eq!(
+                    handle.handle_id, parts[6],
+                    "handle_id mismatch for token {token}"
+                );
+            } else if let Some(reason) = result_line.strip_prefix("ERR ") {
+                let err = rust_result.unwrap_err();
+                assert_eq!(err.reason, reason, "reason mismatch for token {token}");
+            } else {
+                panic!("unexpected oracle line: {result_line}");
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 23, "expected exactly 23 crafted-token cases");
     }
 }

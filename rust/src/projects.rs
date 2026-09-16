@@ -12,8 +12,19 @@ pub const DEFAULT_ENVIRONMENTS: &[&str] = &["dev", "staging", "prod"];
 /// `projects.NAME_RE`: `^[a-z0-9][a-z0-9._-]{0,63}$`, checked by hand (no
 /// `regex` dependency needed for a pattern this small, and it keeps the
 /// character classes trivially auditable against the Python source).
+///
+/// Python's `$` (no `re.MULTILINE`) matches either at the end of the string,
+/// or immediately before a single `'\n'` that is the very last character --
+/// so `NAME_RE.match("abc\n")` succeeds (matching `"abc"`, with the trailing
+/// `\n` left over but a `.match()` call doesn't require consuming the whole
+/// string). `"abc\n\n"` does *not* match: only the single newline
+/// immediately at the end gets this exemption, and there is no way for the
+/// tail character class (which excludes `\n`) to reach the second-to-last
+/// position. Concretely: strip at most one trailing `'\n'` and require the
+/// remainder to match `^[a-z0-9][a-z0-9._-]{0,63}$` exactly.
 fn matches_name_re(value: &str) -> bool {
-    let bytes = value.as_bytes();
+    let core = value.strip_suffix('\n').unwrap_or(value);
+    let bytes = core.as_bytes();
     if bytes.is_empty() || bytes.len() > 64 {
         return false;
     }
@@ -245,5 +256,80 @@ mod tests {
         let (_tmp, state) = new_state();
         let projects = Projects::new(&state);
         assert_eq!(projects.list().unwrap(), Vec::new());
+    }
+
+    // A-3: Python's `NAME_RE.match(value)` accepts exactly one trailing
+    // `"\n"` (a quirk of `$` without `re.MULTILINE`) and returns the
+    // *original* string, newline included.
+    #[test]
+    fn validate_name_accepts_exactly_one_trailing_newline() {
+        let ok = validate_name("abc\n", "project").unwrap();
+        assert_eq!(ok, "abc\n", "must return the original string unmodified");
+
+        assert!(validate_name("abc\n\n", "project").is_err());
+        assert!(validate_name("\nabc", "project").is_err());
+        assert!(validate_name("a\nb", "project").is_err());
+        assert!(validate_name("\n", "project").is_err());
+
+        let name64 = "a".repeat(64);
+        assert!(validate_name(&name64, "project").is_ok());
+        let name64_nl = format!("{name64}\n");
+        assert_eq!(validate_name(&name64_nl, "project").unwrap(), name64_nl);
+
+        let name65 = "a".repeat(65);
+        assert!(validate_name(&name65, "project").is_err());
+        let name65_nl = format!("{name65}\n");
+        assert!(validate_name(&name65_nl, "project").is_err());
+    }
+}
+
+/// Differential tests against the CPython oracle.
+#[cfg(test)]
+mod oracle_tests {
+    use super::*;
+    use crate::oracle;
+
+    // A-3: table-tests `NAME_RE.match(...)` (the exact regex source, run
+    // through CPython) against `matches_name_re` for every case the
+    // reviewer flagged, plus the 64/65-char boundary with and without a
+    // trailing newline.
+    #[test]
+    fn validate_name_matches_python_name_re_table() {
+        let name64 = "a".repeat(64);
+        let name65 = "a".repeat(65);
+        let cases: Vec<String> = vec![
+            "abc".to_string(),
+            "abc\n".to_string(),
+            "abc\n\n".to_string(),
+            "\nabc".to_string(),
+            "a\nb".to_string(),
+            "\n".to_string(),
+            "".to_string(),
+            name64.clone(),
+            format!("{name64}\n"),
+            format!("{name64}\n\n"),
+            name65.clone(),
+            format!("{name65}\n"),
+        ];
+        let script = format!(
+            r#"
+import re
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{{0,63}}$")
+cases = {cases:?}
+for c in cases:
+    print("MATCH" if NAME_RE.match(c) else "NOMATCH")
+"#
+        );
+        let out = oracle::python(&script);
+        let want: Vec<&str> = out.lines().collect();
+        assert_eq!(want.len(), cases.len());
+        for (case, expected) in cases.iter().zip(want.iter()) {
+            let got = if matches_name_re(case) {
+                "MATCH"
+            } else {
+                "NOMATCH"
+            };
+            assert_eq!(got, *expected, "mismatch for case {case:?}");
+        }
     }
 }

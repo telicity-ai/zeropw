@@ -144,3 +144,33 @@ state.write_json("doc.json", {{"b": [1, 2, {{"z": True, "a": None}}], "a": "hell
     let python_bytes = std::fs::read(python_path.join("doc.json")).unwrap();
     assert_eq!(rust_bytes, python_bytes);
 }
+
+// A-10: `StateDir.read_lines` opens the file in Python's default text mode,
+// which applies *universal newline* translation ("\r\n", "\r", and "\n" all
+// terminate a line), not just "\n". Write raw bytes with a mix of
+// terminators (including a final line with none) directly to disk --
+// bypassing `append_line`, which forbids embedded "\n" in either language --
+// and check both languages split it the same way.
+#[test]
+fn read_lines_handles_universal_newlines_like_python() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let state_path = tmp.path().join("state");
+    std::fs::create_dir_all(&state_path).unwrap();
+    std::fs::write(state_path.join("log.jsonl"), b"a\rb\nc\r\nd").unwrap();
+
+    let out = run_python(&format!(
+        r#"
+from zeropw.store import StateDir
+state = StateDir({path})
+for line in state.read_lines("log.jsonl", None):
+    print(line)
+"#,
+        path = py_str_literal(&state_path),
+    ));
+    let want: Vec<&str> = out.lines().collect();
+
+    let state = StateDir::new(&state_path);
+    let got = state.read_lines("log.jsonl", None).unwrap();
+    assert_eq!(got, want);
+    assert_eq!(got, vec!["a", "b", "c", "d"]);
+}

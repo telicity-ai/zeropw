@@ -178,7 +178,11 @@ impl StateDir {
         pyjson::loads(&text).map_err(|_| Error::state("state_corrupt").with_detail(name))
     }
 
-    /// `StateDir.write_json`.
+    /// `StateDir.write_json`. Python's `try` wraps *both* the write and the
+    /// final `os.replace`, and unlinks the tmp file on any `OSError` from
+    /// either (store.py:104-110) -- so a failed rename leaves no tmp file
+    /// behind, unlike [`StateDir::write_bytes`] (store.py:139-147, which
+    /// has no such `except` clause and leaves the tmp file in place).
     pub fn write_json(&self, name: &str, value: &Value) -> Result<(), Error> {
         let target = self.path.join(name);
         if let Some(parent) = target.parent() {
@@ -187,7 +191,7 @@ impl StateDir {
         let text = pyjson::dumps(value, DumpOptions::pretty_sorted())
             .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
         let tmp = tmp_path(&target);
-        let write_result = (|| -> std::io::Result<()> {
+        let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -197,19 +201,14 @@ impl StateDir {
             file.write_all(text.as_bytes())?;
             file.flush()?;
             file.sync_all()?;
+            drop(file);
+            fs::rename(&tmp, &target)?;
             Ok(())
         })();
-        match write_result {
-            Ok(()) => {
-                fs::rename(&tmp, &target)
-                    .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
-                Ok(())
-            }
-            Err(_) => {
-                let _ = fs::remove_file(&tmp);
-                Err(Error::state("state_write_failed").with_detail(name))
-            }
-        }
+        result.map_err(|_| {
+            let _ = fs::remove_file(&tmp);
+            Error::state("state_write_failed").with_detail(name)
+        })
     }
 
     /// Append one line and fsync. Port of `StateDir.append_line`.
@@ -244,17 +243,12 @@ impl StateDir {
         }
         let text = fs::read_to_string(&target)
             .map_err(|_| Error::state("state_corrupt").with_detail(name))?;
-        let mut lines: Vec<String> = if text.is_empty() {
-            Vec::new()
-        } else {
-            text.split('\n').map(str::to_string).collect()
-        };
-        // `str::split('\n')` on text ending in '\n' yields a trailing "" —
-        // Python's `for line in stream` never produces that.
-        if lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
+        let mut lines = split_universal_newlines(&text);
+        // Python: `lines[-limit:]`. `-0 == 0`, so `lines[-0:]` is `lines[0:]`
+        // -- the *whole* list, not an empty one; only `limit > 0` actually
+        // trims from the end.
         if let Some(limit) = limit
+            && limit != 0
             && lines.len() > limit
         {
             lines = lines.split_off(lines.len() - limit);
@@ -262,14 +256,17 @@ impl StateDir {
         Ok(lines)
     }
 
-    /// `StateDir.write_bytes`.
+    /// `StateDir.write_bytes`. Unlike [`StateDir::write_json`], Python's
+    /// `except OSError` here (store.py:139-147) has no `os.unlink(tmp)` --
+    /// a failed write *or* a failed `os.replace` leaves the tmp file
+    /// behind. Match that exactly (no cleanup on any failure path).
     pub fn write_bytes(&self, name: &str, data: &[u8]) -> Result<(), Error> {
         let target = self.path.join(name);
         if let Some(parent) = target.parent() {
             mkdir_p(parent)?;
         }
         let tmp = tmp_path(&target);
-        let write_result = (|| -> std::io::Result<()> {
+        let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -279,19 +276,11 @@ impl StateDir {
             file.write_all(data)?;
             file.flush()?;
             file.sync_all()?;
+            drop(file);
+            fs::rename(&tmp, &target)?;
             Ok(())
         })();
-        match write_result {
-            Ok(()) => {
-                fs::rename(&tmp, &target)
-                    .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
-                Ok(())
-            }
-            Err(_) => {
-                let _ = fs::remove_file(&tmp);
-                Err(Error::state("state_write_failed").with_detail(name))
-            }
-        }
+        result.map_err(|_| Error::state("state_write_failed").with_detail(name))
     }
 
     /// `StateDir.read_bytes`.
@@ -336,9 +325,87 @@ impl Drop for StateLock<'_> {
     }
 }
 
+/// Port of the `Path.mkdir(mode=DIR_MODE, exist_ok=True[, parents=True])`
+/// calls scattered through `store.py` (`subdir`, `lock`, `write_json`,
+/// `append_line`, `write_bytes`). Two things Python does that a naive
+/// `create_dir_all` + chmod does not:
+///
+/// - `exist_ok=True` means `os.mkdir` is never even attempted when the
+///   target already exists as a directory, so its mode is left exactly as
+///   it was found -- Python does *not* re-chmod a pre-existing directory
+///   (including the state root itself) back to `DIR_MODE` on every
+///   write/lock/subdir call.
+/// - With `parents=True`, CPython's recursive parent-creation call
+///   (`self.parent.mkdir(parents=True, exist_ok=True)`) does not forward the
+///   caller's `mode` -- only the leaf directory the caller actually asked
+///   for is created with `mode=DIR_MODE` (still subject to the process
+///   umask at the `mkdir(2)` syscall level); any missing parents get the OS
+///   default mode.
+///
+/// This port creates missing parents the same way (no explicit mode, so
+/// they get whatever `mkdir(2)`'s default subject to umask gives them,
+/// exactly like Python), then creates the leaf and sets its mode to
+/// `DIR_MODE` explicitly rather than depending on the umask arithmetic
+/// Python's `mode=` argument to `os.mkdir` relies on. This is
+/// observationally identical to Python for every umask that does not mask
+/// off owner bits (every umask in practical use: `000`, `002`, `022`,
+/// `027`, `077`, ...) since `DIR_MODE` (`0o700`) has no group/other bits
+/// for such a umask to touch, and is *more* restrictive than Python's raw
+/// result if the process ran under a pathological owner-masking umask
+/// (e.g. `0700`) -- fails closed rather than open, recorded in
+/// `DEVIATIONS.md`.
+/// `open(target, "r", encoding="utf-8")` + `[line.rstrip("\n") for line in
+/// stream]`: Python's text mode applies *universal newline* translation,
+/// recognizing `"\r\n"`, `"\r"`, and `"\n"` as line terminators (not just
+/// `"\n"`), and iterating a stream never yields a trailing empty line for
+/// text that ends in a terminator, while a final line with no terminator is
+/// still yielded (as a short last element).
+fn split_universal_newlines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                lines.push(std::mem::take(&mut current));
+            }
+            '\n' => {
+                lines.push(std::mem::take(&mut current));
+            }
+            other => current.push(other),
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 fn mkdir_p(path: &Path) -> Result<(), Error> {
-    fs::create_dir_all(path)
-        .map_err(|_| Error::state("state_write_failed").with_detail(path_str(path)))?;
+    if path.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|_| Error::state("state_write_failed").with_detail(path_str(parent)))?;
+    }
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        // Lost a create race to another thread/process between the is_dir()
+        // check above and here: `exist_ok` semantics -- leave its mode
+        // alone, same as the "already existed" branch.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
+            return Ok(());
+        }
+        Err(_) => {
+            return Err(Error::state("state_write_failed").with_detail(path_str(path)));
+        }
+    }
     set_mode(path, DIR_MODE)
 }
 
@@ -516,6 +583,84 @@ mod tests {
         );
     }
 
+    // A-10: Python's text-mode `open()` treats "\r\n", "\r", and "\n" all as
+    // line terminators (universal newlines), not just "\n".
+    #[test]
+    fn read_lines_splits_on_any_universal_newline_terminator() {
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("mixed.txt"), b"a\rb\nc\r\nd").unwrap();
+        assert_eq!(
+            state.read_lines("mixed.txt", None).unwrap(),
+            vec!["a", "b", "c", "d"]
+        );
+        // A file ending in a terminator yields no trailing empty line; one
+        // ending mid-line still yields that final partial line.
+        fs::write(state.path.join("trailing.txt"), b"x\ny\n").unwrap();
+        assert_eq!(
+            state.read_lines("trailing.txt", None).unwrap(),
+            vec!["x", "y"]
+        );
+        fs::write(state.path.join("no_trailing.txt"), b"x\ny").unwrap();
+        assert_eq!(
+            state.read_lines("no_trailing.txt", None).unwrap(),
+            vec!["x", "y"]
+        );
+        assert_eq!(
+            state.read_lines("empty_missing.txt", None).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    // A-4: Python's `lines[-limit:]` treats `limit == 0` as `lines[-0:]` ==
+    // `lines[0:]` -- the whole list, not an empty slice.
+    #[test]
+    fn read_lines_limit_zero_returns_everything() {
+        let (_tmp, state) = new_state();
+        for i in 0..5 {
+            state.append_line("log.jsonl", &format!("line{i}")).unwrap();
+        }
+        assert_eq!(
+            state.read_lines("log.jsonl", Some(0)).unwrap(),
+            vec!["line0", "line1", "line2", "line3", "line4"]
+        );
+    }
+
+    // A-8: Python's `write_json` unlinks its tmp file on any failure
+    // (including a failed final `os.replace`), but `write_bytes` has no
+    // such cleanup and leaves the tmp file behind. A write "to a name that
+    // is an existing directory" makes the write itself succeed but the
+    // rename fail (`EISDIR`/`ENOTDIR`), exercising exactly that path.
+    #[test]
+    fn write_json_cleans_tmp_on_failure_but_write_bytes_does_not() {
+        let (_tmp, state) = new_state();
+
+        fn tmp_leftovers(dir: &Path, stem: &str) -> Vec<String> {
+            fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with(&format!(".{stem}.")) && n.ends_with(".tmp"))
+                .collect()
+        }
+
+        fs::create_dir(state.path.join("doc.json")).unwrap();
+        let err = state.write_json("doc.json", &json!({"a": 1})).unwrap_err();
+        assert_eq!(err.reason, "state_write_failed");
+        assert!(
+            tmp_leftovers(&state.path, "doc.json").is_empty(),
+            "write_json must unlink its tmp file on failure"
+        );
+
+        fs::create_dir(state.path.join("blob.bin")).unwrap();
+        let err = state.write_bytes("blob.bin", b"x").unwrap_err();
+        assert_eq!(err.reason, "state_write_failed");
+        assert_eq!(
+            tmp_leftovers(&state.path, "blob.bin").len(),
+            1,
+            "write_bytes must leave its tmp file behind on failure, like Python"
+        );
+    }
+
     #[test]
     fn write_read_bytes_round_trip_and_missing() {
         let (_tmp, state) = new_state();
@@ -540,6 +685,69 @@ mod tests {
         let p2 = state.subdir("audit").unwrap();
         assert_eq!(p1, p2);
         assert!(p1.is_dir());
+    }
+
+    fn dir_mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    // A-7: Python's `Path.mkdir(mode=DIR_MODE, exist_ok=True)` never even
+    // calls `os.mkdir` when the target already exists, so a pre-existing
+    // directory's mode is left exactly as found -- it is not reset to
+    // `DIR_MODE` on every `subdir`/`write_json`/`append_line`/`lock` call.
+    #[test]
+    fn mkdir_p_does_not_chmod_pre_existing_directories() {
+        let (_tmp, state) = new_state();
+
+        // The state root itself, pre-existing with a non-default mode.
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(dir_mode(&state.path), 0o750);
+
+        // `subdir` on an already-existing directory.
+        let audit_dir = state.path.join("audit");
+        fs::create_dir(&audit_dir).unwrap();
+        fs::set_permissions(&audit_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let got = state.subdir("audit").unwrap();
+        assert_eq!(got, audit_dir);
+        assert_eq!(dir_mode(&audit_dir), 0o755, "subdir must not re-chmod");
+
+        // `write_json`'s parent-directory creation on an already-existing
+        // directory.
+        let sub_dir = state.path.join("sub");
+        fs::create_dir(&sub_dir).unwrap();
+        fs::set_permissions(&sub_dir, fs::Permissions::from_mode(0o750)).unwrap();
+        state.write_json("sub/doc.json", &json!({"a": 1})).unwrap();
+        assert_eq!(
+            dir_mode(&sub_dir),
+            0o750,
+            "write_json must not re-chmod an existing parent dir"
+        );
+
+        // `append_line`'s parent-directory creation on an already-existing
+        // directory.
+        let log_dir = state.path.join("logs");
+        fs::create_dir(&log_dir).unwrap();
+        fs::set_permissions(&log_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        state.append_line("logs/x.jsonl", "hello").unwrap();
+        assert_eq!(
+            dir_mode(&log_dir),
+            0o755,
+            "append_line must not re-chmod an existing parent dir"
+        );
+
+        // `lock()`'s mkdir_p on the (already-existing, re-chmodded) state
+        // root must not reset it back to DIR_MODE either.
+        let _g = state.lock().unwrap();
+        drop(_g);
+        assert_eq!(
+            dir_mode(&state.path),
+            0o750,
+            "lock() must not re-chmod the pre-existing state root"
+        );
+
+        // A freshly created directory still gets DIR_MODE.
+        let fresh = state.subdir("fresh").unwrap();
+        assert_eq!(dir_mode(&fresh), DIR_MODE);
     }
 
     #[test]

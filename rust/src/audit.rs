@@ -34,7 +34,7 @@
 //!   still find the alerts file one line short).
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 
@@ -273,6 +273,30 @@ fn round_half_even_3dp(f: f64) -> f64 {
     format!("{f:.3}").parse::<f64>().unwrap_or(f)
 }
 
+/// Python `str()` of a JSON scalar as `_clean` would have left it (`None`,
+/// `bool`, `int`, `float`, or `str` -- `_clean` already rejects arrays/dicts,
+/// so `record.get(...)` values reaching here are always one of these).  Used
+/// by [`Audit::maybe_alert`]'s `f"...{record.get('scope')}..."` formatting,
+/// which calls Python's `str()` on whatever type `scope` happens to hold.
+fn python_scalar_str(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => "None".to_string(),
+        Some(Value::Bool(true)) => "True".to_string(),
+        Some(Value::Bool(false)) => "False".to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => {
+            if n.is_f64() {
+                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
+            } else {
+                n.as_str().to_string()
+            }
+        }
+        // Unreachable in practice: `_clean` rejects arrays/objects before a
+        // value can land in `record`.
+        Some(other) => other.to_string(),
+    }
+}
+
 /// `audit.strip_query`.
 pub fn strip_query(path: &str) -> String {
     path.split('?').next().unwrap_or("").to_string()
@@ -300,7 +324,7 @@ pub struct RecordArgs<'a> {
 
 type ListenerFn = dyn Fn(&Map<String, Value>) + Send + Sync;
 
-struct Listener(Box<ListenerFn>);
+struct Listener(Arc<ListenerFn>);
 
 /// Port of `audit.Audit`.
 pub struct Audit<'a> {
@@ -331,14 +355,25 @@ impl<'a> Audit<'a> {
         self.listeners
             .lock()
             .expect("listeners mutex poisoned")
-            .push(Listener(Box::new(listener)));
+            .push(Listener(Arc::new(listener)));
     }
 
+    /// Mirrors `Audit._notify_listeners`'s `for listener in list(self._listeners)`:
+    /// Python iterates a *copy* of the listener list taken without holding any
+    /// lock, so a listener that calls back into `record`/`subscribe` on the
+    /// same thread never re-enters a held lock. We snapshot (clone the `Arc`s)
+    /// under the listeners mutex, drop it, then invoke -- a listener calling
+    /// `subscribe` only mutates the `Vec` for the *next* `record`, exactly
+    /// like Python's `list(...)` snapshot missing a listener registered during
+    /// iteration.
     fn notify_listeners(&self, record: &Map<String, Value>) {
-        let listeners = self.listeners.lock().expect("listeners mutex poisoned");
-        for listener in listeners.iter() {
+        let snapshot: Vec<Arc<ListenerFn>> = {
+            let listeners = self.listeners.lock().expect("listeners mutex poisoned");
+            listeners.iter().map(|l| l.0.clone()).collect()
+        };
+        for listener in snapshot {
             let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (listener.0)(record)));
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (listener)(record)));
             if result.is_err() {
                 *self
                     .listener_errors
@@ -468,24 +503,20 @@ impl<'a> Audit<'a> {
             )?;
         }
         if event == "incident_open" {
-            let scope = record
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("None");
+            let scope = python_scalar_str(record.get("scope"));
+            // Python: `reason or "unknown"` -- falsy is `None` *or* `""`.
+            let reason_display = match reason {
+                Some(r) if !r.is_empty() => r,
+                _ => "unknown",
+            };
             self.alert(
                 "intrusion",
                 record,
-                &format!(
-                    "incident opened: scope={scope} reason={}",
-                    reason.unwrap_or("unknown")
-                ),
+                &format!("incident opened: scope={scope} reason={reason_display}"),
             )?;
         }
         if event == "incident_widen" {
-            let scope = record
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("None");
+            let scope = python_scalar_str(record.get("scope"));
             self.alert(
                 "intrusion",
                 record,
@@ -517,11 +548,21 @@ impl<'a> Audit<'a> {
         if result == Some("denied") {
             // Authenticated denials count per caller. Unauthenticated ones
             // (forged or tampered handles, unknown tokens) carry no caller,
-            // so they count per event and reason.
-            let caller = record.get("caller").and_then(Value::as_str);
+            // so they count per event and reason. Python: `record.get("caller")`
+            // truthiness -- `None` *and* `""` both take the unauthenticated
+            // branch, not just `None`.
+            let caller = record
+                .get("caller")
+                .and_then(Value::as_str)
+                .filter(|c| !c.is_empty());
             let key = match caller {
                 Some(c) => format!("caller:{c}"),
-                None => format!("unauthenticated:{event}:{}", reason.unwrap_or("None")),
+                None => format!(
+                    "unauthenticated:{event}:{}",
+                    reason
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "None".to_string())
+                ),
             };
             let now = (self.clock)();
             let mut denials = self
@@ -583,7 +624,13 @@ impl<'a> Audit<'a> {
 
 fn parse_tail(lines: &[String], limit: usize) -> Result<Vec<Value>, Error> {
     let non_empty: Vec<&String> = lines.iter().filter(|l| !l.is_empty()).collect();
-    let start = non_empty.len().saturating_sub(limit);
+    // Python: `lines[-limit:]`. `-0 == 0`, so a `limit` of `0` means the
+    // *whole* list (`lines[0:]`), not an empty slice.
+    let start = if limit == 0 {
+        0
+    } else {
+        non_empty.len().saturating_sub(limit)
+    };
     non_empty[start..]
         .iter()
         .map(|l| pyjson::loads(l).map_err(|_| Error::state("state_corrupt").with_detail("audit")))
@@ -962,6 +1009,35 @@ mod tests {
         assert_eq!(run_ids, vec!["r3", "r4"]);
     }
 
+    // A-4: Python's `lines[-limit:]` treats `limit == 0` as the whole list.
+    #[test]
+    fn tail_and_alerts_limit_zero_returns_everything() {
+        let (_tmp, state) = new_audit();
+        let audit = Audit::new(&state, clock::fixed(1_700_000_000.0));
+        for i in 0..5 {
+            audit
+                .record(
+                    "tools_status",
+                    RecordArgs {
+                        run_id: Some(&format!("r{i}")),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        audit
+            .record(
+                "secret_reveal",
+                RecordArgs {
+                    caller: Some("admin"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(audit.tail(0).unwrap().len(), 6);
+        assert_eq!(audit.alerts(0).unwrap().len(), 1);
+    }
+
     #[test]
     fn subscribe_sees_durable_records_and_swallows_panics() {
         let (_tmp, state) = new_audit();
@@ -975,6 +1051,108 @@ mod tests {
         audit.record("init", RecordArgs::default()).unwrap();
         assert_eq!(seen.load(Ordering::SeqCst), 1);
         assert_eq!(*audit.listener_errors.lock().unwrap(), 1);
+    }
+
+    // A-1: `notify_listeners` must not hold the listeners lock while
+    // invoking listeners -- a listener that calls back into `record` or
+    // `subscribe` on the same thread must not deadlock (Python's
+    // `_notify_listeners` iterates `list(self._listeners)`, a snapshot taken
+    // without holding any lock, so this is always safe there). Each
+    // reentrant call runs on its own thread with a watchdog timeout so a
+    // regression fails the test instead of hanging the suite.
+    #[test]
+    fn listener_calling_record_does_not_deadlock() {
+        let (_tmp, state) = new_audit();
+        let state: &'static StateDir = Box::leak(Box::new(state));
+        let audit: &'static Audit<'static> =
+            Box::leak(Box::new(Audit::new(state, clock::fixed(1_700_000_000.0))));
+
+        audit.subscribe(move |record| {
+            if record["event"] == "init" {
+                audit.record("resume", RecordArgs::default()).unwrap();
+            }
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            audit.record("init", RecordArgs::default()).unwrap();
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("listener calling record() deadlocked notify_listeners");
+
+        let log = audit.tail(10).unwrap();
+        let events: Vec<&str> = log.iter().map(|r| r["event"].as_str().unwrap()).collect();
+        assert_eq!(events, vec!["init", "resume"]);
+        assert_eq!(*audit.listener_errors.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn listener_calling_subscribe_does_not_deadlock() {
+        let (_tmp, state) = new_audit();
+        let state: &'static StateDir = Box::leak(Box::new(state));
+        let audit: &'static Audit<'static> =
+            Box::leak(Box::new(Audit::new(state, clock::fixed(1_700_000_000.0))));
+
+        audit.subscribe(move |_record| {
+            audit.subscribe(|_record| {});
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            audit.record("init", RecordArgs::default()).unwrap();
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("listener calling subscribe() deadlocked notify_listeners");
+
+        let log = audit.tail(10).unwrap();
+        let events: Vec<&str> = log.iter().map(|r| r["event"].as_str().unwrap()).collect();
+        assert_eq!(events, vec!["init"]);
+        assert_eq!(*audit.listener_errors.lock().unwrap(), 0);
+    }
+
+    // A-6: Python's `record.get("caller")` is falsy for both `None` and
+    // `""`, so denials with an empty-string caller land in the same
+    // unauthenticated bucket as a missing caller, keyed by event and reason.
+    #[test]
+    fn empty_string_caller_is_treated_as_unauthenticated() {
+        let (_tmp, state) = new_audit();
+        let audit = Audit::new(&state, clock::fixed(1_700_000_000.0));
+        for _ in 0..5 {
+            audit
+                .record(
+                    "http_relay",
+                    RecordArgs {
+                        caller: None,
+                        result: Some("denied"),
+                        reason: Some("r1"),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        for _ in 0..5 {
+            audit
+                .record(
+                    "http_relay",
+                    RecordArgs {
+                        caller: Some(""),
+                        result: Some("denied"),
+                        reason: Some("r2"),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let alerts = audit.alerts(1000).unwrap();
+        assert_eq!(
+            alerts
+                .iter()
+                .filter(|a| a["alert"] == "repeated_denials")
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -1156,6 +1334,132 @@ print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end=
             std::fs::read_to_string(tmp.path().join("state/audit/alerts.jsonl")).unwrap();
 
         assert_eq!(rust_audit, py_audit);
+        assert_eq!(rust_alerts, py_alerts);
+    }
+
+    // A-5: `incident_open`/`incident_widen` alert detail uses Python's
+    // `str()` on `record.get("scope")` (which can be any JSON scalar that
+    // survived `_clean`: None, bool, int, float, string) and `reason or
+    // "unknown"` truthiness (empty string is falsy). Byte-compares every
+    // alert line against the CPython oracle for each scalar kind.
+    #[test]
+    fn incident_alert_detail_matches_python_for_scope_and_reason_kinds() {
+        let script = r#"
+import tempfile, pathlib
+from zeropw.audit import Audit
+from zeropw.store import StateDir
+
+tmp = tempfile.mkdtemp()
+state = StateDir(pathlib.Path(tmp) / "state")
+state.create()
+audit = Audit(state, lambda: 1700000000.0)
+
+audit.record("incident_open", caller="admin", extra={"scope": "connection", "incident_id": "inc-1"})
+audit.record("incident_open", caller="admin", extra={"scope": 3, "incident_id": "inc-2"})
+audit.record("incident_open", caller="admin", reason="manual", extra={"scope": True, "incident_id": "inc-3"})
+audit.record("incident_open", caller="admin", reason="", extra={"scope": False, "incident_id": "inc-4"})
+audit.record("incident_open", caller="admin", extra={"scope": 1.5, "incident_id": "inc-5"})
+audit.record("incident_open", caller="admin", extra={"incident_id": "inc-6"})
+audit.record("incident_widen", caller="admin", extra={"scope": "project", "incident_id": "inc-1"})
+audit.record("incident_widen", caller="admin", extra={"scope": None, "incident_id": "inc-1"})
+
+print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end="")
+"#;
+        let py_alerts = oracle::python(script);
+
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let audit = Audit::new(&state, clock::fixed(1700000000.0));
+
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![
+                        ("scope", json!("connection")),
+                        ("incident_id", json!("inc-1")),
+                    ],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![("scope", json!(3)), ("incident_id", json!("inc-2"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    reason: Some("manual"),
+                    extra: vec![("scope", json!(true)), ("incident_id", json!("inc-3"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    reason: Some(""),
+                    extra: vec![("scope", json!(false)), ("incident_id", json!("inc-4"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![("scope", json!(1.5)), ("incident_id", json!("inc-5"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_open",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![("incident_id", json!("inc-6"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_widen",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![("scope", json!("project")), ("incident_id", json!("inc-1"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        audit
+            .record(
+                "incident_widen",
+                RecordArgs {
+                    caller: Some("admin"),
+                    extra: vec![("scope", Value::Null), ("incident_id", json!("inc-1"))],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let rust_alerts =
+            std::fs::read_to_string(tmp.path().join("state/audit/alerts.jsonl")).unwrap();
         assert_eq!(rust_alerts, py_alerts);
     }
 }

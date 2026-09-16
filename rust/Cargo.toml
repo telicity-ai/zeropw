@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
 base64 = "0.22"
 hex = "0.4"
 sha2 = "0.10"

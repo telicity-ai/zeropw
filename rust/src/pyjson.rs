@@ -15,23 +15,21 @@
 //! - `gateway.py`/`server.py`/`fake_upstream.py` response payloads
 //!   (`json.dumps(payload, sort_keys=True)`): same as `default_sorted`.
 //! - `agent_cli.py` (`json.dumps(payload)`, no `sort_keys`): insertion-order,
-//!   default separators -> [`DumpOptions::plain`]. See the "key order" note
-//!   below: this crate cannot reproduce Python's dict insertion order.
+//!   default separators -> [`DumpOptions::plain`].
 //! - `gateway.py` pattern building (`json.dumps(text)[1:-1]` and
 //!   `json.dumps(text, ensure_ascii=False)[1:-1]`): encoding a single string
 //!   value with `ensure_ascii` True/False -> [`encode_str`].
 //!
 //! ## Key order
 //!
-//! `serde_json`'s `Map` is a `BTreeMap` in this crate (the `preserve_order`
-//! feature needs the `indexmap` crate, which is not vendored for offline
-//! builds -- see `rust/DEVIATIONS.md`). That means **object keys are always
-//! emitted in sorted order**, even when [`DumpOptions::sort_keys`] is `false`.
-//! For every call site above that already passes `sort_keys=True` this is
-//! exactly Python's behaviour. For the few that do not (`agent_cli.py`'s
-//! plain `json.dumps(payload)`), Rust's output has keys sorted where Python's
-//! has insertion order; this is recorded in `DEVIATIONS.md` since it is a
-//! whole-crate limitation, not specific to one module.
+//! `serde_json`'s `preserve_order` feature is enabled, so `Map` is
+//! `indexmap`-backed and iterates in insertion order -- matching Python
+//! `dict`. [`DumpOptions::sort_keys`] controls output order explicitly:
+//! `write_object` sorts a snapshot of the entries by key (`str::cmp`, which
+//! orders valid UTF-8 the same way Python's `sorted()` orders `str` by code
+//! point) when `true`, exactly Python's `json.dumps(x, sort_keys=True)`
+//! (`sorted(dct.items())`), and otherwise writes entries in the `Map`'s
+//! existing (insertion) order, exactly Python's `json.dumps(x)`.
 //!
 //! ## Numbers
 //!
@@ -48,14 +46,28 @@
 //! ## NaN / Infinity
 //!
 //! Python's encoder (`allow_nan=True` by default) can write bare `NaN`,
-//! `Infinity`, `-Infinity` tokens, and its decoder accepts them back. No
-//! writer in `zeropw/` ever produces a non-finite float (audit fields are
-//! `round(time.time(), 3)`-derived; vault/policy documents hold no floats at
-//! all), so this port does not special-case them: [`dumps`] returns an error
-//! for a non-finite float (defensive, should be unreachable), and [`loads`]
-//! rejects the bare tokens as a parse error like any other malformed JSON.
-//! A state file that somehow contained them would be `state_corrupt` in Rust
-//! but would silently parse in Python -- recorded in `DEVIATIONS.md`.
+//! `Infinity`, `-Infinity` tokens, and its decoder accepts them back.
+//! Separately, CPython's `float()` silently *overflows* rather than erroring
+//! -- a numeric literal like `1e400` parses to `inf` with no exception. No
+//! writer in `zeropw/` ever produces a non-finite float or an overflowing
+//! literal (audit fields are `round(time.time(), 3)`-derived; vault/policy
+//! documents hold no floats at all), so this port does not special-case
+//! them: [`dumps`] returns an error for a non-finite float (defensive,
+//! should be unreachable), and [`loads`] rejects the bare tokens *and* any
+//! literal that would overflow to a non-finite `f64` as a parse error, like
+//! any other malformed JSON. A state file that somehow contained one would
+//! be `state_corrupt` in Rust but would silently parse in Python -- recorded
+//! in `DEVIATIONS.md`.
+//!
+//! ## Lone surrogates
+//!
+//! A JSON string may contain an unpaired UTF-16 surrogate `\u` escape (e.g.
+//! `"\ud800"` with no following low surrogate) -- the JSON grammar allows
+//! any `\uXXXX`, and CPython's decoder accepts it, producing a `str` with a
+//! lone surrogate code point. A Rust `String` cannot represent that (it is
+//! not a valid Unicode scalar value), and `serde_json` itself silently
+//! substitutes U+FFFD instead of erroring, so [`loads`] pre-scans for this
+//! case and rejects it (PORTING.md §3.6, `DEVIATIONS.md`).
 
 use std::fmt::Write as _;
 
@@ -153,9 +165,128 @@ pub fn encode_str(s: &str, ensure_ascii: bool) -> String {
 }
 
 /// `json.load`/`json.loads`. Rejects the bare `NaN`/`Infinity`/`-Infinity`
-/// tokens Python's decoder accepts by default -- see the module doc.
+/// tokens Python's decoder accepts by default, any numeric literal that
+/// would overflow to a non-finite `f64` the way CPython's `float()` silently
+/// overflows to `inf`/`-inf` (`pyjson_non_finite_float`; see the module doc's
+/// "NaN / Infinity" note and `rust/DEVIATIONS.md`), and any lone (unpaired)
+/// UTF-16 surrogate `\u` escape in a string (PORTING.md §3.6;
+/// `rust/DEVIATIONS.md`).
 pub fn loads(text: &str) -> serde_json::Result<Value> {
-    serde_json::from_str(text)
+    reject_lone_surrogate_escapes(text)?;
+    let value: Value = serde_json::from_str(text)?;
+    reject_non_finite_numbers(&value)?;
+    Ok(value)
+}
+
+/// Pre-scan for a lone (unpaired) surrogate `\u` escape inside a JSON string
+/// literal, before handing the text to `serde_json`: `serde_json` itself
+/// does not error on one, it silently substitutes U+FFFD (it must -- a Rust
+/// `String` cannot hold an unpaired surrogate), which this port must instead
+/// treat as malformed input (§3.6). Minimal hand-rolled scan: track
+/// "inside a string literal" state (respecting backslash escapes) and,
+/// within a string, validate every `\uXXXX` escape's surrogate-ness against
+/// what immediately follows it. Byte-level scanning is safe here because
+/// every UTF-8 continuation byte is `>= 0x80` and therefore never equals any
+/// of the ASCII bytes (`"`, `\`, hex digits) this scan compares against.
+fn reject_lone_surrogate_escapes(text: &str) -> serde_json::Result<()> {
+    fn hex4(bytes: &[u8]) -> Option<u32> {
+        if bytes.len() < 4 {
+            return None;
+        }
+        std::str::from_utf8(&bytes[..4])
+            .ok()
+            .and_then(|s| u32::from_str_radix(s, 16).ok())
+    }
+
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !in_string {
+            if b == b'"' {
+                in_string = true;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => {
+                in_string = false;
+                i += 1;
+            }
+            b'\\' if i + 1 < bytes.len() && bytes[i + 1] == b'u' => {
+                let code = hex4(&bytes[i + 2..]).ok_or_else(|| {
+                    <serde_json::Error as serde::de::Error>::custom("malformed \\u escape")
+                })?;
+                if (0xD800..=0xDBFF).contains(&code) {
+                    // High surrogate: valid only immediately followed by a
+                    // low surrogate escape.
+                    let paired = bytes.get(i + 6) == Some(&b'\\')
+                        && bytes.get(i + 7) == Some(&b'u')
+                        && hex4(&bytes[i + 8..]).is_some_and(|c2| (0xDC00..=0xDFFF).contains(&c2));
+                    if !paired {
+                        return Err(<serde_json::Error as serde::de::Error>::custom(
+                            "lone surrogate in \\u escape",
+                        ));
+                    }
+                    i += 12; // both escapes consumed as a pair
+                } else if (0xDC00..=0xDFFF).contains(&code) {
+                    // A low surrogate reached on its own (any low surrogate
+                    // that was part of a valid pair was already consumed
+                    // above together with its high surrogate) is lone.
+                    return Err(<serde_json::Error as serde::de::Error>::custom(
+                        "lone surrogate in \\u escape",
+                    ));
+                } else {
+                    i += 6;
+                }
+            }
+            b'\\' => {
+                // Any other escape (`\\`, `\"`, `\n`, ...): skip the
+                // backslash and the one char after it.
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rejects any `Number` in the tree that is a `.`/exponent-bearing literal
+/// whose value overflows to a non-finite `f64` -- see [`loads`]'s doc.
+///
+/// Deliberately does *not* use `Number::is_f64()`/`as_f64()`: with
+/// `arbitrary_precision`, both of those already silently treat an
+/// overflowing literal as "not an f64 at all" (`is_f64()` parses and checks
+/// `is_finite()` itself, so it's `false` for `"1e400"`), which is exactly
+/// backwards for this check -- we need to know "this was syntactically a
+/// float literal" independent of whether it turned out finite. So classify
+/// by the raw literal text via `as_str()` instead: it looks like a float
+/// (has `.`/`e`/`E`) or it doesn't (a plain, possibly huge, integer, which
+/// Python's `int` is unbounded for and this never rejects).
+fn reject_non_finite_numbers(value: &Value) -> serde_json::Result<()> {
+    match value {
+        Value::Number(n) if is_float_literal(n.as_str()) => {
+            if n.as_str().parse::<f64>().is_ok_and(f64::is_finite) {
+                Ok(())
+            } else {
+                Err(<serde_json::Error as serde::de::Error>::custom(
+                    "number literal overflows to a non-finite float",
+                ))
+            }
+        }
+        Value::Number(_) => Ok(()),
+        Value::Array(items) => items.iter().try_for_each(reject_non_finite_numbers),
+        Value::Object(map) => map.values().try_for_each(reject_non_finite_numbers),
+        _ => Ok(()),
+    }
+}
+
+fn is_float_literal(raw: &str) -> bool {
+    raw.contains(['.', 'e', 'E'])
 }
 
 fn write_value(value: &Value, opts: &DumpOptions, depth: usize, out: &mut String) -> Result<()> {
@@ -201,10 +332,15 @@ fn write_object(
     }
     out.push('{');
     let inner = depth + 1;
-    // `Map` is BTreeMap-backed in this build (no `preserve_order`), so
-    // iteration is already key-sorted regardless of `opts.sort_keys`; see
-    // the module doc's "Key order" note.
-    for (i, (key, val)) in map.iter().enumerate() {
+    // `sort_keys=True` in Python is `sorted(dct.items())`, i.e. sorted by
+    // key in code-point order; `str::cmp` on valid UTF-8 agrees with that.
+    // Otherwise Python emits `dict` insertion order, which `Map::iter`
+    // already gives us with `preserve_order` enabled.
+    let mut entries: Vec<(&String, &Value)> = map.iter().collect();
+    if opts.sort_keys {
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+    }
+    for (i, (key, val)) in entries.into_iter().enumerate() {
         if i > 0 {
             out.push_str(opts.item_sep);
         }
@@ -266,15 +402,24 @@ fn write_string(s: &str, ensure_ascii: bool, out: &mut String) {
 }
 
 fn write_number(n: &Number, out: &mut String) -> Result<()> {
-    if n.is_f64() {
-        let f = n
-            .as_f64()
+    let raw = n.as_str();
+    // Classify by the raw literal text, not `Number::is_f64()`: with
+    // `arbitrary_precision`, `is_f64()` parses the literal and checks
+    // `is_finite()` itself, so it is *already false* for an overflowing
+    // literal like `"1e400"` -- using it here would silently fall through
+    // to the integer branch below and echo the raw (non-finite-valued)
+    // literal back out unchanged, exactly the bug this guards against.
+    if is_float_literal(raw) {
+        let f = raw
+            .parse::<f64>()
+            .ok()
+            .filter(|f| f.is_finite())
             .ok_or_else(|| Error::invalid_input("pyjson_non_finite_float").with_detail("number"))?;
         out.push_str(&python_float_repr(f));
     } else {
         // Integer (any size, thanks to `arbitrary_precision`): Python ints
         // have a unique canonical decimal form, which `as_str()` already is.
-        out.push_str(n.as_str());
+        out.push_str(raw);
     }
     Ok(())
 }
@@ -442,6 +587,56 @@ mod tests {
             "\"\\u0000\\u001f\\u007f\""
         );
     }
+
+    // A-11(a), coordinator ruling PORTING.md §3.6.
+    #[test]
+    fn loads_rejects_lone_surrogate_escapes() {
+        assert!(loads("\"\\ud800\"").is_err(), "lone high surrogate");
+        assert!(loads("\"\\udc00\"").is_err(), "lone low surrogate");
+        assert!(loads("\"a\\ud800b\"").is_err(), "lone surrogate mid-string");
+        assert!(
+            loads("{\"k\": \"\\ud800\"}").is_err(),
+            "lone surrogate in an object value"
+        );
+        // A valid surrogate pair (U+1F600) must still parse.
+        assert_eq!(loads("\"\\ud83d\\ude00\"").unwrap(), json!("\u{1F600}"));
+        // An escaped backslash right before a quote must not desynchronise
+        // the "inside a string literal" tracking.
+        assert_eq!(loads(r#""a\\""#).unwrap(), json!("a\\"));
+        assert_eq!(
+            loads(r#"["a\\", "\ud83d\ude00"]"#).unwrap(),
+            json!(["a\\", "\u{1F600}"])
+        );
+    }
+
+    // A-11(b): a numeric literal whose magnitude overflows `f64` (CPython's
+    // `float()` silently returns `inf`/`-inf` for these) must be rejected by
+    // `loads`, and `dumps` must refuse to write a `Number` that is already
+    // non-finite.
+    #[test]
+    fn loads_and_dumps_reject_overflowing_float_literals() {
+        assert!(loads("1e400").is_err());
+        assert!(loads("-1e400").is_err());
+        assert!(loads("[1, 1e400]").is_err());
+        assert!(loads("{\"a\": 1e400}").is_err());
+        // Underflow to zero is not an error: Python's `float("1e-400")` is
+        // `0.0`, not an exception.
+        assert_eq!(loads("1e-400").unwrap().as_f64(), Some(0.0));
+        // A huge *integer* literal (no '.'/exponent) is untouched: Python
+        // `int` is unbounded and this is not a `float` at all.
+        assert!(loads(&"9".repeat(400)).is_ok());
+
+        // `Number::is_f64()` is itself `false` for an overflowing literal
+        // (see `reject_non_finite_numbers`'s doc comment) -- constructing
+        // one directly via `serde_json::from_str::<Number>` (bypassing this
+        // module's `loads`, which already rejects it at the text level) is
+        // the only way to get one to exercise `write_number`'s own guard.
+        let overflowing_number: serde_json::Number = serde_json::from_str("1e400").unwrap();
+        assert!(!overflowing_number.is_f64());
+        assert!(is_float_literal(overflowing_number.as_str()));
+        let v = Value::Number(overflowing_number);
+        assert!(dumps(&v, DumpOptions::compact_sorted()).is_err());
+    }
 }
 
 /// Differential tests against the CPython oracle (`crate::oracle`). Separate
@@ -593,6 +788,39 @@ print(json.dumps(s, ensure_ascii=False))
         assert_eq!(encode_str(s, false), lines.next().unwrap());
     }
 
+    // A-2: with `preserve_order` enabled, `DumpOptions::plain()` (no
+    // `sort_keys`) must emit keys in insertion order, matching Python's
+    // `json.dumps(payload)` on a plain `dict` -- e.g. `ZeroPWError.to_dict()`'s
+    // `{"error": ..., "reason": ..., "detail": ...}` shape.
+    #[test]
+    fn plain_preserves_insertion_order_matching_python_error_to_dict_shape() {
+        let script = r#"
+import json
+print(json.dumps({"error": "InvalidInput", "reason": "invalid_input", "detail": "bad name"}))
+print(json.dumps({"z": 1, "a": 2, "m": 3}))
+"#;
+        let want = oracle::python(script);
+        let mut lines = want.lines();
+
+        let mut error_shape = serde_json::Map::new();
+        error_shape.insert("error".to_string(), json!("InvalidInput"));
+        error_shape.insert("reason".to_string(), json!("invalid_input"));
+        error_shape.insert("detail".to_string(), json!("bad name"));
+        assert_eq!(
+            dumps(&Value::Object(error_shape), DumpOptions::plain()).unwrap(),
+            lines.next().unwrap()
+        );
+
+        let mut unsorted = serde_json::Map::new();
+        unsorted.insert("z".to_string(), json!(1));
+        unsorted.insert("a".to_string(), json!(2));
+        unsorted.insert("m".to_string(), json!(3));
+        assert_eq!(
+            dumps(&Value::Object(unsorted), DumpOptions::plain()).unwrap(),
+            lines.next().unwrap()
+        );
+    }
+
     #[test]
     fn loads_matches_python_json_loads_round_trip() {
         // A state-directory-shaped document, pretty-printed by Python, must
@@ -607,5 +835,28 @@ print(json.dumps(doc, sort_keys=True, indent=2))
         let value = loads(python_text.trim_end_matches('\n')).unwrap();
         let rust_text = dumps(&value, DumpOptions::pretty_sorted()).unwrap();
         assert_eq!(rust_text, python_text.trim_end_matches('\n'));
+    }
+
+    // A-11: pins the actual CPython behaviour this port intentionally
+    // diverges from (PORTING.md §3.6 and the pyjson DEVIATIONS.md rows) --
+    // Python accepts a lone surrogate escape and an overflowing numeric
+    // literal; this port rejects both as malformed.
+    #[test]
+    fn python_accepts_what_rust_rejects_lone_surrogate_and_overflow_literal() {
+        let script = r#"
+import json
+print(repr(json.loads('"\ud800"')))
+n = json.loads("1e400")
+print(n)
+print(json.dumps(n))
+"#;
+        let out = oracle::python(script);
+        let mut lines = out.lines();
+        assert_eq!(lines.next().unwrap(), r"'\ud800'");
+        assert_eq!(lines.next().unwrap(), "inf");
+        assert_eq!(lines.next().unwrap(), "Infinity");
+
+        assert!(loads("\"\\ud800\"").is_err());
+        assert!(loads("1e400").is_err());
     }
 }
