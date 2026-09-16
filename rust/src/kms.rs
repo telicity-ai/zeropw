@@ -182,18 +182,11 @@ fn is_float_literal(raw: &str) -> bool {
 /// `preserve_order` feature), matching Python `dict.__repr__`'s insertion
 /// order exactly -- this closes the "object key order" half of finding B-2
 /// (`DEVIATIONS.md`), the same feature flag that already closed the
-/// equivalent gap in `pyjson.rs`. String escaping reuses
-/// [`crate::sshwire::py_repr_str`] (`pub(crate)`), which reproduces
-/// CPython's `unicode_repr` quote choice and escaping exactly except for
-/// its own documented residual: an approximation of `str.isprintable()`'s
-/// Unicode format (Cf) and private-use (Co) categories, which can only
-/// differ from CPython for an obscure unassigned or exotic codepoint (see
-/// `DEVIATIONS.md`'s `sshwire` `py_repr_str` row) -- the other half of
-/// finding B-2, now narrowed to precisely that residue rather than the
-/// previous much coarser "only the common cases" approximation.
+/// equivalent gap in `pyjson.rs`. String escaping uses
+/// [`crate::pystr::repr_str`], CPython 3.12's exact `repr(str)`.
 fn python_repr(value: &Value) -> String {
     match value {
-        Value::String(s) => crate::sshwire::py_repr_str(s),
+        Value::String(s) => crate::pystr::repr_str(s),
         Value::Array(items) => {
             let parts: Vec<String> = items.iter().map(python_repr).collect();
             format!("[{}]", parts.join(", "))
@@ -201,7 +194,7 @@ fn python_repr(value: &Value) -> String {
         Value::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", crate::sshwire::py_repr_str(k), python_repr(v)))
+                .map(|(k, v)| format!("{}: {}", crate::pystr::repr_str(k), python_repr(v)))
                 .collect();
             format!("{{{}}}", parts.join(", "))
         }
