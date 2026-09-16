@@ -9,8 +9,6 @@
 //! connection within the granted scope until expiry or revocation; it never
 //! reveals a vault value.
 
-use std::fmt::Write as _;
-
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, Mac};
@@ -21,7 +19,9 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::errors::Error;
+use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
+use crate::pystr;
 use crate::secret::SecretBytes;
 use crate::store;
 
@@ -33,8 +33,18 @@ fn b64e(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
 
+/// Port of `handles._b64d`: re-pads `text` to a multiple of 4 with `=`
+/// (`"=" * (-len(text) % 4)`, replicated as `(4 - len % 4) % 4`, counting
+/// Unicode code points as Python's `len()` does) and then decodes with
+/// Python's lenient `base64.urlsafe_b64decode` (ASCII-only precheck,
+/// `-`/`_` translated to `+`/`/`, then the non-strict `binascii` scan) --
+/// see `crate::pybase64` for the exact algorithm. A-R2-3: this used to be a
+/// strict `URL_SAFE_NO_PAD` decode, which rejected inputs (embedded junk,
+/// `+`/`/`, non-canonical padding) Python accepts.
 fn b64d(text: &str) -> Result<Vec<u8>, ()> {
-    URL_SAFE_NO_PAD.decode(text).map_err(|_| ())
+    let pad_len = (4 - (text.chars().count() % 4)) % 4;
+    let padded = format!("{text}{}", "=".repeat(pad_len));
+    pybase64::urlsafe_b64decode(&padded).map_err(|_| ())
 }
 
 /// `handles.Handle`.
@@ -162,7 +172,7 @@ fn python_repr_value(value: &Value) -> String {
         Value::Null => "None".to_string(),
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
-        Value::String(s) => python_repr_str(s),
+        Value::String(s) => pystr::repr_str(s),
         Value::Number(n) => {
             if n.is_f64() {
                 pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
@@ -177,44 +187,11 @@ fn python_repr_value(value: &Value) -> String {
         Value::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
-                .map(|(k, v)| format!("{}: {}", python_repr_str(k), python_repr_value(v)))
+                .map(|(k, v)| format!("{}: {}", pystr::repr_str(k), python_repr_value(v)))
                 .collect();
             format!("{{{}}}", parts.join(", "))
         }
     }
-}
-
-/// `repr(str)`: single-quoted unless the string has a `'` and no `"`, in
-/// which case double-quoted; backslash/quote/`\n`/`\r`/`\t` get short
-/// escapes, other C0 controls and DEL get `\xNN`. Approximates CPython's
-/// full `unicodedata`-driven printable-character check (everything else is
-/// emitted literally); no field this port ever `repr()`s exercises that gap.
-fn python_repr_str(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::new();
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
-                let _ = write!(out, "\\x{:02x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
 }
 
 /// Python `int(value)` coercion, as `HandleIssuer.verify` applies via
@@ -224,11 +201,14 @@ fn python_repr_str(s: &str) -> String {
 /// `handle_malformed`) -- `None`, a list/dict, or a non-numeric string.
 ///
 /// Two narrow residual gaps versus CPython, neither reachable except via a
-/// hand-crafted token from someone who already holds the HMAC signing key:
+/// hand-crafted token from someone who already holds the HMAC signing key
+/// (coordinator ruling PORTING.md §3.7 -- see `rust/DEVIATIONS.md`):
 /// a magnitude that doesn't fit `i64` (Python `int` is unbounded; this
 /// port's `Handle` fields are `i64`) is rejected here instead of succeeding,
 /// and only ASCII `0`-`9` are accepted as digits in a numeric string (Python
-/// also accepts other Unicode decimal-digit characters). A float that is
+/// also accepts other Unicode decimal-digit characters, e.g. `int("٤٢") ==
+/// 42`). `issue` never emits either shape, so every value the issuer
+/// produces still round-trips identically. A float that is
 /// `inf`/`-inf` makes Python's `int()` raise `OverflowError`, which is *not*
 /// one of `TypeError`/`ValueError`/`KeyError` and so escapes `verify`
 /// uncaught -- PORTING.md §3.5 applies and this is folded into the same
@@ -503,6 +483,69 @@ mod tests {
         assert!(err.is(ErrorClass::AuthFailed));
         assert_eq!(err.reason, "handle_signature");
     }
+
+    // A-R2-4: Python's `hmac.compare_digest(expected, parts[2])` raises an
+    // uncaught `TypeError` ("comparing strings with non-ASCII characters is
+    // not supported") when the attacker-supplied signature segment contains
+    // a non-ASCII character -- reachable without the HMAC key, since the
+    // caller controls `parts[2]` directly and the comparison runs before any
+    // key-dependent check could reject it first. Coordinator ruling
+    // PORTING.md §3.5 applies (see `rust/DEVIATIONS.md`): Rust's byte-level
+    // comparison never raises, so this must surface as an ordinary
+    // `handle_signature` failure, exactly like `non_ascii_payload_segment_*`
+    // above but for the signature segment instead of the payload segment.
+    #[test]
+    fn non_ascii_signature_segment_fails_as_signature_mismatch() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let now = 1_700_000_000.0;
+        let token = issuer
+            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
+            .unwrap();
+        let parts: Vec<&str> = token.split('.').collect();
+        let forged = format!("{}.{}.café-not-hex", parts[0], parts[1]);
+        let err = issuer
+            .verify(&forged, Some(now))
+            .expect_err("non-ASCII signature segment must not verify");
+        assert!(err.is(ErrorClass::AuthFailed));
+        assert_eq!(err.reason, "handle_signature");
+    }
+
+    // A-R2-1: `python_int_coerce`/`python_int_from_str` only accept ASCII
+    // digits and `i64`-range magnitudes. Python's `int()` also accepts other
+    // Unicode decimal-digit characters (`int("٤٢") == 42`,
+    // `int("４２") == 42`) and unbounded magnitudes (`int("9" * 25)`,
+    // `int("9" * 34)`). Both gaps are reachable only by someone who already
+    // holds the HMAC signing key (a forged-but-signed token), so coordinator
+    // ruling PORTING.md §3.7 applies (see `rust/DEVIATIONS.md`): keep
+    // rejecting these as `handle_malformed` rather than matching Python's
+    // `int()`. `issue` never emits a non-ASCII-digit or oversized `pv`, so
+    // this never affects a real token.
+    #[test]
+    fn forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let now = 1_700_000_000.0;
+        for pv in [
+            "٤٢",                                // Arabic-Indic digits, int() == 42
+            "４２",                              // fullwidth digits, int() == 42
+            &"9".repeat(25),                     // fits Python int, overflows i64
+            "999999999999999999999999999999999", // 33 nines, well past i64::MAX
+        ] {
+            let payload = json!({
+                "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": pv,
+                "iat": now as i64, "exp": now as i64 + 300, "jti": "abc",
+            });
+            let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
+            let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
+            let sig = issuer.sign(&body);
+            let token = format!("{body}.{sig}");
+            let err = issuer
+                .verify(&token, Some(now))
+                .expect_err("non-ASCII-digit / oversized pv must be rejected");
+            assert_eq!(err.reason, "handle_malformed", "pv={pv:?}");
+        }
+    }
 }
 
 /// Cross-language differential tests: a handle issued by one language must
@@ -607,6 +650,57 @@ with mock.patch.object(secrets, "token_bytes", return_value=bytes.fromhex("{jti_
         b64e(&hex::decode(hex_str).unwrap())
     }
 
+    // A-R2-3: `b64d` now reproduces `handles._b64d` (re-pad with `=`, then
+    // Python's lenient, non-strict `base64.urlsafe_b64decode`) instead of a
+    // strict `URL_SAFE_NO_PAD` decode. Exercise the reviewer's own cases,
+    // plus a genuine payload segment with junk/extra padding appended,
+    // directly against `zeropw.handles._b64d` byte-for-byte.
+    #[test]
+    fn b64d_matches_python_for_reviewer_cases() {
+        let now = 1_700_000_000.0;
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        let token = issuer
+            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
+            .unwrap();
+        let payload_segment = token.split('.').nth(1).unwrap().to_string();
+
+        let cases = vec![
+            format!("{payload_segment}!!!!"),
+            format!("{payload_segment}=="),
+            "QUJ".to_string(),
+            "QUJD==".to_string(),
+            "QU+D".to_string(),
+            "QU/D".to_string(),
+            "QUJD\n".to_string(),
+            "QU-D".to_string(),
+            "QU_D".to_string(),
+        ];
+
+        let mut script = String::from("from zeropw.handles import _b64d\ncases = [\n");
+        for c in &cases {
+            script.push_str(&format!("    {c:?},\n"));
+        }
+        script.push_str(
+            "]\nfor c in cases:\n    try:\n        r = _b64d(c)\n        print('OK ' + r.hex())\n    except Exception:\n        print('ERR')\n",
+        );
+        let out = oracle::python(&script);
+        let python_results: Vec<&str> = out.lines().collect();
+        assert_eq!(python_results.len(), cases.len());
+
+        for (c, py) in cases.iter().zip(python_results.iter()) {
+            let rust = b64d(c);
+            match (*py, rust) {
+                ("ERR", Err(())) => {}
+                (py_ok, Ok(bytes)) if py_ok.starts_with("OK ") => {
+                    assert_eq!(hex::encode(&bytes), &py_ok[3..], "mismatch for {c:?}");
+                }
+                (py_result, rust_result) => {
+                    panic!("mismatch for {c:?}: python={py_result:?} rust={rust_result:?}")
+                }
+            }
+        }
+    }
+
     // A-12: `HandleIssuer.verify`'s `str(payload["c"])` / `int(payload["pv"])`
     // coercions, exercised end-to-end. Python signs a battery of
     // deliberately odd-typed payloads with the shared key (bypassing
@@ -646,6 +740,15 @@ cases = [
     variant(c=True),
     variant(c=[1, 2]),
     variant(c={{"x": 1}}),
+    # A-R2-2: repr() must escape every non-isprintable() char, not just
+    # C0/DEL -- exercised via a non-str `c` so `str(payload["c"])` falls
+    # through to repr() on the (str) list element.
+    variant(c=["\x85"]),  # NEL, Cc
+    variant(c=["\xa0"]),  # NBSP, Zs (not the one exception, U+0020)
+    variant(c=["\xad"]),  # SOFT HYPHEN, Cf
+    variant(c=["​"]),  # ZERO WIDTH SPACE, Cf
+    variant(c=[" "]),  # LINE SEPARATOR, Zl
+    variant(c=["\U0010ffff"]),  # max codepoint, unassigned (Cn)
     variant(n=4.0),
     variant(n=4),
     variant(pv=True),
@@ -736,6 +839,6 @@ for payload in cases:
             }
             checked += 1;
         }
-        assert_eq!(checked, 23, "expected exactly 23 crafted-token cases");
+        assert_eq!(checked, 29, "expected exactly 29 crafted-token cases");
     }
 }

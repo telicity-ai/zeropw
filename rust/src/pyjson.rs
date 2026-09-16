@@ -79,9 +79,13 @@ use crate::errors::{Error, Result};
 /// call's keyword arguments.
 #[derive(Clone, Copy, Debug)]
 pub struct DumpOptions {
-    /// `sort_keys=`. See the "Key order" note on the module: because this
-    /// crate's `Map` is always sorted, `false` only differs from `true` in
-    /// intent/documentation today, not in output.
+    /// `sort_keys=`. See the "Key order" note on the module: `write_object`
+    /// sorts a snapshot of the entries by key when this is `true` (Python
+    /// `json.dumps(x, sort_keys=True)`), and otherwise writes them in the
+    /// `Map`'s existing insertion order (Python `json.dumps(x)`) -- this
+    /// crate's `Map` is `indexmap`-backed and does *not* sort on its own, so
+    /// `false` genuinely differs from `true` in output, not just intent
+    /// (see [`DumpOptions::plain`], the one preset that sets it `false`).
     pub sort_keys: bool,
     /// `separators[0]`: printed between items (after a trailing `\n` +
     /// indent, when `indent` is set).

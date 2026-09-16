@@ -8,9 +8,9 @@
 //! read-modify-write cycles against the same directory -- including a Python
 //! process holding the same `.lock` file.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
@@ -55,13 +55,38 @@ impl StateDir {
     }
 
     // ------------------------------------------------------------------ setup
-    /// `StateDir.create`.
+    /// `StateDir.create`: `self.path.mkdir(mode=DIR_MODE, parents=True)` then
+    /// an unconditional `os.chmod(self.path, DIR_MODE)`. A-R2-7: Python only
+    /// raises `StateError("state_exists")` from the initial `path.exists()`
+    /// check above; any other `mkdir` failure (permission denied, disk full,
+    /// ...) is an uncaught `OSError`, not `StateError("state_exists")` --
+    /// PORTING.md §3.5 applies (`rust/DEVIATIONS.md`), so a non-EEXIST mkdir
+    /// failure here gets a distinct reason (`state_write_failed`) instead of
+    /// being folded into `state_exists`.
     pub fn create(&self) -> Result<(), Error> {
         if self.path.exists() {
             return Err(Error::state("state_exists").with_detail(path_str(&self.path)));
         }
-        fs::create_dir_all(&self.path)
-            .map_err(|_| Error::state("state_exists").with_detail(path_str(&self.path)))?;
+        if let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|_| {
+                Error::state("state_write_failed").with_detail(path_str(&self.path))
+            })?;
+        }
+        match mkdir_exact(&self.path, DIR_MODE) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(Error::state("state_exists").with_detail(path_str(&self.path)));
+            }
+            Err(_) => {
+                return Err(Error::state("state_write_failed").with_detail(path_str(&self.path)));
+            }
+        }
+        // Python's follow-up `os.chmod` (unconditional, regardless of
+        // whether the preceding `mkdir(mode=DIR_MODE)` already landed on
+        // DIR_MODE): fixes the directory back to exactly DIR_MODE even
+        // under a pathological owner-masking umask.
         set_mode(&self.path, DIR_MODE)?;
         Ok(())
     }
@@ -74,10 +99,16 @@ impl StateDir {
         Ok(())
     }
 
-    /// `StateDir.subdir`.
+    /// `StateDir.subdir`: `target.mkdir(mode=DIR_MODE, exist_ok=True)` --
+    /// the one `mkdir` call site in `store.py` that omits `parents=True`.
+    /// A-R2-7: a missing parent therefore makes Python's `os.mkdir` raise an
+    /// uncaught `FileNotFoundError`, not a `StateError` -- fail *closed*
+    /// here (PORTING.md §3.5, `rust/DEVIATIONS.md`) rather than the
+    /// previous fail-*open* behaviour of silently creating the missing
+    /// parent via `mkdir_p`.
     pub fn subdir(&self, name: &str) -> Result<PathBuf, Error> {
         let target = self.path.join(name);
-        mkdir_p(&target)?;
+        mkdir_leaf(&target)?;
         Ok(target)
     }
 
@@ -325,35 +356,6 @@ impl Drop for StateLock<'_> {
     }
 }
 
-/// Port of the `Path.mkdir(mode=DIR_MODE, exist_ok=True[, parents=True])`
-/// calls scattered through `store.py` (`subdir`, `lock`, `write_json`,
-/// `append_line`, `write_bytes`). Two things Python does that a naive
-/// `create_dir_all` + chmod does not:
-///
-/// - `exist_ok=True` means `os.mkdir` is never even attempted when the
-///   target already exists as a directory, so its mode is left exactly as
-///   it was found -- Python does *not* re-chmod a pre-existing directory
-///   (including the state root itself) back to `DIR_MODE` on every
-///   write/lock/subdir call.
-/// - With `parents=True`, CPython's recursive parent-creation call
-///   (`self.parent.mkdir(parents=True, exist_ok=True)`) does not forward the
-///   caller's `mode` -- only the leaf directory the caller actually asked
-///   for is created with `mode=DIR_MODE` (still subject to the process
-///   umask at the `mkdir(2)` syscall level); any missing parents get the OS
-///   default mode.
-///
-/// This port creates missing parents the same way (no explicit mode, so
-/// they get whatever `mkdir(2)`'s default subject to umask gives them,
-/// exactly like Python), then creates the leaf and sets its mode to
-/// `DIR_MODE` explicitly rather than depending on the umask arithmetic
-/// Python's `mode=` argument to `os.mkdir` relies on. This is
-/// observationally identical to Python for every umask that does not mask
-/// off owner bits (every umask in practical use: `000`, `002`, `022`,
-/// `027`, `077`, ...) since `DIR_MODE` (`0o700`) has no group/other bits
-/// for such a umask to touch, and is *more* restrictive than Python's raw
-/// result if the process ran under a pathological owner-masking umask
-/// (e.g. `0700`) -- fails closed rather than open, recorded in
-/// `DEVIATIONS.md`.
 /// `open(target, "r", encoding="utf-8")` + `[line.rstrip("\n") for line in
 /// stream]`: Python's text mode applies *universal newline* translation,
 /// recognizing `"\r\n"`, `"\r"`, and `"\n"` as line terminators (not just
@@ -384,6 +386,53 @@ fn split_universal_newlines(text: &str) -> Vec<String> {
     lines
 }
 
+/// `DirBuilder::new().mode(mode).create(path)`: creates exactly `path` (no
+/// parents) with `mode`, applied atomically at the `mkdir(2)` syscall level
+/// (masked by the process umask) -- the direct equivalent of Python's
+/// `os.mkdir(path, mode)` / `Path.mkdir(mode=mode)`. Unlike creating the
+/// directory with a default mode and `chmod`-ing it afterward (the previous
+/// approach here, A-R2-5), there is no window where the directory exists
+/// with a wider mode than requested.
+fn mkdir_exact(path: &Path, mode: u32) -> std::io::Result<()> {
+    DirBuilder::new().mode(mode).create(path)
+}
+
+/// Port of `target.mkdir(mode=DIR_MODE, exist_ok=True)`: creates only the
+/// leaf `path` (no missing parent is created) with `DIR_MODE`, applied
+/// atomically per [`mkdir_exact`]. `exist_ok=True` means a pre-existing
+/// directory is left with whatever mode it already had -- not re-chmod'd to
+/// `DIR_MODE` -- matching Python's `os.mkdir` never even being attempted in
+/// that case.
+fn mkdir_leaf(path: &Path) -> Result<(), Error> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    match mkdir_exact(path, DIR_MODE) {
+        Ok(()) => Ok(()),
+        // Lost a create race to another thread/process between the is_dir()
+        // check above and here, or the parent already existed with a
+        // pre-existing leaf: `exist_ok` semantics -- leave its mode alone.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        // A-R2-7: covers, among others, a missing parent (Python's
+        // `os.mkdir` raises an uncaught `FileNotFoundError` here, since this
+        // call site has no `parents=True`) -- PORTING.md §3.5 applies
+        // (`rust/DEVIATIONS.md`), folded into the same reason `mkdir_p`
+        // already uses for its own local mkdir failures.
+        Err(_) => Err(Error::state("state_write_failed").with_detail(path_str(path))),
+    }
+}
+
+/// Port of the `Path.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)`
+/// calls in `store.py` (`lock`, `write_json`, `append_line`, `write_bytes`
+/// -- every mkdir call site *except* `subdir`, which has no `parents=True`
+/// and goes through [`mkdir_leaf`] directly instead). With `parents=True`,
+/// CPython's recursive parent-creation call
+/// (`self.parent.mkdir(parents=True, exist_ok=True)`) does not forward the
+/// caller's `mode` -- only the leaf directory the caller actually asked for
+/// is created with `mode=DIR_MODE`; any missing parents get the OS default
+/// mode (`0o777`, masked by umask at the syscall, exactly like
+/// `fs::create_dir_all`'s own default). The leaf itself is then created via
+/// [`mkdir_leaf`], atomically at `DIR_MODE`.
 fn mkdir_p(path: &Path) -> Result<(), Error> {
     if path.is_dir() {
         return Ok(());
@@ -394,19 +443,7 @@ fn mkdir_p(path: &Path) -> Result<(), Error> {
         fs::create_dir_all(parent)
             .map_err(|_| Error::state("state_write_failed").with_detail(path_str(parent)))?;
     }
-    match fs::create_dir(path) {
-        Ok(()) => {}
-        // Lost a create race to another thread/process between the is_dir()
-        // check above and here: `exist_ok` semantics -- leave its mode
-        // alone, same as the "already existed" branch.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
-            return Ok(());
-        }
-        Err(_) => {
-            return Err(Error::state("state_write_failed").with_detail(path_str(path)));
-        }
-    }
-    set_mode(path, DIR_MODE)
+    mkdir_leaf(path)
 }
 
 fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
@@ -622,6 +659,189 @@ mod tests {
         assert_eq!(
             state.read_lines("log.jsonl", Some(0)).unwrap(),
             vec!["line0", "line1", "line2", "line3", "line4"]
+        );
+    }
+
+    // A-R2-7: `read_lines` has no `try`/`except` in Python at all -- a
+    // target that is a directory (`IsADirectoryError`) or contains bytes
+    // that are not valid UTF-8 (`UnicodeDecodeError`) makes Python's
+    // `open(...)`/iteration raise an uncaught `OSError`/`ValueError`, not a
+    // `StateError`. PORTING.md §3.5 applies (`rust/DEVIATIONS.md`): both map
+    // to `state_corrupt`, the reason `read_json` already uses for its own
+    // unreadable/malformed state files.
+    #[test]
+    fn read_lines_on_directory_is_state_corrupt() {
+        let (_tmp, state) = new_state();
+        fs::create_dir(state.path.join("adir")).unwrap();
+        let err = state.read_lines("adir", None).unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+    }
+
+    #[test]
+    fn read_lines_on_non_utf8_file_is_state_corrupt() {
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("bad.txt"), b"line one\n\xffnot utf8\n").unwrap();
+        let err = state.read_lines("bad.txt", None).unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+    }
+
+    // A-R2-7: `subdir`'s Python source (`target.mkdir(mode=DIR_MODE,
+    // exist_ok=True)`) has no `parents=True`, unlike every other `mkdir`
+    // call site in `store.py`; a missing parent makes Python's `os.mkdir`
+    // raise an uncaught `FileNotFoundError`. This used to fail *open* in
+    // Rust (silently creating the missing parent via `mkdir_p`); it must
+    // fail *closed* instead, per PORTING.md §3.5 (`rust/DEVIATIONS.md`).
+    #[test]
+    fn subdir_with_missing_parent_fails_instead_of_creating_it() {
+        let (_tmp, state) = new_state();
+        let err = state.subdir("a/b").unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+        assert!(
+            !state.path.join("a").exists(),
+            "subdir must not fail-open by creating the missing parent"
+        );
+    }
+
+    // A-R2-7: `create()` only raises `StateError("state_exists")` from its
+    // own initial `path.exists()` probe in Python -- any other `mkdir`
+    // failure (e.g. a read-only parent directory) is an uncaught raw
+    // `OSError` there, not `state_exists`. PORTING.md §3.5 applies
+    // (`rust/DEVIATIONS.md`): give it a distinct reason instead of folding
+    // every mkdir failure into `state_exists`.
+    #[test]
+    fn create_reports_distinct_reason_for_non_exists_mkdir_failure() {
+        let tmp = TempDir::new().unwrap();
+        let readonly_parent = tmp.path().join("readonly");
+        fs::create_dir(&readonly_parent).unwrap();
+        fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o500)).unwrap();
+        let state = StateDir::new(readonly_parent.join("state"));
+
+        let err = state.create();
+
+        // Restore write permission unconditionally (before asserting) so
+        // `TempDir`'s own cleanup can still remove `readonly_parent`.
+        fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let err = err.unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_ne!(err.reason, "state_exists");
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    // A-R2-7: Python's `lock()` lets a failed `os.open(self.path / ".lock",
+    // ...)` escape as an uncaught `OSError`, not a `StateError`. PORTING.md
+    // §3.5 applies (`rust/DEVIATIONS.md`): map it to `state_lock_failed`,
+    // the reason this port already uses for a failed `flock`.
+    #[test]
+    fn lock_open_failure_is_state_lock_failed() {
+        let (_tmp, state) = new_state();
+        // A directory in place of the `.lock` file makes `OpenOptions::open`
+        // fail (EISDIR) instead of `flock` itself.
+        fs::create_dir(state.path.join(".lock")).unwrap();
+        match state.lock() {
+            Ok(_) => panic!("expected lock() to fail when .lock is a directory"),
+            Err(err) => {
+                assert!(err.is(ErrorClass::StateError));
+                assert_eq!(err.reason, "state_lock_failed");
+            }
+        }
+    }
+
+    // A-R2-5: `mkdir_p`'s leaf (via `create()` and `subdir()`) must land on
+    // the requested mode atomically at the `mkdir(2)` syscall (masked by
+    // umask, matching `os.mkdir(path, mode)`), not via a default-mode
+    // create followed by a separate `chmod` that leaves a transient wider
+    // window. Exercised under two umasks by re-executing this same test
+    // binary in a child process with the umask set first via a wrapping
+    // shell (never mutating the umask of the parent test process, which is
+    // shared across every concurrently running test thread): `0o077` (a
+    // realistic umask that leaves DIR_MODE's owner bits untouched -- both
+    // `create()` and `subdir()` must land on exactly `DIR_MODE`) and the
+    // pathological owner-masking `0o700` DEVIATIONS.md used to document as
+    // a deliberate, more-restrictive-than-Python divergence -- this port now
+    // matches Python byte-for-byte instead, including Python's own
+    // `create()`-fixes-it-up-afterward-but-`subdir()`-does-not asymmetry.
+    #[test]
+    fn create_and_subdir_apply_dir_mode_under_various_umasks() {
+        if std::env::var_os("ZEROPW_UMASK_CHILD_TEST").is_some() {
+            run_umask_child_check();
+            return;
+        }
+        let exe = std::env::current_exe().expect("current_exe");
+        for umask in ["077", "700"] {
+            let script = format!(
+                "umask {umask} && exec \"$0\" store::tests::create_and_subdir_apply_dir_mode_under_various_umasks --exact --nocapture"
+            );
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .arg(&exe)
+                .env("ZEROPW_UMASK_CHILD_TEST", "1")
+                .output()
+                .expect("failed to spawn umask child");
+            assert!(
+                output.status.success(),
+                "umask {umask} child failed:\nstdout={}\nstderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    /// Runs inside the umask-sandboxed child process spawned by
+    /// [`create_and_subdir_apply_dir_mode_under_various_umasks`]: creates a
+    /// state dir (`create()`) and a subdirectory of it (`subdir()`) under
+    /// whatever umask the parent's shell wrapper set, and cross-checks both
+    /// resulting modes against `zeropw.store.StateDir` run under the same
+    /// (inherited) umask.
+    fn run_umask_child_check() {
+        // `TempDir::new()`'s own directory creation is itself subject to the
+        // umask we just set (POSIX `mkdir`/`mkdtemp` always masks the
+        // requested mode by the process umask); under the pathological
+        // `0o700` case that would otherwise leave the container itself with
+        // mode `0`, making it impossible to create anything inside it. Fix
+        // the container's own mode up front so only `StateDir::create`/
+        // `subdir`'s behaviour -- the thing actually under test -- is
+        // exercised by the umask.
+        let tmp = TempDir::new().unwrap();
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let rust_state = StateDir::new(tmp.path().join("rust-state"));
+        rust_state.create().unwrap();
+        let rust_create_mode = dir_mode(&rust_state.path);
+        let rust_sub = rust_state.subdir("audit").unwrap();
+        let rust_subdir_mode = dir_mode(&rust_sub);
+
+        let py_tmp = TempDir::new().unwrap();
+        fs::set_permissions(py_tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let script = format!(
+            r#"
+from zeropw.store import StateDir
+state = StateDir({:?})
+state.create()
+sub = state.subdir("audit")
+import os
+print(oct(os.stat(state.path).st_mode & 0o777))
+print(oct(os.stat(sub).st_mode & 0o777))
+"#,
+            py_tmp.path().join("py-state").to_string_lossy()
+        );
+        let out = crate::oracle::python(&script);
+        let mut lines = out.lines();
+        let py_create_mode =
+            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
+        let py_subdir_mode =
+            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
+
+        assert_eq!(
+            rust_create_mode, py_create_mode,
+            "create() mode must match Python under this umask"
+        );
+        assert_eq!(
+            rust_subdir_mode, py_subdir_mode,
+            "subdir() mode must match Python under this umask"
         );
     }
 
