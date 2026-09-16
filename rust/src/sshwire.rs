@@ -578,113 +578,39 @@ impl<'a> Reader<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// ADAPTER: switch to crate::crypto::ed25519 after unit B merges
+// Ed25519 backend
 //
 // zeropw/sshwire.py delegates signing, verification and public-key
-// derivation to zeropw.crypto.ed25519, imported lazily. The Rust port of
-// that module (crate::crypto::ed25519) is a stub owned by a different work
-// unit; this adapter talks to `ed25519_dalek` directly so sshwire can be
-// implemented and tested now. It exposes exactly the three operations
-// zeropw/sshwire.py's lazy `_ed25519()` import uses, plus seed generation,
-// and nothing else. When the real module lands, callers here should switch
-// to it unchanged (same signatures).
+// derivation to zeropw.crypto.ed25519 via a lazy import. This thin shim
+// forwards to crate::crypto::ed25519, the port of that module, keeping the
+// fixed-size signatures sshwire's callers already use.
 // ---------------------------------------------------------------------------
 mod ed25519_adapter {
-    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-
-    // Field prime p = 2^255 - 19, little-endian, with the top (sign) bit
-    // already clear. Used to reject non-canonical point encodings the way
-    // zeropw/crypto/ed25519.py's `_point_decode` does (RFC 8032 5.1.3),
-    // since `curve25519-dalek`'s decompression silently reduces mod p and
-    // accepts x == 0 with the sign bit set instead of rejecting either.
-    #[rustfmt::skip]
-    const P_LE: [u8; 32] = [
-        0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
-    ];
-    #[rustfmt::skip]
-    const P_MINUS_1_LE: [u8; 32] = [
-        0xEC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
-    ];
-    const ONE_LE: [u8; 32] = {
-        let mut b = [0u8; 32];
-        b[0] = 1;
-        b
-    };
-
-    /// True when `encoded` (32 bytes, little-endian y with the sign of x in
-    /// the top bit) is the canonical RFC 8032 encoding of some point:
-    /// `y < p`, and not the `x == 0` point encoded with the sign bit set.
-    fn is_canonical_point_encoding(encoded: &[u8; 32]) -> bool {
-        let sign = encoded[31] >> 7;
-        let mut y = *encoded;
-        y[31] &= 0x7F;
-        if le_ge(&y, &P_LE) {
-            return false; // y >= p: non-canonical field element
-        }
-        if sign == 1 && (y == ONE_LE || y == P_MINUS_1_LE) {
-            return false; // x == 0 with the sign bit set
-        }
-        true
-    }
-
-    /// `a >= b` for two little-endian 32-byte unsigned integers.
-    fn le_ge(a: &[u8; 32], b: &[u8; 32]) -> bool {
-        for i in (0..32).rev() {
-            if a[i] != b[i] {
-                return a[i] > b[i];
-            }
-        }
-        true
-    }
+    use crate::crypto::ed25519;
 
     pub(super) fn public_key_from_seed(seed: &[u8; 32]) -> [u8; 32] {
-        SigningKey::from_bytes(seed).verifying_key().to_bytes()
+        match ed25519::public_key_from_seed(seed) {
+            Ok(public) => public,
+            Err(_) => unreachable!("a [u8; 32] seed always has the right size"),
+        }
     }
 
-    /// Deterministic RFC 8032 PureEdDSA signature (no prehash, no context),
-    /// matching `zeropw.crypto.ed25519.sign`.
     pub(super) fn sign(seed: &[u8; 32], message: &[u8]) -> [u8; 64] {
-        SigningKey::from_bytes(seed).sign(message).to_bytes()
+        match ed25519::sign(seed, message) {
+            Ok(signature) => signature,
+            Err(_) => unreachable!("a [u8; 32] seed always has the right size"),
+        }
     }
 
-    /// Verify a signature the way `zeropw.crypto.ed25519.verify` does:
-    /// never panics or raises, strict about non-canonical point and scalar
-    /// encodings, but (like the Python backend, and unlike
-    /// `VerifyingKey::verify_strict`) does not reject small-order/weak keys
-    /// or `R` values, since RFC 8032 does not require it.
     pub(super) fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
-        if public_key.len() != 32 || signature.len() != 64 {
-            return false;
-        }
-        let mut pk = [0u8; 32];
-        pk.copy_from_slice(public_key);
-        if !is_canonical_point_encoding(&pk) {
-            return false;
-        }
-        let Ok(verifying_key) = VerifyingKey::from_bytes(&pk) else {
-            return false;
-        };
-        let mut sig = [0u8; 64];
-        sig.copy_from_slice(signature);
-        // `raw_verify` compares the recomputed R in canonical compressed
-        // form against the signature's R bytes, so a non-canonical R never
-        // matches and needs no separate check here (see the doc comment on
-        // `RCompute::compute` in ed25519-dalek).
-        verifying_key
-            .verify(message, &Signature::from_bytes(&sig))
-            .is_ok()
+        ed25519::verify(public_key, message, signature)
     }
 
     pub(super) fn generate_seed() -> [u8; 32] {
-        let mut seed = [0u8; 32];
-        getrandom::getrandom(&mut seed).expect("OS CSPRNG must be available");
-        seed
+        let seed = ed25519::generate_seed();
+        let mut out = [0u8; 32];
+        out.copy_from_slice(seed.expose());
+        out
     }
 }
 
