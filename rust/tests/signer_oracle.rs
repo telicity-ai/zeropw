@@ -81,7 +81,7 @@ fn py_path(p: &Path) -> String {
 // --------------------------------------------------------------- fixtures
 
 struct Fixture {
-    ctx: &'static Context,
+    _tmp: tempfile::TempDir,
     manager: Arc<signer::SignerManager>,
     user_key: sshwire::Ed25519PrivateKey,
     host_key: sshwire::Ed25519PrivateKey,
@@ -90,6 +90,27 @@ struct Fixture {
     other_session_id: Vec<u8>,
     socket_py: PathBuf,
     socket_rs: PathBuf,
+}
+
+/// Port of `tests/test_signer.py`'s `SignerTestCase.tearDown`, which calls
+/// `shutdown()` on every case (finding G-R3-4). Harmless to call again on top
+/// of a test's own explicit `manager.shutdown()` (`release_for_grant` is
+/// idempotent once every server is already removed from the registry).
+///
+/// Does not also call `Context::close()`: `ctx` is `Box::leak`ed to satisfy
+/// `signer::install`'s `&'static Context` requirement (itself forced by
+/// `BindingServer` capturing it in real OS threads via `thread::spawn`'s own
+/// 'static bound), and safe Rust has no way to reclaim a `&mut Context` once
+/// a `&'static Context` derived from it has been shared that way -- see
+/// `signer_e2e.rs`'s `Fixture` `Drop` impl for the full reasoning. Instead,
+/// `build_fixture` gives `Context` explicit `socket_dir`/`run_dir` under
+/// `_tmp` so it never allocates anything outside `_tmp` for `close()` to
+/// have needed to remove; `_tmp`'s own ordinary `Drop` (after this impl's
+/// body, since fields drop after a type's own `Drop::drop`) removes it all.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.manager.shutdown();
+    }
 }
 
 fn random_bytes(n: usize) -> Vec<u8> {
@@ -102,14 +123,24 @@ fn random_bytes(n: usize) -> Vec<u8> {
 fn build_fixture() -> Fixture {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    std::mem::forget(tmp); // kept alive for the leaked Context's lifetime (test process only)
-
+    // Explicit `socket_dir`/`run_dir` under `root`, kept alive as `_tmp` in
+    // the returned `Fixture` (not forgotten): otherwise `Context::initialize`
+    // would default them to fresh private temp dirs under the *system* temp
+    // dir, owned by `Context` and only ever removed by a `close()`/`Drop`
+    // that cannot run for this leaked, 'static `Context` (see `Fixture`'s
+    // `Drop` impl above) -- exactly the leftover-directory pattern finding
+    // G-R3-4 is about.
+    let config = Config {
+        socket_dir: Some(root.join("ctx-sockets")),
+        run_dir: Some(root.join("ctx-run")),
+        ..Config::default()
+    };
     let ctx: &'static Context = Box::leak(Box::new(
         Context::initialize(
             root.join("state"),
             "admin-passphrase-1",
             "recovery-passphrase-1",
-            Config::default(),
+            config,
             clock::fixed(1_700_000_000.0),
         )
         .unwrap(),
@@ -175,7 +206,7 @@ fn build_fixture() -> Fixture {
     let binding_rs = manager.bind("agent-1", "box", &grant_rs.id).unwrap();
 
     Fixture {
-        ctx,
+        _tmp: tmp,
         manager,
         user_key,
         host_key,
@@ -446,8 +477,10 @@ fn table_driven_scenarios_match_between_python_client_and_rust_client() {
             scenario.name
         );
     }
+    // `Fixture::drop` also calls `shutdown()`; this explicit call just makes
+    // the ordering relative to the assertions above obvious at the call
+    // site, and is harmless to repeat (`release_for_grant` is idempotent).
     f.manager.shutdown();
-    let _ = f.ctx; // keep alive until here (it is 'static/leaked anyway)
 }
 
 /// The oversized-message case (`sshwire::MAX_AGENT_MESSAGE`) closes the
@@ -547,12 +580,22 @@ fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
         "candidate must exceed MAX_UNIX_PATH in bytes for this test to be meaningful: {total_bytes}"
     );
 
+    // Explicit `socket_dir`/`run_dir` under `tmp` (unrelated to `candidate`,
+    // which is what this test actually exercises via `signer::install`'s own
+    // override below): otherwise `Context::initialize` would default them to
+    // fresh private temp dirs under the *system* temp dir that this leaked,
+    // never-`close()`-able `Context` would then never clean up (finding
+    // G-R3-4; see `build_fixture`'s comment above for the full reasoning).
     let ctx: &'static Context = Box::leak(Box::new(
         Context::initialize(
             tmp.path().join("state"),
             "admin-passphrase-1",
             "recovery-passphrase-1",
-            Config::default(),
+            Config {
+                socket_dir: Some(tmp.path().join("ctx-sockets")),
+                run_dir: Some(tmp.path().join("ctx-run")),
+                ..Config::default()
+            },
             clock::fixed(1_700_000_000.0),
         )
         .unwrap(),

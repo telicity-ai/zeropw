@@ -50,6 +50,15 @@
 //!   FFI call. Not observable by anything in this crate's own tests
 //!   ([`DEFAULT_MAX_AGENT_CLIENTS`] caps concurrent clients far below any
 //!   platform's default backlog).
+//! * Python's accept loop blocks in `accept()` with a 0.2s `settimeout`
+//!   purely so `close()` can eventually notice `self._closed`; a genuine
+//!   connection is always served the instant it arrives. `std` has no
+//!   equivalent "blocking accept with a timeout" for `UnixListener`, so this
+//!   port instead makes the listener non-blocking and polls it every
+//!   [`ACCEPT_POLL_INTERVAL`] (1ms, comfortably under Python's own measured
+//!   ~0.4-2.7ms per-connection accept latency) -- see `BindingServer::close`
+//!   and `accept_loop` for why this needs no durable, connectable "wakeup"
+//!   alias for the socket (finding G-R3-1).
 
 use std::collections::HashMap;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
@@ -79,17 +88,21 @@ pub const DEFAULT_MAX_AGENT_CLIENTS: usize = 32;
 const CLIENT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on waiting for the accept thread to notice `closed` and return, the
-/// same 2s Python gives `self._accept_thread.join(timeout=2)`.
+/// same 2s Python gives `self._accept_thread.join(timeout=2)`. With the
+/// non-blocking accept loop below (finding G-R3-1) the accept thread should
+/// always notice within one [`ACCEPT_POLL_INTERVAL`], so this bound is
+/// defence in depth rather than the normal path.
 const ACCEPT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-/// How many times `close()` retries connecting to its own wakeup path to wake
-/// a blocked `accept()` call, in case the very first attempt races the kernel
-/// still finishing the `bind`/`listen` setup. Each retry is cheap (a local
-/// Unix socket connect attempt); this is not a polling interval on the
-/// accept path itself (see `accept_loop`, which blocks in `accept()` with no
-/// sleep), just a small, bounded retry budget for the wakeup nudge. See
-/// [`create_wakeup_link`] (finding G-R2-1) for why this connect target is not
-/// simply `binding.socket_path`.
-const CLOSE_WAKEUP_ATTEMPTS: u32 = 5;
+/// How long `accept_loop` sleeps after a non-blocking `accept()` returns
+/// `WouldBlock` before checking `closed` (and the listener) again and
+/// retrying. This is the *only* thing that bounds how quickly `close()`'s
+/// `closed = true` / listener removal is noticed -- it creates no filesystem
+/// state (finding G-R3-1, replacing the round-2 hard-link "wakeup" design)
+/// and, at 1ms, is far below Python's own per-connection accept latency
+/// (~0.4-2.7ms measured against the real signer), so it does not regress
+/// ordinary accept latency the way a fixed 200ms poll would have (finding
+/// G-1).
+const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[sshwire::SESSION_BIND_EXTENSION];
 pub const SSH_ED25519: &str = "ssh-ed25519";
@@ -192,14 +205,16 @@ struct ClientSlot {
 struct BindingServer {
     ctx: &'static Context,
     binding: SignerBinding,
-    listener: UnixListener,
-    /// A private hard link to `binding.socket_path`, created by
-    /// [`create_wakeup_link`] and used by `close()` to wake a thread parked
-    /// in `accept()` (finding G-R2-1). `None` only if the link itself could
-    /// not be created (e.g. `control_dir` is on a different filesystem than
-    /// `socket_path`), in which case `close()` falls back to connecting to
-    /// `binding.socket_path` directly, same as before this fix.
-    wakeup_path: Option<PathBuf>,
+    /// The listening socket, non-blocking (finding G-R3-1: `accept_loop`
+    /// polls it rather than blocking, so no durable wakeup alias is ever
+    /// needed to interrupt it). Wrapped so `close()` can `take()` and drop
+    /// it, releasing the listening fd immediately and independently of
+    /// whether some other `Arc<BindingServer>` clone (e.g. a client thread
+    /// detached past its join deadline) keeps the rest of this struct alive
+    /// (finding G-R3-3) -- Python's `close()` releases its listening fd
+    /// unconditionally as its second statement (`self._sock.close()`),
+    /// before any joins.
+    listener: Mutex<Option<UnixListener>>,
     closed: AtomicBool,
     /// Live client connections, keyed by a monotonic per-connection id (not
     /// by `ThreadId`, so a client is registered — and admission is decided —
@@ -222,16 +237,16 @@ impl BindingServer {
     fn start(
         ctx: &'static Context,
         binding: SignerBinding,
-        control_dir: &Path,
         max_agent_clients: Arc<AtomicUsize>,
     ) -> Result<Arc<Self>, Error> {
         let listener = bind_and_listen(&binding.socket_path)?;
-        let wakeup_path = create_wakeup_link(control_dir, &binding.socket_path);
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
         let server = Arc::new(BindingServer {
             ctx,
             binding,
-            listener,
-            wakeup_path,
+            listener: Mutex::new(Some(listener)),
             closed: AtomicBool::new(false),
             clients: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(0),
@@ -262,41 +277,34 @@ impl BindingServer {
     // ---------------------------------------------------------- lifecycle
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        // The listener is blocking (see `accept_loop`/`bind_and_listen`), so
-        // a thread parked in `accept()` needs an explicit nudge: connecting
-        // wakes it up by handing the kernel a new pending connection, which
-        // `handle_accepted` immediately refuses once it observes `closed`.
-        // Connect via `wakeup_path` (a private hard link to this exact
-        // listening socket, created at bind time by `create_wakeup_link` and
-        // owned by this binding alone) rather than `binding.socket_path`
-        // itself: `binding.socket_path` lives in a directory this crate does
-        // not control the removal timing of (e.g. `Context::close`/`Drop`
-        // can `rmtree` its owned `socket_dir` before calling
-        // `SignerManager::shutdown`), so it can already be gone by the time
-        // `close()` runs. `wakeup_path` names the *same* underlying socket
-        // (a hard link, not a copy) from a directory only this crate ever
-        // removes from, and only right here -- so this connect target stays
-        // valid for as long as any thread could still be parked in
-        // `accept()` (finding G-R2-1). Falls back to `binding.socket_path`
-        // only if the link itself could not be created (e.g. a
-        // cross-filesystem `control_dir`).
-        let wakeup_target = self
-            .wakeup_path
-            .as_deref()
-            .unwrap_or(&self.binding.socket_path);
-        for _ in 0..CLOSE_WAKEUP_ATTEMPTS {
-            if UnixStream::connect(wakeup_target).is_ok() {
-                break;
-            }
-        }
+        // Take and drop the listener immediately -- Python's `close()`
+        // closes `self._sock` as its second statement, before any joins, so
+        // the listening fd is released unconditionally rather than only
+        // when the last `Arc<BindingServer>` clone drops (finding G-R3-3: a
+        // client thread detached past its join deadline below used to keep
+        // this whole struct, and therefore the listener fd, alive
+        // indefinitely). This also wakes `accept_loop`: it re-locks
+        // `listener` every polling iteration (at most `ACCEPT_POLL_INTERVAL`
+        // apart -- see `accept_loop`) and exits as soon as it observes
+        // `None`, without ever needing a durable, connectable alias to the
+        // socket (finding G-R3-1 -- the round-2 hard-link "wakeup" design is
+        // withdrawn: the reviewer showed that link was a second, fully
+        // functional agent endpoint reachable even after the directory
+        // holding the real socket was removed, widening the capability
+        // boundary `SSH_AUTH_SOCK` is supposed to be).
+        let listener = self
+            .listener
+            .lock()
+            .expect("listener mutex poisoned")
+            .take();
+        drop(listener);
         // Bound the wait the way Python's `self._accept_thread.join(timeout=2)`
         // does: `JoinHandle::join` has no timeout, so wait on a completion
         // signal sent right before `accept_loop` returns, and give up
         // (detaching the handle) past the deadline instead of blocking
-        // `close()` forever on a wedged accept thread. With the guaranteed
-        // wakeup path above this should now always fire promptly; the bound
-        // stays as defence in depth (e.g. every `CLOSE_WAKEUP_ATTEMPTS`
-        // connect attempts failing for an unrelated transient reason).
+        // `close()` forever on a wedged accept thread. With the listener
+        // gone, `accept_loop` should notice within one `ACCEPT_POLL_INTERVAL`
+        // (a couple of milliseconds), so this bound is defence in depth.
         let done = self
             .accept_done
             .lock()
@@ -318,9 +326,6 @@ impl BindingServer {
             drop(handle);
         }
         let _ = std::fs::remove_file(&self.binding.socket_path);
-        if let Some(wakeup_path) = &self.wakeup_path {
-            let _ = std::fs::remove_file(wakeup_path);
-        }
         // Shut down every live client connection so a blocking read in a
         // serving thread returns at once; snapshot the ids under the same
         // lock, mirroring Python's `live = list(self._clients)`.
@@ -392,21 +397,47 @@ impl BindingServer {
     }
 
     fn accept_loop(self: Arc<Self>) {
-        // `accept()` blocks (see `bind_and_listen`): a new connection is
-        // served the instant it arrives, exactly like Python's blocking
-        // `accept()` with a 0.2s `settimeout` (that timeout only bounds
-        // `close()`, never ordinary accept latency -- see finding G-1).
-        // `close()` wakes a parked `accept()` call by connecting to
-        // `wakeup_path` (a private hard link to this same listening socket,
-        // guaranteed to remain connectable for as long as this thread could
-        // still be parked here -- finding G-R2-1) once `closed` is set;
-        // `handle_accepted` immediately refuses that connection (and any
-        // genuine client that raced with `close()`) once it observes the
-        // flag, so no fixed sleep is ever on this path.
+        // The listener is non-blocking (`BindingServer::start`): a genuine
+        // connection is accepted and served the moment `accept()` sees it,
+        // and a `WouldBlock` just means "nothing pending yet", so this loop
+        // rechecks at most `ACCEPT_POLL_INTERVAL` (1ms) later. That interval
+        // is the entire wakeup mechanism `close()` relies on -- there is no
+        // durable, connectable alias for a blocked accept to wait on
+        // (finding G-R3-1, replacing the round-2 hard-link "wakeup" design:
+        // that link was a second, fully functional agent endpoint, not
+        // merely a wakeup nudge, and stayed reachable even after the
+        // directory holding the real socket was removed). `close()` sets
+        // `closed` and takes the listener out from under this loop; both are
+        // checked every iteration, so this thread exits within about one
+        // `ACCEPT_POLL_INTERVAL` of either happening, with no fixed 200ms
+        // poll (finding G-1) and no filesystem state created to make it
+        // happen sooner.
         loop {
-            match self.listener.accept() {
-                Ok((stream, _addr)) => self.handle_accepted(stream),
-                Err(_) => break,
+            if self.closed.load(Ordering::SeqCst) {
+                break;
+            }
+            let accepted = {
+                let guard = self.listener.lock().expect("listener mutex poisoned");
+                guard.as_ref().map(UnixListener::accept)
+            };
+            match accepted {
+                Some(Ok((stream, _addr))) => {
+                    // On some platforms (observed on macOS/Darwin) a socket
+                    // returned by `accept()` inherits the non-blocking flag
+                    // of the *listening* socket, even though POSIX gives it
+                    // a fresh open file description. `serve_client` (and
+                    // Python's own `client.settimeout(30)`) needs ordinary
+                    // blocking-with-timeout reads/writes, so force it back
+                    // explicitly rather than relying on it starting that way.
+                    let _ = stream.set_nonblocking(false);
+                    self.handle_accepted(stream)
+                }
+                Some(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(ACCEPT_POLL_INTERVAL);
+                    continue;
+                }
+                Some(Err(_)) => break,
+                None => break, // `close()` already took the listener
             }
             if self.closed.load(Ordering::SeqCst) {
                 break;
@@ -1045,6 +1076,18 @@ impl BindingServer {
             .expect("a freshly produced 64-byte signature always encodes");
         Ok(sshwire::build_sign_response(&sig_blob))
     }
+
+    /// Test-only probe for finding G-R3-3: whether `close()` has released the
+    /// listening fd, independently of whether this `BindingServer` struct
+    /// itself is still kept alive by some other `Arc` clone (e.g. a client
+    /// thread detached past its join deadline).
+    #[cfg(test)]
+    fn listener_is_released(&self) -> bool {
+        self.listener
+            .lock()
+            .expect("listener mutex poisoned")
+            .is_none()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,10 +1164,6 @@ impl ServerRegistry {
 pub struct SignerManager {
     ctx: &'static Context,
     socket_dir: PathBuf,
-    /// Private (0700) directory, sibling to `socket_dir`, holding each
-    /// binding's [`create_wakeup_link`] hard link. See that function and
-    /// `BindingServer::close` (finding G-R2-1).
-    control_dir: PathBuf,
     servers: Mutex<ServerRegistry>,
     max_agent_clients: Arc<AtomicUsize>,
 }
@@ -1133,11 +1172,9 @@ impl SignerManager {
     fn new(ctx: &'static Context, socket_dir: Option<PathBuf>) -> Result<Self, Error> {
         let preferred = socket_dir.or_else(|| ctx.config.socket_dir.clone());
         let socket_dir = choose_socket_dir(preferred)?;
-        let control_dir = choose_control_dir(&socket_dir)?;
         Ok(SignerManager {
             ctx,
             socket_dir,
-            control_dir,
             servers: Mutex::new(ServerRegistry::new()),
             max_agent_clients: Arc::new(AtomicUsize::new(DEFAULT_MAX_AGENT_CLIENTS)),
         })
@@ -1201,7 +1238,6 @@ impl SignerManager {
         let server = BindingServer::start(
             self.ctx,
             binding.clone(),
-            &self.control_dir,
             Arc::clone(&self.max_agent_clients),
         )?;
         self.servers
@@ -1249,18 +1285,6 @@ impl SignerManager {
 
     pub fn shutdown(&self) {
         self.release_for_grant(None);
-    }
-}
-
-impl Drop for SignerManager {
-    /// `control_dir` (finding G-R2-1) is a Rust-only implementation detail
-    /// with no Python equivalent and no caller-visible effect; best-effort
-    /// clean it up once the manager itself goes away so it does not
-    /// outlive every binding that ever used it. Every per-binding wakeup
-    /// link is already removed by `BindingServer::close`, so this is
-    /// normally just removing an empty directory.
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.control_dir);
     }
 }
 
@@ -1331,49 +1355,6 @@ fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     Ok(short)
 }
 
-/// A private (0700) directory, *sibling* to `socket_dir` (not inside it),
-/// that holds every binding's [`create_wakeup_link`] hard link (finding
-/// G-R2-1). Being a sibling rather than a subdirectory keeps it on the same
-/// filesystem as `socket_dir` -- a hard link cannot cross filesystems -- while
-/// surviving a `remove_dir_all(socket_dir)` run by code outside this module
-/// (e.g. `Context::close`/`Drop` removing its own owned `socket_dir` before
-/// calling `SignerManager::shutdown`): that call only ever touches
-/// `socket_dir` itself, never its parent's other children.
-fn choose_control_dir(socket_dir: &Path) -> Result<PathBuf, Error> {
-    let candidate = match socket_dir.parent().filter(|p| !p.as_os_str().is_empty()) {
-        Some(parent) => parent.join(format!("zpws-ctl-{}", short_hex_id())),
-        // No usable parent (e.g. `socket_dir` is a bare relative name):
-        // fall back to a subdirectory. This gives up the "survives
-        // `remove_dir_all(socket_dir)`" property in this narrow case, same
-        // as `choose_socket_dir`'s own fallback narrows other guarantees
-        // when the caller hands it something unusual.
-        None => socket_dir.join(format!("zpws-ctl-{}", short_hex_id())),
-    };
-    mkdir_leaf_private_0700(&candidate)
-        .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
-    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
-    Ok(candidate)
-}
-
-/// Create a private hard link to `socket_path` inside `control_dir`, giving
-/// `BindingServer::close` a connect target that always resolves to this
-/// exact listening socket even after `socket_path` (and the directory
-/// holding it) has already been removed by the time `close()` runs (finding
-/// G-R2-1). Hard-linking an `AF_UNIX` socket file names the *same*
-/// underlying listening socket under a second, independently-owned path;
-/// connecting via either name delivers a new pending connection to the one
-/// accept queue, waking a thread blocked in `accept()` on it. Returns `None`
-/// if the link could not be created (e.g. `control_dir` ends up on a
-/// different filesystem than `socket_path`, which `EXDEV`s a hard link, or
-/// the filesystem does not support hard-linking socket files) -- `close()`
-/// falls back to connecting to `socket_path` itself in that case, exactly
-/// like this crate did before this fix.
-fn create_wakeup_link(control_dir: &Path, socket_path: &Path) -> Option<PathBuf> {
-    let link = control_dir.join(format!("w{}.sock", short_hex_id()));
-    std::fs::hard_link(socket_path, &link).ok().map(|()| link)
-}
-
 /// Create `path` at mode 0700 atomically (`DirBuilder::mode`), treating an
 /// already-existing *directory* at that path as success -- Python's
 /// `exist_ok=True` -- while still erroring if something else (e.g. a
@@ -1428,13 +1409,12 @@ fn short_hex_id() -> String {
     hex::encode(buf)
 }
 
-/// Bind and chmod 0600. The listener stays blocking, exactly like Python's
-/// socket -- `accept_loop` calls `accept()` directly, so a new connection is
-/// served the instant it arrives rather than waiting out a fixed poll
-/// interval (finding G-1); `close()` wakes a parked `accept()` call by
-/// connecting to this same socket once `closed` is set. See the module doc
-/// comment for the umask/backlog deviations from Python's
-/// `socket.bind`/`listen(16)`.
+/// Bind and chmod 0600. `BindingServer::start` sets the returned listener
+/// non-blocking right after this returns (finding G-R3-1): `accept_loop`
+/// polls it every `ACCEPT_POLL_INTERVAL` rather than blocking in `accept()`,
+/// so `close()` can wake it by simply taking the listener away, with no
+/// durable connectable alias needed. See the module doc comment for the
+/// umask/backlog deviations from Python's `socket.bind`/`listen(16)`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     let listener = UnixListener::bind(path)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
@@ -1486,6 +1466,36 @@ mod tests {
         manager: Arc<SignerManager>,
         binding: SignerBinding,
         session_id: Vec<u8>,
+    }
+
+    /// Port of `tests/test_signer.py`'s `SignerTestCase.tearDown`, which
+    /// calls `shutdown()` on every one of the 22 ported cases below (finding
+    /// G-R3-4: this fixture used to call neither `shutdown()` nor anything
+    /// else, so none of that teardown path -- `shutdown()` ->
+    /// `release_for_grant(None)` -> `BindingServer::close()` for every socket
+    /// a test bound, including ones beyond `binding` itself -- was ever
+    /// exercised).
+    ///
+    /// Does not also call `Context::close()` on `ctx`: it is `Box::leak`ed
+    /// to satisfy `signer::install`'s `&'static Context` requirement (itself
+    /// forced by `BindingServer` capturing it in real OS threads via
+    /// `thread::spawn`'s own 'static bound, not a choice this module makes),
+    /// and safe Rust has no way to reclaim a `&mut Context` once a
+    /// `&'static Context` derived from it has been shared that way -- that
+    /// would need `unsafe` pointer reconstruction, which `rust/PORTING.md`
+    /// forbids outside `store.rs`. `fixture()` gives `Context` explicit
+    /// `socket_dir`/`run_dir` under `_tmp` instead, so it never allocates
+    /// anything `close()` would have needed to remove; `_tmp`'s own
+    /// ordinary `Drop` (which runs after this impl's body, since fields drop
+    /// after a type's own `Drop::drop`) removes the state dir and every
+    /// socket the signer created, closing the gap that left 229 leftover
+    /// `zpws-ctl-*` directories (round 2's now-withdrawn `control_dir`) and
+    /// unbounded `zeropw-sockets-*`/`zeropw-runs-*` directories (this
+    /// fixture's own leaked `Context`) behind on this machine.
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.manager.shutdown();
+        }
     }
 
     impl Fixture {
@@ -1614,15 +1624,18 @@ mod tests {
         let root = tmp.path().to_path_buf();
         let clock_val = Arc::new(StdMutex::new(1_700_000_000.0));
         let clock = make_clock(&clock_val);
+        // Explicit `socket_dir`/`run_dir` under `root` (see `Drop for
+        // Fixture` above, finding G-R3-4): otherwise `Context::initialize`
+        // would default them to fresh private temp dirs under the *system*
+        // temp dir that this leaked, never-`close()`-able `Context` would
+        // then never clean up.
+        let config = Config {
+            socket_dir: Some(root.join("ctx-sockets")),
+            run_dir: Some(root.join("ctx-run")),
+            ..Config::default()
+        };
         let ctx: &'static Context = Box::leak(Box::new(
-            Context::initialize(
-                root.join("state"),
-                ADMIN,
-                RECOVERY,
-                Config::default(),
-                clock,
-            )
-            .unwrap(),
+            Context::initialize(root.join("state"), ADMIN, RECOVERY, config, clock).unwrap(),
         ));
         ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
         let user_key = sshwire::generate_ed25519_private_key("agent-key");
@@ -2305,17 +2318,21 @@ mod tests {
         }
     }
 
-    // Regression test for finding G-R2-1: `close()` used to wake a thread
-    // parked in `accept()` solely by connecting to `binding.socket_path`
-    // itself. If that path is already gone (e.g. something outside this
-    // module removed the directory holding it, such as `Context::close`
-    // running before `SignerManager::shutdown`), every wakeup attempt failed,
-    // `close()` burned the full `ACCEPT_JOIN_TIMEOUT` (2s), and then detached
-    // the accept thread, which stayed parked in `accept()` forever holding
-    // this `Arc<BindingServer>` and the listener fd. `close()` now wakes the
-    // accept thread via a private hard link (`wakeup_path`) that stays valid
-    // regardless of what happens to `socket_path`, so this returns promptly
-    // and the accept thread actually exits (its own `Arc<BindingServer>`
+    // Regression test for finding G-R2-1, re-pinned for the round-3 rewrite
+    // (G-R3-1): a round-1 `close()` used to wake a thread parked in a
+    // *blocking* `accept()` solely by connecting to `binding.socket_path`
+    // itself. If that path was already gone (e.g. something outside this
+    // module removed the directory holding it), every wakeup attempt failed
+    // and the accept thread stayed parked forever, holding this
+    // `Arc<BindingServer>` and the listener fd. Round 2 "fixed" this with a
+    // hard-linked wakeup socket in a manager-owned `control_dir` -- withdrawn
+    // in round 3 because that link was a second, fully functional agent
+    // endpoint reachable even after the directory holding the real socket
+    // was removed (findings G-R3-1). The replacement needs no wakeup target
+    // at all: `accept_loop` never blocks (it polls a non-blocking listener
+    // every `ACCEPT_POLL_INTERVAL`), so removing `binding.socket_path` out
+    // from under it has no effect on `close()`'s ability to return promptly
+    // and have the accept thread actually exit (its own `Arc<BindingServer>`
     // clone is dropped, so `strong_count` drops back to just this test's).
     #[test]
     fn close_after_socket_file_removed_returns_promptly_and_accept_thread_exits() {
@@ -2325,6 +2342,12 @@ mod tests {
         let started = Instant::now();
         f.manager.release(&f.binding);
         let elapsed = started.elapsed();
+        eprintln!(
+            "[G-R3-1] Rust close() latency (plain, socket file already removed): {elapsed:?} \
+             (Python's own close() -- bounded by its accept thread's 0.2s socket settimeout, \
+             not by anything the socket file's existence affects -- measured ~202ms for the \
+             same plain case)"
+        );
         assert!(
             elapsed < Duration::from_millis(500),
             "close() took {elapsed:?} after its socket file was removed, expected well under \
@@ -2337,13 +2360,15 @@ mod tests {
         );
     }
 
-    // Regression test for finding G-R2-1: releasing many bindings whose
-    // socket files were all removed out from under them used to cost
-    // roughly `2 * ACCEPT_JOIN_TIMEOUT` seconds *per binding* (each one
-    // burning the full accept-thread join timeout before detaching), so
-    // `release_for_grant(None)` over N bindings (e.g. `SignerManager::shutdown`)
-    // cost ~2N seconds and leaked N threads + N fds. With a guaranteed
-    // wakeup path this must complete promptly regardless of N.
+    // Regression test for finding G-R2-1, re-pinned for G-R3-1: releasing
+    // many bindings whose socket files were all removed out from under them
+    // used to cost roughly `2 * ACCEPT_JOIN_TIMEOUT` seconds *per binding*
+    // (each one burning the full accept-thread join timeout before
+    // detaching), so `release_for_grant(None)` over N bindings (e.g.
+    // `SignerManager::shutdown`) cost ~2N seconds and leaked N threads + N
+    // fds. The non-blocking, no-wakeup-target accept loop (finding G-R3-1)
+    // makes `binding.socket_path`'s existence irrelevant to `close()`
+    // altogether, so this must complete promptly regardless of N.
     #[test]
     fn release_for_grant_bulk_after_socket_files_removed_completes_promptly() {
         let f = fixture();
@@ -2368,29 +2393,40 @@ mod tests {
         );
     }
 
-    // Regression test for finding G-1: the accept loop used to set the
-    // listener non-blocking and sleep a fixed 200ms (`ACCEPT_POLL_INTERVAL`)
-    // on every `WouldBlock`, so a *new* connection could wait out nearly the
-    // whole poll interval before being accepted at all -- ten sequential
-    // connect+request cycles measured ~1.85s (~205ms each) instead of
-    // Python's ~4.3ms. The listener is blocking again (`bind_and_listen`),
-    // so a connection is served the instant the kernel hands it to
-    // `accept()`; this asserts ten sequential cycles finish in a small
-    // fraction of the 2s (10 x 200ms) the old poll-bound implementation
-    // would need, with a generous margin so the assertion is not flaky on a
-    // loaded CI host.
+    // Regression test for finding G-1, re-measured for the round-3 rewrite
+    // (G-R3-1): a round-1 accept loop set the listener non-blocking and slept
+    // a fixed 200ms on every `WouldBlock`, so a *new* connection could wait
+    // out nearly the whole poll interval before being accepted at all -- ten
+    // sequential connect+request cycles measured ~1.85s (~205ms each)
+    // instead of Python's own ~0.4-2.7ms per connection. Round 2 avoided
+    // that regression with a *blocking* accept woken by a hard-linked
+    // "wakeup" socket; round 3 withdraws that design (it was a second, fully
+    // functional agent endpoint -- finding G-R3-1) in favour of a
+    // non-blocking accept polled every `ACCEPT_POLL_INTERVAL` (1ms). Prints
+    // per-connection latency under `--nocapture` so it can be compared
+    // directly against the real Python signer's own numbers; the assertion
+    // itself just needs to stay well clear of the old 200ms-per-connection
+    // regression, with a generous margin so it is not flaky on a loaded CI
+    // host.
     #[test]
     fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
         let f = fixture();
+        let mut samples = Vec::with_capacity(10);
         let started = Instant::now();
         for _ in 0..10 {
+            let cycle_started = Instant::now();
             let mut conn = f.connect();
             let reply = conn
                 .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
                 .unwrap();
             assert_eq!(reply[0], sshwire::SSH_AGENT_IDENTITIES_ANSWER);
+            samples.push(cycle_started.elapsed());
         }
         let elapsed = started.elapsed();
+        eprintln!(
+            "[G-R3-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
+             {elapsed:?})"
+        );
         assert!(
             elapsed < Duration::from_millis(500),
             "10 sequential connections took {elapsed:?}, expected well under the old \
@@ -2566,6 +2602,84 @@ mod tests {
             elapsed < Duration::from_secs(3),
             "close() took {elapsed:?}, expected to return within roughly \
              CLIENT_JOIN_TIMEOUT even with a client thread wedged on the state lock"
+        );
+
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Regression test for finding G-R3-3: `close()` never closed or dropped
+    // the listener itself -- the listening fd was released only when the
+    // last `Arc<BindingServer>` clone dropped, so on this same
+    // bounded-detach path (a client thread wedged past `CLIENT_JOIN_TIMEOUT`)
+    // the whole `BindingServer`, and therefore its listening socket fd,
+    // stayed alive indefinitely (probe: `Arc::strong_count == 2`,
+    // `clients.len() == 1`, after `close()` returned). Python's `close()`
+    // releases its listening fd unconditionally as its second statement
+    // (`self._sock.close()`), before any joins. The listener now lives
+    // behind its own `Mutex<Option<UnixListener>>` that `close()` empties
+    // regardless of what happens to any wedged client thread, so this
+    // reproduces the exact wedge from the test above and additionally
+    // asserts the listener is gone.
+    #[test]
+    fn close_releases_the_listener_even_with_a_client_thread_wedged_on_the_state_lock() {
+        let f = fixture();
+        let server = f.server();
+        let mut conn = f.connect();
+        assert_eq!(
+            conn.request(&f.bind_message()).unwrap(),
+            sshwire::build_success()
+        );
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let ctx = f.ctx;
+        let holder = thread::spawn(move || {
+            let _guard = ctx.state.lock().expect("state lock");
+            let _ = ready_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("helper thread did not acquire the state lock in time");
+
+        let data = f.userauth();
+        conn.write_message(&sshwire::build_sign_request(
+            &f.user_key.public.blob(),
+            &data,
+            0,
+        ))
+        .unwrap();
+        thread::sleep(Duration::from_millis(200)); // let the server start handling it
+
+        let started = Instant::now();
+        f.binding.close();
+        let close_elapsed = started.elapsed();
+        eprintln!("[G-R3-3] close() with a wedged client thread took {close_elapsed:?}");
+        assert!(
+            close_elapsed < Duration::from_secs(3),
+            "close() took {close_elapsed:?}, expected to return within roughly \
+             CLIENT_JOIN_TIMEOUT even with a client thread wedged on the state lock"
+        );
+
+        // The wedged client thread is detached (not joined), so it still
+        // holds its own `Arc<BindingServer>` clone and its `ClientSlot` is
+        // still in `clients` -- the struct itself is intentionally still
+        // alive. The listener must be gone anyway.
+        assert_eq!(
+            Arc::strong_count(&server),
+            2,
+            "expected exactly this test's handle plus the detached wedged client thread's clone"
+        );
+        assert_eq!(
+            server.clients.lock().unwrap().len(),
+            1,
+            "the wedged client's slot should still be present (its thread never finished)"
+        );
+        assert!(
+            server.listener_is_released(),
+            "close() must release the listening fd even though the BindingServer struct \
+             itself is kept alive by the detached, wedged client thread"
         );
 
         let _ = release_tx.send(());
@@ -2786,6 +2900,62 @@ mod tests {
             reasons
                 .iter()
                 .any(|r| r.as_deref() == Some("unsupported_agent_message"))
+        );
+    }
+
+    // ------------------------------------------------- teardown (G-R3-4)
+
+    // Regression test for finding G-R3-4: neither this module's `Fixture`
+    // nor `signer_e2e.rs`'s used to call `manager.shutdown()` or implement
+    // `Drop` at all, unlike Python's `SignerTestCase.tearDown`/
+    // `SshEndToEndTestCase.setUp` (`addCleanup(self.manager.shutdown)`),
+    // which is exactly what let a `Box::leak`ed `Context`'s default
+    // `socket_dir`/`run_dir` (this crate's own G-R2-1 `control_dir`, plus
+    // Python-shaped `zeropw-sockets-*`/`zeropw-runs-*` temp dirs) accumulate
+    // unbounded (229 leftover `zpws-ctl-*` directories were found on this
+    // machine). `Drop for Fixture` (added for this finding) now runs
+    // `manager.shutdown()` before `_tmp`'s own `Drop` removes the directory
+    // tree; this asserts every observable trace is actually gone afterward:
+    // no socket file, no signer-created `socket_dir`, and -- via the
+    // `BindingServer`'s own `Arc` dropping to zero once `shutdown()` and the
+    // `Fixture`'s `manager: Arc<SignerManager>` are both gone -- no
+    // remaining listener either (a live listener could only exist inside a
+    // still-alive `BindingServer`).
+    #[test]
+    fn teardown_leaves_no_socket_file_listener_or_signer_created_directory() {
+        let socket_path;
+        let socket_dir;
+        let server_weak;
+        {
+            let f = fixture();
+            socket_path = f.binding.socket_path.clone();
+            socket_dir = f.manager.socket_dir().to_path_buf();
+            server_weak = Arc::downgrade(&f.server());
+            assert!(
+                socket_path.exists(),
+                "sanity: socket should exist while bound"
+            );
+            assert!(
+                socket_dir.exists(),
+                "sanity: socket_dir should exist while bound"
+            );
+            // `f` drops at the end of this block: `Drop for Fixture` runs
+            // `manager.shutdown()` (closing every `BindingServer`, which
+            // removes the socket file and releases the listener -- finding
+            // G-R3-3), then `_tmp`'s own ordinary `Drop` removes the whole
+            // directory tree including `socket_dir`.
+        }
+        assert!(
+            !socket_path.exists(),
+            "socket file must not survive Fixture teardown"
+        );
+        assert!(
+            !socket_dir.exists(),
+            "signer-created socket_dir must not survive Fixture teardown"
+        );
+        assert!(
+            server_weak.upgrade().is_none(),
+            "BindingServer (and therefore its listener) must not survive Fixture teardown"
         );
     }
 }

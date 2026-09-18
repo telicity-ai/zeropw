@@ -296,12 +296,27 @@ fn build_fixture() -> Fixture {
     let (sshd_bin, ssh_bin, keygen_bin) = tools_available();
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
+    // Explicit `socket_dir`/`run_dir`, both under `root`: otherwise
+    // `Context::initialize` would default them to fresh private temp dirs
+    // under the *system* temp dir (`private_tempdir`, prefixes
+    // "zeropw-sockets-"/"zeropw-runs-"), owned by this `Context` and only
+    // ever removed by `Context::close`/`Drop` -- neither of which can run
+    // for a `Box::leak`ed, 'static `Context` once it has been shared with
+    // `signer::install` (see `Fixture`'s `Drop` impl below for why). Giving
+    // both paths explicitly up front means `Context` never allocates
+    // anything outside `root`, so there is nothing left for a `close()` we
+    // cannot call to have needed to clean up (finding G-R3-4).
+    let config = Config {
+        socket_dir: Some(root.join("ctx-sockets")),
+        run_dir: Some(root.join("ctx-run")),
+        ..Config::default()
+    };
     let ctx: &'static Context = Box::leak(Box::new(
         Context::initialize(
             root.join("state"),
             "admin-passphrase-1",
             "recovery-passphrase-1",
-            Config::default(),
+            config,
             clock::system(),
         )
         .unwrap(),
@@ -342,6 +357,35 @@ fn build_fixture() -> Fixture {
         sshd,
         username,
         ssh_bin,
+    }
+}
+
+/// Port of `tests/test_ssh_e2e.py`'s `SshEndToEndTestCase.setUp`, which
+/// registers `addCleanup(self.manager.shutdown)` so every case exercises
+/// `shutdown()` -> `release_for_grant(None)` -> `close()` on every socket it
+/// bound, even ones a test never explicitly closed itself (finding G-R3-4:
+/// this crate's fixture used to call neither `shutdown()` nor anything else,
+/// so none of that teardown path was exercised at all).
+///
+/// This does *not* also call `Context::close()` on `ctx`: `ctx` is a
+/// `Box::leak`ed, 'static reference, and `signer::install` requires exactly
+/// that ('static) lifetime because `BindingServer` captures it in real OS
+/// threads (`thread::spawn`'s own 'static bound, not a choice this crate
+/// made) -- once a `&'static Context` has been shared that way, safe Rust
+/// has no way to get a `&mut Context` back to call `close(&mut self)` again
+/// (that would need `unsafe` pointer reconstruction, which `rust/PORTING.md`
+/// forbids outside `store.rs`). `build_fixture` sidesteps the *reason*
+/// `close()` would matter instead: with `socket_dir`/`run_dir` given
+/// explicitly (both under `_tmp`), `Context` never allocates anything
+/// `close()` would have needed to remove (see `build_fixture`'s comment), so
+/// the leaked `Context` never owning anything is what makes this sound
+/// rather than a leak. `_tmp`'s own (ordinary, non-leaked) `Drop` -- which
+/// runs after this impl's body, since fields drop after a type's own
+/// `Drop::drop` -- removes the state dir, `ctx-sockets`/`ctx-run`, and every
+/// socket the signer created under `ctx-sockets`.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.manager.shutdown();
     }
 }
 
@@ -553,6 +597,55 @@ fn revoked_grant_cannot_authenticate() {
     assert!(!result.status.success());
     assert!(!String::from_utf8_lossy(&result.stdout).contains("should-not-run"));
     assert!(!binding.socket_path.exists());
+}
+
+// Regression test for finding G-R3-4: this file's `Fixture` used to call
+// neither `manager.shutdown()` nor anything else at teardown, so none of
+// `SshEndToEndTestCase.setUp`'s `addCleanup(self.manager.shutdown)` path was
+// ever exercised, and every leftover socket/socket_dir was left for the OS
+// to eventually reclaim. `Fixture::drop` (added for this finding) now runs
+// `manager.shutdown()` before `_tmp`'s own `Drop` removes the directory tree
+// -- this asserts both effects are real once the `Fixture` is gone. (The
+// listener-fd half of "no listening socket" needs access to
+// `BindingServer`'s private state to check directly and is pinned instead by
+// `signer.rs`'s `close_releases_the_listener_even_with_a_client_thread_wedged_on_the_state_lock`.)
+#[test]
+fn teardown_leaves_no_socket_file_or_signer_created_directory() {
+    let socket_path;
+    let socket_dir;
+    {
+        let f = build_fixture();
+        f.connection(&f.sshd.host_key_line);
+        let grant = f
+            .ctx
+            .policy
+            .create_grant("agent-1", "box", Some(3600), None)
+            .unwrap();
+        let binding = f.manager.bind("agent-1", "box", &grant.id).unwrap();
+        socket_path = binding.socket_path.clone();
+        socket_dir = f.manager.socket_dir().to_path_buf();
+        assert!(
+            socket_path.exists(),
+            "sanity: socket should exist while bound"
+        );
+        assert!(
+            socket_dir.exists(),
+            "sanity: socket_dir should exist while bound"
+        );
+        // `f` (and therefore `binding`, whose `Drop` is a no-op -- only
+        // `SignerBinding::close`/`BindingServer::close` release anything) is
+        // dropped at the end of this block, running `Fixture::drop` ->
+        // `manager.shutdown()` -> every `BindingServer::close()` -> then
+        // `_tmp`'s own ordinary `Drop` removing the whole directory tree.
+    }
+    assert!(
+        !socket_path.exists(),
+        "socket file must not survive Fixture teardown"
+    );
+    assert!(
+        !socket_dir.exists(),
+        "signer-created socket_dir must not survive Fixture teardown"
+    );
 }
 
 fn walk(dir: &Path) -> Vec<PathBuf> {
