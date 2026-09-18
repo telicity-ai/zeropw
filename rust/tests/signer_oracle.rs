@@ -97,16 +97,15 @@ struct Fixture {
 /// of a test's own explicit `manager.shutdown()` (`release_for_grant` is
 /// idempotent once every server is already removed from the registry).
 ///
-/// Does not also call `Context::close()`: `ctx` is `Box::leak`ed to satisfy
-/// `signer::install`'s `&'static Context` requirement (itself forced by
-/// `BindingServer` capturing it in real OS threads via `thread::spawn`'s own
-/// 'static bound), and safe Rust has no way to reclaim a `&mut Context` once
-/// a `&'static Context` derived from it has been shared that way -- see
-/// `signer_e2e.rs`'s `Fixture` `Drop` impl for the full reasoning. Instead,
-/// `build_fixture` gives `Context` explicit `socket_dir`/`run_dir` under
-/// `_tmp` so it never allocates anything outside `_tmp` for `close()` to
-/// have needed to remove; `_tmp`'s own ordinary `Drop` (after this impl's
-/// body, since fields drop after a type's own `Drop::drop`) removes it all.
+/// Does not call `Context::close()` explicitly: `signer::install` takes an owned
+/// `Arc<Context>` (finding E-R7-1), not `&'static Context`/`Box::leak`, so `ctx`'s last clone
+/// (held inside `manager`'s `SignerManager`, since this fixture does not keep its own `ctx`
+/// field) drops -- running `Context::drop`/`close()` for real -- once `shutdown()` above has
+/// torn down every `BindingServer` and `manager` itself is dropped alongside the rest of
+/// `Fixture`. `build_fixture` also gives `Context` explicit `socket_dir`/`run_dir` under `_tmp`
+/// so it never allocates anything outside `_tmp` in the first place; `_tmp`'s own ordinary
+/// `Drop` (after this impl's body, since fields drop after a type's own `Drop::drop`) removes
+/// it all.
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.manager.shutdown();
@@ -126,16 +125,14 @@ fn build_fixture() -> Fixture {
     // Explicit `socket_dir`/`run_dir` under `root`, kept alive as `_tmp` in
     // the returned `Fixture` (not forgotten): otherwise `Context::initialize`
     // would default them to fresh private temp dirs under the *system* temp
-    // dir, owned by `Context` and only ever removed by a `close()`/`Drop`
-    // that cannot run for this leaked, 'static `Context` (see `Fixture`'s
-    // `Drop` impl above) -- exactly the leftover-directory pattern finding
-    // G-R3-4 is about.
+    // dir -- harmless now that `ctx` is a properly-dropped `Arc<Context>`
+    // (finding E-R7-1), but still worth keeping self-contained under `root`.
     let config = Config {
         socket_dir: Some(root.join("ctx-sockets")),
         run_dir: Some(root.join("ctx-run")),
         ..Config::default()
     };
-    let ctx: &'static Context = Box::leak(Box::new(
+    let ctx: Arc<Context> = Arc::new(
         Context::initialize(
             root.join("state"),
             "admin-passphrase-1",
@@ -144,7 +141,7 @@ fn build_fixture() -> Fixture {
             clock::fixed(1_700_000_000.0),
         )
         .unwrap(),
-    ));
+    );
     ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
 
     let user_key = sshwire::generate_ed25519_private_key("agent-key");
@@ -583,10 +580,10 @@ fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
     // Explicit `socket_dir`/`run_dir` under `tmp` (unrelated to `candidate`,
     // which is what this test actually exercises via `signer::install`'s own
     // override below): otherwise `Context::initialize` would default them to
-    // fresh private temp dirs under the *system* temp dir that this leaked,
-    // never-`close()`-able `Context` would then never clean up (finding
-    // G-R3-4; see `build_fixture`'s comment above for the full reasoning).
-    let ctx: &'static Context = Box::leak(Box::new(
+    // fresh private temp dirs under the *system* temp dir -- harmless now that
+    // `ctx` is a properly-dropped `Arc<Context>` (finding E-R7-1), but still
+    // worth keeping self-contained under `tmp`.
+    let ctx: Arc<Context> = Arc::new(
         Context::initialize(
             tmp.path().join("state"),
             "admin-passphrase-1",
@@ -599,7 +596,7 @@ fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
             clock::fixed(1_700_000_000.0),
         )
         .unwrap(),
-    ));
+    );
     ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
     let user_key = sshwire::generate_ed25519_private_key("agent-key");
     let host_key = sshwire::generate_ed25519_private_key("host");

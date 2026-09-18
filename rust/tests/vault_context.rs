@@ -9,10 +9,10 @@
 //! integration case (it goes through `Context`/`Vault` document storage, not
 //! just `LocalFileKms` in isolation).
 
-use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -731,12 +731,12 @@ fn restore_reapplies_revocations_rotates_handle_key_and_never_reopens_approvals(
     assert!(err.is(ErrorClass::AuthFailed));
     assert_eq!(
         Vault::reapply_revocations(ctx.state).unwrap(),
-        HashMap::from([
+        vec![
             ("grants", 0),
             ("principals", 0),
             ("connections", 0),
             ("secret_versions", 0)
-        ])
+        ]
     );
 }
 
@@ -922,7 +922,17 @@ fn decrypt_shared_coerces_non_string_scalar_fields_like_pythons_str() {
 #[test]
 fn signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir() {
     let tmp = TempDir::new().expect("tempdir");
-    let ctx: &'static Context = Box::leak(Box::new(
+    // Deliberately `Config::default()` (not an explicit `socket_dir`/`run_dir` under `tmp`, unlike
+    // every other fixture in this crate): the whole point of this test is to exercise
+    // `Context::apply_config_defaults`'s *default* private-tempdir codepath (the one that creates
+    // `zeropw-sockets-*`/`zeropw-runs-*` under the real system temp dir) and confirm the signer
+    // actually binds in the directory `Context` created rather than silently falling back. `ctx` is
+    // an owned `Arc<Context>` (finding E-R7-1: `signer::install` no longer requires
+    // `&'static Context`/`Box::leak`), so when `ctx` and `manager` both go out of scope at the end
+    // of this test, the last `Arc<Context>` clone drops and `Context::close()` removes those two
+    // default directories for real -- unlike the `Box::leak` this test used to reach for just to
+    // satisfy `install`'s old `'static` bound, which left both directories on disk forever.
+    let ctx: Arc<Context> = Arc::new(
         Context::initialize(
             tmp.path().join("state"),
             ADMIN,
@@ -931,13 +941,13 @@ fn signer_socket_dir_matches_configured_directory_under_this_machines_default_tm
             clock::fixed(FIXED_NOW),
         )
         .expect("Context::initialize"),
-    ));
+    );
     let configured = ctx
         .config
         .socket_dir
         .clone()
         .expect("apply_config_defaults always sets socket_dir");
-    let manager = zeropw::signer::install(ctx, None).expect("signer::install");
+    let manager = zeropw::signer::install(Arc::clone(&ctx), None).expect("signer::install");
     assert_eq!(
         manager.socket_dir(),
         configured.as_path(),
@@ -1047,7 +1057,13 @@ fn reapply_revocations_skips_silently_when_versions_key_is_entirely_missing() {
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
 
     let counts = Vault::reapply_revocations(ctx.state).unwrap();
-    assert_eq!(counts["secret_versions"], 0);
+    assert_eq!(
+        counts
+            .iter()
+            .find(|(k, _)| *k == "secret_versions")
+            .map(|(_, v)| *v),
+        Some(0)
+    );
 }
 
 /// Finding E-R5-4: `set_version_status`'s activate branch compares a stored
@@ -1122,7 +1138,13 @@ fn reapply_revocations_clears_active_version_stored_as_bool_true() {
     zeropw::policy::append_revocation(ctx.state, "secret_version", fields);
 
     let counts = Vault::reapply_revocations(ctx.state).unwrap();
-    assert_eq!(counts["secret_versions"], 1);
+    assert_eq!(
+        counts
+            .iter()
+            .find(|(k, _)| *k == "secret_versions")
+            .map(|(_, v)| *v),
+        Some(1)
+    );
 
     let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
     assert_eq!(

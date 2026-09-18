@@ -35,7 +35,6 @@
 //! `filter_map`, which is neither Python's behaviour nor this module's own
 //! documented `state_corrupt` convention for exactly this class of error).
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -828,6 +827,17 @@ impl<'a> Vault<'a> {
                 .and_then(Value::as_object)
                 .cloned()
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` is arbitrary
+            // precision -- a `versions` key of `i64::MAX` ("9223372036854775807") still yields
+            // `9223372036854775808` and the write proceeds. `parse_version_key` already narrows
+            // each key to `i64` (row 53), so the `+ 1` here is the one remaining site that can
+            // overflow: a debug build panics (`attempt to add with overflow`), and a release
+            // build (this crate's `Cargo.toml` has no `[profile]` override, so
+            // `overflow-checks` is off) wraps silently to `i64::MIN`, writing a colliding
+            // version key that the next `put_secret` would overwrite, destroying the prior
+            // ciphertext (finding E-R7-2). `checked_add` fails closed the same way `parse_version_key`
+            // already does for a magnitude outside `i64` altogether, rather than panicking or
+            // wrapping on untrusted (state-file) input, per PORTING.md §4.
             let next_version = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k))
@@ -835,7 +845,8 @@ impl<'a> Vault<'a> {
                 .into_iter()
                 .max()
                 .unwrap_or(0)
-                + 1;
+                .checked_add(1)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
             let mut record = self.encrypt(&secret_id, next_version, value)?;
             record.insert("created_at".into(), json!(iso(None)));
             record.insert(
@@ -1403,7 +1414,19 @@ impl<'a> Vault<'a> {
 
     /// Re-apply every known revocation to the current state (idempotent).
     /// Port of the `@staticmethod Vault.reapply_revocations`.
-    pub fn reapply_revocations(state: &StateDir) -> Result<HashMap<&'static str, usize>, Error> {
+    ///
+    /// Returns an insertion-ordered `grants`, `principals`, `connections`, `secret_versions`
+    /// sequence, matching the Python dict `Policy.reapply_revocations` returns (built as
+    /// `{"grants": 0, "principals": 0, "connections": 0}` -- a literal, so exactly that key
+    /// order -- with values only ever mutated in place, never re-inserted) plus this function's
+    /// own `counts["secret_versions"] = changed` appended last. `Policy::reapply_revocations`
+    /// (owned by unit D, `policy.rs:4783`) still returns a `HashMap` internally -- its three keys
+    /// are read back out here in that fixed, known order rather than relying on the `HashMap`'s
+    /// own non-deterministic iteration order, which `Vault::restore` used to do via
+    /// `HashMap::drain()` (finding E-R7-4: not observable in the *written* JSON, since
+    /// `StateDir::write_json` sorts keys, but observable in the `Vec`/`Map` this function itself
+    /// returns to any future caller that iterates or prints it, e.g. a second-half `admin_cli`).
+    pub fn reapply_revocations(state: &StateDir) -> Result<Vec<(&'static str, usize)>, Error> {
         let lines = state.read_lines(crate::audit::AUDIT_FILE, None)?;
         let mut records: Vec<Value> = Vec::new();
         for line in lines {
@@ -1417,7 +1440,11 @@ impl<'a> Vault<'a> {
         let revocations = crate::policy::collect_revocations(state, records.iter());
         let _lock = state.lock()?;
         let policy = crate::policy::Policy::new(state, crate::clock::system());
-        let mut counts = policy.reapply_revocations(&revocations)?;
+        let policy_counts = policy.reapply_revocations(&revocations)?;
+        let mut counts: Vec<(&'static str, usize)> = ["grants", "principals", "connections"]
+            .into_iter()
+            .map(|k| (k, policy_counts.get(k).copied().unwrap_or(0)))
+            .collect();
         let mut changed = 0usize;
         if let Value::Object(mut doc_obj) = state.read_json(VAULT_DOC, Value::Null)? {
             let mut secret_versions: Vec<(String, i64)> =
@@ -1479,7 +1506,7 @@ impl<'a> Vault<'a> {
                 state.write_json(VAULT_DOC, &Value::Object(doc_obj))?;
             }
         }
-        counts.insert("secret_versions", changed);
+        counts.push(("secret_versions", changed));
         Ok(counts)
     }
 
@@ -1638,9 +1665,15 @@ impl<'a> Vault<'a> {
             control.insert("restored_at".into(), json!(iso(None)));
             state.write_json(control_doc, &Value::Object(control))?;
 
-            let mut reapplied = Vault::reapply_revocations(state)?;
+            let reapplied = Vault::reapply_revocations(state)?;
+            // `Map` (`serde_json`'s `preserve_order`-backed map) preserves the insertion order
+            // below, matching Python's `reapplied["approvals_dropped"] = dropped` appending a
+            // fifth key after `reapply_revocations`'s own `grants`/`principals`/`connections`/
+            // `secret_versions` (finding E-R7-4) -- `reapply_revocations` now returns that
+            // ordered sequence directly instead of a `HashMap` whose iteration order this used to
+            // scramble via `.drain()`.
             let mut reapplied_obj: Map<String, Value> = reapplied
-                .drain()
+                .into_iter()
                 .map(|(k, v)| (k.to_string(), json!(v)))
                 .collect();
             reapplied_obj.insert("approvals_dropped".into(), json!(dropped));

@@ -226,7 +226,7 @@ struct ClientSlot {
 
 /// Port of `signer._BindingServer`.
 struct BindingServer {
-    ctx: &'static Context,
+    ctx: Arc<Context>,
     binding: SignerBinding,
     /// The listening socket, non-blocking (finding G-R3-1/G-R4-1:
     /// `accept_loop` waits on it through `mio::Poll` rather than blocking in
@@ -267,7 +267,7 @@ struct BindingServer {
 
 impl BindingServer {
     fn start(
-        ctx: &'static Context,
+        ctx: Arc<Context>,
         binding: SignerBinding,
         max_agent_clients: Arc<AtomicUsize>,
     ) -> Result<Arc<Self>, Error> {
@@ -1254,14 +1254,14 @@ impl ServerRegistry {
 /// Creates one dedicated agent socket per (caller, connection, grant)
 /// binding. Port of `signer.SignerManager`.
 pub struct SignerManager {
-    ctx: &'static Context,
+    ctx: Arc<Context>,
     socket_dir: PathBuf,
     servers: Mutex<ServerRegistry>,
     max_agent_clients: Arc<AtomicUsize>,
 }
 
 impl SignerManager {
-    fn new(ctx: &'static Context, socket_dir: Option<PathBuf>) -> Result<Self, Error> {
+    fn new(ctx: Arc<Context>, socket_dir: Option<PathBuf>) -> Result<Self, Error> {
         let preferred = socket_dir.or_else(|| ctx.config.socket_dir.clone());
         let socket_dir = choose_socket_dir(preferred)?;
         Ok(SignerManager {
@@ -1328,7 +1328,7 @@ impl SignerManager {
             manager: Some(Arc::clone(self)),
         };
         let server = BindingServer::start(
-            self.ctx,
+            Arc::clone(&self.ctx),
             binding.clone(),
             Arc::clone(&self.max_agent_clients),
         )?;
@@ -1381,17 +1381,64 @@ impl SignerManager {
 }
 
 /// Port of `signer.install`.
+///
+/// Takes an owned `Arc<Context>` rather than `&'static Context` (finding E-R7-1): the previous
+/// `&'static` bound could only be satisfied in safe Rust by `Box::leak`ing the `Context`, which
+/// meant `Context::close()`/`Drop` -- the only thing that removes the `socket_dir`/`run_dir`
+/// temp directories `Context::apply_config_defaults` creates -- could never run, on every real
+/// caller of this function. `Arc<Context>` satisfies `thread::spawn`'s own `'static` bound just
+/// as well (an owned, ref-counted clone has no borrow to outlive), and drops the `Context` once
+/// every clone this module hands to a `SignerManager`/`BindingServer`/accept-thread/client-thread
+/// is gone, reproducing Python's `atexit`-registered cleanup instead of leaking unboundedly.
+///
+/// `ctx.signer_manager` (`Context`'s own `AnySlot`, a second-half seam -- see `context.rs`) is
+/// populated with a `Weak<SignerManager>`, not an `Arc<SignerManager>`: `SignerManager` already
+/// holds its own `Arc<Context>` (`self.ctx`), so storing a *strong* `Arc<SignerManager>` back on
+/// `ctx.signer_manager` would make `Context` and `SignerManager` keep each other alive forever
+/// (`Context` -> `Arc<SignerManager>` -> `Context` -> ...), the exact reference cycle that defeats
+/// this whole fix -- discovered by measurement: `signer_socket_dir_matches_configured_directory_
+/// under_this_machines_default_tmpdir` (`vault_context.rs`) is the one test in this crate that
+/// both uses `Context`'s *default* (non-explicit) `socket_dir`/`run_dir` and calls
+/// `signer::install`, and it alone left a `zeropw-runs-*`/`zeropw-sockets-*` pair behind in an
+/// otherwise-empty `TMPDIR` even after this `Arc<Context>` change. A `Weak` back-reference does
+/// not count toward `SignerManager`'s strong refcount, so once every external strong
+/// `Arc<SignerManager>` (the caller's own handle, any live `BindingServer`/accept-thread/client-
+/// thread clone) drops, `SignerManager` itself drops, which drops its `Arc<Context>` clone too --
+/// and since nothing else holds a strong `Arc<Context>` at that point, `Context` drops for real.
+/// Nothing in this crate reads `ctx.signer_manager` back yet (second-half only), so this changes
+/// no currently-observable behaviour, only what a future reader finds there (a `Weak` to
+/// `.upgrade()`, matching Python's plain object-identity reference exactly as long as a second-
+/// half consumer does not rely on it keeping the manager alive by itself).
+///
+/// The `ctx.policy.on_revoke(...)` listener below is the *second*, separate cycle this same fix
+/// has to avoid: `Policy` (`ctx.policy`) is a plain field of `Context`, not behind an `Arc`, and
+/// `Policy::on_revoke` has no unregister -- a listener lives in `Policy`'s own
+/// `revoke_listeners: Vec<Arc<dyn Fn...>>` for as long as the `Policy` (i.e. the owning `Context`)
+/// does. A listener closure that captured a *strong* `Arc<SignerManager>` would therefore keep
+/// `SignerManager` alive as long as `Context` is, while `SignerManager::ctx` keeps `Context` alive
+/// as long as `SignerManager` is -- `Context` -> `Policy` -> listener -> `Arc<SignerManager>` ->
+/// `Arc<Context>` -> the same `Context`, a cycle neither refcount can ever break on its own
+/// (measured: fixing only the `ctx.signer_manager` slot above to `Weak` was not enough by itself --
+/// `signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir` still left
+/// its `zeropw-runs-*`/`zeropw-sockets-*` pair behind with that alone). The listener closure
+/// therefore captures `Weak<SignerManager>` and `.upgrade()`s it on each call, silently doing
+/// nothing once the manager is gone (there is nothing left to revoke sockets for by then) --
+/// Python's `Policy._notify_revoke` has the identical no-op-once-gone behaviour for a duck-typed
+/// listener whose referent has already been collected, since Python's own real cyclic GC (unlike
+/// Rust's plain refcounting) would eventually collect this exact cycle regardless.
 pub fn install(
-    ctx: &'static Context,
+    ctx: Arc<Context>,
     socket_dir: Option<PathBuf>,
 ) -> Result<Arc<SignerManager>, Error> {
-    let manager = Arc::new(SignerManager::new(ctx, socket_dir)?);
+    let manager = Arc::new(SignerManager::new(Arc::clone(&ctx), socket_dir)?);
     *ctx.signer_manager
         .lock()
-        .expect("signer_manager mutex poisoned") = Some(Box::new(Arc::clone(&manager)));
-    let listener_manager = Arc::clone(&manager);
+        .expect("signer_manager mutex poisoned") = Some(Box::new(Arc::downgrade(&manager)));
+    let listener_manager = Arc::downgrade(&manager);
     ctx.policy.on_revoke(move |kind, grant_id| {
-        listener_manager.release_for_grant(if kind == "grant" { grant_id } else { None });
+        if let Some(manager) = listener_manager.upgrade() {
+            manager.release_for_grant(if kind == "grant" { grant_id } else { None });
+        }
     });
     Ok(manager)
 }
@@ -1582,7 +1629,7 @@ mod tests {
 
     struct Fixture {
         _tmp: TempDir,
-        ctx: &'static Context,
+        ctx: Arc<Context>,
         clock_val: Arc<StdMutex<f64>>,
         user_key: sshwire::Ed25519PrivateKey,
         host_key: sshwire::Ed25519PrivateKey,
@@ -1601,22 +1648,17 @@ mod tests {
     /// a test bound, including ones beyond `binding` itself -- was ever
     /// exercised).
     ///
-    /// Does not also call `Context::close()` on `ctx`: it is `Box::leak`ed
-    /// to satisfy `signer::install`'s `&'static Context` requirement (itself
-    /// forced by `BindingServer` capturing it in real OS threads via
-    /// `thread::spawn`'s own 'static bound, not a choice this module makes),
-    /// and safe Rust has no way to reclaim a `&mut Context` once a
-    /// `&'static Context` derived from it has been shared that way -- that
-    /// would need `unsafe` pointer reconstruction, which `rust/PORTING.md`
-    /// forbids outside `store.rs`. `fixture()` gives `Context` explicit
-    /// `socket_dir`/`run_dir` under `_tmp` instead, so it never allocates
-    /// anything `close()` would have needed to remove; `_tmp`'s own
-    /// ordinary `Drop` (which runs after this impl's body, since fields drop
-    /// after a type's own `Drop::drop`) removes the state dir and every
-    /// socket the signer created, closing the gap that left 229 leftover
-    /// `zpws-ctl-*` directories (round 2's now-withdrawn `control_dir`) and
-    /// unbounded `zeropw-sockets-*`/`zeropw-runs-*` directories (this
-    /// fixture's own leaked `Context`) behind on this machine.
+    /// Does not call `Context::close()` explicitly: `ctx` is an `Arc<Context>` (finding
+    /// E-R7-1 -- `signer::install` no longer requires `&'static Context`/`Box::leak`), so once
+    /// `shutdown()` above has dropped every `BindingServer`'s own clone (and joined the threads
+    /// that held theirs), the only clones left are this field and `manager`'s internal one; both
+    /// go when `Fixture`'s fields drop after this impl's body runs, which runs `Context::drop` ->
+    /// `close()` for real. `fixture()` also gives `Context` explicit `socket_dir`/`run_dir` under
+    /// `_tmp`, so it never allocates anything outside `_tmp` in the first place; `_tmp`'s own
+    /// ordinary `Drop` removes the state dir and every socket the signer created, closing the gap
+    /// that left 229 leftover `zpws-ctl-*` directories (round 2's now-withdrawn `control_dir`)
+    /// and unbounded `zeropw-sockets-*`/`zeropw-runs-*` directories (this fixture's previously
+    /// leaked `Context`) behind on this machine.
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.manager.shutdown();
@@ -1752,16 +1794,17 @@ mod tests {
         // Explicit `socket_dir`/`run_dir` under `root` (see `Drop for
         // Fixture` above, finding G-R3-4): otherwise `Context::initialize`
         // would default them to fresh private temp dirs under the *system*
-        // temp dir that this leaked, never-`close()`-able `Context` would
-        // then never clean up.
+        // temp dir, which is harmless now that `ctx` is a properly-dropped
+        // `Arc<Context>` (finding E-R7-1) but still worth keeping self-contained
+        // under `_tmp` like every other fixture.
         let config = Config {
             socket_dir: Some(root.join("ctx-sockets")),
             run_dir: Some(root.join("ctx-run")),
             ..Config::default()
         };
-        let ctx: &'static Context = Box::leak(Box::new(
+        let ctx: Arc<Context> = Arc::new(
             Context::initialize(root.join("state"), ADMIN, RECOVERY, config, clock).unwrap(),
-        ));
+        );
         ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
         let user_key = sshwire::generate_ed25519_private_key("agent-key");
         let host_key = sshwire::generate_ed25519_private_key("host");
@@ -1813,7 +1856,7 @@ mod tests {
             .policy
             .create_grant("agent-1", "box", Some(3600), Some(5))
             .unwrap();
-        let manager = install(ctx, None).unwrap();
+        let manager = install(Arc::clone(&ctx), None).unwrap();
         let binding = manager.bind("agent-1", "box", &grant.id).unwrap();
         let session_id = {
             use rand::RngCore;
@@ -2876,7 +2919,7 @@ mod tests {
         // lock's `flock`, another process) already holding it.
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let ctx = f.ctx;
+        let ctx = Arc::clone(&f.ctx);
         let holder = thread::spawn(move || {
             let _guard = ctx.state.lock().expect("state lock");
             let _ = ready_tx.send(());
@@ -2960,7 +3003,7 @@ mod tests {
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let ctx = f.ctx;
+        let ctx = Arc::clone(&f.ctx);
         let holder = thread::spawn(move || {
             let _guard = ctx.state.lock().expect("state lock");
             let _ = ready_tx.send(());

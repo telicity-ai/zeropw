@@ -2220,7 +2220,7 @@ for c in ("3", 3.0, True):
 #[test]
 fn read_doc_matches_pythons_read_json_or_default_falsy_truthy_split() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -2236,6 +2236,7 @@ def probe(doc_name, method, value):
     except Exception as e:
         print(type(e).__name__)
 
+    shutil.rmtree(d, ignore_errors=True)
 values = [[1], "x", 5, [], None, {}, 0, ""]
 for name, method in ((P.PRINCIPALS, "list_principals"), (P.CONNECTIONS, "list_connections"),
                      (P.GRANTS, "list_grants")):
@@ -2353,7 +2354,7 @@ for name, method in ((P.PRINCIPALS, "list_principals"), (P.CONNECTIONS, "list_co
 #[test]
 fn approvals_setdefault_fails_closed_on_truthy_non_object_like_pythons_setdefault() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -2377,6 +2378,7 @@ def probe(op, value):
     after = state.read_json(P.CONTROL, None)
     print(after["approvals"] == value)
 
+    shutil.rmtree(d, ignore_errors=True)
 for op in ("request", "approve", "consume"):
     for v in ("x", [1], 5):
         probe(op, v)
@@ -2439,7 +2441,7 @@ for op in ("request", "approve", "consume"):
 #[test]
 fn list_approvals_and_approval_history_reproduce_pythons_dict_and_list_coercion() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -2454,6 +2456,7 @@ def probe_approvals(value):
     except Exception as e:
         print(type(e).__name__)
 
+    shutil.rmtree(d, ignore_errors=True)
 for v in ({}, "x", 5, None, {"a": 1}):
     probe_approvals(v)
 
@@ -2468,6 +2471,7 @@ def probe_history(value):
     except Exception as e:
         print(type(e).__name__)
 
+    shutil.rmtree(d, ignore_errors=True)
 for v in ([], "ab", 5, None, {"a": 1, "b": 2}):
     probe_history(v)
 "#;
@@ -3282,7 +3286,7 @@ print(9007199254740993 != 9007199254740992)
 #[test]
 fn credential_versions_changed_validates_every_grant_before_deciding_any_mismatch() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3314,7 +3318,8 @@ except Exception as e:
     print(type(e).__name__)
 after = state.read_json(P.CONNECTIONS, None)
 print("policy_version_untouched", after["gh"]["policy_version"] == 1)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "AttributeError");
@@ -3379,7 +3384,7 @@ print("policy_version_untouched", after["gh"]["policy_version"] == 1)
 #[test]
 fn authenticate_and_revoke_all_fail_closed_on_a_malformed_entry() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3420,7 +3425,10 @@ try:
     print("revoke_grants_of OK")
 except Exception as e:
     print("revoke_grants_of", type(e).__name__)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(d2, ignore_errors=True)
+shutil.rmtree(d3, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "authenticate KeyError");
@@ -3511,7 +3519,7 @@ except Exception as e:
 #[test]
 fn revoke_all_skips_a_present_non_string_status_but_still_revokes_the_rest() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3526,7 +3534,8 @@ pol = P.Policy(state)
 n = pol.revoke_all()
 after = state.read_json(P.GRANTS, None)
 print(n, after["weird"]["status"], after["good"]["status"])
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     assert_eq!(out.trim(), "1 5 revoked");
 
@@ -3565,7 +3574,7 @@ print(n, after["weird"]["status"], after["good"]["status"])
 #[test]
 fn authenticate_fails_closed_on_a_non_ascii_stored_token_hash() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3582,7 +3591,8 @@ try:
     print("OK")
 except Exception as e:
     print(type(e).__name__)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     assert_eq!(out.trim(), "TypeError");
 
@@ -3623,7 +3633,7 @@ except Exception as e:
 #[test]
 fn resume_gates_on_truthiness_of_any_incident_open_type_like_python() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3654,7 +3664,8 @@ for label, v in probes:
         print(f"{label}|OK|{after['stopped']}")
     except Exception as e:
         print(f"{label}|{type(e).__name__}|{e.reason}|{e.detail}")
-"#;
+
+    shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let results: std::collections::HashMap<&str, &str> = out
         .lines()
@@ -3744,7 +3755,7 @@ for label, v in probes:
 #[test]
 fn approval_expired_treats_out_of_range_expires_at_by_its_sign_like_python() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3772,7 +3783,8 @@ for label, expires in (("huge_positive", 10**400), ("huge_negative", -(10**400))
     state.write_json(P.CONTROL, control)
     entry = pol.request_approval("dg1", "agent-1", "gh", "GET", "/repos")
     print(f"{label}|{entry['cycle']}|{entry['expires_at'] == expires}")
-"#;
+
+    shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let mut lines = out.lines();
     assert_eq!(lines.next().unwrap(), "huge_positive|5|True");
@@ -3831,7 +3843,7 @@ for label, expires in (("huge_positive", 10**400), ("huge_negative", -(10**400))
 #[test]
 fn grant_from_value_integral_float_and_bool_fields_load_and_authorize_like_python() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -3873,7 +3885,8 @@ for missing_key in ("expires_at", "max_uses"):
         print(f"missing_{missing_key} OK")
     except TypeError:
         print(f"missing_{missing_key} TypeError")
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "list_grants 1 True True True True");
@@ -4019,7 +4032,7 @@ fn grant_numeric_string_fields_deny_and_allow_exactly_like_python_not_round4s_co
             .collect();
         let script = format!(
             r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4044,9 +4057,10 @@ grant = {{
 {py_overrides}
 state.write_json(P.GRANTS, {{"g-1": grant}})
 pol = P.Policy(state, clock=lambda: 1700000000.0)
-d = pol.check_grant("agent-1", "gh", "g-1")
-print(d.reason)
-"#,
+decision = pol.check_grant("agent-1", "gh", "g-1")
+print(decision.reason)
+
+shutil.rmtree(d, ignore_errors=True)"#,
         );
         let out = run_python(&script);
         assert_eq!(out.trim(), *expected, "python overrides={overrides:?}");
@@ -4107,12 +4121,15 @@ fn reevaluate_grants_fails_closed_on_malformed_entries_like_python() {
     }
 
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
+_setup_dirs = []
+
 def setup(grants):
     d = tempfile.mkdtemp()
+    _setup_dirs.append(d)
     state = StateDir(os.path.join(d, "state"))
     state.create()
     conn = {
@@ -4144,6 +4161,9 @@ try:
     print("missingkey OK")
 except Exception as e:
     print("missingkey", type(e).__name__)
+
+for _d in _setup_dirs:
+    shutil.rmtree(_d, ignore_errors=True)
 "#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
@@ -4215,7 +4235,7 @@ except Exception as e:
 #[test]
 fn reevaluate_grants_short_circuits_on_connection_mismatch_before_reading_status() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4236,7 +4256,8 @@ state.write_json(P.GRANTS, {"other": {"connection": "other-conn"}})
 pol = P.Policy(state, clock=lambda: 1700000000.0)
 after, widened = pol.update_connection("gh", description="new")
 print("OK", after.description, after.policy_version)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     assert_eq!(out.trim(), "OK new 2");
 
@@ -4287,7 +4308,7 @@ fn conn_doc_for_reevaluate_grants() -> serde_json::Value {
 #[test]
 fn list_grants_fails_closed_when_filtering_by_principal_on_malformed_entries() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4324,7 +4345,9 @@ try:
     print("missingkey OK", len(gs2))
 except Exception as e:
     print("missingkey", type(e).__name__)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)
+shutil.rmtree(d2, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "nonobject TypeError");
@@ -4507,7 +4530,7 @@ for bad in ([{"AA": 1}], [{"AA": 1, "x": 2, "y": 3}]):
 #[test]
 fn revoke_grant_closes_approvals_by_none_to_none_match_before_its_own_error() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4533,7 +4556,8 @@ after_control = state.read_json(P.CONTROL, None)
 approval = after_control["approvals"]["ap-1"]
 print("approval_status", approval["status"])
 print("approval_reason", approval.get("closed_reason"))
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "revoke TypeError");
@@ -4602,7 +4626,7 @@ print("approval_reason", approval.get("closed_reason"))
 #[test]
 fn revoke_grant_ledger_line_survives_a_non_object_entry_shape_failure() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4619,7 +4643,8 @@ except Exception as e:
 lines = state.read_lines(P.REVOCATIONS, None)
 print("ledger_lines", len(lines))
 print("ledger_has_id", any('"id":"g-1"' in l for l in lines))
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "revoke TypeError");
@@ -4698,7 +4723,7 @@ except Exception as e:
 #[test]
 fn disable_principal_fails_closed_on_a_non_object_entry_instead_of_silently_succeeding() {
     let script = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4714,7 +4739,8 @@ except Exception as e:
     print(type(e).__name__)
 after = state.read_json(P.PRINCIPALS, None)
 print("unchanged", after["agent-1"])
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let out = run_python(script);
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines[0], "TypeError");
@@ -4753,7 +4779,7 @@ fn grant_huge_int_fields_do_exact_i128_arithmetic_not_lossy_float() {
     let huge_uses = "999999999999999999999999999999"; // 10**30 - 1
     let script = format!(
         r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4784,7 +4810,8 @@ consumed = pol.consume("g-1", caller="agent-1", connection_id="gh",
 print("after_remaining", consumed.public_view()["remaining_uses"])
 doc = state.read_json(P.GRANTS, None)
 print("persisted_uses", doc["g-1"]["uses"])
-"#,
+
+shutil.rmtree(d, ignore_errors=True)"#,
     );
     let out = run_python(&script);
     let lines: Vec<&str> = out.lines().collect();
@@ -4918,7 +4945,7 @@ fn grant_status_revoked_at_expires_at_load_raw_like_python_not_a_hard_type_check
     for (status, expires_at, revoked_at, check_grant_raises, public_view_raises) in cases {
         let script = format!(
             r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -4943,8 +4970,8 @@ grant = {{
 state.write_json(P.GRANTS, {{"g-1": grant}})
 pol = P.Policy(state, clock=lambda: 1700000000.0)
 try:
-    d = pol.check_grant("agent-1", "gh", "g-1")
-    print("check_grant", "ok", d.reason)
+    decision = pol.check_grant("agent-1", "gh", "g-1")
+    print("check_grant", "ok", decision.reason)
 except Exception as e:
     print("check_grant", "err", type(e).__name__)
 try:
@@ -4953,7 +4980,8 @@ try:
     print("public_view", "ok", v["status"], v["expires_at"])
 except Exception as e:
     print("public_view", "err", type(e).__name__)
-"#,
+
+shutil.rmtree(d, ignore_errors=True)"#,
         );
         let out = run_python(&script);
         let mut lines = out.lines();
@@ -5048,7 +5076,7 @@ fn vault_restore_completes_on_empty_revocation_set_with_a_string_grants_document
     // when the revocation set is empty -- the exact premise this fix
     // depends on, checked directly against `python3.12` rather than assumed.
     let py_check = r#"
-import tempfile, os
+import tempfile, os, shutil
 from zeropw.store import StateDir
 from zeropw import policy as P
 
@@ -5061,7 +5089,8 @@ pol = P.Policy(state, clock=lambda: 1700000000.0)
 revs = P.Revocations(grants=set(), principals=set(), connections=set(), secret_versions=set())
 counts = pol.reapply_revocations(revs)
 print("ok", counts)
-"#;
+
+shutil.rmtree(d, ignore_errors=True)"#;
     let py_out = run_python(py_check);
     assert!(
         py_out.trim().starts_with("ok"),

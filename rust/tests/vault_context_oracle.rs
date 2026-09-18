@@ -985,6 +985,58 @@ print(metas[0].versions[0].version)
     );
 }
 
+/// Finding E-R7-2: `put_secret`'s `next_version = max(existing keys) + 1` must not overflow (or,
+/// worse, silently wrap in a release build with `overflow-checks` off) where Python's
+/// arbitrary-precision `int()` computes `2**63` without issue. Placing `i64::MAX`
+/// ("9223372036854775807") as the sole existing version key lands the next `put_secret` call's
+/// `+ 1` exactly on the boundary this finding is about; `rename_sole_version_key` is safe here
+/// because `put_secret`'s next-version computation only reads the `versions` object's *keys*, it
+/// never decrypts an existing record.
+#[test]
+fn put_secret_next_version_at_i64_max_is_state_corrupt_python_returns_two_pow_63() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    rename_sole_version_key(&ctx, "gh-token", "9223372036854775807");
+
+    // `activate=false`: `rename_sole_version_key` only renames the `versions` object's key, not
+    // `entry["active_version"]` (still `1` from `setup_single_secret_context`'s original
+    // `put_secret`), and this test's whole point is the next-version arithmetic, not activation --
+    // `activate=true`'s `entry["versions"][str(previous)]` would look up the now-renamed "1" key
+    // and raise its own unrelated `KeyError` in Python before ever reaching the overflow this test
+    // pins. `next_version`'s computation (and therefore the overflow) happens unconditionally
+    // before the `activate` branch in both languages, so `false` still exercises the finding.
+    let err = ctx
+        .vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"another-synthetic-token-012345",
+            "demo",
+            "dev",
+            false,
+        )
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+v = ctx.vault.put_secret("gh-token", "api_key", b"another-synthetic-token-012345", "demo", "dev", False)
+print(v, type(v).__name__)
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "9223372036854775808 int",
+        "python oracle sanity check: real python must return 2**63 and succeed here"
+    );
+}
+
 // ------------------------------------------------- put_secret sweep findings (round 4)
 /// Sweep finding (round 4): `put_secret`'s existing-entry identity check
 /// (`entry["project"]`/`entry["environment"]`/`entry["kind"]`, direct indexing in Python) must

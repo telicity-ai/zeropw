@@ -355,18 +355,19 @@ impl Context {
     /// revoked, handles invalidated.
     pub fn recover(&mut self, recovery_passphrase: &str) -> Result<usize, Error> {
         let old = self.state.path.join(KMS_FILE);
-        let rotated = self
-            .state
-            .path
-            .join("kms")
-            .join(format!("master.key.retired-{}", (self.clock)() as i64));
+        let rotated = self.state.path.join("kms").join(format!(
+            "master.key.retired-{}",
+            clock_now_i64(&self.clock)?
+        ));
         fs::rename(&old, &rotated)
             .map_err(|e| Error::state("state_write_failed").with_detail(e.to_string()))?;
 
         let attempt = (|| -> Result<(&'static (dyn Kms + Send + Sync), Vault<'static>), Error> {
-            let new_kms: &'static (dyn Kms + Send + Sync) = Box::leak(Box::new(
-                LocalFileKms::create(&old, &format!("local-dev-kms-{}", (self.clock)() as i64))?,
-            ));
+            let new_kms: &'static (dyn Kms + Send + Sync) =
+                Box::leak(Box::new(LocalFileKms::create(
+                    &old,
+                    &format!("local-dev-kms-{}", clock_now_i64(&self.clock)?),
+                )?));
             let vault = Vault::recover(
                 self.state,
                 new_kms,
@@ -379,7 +380,16 @@ impl Context {
         let (new_kms, vault) = match attempt {
             Ok(v) => v,
             Err(e) => {
-                let _ = fs::rename(&rotated, &old);
+                // Python: `except Exception: os.replace(rotated, old); raise` does not itself
+                // guard that `os.replace` -- if the rename-back also fails, its `OSError`
+                // propagates and *replaces* the original exception (the original becomes
+                // `__context__`, not what the caller sees) rather than being swallowed.
+                // `let _ = fs::rename(...)` used to discard that failure and always return the
+                // original error `e` (finding E-R7-3); surface the rename-back failure instead,
+                // matching Python's replacement semantics.
+                if let Err(e2) = fs::rename(&rotated, &old) {
+                    return Err(Error::state("state_write_failed").with_detail(e2.to_string()));
+                }
                 return Err(e);
             }
         };
@@ -400,6 +410,25 @@ impl Context {
         )?;
         Ok(revoked)
     }
+}
+
+/// `Context::recover` names its retired-master-key and new-KMS-key-id files with
+/// `int(self.clock())` (`context.py:198,200`), evaluated *before* the filesystem operation that
+/// immediately follows each call: `int(float('inf'))` raises `OverflowError` and
+/// `int(float('nan'))` raises `ValueError`, so a non-finite clock value aborts `recover` at that
+/// point rather than proceeding (PORTING.md §3.5: an uncaught built-in exception maps to the
+/// closest ZeroPW error a caller of `recover` already handles -- `state_write_failed`, the same
+/// reason every other local filesystem-write failure in this function already surfaces as).
+/// `(self.clock)() as i64` alone would silently saturate instead (`inf` -> `i64::MAX`, `NaN` ->
+/// `0`) and let `recover` rename the live master key aside on a broken clock (finding E-R7-6).
+/// Only reachable via a caller-injected `Clock` returning a non-finite value -- trusted in-process
+/// code, not any untrusted input.
+fn clock_now_i64(clock: &Clock) -> Result<i64, Error> {
+    let now = clock();
+    if !now.is_finite() {
+        return Err(Error::state("state_write_failed").with_detail("clock_not_finite"));
+    }
+    Ok(now as i64)
 }
 
 impl Drop for Context {
@@ -752,9 +781,10 @@ mod tests {
     #[test]
     fn create_private_dir_suffix_length_matches_python_mkdtemp() {
         let python_suffix_len: usize = crate::oracle::python(
-            "import tempfile, os\n\
+            "import tempfile, os, shutil\n\
              path = tempfile.mkdtemp(prefix='zeropw-sockets-')\n\
-             print(len(os.path.basename(path)) - len('zeropw-sockets-'))\n",
+             print(len(os.path.basename(path)) - len('zeropw-sockets-'))\n\
+             shutil.rmtree(path, ignore_errors=True)\n",
         )
         .trim()
         .parse()

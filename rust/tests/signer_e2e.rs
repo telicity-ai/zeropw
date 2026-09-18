@@ -284,7 +284,7 @@ use std::os::unix::fs::PermissionsExt;
 struct Fixture {
     _tmp: tempfile::TempDir,
     root: PathBuf,
-    ctx: &'static Context,
+    ctx: std::sync::Arc<Context>,
     manager: std::sync::Arc<signer::SignerManager>,
     user_key: sshwire::Ed25519PrivateKey,
     sshd: Sshd,
@@ -299,19 +299,15 @@ fn build_fixture() -> Fixture {
     // Explicit `socket_dir`/`run_dir`, both under `root`: otherwise
     // `Context::initialize` would default them to fresh private temp dirs
     // under the *system* temp dir (`private_tempdir`, prefixes
-    // "zeropw-sockets-"/"zeropw-runs-"), owned by this `Context` and only
-    // ever removed by `Context::close`/`Drop` -- neither of which can run
-    // for a `Box::leak`ed, 'static `Context` once it has been shared with
-    // `signer::install` (see `Fixture`'s `Drop` impl below for why). Giving
-    // both paths explicitly up front means `Context` never allocates
-    // anything outside `root`, so there is nothing left for a `close()` we
-    // cannot call to have needed to clean up (finding G-R3-4).
+    // "zeropw-sockets-"/"zeropw-runs-") -- harmless now that `ctx` is a
+    // properly-dropped `Arc<Context>` (finding E-R7-1), but still worth
+    // keeping self-contained under `root`.
     let config = Config {
         socket_dir: Some(root.join("ctx-sockets")),
         run_dir: Some(root.join("ctx-run")),
         ..Config::default()
     };
-    let ctx: &'static Context = Box::leak(Box::new(
+    let ctx: std::sync::Arc<Context> = std::sync::Arc::new(
         Context::initialize(
             root.join("state"),
             "admin-passphrase-1",
@@ -320,7 +316,7 @@ fn build_fixture() -> Fixture {
             clock::system(),
         )
         .unwrap(),
-    ));
+    );
     ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
     let user_key = sshwire::generate_ed25519_private_key("agent");
     ctx.vault
@@ -347,7 +343,7 @@ fn build_fixture() -> Fixture {
              SSH test must fail, not silently pass, when it cannot actually run"
         );
     }
-    let manager = signer::install(ctx, None).unwrap();
+    let manager = signer::install(std::sync::Arc::clone(&ctx), None).unwrap();
     Fixture {
         _tmp: tmp,
         root,
@@ -367,22 +363,18 @@ fn build_fixture() -> Fixture {
 /// this crate's fixture used to call neither `shutdown()` nor anything else,
 /// so none of that teardown path was exercised at all).
 ///
-/// This does *not* also call `Context::close()` on `ctx`: `ctx` is a
-/// `Box::leak`ed, 'static reference, and `signer::install` requires exactly
-/// that ('static) lifetime because `BindingServer` captures it in real OS
-/// threads (`thread::spawn`'s own 'static bound, not a choice this crate
-/// made) -- once a `&'static Context` has been shared that way, safe Rust
-/// has no way to get a `&mut Context` back to call `close(&mut self)` again
-/// (that would need `unsafe` pointer reconstruction, which `rust/PORTING.md`
-/// forbids outside `store.rs`). `build_fixture` sidesteps the *reason*
-/// `close()` would matter instead: with `socket_dir`/`run_dir` given
-/// explicitly (both under `_tmp`), `Context` never allocates anything
-/// `close()` would have needed to remove (see `build_fixture`'s comment), so
-/// the leaked `Context` never owning anything is what makes this sound
-/// rather than a leak. `_tmp`'s own (ordinary, non-leaked) `Drop` -- which
-/// runs after this impl's body, since fields drop after a type's own
-/// `Drop::drop` -- removes the state dir, `ctx-sockets`/`ctx-run`, and every
-/// socket the signer created under `ctx-sockets`.
+/// This does not call `Context::close()` explicitly: `ctx` is an `Arc<Context>`
+/// (finding E-R7-1 -- `signer::install` takes an owned `Arc<Context>`, not
+/// `&'static Context`/`Box::leak`), so once `shutdown()` above has dropped every
+/// `BindingServer`'s own clone, the only clones left are this `Fixture`'s `ctx`
+/// field and `manager`'s internal one; both go when `Fixture`'s fields drop after
+/// this impl's body runs, which runs `Context::drop`/`close()` for real.
+/// `build_fixture` also gives `Context` explicit `socket_dir`/`run_dir` under
+/// `_tmp`, so it never allocates anything outside `_tmp` in the first place;
+/// `_tmp`'s own ordinary `Drop` -- which runs after this impl's body, since
+/// fields drop after a type's own `Drop::drop` -- removes the state dir,
+/// `ctx-sockets`/`ctx-run`, and every socket the signer created under
+/// `ctx-sockets`.
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.manager.shutdown();
