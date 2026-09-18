@@ -148,6 +148,7 @@ def baseline():
                 "grant": "g-gh-bearer", "policy_version": 1, "cycle": 1,
             },
         },
+        "approval_history": [],
     }
     vault_secrets = {"secrets": {"gh-token": {"active_version": 1}}}
     return {
@@ -181,6 +182,8 @@ FIELD_PATHS = [
     ("control", ["approvals", "dg1", "connection"]),
     ("control", ["approvals", "dg1", "caller"]),
     ("control", ["approvals", "dg1", "grant"]),
+    ("control", ["approvals"]),
+    ("control", ["approval_history"]),
     ("principals", ["agent-1", "token_hash"]),
     ("vault_secrets", ["secrets", "gh-token", "active_version"]),
 ]
@@ -199,6 +202,40 @@ ODD_VALUES = [
     ("non_ascii_string", "café"),
     ("whitespace_padded", "  3  "),
     ("missing", "__MISSING__"),
+]
+
+# Runtime control (round 6): the full `FIELD_PATHS x ODD_VALUES` cross
+# product exercises every (field, odd-value) combination, but most fields
+# only ever see *type* confusion, not *content* confusion -- once a value is
+# "some non-matching string", `value_eq_str`/`GrantNum::Str`/
+# `numeric_value_as_f64`/`Option::as_str` all treat "3", "٣", "café" and
+# "  3  " identically (none of them route through `python_int_coerce`'s
+# Unicode-digit/whitespace-stripping grammar). The exception is
+# `Connection.policy_version`, whose `int(data["policy_version"])` *does*
+# parse a numeric string (including a Unicode-digit or whitespace-padded
+# one) -- that's the one place the full string variety changes the
+# accept/reject outcome, so it keeps the complete `ODD_VALUES` list. Every
+# other field runs a smaller, still-representative `CORE_VALUES` set: one
+# falsy string (`empty_string`), one truthy non-numeric string
+# (`numeric_string`), both empty containers, both truthy-numeric shapes
+# (`bool_true`, `integral_float`), the exact-precision boundary
+# (`huge_int`), and the no-default/missing-key case. This keeps the
+# case_count (and so total runtime) roughly stable even as this round adds
+# two more field paths -- fixed, not randomly sampled, so it is exactly
+# reproducible and never silently drops the specific (field, label) pairs
+# this round's fixes are pinned against (every label this round's four
+# fixed exceptions cared about -- `huge_int`, `empty_array`, `empty_object`
+# -- is in `CORE_VALUES`).
+FULL_ODD_VALUE_PATHS = {
+    ("connections", ("gh-bearer", "policy_version")),
+    ("connections", ("box-ssh", "policy_version")),
+    ("connections", ("gh-basic", "policy_version")),
+}
+CORE_VALUES = [
+    v for v in ODD_VALUES
+    if v[0] in ("null", "empty_array", "empty_object", "empty_string",
+                "numeric_string", "integral_float", "bool_true", "huge_int",
+                "missing")
 ]
 
 
@@ -291,6 +328,14 @@ def run_read_ops(pol):
         out["restore_pending"] = ok(pol.restore_pending())
     except Exception as e:
         out["restore_pending"] = err_tuple(e)
+    try:
+        out["list_approvals"] = ok(pol.list_approvals())
+    except Exception as e:
+        out["list_approvals"] = err_tuple(e)
+    try:
+        out["approval_history"] = ok(pol.approval_history())
+    except Exception as e:
+        out["approval_history"] = err_tuple(e)
     return out
 
 
@@ -385,7 +430,8 @@ def main():
     print(json.dumps({"baseline": base}, sort_keys=True))
     idx = 0
     for doc_name, path in FIELD_PATHS:
-        for label, value in ODD_VALUES:
+        odd_values = ODD_VALUES if (doc_name, tuple(path)) in FULL_ODD_VALUE_PATHS else CORE_VALUES
+        for label, value in odd_values:
             idx += 1
             mutated = apply_mutation(base, doc_name, path, label, value)
 
@@ -580,38 +626,12 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
         },
         skip_doc_compare: true,
     },
-    // These two `huge_int`-only exceptions are listed *before* the general
-    // Grant-field one below so `matching_exception`'s first-match lookup
-    // reaches them for `expires_at`/the four D-R5-2 fields at that specific
-    // value -- the general exception's own predicate does not exclude
-    // `label == "huge_int"`, so ordering here is load-bearing, not
-    // cosmetic.
-    NamedException {
-        description: "Newly discovered, undocumented until this round's \
-            differential harness (reported, not fixed): once `GrantNum` \
-            represents `policy_version`/`max_uses`/`uses`/`credential_version` \
-            beyond `i64` range via `Float` (an `f64` approximation, the \
-            closest this port can hold), any arithmetic/output involving \
-            that value (`remaining_uses` in `public_view()`, `consume`'s \
-            `uses + 1` write) is only approximately right where Python's \
-            arbitrary-precision `int` stays exact -- a purely cosmetic loss \
-            of precision at a magnitude (>1e18) no value this crate or \
-            `zeropw/policy.py` itself ever writes reaches.",
-        applies: |doc, path, missing, label, _op| {
-            doc == "grants"
-                && !missing
-                && label == "huge_int"
-                && matches!(
-                    path.last().map(String::as_str),
-                    Some("max_uses")
-                        | Some("uses")
-                        | Some("policy_version")
-                        | Some("credential_version")
-                )
-        },
-        judge: |_py, _rust| true,
-        skip_doc_compare: true,
-    },
+    // This `huge_int`-only exception is listed *before* the (removed, round
+    // 6) general Grant-field one used to sit so `matching_exception`'s
+    // first-match lookup would reach it for `expires_at` at that specific
+    // value; kept in this position since a future addition to this array
+    // could reintroduce the same ordering hazard for any predicate that
+    // doesn't exclude `label == "huge_int"`.
     NamedException {
         description: "Newly discovered, undocumented until this round's \
             differential harness (reported, not fixed): Python's `iso()` \
@@ -628,83 +648,6 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
                 && path.last().map(String::as_str) == Some("expires_at")
         },
         judge: |_py, _rust| true,
-        skip_doc_compare: true,
-    },
-    NamedException {
-        description: "Newly discovered, undocumented until this round's \
-            differential harness (reported, not fixed): `Grant`'s `status`/\
-            `revoked_at`/`expires_at` fields get no `int()`/`isinstance` \
-            conversion or check at all in Python (dataclass field, used \
-            verbatim or only in a comparison that itself may or may not \
-            raise). `policy_version`/`max_uses`/`uses`/`credential_version` \
-            (the four fields finding D-R5-2 targeted) were fixed the same \
-            round this harness found this: their best-effort public `i64` \
-            field no longer aborts the whole grant load when \
-            `python_int_coerce` can't represent the stored shape -- \
-            `GrantNum::Other` now backs the field this module's own \
-            decisions actually use for any JSON shape at all -- but \
-            `status`/`revoked_at`/`expires_at` are plain `String`/\
-            `Option<String>`/`Option<f64>` fields with no such fallback, so \
-            `Grant::from_value` still requires the exact expected JSON type \
-            up front and fails the whole load (`state_corrupt`) where \
-            Python defers validation to point of use (or never uses the \
-            value at all).",
-        applies: |doc, path, missing, _label, _op| {
-            doc == "grants"
-                && !missing
-                && matches!(
-                    path.last().map(String::as_str),
-                    Some("status") | Some("revoked_at") | Some("expires_at")
-                )
-        },
-        judge: |_py, rust| is_state_corrupt(rust),
-        skip_doc_compare: true,
-    },
-    NamedException {
-        description: "Newly discovered, undocumented until this round's \
-            differential harness (reported, not fixed): a vault secret's \
-            `active_version` beyond `i64` range still `isinstance(active, \
-            int)` in Python, which resolves to that literal huge value; \
-            this port's `resolved_credential_version` can only represent an \
-            `i64`, so it returns `None` (an unpinned connection resolves to \
-            \"no active credential\") instead -- `credential_versions_changed` \
-            then finds nothing to change (or a different set of changed \
-            connections) where Python bumps every unpinned connection whose \
-            grants don't already record that literal huge value, and \
-            `update_connection`/`disable_connection` (which always call the \
-            same resolution when re-evaluating grants) persist a `null` \
-            `credential_version` where Python persists the huge integer.",
-        applies: |doc, path, _missing, label, _op| {
-            doc == "vault_secrets"
-                && path.last().map(String::as_str) == Some("active_version")
-                && label == "huge_int"
-        },
-        judge: |py, rust| matches!(py, Outcome::Ok(_)) && matches!(rust, Outcome::Ok(_)),
-        skip_doc_compare: true,
-    },
-    NamedException {
-        description: "Newly discovered, undocumented until this round's \
-            differential harness (reported, not fixed): `_invalidate_approvals`'s \
-            filter lambdas in `credential_versions_changed` \
-            (`e.get(\"connection\") in ids`) and `reapply_revocations` \
-            (`... or e.get(\"grant\") in revocations.grants or ...`) do a \
-            raw Python `in` test against a `set`, which raises an uncaught \
-            `TypeError: unhashable type` for an approval entry whose \
-            `connection`/`grant` field is a list or dict -- *after* the \
-            operation's own document writes already committed. This port's \
-            equivalent only ever compares a `&str` (`.and_then(Value::as_str)`), \
-            so a non-string value just never matches -- no error, no crash \
-            -- silently more lenient than Python's late, already-too-late \
-            failure.",
-        applies: |doc, path, missing, label, op| {
-            doc == "control"
-                && !missing
-                && matches!(label, "empty_array" | "empty_object")
-                && ((path == ["approvals", "dg1", "connection"]
-                    && op == "credential_versions_changed")
-                    || (path == ["approvals", "dg1", "grant"] && op == "reapply_revocations"))
-        },
-        judge: |py, rust| matches!(py, Outcome::BuiltinErr) && matches!(rust, Outcome::Ok(_)),
         skip_doc_compare: true,
     },
     NamedException {
@@ -765,6 +708,8 @@ const READ_OPS: &[&str] = &[
     "usable_connections",
     "is_stopped",
     "restore_pending",
+    "list_approvals",
+    "approval_history",
 ];
 
 const WRITE_OPS: &[&str] = &[
@@ -819,6 +764,8 @@ fn run_rust_read_op(pol: &Policy, op: &str) -> Outcome {
         }),
         "is_stopped" => pol.is_stopped().map(|b| json!(b)),
         "restore_pending" => pol.restore_pending().map(|b| json!(b)),
+        "list_approvals" => pol.list_approvals().map(Value::Object),
+        "approval_history" => pol.approval_history().map(Value::Array),
         _ => unreachable!("unknown read op {op}"),
     };
     Outcome::from_rust_result(r)

@@ -4739,3 +4739,421 @@ print("unchanged", after["agent-1"])
         .unwrap();
     assert_eq!(after["agent-1"], serde_json::json!("not-a-dict"));
 }
+
+// Round 6 (differential-harness findings): `GrantNum`'s previous `Float`
+// fallback for an integer-shaped literal outside `i64` range lost precision
+// the moment arithmetic touched it -- `max_uses - uses` near `10**30`
+// suffers catastrophic cancellation in `f64` (the true difference, `5`, is
+// far smaller than the rounding error of either huge operand alone), where
+// Python's arbitrary-precision `int` stays exact. `GrantNum::BigInt(i128)`
+// fixes this for any magnitude `i128` can hold (`10**30` included).
+#[test]
+fn grant_huge_int_fields_do_exact_i128_arithmetic_not_lossy_float() {
+    let huge_max_uses = "1000000000000000000000000000005"; // 10**30 + 5
+    let huge_uses = "999999999999999999999999999999"; // 10**30 - 1
+    let script = format!(
+        r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {{"agent-1": {{"token_hash": P.hash_token("zpwc_abc"), "status": "active", "created_at": ""}}}})
+conn = {{
+    "id": "gh", "project": "demo", "environment": "dev", "service": "svc", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {{"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False}},
+    "http_auth": {{"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None}},
+    "http_scope": {{"methods": ["GET", "POST"], "path_prefixes": ["/repos"], "confirm_methods": []}},
+    "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+}}
+state.write_json(P.CONNECTIONS, {{"gh": conn}})
+grant = {{
+    "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+    "expires_at": None, "max_uses": {huge_max_uses}, "uses": {huge_uses}, "status": "active",
+    "created_at": "", "revoked_at": None, "credential_version": None,
+}}
+state.write_json(P.GRANTS, {{"g-1": grant}})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+before = pol.get_grant("g-1").public_view()
+print("before_remaining", before["remaining_uses"])
+consumed = pol.consume("g-1", caller="agent-1", connection_id="gh",
+                        action=P.Action("http", "GET", "/repos"), policy_version=None)
+print("after_remaining", consumed.public_view()["remaining_uses"])
+doc = state.read_json(P.GRANTS, None)
+print("persisted_uses", doc["g-1"]["uses"])
+"#,
+    );
+    let out = run_python(&script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "before_remaining 6");
+    assert_eq!(lines[1], "after_remaining 5");
+    assert_eq!(
+        lines[2],
+        format!(
+            "persisted_uses {huge_max_uses_minus_5}",
+            huge_max_uses_minus_5 = "1000000000000000000000000000000"
+        )
+    );
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut principals = serde_json::Map::new();
+    principals.insert(
+        "agent-1".into(),
+        serde_json::json!({"token_hash": policy::hash_token("zpwc_abc"), "status": "active", "created_at": ""}),
+    );
+    state
+        .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+        .unwrap();
+    let mut connections = serde_json::Map::new();
+    connections.insert(
+        "gh".into(),
+        serde_json::json!({
+            "id": "gh", "project": "demo", "environment": "dev", "service": "svc", "kind": "http",
+            "secret_id": "gh-token", "secret_version": null, "description": "demo",
+            "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+            "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+            "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos"], "confirm_methods": []},
+            "ssh_target": null, "cli": null, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+        }),
+    );
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+        .unwrap();
+    let huge_max_uses_num: serde_json::Value =
+        serde_json::from_str(huge_max_uses).expect("huge literal parses");
+    let huge_uses_num: serde_json::Value =
+        serde_json::from_str(huge_uses).expect("huge literal parses");
+    let mut grants = serde_json::Map::new();
+    grants.insert(
+        "g-1".into(),
+        serde_json::json!({
+            "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+            "expires_at": null, "max_uses": huge_max_uses_num, "uses": huge_uses_num, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        }),
+    );
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let before = pol.get_grant("g-1").unwrap().public_view().unwrap();
+    assert_eq!(before["remaining_uses"], serde_json::json!(6));
+    let consumed = pol
+        .consume(
+            "g-1",
+            Some("agent-1"),
+            Some("gh"),
+            Some(Action::http("GET", "/repos")),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        consumed.public_view().unwrap()["remaining_uses"],
+        serde_json::json!(5)
+    );
+    let persisted = state
+        .read_json(policy::GRANTS, serde_json::json!({}))
+        .unwrap();
+    let persisted_uses = &persisted["g-1"]["uses"];
+    assert_eq!(
+        persisted_uses.to_string(),
+        "1000000000000000000000000000000",
+        "persisted uses must be the exact bigint, not an f64 approximation"
+    );
+}
+
+// Round 6 (differential-harness findings): `Grant`'s `status`/`revoked_at`/
+// `expires_at` fields get no `int()`/`isinstance` conversion at all in
+// Python -- a present-but-wrong-shaped value there must not abort the whole
+// grant load the way it did before this round. Also pins the subtle
+// difference between `_grant_state`'s `is not None` guard on `expires_at`
+// (reaches the numeric comparison, and so can raise, for *any* non-`None`
+// value, even a falsy one like `""`) and `public_view`'s truthiness guard
+// (only reaches that same comparison for a *truthy* non-`None` value).
+#[test]
+fn grant_status_revoked_at_expires_at_load_raw_like_python_not_a_hard_type_check() {
+    fn conn() -> serde_json::Value {
+        serde_json::json!({
+            "id": "gh", "project": "demo", "environment": "dev", "service": "svc", "kind": "http",
+            "secret_id": "gh-token", "secret_version": null, "description": "demo",
+            "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+            "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+            "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos"], "confirm_methods": []},
+            "ssh_target": null, "cli": null, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+        })
+    }
+    fn base_grant() -> serde_json::Value {
+        serde_json::json!({
+            "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+            "expires_at": null, "max_uses": null, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        })
+    }
+
+    // (status override, expires_at override, revoked_at override) as Python
+    // literals, and whether `check_grant`/`public_view` are expected to
+    // raise an uncaught exception in Python.
+    let cases: &[(&str, &str, &str, bool, bool)] = &[
+        // A null status is never "active"/"stale"/"revoked": always
+        // `grant_inactive`, never an error either side.
+        ("None", "None", "None", false, false),
+        // An empty-list revoked_at is never read by anything but
+        // round-tripping -- load and every op still succeeds.
+        ("\"active\"", "None", "[]", false, false),
+        // A falsy-but-not-`None` expires_at (`""`) reaches `_grant_state`'s
+        // `is not None` guard (raises there) but not `public_view`'s
+        // truthiness guard (stays `null`, no raise).
+        ("\"active\"", "\"\"", "None", true, false),
+        // A truthy, non-numeric expires_at raises in *both* `check_grant`
+        // (ordering) and `public_view` (`iso()`).
+        ("\"active\"", "\"soon\"", "None", true, true),
+    ];
+
+    for (status, expires_at, revoked_at, check_grant_raises, public_view_raises) in cases {
+        let script = format!(
+            r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {{"agent-1": {{"token_hash": P.hash_token("zpwc_abc"), "status": "active", "created_at": ""}}}})
+conn = {{
+    "id": "gh", "project": "demo", "environment": "dev", "service": "svc", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {{"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False}},
+    "http_auth": {{"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None}},
+    "http_scope": {{"methods": ["GET", "POST"], "path_prefixes": ["/repos"], "confirm_methods": []}},
+    "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+}}
+state.write_json(P.CONNECTIONS, {{"gh": conn}})
+grant = {{
+    "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+    "expires_at": {expires_at}, "max_uses": None, "uses": 0, "status": {status},
+    "created_at": "", "revoked_at": {revoked_at}, "credential_version": None,
+}}
+state.write_json(P.GRANTS, {{"g-1": grant}})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+try:
+    d = pol.check_grant("agent-1", "gh", "g-1")
+    print("check_grant", "ok", d.reason)
+except Exception as e:
+    print("check_grant", "err", type(e).__name__)
+try:
+    g = pol.get_grant("g-1")
+    v = g.public_view()
+    print("public_view", "ok", v["status"], v["expires_at"])
+except Exception as e:
+    print("public_view", "err", type(e).__name__)
+"#,
+        );
+        let out = run_python(&script);
+        let mut lines = out.lines();
+        let cg_line = lines.next().unwrap();
+        let pv_line = lines.next().unwrap();
+        if *check_grant_raises {
+            assert!(cg_line.starts_with("check_grant err"), "{cg_line}");
+        } else {
+            assert!(cg_line.starts_with("check_grant ok"), "{cg_line}");
+        }
+        if *public_view_raises {
+            assert!(pv_line.starts_with("public_view err"), "{pv_line}");
+        } else {
+            assert!(pv_line.starts_with("public_view ok"), "{pv_line}");
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let mut principals = serde_json::Map::new();
+        principals.insert(
+            "agent-1".into(),
+            serde_json::json!({"token_hash": policy::hash_token("zpwc_abc"), "status": "active", "created_at": ""}),
+        );
+        state
+            .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+            .unwrap();
+        let mut connections = serde_json::Map::new();
+        connections.insert("gh".into(), conn());
+        state
+            .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+            .unwrap();
+        let mut grant = base_grant();
+        let py_to_value = |lit: &str| -> serde_json::Value {
+            match lit {
+                "None" => serde_json::Value::Null,
+                "[]" => serde_json::json!([]),
+                other => serde_json::Value::String(other.trim_matches('"').to_string()),
+            }
+        };
+        grant["status"] = py_to_value(status);
+        grant["expires_at"] = py_to_value(expires_at);
+        grant["revoked_at"] = py_to_value(revoked_at);
+        let mut grants = serde_json::Map::new();
+        grants.insert("g-1".into(), grant);
+        state
+            .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+            .unwrap();
+
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        let cg = pol.check_grant("agent-1", "gh", "g-1");
+        assert_eq!(
+            cg.is_err(),
+            *check_grant_raises,
+            "check_grant status={status} expires_at={expires_at} revoked_at={revoked_at}: {cg:?}"
+        );
+        let g = pol.get_grant("g-1").unwrap();
+        let pv = g.public_view();
+        assert_eq!(
+            pv.is_err(),
+            *public_view_raises,
+            "public_view status={status} expires_at={expires_at} revoked_at={revoked_at}: {pv:?}"
+        );
+    }
+}
+
+// Cross-unit finding E-R5-3 (round 6): `Policy::reapply_revocations`'s
+// Python counterpart only ever touches `policy/grants.json` inside `for
+// grant_id in revocations.grants:` -- with an empty revocation set that loop
+// never runs, so `.get()` is never called on the document at all, and a
+// truthy-but-not-a-dict read (e.g. a JSON string) never raises. This port's
+// `self.grants()?` used to validate the document's shape unconditionally,
+// aborting `Vault::restore` -- after `policy/control.json` and every other
+// archive document had already been written -- for a digest-valid archive
+// whose `policy/grants.json` is a JSON string, even with nothing to
+// reapply. Drives the full `Vault::restore` path (not just
+// `Policy::reapply_revocations` in isolation) to confirm the fix holds
+// end-to-end: the handle key rotates, `restore_reapplied` is written, and a
+// `restore`/`result=ok` audit record is produced, matching `python3.12`'s
+// `Vault.restore` on the same archive shape.
+#[test]
+fn vault_restore_completes_on_empty_revocation_set_with_a_string_grants_document() {
+    use sha2::{Digest, Sha256};
+    use zeropw::context::{self, Config, Context};
+    use zeropw::pyjson::{self, DumpOptions};
+    use zeropw::vault::Vault;
+
+    const FIXED_NOW: f64 = 1_700_000_000.0;
+
+    // Confirms Python's own `Vault.restore`/`Policy.reapply_revocations`
+    // really does complete (not error) for a string `grants.json` document
+    // when the revocation set is empty -- the exact premise this fix
+    // depends on, checked directly against `python3.12` rather than assumed.
+    let py_check = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.CONTROL, {"stopped": False, "restore_pending": False, "approvals": {}})
+state.write_json(P.GRANTS, "corrupted")
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+revs = P.Revocations(grants=set(), principals=set(), connections=set(), secret_versions=set())
+counts = pol.reapply_revocations(revs)
+print("ok", counts)
+"#;
+    let py_out = run_python(py_check);
+    assert!(
+        py_out.trim().starts_with("ok"),
+        "python3.12 baseline: {py_out}"
+    );
+
+    let tmp = TempDir::new().unwrap();
+    let config = Config {
+        socket_dir: Some(tmp.path().join("ctx-sockets")),
+        run_dir: Some(tmp.path().join("ctx-run")),
+        ..Config::default()
+    };
+    let ctx = Context::initialize(
+        tmp.path().join("state"),
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        config,
+        clock::fixed(FIXED_NOW),
+    )
+    .expect("Context::initialize");
+
+    let handle_key_before = ctx.state.read_bytes(context::HANDLE_KEY).unwrap();
+
+    // A digest-valid archive (correct `manifest.format`/`sha256`, so it
+    // passes `Vault::restore`'s own verification) whose `documents` map
+    // holds only a `policy/grants.json` entry that is a JSON *string*, not
+    // an object -- the archive is caller-supplied input whose manifest sits
+    // outside the digest of anything the KMS key touches, so this needs no
+    // KMS key at all (`kms: None` below). Every other document (`vault/
+    // secrets.json`, `policy/principals.json`, `policy/connections.json`,
+    // `policy/control.json`) is simply absent from `documents` and so left
+    // untouched by `Vault::restore` on the live state -- an empty revocation
+    // set (nothing was ever revoked on this freshly initialized `Context`)
+    // is exactly what makes the malformed `grants.json` unreachable.
+    let mut documents = serde_json::Map::new();
+    documents.insert(
+        policy::GRANTS.to_string(),
+        serde_json::Value::String("corrupted".to_string()),
+    );
+    let documents = serde_json::Value::Object(documents);
+    let payload = pyjson::dumps(&documents, DumpOptions::compact_sorted()).unwrap();
+    let digest = hex::encode(Sha256::digest(payload.as_bytes()));
+    let archive = serde_json::json!({
+        "manifest": {
+            "format": "zeropw-backup-v1",
+            "created_at": "2024-01-01T00:00:00Z",
+            "sha256": digest,
+            "kms_key_id": "irrelevant-for-this-probe",
+            "backup_id": "e-r5-3-probe",
+        },
+        "documents": documents,
+    });
+    let archive_path = tmp.path().join("archive.json");
+    std::fs::write(&archive_path, serde_json::to_string(&archive).unwrap()).unwrap();
+
+    let result = Vault::restore(ctx.state, &archive_path, ctx.audit, None);
+    assert!(
+        result.is_ok(),
+        "Vault::restore must complete on an empty revocation set even with a \
+         non-object policy/grants.json document (E-R5-3): {result:?}"
+    );
+
+    let handle_key_after = ctx.state.read_bytes(context::HANDLE_KEY).unwrap();
+    assert_ne!(
+        handle_key_before, handle_key_after,
+        "a successful restore must rotate the handle key"
+    );
+
+    let control = ctx
+        .state
+        .read_json(policy::CONTROL, serde_json::Value::Null)
+        .unwrap();
+    assert_eq!(
+        control["restore_reapplied"],
+        serde_json::json!({
+            "grants": 0, "principals": 0, "connections": 0,
+            "secret_versions": 0, "approvals_dropped": 0,
+        }),
+        "restore_reapplied must be written even though nothing needed reapplying"
+    );
+
+    let restore_records: Vec<serde_json::Value> = ctx
+        .audit
+        .tail(50)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "restore")
+        .collect();
+    assert_eq!(
+        restore_records.len(),
+        1,
+        "exactly one restore audit record: {restore_records:?}"
+    );
+    assert_eq!(restore_records[0]["result"], serde_json::json!("ok"));
+}
