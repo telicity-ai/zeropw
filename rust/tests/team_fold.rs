@@ -846,23 +846,33 @@ fn seq_gap_rejected_through_receive_commit() {
 }
 
 // ------------------------------------------------------------------ H-R2-6
-/// Finding H-R2-6: `derive_local`'s `count: i64 =
+/// Finding H-R2-6 (round 2): `derive_local`'s `count: i64 =
 /// fold_result.vector.values().sum()` PANICKED (`attempt to add with
 /// overflow`) once `FoldResult::vector` (widened to `i128` for
 /// `commit.author_seq`) held two authors whose combined `author_seq` total
 /// exceeded `i64::MAX` -- a panic on file-supplied data (`author_seq` is
 /// read straight off a stored commit file by `all_commits()`), which
-/// `rust/PORTING.md` forbids regardless of how it's reached. `count` is now
-/// `i128`; this test doesn't need a Python oracle (Python's `sum()` never
-/// overflows in the first place) -- it just proves the summation itself
-/// can no longer panic for a case that would have overflowed `i64`.
+/// `rust/PORTING.md` forbids regardless of how it's reached. `count` was
+/// widened to `i128` to fix it.
+///
+/// **Round-3 correction (finding H-R3-7):** the round-2 fix and this very
+/// test only ever probed `i64::MAX`-sized values, which fit comfortably
+/// inside `i128` and never actually exercised an `i128` overflow -- the
+/// round-2 DEVIATIONS.md row's claim that this was "fixed" was therefore
+/// premature: `.sum()`'s plain `+` still panicked for the REAL boundary,
+/// two authors each at `author_seq == i128::MAX` (reachable from two real
+/// commit files, since `author_seq` is read verbatim at `i128` width).
+/// `derive_local` now accumulates with `saturating_add` instead of
+/// `.sum()`, which cannot panic at any width; this test now pins the actual
+/// `i128::MAX` boundary, not merely the previously-fixed `i64::MAX` one
+/// (still exercised below too, since it remains a valid, smaller case).
 #[test]
 fn derive_local_does_not_panic_with_two_large_author_seq_totals() {
     let (_tmp, ctx) = setup();
     let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
     let mut result = F::fold(&env_id, vec![c1], None, None, None, None).unwrap();
     // Two authors, each holding an `author_seq` that alone fits `i64` but
-    // whose SUM does not -- exactly the shape that panicked before this fix.
+    // whose SUM does not -- the round-2 fix's own shape, still valid.
     result
         .vector
         .insert("author-a".to_string(), i64::MAX as i128);
@@ -898,5 +908,46 @@ fn derive_local_does_not_panic_with_two_large_author_seq_totals() {
         applies[0]["count"],
         json!(expected),
         "count must carry the full i128 sum, not a clamped/overflowed i64"
+    );
+}
+
+/// Finding H-R3-7's actual reachable boundary: two authors EACH at
+/// `author_seq == i128::MAX` -- unlike the sibling test above (`i64::MAX`,
+/// which fits comfortably inside `i128` and never overflows when summed),
+/// adding two `i128::MAX` values together overflows `i128` itself. This is
+/// exactly the case the round-2 DEVIATIONS.md row wrongly claimed was
+/// already fixed. Must not panic, and the audited `count` must saturate at
+/// `i128::MAX` (the closest representable value to the true,
+/// arbitrary-precision Python sum) rather than wrapping or panicking.
+#[test]
+fn derive_local_saturates_instead_of_panicking_at_the_real_i128_max_boundary() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let mut result = F::fold(&env_id, vec![c1], None, None, None, None).unwrap();
+    result.vector.insert("author-a".to_string(), i128::MAX);
+    result.vector.insert("author-b".to_string(), i128::MAX);
+    F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .unwrap();
+    let applies: Vec<Value> = ctx
+        .audit
+        .tail(50)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.get("event").and_then(Value::as_str) == Some("team_commit_apply"))
+        .collect();
+    assert_eq!(applies.len(), 1);
+    assert_eq!(
+        applies[0]["count"],
+        json!(i128::MAX),
+        "count must saturate at i128::MAX rather than panic or wrap"
     );
 }

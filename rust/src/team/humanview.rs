@@ -252,11 +252,11 @@ fn yaml_lines_tuple_dict(
         match item {
             Value::Object(m) if !m.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent + 1, fresh_connections));
+                lines.extend(yaml_lines(item, indent + 1, fresh_connections, false));
             }
             Value::Array(a) if !a.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent, fresh_connections));
+                lines.extend(yaml_lines(item, indent, fresh_connections, false));
             }
             _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
         }
@@ -323,11 +323,11 @@ fn yaml_lines_connection(
         match item {
             Value::Object(m) if !m.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent + 1, fresh_connections));
+                lines.extend(yaml_lines(item, indent + 1, fresh_connections, false));
             }
             Value::Array(a) if !a.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent, fresh_connections));
+                lines.extend(yaml_lines(item, indent, fresh_connections, false));
             }
             _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
         }
@@ -335,7 +335,31 @@ fn yaml_lines_connection(
     lines
 }
 
-fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>) -> Vec<String> {
+/// `is_root`: true only for the single top-level call `to_yaml` itself
+/// makes -- every recursive call (a nested dict/list value, a list item, ...)
+/// passes `false`. Finding H-R3-6: the "connections" special-case below
+/// used to trigger for a key literally named `"connections"` at ANY depth,
+/// not just the actual environment document's own top-level `connections`
+/// map -- but Python's real rendering has NO key-name-based special case at
+/// all (see the module doc comment on [`python_tuple_repr`]): whether an
+/// array renders as a YAML list or a Python tuple's `str()` depends
+/// entirely on whether that specific JSON VALUE, in Python, is really a
+/// `list` or a `tuple` object at that exact tree position, which for a real
+/// document can only ever be true at the document's OWN `connections`
+/// field. Peer-controlled JSON reachable through this renderer (e.g. a
+/// `secret.put_version` op's arbitrary `public` metadata) can freely nest a
+/// key named `"connections"` at any depth without ever containing a Python
+/// tuple, so a `public = {"connections": {"<id>": {"http_scope":
+/// {"methods": ["GET"]}}}}` value must render `methods` as an ordinary YAML
+/// list, matching Python -- not as `('GET',)` just because some nested dict
+/// happens to be named `connections` and some inner id happens to collide
+/// with (or merely coincide in shape with) a real fresh connection id.
+fn yaml_lines(
+    value: &Value,
+    indent: usize,
+    fresh_connections: &BTreeSet<String>,
+    is_root: bool,
+) -> Vec<String> {
     let pad = "  ".repeat(indent);
     let mut lines = Vec::new();
     match value {
@@ -351,8 +375,10 @@ fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>
                 // key itself, so it gets its own per-id dispatch here
                 // rather than falling into the generic `Value::Object`
                 // branch below (which has no notion of "current connection
-                // id").
-                if key == "connections"
+                // id") -- but ONLY at the document root (`is_root`, finding
+                // H-R3-6): see this function's own doc comment.
+                if is_root
+                    && key == "connections"
                     && let Value::Object(conns) = item
                 {
                     if conns.is_empty() {
@@ -384,11 +410,11 @@ fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>
                 match item {
                     Value::Object(m) if !m.is_empty() => {
                         lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines(item, indent + 1, fresh_connections));
+                        lines.extend(yaml_lines(item, indent + 1, fresh_connections, false));
                     }
                     Value::Array(a) if !a.is_empty() => {
                         lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines(item, indent, fresh_connections));
+                        lines.extend(yaml_lines(item, indent, fresh_connections, false));
                     }
                     _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
                 }
@@ -405,7 +431,7 @@ fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>
                     _ => false,
                 };
                 if nonempty_container {
-                    let sub = yaml_lines(item, indent + 1, fresh_connections);
+                    let sub = yaml_lines(item, indent + 1, fresh_connections, false);
                     lines.push(format!("{pad}-"));
                     lines.extend(sub);
                 } else {
@@ -427,7 +453,7 @@ fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>
 /// one where every connection came from a snapshot seed untouched this
 /// fold.
 pub fn to_yaml(value: &Value, fresh_connections: &BTreeSet<String>) -> String {
-    let lines = yaml_lines(value, 0, fresh_connections);
+    let lines = yaml_lines(value, 0, fresh_connections, true);
     format!("{}\n", lines.join("\n"))
 }
 
@@ -509,5 +535,47 @@ mod tests {
             "non-fresh connection must render http_scope.methods as a YAML list, not a tuple repr:\n{stale_out}"
         );
         assert_ne!(fresh_out, stale_out);
+    }
+
+    /// Finding H-R3-6: a key literally named `"connections"` at ANY depth
+    /// used to trigger the tuple-rendering special case, not just the
+    /// document's own top-level `connections` map. A `secret.put_version`
+    /// op's `public` metadata is arbitrary peer-controlled JSON (never
+    /// passes through `build_connection_fields`/`dataclasses.asdict`, so
+    /// its array values are always plain Python `list`s, never `tuple`s):
+    /// nesting a `"connections"` key inside it, whose "id" happens to
+    /// collide with a REAL fresh connection id, must still render as an
+    /// ordinary YAML list, not `('GET',)`, since Python's real rendering
+    /// has no key-name-based special case at all -- only the document
+    /// POSITION (top-level `connections`) ever holds a real Python tuple.
+    #[test]
+    fn nested_connections_key_off_document_root_never_renders_as_a_tuple() {
+        let mut fresh = BTreeSet::new();
+        fresh.insert("gh".to_string()); // a REAL fresh connection id
+        let doc = json!({
+            "connections": {"gh": {"http_scope": {"methods": ["GET"]}}},
+            "secrets": {"s1": {"versions": {"v1": {"public": {
+                "connections": {"gh": {"http_scope": {"methods": ["GET"]}}}
+            }}}}},
+        });
+        let out = to_yaml(&doc, &fresh);
+        // The REAL top-level connection ("gh", genuinely fresh) still
+        // renders as a tuple repr...
+        assert!(
+            out.contains("methods: ('GET',)"),
+            "the document's own top-level connections must still render as a tuple:\n{out}"
+        );
+        // ...but the nested one inside `public`, despite the identical
+        // shape and a colliding id, must render as a plain YAML list --
+        // i.e. there must be exactly ONE tuple-repr occurrence, not two.
+        assert_eq!(
+            out.matches("methods: ('GET',)").count(),
+            1,
+            "only the document's own top-level connections may render as a tuple:\n{out}"
+        );
+        assert!(
+            out.contains("- GET"),
+            "the nested public.connections.gh.http_scope.methods must render as an ordinary YAML list:\n{out}"
+        );
     }
 }

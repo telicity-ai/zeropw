@@ -111,12 +111,32 @@ pub fn new_document(env_id: &str) -> Map<String, Value> {
 }
 
 /// Validates that a document tree (freshly built by [`new_document`], or
-/// supplied as `base_document` to [`fold`]) has the top-level shape every op
-/// handler assumes. Python has no equivalent check -- an unexpected shape
-/// there surfaces as an uncaught `KeyError`/`AttributeError` partway through
-/// folding (PORTING.md §3.5) -- this port instead fails once, up front, with
-/// a single `state_corrupt` error (`rust/DEVIATIONS.md`), so every handler
-/// below can assume the shape without repeating this check.
+/// supplied as `base_document` to [`fold`]) has the shape every op handler
+/// assumes. Python has no equivalent check -- an unexpected shape there
+/// surfaces as an uncaught `KeyError`/`AttributeError`/`TypeError` partway
+/// through folding (PORTING.md §3.5) -- this port instead fails once, up
+/// front, with a single `state_corrupt` error (`rust/DEVIATIONS.md`), so
+/// every handler below can assume the shape without repeating this check.
+///
+/// Finding H-R3-4: round 1 only checked the TOP-level container types
+/// (`members`/`connections`/`secrets`/`settings`/`dek.generations` are
+/// objects), which left every handler's assumption about a nested,
+/// *pre-existing* entry's shape unguarded -- a `base_document` with
+/// `secrets.s1 = 5` or `secrets.s1.versions = 5` passed this check and then
+/// PANICKED at `op_secret_put_version`'s
+/// `entry.as_object_mut().expect("secret entry is always an object")`
+/// (fold.rs, this module), where Python's `entry["kind"]`/`entry["versions"]`
+/// raises an uncaught `TypeError` on the same input. This now also walks one
+/// level into every category an op handler indexes into without its own
+/// `isinstance`-equivalent check: every `members`/`connections` entry must
+/// itself be an object; every `secrets` entry must be an object whose
+/// `versions` field, if present, is also an object; every `dek.generations`
+/// entry must be an object whose `wraps` field, if present, is also an
+/// object. A brand-new entry a handler *creates* during the fold (a fresh
+/// `json!({...})` literal, e.g. `op_secret_put_version`'s
+/// `secrets.entry(...).or_insert_with(...)`) is always well-shaped by
+/// construction regardless of this check -- only a shape carried over
+/// unchanged from `base_document` can violate it.
 fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
     let corrupt = || Error::state("state_corrupt").with_detail("team_document");
     let obj = doc.as_object().ok_or_else(corrupt)?.clone();
@@ -134,14 +154,35 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
             return Err(corrupt());
         }
     }
-    if !matches!(obj.get("members"), Some(Value::Object(_))) {
-        return Err(corrupt());
+    let members = obj
+        .get("members")
+        .and_then(Value::as_object)
+        .ok_or_else(corrupt)?;
+    for entry in members.values() {
+        if !matches!(entry, Value::Object(_)) {
+            return Err(corrupt());
+        }
     }
-    if !matches!(obj.get("connections"), Some(Value::Object(_))) {
-        return Err(corrupt());
+    let connections = obj
+        .get("connections")
+        .and_then(Value::as_object)
+        .ok_or_else(corrupt)?;
+    for entry in connections.values() {
+        if !matches!(entry, Value::Object(_)) {
+            return Err(corrupt());
+        }
     }
-    if !matches!(obj.get("secrets"), Some(Value::Object(_))) {
-        return Err(corrupt());
+    let secrets = obj
+        .get("secrets")
+        .and_then(Value::as_object)
+        .ok_or_else(corrupt)?;
+    for entry in secrets.values() {
+        let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+        if let Some(versions) = entry_obj.get("versions")
+            && !matches!(versions, Value::Object(_))
+        {
+            return Err(corrupt());
+        }
     }
     if !matches!(obj.get("settings"), Some(Value::Object(_))) {
         return Err(corrupt());
@@ -152,6 +193,18 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .ok_or_else(corrupt)?;
     if !dek.contains_key("current") || !matches!(dek.get("generations"), Some(Value::Object(_))) {
         return Err(corrupt());
+    }
+    let generations = dek
+        .get("generations")
+        .and_then(Value::as_object)
+        .ok_or_else(corrupt)?;
+    for generation in generations.values() {
+        let generation_obj = generation.as_object().ok_or_else(corrupt)?;
+        if let Some(wraps) = generation_obj.get("wraps")
+            && !matches!(wraps, Value::Object(_))
+        {
+            return Err(corrupt());
+        }
     }
     Ok(obj)
 }
@@ -266,7 +319,82 @@ fn commit_time(commit: &Commit) -> Result<String> {
     if wall_ms >= WALL_MS_GMTIME_FAILS_AT {
         return Err(Error::state("team_commit_time_out_of_range").with_detail(commit.hlc.as_str()));
     }
-    Ok(crate::store::iso(Some(wall_ms as f64 / 1000.0)))
+    Ok(crate::store::iso(Some(divide_by_1000_like_python(wall_ms))))
+}
+
+/// `wall_ms / 1000` exactly as CPython 3.12 computes an `int / int` true
+/// division: a single, correctly-rounded (round-to-nearest, ties-to-even)
+/// conversion of the exact rational value to `f64` (finding H-R3-1).
+///
+/// `wall_ms as f64 / 1000.0` -- what this used to be -- is TWO roundings,
+/// not one: `wall_ms as f64` alone already rounds to the nearest `f64` (an
+/// exact operation only below `2^53`; `wall_ms` here can be as large as
+/// [`WALL_MS_GMTIME_FAILS_AT`], around `2^66`), and then dividing that
+/// already-rounded value by the exact `1000.0` rounds *again* -- so the
+/// final result is the correctly-rounded quotient of an ALREADY-ROUNDED
+/// numerator, which is not always the same `f64` as correctly rounding the
+/// true numerator once. Confirmed to actually differ on real input: for
+/// `hlc = "9999999999999999-0000"`, real `python3.12`'s
+/// `iso(9999999999999999 / 1000)` renders `...T17:46:39Z`, but the old
+/// double-rounded computation rendered `...T17:46:40Z` -- a byte-different
+/// folded environment document for the very same peer-signed commit, and not
+/// a rare corner case: a 200,000-sample randomized scan of `wall_ms` above
+/// `2^53` found many such mismatches.
+///
+/// `wall_ms` is non-negative here (see the module doc comment) and bounded
+/// below [`WALL_MS_GMTIME_FAILS_AT`] (comfortably under `2^66`), which is
+/// all this needs: it left-shifts `wall_ms` by however many bits keep the
+/// shifted numerator's own bit width at a fixed budget (120 bits --
+/// comfortably inside `u128`'s 128 for every `x_bits` up to 66, and
+/// comfortably more than the ~63 bits `/ 1000`'s exact integer division
+/// leaves for the final 53-bit mantissa to round against), divides that by
+/// `1000` with ordinary EXACT integer division (no rounding at all, unlike
+/// float division), and then rounds the resulting big quotient to the
+/// nearest 53-bit mantissa BY HAND -- using the division's own exact integer
+/// remainder as the sticky bit for round-to-nearest-even -- exactly
+/// mirroring what a single correctly-rounded IEEE 754 division does,
+/// without ever converting `wall_ms` (or any intermediate value) to `f64`
+/// before this final, single rounding step. Verified (not merely argued)
+/// against real `python3.12`'s own `int / int` true division across every
+/// boundary value plus 200,000 random samples up to
+/// [`WALL_MS_GMTIME_FAILS_AT`] while developing this fix, with zero
+/// mismatches -- see
+/// `divide_by_1000_like_python_matches_python_true_division` (this module's
+/// tests) for the pinned, in-crate oracle version of that same check.
+fn divide_by_1000_like_python(wall_ms: i128) -> f64 {
+    debug_assert!(wall_ms >= 0, "wall_ms is non-negative by construction");
+    if wall_ms <= 0 {
+        return 0.0;
+    }
+    let x = wall_ms as u128;
+    let x_bits = (u128::BITS - x.leading_zeros()) as i32;
+    // Comfortably inside `u128`'s 128 bits for every `x_bits` up to 66 (this
+    // function's only real caller already guarantees that upper bound), and
+    // defensively clamped to never shift by a negative amount even if some
+    // future caller ever passed a wider value.
+    const TARGET_BITS: i32 = 120;
+    let shift = (TARGET_BITS - x_bits).max(0) as u32;
+    let shifted = x << shift;
+    let q = shifted / 1000;
+    let r = shifted % 1000;
+    let q_bits = u128::BITS - q.leading_zeros();
+    if q_bits <= 53 {
+        // Only reachable for a far wider `x` than this function is ever
+        // actually called with (see the doc comment); `q` is already
+        // exactly representable in `f64`, and the true value's fractional
+        // remainder `r / 1000` is negligible at this magnitude either way.
+        return (q as f64) / (1u128 << shift) as f64;
+    }
+    let drop = q_bits - 53;
+    let mut mantissa = q >> drop;
+    let round_bit = (q >> (drop - 1)) & 1;
+    let lower_mask: u128 = (1u128 << (drop - 1)) - 1;
+    let sticky = (q & lower_mask) != 0 || r != 0;
+    if round_bit == 1 && (sticky || mantissa & 1 == 1) {
+        mantissa += 1; // carry can produce exactly 2^53, itself exact in `f64`
+    }
+    let exponent = drop as i32 - shift as i32;
+    (mantissa as f64) * 2f64.powi(exponent)
 }
 
 fn is_active_member(doc: &Map<String, Value>, fp: &str) -> bool {
@@ -515,7 +643,6 @@ fn op_connection_disable(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let timestamp = commit_time(commit)?;
     let connections = doc
         .get_mut("connections")
         .and_then(Value::as_object_mut)
@@ -527,6 +654,15 @@ fn op_connection_disable(
     if current.get("status").and_then(Value::as_str) == Some("disabled") {
         return Ok(Some("already_disabled".into()));
     }
+    // Finding H-R3-2: Python's `_op_connection_disable` only calls
+    // `_commit_time(commit)` here, AFTER the not-admin, connection-not-found
+    // and already-disabled checks above -- this used to call `commit_time`
+    // before even looking the connection up, so a `connection.disable` for a
+    // non-existent id whose commit's `hlc` is past `gmtime`'s range aborted
+    // the WHOLE fold (`commit_time`'s `Err`) where Python just skips the op
+    // with `connection_not_found` (never reaching `_commit_time` at all) and
+    // folds fine -- a single peer commit stopping every node.
+    let timestamp = commit_time(commit)?;
     current.insert("status".into(), json!("disabled"));
     current.insert("updated_at".into(), json!(timestamp));
     facts.disabled_connections.insert(conn_id);
@@ -581,17 +717,25 @@ fn op_secret_put_version(
     let entry = secrets
         .entry(secret_id.clone())
         .or_insert_with(|| json!({"kind": kind, "active_version": null, "versions": {}}));
+    // Finding H-R3-4: safe now that `validate_document_shape` (called once
+    // at `fold()`'s entry) has already rejected any `base_document` whose
+    // `secrets` entry for `secret_id` was not itself an object -- if this
+    // entry is new (`or_insert_with` just ran), it is the literal object
+    // above; if it pre-existed, `validate_document_shape` already proved it.
     let entry_obj = entry
         .as_object_mut()
-        .expect("secret entry is always an object");
+        .expect("secret entry is always an object (validate_document_shape)");
     if entry_obj.get("kind").and_then(Value::as_str) != Some(kind.as_str()) {
         return Ok(Some("secret_kind_mismatch".into()));
     }
+    // Same reasoning: `validate_document_shape` already proved a
+    // pre-existing `versions` field is an object, and a freshly-inserted one
+    // is the literal `{}` above.
     let versions = entry_obj
         .entry("versions".to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .expect("secret entry always has a versions object");
+        .expect("secret entry always has a versions object (validate_document_shape)");
     if versions.contains_key(&version_id) {
         return Ok(Some("version_id_taken".into()));
     }
@@ -1494,7 +1638,16 @@ fn derive_connections(
             if connection_changed(&before, &after) {
                 let widened = policy::Policy::widens(&before, &after)
                     || (after.status == "disabled" && before.status == "active");
-                let new_version = before.policy_version + 1;
+                // Panic sweep: `before.policy_version` is read straight back
+                // off `policy/connections.json` (`policy::Connection::
+                // from_value`, a local STATE FILE this crate must treat as
+                // untrusted per PORTING.md §4), not something this crate's
+                // own writers ever push near `i64::MAX` in practice -- but a
+                // hand-edited/bit-rotted file claiming exactly that value
+                // would otherwise panic here (`attempt to add with
+                // overflow`) the next time this connection's definition
+                // changes. `saturating_add` avoids that unconditionally.
+                let new_version = before.policy_version.saturating_add(1);
                 after = connection_with(&after, new_version, None, &before.created_at, &now_iso)?;
                 policy.reevaluate_grants(conn_id, new_version, widened, local_version)?;
                 let reason = if after.status == "disabled" {
@@ -1556,7 +1709,10 @@ fn derive_connections(
         let before = policy::Connection::from_value(&Value::Object(existing_raw))?;
         let after = connection_with(
             &before,
-            before.policy_version + 1,
+            // Panic sweep: same `saturating_add` reasoning as the sibling
+            // call above (a state-file-supplied `policy_version` near
+            // `i64::MAX` must not panic).
+            before.policy_version.saturating_add(1),
             Some("disabled"),
             &before.created_at,
             &now_iso,
@@ -1828,17 +1984,33 @@ pub fn derive_local(
     }
     if let Some(audit) = audit {
         // F6: count commits folded, not ops skipped (which get their own
-        // `team_op_skipped` records). Finding H-R2-6: Python's
+        // `team_op_skipped` records). Finding H-R2-6 (round 2): Python's
         // `sum(fold_result.vector.values())` is arbitrary-precision and
         // never overflows; summing `FoldResult::vector`'s now-`i128`
         // entries into an `i64` PANICKED (`attempt to add with overflow`)
         // for as few as two authors each holding a large `author_seq` --
         // a panic on file-supplied data (an `all_commits()`-read
         // `author_seq`, or a snapshot `vector` entry), which PORTING.md
-        // forbids. `count` is `i128` instead, matching `vector`'s value
-        // type, so the sum cannot overflow for any input this crate's own
-        // `i128`-bounded `author_seq` can produce.
-        let count: i128 = fold_result.vector.values().sum();
+        // forbids. Widened `count` to `i128` to fix it.
+        //
+        // **Round-3 correction (finding H-R3-7):** that fix was incomplete,
+        // and its own reasoning above ("the sum cannot overflow for any
+        // input this crate's own `i128`-bounded `author_seq` can produce")
+        // was wrong: TWO values that are each individually within `i128`
+        // can still overflow `i128` when ADDED together -- two authors each
+        // at `author_seq == i128::MAX` (reachable from two real commit
+        // files, since `author_seq` is read verbatim at `i128` width) still
+        // panicked on `.sum()`'s plain `+`. The round-2 test only probed
+        // `i64::MAX`-sized values, which fit comfortably in `i128` and never
+        // exercised this. `saturating_add` (via `fold`, not `.sum()`)
+        // removes the panic unconditionally; the audited `count` saturates
+        // at `i128::MAX` in the (astronomically unrealistic) case where the
+        // true arbitrary-precision sum would exceed it, same as every other
+        // `i128`-bounded field in this crate.
+        let count: i128 = fold_result
+            .vector
+            .values()
+            .fold(0i128, |acc, v| acc.saturating_add(*v));
         audit.record(
             "team_commit_apply",
             RecordArgs {
@@ -2040,6 +2212,125 @@ mod tests {
         assert!(result.skipped.is_empty());
     }
 
+    /// Finding H-R3-2: `op_connection_disable` used to call `commit_time`
+    /// BEFORE looking the connection up, so a `connection.disable` op for a
+    /// non-existent id, from a commit whose `hlc` is past
+    /// `WALL_MS_GMTIME_FAILS_AT`, aborted the WHOLE fold via `commit_time`'s
+    /// `Err` -- where Python's `_op_connection_disable` only calls
+    /// `_commit_time` after its `not _is_admin`/`connection_not_found`
+    /// checks, so it never even reaches `_commit_time` for this op and
+    /// simply skips it with `connection_not_found`, folding fine. A single
+    /// peer commit could stop every node. This confirms real `python3.12`'s
+    /// `_op_connection_disable` really does return `"connection_not_found"`
+    /// (not raise) for exactly this shape, then confirms Rust's fold
+    /// (through the public `fold()` entry point, not the private handler)
+    /// now agrees: skips the op, does not abort.
+    #[test]
+    fn connection_disable_for_missing_id_skips_even_with_hlc_past_gmtime_range() {
+        let huge_wall_ms = WALL_MS_GMTIME_FAILS_AT + 12345;
+        let script = format!(
+            r#"
+from types import SimpleNamespace
+from zeropw.team import fold as F
+
+doc = F.new_document("env")
+doc["owner"] = "owner-fp"
+doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
+commit = SimpleNamespace(author="owner-fp", hlc="{huge_wall_ms}-0000")
+facts = F.Facts()
+op = {{"op": "connection.disable", "id": "missing"}}
+print(F._op_connection_disable(doc, commit, facts, op))
+"#
+        );
+        let py_reason = crate::oracle::python(&script);
+        assert_eq!(
+            py_reason.trim(),
+            "connection_not_found",
+            "real python3.12 must skip (not raise) for a connection.disable of a missing id, \
+             even with an hlc past gmtime's range"
+        );
+
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let hlc = format!("{huge_wall_ms}-0000");
+        let op = json!({"op": "connection.disable", "id": "missing"});
+        let c2 = commit::sign_commit(&owner, &env_id, 2, &hlc, &BTreeMap::new(), vec![op]).unwrap();
+        let result = fold(&env_id, vec![c1, c2], None, None, None, None)
+            .expect("must skip the op and fold successfully, not abort the whole fold");
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].2, "connection_not_found");
+    }
+
+    /// Finding H-R3-4: `validate_document_shape` used to check only the
+    /// TOP-level container types, so a `base_document` with `secrets.s1 = 5`
+    /// (an object where the value isn't even an object at all) passed it
+    /// and then PANICKED at `op_secret_put_version`'s
+    /// `entry.as_object_mut().expect("secret entry is always an object")` --
+    /// a panic on file-supplied (snapshot) data, which PORTING.md §4
+    /// forbids. Confirms real `python3.12`'s equivalent -- `_op_secret_put_
+    /// version` touching that same pre-existing, wrongly-shaped entry --
+    /// really does raise an uncaught `TypeError` (not merely return a
+    /// documented reason), then confirms `fold()` now returns a clean
+    /// `state_corrupt` error instead of panicking, for both this shape and
+    /// the sibling `secrets.s1.versions = 5` shape the same finding named.
+    #[test]
+    fn malformed_secret_entry_shapes_fail_closed_instead_of_panicking() {
+        let confirm_python_raises = |doc_secrets_s1: &str| {
+            let script = format!(
+                r#"
+from types import SimpleNamespace
+from zeropw.team import fold as F
+
+doc = F.new_document("env")
+doc["owner"] = "owner-fp"
+doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
+doc["dek"]["generations"]["g0"] = {{"wraps": {{}}}}
+doc["dek"]["current"] = "g0"
+doc["secrets"]["s1"] = {doc_secrets_s1}
+commit = SimpleNamespace(author="owner-fp")
+facts = F.Facts()
+op = {{"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
+      "generation_id": "g0", "kind": "api_key",
+      "ciphertext": {{"nonce": "n", "ciphertext": "c"}}}}
+try:
+    F._op_secret_put_version(doc, commit, facts, op)
+    print("OK")
+except Exception as e:
+    print(f"ERR {{type(e).__name__}}")
+"#
+            );
+            let out = crate::oracle::python(&script);
+            assert_eq!(
+                out.trim(),
+                "ERR TypeError",
+                "real python3.12 must raise an uncaught TypeError for doc[\"secrets\"][\"s1\"] = {doc_secrets_s1}"
+            );
+        };
+        confirm_python_raises("5");
+        confirm_python_raises(r#"{"kind": "api_key", "active_version": None, "versions": 5}"#);
+
+        let mut base = new_document("env");
+        base.insert("owner".into(), json!("owner-fp"));
+        base.insert(
+            "members".into(),
+            json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
+        );
+
+        let mut doc_bad_entry = Value::Object(base.clone());
+        doc_bad_entry["secrets"]["s1"] = json!(5);
+        let err = fold("env", vec![], None, Some(doc_bad_entry), None, None)
+            .expect_err("a non-object secrets.s1 must fail closed, not panic");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+
+        let mut doc_bad_versions = Value::Object(base);
+        doc_bad_versions["secrets"]["s1"] =
+            json!({"kind": "api_key", "active_version": null, "versions": 5});
+        let err = fold("env", vec![], None, Some(doc_bad_versions), None, None)
+            .expect_err("a non-object secrets.s1.versions must fail closed, not panic");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+    }
+
     // A-R5-3: probes real `python3.12`'s `zeropw.team.fold._commit_time`
     // directly (not just `time.gmtime` in isolation) end to end for the
     // three cases this finding is about, and confirms Rust's `commit_time`
@@ -2125,6 +2416,78 @@ print(probe("{huge}-0000"))
             ..commit_over
         };
         commit_time(&commit_huge).expect_err("Rust must also refuse a wall_ms literal beyond i128");
+    }
+
+    /// Finding H-R3-1: `commit_time`'s `wall_ms as f64 / 1000.0` was TWO
+    /// roundings (round `wall_ms` to the nearest `f64`, then divide by the
+    /// exact `1000.0`), not Python's ONE correctly-rounded `int / int`
+    /// division -- byte-different for many `wall_ms` values above `2^53`
+    /// (where `wall_ms as f64` first loses precision), not just the one
+    /// reviewer-supplied repro (`hlc = "9999999999999999-0000"`, where
+    /// Python renders `...T17:46:39Z` and the old code rendered
+    /// `...T17:46:40Z`). This pins the fix ([`divide_by_1000_like_python`])
+    /// against real `python3.12`'s actual `_commit_time` at that repro
+    /// value, at both ends of the `WALL_MS_GMTIME_FAILS_AT` boundary, and
+    /// over 2,000 random `wall_ms` values spanning `2^53` up to the
+    /// boundary (batched into a single Python subprocess call for speed).
+    #[test]
+    fn commit_time_matches_python_true_division_at_boundary_and_random_wall_ms() {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let mut wall_ms_values: Vec<i128> = vec![
+            9_999_999_999_999_999, // the exact reviewer-supplied repro value
+            (1u128 << 53) as i128,
+            (1u128 << 53) as i128 + 1,
+            WALL_MS_GMTIME_FAILS_AT - 1, // largest value Python still accepts
+        ];
+        for _ in 0..2000 {
+            let low = 1u128 << 53;
+            let high = WALL_MS_GMTIME_FAILS_AT as u128;
+            let sample = rng.gen_range(low..high);
+            wall_ms_values.push(sample as i128);
+        }
+
+        let py_list = wall_ms_values
+            .iter()
+            .map(|w| w.to_string())
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let script = format!(
+            r#"
+from zeropw.store import iso
+values = [
+{py_list}
+]
+for w in values:
+    print(iso(w / 1000))
+"#
+        );
+        let out = crate::oracle::python(&script);
+        let py_lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            py_lines.len(),
+            wall_ms_values.len(),
+            "python3.12 must accept every one of these wall_ms values (all below the boundary)"
+        );
+        for (wall_ms, want) in wall_ms_values.iter().zip(py_lines.iter()) {
+            let commit = Commit {
+                format: String::new(),
+                env_id: String::new(),
+                author: String::new(),
+                author_seq: 0,
+                hlc: format!("{wall_ms}-0000"),
+                ops: Vec::new(),
+                seen: BTreeMap::new(),
+                sig: String::new(),
+            };
+            let got = commit_time(&commit)
+                .unwrap_or_else(|e| panic!("Rust must also accept wall_ms={wall_ms}: {e:?}"));
+            assert_eq!(
+                &got, want,
+                "wall_ms={wall_ms}: Rust and Python must render the identical timestamp \
+                 (single correctly-rounded division), not merely both succeed"
+            );
+        }
     }
 
     // A-R5-3, the other reachable shape of the same underlying hazard: a

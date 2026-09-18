@@ -592,6 +592,89 @@ with tempfile.TemporaryDirectory() as tmp:
     let _ = owner_record; // only used to keep build_history()'s destructure symmetric with the sibling test
 }
 
+/// Finding H-R3-6: the tuple-rendering special case used to trigger for a
+/// key literally named `"connections"` at ANY depth, not just the
+/// document's own top-level `connections` map -- but a `secret.put_version`
+/// op's `public` metadata is arbitrary peer-controlled JSON that never
+/// passes through `build_connection_fields`/`dataclasses.asdict`, so its
+/// array values are always plain Python `list`s, never `tuple`s, no matter
+/// what key they sit under. This must be tested through a REAL `fold()`
+/// (not a hand-built document loaded straight from JSON, which -- in
+/// Python -- can never contain a real `tuple` at all, `json.loads` always
+/// produces `list`s, so it could never actually exercise the "must still
+/// render as a tuple" half of this comparison): `build_history()`'s "gh"
+/// connection is genuinely fresh-built by a real `connection.create` op
+/// (so `http_scope.methods` really is a Python `tuple` there), and this
+/// adds one more commit whose `secret.put_version` op's `public` metadata
+/// nests a `"connections"` key with an id that deliberately COLLIDES with
+/// "gh". Confirms real `python3.12` renders the top-level "gh" as a tuple
+/// repr but the nested, colliding one as an ordinary list, then confirms
+/// Rust matches byte-for-byte.
+#[test]
+fn humanview_nested_connections_key_off_root_matches_python() {
+    let (env_id, mut commits, owner_record, _second_record) = build_history();
+    let owner = fixed_device(0x10, 0x20); // same fixed seed build_history() uses for owner
+    let gen0 = "0".repeat(16);
+    let trap_public = json!({"connections": {"gh": {"http_scope": {"methods": ["GET"]}}}});
+    let c8 = C::sign_commit(
+        &owner,
+        &env_id,
+        6,
+        "6000-0000",
+        &BTreeMap::new(),
+        vec![
+            json!({"op": "secret.put_version", "secret_id": "s-trap", "kind": "api_key",
+              "generation_id": gen0, "version_id": "2".repeat(16),
+              "ciphertext": {"nonce": "AAAA", "ciphertext": "BBBB"}, "public": trap_public}),
+        ],
+    )
+    .unwrap();
+    commits.push(c8);
+
+    let rust_result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    let stripped = humanview::strip_document(&rust_result.document);
+    let rust_yaml = humanview::to_yaml(&stripped, &rust_result.fresh_connections);
+    // Both "gh" and "gitlab" are genuinely fresh-built this fold (each has
+    // its own real `connection.create`), so each renders `http_scope.
+    // methods` as a tuple repr -- exactly 2 occurrences, not 3: the nested,
+    // colliding "connections.gh" inside `s-trap`'s `public` metadata must
+    // NOT add a third.
+    assert_eq!(
+        rust_yaml.matches("methods: ('GET',)").count(),
+        2,
+        "exactly the two real top-level connections may render as a tuple:\n{rust_yaml}"
+    );
+    assert!(
+        rust_yaml.contains("public:\n          connections:\n            gh:\n              http_scope:\n                methods:\n                - GET"),
+        "the nested, colliding connections key must render as an ordinary YAML list:\n{rust_yaml}"
+    );
+
+    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
+    let temp = write_json_temp(&json!(commits_json));
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+from zeropw.team import humanview as H
+with open({path}) as f:
+    raw = json.load(f)
+commits = [C.Commit.from_dict(c) for c in raw]
+result = F.fold({env_id}, commits)
+stripped = H.strip_document(result.document)
+print(H.to_yaml(stripped), end="")
+"#,
+        path = py_str_literal(temp.path().to_str().unwrap()),
+        env_id = py_str_literal(&env_id),
+    );
+    let py_yaml = run_python(&script);
+    assert_eq!(
+        rust_yaml, py_yaml,
+        "to_yaml() must match python byte-for-byte for a colliding nested connections key"
+    );
+    let _ = owner_record; // only used to keep build_history()'s destructure symmetric with sibling tests
+}
+
 // ------------------------------------------------------------------ H-R2-6
 /// Finding H-R2-6 (probe 1, "the 10^30 commit body"): `FoldResult::vector`
 /// used to be filled with `i64::try_from(commit.author_seq).unwrap_or(i64::MAX)`,
@@ -751,6 +834,120 @@ with tempfile.TemporaryDirectory() as tmp:
         lines.next().unwrap(),
         "team_seq_duplicate",
         "python must also refuse the replayed commit"
+    );
+}
+
+/// Finding H-R3-9: `CommitStore.vector`/`_snapshot_floor` (Python) filter
+/// commit/snapshot filenames with `Path.stem.isdigit()` then parse with
+/// `int(stem)` -- NOT the ASCII-only grammar this port's `digit_stems` used
+/// to filter on. A commit file named `٣.json` (U+0663, ARABIC-INDIC DIGIT
+/// THREE -- an `Nd` code point `int()` DOES accept) used to be silently
+/// IGNORED here (`vector()` missing that entry, `last_seq() == 0`) where
+/// Python reads it as `author_seq = 3` -- which would let a REPLAYED
+/// `author_seq = 1..3` commit Python refuses (`team_seq_duplicate`) be
+/// silently re-accepted by this port instead. This confirms real
+/// `python3.12`'s `CommitStore.vector` really does read that exact
+/// filename as `3`, then confirms Rust now agrees.
+#[test]
+fn commit_store_vector_reads_non_ascii_nd_digit_filename_like_python() {
+    let owner = fixed_device(0x91, 0x92);
+    let record = owner.record().unwrap();
+    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let fp = record.fingerprint();
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    // U+0663 ARABIC-INDIC DIGIT THREE: `"\u{0663}".isdigit()` is `True` and
+    // `int("\u{0663}") == 3` in real python3.12, but it is not an ASCII
+    // digit at all.
+    state
+        .write_json(
+            &format!("team/{env_id}/commits/{fp}/\u{0663}.json"),
+            &json!({}),
+        )
+        .unwrap();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    assert_eq!(
+        store.last_seq(&fp).unwrap(),
+        3,
+        "a non-ASCII Nd digit filename must still be read as author_seq 3"
+    );
+
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+state = StateDir(Path({state_path}))
+store = C.CommitStore(state, {env_id})
+print(store.last_seq({fp}))
+"#,
+        state_path = py_str_literal(&state.path.to_string_lossy()),
+        env_id = py_str_literal(&env_id),
+        fp = py_str_literal(&fp),
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "3",
+        "real python3.12 must also read this filename as author_seq 3"
+    );
+}
+
+/// Finding H-R3-9's other reachable shape: a stem `str.isdigit()` accepts
+/// but `int()` cannot parse -- `"\u{b2}"` (superscript two, `Numeric_Type=
+/// Digit`, not `Decimal`) -- raises an uncaught `ValueError` from Python's
+/// own `[int(p.stem) for p in ... if p.stem.isdigit()]` list comprehension,
+/// aborting `CommitStore.vector`/`_snapshot_floor` entirely, where the
+/// previous ASCII-only filter here just silently ignored the file (as if
+/// it had never matched `isdigit()` at all). Fixed to fail closed
+/// (`state_corrupt`) instead, matching "every real caller lets this
+/// exception escape uncaught" (PORTING.md §3.5).
+#[test]
+fn commit_store_vector_fails_closed_on_isdigit_but_unparsable_filename() {
+    let owner = fixed_device(0x93, 0x94);
+    let record = owner.record().unwrap();
+    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let fp = record.fingerprint();
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    state
+        .write_json(
+            &format!("team/{env_id}/commits/{fp}/\u{b2}.json"),
+            &json!({}),
+        )
+        .unwrap();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    let err = store
+        .last_seq(&fp)
+        .expect_err("an isdigit()-but-unparsable stem must fail closed, not silently skip");
+    assert_eq!(err.reason, "state_corrupt");
+
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+state = StateDir(Path({state_path}))
+store = C.CommitStore(state, {env_id})
+try:
+    store.last_seq({fp})
+    print("OK")
+except Exception as e:
+    print(f"ERR {{type(e).__name__}}")
+"#,
+        state_path = py_str_literal(&state.path.to_string_lossy()),
+        env_id = py_str_literal(&env_id),
+        fp = py_str_literal(&fp),
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "ERR ValueError",
+        "real python3.12 must raise an uncaught ValueError for this filename"
     );
 }
 
@@ -1287,6 +1484,62 @@ except InvalidInput as exc:
     }
 }
 
+/// Finding H-R3-5: `CliProfile.__post_init__` validates each `extra_env`
+/// entry's KEY before its VALUE, one entry at a time, in the dict's
+/// insertion/document order -- `{"b": "x", "A": 5}` raises
+/// `invalid_env_name` (`"b"`, checked first, fails the name pattern) not
+/// `invalid_env_value` (from `"A"`'s non-string value, never reached). The
+/// sweep test above (`op_validation_reason_sweep_matches_python`) serialises
+/// every op with `pyjson::dumps(..., DumpOptions::compact_sorted())` before
+/// sending it to the Python subprocess -- which recursively KEY-SORTS the
+/// JSON text, so by the time Python's `json.loads` reconstructs the dict,
+/// `"A"` already sorts before `"b"` and the bug is invisible. This test
+/// builds the raw JSON text BY HAND instead, with `extra_env`'s keys
+/// deliberately left in `b`-before-`A` order, and feeds that exact text to
+/// both `serde_json::from_str` (preserving the document order it parses,
+/// same as `zeropw::team::commit::validate_op`'s own `Map` -- `preserve_
+/// order` is enabled crate-wide) and Python's `json.loads` (which always
+/// preserves the source text's key order).
+#[test]
+fn extra_env_key_before_value_order_matches_python_when_not_key_sorted() {
+    let raw_json = r#"{"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+        "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+        "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+        "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"]},
+        "cli": {"program": "gh", "kind": "http", "extra_env": {"b": "x", "A": 5}}}"#;
+
+    let op: Value = serde_json::from_str(raw_json).expect("parse raw json");
+    let rust_result = match C::validate_op(&op) {
+        Ok(()) => "accepted".to_string(),
+        Err(e) => e.reason.to_string(),
+    };
+    assert_eq!(
+        rust_result, "invalid_env_name",
+        "'b' (checked first in document order) must fail the name pattern before 'A's bad value is ever inspected"
+    );
+
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+op = json.loads({raw})
+try:
+    C.validate_op(op)
+    print("accepted")
+except InvalidInput as e:
+    print(e.reason)
+"#,
+        raw = py_str_literal(raw_json),
+    );
+    let py_result = run_python(&script);
+    assert_eq!(
+        py_result.trim(),
+        rust_result,
+        "rust and real python3.12 must agree on the first-in-document-order failure"
+    );
+}
+
 /// Finding H-6 (the two `Commit::from_dict` DEVIATIONS.md rows, the second
 /// covering `str(data["format"])`/`str(data["env_id"])`/`str(data["author"])`/
 /// `str(data["hlc"])`/`str(data["sig"])`): Python's `str(x)` coerces *any*
@@ -1413,6 +1666,55 @@ with tempfile.TemporaryDirectory() as tmp:
         "python must also accept a pair-list op"
     );
     assert_eq!(lines.next().unwrap(), "2");
+}
+
+/// Finding H-R3-3 (correcting H-R2-5's own reasoning): a pair-list `ops`
+/// element whose KEY isn't a JSON string, e.g.
+/// `[["op", "settings.update"], [1, "x"]]`, is not actually inert in
+/// Python just because no op handler looks it up by name -- `dict()` keeps
+/// the `1` key like any other, and `Commit.canonical_json`'s
+/// `json.dumps(..., sort_keys=True)` (the exact bytes signed and hashed)
+/// then raises an uncaught `TypeError` trying to sort `1` against `"op"`.
+/// The round-2 fix silently dropped the bad-keyed pair and kept the rest of
+/// the op, so this port ACCEPTED and FOLDED a commit shape Python can never
+/// even hash, let alone sign or verify -- confirmed here against real
+/// `python3.12`: `Commit.from_dict` succeeds, but `canonical_json` (and
+/// therefore `hash`/`sign_commit`/`receive_commit`) always raises for this
+/// exact shape. `Commit::from_dict` must instead reject the whole commit as
+/// malformed, matching "every real caller's canonicalization step raises".
+#[test]
+fn commit_ops_element_with_non_string_pair_key_is_pythons_uncaught_typeerror() {
+    let data = json!({
+        "format": "zeropw-team-commit-v1", "env_id": "e", "author": "a", "author_seq": 1,
+        "hlc": "1000-0000", "seen": {}, "sig": "",
+        "ops": [[["op", "settings.update"], [1, "x"]]],
+    });
+    let data_text = pyjson::dumps(&data, DumpOptions::compact_sorted()).unwrap();
+
+    let script = format!(
+        r#"
+import json
+from zeropw.team.commit import Commit
+data = json.loads({data})
+c = Commit.from_dict(data)
+try:
+    c.canonical_json(False)
+    print("OK")
+except Exception as e:
+    print(f"ERR {{type(e).__name__}}")
+"#,
+        data = py_str_literal(&data_text),
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "ERR TypeError",
+        "real python3.12 must raise an uncaught TypeError canonicalizing this op"
+    );
+
+    let err = Commit::from_dict(&data)
+        .expect_err("Rust must reject the whole commit as malformed, not silently drop the key");
+    assert_eq!(err.reason, "commit_malformed");
 }
 
 /// Finding H-6 (`Commit::from_dict`'s `seen` arm vs `zeropw/team/commit.py`

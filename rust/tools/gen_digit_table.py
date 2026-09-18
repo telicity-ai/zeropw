@@ -1,5 +1,6 @@
 #!/usr/bin/env python3.12
-"""Generate `UNICODE_DECIMAL_DIGIT_BLOCKS` for `rust/src/team/commit.rs`.
+"""Generate `UNICODE_DECIMAL_DIGIT_BLOCKS`/`UNICODE_DIGIT_NOT_DECIMAL` for
+`rust/src/team/commit.rs`.
 
 CPython 3.12's `int(str)` accepts any Unicode code point that has a decimal
 digit value (`unicodedata.decimal(ch)` does not raise `ValueError`) as a
@@ -73,16 +74,46 @@ def format_table(name, starts):
     return "\n".join(lines)
 
 
+def digit_not_decimal_codepoints():
+    """Every code point where `str.isdigit()` is `True` but
+    `unicodedata.decimal()` raises `ValueError` -- i.e. `Numeric_Type=Digit`
+    (superscripts, circled digits, ...) rather than `Numeric_Type=Decimal`.
+    `int(str)` cannot parse any of these (finding H-R3-9: CPython's `str.
+    isdigit()` is a strictly wider test than the digit grammar `int()`
+    actually accepts, e.g. `"\\xb2".isdigit()` is `True` but `int("\\xb2")`
+    raises `ValueError`), so `commit.rs`'s `digit_stems` must recognise them
+    (to match `Path.stem.isdigit()`) without ever assigning them a value (to
+    match `int()` failing), i.e. fail closed rather than silently skip.
+    Unlike the decimal blocks these are not all contiguous runs of ten, so
+    this returns the flat, sorted list of individual code points."""
+    out = []
+    for cp in range(0, MAX_CODEPOINT + 1):
+        if SURROGATE_LO <= cp <= SURROGATE_HI:
+            continue
+        ch = chr(cp)
+        if not ch.isdigit():
+            continue
+        try:
+            unicodedata.decimal(ch)
+        except ValueError:
+            out.append(cp)
+    return out
+
+
 def main():
     starts = block_starts()
     non_ascii = [cp for cp in starts if cp != ASCII_ZERO]
+    not_decimal = digit_not_decimal_codepoints()
 
     print(f"# unicodedata.unidata_version = {unicodedata.unidata_version!r}", file=sys.stderr)
     print(f"# python version = {sys.version!r}", file=sys.stderr)
     print(f"# total Nd blocks (incl. ASCII): {len(starts)}", file=sys.stderr)
     print(f"# non-ASCII Nd blocks: {len(non_ascii)}", file=sys.stderr)
+    print(f"# isdigit()-but-not-decimal code points: {len(not_decimal)}", file=sys.stderr)
 
     print(format_table("UNICODE_DECIMAL_DIGIT_BLOCKS", non_ascii))
+    print()
+    print(format_table("UNICODE_DIGIT_NOT_DECIMAL", not_decimal))
 
 
 if __name__ == "__main__":
