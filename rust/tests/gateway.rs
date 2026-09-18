@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use zeropw::context::{Config, Context};
@@ -1575,7 +1577,7 @@ fn chunked_stream_is_buffered() {
 
 #[test]
 fn large_ok_and_huge_rejected() {
-    let t = GatewayTest::new();
+    let mut t = GatewayTest::new();
     let result = t.relay("GET", "/large");
     assert_eq!(
         (result.status, result.body.len()),
@@ -1583,6 +1585,14 @@ fn large_ok_and_huge_rejected() {
     );
     let huge = assert_blocked(&t, "/huge", "response_too_large");
     assert!(!huge.body.windows(4).any(|w| w == b"yyyy"));
+    // finding F-13 (tests/test_gateway.py:552-560's `test_large_ok_and_huge_rejected`):
+    // the original port stopped at the `/huge` case above and dropped the
+    // `max_response_bytes` mutation entirely, so a response that is only
+    // too large *for this connection's own configured limit* (not the
+    // hard-coded `/huge` fixture) was never exercised.
+    t.ctx.config.max_response_bytes = 1024;
+    let small = t.relay("GET", "/large");
+    assert_eq!(small.reason.as_deref(), Some("response_too_large"));
 }
 
 #[test]
@@ -1655,6 +1665,149 @@ fn unsupported_auth_mode_and_unsafe_credential_fail_closed() {
 }
 
 #[test]
+fn unsupported_auth_mode_via_corrupted_stored_document() {
+    // finding F-18 (tests/test_gateway.py:574-596's
+    // `test_unsupported_auth_mode_fails_closed`, `unsupported_auth_mode`
+    // half only -- the `credential_header_unsafe` half is the test just
+    // above, already ported). Python reaches this scenario only via
+    // `object.__new__(P.HttpAuth)`: it constructs an `HttpAuth` whose
+    // `mode` is `"digest"` while *bypassing* `__post_init__`'s own `mode
+    // not in AUTH_MODES` check, then injects it into a `Decision` via
+    // `mock.patch.object(self.ctx.policy, "evaluate", return_value=decision)`.
+    //
+    // Rust's `HttpAuth` has no such backdoor: `HttpAuth::new`/`from_value`
+    // are the only ways to construct one, and both already reject an
+    // unknown `mode` eagerly -- matching what `HttpAuth.__post_init__`
+    // itself would do if Python's test called the real constructor instead
+    // of bypassing it. In other words, Python's own dataclass validation
+    // makes this scenario just as unreachable through ordinary
+    // construction; the test is exercising a defensive fallback inside
+    // `_auth_header` (`gateway.py:377`) that nothing in real operation can
+    // trigger either.
+    //
+    // The closest portable equivalent is a hand-edited stored
+    // `connections.json` (the same technique
+    // `stored_metadata_literal_loads_and_is_refused_at_use` uses for a
+    // similarly "record predates a later, stricter check" gap). That
+    // reaches a *different* path than Python's mocked one, though: Rust
+    // validates `http_auth.mode` at connection-*load* time
+    // (`Connection::from_value` -> `HttpAuth::from_value`), not lazily at
+    // header-building time, so the failure surfaces while evaluating policy
+    // -- before `Relay::run` ever reaches `auth_header` -- as
+    // `Error::InvalidInput` (400, error name `"InvalidInput"`), not
+    // `Error::Unsupported` (501, error name `"Unsupported"`) as Python's
+    // test asserts. Confirmed empirically (not just reasoned about): this
+    // is a real, newly-observed divergence for this specific
+    // unreachable-via-normal-construction case -- see the "gateway
+    // (`unsupported_auth_mode` via a hand-edited stored document)" row in
+    // `DEVIATIONS.md`. The assertions below pin the *actual* Rust outcome
+    // rather than Python's, since weakening this to only check the shared
+    // `reason` string would hide that divergence.
+    let t = GatewayTest::new();
+    let path = t.ctx.state.path.join(P::CONNECTIONS);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut doc: Value = serde_json::from_str(&text).unwrap();
+    doc["gh"]["http_auth"]["mode"] = serde_json::json!("digest");
+    std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+
+    let result = t.relay("GET", "/repos");
+    assert_eq!(result.reason.as_deref(), Some("unsupported_auth_mode"));
+    assert_eq!(result.status, 400);
+    assert_eq!(result.json()["error"], "InvalidInput");
+    assert_eq!(t.fake.requests().len(), 0);
+}
+
+#[test]
+fn zeropw_authority_is_never_a_business_credential() {
+    // finding F-16(c) (tests/test_gateway.py:1099-1115's
+    // `test_zeropw_authority_is_never_a_business_credential`): not ported
+    // at all previously.
+    let t = GatewayTest::new();
+    let token = t.ctx.policy.create_principal("agent-2", "cli").unwrap();
+    let bearer_token = format!("Bearer {token}");
+    let cases: [(&str, &[u8]); 3] = [
+        ("caller-token", token.as_bytes()),
+        ("handle", t.handle.as_bytes()),
+        ("bearer-caller-token", bearer_token.as_bytes()),
+    ];
+    for (name, value) in cases {
+        t.ctx
+            .vault
+            .put_secret(name, "api_key", value, "demo", "dev", true)
+            .unwrap();
+        t.ctx
+            .policy
+            .create_connection(http_connection(
+                name,
+                &t.fake,
+                name,
+                HttpAuth::bearer(),
+                HttpScope::new(None, None, vec![]).unwrap(),
+            ))
+            .unwrap();
+        t.ctx
+            .policy
+            .create_grant("agent-1", name, Some(3600), None)
+            .unwrap();
+        let result = gateway::relay_for_caller(
+            &t.ctx,
+            "agent-1",
+            name,
+            "GET",
+            "/me",
+            &no_headers(),
+            b"",
+            None,
+        );
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (501, Some("self_referential_credential")),
+            "{name}"
+        );
+    }
+    assert_eq!(t.fake.requests().len(), 0);
+
+    // A credential that merely contains the letters is not mistaken for ZeroPW authority.
+    t.ctx
+        .vault
+        .put_secret(
+            "lookalike",
+            "api_key",
+            b"synthetic-token-xzpw1.abc-zpwc_def",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    t.ctx
+        .policy
+        .create_connection(http_connection(
+            "lookalike",
+            &t.fake,
+            "lookalike",
+            HttpAuth::bearer(),
+            HttpScope::new(None, None, vec![]).unwrap(),
+        ))
+        .unwrap();
+    t.ctx
+        .policy
+        .create_grant("agent-1", "lookalike", Some(3600), None)
+        .unwrap();
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "lookalike",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!((result.status, result.reason.as_deref()), (401, None));
+    t.assert_credential_free(&t.state_text(&["audit/audit.jsonl"]), &[token.as_str()]);
+}
+
+#[test]
 fn missing_credential_is_explicit() {
     let t = GatewayTest::new();
     t.ctx
@@ -1667,6 +1820,34 @@ fn missing_credential_is_explicit() {
         (503, Some("credential_unavailable"))
     );
     assert_eq!(t.fake.requests().len(), 0);
+}
+
+#[test]
+fn audit_unavailable_refuses_before_credential_use() {
+    // finding F-16(a) (tests/test_gateway.py:603-618's
+    // `test_audit_unavailable_refuses_before_credential_use`): not ported at
+    // all previously ("audit_unavailable"/"append_line" did not appear
+    // anywhere in this file). Python monkeypatches
+    // `ctx.state.append_line` to raise `OSError("disk full")`; this port
+    // reaches the same `StateDir::append_line` failure through the
+    // filesystem instead -- stripping the audit log's write permission --
+    // since there is no injectable seam for that method.
+    let t = GatewayTest::new();
+    let audit_path = t.ctx.state.path.join(zeropw::audit::AUDIT_FILE);
+    let original_perms = std::fs::metadata(&audit_path).unwrap().permissions();
+    let mut readonly = original_perms.clone();
+    readonly.set_readonly(true);
+    std::fs::set_permissions(&audit_path, readonly).unwrap();
+    let result = t.relay("GET", "/repos");
+    std::fs::set_permissions(&audit_path, original_perms).unwrap();
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (503, Some("audit_unavailable"))
+    );
+    assert_eq!(t.fake.requests().len(), 0);
+    assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 0);
+    // Audit back: the request proceeds.
+    assert_eq!(t.relay("GET", "/repos").status, 200);
 }
 
 #[test]
@@ -1748,6 +1929,262 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 1);
 }
 
+#[test]
+fn pending_approval_shows_what_the_digest_binds() {
+    // finding F-15 (tests/test_gateway.py:660-717's
+    // `test_pending_approval_shows_what_the_digest_binds`): not ported at
+    // all previously -- `Relay::annotate_approval` had no test coverage.
+    let t = GatewayTest::new();
+    t.ctx
+        .policy
+        .create_connection(http_connection(
+            "writes",
+            &t.fake,
+            "gh-token",
+            HttpAuth::bearer(),
+            HttpScope::new(None, None, vec!["POST".to_string()]).unwrap(),
+        ))
+        .unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", "writes", Some(3600), None)
+        .unwrap();
+    let handle = t.issue_handle_for("agent-1", "writes", &grant.id, None, 300);
+    let json_type = headers(&[("Content-Type", "application/json")]);
+    let benign_body = serde_json::to_vec(&serde_json::json!({"title": "typo fix"})).unwrap();
+    let evil_body = serde_json::to_vec(&serde_json::json!({"title": "wipe everything"})).unwrap();
+    let benign = t.relay_full(
+        "POST",
+        "/repos/demo/issues",
+        &json_type,
+        &benign_body,
+        Some(&handle),
+        None,
+    );
+    let evil = t.relay_full(
+        "POST",
+        "/repos/demo/issues?admin_override=1",
+        &json_type,
+        &evil_body,
+        Some(&handle),
+        None,
+    );
+    assert_eq!(
+        (benign.reason.as_deref(), evil.reason.as_deref()),
+        (Some("approval_required"), Some("approval_required"))
+    );
+    let approvals = t.ctx.policy.list_approvals().unwrap();
+    let benign_digest = benign.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let evil_digest = evil.json()["approval_digest"].as_str().unwrap().to_string();
+    let benign_entry = &approvals[&benign_digest];
+    let evil_entry = &approvals[&evil_digest];
+    let origin = format!("http://127.0.0.1:{}", t.fake.port());
+    assert_eq!(evil_entry["caller"], "agent-1");
+    assert_eq!(evil_entry["connection"], "writes");
+    assert_eq!(evil_entry["method"], "POST");
+    assert_eq!(evil_entry["path"], "/repos/demo/issues");
+    assert_eq!(evil_entry["origin"], origin);
+    assert_eq!(evil_entry["query"], "admin_override=1");
+    assert_eq!(evil_entry["content_type"], "application/json");
+    assert_eq!(evil_entry["body_bytes"], evil_body.len());
+    assert_eq!(
+        evil_entry["body_sha256"],
+        hex::encode(Sha256::digest(&evil_body))
+    );
+    assert_eq!(
+        evil_entry["body_preview"],
+        String::from_utf8(evil_body.clone()).unwrap()
+    );
+    assert_eq!(evil_entry["body_preview_truncated"], false);
+    assert_eq!(evil_entry["policy_version"], 1);
+    assert_eq!(evil_entry["status"], "pending");
+    assert_eq!(benign_entry["query"], Value::Null);
+    assert_eq!(
+        benign_entry["body_preview"],
+        String::from_utf8(benign_body.clone()).unwrap()
+    );
+    assert_ne!(benign_entry["body_sha256"], evil_entry["body_sha256"]);
+    // The details live only in the admin-only approval record, never in the audit log.
+    let audit = t.state_text(&["audit/audit.jsonl"]);
+    assert!(!audit.contains("admin_override"));
+    assert!(!audit.contains("wipe everything"));
+    // Approving the benign entry releases exactly the benign request.
+    t.ctx.policy.approve(&benign_digest).unwrap();
+    let still_pending = t.relay_full(
+        "POST",
+        "/repos/demo/issues?admin_override=1",
+        &json_type,
+        &evil_body,
+        Some(&handle),
+        None,
+    );
+    assert_eq!(still_pending.reason.as_deref(), Some("approval_required"));
+    let done = t.relay_full(
+        "POST",
+        "/repos/demo/issues",
+        &json_type,
+        &benign_body,
+        Some(&handle),
+        None,
+    );
+    assert_eq!((done.status, done.reason.clone()), (201, None));
+    let last = t.fake.requests().last().unwrap().clone();
+    assert_eq!(
+        (last.path.as_str(), last.body),
+        ("/repos/demo/issues", benign_body)
+    );
+    // Content-Type is bound as well: the approved bytes under another type need a new approval.
+    t.ctx.policy.approve(&evil_digest).unwrap();
+    let retyped = t.relay_full(
+        "POST",
+        "/repos/demo/issues?admin_override=1",
+        &headers(&[("Content-Type", "text/plain")]),
+        &evil_body,
+        Some(&handle),
+        None,
+    );
+    assert_eq!(retyped.reason.as_deref(), Some("approval_required"));
+    let retyped_digest = retyped.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        t.ctx.policy.list_approvals().unwrap()[&retyped_digest]["content_type"],
+        "text/plain"
+    );
+    assert_eq!(t.fake.requests().len(), 1);
+    // Long and binary bodies: bounded preview, or size and digest only.
+    let mut long_body = b"{\"title\":\"".to_vec();
+    long_body.extend(std::iter::repeat_n(b'x', 1000));
+    long_body.push(b'"');
+    long_body.push(b'}');
+    let long_result = t.relay_full(
+        "POST",
+        "/repos/demo/issues",
+        &json_type,
+        &long_body,
+        Some(&handle),
+        None,
+    );
+    let long_digest = long_result.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let long_entry = t.ctx.policy.list_approvals().unwrap()[&long_digest].clone();
+    assert_eq!(
+        long_entry["body_preview"].as_str().unwrap().chars().count(),
+        gateway::APPROVAL_PREVIEW_CHARS
+    );
+    assert_eq!(long_entry["body_preview_truncated"], true);
+    let binary_result = t.relay_full(
+        "POST",
+        "/repos/demo/issues",
+        &no_headers(),
+        b"\xff\xfe\x00binary",
+        Some(&handle),
+        None,
+    );
+    let binary_digest = binary_result.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let binary_entry = t.ctx.policy.list_approvals().unwrap()[&binary_digest].clone();
+    assert_eq!(binary_entry["body_preview"], Value::Null);
+    assert_eq!(binary_entry["body_bytes"], 9);
+    assert_eq!(binary_entry["content_type"], Value::Null);
+}
+
+#[test]
+fn approval_does_not_survive_a_changed_target_or_policy_version() {
+    // finding F-15 (tests/test_gateway.py:718-749's
+    // `test_approval_does_not_follow_a_changed_origin_or_policy_version`):
+    // not ported at all previously. Python's first half additionally
+    // mock-patches `Policy.evaluate` to simulate the *same* connection
+    // resolving to a different origin without changing stored state at
+    // all; there is no portable Rust seam for that (evaluate is not
+    // injectable), so this port exercises the origin-binding property via
+    // the mechanism the equivalence review itself called out as portable:
+    // `update_connection` to another port, plus `regrant` -- which changes
+    // both the origin and the policy version together, still proving the
+    // same thing (an approval granted under one resolved origin/policy
+    // version is refused under another).
+    let t = GatewayTest::new();
+    let first = t.relay("DELETE", "/repos/demo");
+    let digest = first.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    t.ctx.policy.approve(&digest).unwrap();
+
+    let other = FakeUpstream::new(SECRET_A).start();
+    let (_, widened) = t
+        .ctx
+        .policy
+        .update_connection(
+            "gh",
+            ConnectionChanges::new().http_target(Some(
+                HttpTarget::new("http", "127.0.0.1", other.port() as i64, None, false).unwrap(),
+            )),
+        )
+        .unwrap();
+    assert!(widened);
+    let fresh = t.ctx.policy.regrant(&t.grant.id).unwrap();
+    let fresh_handle = t.issue_handle_for("agent-1", "gh", &fresh.id, None, 300);
+    let after_move = t.relay_full(
+        "DELETE",
+        "/repos/demo",
+        &no_headers(),
+        b"",
+        Some(&fresh_handle),
+        None,
+    );
+    assert_eq!(
+        (after_move.status, after_move.reason.as_deref()),
+        (428, Some("approval_required"))
+    );
+    let after_move_digest = after_move.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(after_move_digest, digest);
+    assert_eq!(
+        t.ctx.policy.list_approvals().unwrap()[&after_move_digest]["origin"],
+        format!("http://127.0.0.1:{}", other.port())
+    );
+
+    // A policy-version change alone (not widening) also needs a new approval.
+    t.ctx.policy.approve(&after_move_digest).unwrap();
+    t.ctx
+        .policy
+        .update_connection("gh", ConnectionChanges::new().description("renamed"))
+        .unwrap();
+    let renamed = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "gh",
+        "DELETE",
+        "/repos/demo",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (renamed.status, renamed.reason.as_deref()),
+        (428, Some("approval_required"))
+    );
+    let renamed_digest = renamed.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(renamed_digest, after_move_digest);
+    assert_eq!(t.fake.requests().len(), 0);
+    assert_eq!(other.requests().len(), 0);
+}
+
 // ---------------------------------------------------------------- ledger
 
 fn issue_ledger(t: &GatewayTest, request_id: &str, title: &str) -> RelayResult {
@@ -1820,18 +2257,101 @@ fn same_id_different_request_is_rejected() {
 
 #[test]
 fn uncertain_outcome_is_not_retried_blindly() {
-    let t = GatewayTest::new();
+    // finding F-14 (tests/test_gateway.py:797-807's
+    // `test_uncertain_outcome_is_not_retried_blindly`): the previous version
+    // of this test was a stub -- it issued one ledgered request and then
+    // asserted nothing about the actual uncertain-outcome behaviour,
+    // claiming `ctx.config` could not be mutated from this test helper. It
+    // can: `Context::config` is a plain public field, and `upstream_timeout`
+    // is genuinely mutable through a `mut` binding, exactly like
+    // `upstream_down_and_timeout` above already does. Neither
+    // "outcome_uncertain" nor "request_in_flight" appeared anywhere else in
+    // this file before this fix.
+    let mut t = GatewayTest::new();
     let first = issue_ledger(&t, "req-3", "same");
     assert_eq!((first.status, first.reason.clone()), (201, None));
-    // Exercise the ledger's uncertain-outcome path without a real network
-    // timeout: point the connection at a target address that is refused,
-    // which -- like a timeout -- never reaches "transmitted" and so is not
-    // representative of "uncertain"; instead directly verify via a slow
-    // response that completes (timeout itself is covered informally by
-    // `/slow` reachability above, since driving a sub-second real socket
-    // timeout deterministically needs a mutable `ctx.config`, not exposed
-    // by this crate's `&Context` test helper).
-    let _ = first;
+    t.ctx.config.upstream_timeout = 0.3;
+    let timed_out = t.relay_full(
+        "GET",
+        "/slow?seconds=1",
+        &no_headers(),
+        b"",
+        None,
+        Some("slow-2"),
+    );
+    assert_eq!(timed_out.reason.as_deref(), Some("upstream_timeout"));
+    let again = t.relay_full(
+        "GET",
+        "/slow?seconds=1",
+        &no_headers(),
+        b"",
+        None,
+        Some("slow-2"),
+    );
+    assert_eq!(
+        (again.status, again.reason.as_deref()),
+        (409, Some("outcome_uncertain"))
+    );
+    assert_eq!(
+        t.fake
+            .requests()
+            .iter()
+            .filter(|r| r.path.starts_with("/slow"))
+            .count(),
+        1
+    );
+    std::thread::sleep(Duration::from_millis(800));
+}
+
+#[test]
+fn in_flight_duplicate_is_rejected_then_replayed() {
+    // finding F-14 (tests/test_gateway.py:718-749's
+    // `test_in_flight_duplicate_is_rejected_then_replayed`): not ported at
+    // all previously. A second thread races the first request under the
+    // same request id while it is still in flight against `/slow`.
+    let t = GatewayTest::new();
+    let first_result: Mutex<Option<RelayResult>> = Mutex::new(None);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let r = t.relay_full(
+                "GET",
+                "/slow?seconds=0.8",
+                &no_headers(),
+                b"",
+                None,
+                Some("in-flight"),
+            );
+            *first_result.lock().unwrap() = Some(r);
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while t.fake.requests().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let duplicate = t.relay_full(
+            "GET",
+            "/slow?seconds=0.8",
+            &no_headers(),
+            b"",
+            None,
+            Some("in-flight"),
+        );
+        assert_eq!(
+            (duplicate.status, duplicate.reason.as_deref()),
+            (409, Some("request_in_flight"))
+        );
+    });
+    let first = first_result.into_inner().unwrap().expect("worker ran");
+    assert_eq!(first.status, 200);
+    let replay = t.relay_full(
+        "GET",
+        "/slow?seconds=0.8",
+        &no_headers(),
+        b"",
+        None,
+        Some("in-flight"),
+    );
+    assert_eq!((replay.status, replay.body.clone()), (200, first.body));
+    assert_eq!(t.fake.requests().len(), 1);
 }
 
 #[test]
@@ -1937,6 +2457,27 @@ fn ledger_file_is_bounded_and_value_free() {
         .collect();
     assert_eq!(ids, std::collections::HashSet::from(["r0".to_string()]));
     t.assert_credential_free(&doc.to_string(), &[SECRET_A]);
+}
+
+#[test]
+fn large_replay_body_is_not_stored() {
+    // finding F-16(b) (tests/test_gateway.py:823-831's
+    // `test_large_replay_body_is_not_stored`): Python shrinks
+    // `LEDGER_MAX_STORED_BODY` to 16 bytes via monkeypatching; this port
+    // instead uses `/large` (2 MiB), which is already above the real
+    // `gateway::LEDGER_MAX_STORED_BODY` (1 MiB) and below the default
+    // `max_response_bytes` (8 MiB), so no seam is needed at all.
+    const _: () = assert!(zeropw::fake_upstream::LARGE_BODY_SIZE > gateway::LEDGER_MAX_STORED_BODY);
+    let t = GatewayTest::new();
+    let first = t.relay_full("GET", "/large", &no_headers(), b"", None, Some("big"));
+    assert_eq!(first.status, 200);
+    let replay = t.relay_full("GET", "/large", &no_headers(), b"", None, Some("big"));
+    assert_eq!(
+        (replay.status, replay.reason.as_deref()),
+        (200, Some("replay_body_unavailable"))
+    );
+    assert_eq!(replay.json()["reason"], "replay_body_unavailable");
+    assert_eq!(t.fake.requests().len(), 1);
 }
 
 // -------------------------------------------------------------------- pure
@@ -2268,6 +2809,313 @@ fn mixed_answer_is_refused_as_a_whole() {
 }
 
 #[test]
+fn metadata_answer_is_refused_even_for_private_opt_in() {
+    // finding F-17 (tests/test_gateway.py:1504-1513's
+    // `test_metadata_answer_is_refused_even_for_private_opt_in`): not
+    // ported at all previously.
+    let t = GatewayTest::new();
+    let handle = named_connection(&t, "meta", "upstream.zeropw.test", true);
+    for answer in [
+        "169.254.169.254",
+        "fd00:ec2::254",
+        "::ffff:169.254.169.254",
+        "fd00:ec2::23",
+        "fd20:ce::254",
+        "fd00:c1::a9fe:a9fe",
+        "64:ff9b::169.254.169.254",
+        "::169.254.169.254",
+        "168.63.129.16",
+    ] {
+        let resolver = resolver_answering(vec![answer.parse().unwrap()]);
+        let result = gateway::relay_with_resolver(
+            &t.ctx,
+            &handle,
+            "GET",
+            "/me",
+            &no_headers(),
+            b"",
+            None,
+            resolver,
+        );
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (403, Some("metadata_address_not_allowed")),
+            "answer={answer}"
+        );
+    }
+    assert_eq!(t.fake.requests().len(), 0);
+}
+
+#[test]
+fn ipv4_embedded_in_ipv6_answers_are_judged_by_the_ipv4_address() {
+    // finding F-17 (tests/test_gateway.py:1514-1525's
+    // `test_ipv4_embedded_in_ipv6_answers_is_judged_by_the_ipv4_address`):
+    // not ported at all previously. Python additionally asserts nothing was
+    // *dialed* via a `socket.create_connection` patch; this port uses the
+    // same proxy every other resolver test in this file already uses for
+    // "never reached upstream" -- the fake upstream's own request count.
+    let t = GatewayTest::new();
+    let handle = named_connection(&t, "nat64", "upstream.zeropw.test", false);
+    for answer in [
+        "64:ff9b::10.0.0.1",
+        "64:ff9b::127.0.0.1",
+        "::10.0.0.1",
+        "::ffff:0:10.0.0.1",
+        "fec0::1",
+    ] {
+        let resolver = resolver_answering(vec![answer.parse().unwrap()]);
+        let result = gateway::relay_with_resolver(
+            &t.ctx,
+            &handle,
+            "GET",
+            "/me",
+            &no_headers(),
+            b"",
+            None,
+            resolver,
+        );
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (403, Some("target_address_not_allowed")),
+            "answer={answer}"
+        );
+    }
+    assert_eq!(t.fake.requests().len(), 0);
+}
+
+#[test]
+fn address_refusal_spends_no_grant_use_approval_or_credential() {
+    // finding F-17 (tests/test_gateway.py:1526-1560's
+    // `test_address_refusal_spends_no_use_approval_or_credential`). Python
+    // resolves to a genuinely public address (`8.8.8.8`) and patches
+    // `socket.create_connection` (`dial_recorder(deliver_to_fake=True)`) to
+    // redirect the actual TCP dial to the local fake upstream -- there is
+    // no Rust seam for that (only DNS resolution is injectable via
+    // `gateway::Resolver`, per the `gateway`/`_getaddrinfo` row in
+    // `DEVIATIONS.md`). This port instead uses an
+    // `allow_private_network=true` connection: a loopback answer is
+    // allowed and really reaches the fake upstream (the same pattern
+    // `opt_in_connects_to_the_checked_address_and_resolves_once_per_request`
+    // above already relies on), while a *metadata* answer is refused
+    // regardless of that opt-in -- exercising the same "a refused DNS
+    // answer spends nothing" property through the public resolver seam
+    // alone, without needing to mock `Vault::secret_for_trusted_use`
+    // either: the vault is never reached as long as no upstream request
+    // ever left (`t.fake.requests()` stays empty) and the grant's use
+    // counter/approval status never move.
+    let t = GatewayTest::new();
+    t.ctx
+        .policy
+        .create_connection(
+            Connection::new(
+                "capped",
+                "demo",
+                "dev",
+                "named",
+                "http",
+                "gh-token",
+                None,
+                "test connection",
+                Some(
+                    HttpTarget::new(
+                        "http",
+                        "upstream.zeropw.test",
+                        t.fake.port() as i64,
+                        None,
+                        true,
+                    )
+                    .unwrap(),
+                ),
+                Some(HttpAuth::bearer()),
+                Some(HttpScope::new(None, None, vec!["DELETE".to_string()]).unwrap()),
+                None,
+                None,
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", "capped", Some(3600), Some(2))
+        .unwrap();
+    let handle = t.issue_handle_for("agent-1", "capped", &grant.id, None, 300);
+
+    let allowed = resolver_answering(vec!["127.0.0.1".parse().unwrap()]);
+    let pending = gateway::relay_with_resolver(
+        &t.ctx,
+        &handle,
+        "DELETE",
+        "/repos/demo",
+        &no_headers(),
+        b"",
+        None,
+        allowed,
+    );
+    assert_eq!(
+        (pending.status, pending.reason.as_deref()),
+        (428, Some("approval_required"))
+    );
+    let digest = pending.json()["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    t.ctx.policy.approve(&digest).unwrap();
+
+    // A metadata answer is refused regardless of the opt-in, for every
+    // method -- and never spends the approval or a grant use.
+    let refused = resolver_answering(vec!["169.254.169.254".parse().unwrap()]);
+    for (method, path) in [("GET", "/me"), ("GET", "/repos"), ("DELETE", "/repos/demo")] {
+        let result = gateway::relay_with_resolver(
+            &t.ctx,
+            &handle,
+            method,
+            path,
+            &no_headers(),
+            b"",
+            None,
+            refused.clone(),
+        );
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (403, Some("metadata_address_not_allowed")),
+            "{method} {path}"
+        );
+    }
+    assert_eq!(t.fake.requests().len(), 0);
+    assert_eq!(t.ctx.policy.get_grant(&grant.id).unwrap().uses, 0);
+    let approvals = t.ctx.policy.list_approvals().unwrap();
+    assert_eq!(approvals[&digest]["status"], "approved");
+    assert!(
+        !t.audit_records()
+            .iter()
+            .any(|r| r["connection"] == "capped" && r["result"] == "attempt")
+    );
+
+    // Once DNS points back at the checked upstream, the approval and both uses are still there.
+    let allowed_again = resolver_answering(vec!["127.0.0.1".parse().unwrap()]);
+    let done = gateway::relay_with_resolver(
+        &t.ctx,
+        &handle,
+        "DELETE",
+        "/repos/demo",
+        &no_headers(),
+        b"",
+        None,
+        allowed_again.clone(),
+    );
+    assert_eq!(done.status, 204);
+    let me = gateway::relay_with_resolver(
+        &t.ctx,
+        &handle,
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+        allowed_again,
+    );
+    assert_eq!(me.status, 200);
+    assert_eq!(t.fake.requests().len(), 2);
+    assert_eq!(t.ctx.policy.get_grant(&grant.id).unwrap().uses, 2);
+}
+
+#[test]
+fn stored_metadata_literal_loads_and_is_refused_at_use() {
+    // finding F-17 (tests/test_gateway.py:1577-1610's
+    // `test_stored_metadata_literal_loads_and_is_refused_at_use`): not
+    // ported at all previously. Dropping only the `tools.list_connections`
+    // assertion (`tools` is out of this half's scope).
+    let t = GatewayTest::new();
+    let _handle = named_connection(&t, "old-meta", "upstream.zeropw.test", false);
+
+    // Simulate a record saved before this literal became forbidden: there
+    // is no public API to create an already-forbidden literal directly
+    // (`HttpTarget::new`/`create_connection` always check it eagerly), so
+    // hand-edit the stored `connections.json`, the same technique Python's
+    // test uses (`json.loads(path.read_text())`).
+    let path = t.ctx.state.path.join(P::CONNECTIONS);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut doc: Value = serde_json::from_str(&text).unwrap();
+    doc["old-meta"]["http_target"]["host"] = serde_json::json!("169.254.169.254");
+    doc["old-meta"]["http_target"]
+        .as_object_mut()
+        .unwrap()
+        .remove("allow_private_network");
+    std::fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+
+    let grant = t
+        .ctx
+        .policy
+        .list_grants(Some("agent-1"))
+        .unwrap()
+        .into_iter()
+        .find(|g| g.connection == "old-meta")
+        .unwrap();
+
+    assert_eq!(
+        t.ctx
+            .policy
+            .get_connection("old-meta")
+            .unwrap()
+            .http_target
+            .unwrap()
+            .host,
+        "169.254.169.254"
+    );
+    assert!(
+        t.ctx
+            .policy
+            .list_connections()
+            .unwrap()
+            .iter()
+            .any(|c| c.id == "old-meta")
+    );
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "old-meta",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (403, Some("metadata_address_not_allowed"))
+    );
+    let record = t.audit_records().last().unwrap().clone();
+    assert_eq!(record["connection"], "old-meta");
+    assert_eq!(record["reason"], "metadata_address_not_allowed");
+    assert_eq!(t.ctx.policy.get_grant(&grant.id).unwrap().uses, 0);
+    assert_eq!(t.fake.requests().len(), 0);
+    let disabled = t.ctx.policy.disable_connection("old-meta").unwrap();
+    assert_eq!(disabled.status, "disabled");
+    // New input is still checked strictly, also when it bypasses the constructor check.
+    let lenient = HttpTarget::from_stored("http", "fd20:ce::254", 80, None, false).unwrap();
+    let err = t
+        .ctx
+        .policy
+        .update_connection(
+            "old-meta",
+            ConnectionChanges::new().http_target(Some(lenient.clone())),
+        )
+        .unwrap_err();
+    assert_eq!(err.reason, "metadata_address_not_allowed");
+    let stored = t.ctx.policy.get_connection("old-meta").unwrap();
+    let mut new_conn = stored.clone();
+    new_conn.id = "new-meta".to_string();
+    new_conn.http_target = Some(lenient);
+    let err2 = t.ctx.policy.create_connection(new_conn).unwrap_err();
+    assert_eq!(err2.reason, "metadata_address_not_allowed");
+}
+
+#[test]
 fn opt_in_connects_to_the_checked_address_and_resolves_once_per_request() {
     let t = GatewayTest::new();
     let handle = named_connection(&t, "internal", "upstream.zeropw.test", true);
@@ -2343,6 +3191,82 @@ fn resolution_failure_is_explicit() {
     t.assert_result_credential_free(&result);
 }
 
+#[test]
+fn dns_change_between_requests_takes_effect_on_the_next_request() {
+    // finding F-17 (tests/test_gateway.py:1611-1621's
+    // `test_dns_change_between_requests_takes_effect_on_the_next_request`):
+    // not ported at all previously.
+    let t = GatewayTest::new();
+    let handle = named_connection(&t, "rebind", "upstream.zeropw.test", true);
+    let good = resolver_answering(vec!["127.0.0.1".parse().unwrap()]);
+    let first = gateway::relay_with_resolver(
+        &t.ctx,
+        &handle,
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+        good,
+    );
+    assert_eq!(first.status, 200);
+    let rebound = resolver_answering(vec!["169.254.169.254".parse().unwrap()]);
+    let result = gateway::relay_with_resolver(
+        &t.ctx,
+        &handle,
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+        rebound,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (403, Some("metadata_address_not_allowed"))
+    );
+    assert_eq!(t.fake.requests().len(), 1);
+}
+
+#[test]
+fn private_network_opt_in_is_a_widening_change() {
+    // finding F-17 (tests/test_gateway.py:1633-1643's
+    // `test_private_network_opt_in_is_a_widening_change`): not ported at
+    // all previously -- `policy.rs`'s `allow_private_network` widening rule
+    // had no test coverage anywhere in this crate.
+    let t = GatewayTest::new();
+    named_connection(&t, "widen", "upstream.zeropw.test", false);
+    let before = t.ctx.policy.get_connection("widen").unwrap();
+    let bt = before.http_target.clone().unwrap();
+    let target = HttpTarget::new(bt.scheme.clone(), bt.host.clone(), bt.port, None, true).unwrap();
+    let (_, widened) = t
+        .ctx
+        .policy
+        .update_connection(
+            "widen",
+            ConnectionChanges::new().http_target(Some(target.clone())),
+        )
+        .unwrap();
+    assert!(widened);
+    let narrowed = HttpTarget::new(
+        target.scheme.clone(),
+        target.host.clone(),
+        target.port,
+        None,
+        false,
+    )
+    .unwrap();
+    let (_, widened_again) = t
+        .ctx
+        .policy
+        .update_connection(
+            "widen",
+            ConnectionChanges::new().http_target(Some(narrowed)),
+        )
+        .unwrap();
+    assert!(!widened_again);
+}
+
 // ----------------------------------------------------------- self-reference
 
 #[test]
@@ -2413,6 +3337,23 @@ fn peer_check_catches_a_dns_resolved_self_reference() {
         (501, Some("self_referential_target"))
     );
     gateway::unregister_local_listener(&listener);
+}
+
+#[test]
+fn dropped_listener_is_forgotten_without_explicit_unregister() {
+    // finding F-16(d) (tests/test_gateway.py:1116-1123's
+    // `test_closed_listener_is_forgotten`): the existing tests in this file
+    // only ever call `unregister_local_listener` explicitly. Python's
+    // registry is a `weakref.WeakSet`, so a listener that is simply garbage
+    // collected (closed) without ever being explicitly unregistered still
+    // disappears; the Rust equivalent (`LOCAL_LISTENERS: Vec<Weak<TcpListener>>`)
+    // must forget it the same way once the last `Arc` is dropped.
+    let listener = Arc::new(TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    let port = listener.local_addr().unwrap().port();
+    gateway::register_local_listener(&listener);
+    assert!(gateway::listener_addresses().contains(&(IpAddr::from([127, 0, 0, 1]), port)));
+    drop(listener); // no `unregister_local_listener` call.
+    assert!(!gateway::listener_addresses().contains(&(IpAddr::from([127, 0, 0, 1]), port)));
 }
 
 // --------------------------------------------------------------------- TLS
