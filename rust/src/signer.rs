@@ -45,11 +45,15 @@
 //!   `bind()`. The socket directory is always created mode 0700
 //!   ([`choose_socket_dir`]), so no other user on the host can even resolve
 //!   the socket's path to exploit the brief window.
-//! * `UnixListener::bind` uses the OS default backlog; std has no safe way
-//!   to request Python's explicit `listen(16)` backlog without an `unsafe`
-//!   FFI call. Not observable by anything in this crate's own tests
-//!   ([`DEFAULT_MAX_AGENT_CLIENTS`] caps concurrent clients far below any
-//!   platform's default backlog).
+//! * [`bind_and_listen`] matches Python's explicit `listen(16)` backlog
+//!   exactly (finding G-R5-1): `std`'s `UnixListener::bind` has no safe way
+//!   to request a specific backlog (only the OS default, 128 on this
+//!   platform), so this port builds the socket with the audited
+//!   `socket2` crate -- the same "audited safe wrapper" precedent already
+//!   used for `mio` below -- calls its safe `Socket::listen(16)`, then
+//!   converts it into a `std::os::unix::net::UnixListener` before handing
+//!   it to the rest of this module exactly as `UnixListener::bind` used to.
+//!   Pinned by `burst_above_backlog_is_refused_like_python`.
 //! * Python's accept loop blocks in `accept()` with a 0.2s `settimeout`
 //!   purely so `close()` can eventually notice `self._closed`; a genuine
 //!   connection is always served the instant it arrives. `std` has no
@@ -81,6 +85,7 @@ use std::time::{Duration, Instant};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token, Waker};
 use serde_json::{Value, json};
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::audit::RecordArgs;
 use crate::context::Context;
@@ -95,6 +100,9 @@ pub const MAX_UNIX_PATH: usize = 100;
 /// [`SignerManager::set_max_agent_clients`] for the injectable override that
 /// replaces Python's mutable `MAX_AGENT_CLIENTS` module global.
 pub const DEFAULT_MAX_AGENT_CLIENTS: usize = 32;
+/// Matches Python's `self._sock.listen(16)` in `_BindingServer.__init__`
+/// (finding G-R5-1). See [`bind_and_listen`].
+const SIGNER_LISTEN_BACKLOG: i32 = 16;
 const CLIENT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on waiting for the accept thread to notice `closed` and return, the
@@ -1493,19 +1501,50 @@ fn short_hex_id() -> String {
     hex::encode(buf)
 }
 
-/// Bind and chmod 0600. `BindingServer::start` sets the returned listener
-/// non-blocking right after this returns (finding G-R3-1/G-R4-1):
-/// `accept_loop` waits on it through a per-binding `mio::Poll` (event-driven,
-/// no fixed poll interval) rather than blocking in `accept()` directly, so
-/// `close()` can wake it with `Waker::wake()` and by simply taking the
-/// listener away, with no durable connectable alias needed. See the module
-/// doc comment for the umask/backlog deviations from Python's
-/// `socket.bind`/`listen(16)`.
+/// Bind, listen with Python's explicit backlog, and chmod 0600.
+/// `BindingServer::start` sets the returned listener non-blocking right
+/// after this returns (finding G-R3-1/G-R4-1): `accept_loop` waits on it
+/// through a per-binding `mio::Poll` (event-driven, no fixed poll interval)
+/// rather than blocking in `accept()` directly, so `close()` can wake it
+/// with `Waker::wake()` and by simply taking the listener away, with no
+/// durable connectable alias needed. See the module doc comment for the
+/// umask deviation from Python's `socket.bind`.
+///
+/// Finding G-R5-1: Python calls `self._sock.listen(16)`, an explicit
+/// backlog, but `std::os::unix::net::UnixListener::bind` has no way to
+/// request a specific backlog -- only the OS default (128 on this crate's
+/// target platforms), well above Python's 16. Measured effect: a
+/// simultaneous burst of connections above 16 but below the per-binding
+/// client cap gets refused at `connect(2)` (`ECONNREFUSED`, a
+/// transport-level refusal with no application-level audit record) against
+/// Python once the backlog fills, but was accepted in full against the old
+/// default-backlog Rust listener. `socket2::Socket::listen` is a safe `fn`
+/// (unlike the raw `listen(2)` FFI call `std` would need), so this builds
+/// the socket explicitly with `socket2` -- the same "audited safe wrapper
+/// crate" precedent already used for `mio` in this module -- binds it to
+/// `path`, calls `listen(SIGNER_LISTEN_BACKLOG)`, and converts the result
+/// into a `std::os::unix::net::UnixListener` via `socket2`'s `From` impl so
+/// every caller of `bind_and_listen` sees the same std type as before.
+/// Pinned by `burst_above_backlog_is_refused_like_python`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
-    let listener = UnixListener::bind(path)
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+    let addr = SockAddr::unix(path)
+        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+    socket
+        .bind(&addr)
+        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+    socket
+        .listen(SIGNER_LISTEN_BACKLOG)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+    // `socket2::Socket -> UnixListener` directly is gated behind socket2's
+    // "all" feature; going through the standard `OwnedFd` (which both
+    // `Socket` and `UnixListener` convert with unconditionally) avoids
+    // pulling that extra surface in for one conversion.
+    let fd: std::os::fd::OwnedFd = socket.into();
+    let listener = UnixListener::from(fd);
     Ok(listener)
 }
 
@@ -2480,31 +2519,51 @@ mod tests {
     }
 
     // Regression test for finding G-1, re-measured for the round-3 rewrite
-    // (G-R3-1) and again for round 4 (G-R4-1): a round-1 accept loop set the
-    // listener non-blocking and slept a fixed 200ms on every `WouldBlock`, so
-    // a *new* connection could wait out nearly the whole poll interval before
-    // being accepted at all -- ten sequential connect+request cycles measured
-    // ~1.85s (~205ms each) instead of Python's own real per-cycle latency
-    // (measured directly against `python3.12`: 0.15-0.38ms typical, 10
-    // cycles ~6.8-22ms total including one-off thread-startup jitter on the
-    // first cycle or two). Round 2 avoided that regression with a *blocking*
-    // accept woken by a hard-linked "wakeup" socket (withdrawn: finding
-    // G-R3-1, a real second agent endpoint). Round 3's replacement -- a
-    // non-blocking accept polled every fixed 1ms -- was *itself* a
-    // regression the round-3 report's own (unreproducible) Python numbers
-    // missed: re-measured directly against real Python this round, round 3's
-    // design cost ~1.5ms/cycle (10 cycles ~13.6-14.1ms), about 7x Python's
-    // real number, not "far below" it. This round replaces the fixed
-    // interval with the event-driven `mio::Poll`/`Waker` wait in
-    // `accept_loop` (finding G-R4-1): ten sequential cycles now measure
-    // consistently in the low single-digit milliseconds (repeated runs in
-    // this environment: ~4.0-6.3ms total, ~0.35-1.1ms per cycle), the same
-    // order of magnitude as Python's own real number and no longer
-    // dominated by any fixed interval at all. Prints per-connection latency
-    // under `--nocapture` so it can be compared directly against the real
-    // Python signer's own numbers; the assertion pins a bound well above
-    // this environment's measured range but far tighter than the old,
-    // 35x-loose 500ms (which would not have caught either the round-1 or the
+    // (G-R3-1), again for round 4 (G-R4-1), and again for round 5 (G-R5-1
+    // documentation correction only -- no behaviour change here): a round-1
+    // accept loop set the listener non-blocking and slept a fixed 200ms on
+    // every `WouldBlock`, so a *new* connection could wait out nearly the
+    // whole poll interval before being accepted at all -- ten sequential
+    // connect+request cycles measured ~1.85s (~205ms each) instead of
+    // Python's own real per-cycle latency. Round 2 avoided that regression
+    // with a *blocking* accept woken by a hard-linked "wakeup" socket
+    // (withdrawn: finding G-R3-1, a real second agent endpoint). Round 3's
+    // replacement -- a non-blocking accept polled every fixed 1ms -- was
+    // *itself* a regression the round-3 report's own (unreproducible)
+    // Python numbers missed. This round replaces the fixed interval with
+    // the event-driven `mio::Poll`/`Waker` wait in `accept_loop` (finding
+    // G-R4-1): ten sequential cycles measure consistently in the low
+    // single-digit milliseconds, no longer dominated by any fixed interval
+    // at all.
+    //
+    // Round-5 re-measurement (finding G-R5-1's documentation correction:
+    // the round-4 numbers below this comment, and the ones previously
+    // quoted here and in `DEVIATIONS.md`, cited a Python baseline of
+    // "6.8-22ms total" that this round could not reproduce and that
+    // contradicted its own per-cycle figure; replaced with fresh
+    // measurements, same method -- `time.monotonic()`/`Instant::now()`, ten
+    // sequential connect+`REQUEST_IDENTITIES` cycles, five repeated runs
+    // each -- in this environment):
+    //   * Python (`python3.12`): total 4.17-6.37ms per run of 10 cycles
+    //     (one outlier run measured 33.68ms, its first two cycles alone
+    //     accounting for ~11.5ms -- the same one-off thread-startup jitter
+    //     the round-4 text already called out); per-cycle typical
+    //     0.26-0.94ms.
+    //   * Rust, debug build (`cargo test`, unoptimized+debuginfo): total
+    //     4.12-10.42ms per run; per-cycle 0.37-1.49ms -- the same order of
+    //     magnitude as Python, sometimes above it (debug-build overhead,
+    //     not a fixed interval: no run showed the round-3 busy-poll's
+    //     ~1.5ms/cycle floor).
+    //   * Rust, release build (`cargo test --release`): total 1.12-2.29ms
+    //     per run; per-cycle 0.09-0.50ms -- consistently at or below
+    //     Python's own real number.
+    // Conclusion stands on these numbers: no fixed poll interval, and Rust
+    // at or better than Python once built in release. Prints per-connection
+    // latency under `--nocapture` so it can be compared directly against a
+    // real Python signer's own numbers; the assertion pins a bound with
+    // headroom above the debug-build range measured above (a loaded CI host
+    // normally runs debug tests) but far tighter than the old, 35x-looser
+    // 500ms bound (which would not have caught either the round-1 or the
     // round-3 regression).
     #[test]
     fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
@@ -2522,17 +2581,96 @@ mod tests {
         }
         let elapsed = started.elapsed();
         eprintln!(
-            "[G-R4-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
-             {elapsed:?}; real python3.12 measured 6.8-22ms total for the same 10 cycles, \
-             0.15-0.38ms/cycle typical)"
+            "[G-R5-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
+             {elapsed:?}; this session's own measurements in this environment: real \
+             python3.12 4.17-6.37ms total/10 cycles (0.26-0.94ms/cycle typical), Rust debug \
+             4.12-10.42ms total (0.37-1.49ms/cycle), Rust release 1.12-2.29ms total \
+             (0.09-0.50ms/cycle) -- see DEVIATIONS.md and the comment above this test)"
         );
         assert!(
             elapsed < Duration::from_millis(25),
-            "10 sequential connections took {elapsed:?}; this environment measures 4.0-6.3ms \
-             for the same workload with the event-driven accept wait (finding G-R4-1) -- \
-             25ms is a real, tight pin (not the old, 35x-loose 500ms) with headroom for a \
-             loaded CI host, and is still far below round 3's own busy-poll regression \
-             (~13.6-14.1ms measured against real Python this round)"
+            "10 sequential connections took {elapsed:?}; this environment measures \
+             4.12-10.42ms for a debug build of the same workload with the event-driven \
+             accept wait (finding G-R4-1/G-R5-1) -- 25ms is a real, tight pin (not the old, \
+             35x-loose 500ms) with headroom for a loaded CI host, and is still far below \
+             round 3's own busy-poll regression"
+        );
+    }
+
+    // Regression test for finding G-R5-1: Python's `_BindingServer.__init__`
+    // calls `self._sock.listen(16)`, an explicit backlog; once 16
+    // connections are queued waiting to be `accept()`ed, the kernel refuses
+    // any further `connect(2)` immediately with `ECONNREFUSED` -- a
+    // transport-level refusal that never reaches this process's accept
+    // loop, policy check or audit log at all. `bind_and_listen` used to
+    // build the listener with `std::os::unix::net::UnixListener::bind`,
+    // which has no way to request anything but the OS default backlog (128
+    // on this crate's target platforms) -- comfortably above every burst
+    // this crate's own tests exercised, so it silently accepted bursts
+    // Python would have refused. `bind_and_listen` now uses
+    // `socket2::Socket::listen(SIGNER_LISTEN_BACKLOG)` (16) instead, the
+    // same audited-safe-wrapper-crate precedent already accepted for `mio`.
+    //
+    // Reviewer's own measurement (real Python, backlog 16, client cap 24): a
+    // 24-connection simultaneous burst served 17-18 and refused 6-7 at
+    // `connect(2)`, with no `ssh_agent_refused` audit record for the
+    // refused connections. Kernel scheduling makes the exact split
+    // nondeterministic even on one machine (whether the accept loop drains
+    // a few pending connections before the burst finishes queuing depends
+    // on thread scheduling), so this test pins the *shape* Python has --
+    // some connections refused at `connect()`, and zero audit records for
+    // any of them -- rather than an exact count. The burst (40) is well
+    // above the backlog (16) but stays below the per-binding client cap
+    // (raised to 64 here) so an admission-cap refusal, which *does* reach
+    // the application layer and would confuse this probe, cannot occur.
+    #[test]
+    fn burst_above_backlog_is_refused_like_python() {
+        let f = fixture();
+        f.manager.set_max_agent_clients(64);
+
+        const BURST: usize = 40;
+        let barrier = Arc::new(std::sync::Barrier::new(BURST));
+        let path = f.binding.socket_path.clone();
+        let handles: Vec<JoinHandle<bool>> = (0..BURST)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let path = path.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    UnixStream::connect(&path).is_ok()
+                })
+            })
+            .collect();
+        let results: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let refused = results.iter().filter(|ok| !**ok).count();
+        let served = results.len() - refused;
+        eprintln!(
+            "[G-R5-1] burst of {BURST} simultaneous connections against a backlog-16 \
+             listener: {served} served, {refused} refused at connect() (the reviewer's own \
+             real-Python measurement for a smaller, 24-connection burst against the same \
+             backlog: 17-18 served / 6-7 refused)"
+        );
+        assert!(
+            refused > 0,
+            "expected at least one connect() to be refused by a backlog-16 listener under a \
+             {BURST}-connection simultaneous burst, matching Python's `listen(16)`; got 0 \
+             refused out of {BURST} -- kernel backlog/scheduling variance can shift the exact \
+             split but should not eliminate refusals entirely at this burst size"
+        );
+
+        let refused_recorded = f
+            .ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"].as_str() == Some("ssh_agent_refused"))
+            .count();
+        assert_eq!(
+            refused_recorded, 0,
+            "a connect()-level backlog refusal never reaches the accept loop, policy check or \
+             audit log, so it must produce no `ssh_agent_refused` record -- Python's own \
+             transport-level ECONNREFUSED produces none either"
         );
     }
 
