@@ -81,7 +81,7 @@ fn env_init_commit(
 fn connection_create_commit(
     env_id: &str,
     author: &DeviceKey,
-    seq: i64,
+    seq: i128,
     hlc: &str,
     conn_id: &str,
     methods: Option<&[&str]>,
@@ -102,7 +102,7 @@ fn connection_create_commit(
 fn simple_connection_create(
     env_id: &str,
     author: &DeviceKey,
-    seq: i64,
+    seq: i128,
     hlc: &str,
     conn_id: &str,
 ) -> Commit {
@@ -794,4 +794,53 @@ fn no_leak_across_commits_documents_snapshots_state() {
         find_secret_in_tree(&ctx.state.path, &secrets_to_check).is_none(),
         "leak in state directory"
     );
+}
+
+// --------------------------------------------------------- H-7: seq gap
+/// Port of `tests/test_team_fold.py::SignatureSeqEnvMismatchTestCase::
+/// test_seq_gap_rejected` (finding H-7): a validly-signed commit whose
+/// `author_seq` skips ahead of the store's contiguous sequence must be
+/// rejected by `receive_commit` -- not merely by `CommitStore::append` in
+/// isolation -- with a `rejected/` record on disk and a
+/// `team_commit_rejected` audit entry carrying reason `team_seq_gap`.
+/// Nothing exercised this path through `receive_commit` before.
+#[test]
+fn seq_gap_rejected_through_receive_commit() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(None);
+    let store = C::CommitStore::new(ctx.state, env_id.clone());
+    assert_eq!(
+        C::receive_commit(&store, &c1, 1_000_000, Some(ctx.audit)).unwrap(),
+        "accepted"
+    );
+
+    // author_seq jumps from 1 straight to 5: a gap, not a duplicate.
+    let skip_ahead = simple_connection_create(&env_id, &owner, 5, "2000-0000", "gh");
+    assert_eq!(
+        C::receive_commit(&store, &skip_ahead, 1_000_100, Some(ctx.audit)).unwrap(),
+        "rejected"
+    );
+
+    // A `rejected/` record was written for the gapped commit.
+    let rejected_dir = ctx.state.path.join(format!("team/{env_id}/rejected"));
+    let rejected_files: Vec<_> = std::fs::read_dir(&rejected_dir)
+        .expect("rejected dir exists")
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(rejected_files.len(), 1, "exactly one rejected record");
+    let rejected_doc: Value =
+        pyjson::loads(&std::fs::read_to_string(rejected_files[0].path()).unwrap()).unwrap();
+    assert_eq!(rejected_doc["rejected_reason"], json!("team_seq_gap"));
+
+    // The audit carries the same reason.
+    let rejections: Vec<Value> = ctx
+        .audit
+        .tail(50)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.get("event").and_then(Value::as_str) == Some("team_commit_rejected"))
+        .collect();
+    assert_eq!(rejections.len(), 1);
+    assert_eq!(rejections[0]["reason"], json!("team_seq_gap"));
+    assert_eq!(rejections[0]["result"], json!("denied"));
 }

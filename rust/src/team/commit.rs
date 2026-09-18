@@ -125,6 +125,85 @@ fn is_float_literal(raw: &str) -> bool {
     raw.contains(['.', 'e', 'E'])
 }
 
+/// Contiguous Unicode `General_Category=Nd` ("decimal digit") blocks: every
+/// `Nd` block is exactly ten consecutive code points representing the
+/// digits `0`..`9` in order, so a block's start alone gives every digit's
+/// value (`codepoint - start`). Covers CPython 3.12's `int(str)` accepting
+/// non-ASCII decimal digits (e.g. Arabic-Indic `"١٠٠٠"`), per
+/// `rust/DEVIATIONS.md`'s `Hlc::parse`/`Commit::from_dict` rows -- this
+/// table is not claimed exhaustive over every Unicode version, but covers
+/// every currently-assigned `Nd` block.
+const UNICODE_DECIMAL_DIGIT_BLOCKS: &[u32] = &[
+    0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6, 0x0D66,
+    0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+    0x116C0, 0x11730, 0x118E0, 0x11C50, 0x11D50, 0x11DA0, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE,
+    0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0,
+];
+
+/// The digit value (`0..=9`) of `c` under CPython 3.12 `int(str)`'s digit
+/// grammar: ASCII `0`-`9`, or any Unicode `Nd` code point (see
+/// [`UNICODE_DECIMAL_DIGIT_BLOCKS`]).
+fn unicode_digit_value(c: char) -> Option<u32> {
+    let cp = c as u32;
+    if c.is_ascii_digit() {
+        return Some(cp - '0' as u32);
+    }
+    for &start in UNICODE_DECIMAL_DIGIT_BLOCKS {
+        if cp >= start && cp <= start + 9 {
+            return Some(cp - start);
+        }
+    }
+    None
+}
+
+/// CPython 3.12 `int(str)`'s full numeric-literal grammar: surrounding
+/// `str.isspace()` whitespace, an optional `+`/`-` sign, then one or more
+/// decimal digits (ASCII or any Unicode `Nd` code point, see
+/// [`unicode_digit_value`]) with single, non-leading/trailing underscores
+/// allowed between them (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Unlike
+/// `policy.rs`'s narrower `python_int_from_str` (ASCII-digit-only, bounded
+/// to `i64`), this accepts the full grammar and any magnitude that fits
+/// `i128` -- see `rust/DEVIATIONS.md` for the (practically unreachable)
+/// residual gap beyond `i128::MAX`/`MIN`.
+fn python_int_parse_i128(raw: &str) -> Option<i128> {
+    let trimmed = raw.trim_matches(crate::pystr::is_space);
+    let (negative, digits_part) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
+        return None;
+    }
+    let mut magnitude: i128 = 0;
+    let mut prev_underscore = false;
+    for c in digits_part.chars() {
+        if c == '_' {
+            if prev_underscore {
+                return None;
+            }
+            prev_underscore = true;
+            continue;
+        }
+        let digit = unicode_digit_value(c)?;
+        prev_underscore = false;
+        magnitude = magnitude.checked_mul(10)?.checked_add(digit as i128)?;
+    }
+    if prev_underscore {
+        return None; // trailing underscore already excluded above, kept for clarity
+    }
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+/// Build a `serde_json::Value` integer from an `i128`, preserving the exact
+/// decimal digits (`serde_json`'s `arbitrary_precision` feature backs
+/// `Number` with the literal text, so this round-trips byte-identically
+/// through `pyjson::dumps`, matching Python's arbitrary-precision `int`).
+fn json_int128(v: i128) -> Value {
+    Value::Number(v.into())
+}
+
 fn b64decode_strict(text: &str) -> std::result::Result<Vec<u8>, ()> {
     use base64::Engine;
     use base64::alphabet;
@@ -156,29 +235,37 @@ fn b64decode_strict(text: &str) -> std::result::Result<Vec<u8>, ()> {
 /// string, since a wall-clock component can exceed 9999 and would then sort
 /// incorrectly as text.
 ///
-/// `wall_ms`/`counter` are `i64`, unlike Python's arbitrary-precision `int`;
-/// see `rust/DEVIATIONS.md` for the (practically unreachable) bound this
-/// implies on [`Hlc::parse`].
+/// `wall_ms`/`counter` are `i128`, unlike Python's arbitrary-precision
+/// `int`; see `rust/DEVIATIONS.md` for the (practically unreachable, beyond
+/// `i128::MAX`) bound this implies on [`Hlc::parse`]. `i128` is wide enough
+/// that every value this port's own [`Hlc::tick`] ever produces, and every
+/// value a reviewer's or peer's hand-crafted `hlc` string can plausibly
+/// exercise, parses and compares exactly as Python's `int` would (finding
+/// H-2).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hlc {
-    pub wall_ms: i64,
-    pub counter: i64,
+    pub wall_ms: i128,
+    pub counter: i128,
 }
 
 impl Hlc {
-    pub fn new(wall_ms: i64, counter: i64) -> Self {
+    pub fn new(wall_ms: i128, counter: i128) -> Self {
         Hlc { wall_ms, counter }
     }
 
-    /// `Hlc.parse` (a `@staticmethod` in Python).
-    pub fn parse(value: &str) -> Result<(i64, i64)> {
+    /// `Hlc.parse` (a `@staticmethod` in Python). `wall_str`/`counter_str`
+    /// are parsed with [`python_int_parse_i128`], matching CPython's
+    /// `int(str)` grammar (whitespace, `+`/`-` sign, `_` digit separators,
+    /// Unicode decimal digits, arbitrary precision up to `i128`) rather
+    /// than Rust's strict `str::parse`.
+    pub fn parse(value: &str) -> Result<(i128, i128)> {
         let bad = || Error::invalid_input("hlc_malformed");
         let parts: Vec<&str> = value.split('-').collect();
         if parts.len() != 2 {
             return Err(bad());
         }
-        let wall_ms: i64 = parts[0].parse().map_err(|_| bad())?;
-        let counter: i64 = parts[1].parse().map_err(|_| bad())?;
+        let wall_ms = python_int_parse_i128(parts[0]).ok_or_else(bad)?;
+        let counter = python_int_parse_i128(parts[1]).ok_or_else(bad)?;
         if wall_ms < 0 || counter < 0 {
             return Err(bad());
         }
@@ -206,7 +293,7 @@ impl Hlc {
     /// rendered `hlc`. `now_ms=None` uses the system clock, like Python's
     /// `int(time.time() * 1000)`.
     pub fn tick(&mut self, now_ms_value: Option<i64>) -> String {
-        let now_ms_value = now_ms_value.unwrap_or_else(now_ms);
+        let now_ms_value = i128::from(now_ms_value.unwrap_or_else(now_ms));
         let candidate = now_ms_value.max(self.wall_ms);
         if candidate > self.wall_ms {
             self.wall_ms = candidate;
@@ -225,14 +312,14 @@ pub fn now_ms() -> i64 {
 
 /// Total order key (docs/team-sync.md section 7.1): `(hlc, author)` as a
 /// numeric/text tuple. Port of `order_key`.
-pub fn order_key(commit: &Commit) -> Result<(i64, i64, String)> {
+pub fn order_key(commit: &Commit) -> Result<(i128, i128, String)> {
     let (wall_ms, counter) = Hlc::parse(&commit.hlc)?;
     Ok((wall_ms, counter, commit.author.clone()))
 }
 
 /// Port of `sort_total_order`.
 pub fn sort_total_order(commits: Vec<Commit>) -> Result<Vec<Commit>> {
-    let mut keyed: Vec<((i64, i64, String), Commit)> = Vec::with_capacity(commits.len());
+    let mut keyed: Vec<((i128, i128, String), Commit)> = Vec::with_capacity(commits.len());
     for commit in commits {
         let key = order_key(&commit)?;
         keyed.push((key, commit));
@@ -248,9 +335,11 @@ pub struct Commit {
     pub format: String,
     pub env_id: String,
     pub author: String,
-    pub author_seq: i64,
+    /// `i128`, unlike Python's arbitrary-precision `int`; see
+    /// `rust/DEVIATIONS.md` (finding H-6).
+    pub author_seq: i128,
     pub hlc: String,
-    pub seen: BTreeMap<String, i64>,
+    pub seen: BTreeMap<String, i128>,
     pub ops: Vec<Value>,
     /// Base64 Ed25519 signature, empty until signed.
     pub sig: String,
@@ -262,12 +351,12 @@ impl Commit {
         m.insert("format".into(), Value::String(self.format.clone()));
         m.insert("env_id".into(), Value::String(self.env_id.clone()));
         m.insert("author".into(), Value::String(self.author.clone()));
-        m.insert("author_seq".into(), json!(self.author_seq));
+        m.insert("author_seq".into(), json_int128(self.author_seq));
         m.insert("hlc".into(), Value::String(self.hlc.clone()));
         let seen: Map<String, Value> = self
             .seen
             .iter()
-            .map(|(k, v)| (k.clone(), json!(v)))
+            .map(|(k, v)| (k.clone(), json_int128(*v)))
             .collect();
         m.insert("seen".into(), Value::Object(seen));
         m.insert("ops".into(), Value::Array(self.ops.clone()));
@@ -301,19 +390,21 @@ impl Commit {
     }
 
     /// `Commit.from_dict`. `KeyError | TypeError | ValueError` all become
-    /// `InvalidInput("commit_malformed")`. As documented on the module:
-    /// `format`/`env_id`/`author`/`hlc`/`sig` must already be JSON strings
-    /// here (Python's `str(x)` coerces any value; this port does not) --
-    /// see `rust/DEVIATIONS.md`.
+    /// `InvalidInput("commit_malformed")`. `format`/`env_id`/`author`/`hlc`/
+    /// `sig` go through [`python_str_coerce`], matching Python's
+    /// `str(data["..."])`: a *missing* key still raises (`commit_malformed`,
+    /// Python's `KeyError`), but a present non-string value (a number,
+    /// `true`/`false`, `null`, ...) is coerced to text rather than rejected
+    /// (finding H-6's peer-key ruling: this port's own writers never emit a
+    /// non-string value for these fields, but a peer's own signer is not
+    /// required to route through this crate's `sign_commit` at all, so the
+    /// shape it emits is not something the receiving node's key ever
+    /// authenticates).
     pub fn from_dict(data: &Value) -> Result<Commit> {
         let bad = || Error::invalid_input("commit_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
-        let str_field = |key: &str| -> Result<String> {
-            obj.get(key)
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(bad)
-        };
+        let str_field =
+            |key: &str| -> Result<String> { obj.get(key).map(python_str_coerce).ok_or_else(bad) };
         let format = str_field("format")?;
         let env_id = str_field("env_id")?;
         let author = str_field("author")?;
@@ -322,18 +413,23 @@ impl Commit {
             .and_then(python_int_coerce)
             .ok_or_else(bad)?;
         let hlc = str_field("hlc")?;
+        // `dict(data.get("seen") or {})`: a *falsy* `seen` (absent, `null`,
+        // `0`, `""`, `[]`, `{}`, `false`) is treated as `{}` with no error;
+        // otherwise `dict(x)` accepts a mapping directly or any iterable of
+        // two-element pairs (finding H-6) -- [`python_dict_pairs`].
         let seen = match obj.get("seen") {
-            None | Some(Value::Null) => BTreeMap::new(),
-            Some(Value::Object(m)) if m.is_empty() => BTreeMap::new(),
-            Some(Value::Object(m)) => {
+            None => BTreeMap::new(),
+            Some(v) if json_falsy(v) => BTreeMap::new(),
+            Some(v) => {
+                let pairs = python_dict_pairs(v).ok_or_else(bad)?;
                 let mut out = BTreeMap::new();
-                for (k, v) in m {
-                    let n = python_int_coerce(v).ok_or_else(bad)?;
-                    out.insert(k.clone(), n);
+                for (k, v) in pairs {
+                    let key = python_str_coerce(&k);
+                    let n = python_int_coerce(&v).ok_or_else(bad)?;
+                    out.insert(key, n);
                 }
                 out
             }
-            _ => return Err(bad()),
         };
         let ops: Vec<Value> = obj
             .get("ops")
@@ -362,13 +458,17 @@ impl Commit {
 
 /// Python `int(x)` for a parsed JSON value (bool/int/float-truncating/
 /// numeric-string), used by [`Commit::from_dict`] for `author_seq`/`seen`
-/// values. A narrower duplicate of `handles.rs`'s private
-/// `python_int_coerce` (not reachable from here): see that function's doc
-/// comment for the residual gaps versus CPython (bounded to `i64`, ASCII
-/// digits only) -- recorded again here in `rust/DEVIATIONS.md`.
-fn python_int_coerce(value: &Value) -> Option<i64> {
+/// values -- a `Value::String` goes through [`python_int_parse_i128`], so
+/// this accepts CPython's full `int(str)` grammar (whitespace, `+`/`-`
+/// sign, `_` separators, Unicode decimal digits) and any magnitude up to
+/// `i128`, not just plain ASCII digits bounded to `i64` (finding H-2/H-6).
+/// A wider duplicate of `handles.rs`'s/`policy.rs`'s private
+/// `python_int_coerce` (not reachable from here, and narrower: those stay
+/// `i64`/ASCII-only) -- the residual gap beyond `i128` is recorded in
+/// `rust/DEVIATIONS.md`.
+fn python_int_coerce(value: &Value) -> Option<i128> {
     match value {
-        Value::Bool(b) => Some(i64::from(*b)),
+        Value::Bool(b) => Some(i128::from(*b)),
         Value::Number(n) => {
             if is_float_literal(n.as_str()) {
                 let f: f64 = n.as_str().parse().ok()?;
@@ -376,19 +476,83 @@ fn python_int_coerce(value: &Value) -> Option<i64> {
                     return None;
                 }
                 let truncated = f.trunc();
-                if truncated > i64::MAX as f64 || truncated < i64::MIN as f64 {
+                if truncated > i128::MAX as f64 || truncated < i128::MIN as f64 {
                     return None;
                 }
-                Some(truncated as i64)
+                Some(truncated as i128)
             } else {
-                n.as_str().parse::<i64>().ok()
+                // Beyond `i128` but still integer-shaped: `None` (see
+                // `rust/DEVIATIONS.md`).
+                n.as_str().parse::<i128>().ok()
             }
         }
-        Value::String(s) => {
-            let t = s.trim();
-            t.parse::<i64>().ok()
-        }
+        Value::String(s) => python_int_parse_i128(s),
         Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// `str(k)` for a JSON value used as a `seen`-pair key (finding H-6): a
+/// string is used as-is; the other JSON scalars use CPython's `str()` text.
+/// A list/dict key is vanishingly unlikely to appear in a real `seen` pair
+/// (there is no writer that could produce one merely by mis-shaping
+/// `seen`), so it falls back to `pyjson`'s compact JSON form rather than
+/// CPython's `repr`-style container text -- a difference only observable
+/// for that unreachable shape.
+fn python_str_coerce(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
+        Value::Null => "None".to_string(),
+        Value::Number(n) => {
+            if is_float_literal(n.as_str()) {
+                n.as_f64()
+                    .map(pyjson::python_float_repr)
+                    .unwrap_or_else(|| n.to_string())
+            } else {
+                n.to_string()
+            }
+        }
+        Value::Array(_) | Value::Object(_) => {
+            pyjson::dumps(value, DumpOptions::compact_sorted()).unwrap_or_default()
+        }
+    }
+}
+
+/// `dict(x)` for the shapes actually reachable through a signed commit's
+/// `seen` field (finding H-6): a JSON object (used directly, matching
+/// Python's `dict(mapping)`), or a JSON array of two-element arrays
+/// (matching Python's `dict(iterable_of_pairs)`, e.g. `[["<fp>", 3]]`).
+/// Python's `dict()` also accepts an iterable of *any* two-element
+/// sequence, including a two-character string (`dict(["ab"]) ==
+/// {"a": "b"}`) -- included here too since it costs nothing extra. Anything
+/// else that is not iterable at all in Python (`dict(5)`) raises `TypeError`
+/// (uncaught, `commit_malformed` per PORTING.md §3.5), returning `None`.
+fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
+    match value {
+        Value::Object(m) => Some(
+            m.iter()
+                .map(|(k, v)| (Value::String(k.clone()), v.clone()))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::Array(pair) if pair.len() == 2 => {
+                        out.push((pair[0].clone(), pair[1].clone()));
+                    }
+                    Value::String(s) if s.chars().count() == 2 => {
+                        let mut chars = s.chars();
+                        let k = chars.next().expect("len 2").to_string();
+                        let v = chars.next().expect("len 2").to_string();
+                        out.push((Value::String(k), Value::String(v)));
+                    }
+                    _ => return None,
+                }
+            }
+            Some(out)
+        }
+        _ => None,
     }
 }
 
@@ -397,9 +561,9 @@ fn python_int_coerce(value: &Value) -> Option<i64> {
 pub fn sign_commit(
     device: &DeviceKey,
     env_id: &str,
-    author_seq: i64,
+    author_seq: i128,
     hlc: &str,
-    seen: &BTreeMap<String, i64>,
+    seen: &BTreeMap<String, i128>,
     ops: Vec<Value>,
 ) -> Result<Commit> {
     validate_ops(&ops)?;
@@ -550,6 +714,27 @@ fn json_strings_lossy(items: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// Python `tuple(x)` for the JSON shapes `_build_http_scope`/
+/// `_build_ssh_target` can hand it (finding H-5): a list is iterated
+/// element-by-element (non-string elements become a sentinel that can never
+/// match a valid method/prefix/host-key line, matching Python's `tuple`
+/// preserving whatever non-string element it held -- see
+/// [`json_strings_lossy`]); a *string* is iterated character-by-character
+/// (Python iterates a `str` by codepoint); a JSON object is iterated over
+/// its keys (Python `dict` iteration, insertion order). Anything else
+/// (a number, a bool) is not iterable in Python and `tuple(x)` raises
+/// `TypeError` -- `None` here, for the caller to map to its own wrapped
+/// reason (`invalid_http_scope`/`invalid_ssh_target`), matching the
+/// `except (KeyError, TypeError)` around the real Python call site.
+fn python_iterable_strings(value: &Value) -> Option<Vec<String>> {
+    match value {
+        Value::Array(items) => Some(json_strings_lossy(items)),
+        Value::String(s) => Some(s.chars().map(|c| c.to_string()).collect()),
+        Value::Object(m) => Some(m.keys().cloned().collect()),
+        Value::Number(_) | Value::Bool(_) | Value::Null => None,
+    }
+}
+
 fn opt_string(value: Option<&Value>) -> Option<String> {
     match value {
         Some(Value::String(s)) => Some(s.clone()),
@@ -557,12 +742,21 @@ fn opt_string(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn http_target_value(t: &policy::HttpTarget) -> Value {
-    json!({"scheme": t.scheme, "host": t.host, "port": t.port, "ca_file": t.ca_file,
+/// `raw_ca_file` is the op's own `http_target.ca_file` JSON value verbatim
+/// (finding H-4): `HttpTarget.ca_file` has no `isinstance` check in Python,
+/// so a non-string value (an int, a list, ...) validates and is stored
+/// exactly as given -- `t.ca_file` (`Option<String>`) can't hold that, so
+/// the caller reads the raw value back off the original op instead of
+/// going through the validated, `String`-typed field.
+fn http_target_value(t: &policy::HttpTarget, raw_ca_file: &Value) -> Value {
+    json!({"scheme": t.scheme, "host": t.host, "port": t.port, "ca_file": raw_ca_file,
           "allow_private_network": t.allow_private_network})
 }
-fn http_auth_value(a: &policy::HttpAuth) -> Value {
-    json!({"mode": a.mode, "header_name": a.header_name, "value_prefix": a.value_prefix,
+/// `raw_value_prefix`: see [`http_target_value`]'s doc comment --
+/// `HttpAuth.value_prefix` is the same kind of unchecked-optional-field
+/// case (finding H-4).
+fn http_auth_value(a: &policy::HttpAuth, raw_value_prefix: &Value) -> Value {
+    json!({"mode": a.mode, "header_name": a.header_name, "value_prefix": raw_value_prefix,
           "basic_username": a.basic_username})
 }
 fn http_scope_value(s: &policy::HttpScope) -> Value {
@@ -575,7 +769,25 @@ fn cli_profile_value(c: &policy::CliProfile) -> Value {
     json!({"program": c.program, "kind": c.kind, "base_url_env": c.base_url_env, "extra_env": c.extra_env})
 }
 
-/// `zeropw.team.commit._build_http_target`.
+/// `zeropw.team.commit._build_http_target`: `P.HttpTarget(scheme=...,
+/// host=..., port=..., ca_file=value.get("ca_file"),
+/// allow_private_network=value.get("allow_private_network", False))`.
+///
+/// `HttpTarget.__post_init__` (`policy.py`) checks, in order: `scheme`,
+/// then `host` (format), then `port` (range), then `allow_private_network`
+/// (must be a `bool`), then -- only once all of those pass -- whether the
+/// resolved literal is blocked. Finding H-5: this builder used to check
+/// `allow_private_network`'s type *before* the real scheme/host/port
+/// validation ran (that only happened inside `policy::HttpTarget::new`
+/// afterwards), so a bad scheme *and* a non-bool `allow_private_network`
+/// wrongly surfaced as `invalid_allow_private_network` instead of Python's
+/// `invalid_scheme`. Fixed by validating scheme/host/port and the address
+/// block (via `HttpTarget::from_stored` + `require_allowed_literal`, in
+/// that Python order) with a placeholder `allow_private_network`, *then*
+/// checking the real value's type -- safe because
+/// `HttpTarget::literal_block_reason` never actually reads
+/// `allow_private_network` (see its doc comment in `policy.rs`), so the
+/// placeholder cannot change which literal-block error (if any) surfaces.
 fn build_http_target(value: Option<&Value>) -> Result<Option<policy::HttpTarget>> {
     let value = match value {
         None | Some(Value::Null) => return Ok(None),
@@ -601,19 +813,23 @@ fn build_http_target(value: Option<&Value>) -> Result<Option<policy::HttpTarget>
         .get("port")
         .and_then(Value::as_i64)
         .ok_or_else(|| Error::invalid_input("invalid_port"))?;
+    // Finding H-4: `HttpTarget.ca_file` has no `isinstance` check in Python,
+    // so a non-string value validates and is stored verbatim; carried
+    // through as the raw JSON value by the caller (`build_connection_fields`
+    // reads it back off `args` directly), not lost here the way `opt_string`
+    // would lose it.
     let ca_file = opt_string(obj.get("ca_file"));
+    // Scheme/host/port only, in Python's `__post_init__` order, with no
+    // literal-block check yet (`check_address=false`/`from_stored`).
+    let mut target = policy::HttpTarget::from_stored(scheme, host, port, ca_file, false)?;
     let allow_private_network = match obj.get("allow_private_network") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(Error::invalid_input("invalid_allow_private_network")),
     };
-    Ok(Some(policy::HttpTarget::new(
-        scheme,
-        host,
-        port,
-        ca_file,
-        allow_private_network,
-    )?))
+    target.allow_private_network = allow_private_network;
+    target.require_allowed_literal()?;
+    Ok(Some(target))
 }
 
 /// `zeropw.team.commit._build_http_auth`.
@@ -641,7 +857,19 @@ fn build_http_auth(value: Option<&Value>) -> Result<Option<policy::HttpAuth>> {
     )?))
 }
 
-/// `zeropw.team.commit._build_http_scope`.
+/// `zeropw.team.commit._build_http_scope`:
+/// `methods=tuple(value["methods"]) if value.get("methods") is not None
+/// else None`, same for `path_prefixes`; `confirm_methods=tuple(value.get
+/// ("confirm_methods") or ())`.
+///
+/// Finding H-5: a `methods`/`path_prefixes` that is present but not a JSON
+/// array (a string, say) used to be rejected outright as
+/// `invalid_http_scope`; Python instead runs `tuple(...)` on it (see
+/// [`python_iterable_strings`]) and only *that* raises `TypeError` -> the
+/// wrapped reason -- a string or object is iterable, so it becomes a tuple
+/// of characters/keys that reaches `HttpScope.__post_init__`'s own checks
+/// and fails with *their* reason (`invalid_method`/`invalid_path_prefix`),
+/// not the wrapper's.
 fn build_http_scope(value: Option<&Value>) -> Result<Option<policy::HttpScope>> {
     let value = match value {
         None | Some(Value::Null) => return Ok(None),
@@ -650,20 +878,23 @@ fn build_http_scope(value: Option<&Value>) -> Result<Option<policy::HttpScope>> 
     let obj = value
         .as_object()
         .ok_or_else(|| Error::invalid_input("invalid_http_scope"))?;
+    let wrap_err = || Error::invalid_input("invalid_http_scope");
     let methods = match obj.get("methods") {
         None | Some(Value::Null) => None,
-        Some(Value::Array(items)) => Some(json_strings_lossy(items)),
-        Some(_) => return Err(Error::invalid_input("invalid_http_scope")),
+        Some(v) => Some(python_iterable_strings(v).ok_or_else(wrap_err)?),
     };
     let path_prefixes = match obj.get("path_prefixes") {
         None | Some(Value::Null) => None,
-        Some(Value::Array(items)) => Some(json_strings_lossy(items)),
-        Some(_) => return Err(Error::invalid_input("invalid_http_scope")),
+        Some(v) => Some(python_iterable_strings(v).ok_or_else(wrap_err)?),
     };
+    // `value.get("confirm_methods") or ()`: a *falsy* present value (`""`,
+    // `[]`, `{}`, `0`, `false`) short-circuits to `()` without ever calling
+    // `tuple()` on it, so (unlike `methods`/`path_prefixes`) a falsy
+    // non-iterable like `0`/`false` is fine, not a `TypeError`.
     let confirm_methods = match obj.get("confirm_methods") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(items)) => json_strings_lossy(items),
-        Some(_) => return Err(Error::invalid_input("invalid_http_scope")),
+        None => Vec::new(),
+        Some(v) if json_falsy(v) => Vec::new(),
+        Some(v) => python_iterable_strings(v).ok_or_else(wrap_err)?,
     };
     Ok(Some(policy::HttpScope::new(
         methods,
@@ -702,10 +933,19 @@ fn build_ssh_target(value: Option<&Value>) -> Result<Option<policy::SshTarget>> 
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| Error::invalid_input("invalid_ssh_username"))?;
-    let host_keys = match obj.get("host_keys") {
-        Some(Value::Array(items)) => json_strings_lossy(items),
-        _ => return Err(Error::invalid_input("invalid_ssh_target")),
-    };
+    // `host_keys=tuple(value["host_keys"])`, unconditionally (finding H-5):
+    // a non-array iterable (a string -> one-character elements, an object
+    // -> its keys) is not rejected here the way it used to be; it reaches
+    // `SshTarget::new`'s own per-element check and fails with *its* reason
+    // (`unsupported_host_key`/`ssh_host_keys_required`), matching Python's
+    // `tuple(str)`/`tuple(dict)` behaviour. Only a genuinely non-iterable
+    // value (a number, a bool) is a Python `TypeError`, wrapped here as
+    // `invalid_ssh_target`.
+    let host_keys = python_iterable_strings(
+        obj.get("host_keys")
+            .ok_or_else(|| Error::invalid_input("invalid_ssh_target"))?,
+    )
+    .ok_or_else(|| Error::invalid_input("invalid_ssh_target"))?;
     Ok(Some(policy::SshTarget::new(
         host, port, username, host_keys,
     )?))
@@ -733,10 +973,20 @@ fn build_cli_profile(value: Option<&Value>) -> Result<Option<policy::CliProfile>
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| Error::invalid_input("invalid_cli_kind"))?;
+    // `base_url_env=value.get("base_url_env", "ZEROPW_API_BASE_URL")`: the
+    // default only applies when the key is *absent*; an explicit `null` (or
+    // any other non-string) is passed straight to `CliProfile(...)`, whose
+    // `__post_init__` calls `re.match(pattern, self.base_url_env)` --
+    // `re.match` raises `TypeError` for a non-`str`/`bytes` argument, which
+    // is *not* one of `CliProfile.__post_init__`'s own `InvalidInput`s, so
+    // it's caught by `_build_cli_profile`'s own `except (KeyError,
+    // TypeError)` and re-raised as `invalid_cli_profile` -- not
+    // `invalid_env_name` (finding H-5, which is what a wrong-but-*string*
+    // `base_url_env` gets, from the regex actually failing to match).
     let base_url_env = match obj.get("base_url_env") {
-        None | Some(Value::Null) => None,
+        None => None,
         Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(Error::invalid_input("invalid_env_name")),
+        Some(_) => return Err(Error::invalid_input("invalid_cli_profile")),
     };
     let extra_env = match obj.get("extra_env") {
         None | Some(Value::Null) => BTreeMap::new(),
@@ -829,18 +1079,30 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
         secret_version.map(Value::String).unwrap_or(Value::Null),
     );
     out.insert("description".into(), Value::String(description));
+    let raw_ca_file = args
+        .get("http_target")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("ca_file"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let raw_value_prefix = args
+        .get("http_auth")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("value_prefix"))
+        .cloned()
+        .unwrap_or(Value::Null);
     out.insert(
         "http_target".into(),
         http_target
             .as_ref()
-            .map(http_target_value)
+            .map(|t| http_target_value(t, &raw_ca_file))
             .unwrap_or(Value::Null),
     );
     out.insert(
         "http_auth".into(),
         http_auth
             .as_ref()
-            .map(http_auth_value)
+            .map(|a| http_auth_value(a, &raw_value_prefix))
             .unwrap_or(Value::Null),
     );
     out.insert(
@@ -1074,10 +1336,19 @@ fn validate_dek_rotate(op: &Map<String, Value>) -> Result<()> {
     Ok(())
 }
 
+/// `_validate_settings_update`: `not isinstance(value, int) or
+/// isinstance(value, bool) or value <= 0`. Python's `int` is arbitrary
+/// precision, so any positive integer literal -- including one far outside
+/// `i64` (`10**30`) -- is valid; this checks the raw JSON literal's *shape*
+/// (no `.`/`e`/`E`, no leading `-`, not exactly `"0"`) rather than going
+/// through `as_i64()`, so it never rejects a magnitude Rust's integer types
+/// can't hold (finding H-3: the old `as_i64()`-bounded check made
+/// `receive_commit` reject a whole commit `fold()` itself handles fine).
 fn validate_settings_update(op: &Map<String, Value>) -> Result<()> {
     let ok = match op.get("sync_interval_seconds") {
         Some(Value::Number(n)) => {
-            !is_float_literal(n.as_str()) && n.as_i64().is_some_and(|v| v > 0)
+            let raw = n.as_str();
+            !is_float_literal(raw) && !raw.starts_with('-') && raw != "0"
         }
         _ => false,
     };
@@ -1249,14 +1520,19 @@ impl<'a> CommitStore<'a> {
             return Err(Error::invalid_input("team_env_id_mismatch"));
         }
         let last = self.last_seq(&commit.author)?;
-        if commit.author_seq <= last {
+        if commit.author_seq <= i128::from(last) {
             return Err(Error::invalid_input("team_seq_duplicate"));
         }
-        if commit.author_seq > last + 1 {
+        if commit.author_seq > i128::from(last) + 1 {
             return Err(Error::invalid_input("team_seq_gap"));
         }
+        // `commit.author_seq` is proven `== last + 1` by the two checks
+        // above, so it fits `i64` (on-disk sequence numbers are always
+        // small, contiguous counters) -- use `last + 1` directly rather
+        // than casting a value that could in principle be an out-of-`i64`
+        // `i128` (it never is, here).
         self.state.write_json(
-            &self.commit_path(&commit.author, commit.author_seq),
+            &self.commit_path(&commit.author, last + 1),
             &commit.to_dict(),
         )?;
         Ok(())
@@ -1344,7 +1620,7 @@ impl<'a> CommitStore<'a> {
         let mut released = Vec::new();
         for commit in self.deferred_commits()? {
             let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
-            if wall_ms > now_ms_value + MAX_CLOCK_SKEW_MS {
+            if wall_ms > i128::from(now_ms_value) + i128::from(MAX_CLOCK_SKEW_MS) {
                 continue;
             }
             let path = self.deferred_path(&commit);
@@ -1496,8 +1772,15 @@ pub fn receive_commit(
     }
 
     let last_seq = store.last_seq(&commit.author)?;
-    if commit.author_seq <= last_seq {
-        let previously_stored = store.get(&commit.author, commit.author_seq)?;
+    if commit.author_seq <= i128::from(last_seq) {
+        // On-disk sequence numbers are always small (a contiguous counter
+        // this crate itself assigned); an `author_seq` outside `i64` range
+        // can never match a stored commit, so it behaves exactly like the
+        // "no such file" case Python's own out-of-range lookup hits.
+        let previously_stored = match i64::try_from(commit.author_seq) {
+            Ok(seq) => store.get(&commit.author, seq)?,
+            Err(_) => None,
+        };
         if let Some(prev) = &previously_stored
             && prev.hash()? == commit.hash()?
         {
@@ -1507,7 +1790,10 @@ pub fn receive_commit(
     }
 
     if commit.author_seq > 1 {
-        let previous = store.get(&commit.author, commit.author_seq - 1)?;
+        let previous = match i64::try_from(commit.author_seq - 1) {
+            Ok(seq) => store.get(&commit.author, seq)?,
+            Err(_) => None,
+        };
         if let Some(previous) = previous
             && Hlc::parse(&commit.hlc)? <= Hlc::parse(&previous.hlc)?
         {
@@ -1516,7 +1802,7 @@ pub fn receive_commit(
     }
 
     let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
-    if wall_ms > now_ms_value + MAX_CLOCK_SKEW_MS {
+    if wall_ms > i128::from(now_ms_value) + i128::from(MAX_CLOCK_SKEW_MS) {
         store.defer(commit)?;
         return Ok("deferred");
     }
@@ -1785,6 +2071,14 @@ mod tests {
         env_id: String,
     }
 
+    /// `CommitStore::vector()` (`BTreeMap<String, i64>`, on-disk sequence
+    /// numbers) widened to `sign_commit`'s `seen: &BTreeMap<String, i128>`,
+    /// for tests that (as a convenient stand-in for a real `seen` vector)
+    /// sign a commit claiming to have seen the store's current state.
+    fn seen_i128(v: &BTreeMap<String, i64>) -> BTreeMap<String, i128> {
+        v.iter().map(|(k, n)| (k.clone(), i128::from(*n))).collect()
+    }
+
     fn fixture() -> Fixture {
         let tmp = TempDir::new().unwrap();
         let state = StateDir::new(tmp.path().join("state"));
@@ -1845,14 +2139,14 @@ mod tests {
             &f.env_id,
             2,
             &Hlc::default().tick(Some(1_000_100)),
-            &store.vector().unwrap(),
+            &seen_i128(&store.vector().unwrap()),
             vec![connection_create_op("gh")],
         )
         .unwrap();
         store.append(&c2).unwrap();
         let vector = store.vector().unwrap();
         assert_eq!(vector.get(&f.owner.fingerprint().unwrap()), Some(&2));
-        let seqs: Vec<i64> = store
+        let seqs: Vec<i128> = store
             .all_commits()
             .unwrap()
             .iter()
@@ -1955,7 +2249,7 @@ mod tests {
             &f.env_id,
             2,
             &Hlc::default().tick(Some(far_future_ms)),
-            &store.vector().unwrap(),
+            &seen_i128(&store.vector().unwrap()),
             vec![connection_create_op("gh")],
         )
         .unwrap();

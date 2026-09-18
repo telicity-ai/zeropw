@@ -1099,14 +1099,25 @@ pub fn fold(
                     "by_author": commit.author, "by_seq": commit.author_seq, "by_hash": hash,
                 }));
             }
-            last_target_author.insert(target, (commit.author.clone(), commit.author_seq, hash));
+            // `commit.author_seq` is `i128` (finding H-2/H-6's `Commit`
+            // widening in `commit.rs`); `fold()` only ever processes
+            // commits already accepted by `CommitStore`/`receive_commit`,
+            // whose contiguous-sequence invariant keeps `author_seq` inside
+            // `i64` in every reachable case, so this saturating downcast
+            // (kept for tracking/audit bookkeeping only, never for
+            // signature-covered bytes) never actually clamps in practice.
+            let author_seq_i64 = i64::try_from(commit.author_seq).unwrap_or(i64::MAX);
+            last_target_author.insert(target, (commit.author.clone(), author_seq_i64, hash));
         }
     }
     reapply_facts(&mut doc, &working_facts);
     let mut vector: BTreeMap<String, i64> = BTreeMap::new();
     for commit in &ordered {
         let entry = vector.entry(commit.author.clone()).or_insert(0);
-        *entry = (*entry).max(commit.author_seq);
+        // See the `author_seq_i64` comment above: bounded to `i64` in every
+        // commit `fold()` can actually be reached with.
+        let author_seq_i64 = i64::try_from(commit.author_seq).unwrap_or(i64::MAX);
+        *entry = (*entry).max(author_seq_i64);
     }
     Ok(FoldResult {
         document: Value::Object(doc),
@@ -1195,7 +1206,7 @@ pub fn fold_with_snapshot(
                 .get(&c.author)
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            c.author_seq > base
+            c.author_seq > i128::from(base)
         })
         .collect();
     let base_document = snapshot.get("document").cloned();
@@ -1758,7 +1769,7 @@ mod tests {
     fn connection_create_commit_full(
         env_id: &str,
         author: &DeviceKey,
-        seq: i64,
+        seq: i128,
         hlc: &str,
         conn_id: &str,
         methods: Option<&[&str]>,
@@ -1779,7 +1790,7 @@ mod tests {
     fn connection_create_commit(
         env_id: &str,
         author: &DeviceKey,
-        seq: i64,
+        seq: i128,
         hlc: &str,
         conn_id: &str,
     ) -> Commit {
@@ -1798,7 +1809,7 @@ mod tests {
     fn member_add_commit(
         env_id: &str,
         author: &DeviceKey,
-        seq: i64,
+        seq: i128,
         hlc: &str,
         new_device: &DeviceKey,
         role: &str,

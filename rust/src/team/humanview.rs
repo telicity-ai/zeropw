@@ -14,6 +14,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::pyjson;
+use crate::pystr;
 
 /// `zeropw.team.humanview._YAML_NEEDS_QUOTING`.
 static YAML_NEEDS_QUOTING: LazyLock<Regex> = LazyLock::new(|| {
@@ -141,6 +142,19 @@ fn number_display(n: &serde_json::Number) -> String {
     }
 }
 
+/// Quote `text` as a double-quoted YAML scalar (JSON string escaping rules)
+/// when it needs it -- a YAML-reserved word (case-insensitively) or a match
+/// of [`YAML_NEEDS_QUOTING`] -- else return it verbatim. Shared by
+/// [`yaml_scalar`]'s `Value::String` case and [`python_tuple_repr`]'s
+/// composed `str(tuple(...))` text (finding H-1).
+fn quote_yaml_text(text: &str) -> String {
+    if YAML_RESERVED.contains(&text.to_lowercase().as_str()) || YAML_NEEDS_QUOTING.is_match(text) {
+        pyjson::encode_str(text, true)
+    } else {
+        text.to_string()
+    }
+}
+
 /// `zeropw.team.humanview._yaml_scalar`.
 fn yaml_scalar(value: &Value) -> String {
     match value {
@@ -153,21 +167,82 @@ fn yaml_scalar(value: &Value) -> String {
             }
         }
         Value::Number(n) => number_display(n),
-        Value::String(s) => {
-            if YAML_RESERVED.contains(&s.to_lowercase().as_str()) || YAML_NEEDS_QUOTING.is_match(s)
-            {
-                // A double-quoted YAML scalar follows JSON string escaping rules.
-                pyjson::encode_str(s, true)
-            } else {
-                s.clone()
-            }
-        }
+        Value::String(s) => quote_yaml_text(s),
         // `_yaml_lines` never routes a container value here (both branches
         // that could -- a dict/list under a key, or a dict/list list item --
         // recurse into `_yaml_lines` instead); kept as a safe, non-panicking
         // fallback rather than relying on that invariant.
         Value::Array(_) | Value::Object(_) => String::new(),
     }
+}
+
+/// `str(tuple(items))` for a JSON array Python holds as a `tuple` at this
+/// exact point in the document (finding H-1): `build_connection_fields`
+/// (`zeropw/team/commit.py`) returns `dataclasses.asdict(Connection(...))`,
+/// and `HttpScope.methods`/`path_prefixes`/`confirm_methods` and
+/// `SshTarget.host_keys` are dataclass fields typed as `tuple[str, ...]` --
+/// `asdict` recurses into a tuple field but keeps it a tuple, so a folded
+/// connection's `to_yaml()` rendering hits `_yaml_lines`' final `else`
+/// branch (neither `isinstance(..., dict)` nor `isinstance(..., list)` is
+/// true for a tuple) and falls through to `_yaml_scalar(the_tuple)` ->
+/// `str(the_tuple)`, always as a single inline scalar (never the multi-line
+/// `-` list form, and never `[]` for an empty one -- `()` instead).
+/// `str()` of a Python tuple is `(repr(e0), repr(e1), ...)`, with a
+/// trailing comma before the closing paren for exactly one element
+/// (`('x',)`) and none for zero or two-or-more (`()`, `('x', 'y')`).
+/// Every element here is validated to already be a `str` by
+/// `HttpScope::new`/`SshTarget::new`, so [`pystr::repr_str`] (this crate's
+/// `repr(str)`) is exact; a non-string element (unreachable through this
+/// port's own validated builders) falls back to [`yaml_scalar`] rather than
+/// panicking.
+fn python_tuple_repr(items: &[Value]) -> String {
+    let reprs: Vec<String> = items
+        .iter()
+        .map(|v| match v {
+            Value::String(s) => pystr::repr_str(s),
+            other => yaml_scalar(other),
+        })
+        .collect();
+    match reprs.len() {
+        0 => "()".to_string(),
+        1 => format!("({},)", reprs[0]),
+        _ => format!("({})", reprs.join(", ")),
+    }
+}
+
+/// Render a `http_scope`/`ssh_target` dict's own fields, treating
+/// `tuple_fields` (an array value, even empty) as a Python tuple -- see
+/// [`python_tuple_repr`] -- and every other field generically, matching
+/// `_yaml_lines`'s per-key dispatch (finding H-1).
+fn yaml_lines_tuple_dict(
+    map: &Map<String, Value>,
+    indent: usize,
+    tuple_fields: &[&str],
+) -> Vec<String> {
+    let pad = "  ".repeat(indent);
+    let mut lines = Vec::new();
+    for (key, item) in map {
+        let key_text = yaml_scalar(&Value::String(key.clone()));
+        if tuple_fields.contains(&key.as_str())
+            && let Value::Array(items) = item
+        {
+            let text = python_tuple_repr(items);
+            lines.push(format!("{pad}{key_text}: {}", quote_yaml_text(&text)));
+            continue;
+        }
+        match item {
+            Value::Object(m) if !m.is_empty() => {
+                lines.push(format!("{pad}{key_text}:"));
+                lines.extend(yaml_lines(item, indent + 1));
+            }
+            Value::Array(a) if !a.is_empty() => {
+                lines.push(format!("{pad}{key_text}:"));
+                lines.extend(yaml_lines(item, indent));
+            }
+            _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
+        }
+    }
+    lines
 }
 
 fn yaml_scalar_or_empty(item: &Value) -> String {
@@ -189,6 +264,18 @@ fn yaml_lines(value: &Value, indent: usize) -> Vec<String> {
             for (key, item) in map {
                 let key_text = yaml_scalar(&Value::String(key.clone()));
                 match item {
+                    Value::Object(m) if !m.is_empty() && key == "http_scope" => {
+                        lines.push(format!("{pad}{key_text}:"));
+                        lines.extend(yaml_lines_tuple_dict(
+                            m,
+                            indent + 1,
+                            &["methods", "path_prefixes", "confirm_methods"],
+                        ));
+                    }
+                    Value::Object(m) if !m.is_empty() && key == "ssh_target" => {
+                        lines.push(format!("{pad}{key_text}:"));
+                        lines.extend(yaml_lines_tuple_dict(m, indent + 1, &["host_keys"]));
+                    }
                     Value::Object(m) if !m.is_empty() => {
                         lines.push(format!("{pad}{key_text}:"));
                         lines.extend(yaml_lines(item, indent + 1));
