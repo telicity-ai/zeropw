@@ -430,8 +430,39 @@ impl Commit {
             Some(v) if json_falsy(v) => BTreeMap::new(),
             Some(v) => {
                 let pairs = python_dict_pairs(v).ok_or_else(bad)?;
-                let mut out = BTreeMap::new();
+                // `seen={str(k): int(v) for k, v in dict(pairs).items()}`:
+                // `dict(pairs)` runs FIRST and completely on its own
+                // (finding H-R5-5) -- a `list`/`dict` key is Python's own
+                // UNHASHABLE type, an uncaught `TypeError` from `dict()`
+                // itself (`commit_malformed` per PORTING.md §3.5, not the
+                // silent string-coercion this used to give every key
+                // regardless of type); a hashable key collides with any
+                // other Python-equal one (`bool`/`int`/`float` compare and
+                // hash purely by NUMERIC value -- confirmed against real
+                // `python3.12`: `dict([(True, 1), (1, 2)]) == {True: 2}`,
+                // one entry, keeping the FIRST key's representation but the
+                // LAST value written for it). Only once THAT merge is
+                // fully resolved does `str(k)`/`int(v)` run, once per
+                // SURVIVING pair -- a value on a pair some later pair's
+                // same key discards is never passed through `int()` at
+                // all, so it cannot fail validation either (this also
+                // fixes a related pre-existing bug: the previous
+                // per-pair-in-arrival-order `python_int_coerce` call could
+                // wrongly reject a `seen` value that Python's real
+                // `dict()`-first order would have discarded before ever
+                // looking at it).
+                let mut merged: Vec<(Value, Value)> = Vec::new();
                 for (k, v) in pairs {
+                    if !dict_key_is_hashable(&k) {
+                        return Err(bad());
+                    }
+                    match merged.iter_mut().find(|(ek, _)| dict_keys_equal(ek, &k)) {
+                        Some(existing) => existing.1 = v,
+                        None => merged.push((k, v)),
+                    }
+                }
+                let mut out = BTreeMap::new();
+                for (k, v) in merged {
                     let key = python_str_coerce(&k);
                     let n = python_int_coerce(&v).ok_or_else(bad)?;
                     out.insert(key, n);
@@ -536,22 +567,31 @@ fn python_int_coerce(value: &Value) -> Option<i128> {
 
 /// `str(k)` for a JSON value used as a `seen`-pair key (finding H-6): a
 /// string is used as-is; the other JSON scalars use CPython's `str()` text.
-/// A list/dict key is vanishingly unlikely to appear in a real `seen` pair
-/// (there is no writer that could produce one merely by mis-shaping
-/// `seen`), so it falls back to `pyjson`'s compact JSON form rather than
-/// CPython's `repr`-style container text -- a difference only observable
-/// for that unreachable shape (e.g. a Python `str` container containing a
-/// quote or backslash would `repr()` differently than `pyjson` renders it;
-/// the base64-alphabet-preserving case `identity.rs`'s `DeviceRecord::
-/// from_dict` needs, finding H-R4-1, is unaffected either way since every
-/// non-base64-alphabet character -- quotes, brackets, whichever style --
-/// is discarded identically by the lenient decoder).
+/// A list/dict value renders as CPython's actual `repr()` text via
+/// [`crate::pystr::repr_value`] (finding H-R5-1: `[`/`]`/`{`/`}`
+/// delimiters, `, ` / `: ` separators, **insertion** order, single-quoted
+/// strings, `None`/`True`/`False`) -- NOT `pyjson`'s compact/sorted JSON
+/// form, which this function used to fall back to. That distinction is
+/// observable, not academic: a peer-signed `agree_pub` (etc.) shaped as a
+/// dict whose *JSON key order* differs from its *Python insertion order*
+/// (dicts built by non-literal code, e.g. from a prior key deletion and
+/// re-insertion, keep insertion order while `json.dumps`'s wire form need
+/// not reflect it in the way a hand-built Rust equivalent would guess) can
+/// `repr()` to valid lenient base64 in Python while the sorted-JSON
+/// approximation decoded to different bytes in Rust; and a value containing
+/// a literal non-ASCII character `repr()`s with that character copied
+/// through literally (Python `str.encode('ascii')`-equivalent then fails
+/// inside `b64decode`), whereas `ensure_ascii` JSON escaping made the same
+/// input silently ASCII-safe and thus wrongly acceptable in Rust. See
+/// `rust/DEVIATIONS.md`'s corrected H-R4-1 row.
 ///
 /// Exposed crate-wide (not just within this module) because
 /// `identity.rs`'s `DeviceRecord::from_dict` needs the identical `str(...)`
 /// coercion Python applies to `sign_pub`/`agree_pub`/`sig` before its own
 /// lenient base64 decode (finding H-R4-1); per PORTING.md §3b this is the
-/// one canonical place for that coercion, reused rather than copied.
+/// one canonical place for that coercion (which itself defers to
+/// [`crate::pystr::repr_value`], the crate's one canonical container-`repr`,
+/// for the `Array`/`Object` cases), reused rather than copied.
 pub(crate) fn python_str_coerce(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -566,9 +606,7 @@ pub(crate) fn python_str_coerce(value: &Value) -> String {
                 n.to_string()
             }
         }
-        Value::Array(_) | Value::Object(_) => {
-            pyjson::dumps(value, DumpOptions::compact_sorted()).unwrap_or_default()
-        }
+        Value::Array(_) | Value::Object(_) => crate::pystr::repr_value(value),
     }
 }
 
@@ -606,6 +644,43 @@ fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
             }
             Some(out)
         }
+        _ => None,
+    }
+}
+
+/// Whether a JSON value is Python-HASHABLE when used as a `dict`/`seen`-pair
+/// key (finding H-R5-5): everything except a `list`/`dict` (Python's own
+/// unhashable types -- confirmed against real `python3.12`:
+/// `dict([([1], 1)])` raises `TypeError: unhashable type: 'list'`).
+fn dict_key_is_hashable(v: &Value) -> bool {
+    !matches!(v, Value::Array(_) | Value::Object(_))
+}
+
+/// Python `==`/hash identity for two `dict` keys (finding H-R5-5): `None`
+/// only equals `None`; a `str` only equals an identical `str`; a
+/// `bool`/`int`/`float` all compare (and hash) by pure NUMERIC value, so
+/// they collide across type -- confirmed against real `python3.12`:
+/// `True == 1 == 1.0` and `False == 0 == 0.0`. A `list`/`dict` never
+/// reaches this function (see [`dict_key_is_hashable`], checked first).
+fn dict_keys_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::String(x), Value::String(y)) => x == y,
+        _ => match (dict_key_numeric_value(a), dict_key_numeric_value(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        },
+    }
+}
+
+/// A `bool`/JSON number's value as `f64`, for [`dict_keys_equal`]'s
+/// cross-type numeric comparison (`True`/`1`/`1.0` all the same Python
+/// dict key). `None` for anything else, including a number whose text
+/// cannot parse as `f64` at all (unreachable for well-formed JSON).
+fn dict_key_numeric_value(v: &Value) -> Option<f64> {
+    match v {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::Number(n) => n.as_f64(),
         _ => None,
     }
 }
@@ -808,10 +883,21 @@ fn http_target_value(t: &policy::HttpTarget, raw_ca_file: &Value) -> Value {
 }
 /// `raw_value_prefix`: see [`http_target_value`]'s doc comment --
 /// `HttpAuth.value_prefix` is the same kind of unchecked-optional-field
-/// case (finding H-4).
-fn http_auth_value(a: &policy::HttpAuth, raw_value_prefix: &Value) -> Value {
+/// case (finding H-4). `raw_basic_username` is the analogous raw
+/// passthrough for `basic_username` (finding H-R5-3): Python keeps
+/// whatever value the op provided verbatim (a validated string, or an
+/// accepted colon-free list/dict when `mode == "basic"`, or an entirely
+/// unchecked value when `mode != "basic"`), which the typed
+/// `HttpAuth::basic_username: Option<String>` field cannot hold for a
+/// container -- so the document is built from the original JSON value,
+/// not from `a.basic_username`.
+fn http_auth_value(
+    a: &policy::HttpAuth,
+    raw_value_prefix: &Value,
+    raw_basic_username: &Value,
+) -> Value {
     json!({"mode": a.mode, "header_name": a.header_name, "value_prefix": raw_value_prefix,
-          "basic_username": a.basic_username})
+          "basic_username": raw_basic_username})
 }
 fn http_scope_value(s: &policy::HttpScope) -> Value {
     json!({"methods": s.methods, "path_prefixes": s.path_prefixes, "confirm_methods": s.confirm_methods})
@@ -819,8 +905,12 @@ fn http_scope_value(s: &policy::HttpScope) -> Value {
 fn ssh_target_value(t: &policy::SshTarget) -> Value {
     json!({"host": t.host, "port": t.port, "username": t.username, "host_keys": t.host_keys})
 }
-fn cli_profile_value(c: &policy::CliProfile) -> Value {
-    json!({"program": c.program, "kind": c.kind, "base_url_env": c.base_url_env, "extra_env": c.extra_env})
+/// `raw_program`: see [`http_target_value`]'s doc comment for the general
+/// pattern -- `CliProfile.program` can be a peer-accepted truthy list/dict
+/// (finding H-R5-2), which the typed `CliProfile::program: String` field
+/// cannot hold, so the document is built from the op's original JSON value.
+fn cli_profile_value(c: &policy::CliProfile, raw_program: &Value) -> Value {
+    json!({"program": raw_program, "kind": c.kind, "base_url_env": c.base_url_env, "extra_env": c.extra_env})
 }
 
 /// `zeropw.team.commit._build_http_target`: `P.HttpTarget(scheme=...,
@@ -917,11 +1007,22 @@ fn build_http_auth(value: Option<&Value>) -> Result<Option<policy::HttpAuth>> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| Error::invalid_input("unsupported_auth_mode"))?;
+    // Finding H-R5-3: `basic_username` goes through
+    // `policy::basic_username_decision` rather than `opt_string`, which
+    // used to collapse ANY non-string value -- including a truthy,
+    // colon-free list/dict, which Python accepts and folds verbatim -- to
+    // `None` and so always rejected it as `invalid_basic_username`, a
+    // permanent peer-reachable divergence under the coordinator's
+    // commit-fields ruling (same shape as H-R5-2's `program`). The final
+    // document's `basic_username` field is filled in from the RAW op value
+    // by the caller (`build_connection_fields`), not from the placeholder
+    // `HttpAuth::basic_username` this produces (PORTING.md §3b's
+    // typed-field limit -- see `basic_username_decision`'s doc comment).
     Ok(Some(policy::HttpAuth::new(
         mode,
         opt_string(obj.get("header_name")),
         opt_string(obj.get("value_prefix")),
-        opt_string(obj.get("basic_username")),
+        policy::basic_username_decision(obj.get("basic_username")),
     )?))
 }
 
@@ -1118,19 +1219,56 @@ fn build_cli_profile(value: Option<&Value>) -> Result<Option<policy::CliProfile>
     // `if not self.program or "\x00" in self.program`: Python's `or`
     // short-circuits on a FALSY `program` (`""`, `0`, `False`, `None`,
     // `[]`, `{}`) straight to `invalid_cli_program` without ever evaluating
-    // `"\x00" in self.program`; only a TRUTHY non-string `program` reaches
-    // that `in` check, an uncaught `TypeError` for a non-iterable value
-    // that resolves to `invalid_cli_profile` -- reached here only now that
-    // `kind` is already confirmed valid, matching Python's order (finding
-    // H-R2-8's reason merge is corrected: the two Python outcomes are
-    // different reasons, not one).
-    let program = if json_falsy(&program_raw) {
-        String::new() // placeholder; the emptiness check below raises the documented reason
-    } else {
-        match program_raw.as_str() {
-            Some(s) => s.to_string(),
-            None => return Err(bad()),
-        }
+    // `"\x00" in self.program` -- reached here only now that `kind` is
+    // already confirmed valid, matching Python's order (finding H-R2-8's
+    // reason merge is corrected: the two Python outcomes are different
+    // reasons, not one).
+    //
+    // Finding H-R5-4: this check now raises EAGERLY, right here, instead
+    // of being deferred into `new_ordered`'s own check at the very end of
+    // this function -- deferring it let `base_url_env`'s check (below)
+    // fire first and report its own reason whenever BOTH were invalid,
+    // which is the wrong order: Python's `__post_init__` checks `program`
+    // before ever looking at `base_url_env`.
+    //
+    // Finding H-R5-2: a TRUTHY value then only fails via `"\x00" in
+    // self.program`. For a `str` this is `contains('\0')` (unchanged). For
+    // a `list`/`dict`, Python's `in` is a plain MEMBERSHIP test -- true iff
+    // an element (list) or key (dict) equals the exact string `"\x00"` --
+    // so an ordinary truthy list/dict does NOT raise, and Python folds it
+    // into the document verbatim: confirmed against real `python3.12`,
+    // `CliProfile(program=["curl"], kind="http")` succeeds and keeps the
+    // list, while `CliProfile(program={"\x00": 1}, kind="http")` raises
+    // the documented `invalid_cli_program`. Only a truthy *non-iterable*
+    // scalar (`int`/`float`/`bool`) still hits Python's uncaught
+    // `TypeError` on `in`, substituted with `invalid_cli_profile` (`bad()`)
+    // as before -- this function previously treated EVERY non-string
+    // `program`, container or not, as that same scalar case, wrongly
+    // rejecting the whole op for a shape Python accepts.
+    let program_contains_nul = match &program_raw {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(items) => items.iter().any(|v| v.as_str() == Some("\u{0}")),
+        Value::Object(map) => map.keys().any(|k| k == "\u{0}"),
+        Value::Number(_) | Value::Bool(_) | Value::Null => false,
+    };
+    if json_falsy(&program_raw) || program_contains_nul {
+        return Err(Error::invalid_input("invalid_cli_program"));
+    }
+    let program_is_container = matches!(&program_raw, Value::Array(_) | Value::Object(_));
+    let program = match program_raw.as_str() {
+        Some(s) => s.to_string(),
+        // Placeholder for the typed `CliProfile::program: String` field
+        // (PORTING.md §3b's typed-field limit, same as `ca_file`/
+        // `value_prefix`/`basic_username`): the final document is built
+        // from `program_raw` directly (`cli_profile_value`'s
+        // `raw_program`), never from this placeholder, and it is
+        // guaranteed non-empty/NUL-free so `new_ordered`'s own
+        // (redundant, already-passed) program check below never
+        // re-rejects it.
+        None if program_is_container => "\u{1}container-program".to_string(),
+        // Truthy non-iterable scalar (int/float/bool): Python's uncaught
+        // `TypeError` from `"\x00" in <scalar>`.
+        None => return Err(bad()),
     };
     // `re.match(pattern, self.base_url_env)` has no `isinstance` guard at
     // all: ANY non-string value, falsy or truthy, is the same uncaught
@@ -1272,6 +1410,12 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
         .and_then(|o| o.get("value_prefix"))
         .cloned()
         .unwrap_or(Value::Null);
+    let raw_basic_username = args
+        .get("http_auth")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("basic_username"))
+        .cloned()
+        .unwrap_or(Value::Null);
     out.insert(
         "http_target".into(),
         http_target
@@ -1283,7 +1427,7 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
         "http_auth".into(),
         http_auth
             .as_ref()
-            .map(|a| http_auth_value(a, &raw_value_prefix))
+            .map(|a| http_auth_value(a, &raw_value_prefix, &raw_basic_username))
             .unwrap_or(Value::Null),
     );
     out.insert(
@@ -1300,9 +1444,17 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
             .map(ssh_target_value)
             .unwrap_or(Value::Null),
     );
+    let raw_program = args
+        .get("cli")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("program"))
+        .cloned()
+        .unwrap_or(Value::Null);
     out.insert(
         "cli".into(),
-        cli.as_ref().map(cli_profile_value).unwrap_or(Value::Null),
+        cli.as_ref()
+            .map(|c| cli_profile_value(c, &raw_program))
+            .unwrap_or(Value::Null),
     );
     Ok(out)
 }

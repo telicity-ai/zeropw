@@ -96,6 +96,53 @@ pub fn repr_str(s: &str) -> String {
     out
 }
 
+/// Emulate CPython's `repr()` for a `json.loads`-decoded value (PORTING.md
+/// §3b: the ONE canonical home for this, reused rather than copied). Also
+/// what CPython's `str()` falls back to for a `list`/`dict` (`str(x)` calls
+/// `type(x).__str__`, and neither `list` nor `dict` overrides `__str__`, so
+/// it is `list.__repr__`/`dict.__repr__`) -- callers coercing a JSON value
+/// with `str(...)` should use this for the `Array`/`Object` cases and their
+/// own scalar rendering (`None`/`True`/`False`/number-as-text) for the rest.
+///
+/// `[`/`]` and `{`/`}` delimiters, `", "` element separator, `": "` key
+/// separator, and **insertion order** (never sorted -- `serde_json` here is
+/// built with the `preserve_order` feature so a `Value::Object`'s iteration
+/// order already matches the JSON document's own key order, which is what
+/// CPython's `dict` preserves). `None`/`True`/`False` for `null`/booleans;
+/// [`repr_str`] for strings (including dict keys, which `dict.__repr__`
+/// reprs exactly like any other value); an integer JSON number renders its
+/// digits verbatim (arbitrary precision, matching `int.__repr__`), a float
+/// one through [`crate::pyjson::python_float_repr`] (matching
+/// `float.__repr__`); each container element recurses through this same
+/// function.
+pub fn repr_value(value: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::String(s) => repr_str(s),
+        Value::Number(n) => {
+            if n.is_f64() {
+                crate::pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
+            } else {
+                n.as_str().to_string()
+            }
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(repr_value).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", repr_str(k), repr_value(v)))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // `int(str)` grammar (PORTING.md §3b coordinator ruling): the ONE canonical
 // home for CPython's `int(str)`/`int(str, base)` semantics. Three separate
@@ -1162,6 +1209,69 @@ print(hs.hexdigest())
             let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
             let theirs = python(&script).trim().to_string();
             assert_eq!(ours, theirs, "input {s:?}");
+        }
+    }
+
+    /// Finding H-R5-1 (PORTING.md §3b): pins [`repr_value`], the crate's
+    /// ONE canonical `repr()` for a `json.loads`-decoded value, against
+    /// real `python3.12`'s own `repr()`/`str()` for a table covering
+    /// everything its doc comment promises: nested containers, dict KEY
+    /// ORDER (insertion, never sorted), non-ASCII strings copied through
+    /// literally (not escaped the way JSON's `ensure_ascii` would), floats
+    /// (including a tie-breaking case where the shortest round-tripping
+    /// decimal representation matters), and a large (beyond-`i64`) integer
+    /// rendered verbatim. Each case is round-tripped through `pyjson` so
+    /// both languages parse the identical JSON text, then both languages'
+    /// `repr()`/`str()` outputs are compared.
+    #[test]
+    fn repr_value_oracle_table() {
+        use serde_json::json;
+
+        let cases: Vec<serde_json::Value> = vec![
+            json!(null),
+            json!(true),
+            json!(false),
+            json!(0),
+            json!(-17),
+            json!(170141183460469231731687303715884105727i128), // beyond i64::MAX
+            json!(-170141183460469231731687303715884105728i128), // beyond i64::MIN
+            json!(2.5),
+            json!(0.1),
+            json!(1.0),
+            json!(100.0),
+            // Tie-breaking case: the float closest to 0.1 + 0.2 needs its
+            // shortest round-tripping repr, not a naive fixed-precision one.
+            json!(0.30000000000000004),
+            json!(""),
+            json!("plain"),
+            json!("café \u{00e9} non-ascii"),
+            json!("emoji \u{1F600}"),
+            json!("quote's and \"quotes\""),
+            json!([]),
+            json!({}),
+            json!([1, "two", 3.0, null, true, false]),
+            // Dict key order: JSON object insertion order, NOT sorted --
+            // `serde_json` here is built with `preserve_order` for exactly
+            // this reason.
+            json!({"b": 1, "a": 2, "z": 3}),
+            // Nested containers, mixed.
+            json!({"list": [1, {"k": "v"}, [2, 3]], "s": "x"}),
+            json!([{"b": 1, "a": 2}, {"y": [1, 2], "x": null}]),
+            json!(["café", {"emoji": "\u{1F600}", "b": 1, "a": 2}]),
+        ];
+
+        for value in &cases {
+            let ours = repr_value(value);
+            // `DumpOptions::plain()` (insertion order, matching Python's own
+            // `dict`) -- NOT `compact_sorted()`, which would reorder the
+            // "b"/"a"/"z" case's keys in the JSON text itself before either
+            // language ever sees them, defeating the dict-key-order case
+            // this table exists to cover.
+            let json_text =
+                crate::pyjson::dumps(value, crate::pyjson::DumpOptions::plain()).unwrap();
+            let script = format!("import json\nv = json.loads({json_text:?})\nprint(repr(v))");
+            let theirs = python(&script).trim().to_string();
+            assert_eq!(ours, theirs, "input {value:?}");
         }
     }
 

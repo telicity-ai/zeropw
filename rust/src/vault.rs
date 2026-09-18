@@ -259,9 +259,11 @@ fn python_list_over_value(v: &Value) -> Result<Vec<Value>, Error> {
 /// still produce Python's exact `str()` output for that case, not merely
 /// something plausible: `str()` on a `dict`/`list` falls back to `repr()`
 /// (`str({'a': 1}) == "{'a': 1}"`, `str([1, 2]) == "[1, 2]"`), so the
-/// catch-all here defers to [`python_repr_value`] instead of a compact JSON
-/// rendering (finding E-R3-3; the previous version used `Value::to_string()`
-/// here, e.g. `{"a":1}`, which is not what Python's `str()` produces).
+/// catch-all here defers to [`crate::pystr::repr_value`] (the crate's one
+/// canonical container-`repr` implementation, PORTING.md §3b) instead of a
+/// compact JSON rendering (finding E-R3-3; the previous version used
+/// `Value::to_string()` here, e.g. `{"a":1}`, which is not what Python's
+/// `str()` produces).
 fn python_str_scalar(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
@@ -275,44 +277,7 @@ fn python_str_scalar(v: &Value) -> String {
                 n.as_str().to_string()
             }
         }
-        Value::Array(_) | Value::Object(_) => python_repr_value(v),
-    }
-}
-
-/// Python `repr()` of a value parsed by `json.loads`. `str()` on a
-/// `dict`/`list` (see [`python_str_scalar`]) falls back to `__repr__`, which
-/// renders every *nested* element with, in turn, its own `repr()` --
-/// `str({'a': 1}) == "{'a': 1}"`, `str([1, 'x', None, True]) == "[1, 'x',
-/// None, True]"`. Dict/list iteration order matches Python's own (both
-/// preserve JSON document insertion order; this crate's `serde_json` is
-/// built with the `preserve_order` feature for exactly this reason). Nested
-/// strings reuse [`crate::pystr::repr_str`] (dict keys are always JSON
-/// strings, and Python's `dict.__repr__` reprs its keys the same as any
-/// other value).
-fn python_repr_value(v: &Value) -> String {
-    match v {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::String(s) => crate::pystr::repr_str(s),
-        Value::Number(n) => {
-            if n.is_f64() {
-                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
-        Value::Array(items) => {
-            let inner: Vec<String> = items.iter().map(python_repr_value).collect();
-            format!("[{}]", inner.join(", "))
-        }
-        Value::Object(map) => {
-            let inner: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("{}: {}", crate::pystr::repr_str(k), python_repr_value(v)))
-                .collect();
-            format!("{{{}}}", inner.join(", "))
-        }
+        Value::Array(_) | Value::Object(_) => crate::pystr::repr_value(v),
     }
 }
 

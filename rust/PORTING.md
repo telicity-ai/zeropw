@@ -88,6 +88,7 @@ ONE place and are reused, never copied:
 | Semantics | Canonical home |
 | --- | --- |
 | `str.isspace`, `str.isprintable`, `repr(str)` | `crate::pystr` |
+| `repr()` of a `json.loads`-decoded value (also what `str()` falls back to for a `list`/`dict`) | `crate::pystr::repr_value` |
 | `int(str)` grammar (its own whitespace set, `_` separators, sign, Unicode `Nd` digits) | `crate::pystr` |
 | `base64` (lenient `b64decode`, urlsafe, encode) | `crate::pybase64` |
 | `json.dump`/`load` byte compatibility | `crate::pyjson` |

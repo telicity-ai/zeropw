@@ -1699,6 +1699,139 @@ except InvalidInput as e:
     }
 }
 
+fn connection_create_args(cli_json: &str, http_auth_json: &str) -> String {
+    format!(
+        r#"{{"project": "demo", "environment": "dev", "service": "github", "kind": "http",
+        "secret_id": "gh-token", "secret_version": null, "description": "",
+        "http_target": {{"scheme": "https", "host": "api.github.com", "port": 443}},
+        "http_auth": {http_auth_json}, "http_scope": {{"methods": ["GET"]}},
+        "cli": {cli_json}}}"#
+    )
+}
+
+/// Finding H-R5-2 (`build_cli_profile`'s `program` check vs
+/// `zeropw/policy.py` `CliProfile.__post_init__`'s `if not self.program or
+/// "\x00" in self.program`): a TRUTHY list/dict `program` does not raise in
+/// Python -- `"\x00" in value` is a plain membership test on any container,
+/// not a type check -- so it is folded into the connection's `cli` field
+/// VERBATIM. Confirmed against real `python3.12`:
+/// `build_connection_fields({"cli": {"program": ["curl"], ...}, ...})`
+/// succeeds and keeps `program == ["curl"]`; the previous Rust code
+/// rejected ANY non-string `program` outright (`invalid_cli_profile`), even
+/// a well-formed list with no `"\x00"` in it. A container that DOES contain
+/// the literal `"\x00"` (as a list element or dict key) still fails with
+/// the documented `invalid_cli_program` -- the same reason a falsy `program`
+/// gets, matching Python exactly.
+#[test]
+fn cli_profile_truthy_container_program_matches_python() {
+    let accept_args = connection_create_args(
+        r#"{"program": ["curl", "--silent"], "kind": "http"}"#,
+        r#"{"mode": "bearer"}"#,
+    );
+    let accept_op: Map<String, Value> = serde_json::from_str(&accept_args).unwrap();
+    let rust_fields = C::build_connection_fields(&accept_op)
+        .expect("rust must accept a truthy, nul-free list program, matching python");
+    assert_eq!(
+        rust_fields.get("cli").unwrap().get("program").unwrap(),
+        &json!(["curl", "--silent"]),
+        "the list program must be folded VERBATIM into the document"
+    );
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+args = json.loads({raw})
+fields = C.build_connection_fields(args)
+print(json.dumps(fields["cli"]["program"]))
+"#,
+        raw = py_str_literal(&accept_args),
+    );
+    let py_out = run_python(&script);
+    let py_program: Value = serde_json::from_str(py_out.trim()).unwrap();
+    assert_eq!(
+        py_program,
+        json!(["curl", "--silent"]),
+        "python's own program field must also be the verbatim list"
+    );
+
+    // A dict `program` containing the literal NUL as a KEY must still be
+    // rejected the documented way.
+    let reject_args = connection_create_args(
+        "{\"program\": {\"\\u0000\": 1}, \"kind\": \"http\"}",
+        r#"{"mode": "bearer"}"#,
+    );
+    let reject_op: Map<String, Value> = serde_json::from_str(&reject_args).unwrap();
+    let rust_err = C::build_connection_fields(&reject_op)
+        .expect_err("a dict program containing a literal NUL key must be rejected");
+    assert_eq!(rust_err.reason, "invalid_cli_program");
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+args = json.loads({raw})
+try:
+    C.build_connection_fields(args)
+    print("accepted")
+except InvalidInput as e:
+    print(e.reason)
+"#,
+        raw = py_str_literal(&reject_args),
+    );
+    let py_out = run_python(&script);
+    assert_eq!(
+        py_out.trim(),
+        "invalid_cli_program",
+        "python must reject the NUL-keyed dict program the same documented way"
+    );
+}
+
+/// Finding H-R5-4 (`build_cli_profile`'s check ORDER vs
+/// `CliProfile.__post_init__`'s exact `kind` -> `program` -> `base_url_env`
+/// -> entries sequence): with `kind` already valid, a FALSY `program`
+/// (`""`) must raise `invalid_cli_program` even when `base_url_env` is ALSO
+/// malformed (a non-string value, which on its own would fail with a
+/// different substituted reason) -- Python's `__post_init__` never reaches
+/// `base_url_env` at all once `program` has already failed. Before this
+/// fix, the `program` check was deferred into `CliProfile::new_ordered`'s
+/// own check at the very end of `build_cli_profile`, so `base_url_env`'s
+/// check ran FIRST and its reason won instead.
+#[test]
+fn cli_profile_program_checked_before_base_url_env_matches_python() {
+    let args_text = connection_create_args(
+        r#"{"program": "", "kind": "http", "base_url_env": 5}"#,
+        r#"{"mode": "bearer"}"#,
+    );
+    let op: Map<String, Value> = serde_json::from_str(&args_text).unwrap();
+    let rust_err = C::build_connection_fields(&op)
+        .expect_err("a falsy program must be rejected even with a malformed base_url_env");
+    assert_eq!(
+        rust_err.reason, "invalid_cli_program",
+        "rust must report the PROGRAM failure, not whatever base_url_env's own reason is"
+    );
+
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+args = json.loads({raw})
+try:
+    C.build_connection_fields(args)
+    print("accepted")
+except InvalidInput as e:
+    print(e.reason)
+"#,
+        raw = py_str_literal(&args_text),
+    );
+    let py_out = run_python(&script);
+    assert_eq!(
+        py_out.trim(),
+        "invalid_cli_program",
+        "python must also report invalid_cli_program first"
+    );
+}
+
 /// Finding H-6 (the two `Commit::from_dict` DEVIATIONS.md rows, the second
 /// covering `str(data["format"])`/`str(data["env_id"])`/`str(data["author"])`/
 /// `str(data["hlc"])`/`str(data["sig"])`): Python's `str(x)` coerces *any*
@@ -1854,6 +1987,138 @@ with tempfile.TemporaryDirectory() as tmp:
     let rust_fold = F::fold(&env_id, all_commits, None, None, None, None).unwrap();
     let members = rust_fold.document["members"].as_object().unwrap();
     assert_eq!(members.len(), 2, "owner + new member must both be present");
+}
+
+/// Finding H-R5-1: `DeviceRecord::from_dict`'s `str(...)` coercion for
+/// `sign_pub`/`agree_pub`/`sig` (`crate::team::commit::python_str_coerce`,
+/// PORTING.md §3b's canonical coercion, now backed by
+/// `crate::pystr::repr_value` for the `Array`/`Object` cases) against
+/// `zeropw/team/identity.py`'s `_b64d(str(data[key]))`. Two shapes from
+/// the reviewer's own probes, run directly against
+/// `DeviceRecord::from_dict`/`DeviceRecord.from_dict` (no signing/receiving
+/// needed -- this is purely a decode-correctness question, not an
+/// accept/reject-of-a-commit one):
+///
+/// (a) A dict-ordered `agree_pub` (`{"!": "<first 20 chars>", " ": "<rest>"}`)
+///     decodes to the REAL 32-byte key in Python, because `str(dict)`
+///     preserves INSERTION order (matching the JSON document's own key
+///     order) and the lenient base64 decoder discards the non-alphabet
+///     `{`/`}`/`'`/`:`/`,`/space characters wherever they fall. Before this
+///     fix, `python_str_coerce` rendered this as compact, SORTED JSON
+///     (`{" ":"...","!":"..."}`, keys reordered) instead of CPython's
+///     `repr()` text (`{'!': '...', ' ': '...'}`, insertion order) -- the
+///     reordering shuffled which base64 characters landed where, decoding
+///     to the WRONG 17 bytes instead of the real key.
+/// (b) An array-wrapped `agree_pub` with a literal NON-ASCII element
+///     alongside the real base64 text (`["<b64>", "é"]`) is REJECTED
+///     by Python: `str(["<b64>", "é"])` contains the literal `é` (`repr()`
+///     never escapes a printable non-ASCII codepoint), and
+///     `base64.b64decode` on a `str` containing any non-ASCII character
+///     raises `ValueError` before the lenient scan even runs. Before this
+///     fix, `python_str_coerce` rendered this as compact JSON with
+///     `ensure_ascii`-style escaping (`["<b64>","é"]`, still pure
+///     ASCII), which the lenient decoder then silently accepted --
+///     decoding to the CORRECT 32 bytes -- so Rust wrongly ACCEPTED a
+///     device Python rejects. `pybase64::b64decode`'s existing ASCII
+///     precheck (`require_ascii`, unchanged by this fix) is what turns the
+///     corrected `repr()` text into the matching rejection automatically
+///     once the literal `é` is no longer escaped away.
+#[test]
+fn device_record_from_dict_container_field_coercion_matches_python() {
+    let new_device = fixed_device(0x81, 0x82);
+    let record = new_device.record().unwrap();
+    let agree_pub_b64 = record
+        .to_dict()
+        .as_object()
+        .unwrap()
+        .get("agree_pub")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // (a) dict-ordered, non-alphabetically-sorted keys: must be ACCEPTED
+    // and decode to the real key, matching Python.
+    let (first, rest) = agree_pub_b64.split_at(20);
+    let mut reordered = Map::new();
+    reordered.insert("!".to_string(), json!(first));
+    reordered.insert(" ".to_string(), json!(rest));
+    let mut dict_order_device = record.to_dict();
+    dict_order_device
+        .as_object_mut()
+        .unwrap()
+        .insert("agree_pub".to_string(), Value::Object(reordered));
+
+    let rust_result = DeviceRecord::from_dict(&dict_order_device);
+    assert!(
+        rust_result.is_ok(),
+        "rust must accept the dict-ordered agree_pub, matching python: {rust_result:?}"
+    );
+    assert_eq!(
+        rust_result.unwrap(),
+        record,
+        "the decoded record must match the real one -- the dict-ordered field must decode to the \
+         SAME bytes as the plain string form"
+    );
+
+    let doc_text =
+        pyjson::dumps(&dict_order_device, DumpOptions::plain()).expect("dump dict-order device");
+    let script = format!(
+        r#"
+import json
+from zeropw.team.identity import DeviceRecord
+data = json.loads({doc_text:?})
+try:
+    r = DeviceRecord.from_dict(data)
+    print("OK", r.agree_pub.hex())
+except Exception as e:
+    print("ERR", type(e).__name__)
+"#
+    );
+    let py_out = run_python(&script);
+    assert!(
+        py_out.trim().starts_with("OK"),
+        "real python3.12 must also accept the dict-ordered agree_pub: {py_out}"
+    );
+    let py_hex = py_out.trim().strip_prefix("OK ").unwrap();
+    assert_eq!(
+        py_hex,
+        hex::encode(record.agree_pub),
+        "python's decoded agree_pub bytes must match the real key"
+    );
+
+    // (b) array-wrapped with a literal non-ASCII element: must be REJECTED,
+    // matching Python.
+    let mut array_nonascii_device = record.to_dict();
+    array_nonascii_device.as_object_mut().unwrap().insert(
+        "agree_pub".to_string(),
+        json!([agree_pub_b64.clone(), "\u{00e9}"]),
+    );
+    let rust_result = DeviceRecord::from_dict(&array_nonascii_device);
+    assert!(
+        rust_result.is_err(),
+        "rust must reject the non-ASCII-containing array agree_pub, matching python"
+    );
+
+    let doc_text = pyjson::dumps(&array_nonascii_device, DumpOptions::plain())
+        .expect("dump array-nonascii device");
+    let script = format!(
+        r#"
+import json
+from zeropw.team.identity import DeviceRecord
+data = json.loads({doc_text:?})
+try:
+    DeviceRecord.from_dict(data)
+    print("OK")
+except Exception as e:
+    print("ERR", type(e).__name__)
+"#
+    );
+    let py_out = run_python(&script);
+    assert!(
+        py_out.trim().starts_with("ERR"),
+        "real python3.12 must also reject the non-ASCII-containing array agree_pub: {py_out}"
+    );
 }
 
 /// Finding H-R2-5 (`Commit::from_dict`'s `ops` arm vs `zeropw/team/commit.py`
@@ -2136,6 +2401,120 @@ with tempfile.TemporaryDirectory() as tmp:
     }
 }
 
+/// Finding H-R5-5 (`Commit::from_dict`'s `seen` building vs
+/// `zeropw/team/commit.py`'s `seen={str(k): int(v) for k, v in
+/// dict(data.get("seen") or {}).items()}`): Python's `dict(pairs)` runs
+/// FIRST, entirely on its own, before `str(k)`/`int(v)` ever touch
+/// anything. A `list`/`dict` PAIR KEY is Python's own UNHASHABLE type, an
+/// uncaught `TypeError` from `dict()` itself -- caught by
+/// `Commit.from_dict`'s own `except (KeyError, TypeError, ValueError)` and
+/// reported as the documented `commit_malformed`, confirmed against real
+/// `python3.12`. A HASHABLE key collides with any other Python-equal one:
+/// `bool`/`int`/`float` all compare and hash by pure NUMERIC value, so
+/// `dict([(True, 1), (1, 2)])` has exactly ONE entry (`{True: 2}` -- the
+/// FIRST key's representation, the LAST value written for it), confirmed
+/// against real `python3.12`. Before this fix, `Commit::from_dict` coerced
+/// EVERY pair's key to a STRING (via `python_str_coerce`) and inserted
+/// directly into a `BTreeMap<String, i128>`, before ever considering
+/// whether two JSON-distinct keys were the same Python dict key -- so
+/// `True`/`1` never collided here the way they do in Python, a `list`/
+/// `dict` key was silently coerced to text instead of rejected, and a
+/// discarded pair's VALUE could spuriously fail `int()` validation even
+/// though Python's real `dict()`-first order never evaluates `int()` on a
+/// value that gets overwritten before ever being read.
+#[test]
+fn commit_from_dict_seen_pair_key_hashability_and_collisions_match_python() {
+    fn from_dict_seen(seen: Value) -> String {
+        let data = json!({
+            "format": "zeropw-team-commit-v1", "env_id": "env", "author": "auth",
+            "author_seq": 1, "hlc": "1000-0000", "seen": seen,
+            "ops": [{"op": "settings.update", "sync_interval_seconds": 1}], "sig": "",
+        });
+        match Commit::from_dict(&data) {
+            Ok(c) => {
+                let mut entries: Vec<(String, i128)> = c.seen.into_iter().collect();
+                entries.sort();
+                format!(
+                    "OK {}",
+                    entries
+                        .iter()
+                        .map(|(k, v)| format!("{k:?}:{v}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
+            Err(e) => format!("ERR {}", e.reason),
+        }
+    }
+
+    fn py_from_dict_seen(seen_json: &str) -> String {
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+data = {{"format": "zeropw-team-commit-v1", "env_id": "env", "author": "auth",
+        "author_seq": 1, "hlc": "1000-0000", "seen": json.loads({seen}),
+        "ops": [{{"op": "settings.update", "sync_interval_seconds": 1}}], "sig": ""}}
+try:
+    c = C.Commit.from_dict(data)
+    entries = sorted(c.seen.items())
+    print("OK " + ",".join(f"{{k!r}}:{{v}}" for k, v in entries))
+except InvalidInput as e:
+    print("ERR " + e.reason)
+"#,
+            seen = py_str_literal(seen_json),
+        );
+        run_python(&script).trim().to_string()
+    }
+
+    let cases: &[(&str, &str)] = &[
+        // Unhashable pair keys: a list, then a dict.
+        (r#"[[["x"], 5]]"#, "list key"),
+        (r#"[[{"a": 1}, 5]]"#, "dict key"),
+        // bool/int collide: ONE entry, first key's repr, last value.
+        (r#"[[true, 1], [1, 2]]"#, "bool/int collision"),
+        // bool/float/int collide, mixed with an ordinary string key.
+        (
+            r#"[["fp", 1], [1.0, 2], [true, 3]]"#,
+            "fp plus float/bool/int collision",
+        ),
+        // false/0 collide too.
+        (r#"[[false, 1], [0, 2], [0.0, 3]]"#, "false/0/0.0 collision"),
+        // A later pair's key collides with and overwrites an earlier one
+        // whose VALUE would otherwise fail int() validation -- Python's
+        // dict()-first order never evaluates int() on the discarded value.
+        (
+            r#"[[1, "not-an-int"], [1, 5]]"#,
+            "overwritten bad value never validated",
+        ),
+    ];
+
+    for (seen_json, label) in cases {
+        let seen_value: Value = serde_json::from_str(seen_json).unwrap();
+        let rust_out = from_dict_seen(seen_value);
+        let py_out = py_from_dict_seen(seen_json);
+        // Compare only ACCEPT-vs-REJECT and, when both accept, the entry
+        // COUNT and VALUES -- not the exact Rust `{:?}`-vs-Python `repr()`
+        // key text side by side (already covered by other tests), just
+        // that both languages agree on outcome.
+        let rust_ok = rust_out.starts_with("OK");
+        let py_ok = py_out.starts_with("OK");
+        assert_eq!(
+            rust_ok, py_ok,
+            "case {label:?} ({seen_json}): rust={rust_out} python={py_out}"
+        );
+        if rust_ok {
+            let rust_count = rust_out.matches(':').count();
+            let py_count = py_out.matches(':').count();
+            assert_eq!(
+                rust_count, py_count,
+                "case {label:?} entry count mismatch: rust={rust_out} python={py_out}"
+            );
+        }
+    }
+}
+
 // ------------------------------------------------------------------ H-R2-9
 // Round-2 equivalence-review finding H-R2-9: several §3.5-shaped mappings
 // (Rust substitutes a documented reason for something Python does NOT
@@ -2188,14 +2567,24 @@ except Exception as exc:
     assert_eq!(err.reason, "invalid_path_prefix");
 }
 
-/// Finding H-R2-9(b): `HttpAuth.__post_init__`'s `HEADER_NAME_RE.match(self.header_name)`
-/// (mode `"header"`) and `":" in self.basic_username` (mode `"basic"`) have
-/// no `isinstance` guard either; a TRUTHY non-string value there is an
+/// Finding H-R2-9(b), corrected by finding H-R5-3: `HttpAuth.__post_init__`'s
+/// `HEADER_NAME_RE.match(self.header_name)` (mode `"header"`) has no
+/// `isinstance` guard either; a TRUTHY non-string value there is an
 /// uncaught `TypeError` that `_build_http_auth`'s own `except KeyError`
-/// (KeyError only, not TypeError) does not catch. `opt_string` collapses
-/// any non-string value (truthy or falsy) to `None`, so Rust instead
-/// reaches the documented `invalid_header_name`/`invalid_basic_username` a
-/// FALSY value would also get.
+/// (KeyError only, not TypeError) does not catch. This row's ORIGINAL
+/// claim was that `":" in self.basic_username` (mode `"basic"`) behaves the
+/// SAME way for a truthy non-string value -- that is only true for a
+/// truthy non-ITERABLE scalar (`int`/`float`/`bool`, this test's own `5`/
+/// `true` cases: `"in"` on a non-iterable raises `TypeError` too). It is
+/// FALSE for a truthy list/dict: `"in"` is a plain membership test that
+/// works on any iterable and does not raise at all for one, so Python
+/// accepts and keeps it verbatim (see
+/// `http_auth_truthy_container_basic_username_matches_python`, right
+/// below). For the scalar case this test covers, `opt_string`/
+/// `basic_username_decision` (post-H-R5-3) still collapse the value to
+/// `None`, so Rust still reaches the documented
+/// `invalid_header_name`/`invalid_basic_username` a FALSY value would also
+/// get.
 #[test]
 fn header_name_and_basic_username_truthy_non_string_is_pythons_uncaught_typeerror() {
     let cases = [
@@ -2247,6 +2636,88 @@ except Exception as exc:
     ))
     .unwrap_err();
     assert_eq!(err.reason, "invalid_basic_username");
+}
+
+/// Finding H-R5-3 (`build_http_auth`'s `basic_username` check vs
+/// `zeropw/policy.py` `HttpAuth.__post_init__`'s `if self.mode == "basic"
+/// and (not self.basic_username or ":" in self.basic_username)`): the
+/// DEVIATIONS.md H-R2-9b row's claim that a truthy non-string value here is
+/// always Python's uncaught `TypeError` is only true for `header_name`
+/// (`re.match` requires an actual `str`/`bytes` argument); `basic_username`
+/// uses plain `"in"` membership, which works on any iterable, so a truthy
+/// list/dict does NOT raise at all -- confirmed against real `python3.12`:
+/// `build_connection_fields({"http_auth": {"mode": "basic",
+/// "basic_username": ["curl", "user"]}, ...})` succeeds and keeps
+/// `basic_username == ["curl", "user"]` verbatim. A container that DOES
+/// contain the literal `":"` (as an element or key) still fails with the
+/// documented `invalid_basic_username`, matching a colon-containing STRING
+/// exactly.
+#[test]
+fn http_auth_truthy_container_basic_username_matches_python() {
+    let accept_args = connection_create_args(
+        r#"{"program": "gh", "kind": "http"}"#,
+        r#"{"mode": "basic", "basic_username": ["curl", "user"]}"#,
+    );
+    let accept_op: Map<String, Value> = serde_json::from_str(&accept_args).unwrap();
+    let rust_fields = C::build_connection_fields(&accept_op)
+        .expect("rust must accept a truthy, colon-free list basic_username, matching python");
+    assert_eq!(
+        rust_fields
+            .get("http_auth")
+            .unwrap()
+            .get("basic_username")
+            .unwrap(),
+        &json!(["curl", "user"]),
+        "the list basic_username must be folded VERBATIM into the document"
+    );
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+args = json.loads({raw})
+fields = C.build_connection_fields(args)
+print(json.dumps(fields["http_auth"]["basic_username"]))
+"#,
+        raw = py_str_literal(&accept_args),
+    );
+    let py_out = run_python(&script);
+    let py_basic_username: Value = serde_json::from_str(py_out.trim()).unwrap();
+    assert_eq!(
+        py_basic_username,
+        json!(["curl", "user"]),
+        "python's own basic_username field must also be the verbatim list"
+    );
+
+    // A list `basic_username` containing the literal ":" as an ELEMENT
+    // must still be rejected the documented way.
+    let reject_args = connection_create_args(
+        r#"{"program": "gh", "kind": "http"}"#,
+        r#"{"mode": "basic", "basic_username": ["a", ":"]}"#,
+    );
+    let reject_op: Map<String, Value> = serde_json::from_str(&reject_args).unwrap();
+    let rust_err = C::build_connection_fields(&reject_op)
+        .expect_err("a list basic_username containing the literal ':' must be rejected");
+    assert_eq!(rust_err.reason, "invalid_basic_username");
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+args = json.loads({raw})
+try:
+    C.build_connection_fields(args)
+    print("accepted")
+except InvalidInput as e:
+    print(e.reason)
+"#,
+        raw = py_str_literal(&reject_args),
+    );
+    let py_out = run_python(&script);
+    assert_eq!(
+        py_out.trim(),
+        "invalid_basic_username",
+        "python must reject the colon-containing list basic_username the same documented way"
+    );
 }
 
 /// Finding H-R2-9(c): a truthy plain *string* `extra_env` (e.g. `"ab"`) is

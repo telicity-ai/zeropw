@@ -157,40 +157,13 @@ impl HandleIssuer {
 /// `HandleIssuer.verify` applies via `str(payload["c"])` etc. Never fails:
 /// `str()` succeeds for every Python object. For `str`, this is the value
 /// itself; for everything else it is `repr(value)` (`None`/`True`/`False`,
-/// the canonical number form, or a Python-style `repr` of a list/dict).
+/// the canonical number form, or a Python-style `repr` of a list/dict) via
+/// [`pystr::repr_value`], the crate's one canonical container-`repr`
+/// implementation (PORTING.md §3b).
 fn python_str_coerce(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
-        other => python_repr_value(other),
-    }
-}
-
-/// `repr(value)` for a JSON-decoded value, used both by [`python_str_coerce`]
-/// for non-`str` top-level values and recursively for list/dict elements.
-fn python_repr_value(value: &Value) -> String {
-    match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::String(s) => pystr::repr_str(s),
-        Value::Number(n) => {
-            if n.is_f64() {
-                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
-        Value::Array(items) => {
-            let parts: Vec<String> = items.iter().map(python_repr_value).collect();
-            format!("[{}]", parts.join(", "))
-        }
-        Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("{}: {}", pystr::repr_str(k), python_repr_value(v)))
-                .collect();
-            format!("{{{}}}", parts.join(", "))
-        }
+        other => pystr::repr_value(other),
     }
 }
 

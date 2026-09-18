@@ -1070,6 +1070,67 @@ impl HttpTarget {
     }
 }
 
+/// Python's `not self.basic_username or ":" in self.basic_username`
+/// (`HttpAuth.__post_init__`, only evaluated when `mode == "basic"`),
+/// resolved to a placeholder `String` that [`HttpAuth::new`]'s own
+/// `!u.is_empty() && !u.contains(':')` check evaluates to the identical
+/// accept/reject decision -- finding H-R5-3, correcting DEVIATIONS.md's
+/// H-R2-9b row, which claimed a truthy non-string value always raises
+/// Python's uncaught `TypeError` here. That is true for `header_name`
+/// (`re.match` requires an actual `str`/`bytes` argument, so ANY
+/// non-string -- scalar or container -- raises), but NOT for
+/// `basic_username`: `"in"` is a membership test that works on any
+/// iterable, so a truthy `list`/`dict` never raises at all. Confirmed
+/// against real `python3.12`: `HttpAuth(mode="basic",
+/// basic_username=["curl"])` succeeds and keeps the list verbatim;
+/// `HttpAuth(mode="basic", basic_username=[":"])` raises the documented
+/// `InvalidInput("invalid_basic_username")`; only a truthy *non-iterable*
+/// scalar (`int`/`float`/`bool`) still hits the uncaught `TypeError`
+/// (`"argument of type 'int' is not iterable"`), which keeps its existing
+/// substitution onto the same `invalid_basic_username` reason the falsy
+/// case already uses (round-2 finding H-R2-9b, unchanged for this shape).
+///
+/// Returns `None` for anything [`HttpAuth::new`] should reject via its
+/// existing "missing" branch: a falsy value (`None`, `false`, `0`, `""`,
+/// `[]`, `{}`) or a truthy non-iterable scalar (the substituted
+/// `TypeError` case). Returns `Some(s.clone())` for a real string
+/// (unchanged). Returns `Some(":")` for a truthy list/dict that contains
+/// the literal `":"` as an element (list) or key (dict) -- deliberately
+/// colon-bearing so [`HttpAuth::new`]'s own check rejects it with the
+/// correct reason -- or a fixed colon-free sentinel for one that does not,
+/// so the same check accepts it.
+///
+/// This only resolves the accept/reject *decision*; it cannot make
+/// [`HttpAuth::new`]'s typed `Option<String>` field hold the real
+/// list/dict (PORTING.md §3b/§4's typed-field limit, the same one
+/// `HttpTarget.ca_file`/`HttpAuth.value_prefix` already have residual rows
+/// for). A caller that also needs the byte-exact value in an emitted
+/// document (`team::commit::build_http_auth`, receiving a peer-signed op)
+/// carries the raw `serde_json::Value` through separately, the same
+/// raw-passthrough pattern `ca_file`/`value_prefix` already use.
+pub(crate) fn basic_username_decision(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(s) => Some(s.clone()),
+        v @ Value::Array(items) if json_truthy(Some(v)) => {
+            let has_colon = items.iter().any(|item| item.as_str() == Some(":"));
+            Some(if has_colon {
+                ":".to_string()
+            } else {
+                "\u{1}".to_string()
+            })
+        }
+        v @ Value::Object(map) if json_truthy(Some(v)) => {
+            let has_colon = map.keys().any(|k| k == ":");
+            Some(if has_colon {
+                ":".to_string()
+            } else {
+                "\u{1}".to_string()
+            })
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpAuth {
     pub mode: String,
@@ -1172,13 +1233,16 @@ impl HttpAuth {
         // reason in Python, not an uncaught `TypeError` -- coercing it to
         // `None` here reproduces that (`HttpAuth::new` treats a `None`
         // `header_name`/`basic_username` the same falsy way). A *truthy*
-        // non-string value when the field applies (a number, a non-empty
-        // list/dict) still reaches Python's `re.match`/`in` and is an
-        // uncaught `TypeError` there in every case this crate's own tests
-        // exercise (`state_corrupt`, PORTING.md §3.5); when the field does
-        // not apply to this `mode` at all, Python validates it not at all,
-        // which Rust's typed `Option<String>` still cannot represent for a
-        // non-string value -- a real, narrower residual (see
+        // non-string `header_name` when the field applies still reaches
+        // Python's `re.match` and is an uncaught `TypeError` there in every
+        // case this crate's own tests exercise (`state_corrupt`, PORTING.md
+        // §3.5); a truthy non-string `basic_username` does NOT, per
+        // [`basic_username_decision`]'s doc comment (finding H-R5-3,
+        // correcting this row's previous blanket claim) -- handled
+        // separately below instead of through this closure. When a field
+        // does not apply to this `mode` at all, Python validates it not at
+        // all, which Rust's typed `Option<String>` still cannot represent
+        // for a non-string value -- a real, narrower residual (see
         // `DEVIATIONS.md`).
         let opt_str = |key: &str, applies_for_mode: bool| -> Result<Option<String>, Error> {
             match obj.get(key) {
@@ -1188,11 +1252,25 @@ impl HttpAuth {
                 _ => Err(bad()),
             }
         };
+        // Finding H-R5-3: when `mode == "basic"`, resolve through
+        // [`basic_username_decision`] instead of `opt_str` so a truthy,
+        // colon-free list/dict is accepted (matching Python) rather than
+        // rejected as `state_corrupt` -- a state file this crate's own
+        // `team::commit::build_http_auth` can now legitimately write, since
+        // it folds a peer's `connection.create`/`connection.update` op the
+        // same way Python does. When `mode != "basic"` the field is
+        // unchecked in Python either way, so `opt_str`'s existing
+        // (documented, narrower) residual for that case is unchanged.
+        let basic_username = if mode == "basic" {
+            basic_username_decision(obj.get("basic_username"))
+        } else {
+            opt_str("basic_username", false)?
+        };
         HttpAuth::new(
             mode.clone(),
             opt_str("header_name", mode == "header")?,
             opt_str("value_prefix", false)?,
-            opt_str("basic_username", mode == "basic")?,
+            basic_username,
         )
     }
 }
@@ -1624,21 +1702,39 @@ impl CliProfile {
         // so a present falsy non-string (`null`/`0`/`false`/`[]`/`{}`) gets
         // this documented reason too; only a *truthy* non-string reaches
         // `"\x00" in self.program`, a genuinely uncaught `TypeError` for a
-        // non-iterable (a number/bool) and an unrepresentable success for
-        // an iterable (a list/dict Python would store verbatim) --
-        // `state_corrupt` either way, since `CliProfile.program` is typed
-        // `String` here.
-        let program = if !json_truthy(Some(&program_raw)) {
-            String::new() // placeholder; the `is_empty()` check below raises the documented reason
-        } else {
-            match program_raw.as_str() {
-                Some(s) => s.to_string(),
-                None => return Err(bad()),
-            }
+        // non-iterable (a number/bool) -- `state_corrupt` for that case,
+        // since there is no documented reason to substitute a scalar with.
+        //
+        // A truthy `list`/`dict` does NOT raise (finding H-R5-2's sibling
+        // gap on this loading path: `"\x00" in self.program` is a plain
+        // membership test, true only when an element/key literally equals
+        // `"\x00"`), and Python loads it successfully, keeping the
+        // list/dict verbatim -- `team::commit::build_cli_profile` can now
+        // legitimately write exactly that shape into a document (it folds
+        // a peer's `connection.create`/`connection.update` op the same way
+        // Python does), so this must accept it too rather than fail the
+        // whole document with `state_corrupt`. `CliProfile.program` is
+        // typed `String` here and cannot hold the real list/dict (PORTING.md
+        // §3b's typed-field limit, same as `ca_file`); the value substituted
+        // below is a placeholder guaranteed to pass the checks after it,
+        // not a faithful round-trip of the original container -- narrower
+        // residual than an outright load failure, recorded in
+        // `DEVIATIONS.md`.
+        let program_contains_nul = match &program_raw {
+            Value::String(s) => s.contains('\0'),
+            Value::Array(items) => items.iter().any(|v| v.as_str() == Some("\u{0}")),
+            Value::Object(map) => map.keys().any(|k| k == "\u{0}"),
+            Value::Number(_) | Value::Bool(_) | Value::Null => false,
         };
-        if program.is_empty() || program.contains('\0') {
+        if !json_truthy(Some(&program_raw)) || program_contains_nul {
             return Err(Error::invalid_input("invalid_cli_program"));
         }
+        let program_is_container = matches!(&program_raw, Value::Array(_) | Value::Object(_));
+        let program = match program_raw.as_str() {
+            Some(s) => s.to_string(),
+            None if program_is_container => "\u{1}container-program".to_string(),
+            None => return Err(bad()),
+        };
         // `re.match(pattern, self.base_url_env)`: no `isinstance` guard at
         // all, so a present non-string value raises an uncaught `TypeError`
         // here, unconditionally.

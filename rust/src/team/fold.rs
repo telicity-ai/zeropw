@@ -155,13 +155,51 @@ pub fn new_document(env_id: &str) -> Map<String, Value> {
 /// `secrets.entry(...).or_insert_with(...)`) is always well-shaped by
 /// construction regardless of this check -- only a shape carried over
 /// unchanged from `base_document` can violate it.
+///
+/// Finding H-R5-6: this eager, whole-document check has no Python
+/// equivalent at all (see the paragraph above), which cuts both ways --
+/// round 3/4 used it to fail closed for shapes that WOULD raise if an op
+/// ever actually touched them, but Python's `fold()` (`copy.deepcopy
+/// (base_document)`, then only ever reading through whichever specific
+/// fields the ACTUAL commits/ops passed to this call touch) never performs
+/// this check itself, so a document shape that no op in a given `fold()`
+/// call ever dereferences folds successfully in Python regardless of how
+/// malformed it is elsewhere. Confirmed against real `python3.12`:
+/// `F.fold("env", [], base_document=doc)` (zero commits, so nothing is
+/// ever touched) returns `OK` for every one of `members.fp = null / 0 / []
+/// / ""`, `connections.c1 = null / 0`, `secrets.s1 = null`, a `doc` missing
+/// `format` entirely, and one missing `owner` entirely -- nine shapes this
+/// function used to reject outright. `format`/`owner` are dropped from the
+/// required-key list below entirely (nothing in this module dereferences
+/// them unconditionally -- `is_owner`/`is_admin` already read `owner` via
+/// a graceful `.and_then(Value::as_str)`, matching Python's own `doc.get
+/// ("owner")`-shaped tolerance there). `members`/`connections`/`secrets`
+/// entries move from "must already be well-shaped" to "IF an object, must
+/// be well-shaped" -- deliberately narrower than "any falsy value is fine"
+/// for `connections`/`secrets` (unlike `members`, Python's own handlers for
+/// those two have no `bool(...)`-style short-circuit at all, so a
+/// non-`None` falsy entry like `{}` that an op DOES touch still raises its
+/// own uncaught exception in Python -- this function cannot know, from the
+/// document alone, whether the commits in THIS `fold()` call will ever
+/// touch a given id, so it keeps failing closed for any *object*-shaped
+/// entry missing its required keys, exactly matching the pre-existing,
+/// still-passing `seven_more_unconditionally_indexed_fields_fail_closed_
+/// instead_of_fail_open`/`malformed_secret_entry_shapes_fail_closed_
+/// instead_of_panicking` tests below) -- only a value that ISN'T AN OBJECT
+/// AT ALL (`null`/`0`/...) is now tolerated, since none of those two
+/// tests' cases are shaped that way and every one of the nine confirmed
+/// shapes above is. A `secrets` entry that slips through this way can still
+/// reach `op_secret_put_version`'s `entry.as_object_mut()` later if a
+/// LATER op in a DIFFERENT `fold()` call does target that id -- handled
+/// there now by failing closed instead of panicking (see that function's
+/// own doc comment), the same "closest handled reason for an uncaught
+/// exception" substitution PORTING.md §3.5 already uses throughout this
+/// module.
 fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
     let corrupt = || Error::state("state_corrupt").with_detail("team_document");
     let obj = doc.as_object().ok_or_else(corrupt)?.clone();
     for key in [
         "env_id",
-        "format",
-        "owner",
         "members",
         "dek",
         "connections",
@@ -177,11 +215,15 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
     for entry in members.values() {
+        // `bool(member) and member["status"] == "active"`: a FALSY entry of
+        // ANY JSON type (finding H-R5-6: `null`/`0`/`[]`/`""`, not just an
+        // empty object `{}`) never even evaluates the subscript, so only a
+        // TRUTHY entry needs to be an object with `"status"` here.
+        if json_falsy(entry) {
+            continue;
+        }
         let entry_obj = entry.as_object().ok_or_else(corrupt)?;
-        // `bool(member) and member["status"] == "active"`: an EMPTY entry
-        // (`{}`, falsy) never even evaluates the subscript, so only a
-        // TRUTHY (non-empty) entry needs `"status"` here.
-        if !entry_obj.is_empty() && !entry_obj.contains_key("status") {
+        if !entry_obj.contains_key("status") {
             return Err(corrupt());
         }
     }
@@ -190,7 +232,16 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
     for entry in connections.values() {
-        let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+        // Finding H-R5-6: a connections entry that is not an OBJECT AT ALL
+        // (`null`/`0`/...) is tolerated here -- see this function's own doc
+        // comment for why this is narrower than the members case above (no
+        // `bool(...)`-short-circuit equivalent exists for connections in
+        // Python, so an object entry -- even `{}` -- still needs
+        // `status`/`created_at`, unchanged from finding H-R4-6).
+        let entry_obj = match entry.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
         // `current["status"]`/`current["created_at"]`: both unconditional
         // subscripts, in `_op_connection_disable`/`_op_connection_update`.
         if !entry_obj.contains_key("status") || !entry_obj.contains_key("created_at") {
@@ -202,7 +253,15 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
     for entry in secrets.values() {
-        let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+        // Finding H-R5-6: same "not an object at all" tolerance as
+        // `connections` above (a truthy-but-not-`dict` Python value, e.g. a
+        // number or string, still raises its own uncaught exception the
+        // moment a real op targets it -- see `op_secret_put_version`'s own
+        // updated doc comment).
+        let entry_obj = match entry.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
         // `entry["kind"]` (`_op_secret_put_version`), `entry["active_version"]`
         // (`_set_secret_status`): both unconditional subscripts on a
         // pre-existing entry.
@@ -758,25 +817,40 @@ fn op_secret_put_version(
     let entry = secrets
         .entry(secret_id.clone())
         .or_insert_with(|| json!({"kind": kind, "active_version": null, "versions": {}}));
-    // Finding H-R3-4: safe now that `validate_document_shape` (called once
-    // at `fold()`'s entry) has already rejected any `base_document` whose
-    // `secrets` entry for `secret_id` was not itself an object -- if this
-    // entry is new (`or_insert_with` just ran), it is the literal object
-    // above; if it pre-existed, `validate_document_shape` already proved it.
+    // Finding H-R3-4 (corrected by H-R5-6): `entry = doc["secrets"].
+    // setdefault(secret_id, {...})` -- Python's `setdefault` only inserts
+    // the default for an ABSENT key; a pre-existing, non-`dict` value (even
+    // `None`) is returned AS-IS, and `entry["kind"]` then raises an
+    // uncaught `TypeError` (confirmed against real `python3.12`:
+    // `doc["secrets"]["s1"] = None` then calling this op gives `TypeError:
+    // 'NoneType' object is not subscriptable`). `validate_document_shape`
+    // no longer guarantees a pre-existing `secrets` entry is an object at
+    // all (finding H-R5-6 -- Python's `fold()` never checks that up front
+    // either, only failing here, lazily, the moment an op actually targets
+    // that id), so this fails closed instead of panicking: the same
+    // "closest handled reason for an uncaught exception" substitution
+    // PORTING.md §3.5 already uses throughout this module. A freshly
+    // inserted entry (`or_insert_with` just ran) is always the literal
+    // object literal above and never hits this branch.
     let entry_obj = entry
         .as_object_mut()
-        .expect("secret entry is always an object (validate_document_shape)");
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("team_document_secret_entry"))?;
     if entry_obj.get("kind").and_then(Value::as_str) != Some(kind.as_str()) {
         return Ok(Some("secret_kind_mismatch".into()));
     }
-    // Same reasoning: `validate_document_shape` already proved a
-    // pre-existing `versions` field is an object, and a freshly-inserted one
-    // is the literal `{}` above.
+    // Same reasoning for `entry["versions"]`: `setdefault`'s equivalent
+    // (`.entry(...).or_insert_with(...)`) only supplies `{}` for an ABSENT
+    // key, so a pre-existing non-object `versions` field (Python:
+    // `entry["versions"][version_id] = {...}` on a non-dict raises its own
+    // uncaught `TypeError`) fails closed the same way, rather than
+    // `validate_document_shape` having to keep proving every reachable
+    // entry's `versions` field is well-shaped up front regardless of
+    // whether any op ever visits it.
     let versions = entry_obj
         .entry("versions".to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .expect("secret entry always has a versions object (validate_document_shape)");
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("team_document_secret_entry"))?;
     if versions.contains_key(&version_id) {
         return Ok(Some("version_id_taken".into()));
     }
@@ -1945,16 +2019,47 @@ fn derive_vault(
     // with a fresh object built from only THIS environment's secrets --
     // destroying whatever the field held instead of leaving it alone the
     // way Python's uncaught exception does.
-    let mut secrets_doc: Map<String, Value> = match doc.get("secrets") {
-        None => Map::new(),
-        Some(Value::Object(m)) => m.clone(),
-        Some(_) => return Err(Error::state("state_corrupt").with_detail("vault_secrets")),
-    };
     let secrets = document
         .get("secrets")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // Finding H-R5-7: `secrets_doc.get(secret_id)` (the line that actually
+    // dereferences `secrets_doc` and so is where Python's uncaught
+    // `AttributeError` from the row above really fires) is the FIRST
+    // statement inside `for secret_id, entry in document["secrets"].items
+    // ():` -- for an EMPTY `document["secrets"]` (this fold's own document
+    // currently has no secrets at all), that loop body never runs, so a
+    // pre-existing non-dict `doc["secrets"]` in the LOCAL vault file is
+    // never touched, and Python's `derive_local` succeeds, writing `doc`
+    // back completely unchanged. The check below used to run
+    // unconditionally, before ever looking at whether `secrets` (computed
+    // above) had anything to iterate, so it aborted `derive_local` -- and
+    // so the WHOLE fold-and-derive call, since `derive_local` is the last
+    // step -- for a shape Python's real control flow never even reaches
+    // when there is nothing to derive. Skipping the check entirely for
+    // that case is exact, not approximate: when `secrets` is non-empty,
+    // the loop's first iteration always reaches `secrets_doc.get(...)`
+    // immediately, so raising here up front is equivalent to raising
+    // lazily inside the loop (no other exception can fire first).
+    // `secrets_was_absent` distinguishes the two ways `secrets.is_empty()`
+    // can leave `doc["secrets"]` unwritten-to below: Python's `setdefault`
+    // still MUTATES `doc` by inserting the literal `{}` default when the
+    // key was genuinely absent (even though nothing further ever reads or
+    // writes through that `{}`), but leaves a PRESENT value -- of any
+    // shape, well-formed or not -- completely untouched, since `setdefault`
+    // just returns the existing reference and the loop that would mutate
+    // it never runs.
+    let secrets_was_absent = !doc.contains_key("secrets");
+    let mut secrets_doc: Map<String, Value> = if secrets.is_empty() {
+        Map::new()
+    } else {
+        match doc.get("secrets") {
+            None => Map::new(),
+            Some(Value::Object(m)) => m.clone(),
+            Some(_) => return Err(Error::state("state_corrupt").with_detail("vault_secrets")),
+        }
+    };
     for (secret_id, entry_val) in &secrets {
         let entry = match entry_val.as_object() {
             Some(e) => e,
@@ -2061,7 +2166,17 @@ fn derive_vault(
             }),
         );
     }
-    doc.insert("secrets".into(), Value::Object(secrets_doc));
+    // Finding H-R5-7 (continued): only write `secrets_doc` back when the
+    // loop above actually ran (`!secrets.is_empty()`, matching every real
+    // mutation Python's own loop could have made), or when `doc["secrets"]`
+    // was genuinely absent to begin with (matching `setdefault`'s own
+    // `{}`-insertion side effect even with an empty loop) -- otherwise a
+    // PRESENT `doc["secrets"]` (well-formed or not) is left completely
+    // untouched, exactly like Python's `setdefault` returning the existing
+    // reference and nothing ever mutating it.
+    if !secrets.is_empty() || secrets_was_absent {
+        doc.insert("secrets".into(), Value::Object(secrets_doc));
+    }
     state.write_json(vault::VAULT_DOC, &Value::Object(doc))?;
     Ok(())
 }
@@ -2492,20 +2607,79 @@ except Exception as e:
         confirm_python_raises("5");
         confirm_python_raises(r#"{"kind": "api_key", "active_version": None, "versions": 5}"#);
 
+        // Finding H-R5-6: `secrets.s1 = 5` alone -- with NO op in this
+        // `fold()` call ever targeting `"s1"` -- is no longer eagerly
+        // rejected: `validate_document_shape` only requires a `secrets`
+        // ENTRY be an object when it already is one (see that function's
+        // own doc comment), and Python's `fold()` never validates this up
+        // front either, confirmed against real `python3.12`:
+        // `F.fold("env", [], base_document=doc)` with `doc["secrets"]["s1"]
+        // = 5` returns `OK`, the document -- `secrets` included --
+        // completely unchanged.
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let base_result = fold(&env_id, vec![c1], None, None, None, None).unwrap();
+        let mut malformed_doc = base_result.document.as_object().unwrap().clone();
+        malformed_doc.insert("secrets".into(), json!({"s1": 5}));
+        let malformed_doc = Value::Object(malformed_doc);
+
+        let untouched = fold(
+            &env_id,
+            vec![],
+            None,
+            Some(malformed_doc.clone()),
+            None,
+            None,
+        )
+        .expect(
+            "zero commits never touch secrets.s1 -- must fold successfully, matching python3.12",
+        );
+        assert_eq!(
+            untouched.document.as_object().unwrap().get("secrets"),
+            malformed_doc.as_object().unwrap().get("secrets"),
+            "an untouched malformed secrets entry must pass through unchanged, matching Python"
+        );
+        let py_script = format!(
+            r#"
+import json
+from zeropw.team import fold as F
+doc = json.loads({doc_text:?})
+r = F.fold({env_id:?}, [], base_document=doc)
+print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":")))
+"#,
+            doc_text =
+                pyjson::dumps(&malformed_doc, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            env_id = env_id,
+        );
+        assert_eq!(
+            crate::oracle::python(&py_script).trim(),
+            r#"{"s1":5}"#,
+            "real python3.12 must also leave the untouched malformed secrets entry unchanged"
+        );
+
+        // The panic risk this test originally guarded against only exists
+        // once a real op actually TARGETS the malformed entry -- confirmed
+        // above by `confirm_python_raises("5")`. Build a real signed
+        // `secret.put_version` commit for `"s1"` and fold it against the
+        // SAME malformed document: this must now fail closed
+        // (`state_corrupt`, not a panic), matching Python's own uncaught
+        // `TypeError` from that exact op handler.
+        let op = json!({"op": "secret.put_version", "secret_id": "s1", "version_id": random_hex(8),
+                        "generation_id": GEN0, "kind": "api_key",
+                        "ciphertext": {"nonce": "n", "ciphertext": "c"}});
+        let c2 =
+            commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op]).unwrap();
+        let err = fold(&env_id, vec![c2], None, Some(malformed_doc), None, None).expect_err(
+            "an op that actually targets a non-object secrets.s1 must fail closed, not panic",
+        );
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+
         let mut base = new_document("env");
         base.insert("owner".into(), json!("owner-fp"));
         base.insert(
             "members".into(),
             json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
         );
-
-        let mut doc_bad_entry = Value::Object(base.clone());
-        doc_bad_entry["secrets"]["s1"] = json!(5);
-        let err = fold("env", vec![], None, Some(doc_bad_entry), None, None)
-            .expect_err("a non-object secrets.s1 must fail closed, not panic");
-        assert!(err.is(crate::errors::ErrorClass::StateError));
-        assert_eq!(err.reason, "state_corrupt");
-
         let mut doc_bad_versions = Value::Object(base);
         doc_bad_versions["secrets"]["s1"] =
             json!({"kind": "api_key", "active_version": null, "versions": 5});
@@ -2710,6 +2884,256 @@ except Exception as e:
                 case.label
             );
         }
+    }
+
+    /// Finding H-R5-6: `validate_document_shape` used to reject nine
+    /// document shapes Python's `fold()` folds without error. Confirmed
+    /// against real `python3.12`: `F.fold(env_id, [], base_document=doc)`
+    /// (zero commits -- nothing is ever dereferenced) returns `OK`,
+    /// document unchanged, for every one of these. Each case round-trips
+    /// through `pyjson` so both languages parse byte-identical input.
+    #[test]
+    fn nine_over_strict_shapes_now_fold_successfully_matching_python() {
+        fn base(patch: &[(&str, Value)]) -> Value {
+            let mut doc: Map<String, Value> = serde_json::from_str(
+                r#"{"env_id":"env","format":"zeropw-team-env-v1","owner":"owner-fp",
+                    "members":{},"dek":{"current":null,"generations":{}},
+                    "connections":{},"secrets":{},
+                    "settings":{"sync_interval_seconds":10}}"#,
+            )
+            .unwrap();
+            for (k, v) in patch {
+                doc.insert((*k).to_string(), v.clone());
+            }
+            Value::Object(doc)
+        }
+
+        struct Case {
+            label: &'static str,
+            doc: Value,
+        }
+        let cases: Vec<Case> = vec![
+            Case {
+                label: "members null entry",
+                doc: base(&[("members", json!({"fp": null}))]),
+            },
+            Case {
+                label: "members zero entry",
+                doc: base(&[("members", json!({"fp": 0}))]),
+            },
+            Case {
+                label: "members empty-list entry",
+                doc: base(&[("members", json!({"fp": []}))]),
+            },
+            Case {
+                label: "members empty-string entry",
+                doc: base(&[("members", json!({"fp": ""}))]),
+            },
+            Case {
+                label: "connections null entry",
+                doc: base(&[("connections", json!({"c1": null}))]),
+            },
+            Case {
+                label: "connections zero entry",
+                doc: base(&[("connections", json!({"c1": 0}))]),
+            },
+            Case {
+                label: "secrets null entry",
+                doc: base(&[("secrets", json!({"s1": null}))]),
+            },
+            Case {
+                label: "format missing",
+                doc: {
+                    let mut d = base(&[]);
+                    d.as_object_mut().unwrap().remove("format");
+                    d
+                },
+            },
+            Case {
+                label: "owner missing",
+                doc: {
+                    let mut d = base(&[]);
+                    d.as_object_mut().unwrap().remove("owner");
+                    d
+                },
+            },
+        ];
+        assert_eq!(cases.len(), 9, "must cover exactly the nine shapes");
+
+        for case in &cases {
+            let result = fold("env", vec![], None, Some(case.doc.clone()), None, None)
+                .unwrap_or_else(|e| panic!("case {:?} must fold successfully: {e:?}", case.label));
+            assert_eq!(
+                &result.document, &case.doc,
+                "case {:?}: an untouched document must pass through unchanged",
+                case.label
+            );
+
+            let doc_text = pyjson::dumps(&case.doc, pyjson::DumpOptions::plain()).unwrap();
+            let script = format!(
+                r#"
+import json
+from zeropw.team import fold as F
+doc = json.loads({doc_text:?})
+try:
+    r = F.fold("env", [], base_document=doc)
+    print("OK " + json.dumps(r.document, sort_keys=True, separators=(",", ":")))
+except Exception as e:
+    print("RAISE " + type(e).__name__)
+"#,
+            );
+            let py_out = crate::oracle::python(&script);
+            assert!(
+                py_out.trim().starts_with("OK"),
+                "case {:?}: real python3.12 must fold this shape successfully too, got: {}",
+                case.label,
+                py_out
+            );
+        }
+    }
+
+    /// Finding H-R5-6: `parse_stray_version_order` (used only when a
+    /// `base_document` ITSELF already carries a stray `_version_order` key
+    /// -- see [`fold`]'s own H-R4-5 doc comment) had no `DEVIATIONS.md`
+    /// row. Its fail-closed posture for a non-object `_version_order`, or a
+    /// per-secret value that isn't an array, is real and load-bearing (a
+    /// LATER op that actually appends to that secret id would otherwise hit
+    /// `.setdefault`/`.append` on the wrong Python type -- an uncaught
+    /// `AttributeError`, confirmed against real `python3.12` below); this
+    /// pins that fail-closed behaviour and documents the one remaining gap
+    /// this function is narrower than Python for: an array VALUE with
+    /// non-string elements, which Python tolerates (no per-element type
+    /// check once the key is already present) but this function still
+    /// rejects.
+    #[test]
+    fn parse_stray_version_order_fails_closed_matching_pythons_touched_behaviour() {
+        fn base_doc() -> Map<String, Value> {
+            let mut doc = new_document("env");
+            doc.insert("owner".into(), json!("owner-fp"));
+            doc.insert(
+                "members".into(),
+                json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
+            );
+            doc.insert(
+                "dek".into(),
+                json!({"current": "g0", "generations": {"g0": {"wraps": {}}}}),
+            );
+            doc.insert(
+                "secrets".into(),
+                json!({"s1": {"kind": "api_key", "active_version": null, "versions": {}}}),
+            );
+            doc
+        }
+
+        // A non-object `_version_order` (Python: `.setdefault` on an int
+        // raises `AttributeError` once an op actually appends) and a
+        // per-key non-array value (Python: `.append` on an int raises)
+        // both fail closed here, confirmed against a real touching op.
+        for stray in [json!(5), json!({"s1": 5})] {
+            let mut doc = base_doc();
+            doc.insert("_version_order".into(), stray.clone());
+            let err = fold("env", vec![], None, Some(Value::Object(doc)), None, None)
+                .expect_err(&format!("stray _version_order={stray:?} must fail closed"));
+            assert!(err.is(crate::errors::ErrorClass::StateError));
+            assert_eq!(err.reason, "state_corrupt");
+
+            // Confirm python3.12's own handler really does raise once a
+            // real op touches this secret id.
+            let script = format!(
+                r#"
+from types import SimpleNamespace
+from zeropw.team import fold as F
+doc = F.new_document("env")
+doc["owner"] = "owner-fp"
+doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
+doc["dek"] = {{"current": "g0", "generations": {{"g0": {{"wraps": {{}}}}}}}}
+doc["secrets"] = {{"s1": {{"kind": "api_key", "active_version": None, "versions": {{}}}}}}
+doc["_version_order"] = {stray}
+commit = SimpleNamespace(author="owner-fp", hlc="1000-0000")
+facts = F.Facts()
+op = {{"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
+      "generation_id": "g0", "kind": "api_key",
+      "ciphertext": {{"nonce": "n", "ciphertext": "c"}}}}
+try:
+    F._op_secret_put_version(doc, commit, facts, op)
+    print("OK")
+except Exception as e:
+    print(f"ERR {{type(e).__name__}}")
+"#,
+                stray = pyjson::dumps(&stray, pyjson::DumpOptions::plain()).unwrap(),
+            );
+            let py_out = crate::oracle::python(&script);
+            assert_eq!(
+                py_out.trim(),
+                "ERR AttributeError",
+                "real python3.12 must raise for stray _version_order={stray:?} once touched"
+            );
+        }
+    }
+
+    /// Finding H-R5-7 (`derive_vault`'s non-object `secrets` check vs
+    /// `zeropw/team/fold.py` `_derive_vault`): `secrets_doc = doc.
+    /// setdefault("secrets", {})` only gets DEREFERENCED
+    /// (`secrets_doc.get(secret_id)`) inside the loop over `document
+    /// ["secrets"]` -- for a document with NO secrets to derive, that loop
+    /// never runs, so a malformed local `vault/secrets.json` `"secrets"`
+    /// field is never touched and `derive_local` succeeds, the local vault
+    /// file left completely unchanged. Confirmed against real
+    /// `python3.12`'s own `_derive_vault` (called directly against a fake
+    /// `StateDir`-like object, mirroring the reviewer's own probe method).
+    #[test]
+    fn derive_vault_skips_the_secrets_type_check_when_there_is_nothing_to_derive() {
+        use crate::audit::Audit;
+        use crate::secret::SecretBytes;
+
+        let (_tmp, state) = new_state();
+        // A malformed local vault: "secrets" is a plain number, not a dict.
+        state
+            .write_json(vault::VAULT_DOC, &json!({"secrets": 5, "other": "keepme"}))
+            .unwrap();
+
+        let document: Map<String, Value> = json!({"secrets": {}}).as_object().unwrap().clone();
+        let version_index: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+        let audit: Option<&Audit> = None;
+        let result = derive_vault(&document, &state, "env", &version_index, audit, None, None);
+        assert!(
+            result.is_ok(),
+            "derive_vault must succeed when document[\"secrets\"] is empty, matching python: {result:?}"
+        );
+        let after: Value = state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+        assert_eq!(
+            after,
+            json!({"secrets": 5, "other": "keepme"}),
+            "the malformed local secrets field must be left completely untouched"
+        );
+        let _ = SecretBytes::new(vec![]); // keep the import used even if unrelated code shifts
+
+        // Confirm the same against real python3.12's own `_derive_vault`.
+        let script = r#"
+from zeropw.team import fold as F
+
+class FakeState:
+    def __init__(self, doc):
+        self._doc = doc
+    def read_json(self, path, default):
+        return self._doc
+    def write_json(self, path, value):
+        self.written = value
+
+doc = {"secrets": 5, "other": "keepme"}
+state = FakeState(doc)
+document = {"secrets": {}}
+F._derive_vault(document, state, "env", {}, None, project=None, environment=None)
+import json
+print(json.dumps(state.written, sort_keys=True))
+"#;
+        let py_out = crate::oracle::python(script);
+        let py_value: Value = serde_json::from_str(py_out.trim()).unwrap();
+        assert_eq!(
+            py_value,
+            json!({"other": "keepme", "secrets": 5}),
+            "python's own local vault must also be left unchanged"
+        );
     }
 
     /// Finding H-R4-5: Python's `fold()` keeps `_version_order` INSIDE `doc`
