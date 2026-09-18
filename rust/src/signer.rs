@@ -891,7 +891,15 @@ impl BindingServer {
     }
 
     fn session_bind(&self, state: &mut ClientState, data: &[u8]) -> Result<Vec<u8>, Error> {
-        state.bind_attempts += 1;
+        // X-20: Python's `bind_attempts` is an unbounded `int`; `u32` is
+        // not. Nothing reads this field back (`#[allow(dead_code)]` above)
+        // and reaching `u32::MAX` needs 2^32 `session_bind` extension
+        // messages on one connection, each one writing an audit record
+        // first -- impractical, but `saturating_add` costs nothing and
+        // removes the only realistic future hazard (a debug panic, or a
+        // release-mode wrap back to 0) instead of leaving it merely
+        // "unreached so far".
+        state.bind_attempts = state.bind_attempts.saturating_add(1);
         let bind = match sshwire::parse_session_bind(data) {
             Ok(b) => b,
             Err(_) => {

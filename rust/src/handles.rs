@@ -33,6 +33,20 @@ fn b64e(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
 
+/// The smallest `f64` strictly greater than every value `i64::MAX as i64`
+/// can represent. `i64::MAX` (9223372036854775807) is not itself exactly
+/// representable in `f64`; the nearest representable value rounds UP to
+/// exactly `2^63` (9223372036854775808.0, `i64::MAX as f64` in Rust). A
+/// bound check must therefore reject at `>=` this constant, not `>`
+/// `i64::MAX as f64` -- the two are the same float, so `>` lets exactly
+/// `2^63` fall through and `as i64` silently saturates/truncates it instead
+/// of rejecting it (finding X-13: measured against live `python3.12`, the
+/// float literal `9223372036854775808.0` and the integer literal
+/// `9223372036854775808` must be treated identically -- both are one past
+/// `i64::MAX` -- but the old `>` check accepted the float and rejected the
+/// integer).
+const I64_MAX_EXCLUSIVE_UPPER_BOUND_F64: f64 = 9_223_372_036_854_775_808.0;
+
 /// Port of `handles._b64d`: re-pads `text` to a multiple of 4 with `=`
 /// (`"=" * (-len(text) % 4)`, replicated as `(4 - len % 4) % 4`, counting
 /// Unicode code points as Python's `len()` does) and then decodes with
@@ -93,6 +107,34 @@ impl HandleIssuer {
     /// (seconds since the epoch); `int(now)` truncates toward zero, which is
     /// exactly what a plain `as i64` cast does in Rust for a finite,
     /// in-`i64`-range float.
+    ///
+    /// Three clock-input cases, measured against live `python3.12`
+    /// (findings X-8, X-12):
+    ///   - `now` finite and `int(now)` fits `i64`: Python succeeds; so does
+    ///     this function.
+    ///   - `now` is `+inf`/`-inf`: `int(now)` raises `OverflowError`,
+    ///     uncaught (`issue` has no `try`/`except`) -- PORTING.md §3.5
+    ///     applies. `now` is NaN: `int(now)` raises `ValueError`, likewise
+    ///     uncaught, likewise §3.5 (NOT the same as `f64::NAN as i64 == 0`
+    ///     silently succeeding, which is what unchecked Rust code did
+    ///     before this fix -- X-12). Both map to `Error::invalid_input(
+    ///     "handle_clock")`, the closest error a caller of `issue` already
+    ///     handles (the only other error this function returns).
+    ///   - `now` finite but `int(now)` does NOT fit `i64` (e.g. `1e30`,
+    ///     or exactly `9.223372036854776e18` == `2^63`): Python's `int` is
+    ///     unbounded, so `issue` still succeeds and returns a handle dated
+    ///     to an astronomically distant `exp`. This is NOT a §3.5 case --
+    ///     CPython returns a value here, it never raises -- so rejecting it
+    ///     is a genuine, recorded deviation (`rust/DEVIATIONS.md`, `handles`
+    ///     row): `Handle`'s fields are `i64`, and no real caller's clock
+    ///     (`store::now()`) is ever more than a few decades from the
+    ///     epoch, so this narrowing is unreachable in practice. Also
+    ///     covers the case the old code got silently wrong (X-8): an
+    ///     `issued` that fits `i64` but overflows `i64` again once
+    ///     `ttl_seconds` (bounded 1..=86400 by the check above) is added to
+    ///     it -- `checked_add` turns that into the same rejection instead
+    ///     of a debug panic or a release-mode wraparound to a negative
+    ///     `exp` that would have made the handle born already-expired.
     pub fn issue(
         &self,
         caller: &str,
@@ -105,7 +147,18 @@ impl HandleIssuer {
         if ttl_seconds <= 0 || ttl_seconds > 86400 {
             return Err(Error::invalid_input("handle_ttl"));
         }
-        let issued = now.unwrap_or_else(store::now) as i64;
+        let now = now.unwrap_or_else(store::now);
+        if !now.is_finite() {
+            return Err(Error::invalid_input("handle_clock"));
+        }
+        let truncated = now.trunc();
+        if truncated >= I64_MAX_EXCLUSIVE_UPPER_BOUND_F64 || truncated < i64::MIN as f64 {
+            return Err(Error::invalid_input("handle_clock"));
+        }
+        let issued = truncated as i64;
+        let exp = issued
+            .checked_add(ttl_seconds)
+            .ok_or_else(|| Error::invalid_input("handle_clock"))?;
         let mut jti_raw = [0u8; 12];
         OsRng.fill_bytes(&mut jti_raw);
         let payload = json!({
@@ -115,7 +168,7 @@ impl HandleIssuer {
             "g": grant,
             "pv": policy_version,
             "iat": issued,
-            "exp": issued + ttl_seconds,
+            "exp": exp,
             "jti": b64e(&jti_raw),
         });
         let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted())?;
@@ -199,7 +252,17 @@ fn python_int_coerce(value: &Value) -> Result<i64, ()> {
                     return Err(());
                 }
                 let truncated = f.trunc();
-                if truncated > i64::MAX as f64 || truncated < i64::MIN as f64 {
+                // X-13: `>=`, not `>` -- see `I64_MAX_EXCLUSIVE_UPPER_BOUND_F64`.
+                // `i64::MAX as f64` rounds UP to exactly `2^63`, so a `>`
+                // comparison let a payload with `exp: 9223372036854775808.0`
+                // fall through and get silently clamped to `i64::MAX` by
+                // `as i64` below, while the equivalent integer JSON literal
+                // `9223372036854775808` was (correctly) rejected -- an
+                // inconsistency measured directly against live
+                // `python3.12`, which accepts both forms identically
+                // (`HandleIssuer.verify` returns `exp=9223372036854775808`
+                // for either).
+                if truncated >= I64_MAX_EXCLUSIVE_UPPER_BOUND_F64 || truncated < i64::MIN as f64 {
                     return Err(());
                 }
                 Ok(truncated as i64)
@@ -416,6 +479,75 @@ mod tests {
         );
     }
 
+    // X-8/X-12: a non-finite `now` must be rejected, not silently coerced.
+    // Measured against live `python3.12`: `issuer.issue(..., now=float(
+    // "inf"))`/`now=float("-inf")` raise uncaught `OverflowError`
+    // ("cannot convert float infinity to integer"); `now=float("nan")`
+    // raises uncaught `ValueError` ("cannot convert float NaN to
+    // integer") -- all three escape `issue` uncaught (no `try`/`except`
+    // there), so PORTING.md §3.5 applies. Before this fix, none of these
+    // panicked OR errored: `now as i64` silently produced `i64::MAX`,
+    // `i64::MIN`, and `0` respectively, and `0` (from NaN) let `issue`
+    // *succeed* with a validly-signed token dated to the Unix epoch --
+    // the fail-open direction on exactly the input Python refuses.
+    #[test]
+    fn issue_rejects_non_finite_now() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        for now in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let err = issuer
+                .issue("a", "b", "c", 1, 300, Some(now))
+                .expect_err("non-finite now must not panic or silently succeed");
+            assert!(err.is(ErrorClass::InvalidInput));
+            assert_eq!(err.reason, "handle_clock");
+        }
+    }
+
+    // X-8: a finite `now` whose `int(now)` does not fit `i64` must be
+    // rejected rather than silently saturated. Measured against live
+    // `python3.12`: `int(1e30)` and `int(9.223372036854776e18)` (==
+    // `2**63`, one past `i64::MAX`) both succeed -- Python's `int` is
+    // unbounded -- so `issue` returns a token there; Rust's `Handle` is
+    // `i64`-typed (a recorded, genuine deviation -- see
+    // `rust/DEVIATIONS.md`, NOT a §3.5 case, since CPython returns a value
+    // here). Before this fix `now as i64` silently saturated to
+    // `i64::MAX`, and the following `issued + ttl_seconds` then overflowed
+    // -- a debug-build panic (`attempt to add with overflow`), or in
+    // release, a silent wraparound to a negative `exp` that made the
+    // issued handle born already-expired.
+    #[test]
+    fn issue_rejects_now_whose_int_conversion_does_not_fit_i64() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        for now in [1e30, 9.223372036854776e18_f64] {
+            let err = issuer
+                .issue("a", "b", "c", 1, 300, Some(now))
+                .expect_err("out-of-i64-range now must not be silently saturated");
+            assert_eq!(err.reason, "handle_clock");
+        }
+    }
+
+    // X-8: even a `now` that itself fits `i64` can push `issued +
+    // ttl_seconds` past `i64::MAX` once `ttl_seconds` (bounded 1..=86400)
+    // is added. `9223372036854774784.0` is the largest `f64` strictly less
+    // than `2^63` (float spacing near this magnitude is 1024, so it is
+    // also the largest representable value that still passes the
+    // range check above) -- `9223372036854774784 + 86400 =
+    // 9223372036854861184`, which is past `i64::MAX`
+    // (9223372036854775807). `checked_add` must catch this and return an
+    // error instead of panicking (debug) or wrapping to a negative `exp`
+    // (release).
+    #[test]
+    fn issue_rejects_when_issued_plus_ttl_would_overflow_i64() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let now = 9223372036854774784.0_f64;
+        let err = issuer
+            .issue("a", "b", "c", 1, 86400, Some(now))
+            .expect_err("issued + ttl_seconds overflow must not panic or wrap");
+        assert_eq!(err.reason, "handle_clock");
+    }
+
     #[test]
     fn verify_rejects_wrong_version() {
         // Same shape `issue` produces, but with v=2: must fail as
@@ -512,6 +644,45 @@ mod tests {
                 .verify(&token, Some(now))
                 .expect_err("non-ASCII-digit / oversized pv must be rejected");
             assert_eq!(err.reason, "handle_malformed", "pv={pv:?}");
+        }
+    }
+
+    // X-13: `python_int_coerce`'s float-branch boundary check must reject
+    // exactly `2^63` (9223372036854775808.0) the same way it already
+    // rejects the equivalent integer JSON literal `9223372036854775808`
+    // (the `999...` case in the test above, one past `i64::MAX`). Before
+    // this fix, the float form was silently accepted and clamped to
+    // `i64::MAX` (`>` let the exact boundary value fall through), which
+    // measurement against live `python3.12` shows is the ONE thing Python
+    // itself does not distinguish -- `HandleIssuer.verify` treats
+    // `exp: 9223372036854775808.0` and `exp: 9223372036854775808` (an
+    // unbounded Python `int`) identically, both returning
+    // `expires_at == 9223372036854775808`. Rust cannot represent that
+    // value at all (`Handle.expires_at` is `i64`, PORTING.md §3.7 / the
+    // `handles` A-R2-1 `DEVIATIONS.md` row), so rejecting both spellings
+    // consistently is correct; silently accepting one spelling and
+    // rejecting the other was the actual bug.
+    #[test]
+    fn float_exp_exactly_two_pow_63_is_rejected_like_the_integer_literal() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let now = 1_700_000_000.0;
+        for exp in [
+            json!(9223372036854775808.0_f64), // == 2^63, exactly representable
+            json!(9223372036854775808_u64),   // the equivalent integer literal
+        ] {
+            let payload = json!({
+                "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4,
+                "iat": now as i64, "exp": exp, "jti": "abc",
+            });
+            let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
+            let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
+            let sig = issuer.sign(&body);
+            let token = format!("{body}.{sig}");
+            let err = issuer
+                .verify(&token, Some(now))
+                .expect_err("2^63 must be rejected the same way regardless of spelling");
+            assert_eq!(err.reason, "handle_malformed", "exp={exp:?}");
         }
     }
 

@@ -970,6 +970,80 @@ fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
+// Finding X-6: `POST /repos/issues` (no repo name at all) makes the
+// `/repos/` prefix and the `/issues` suffix overlap by one character, so the
+// computed slice bounds are backwards. Measured against live `python3.12`
+// over a raw socket, this does NOT error -- Python's `path[7:-7]` clamps a
+// backwards slice to `''` -- the fake answers `201 {"number": 1, "repo": "",
+// "title": "hi"}`. Before the fix, `&path[7..path.len() - 7]` panicked the
+// connection-handling thread instead (`byte range starts at 7 but ends at
+// 6`), which the client observed as the connection closing with no
+// response at all -- reachable through the real relay as
+// `502 upstream_protocol_error` from an ordinary agent with a `POST` grant.
+#[test]
+fn post_repos_issues_with_no_repo_name_matches_python_clamp() {
+    let fake = FakeUpstream::new(SECRET).start();
+    let (name, value) = auth_header(SECRET);
+    let payload = serde_json::to_vec(&serde_json::json!({"title": "hi"})).unwrap();
+    let resp = request(
+        fake.host(),
+        fake.port(),
+        "POST",
+        "/repos/issues",
+        &[(name, &value), ("Content-Type", "application/json")],
+        Some(&payload),
+    );
+    assert_eq!(resp.status, 201);
+    assert_eq!(
+        json(&resp.body),
+        serde_json::json!({"number": 1, "title": "hi", "repo": ""})
+    );
+}
+
+// Finding X-7: `unquote_plus` used to slice a latin-1-decoded `String` at
+// raw UTF-8 byte offsets, which panics whenever a multi-byte-encoded
+// character (any original wire byte >= 0x80) lands across a slice boundary
+// -- this is a fixed bug (`gateway.rs`'s `percent_decode_lossy`, finding
+// F-R2-1) reintroduced as a byte-identical copy in this sibling file.
+// `%A` followed by the raw byte 0x80 is exactly such a case: `%A` is not a
+// valid `%XX` escape (only one hex digit follows the `%`), so the old code
+// tried to decode past the raw high byte and sliced into the middle of its
+// two-byte UTF-8 encoding. Measured against live `python3.12`,
+// `parse_qs("auth=%A\x80")` never raises -- it returns
+// `{"auth": ["%A\x80"]}` unchanged -- so the real relay reaching this route
+// must answer normally too, not drop the connection. This request reaches
+// `/leak` (which requires a valid `Authorization` header, checked before
+// query parsing), so it is sent over a raw socket to embed the literal
+// non-UTF8-safe byte 0x80 that the `request()`/`send_request()` helpers
+// (which build the request line through a Rust `&str`) cannot carry.
+#[test]
+fn query_percent_followed_by_raw_high_byte_does_not_panic() {
+    let fake = FakeUpstream::new(SECRET).start();
+    let mut stream = TcpStream::connect((fake.host(), fake.port())).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut req = Vec::new();
+    req.extend_from_slice(b"GET /leak?auth=%A\x80 HTTP/1.1\r\n");
+    req.extend_from_slice(format!("Host: {}:{}\r\n", fake.host(), fake.port()).as_bytes());
+    req.extend_from_slice(format!("Authorization: Bearer {SECRET}\r\n").as_bytes());
+    req.extend_from_slice(b"\r\n");
+    stream.write_all(&req).expect("write request");
+
+    let (status, headers, leftover) = read_head(&mut stream);
+    assert_eq!(
+        status, 200,
+        "connection must not die: handler must not panic"
+    );
+    let body = read_body(&mut stream, &headers, leftover);
+    let leaked = json(&body)["leaked"].as_str().unwrap().to_string();
+    // Python: `parse_qs("auth=%A\x80")["auth"][0] == "%A\x80"` -- the `%A`
+    // is left completely undecoded (not even the literal `%` consumed
+    // differently) and the raw high byte passes through unchanged.
+    let expected: String = ['%', 'A', '\u{0080}'].iter().collect();
+    assert_eq!(leaked, expected);
+}
+
 #[test]
 fn stop_is_idempotent_and_reusable_after_restart() {
     let mut other = FakeUpstream::new(SECRET).start();

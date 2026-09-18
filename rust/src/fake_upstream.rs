@@ -624,32 +624,74 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
     out
 }
 
+/// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`) as
+/// CPython actually implements it: `+` becomes a space, then `unquote`
+/// splits the string into maximal runs of ASCII (U+0000-U+007F) and
+/// non-ASCII characters (`urllib.parse._asciire = re.compile(
+/// "([\x00-\x7f]+)")`) *before* doing any `%XX` decoding. A `%XX` escape is
+/// decoded only inside an ASCII run -- collected as raw bytes, then the
+/// whole run is lossily UTF-8-decoded in one `bytes.decode("utf-8",
+/// "replace")` call, so adjacent escapes can combine into one multi-byte
+/// character exactly as CPython's single `decode` call does (`%E4%B8%AD`
+/// -> `中`). A non-ASCII run is copied through unchanged, character for
+/// character, and is NEVER merged with a `%`-decoded byte sequence, even
+/// from an adjacent run (measured against live `python3.12`:
+/// `parse_qs("auth=%E4\x80")` is `{"auth": ["�\x80"]}` -- one
+/// replacement character for the dangling `%E4`, then the raw `\x80`
+/// untouched -- not the single differently-decoded character a byte-level
+/// merge across the run boundary would produce).
+///
+/// Every string this module passes here went through [`latin1`], so each
+/// Rust `char` is exactly one Python code point / one original wire byte
+/// (never part of a multi-byte UTF-8 encoding). Operating char-by-char
+/// rather than on raw UTF-8 byte offsets is what makes that true here too:
+/// finding X-7, a bug already fixed once in the sibling `gateway.rs`
+/// (`percent_decode_lossy`, finding F-R2-1) and reintroduced here as a
+/// byte-identical copy. The old code indexed `&s[i+1..i+3]` on the `str`
+/// itself, which panicked whenever a multi-byte-encoded character (e.g.
+/// U+0080, encoded as two UTF-8 bytes) put a slice boundary out of
+/// alignment with the raw byte offsets `i` was counting.
 fn unquote_plus(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let chars: Vec<char> = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
+    let mut out = String::with_capacity(chars.len());
     let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                    out.push(byte);
-                    i += 3;
-                } else {
-                    out.push(bytes[i]);
-                    i += 1;
-                }
-            }
-            b => {
-                out.push(b);
-                i += 1;
+    while i < chars.len() {
+        if (chars[i] as u32) > 0x7F {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && (chars[i] as u32) <= 0x7F {
+            i += 1;
+        }
+        out.push_str(&unquote_ascii_run(&chars[start..i]));
+    }
+    out
+}
+
+/// Decodes `%XX` triplets within a pure-ASCII run of characters
+/// (`urllib.parse._unquote_impl` followed by one `bytes.decode("utf-8",
+/// "replace")` over the whole run) -- see [`unquote_plus`]. Every character
+/// here is ASCII, so casting it to `u8` is exactly its one raw byte; no
+/// slicing of a `str` by byte offset is ever needed.
+fn unquote_ascii_run(run: &[char]) -> String {
+    let mut decoded: Vec<u8> = Vec::with_capacity(run.len());
+    let mut i = 0;
+    while i < run.len() {
+        if run[i] == '%' && i + 2 < run.len() {
+            let hi = run[i + 1].to_digit(16);
+            let lo = run[i + 2].to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                decoded.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
             }
         }
+        decoded.push(run[i] as u8);
+        i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 fn query_get<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -734,7 +776,20 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
     } else if is_get_or_head && path == "/me" {
         responder.send_json(200, &json!({"login": "synthetic-user"}), &[]);
     } else if method == "POST" && path.starts_with("/repos/") && path.ends_with("/issues") {
-        let name = &path[("/repos/".len())..path.len() - "/issues".len()];
+        // Python: `path[7:-7]` never errors, even when the computed start
+        // exceeds the computed end. For `path == "/repos/issues"` (13
+        // chars) the `/repos/` prefix (indices 0..7) and the `/issues`
+        // suffix (13-7=6..13) overlap by one character -- the `/` at index
+        // 6 -- so `path[7:6]` is a backwards slice, which Python clamps to
+        // `''` rather than raising (finding X-6, measured over a raw socket
+        // against live `python3.12`: `POST /repos/issues` with a JSON body
+        // `{"title": "hi"}` answers `201 {"number": 1, "repo": "", "title":
+        // "hi"}`). `&path[7..path.len() - 7]` panicked here with "byte
+        // range starts at 7 but ends at 6"; `str::get` returns `None`
+        // instead of panicking for a backwards range, which
+        // `unwrap_or("")` turns into Python's clamp-to-empty.
+        let end = path.len() - "/issues".len();
+        let name = path.get("/repos/".len()..end).unwrap_or("");
         let payload: Option<Value> = if request.body.is_empty() {
             Some(json!({}))
         } else {
@@ -878,4 +933,69 @@ fn encoded_credential_for(server: &Server, form: &str) -> Option<String> {
         server.basic_username.as_deref(),
         form,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding X-7, unit-level: `unquote_plus` must never panic on a
+    /// latin-1-decoded string (every character `<= U+00FF`) and must match
+    /// `urllib.parse.unquote_plus` byte-for-byte, including the cases where
+    /// a naive whole-string byte-buffer merge would silently disagree with
+    /// Python (a raw non-ASCII character must never combine with an
+    /// adjacent `%`-decoded byte sequence). Every expected value here was
+    /// cross-checked directly against live `python3.12`:
+    /// `urllib.parse.unquote_plus(bytes(...).decode("iso-8859-1"))`.
+    #[test]
+    fn unquote_plus_matches_python_for_probed_cases() {
+        fn case(raw: &[u8], expected_code_points: &[u32]) {
+            let s = latin1(raw);
+            let got = unquote_plus(&s);
+            let got_code_points: Vec<u32> = got.chars().map(|c| c as u32).collect();
+            assert_eq!(
+                got_code_points, expected_code_points,
+                "mismatch for {raw:?} (decoded as {s:?})"
+            );
+        }
+        // `%A` is not a valid `%XX` triplet (only one hex digit follows);
+        // the raw non-ASCII byte 0x80 right after it must survive
+        // untouched -- this exact input panicked the old byte-offset-slice
+        // implementation.
+        case(b"%A\x80", &[0x25, 0x41, 0x80]);
+        // A dangling `%E4` (incomplete UTF-8 lead byte, no continuation
+        // bytes decoded alongside it in the same ASCII run) becomes one
+        // U+FFFD; the raw 0x80 that follows is a SEPARATE, non-ASCII run
+        // and must NOT be consumed as a continuation byte of that same
+        // multi-byte decode.
+        case(b"%E4\x80", &[0xFFFD, 0x0080]);
+        // Three escapes in one ASCII run combine into one multi-byte
+        // character, exactly like CPython's single `bytes.decode` call.
+        case(b"%E4%B8%AD", &[0x4E2D]);
+        case(b"%E4\x80\xad", &[0xFFFD, 0x0080, 0x00AD]);
+        case(
+            b"hello+world%20%2Fx",
+            &[
+                0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x20, 0x2f, 0x78,
+            ],
+        );
+        case(b"%zz%41", &[0x25, 0x7a, 0x7a, 0x41]);
+        case(
+            b"100%25done",
+            &[0x31, 0x30, 0x30, 0x25, 0x64, 0x6f, 0x6e, 0x65],
+        );
+        case(b"\xff\xfe%41", &[0xff, 0xfe, 0x41]);
+    }
+
+    /// Finding X-6, unit-level: the `/repos/` prefix and `/issues` suffix
+    /// overlap at exactly `path == "/repos/issues"` (13 chars), making the
+    /// computed slice bounds backwards. `path.get(7..6)` must return `None`
+    /// (never panic), reproducing Python's `path[7:-7] == ''`.
+    #[test]
+    fn repos_issues_prefix_suffix_overlap_clamps_to_empty() {
+        let path = "/repos/issues";
+        assert!(path.starts_with("/repos/") && path.ends_with("/issues"));
+        let end = path.len() - "/issues".len();
+        assert_eq!(path.get("/repos/".len()..end).unwrap_or(""), "");
+    }
 }
