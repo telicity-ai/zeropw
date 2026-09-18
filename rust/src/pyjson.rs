@@ -38,10 +38,28 @@
 //! keeps knowing whether it was written as a JSON integer or a JSON float
 //! (`3` vs `3.0`). Floats are always re-rendered through [`python_float_repr`],
 //! which reimplements `Python/pystrtod.c`'s `format_float_short` (the `'r'`
-//! / `repr()` mode `json.dumps` uses for floats) from the shortest
-//! round-trip digits Rust's own float formatter produces -- so the output
-//! matches Python byte-for-byte regardless of whether the `Number` came from
-//! parsing Python's JSON or from Rust arithmetic.
+//! / `repr()` mode `json.dumps` uses for floats): the shortest decimal digit
+//! string that round-trips back to the same `f64`, laid out fixed or
+//! exponential using CPython's own thresholds. **Finding H-R4-2 (fixed
+//! here):** earlier revisions took that shortest digit string directly from
+//! Rust's own `{:e}` formatter and assumed it always agreed with CPython's
+//! `_Py_dg_dtoa` mode 0 -- false. Both produce *a* correct shortest
+//! round-tripping digit string, but the two are independent implementations
+//! that can and do disagree on which one to produce in the rare case where
+//! two adjacent same-length decimal strings both round-trip to the same
+//! `f64` (an exact tie, which happens whenever the double's true value is
+//! exactly halfway between them -- typically because the double is itself an
+//! exact, terminating binary fraction whose decimal expansion happens to end
+//! in a `5` right at the digit position the shortest representation cuts
+//! off). CPython's dtoa breaks such ties with round-half-to-even on the
+//! digit string; Rust's formatter breaks them the other way.
+//! [`python_float_repr`] now detects this exact situation (by literally
+//! constructing both same-length neighbours and checking, via Rust's own
+//! correctly-rounded string-to-`f64` parser, whether either also round-trips)
+//! and picks the even-last-digit candidate when it does, matching CPython
+//! byte-for-byte in both the tied and untied cases -- see that function's
+//! doc comment for the full algorithm and why no arbitrary-precision
+//! arithmetic is needed to get this exactly right.
 //!
 //! ## NaN / Infinity
 //!
@@ -836,11 +854,67 @@ fn write_number(n: &Number, out: &mut String) -> Result<()> {
 ///
 /// Reimplements CPython's `format_float_short` (`Python/pystrtod.c`) in its
 /// `'r'` (repr) mode: take the shortest decimal digit string that round-trips
-/// to `f` (Rust's own `{:e}` formatter already computes exactly this -- same
-/// class of shortest-round-trip algorithm as CPython's David Gay `dtoa`
-/// mode 0), then lay it out fixed or exponential using the same thresholds
+/// to `f`, then lay it out fixed or exponential using the same thresholds
 /// CPython uses: exponential when the decimal point would fall at or before
 /// position -4, or after position 16.
+///
+/// **Getting the digit string itself to match CPython (finding H-R4-2).**
+/// Rust's own `{:e}` formatter already computes *a* shortest round-tripping
+/// digit string -- same class of algorithm as CPython's David Gay `dtoa`
+/// mode 0 -- and the two agree on both the digit count and every digit
+/// whenever the shortest round-tripping representation at that length is
+/// unique, which is true generically. They can disagree only in the
+/// genuinely ambiguous case: `f`'s exact value sits *precisely* halfway
+/// between two adjacent same-length decimal strings (this only arises when
+/// `f` is itself an exact, finite binary fraction whose decimal expansion
+/// terminates with a `5` right at the digit position being cut). CPython's
+/// dtoa resolves that specific case with round-half-to-even on the digit
+/// string; Rust's formatter does not always agree.
+///
+/// Rather than reimplementing dtoa's arbitrary-precision digit generation
+/// from scratch, this takes Rust's candidate digit string and *checks* for
+/// exactly this situation: construct the two same-length neighbouring digit
+/// strings (candidate literal value ±1 in the last digit, with borrow/carry
+/// propagated across the whole string) and test each with **two** separate
+/// conditions, both required:
+///
+/// 1. The neighbour must itself be a *valid* representation of `f` --
+///    parsing it back (Rust's `str::parse`, correctly-rounded) must yield
+///    exactly `f`'s bit pattern. This is not implied by condition 2: at a
+///    power-of-two `f`, the gap down to the next-smaller float is only half
+///    the gap up to the next-larger one (the implicit mantissa bit shifts
+///    down a binade), so a decimal that is exactly `0.5` decimal-ULPs below
+///    `f` can still parse to the *next float down*, not to `f` -- e.g. for
+///    `f = 2f64.powi(-24)`, `"5.960464477539062e-8"` is exactly halfway
+///    between the two adjacent 16-digit decimals in real-number terms, yet
+///    it parses to the float *below* `f`, not to `f` itself, so it is never
+///    a legitimate alternative rendering of `f` no matter how the tie
+///    question is framed. (This also means round-trip agreement alone,
+///    condition 1 without condition 2, is not sufficient either: a double
+///    needing close to the maximum ~17 significant digits routinely has
+///    several neighbouring same-length decimals that all satisfy condition
+///    1 while Rust's original candidate remains unambiguously nearest --
+///    confirmed against real `python3.12`, which agrees with Rust's
+///    original candidate in exactly these cases.)
+/// 2. `f`'s exact value must be the precise arithmetic midpoint between the
+///    candidate and its neighbour -- checked exactly via
+///    [`decimal_equals_exact`] (arbitrary-precision integer comparison, not
+///    a re-parse), since that is the actual definition of "tied" (neither
+///    candidate is closer to `f` than the other).
+///
+/// If neither neighbour satisfies both conditions, Rust's candidate is
+/// already correct and matches CPython. If exactly one does, `f`'s value is
+/// a genuine tie: pick whichever of the pair has an even last digit,
+/// matching CPython's tie-break (the two candidates differ by 1 in their
+/// last digit, so exactly one of them is even). Both neighbours satisfying
+/// both conditions simultaneously is unreachable for a binary `f64`: that
+/// would need `f`'s exact value to equal both `candidate - 0.5` and
+/// `candidate + 0.5` (in units of the last digit) at once, a contradiction.
+/// Pinned against real `python3.12` by
+/// `oracle_tests::float_repr_matches_python_extensive_fuzz` (deliberately
+/// constructed exact ties, every power of two across the exponent range and
+/// its immediate neighbours, >200,000 random bit patterns, subnormals) and
+/// `tests::float_repr_known_values` (the finding's own reported values).
 pub fn python_float_repr(f: f64) -> String {
     if f == 0.0 {
         return if f.is_sign_negative() {
@@ -851,15 +925,19 @@ pub fn python_float_repr(f: f64) -> String {
     }
     let neg = f.is_sign_negative();
     let af = f.abs();
-    // "{:e}" gives the shortest round-trip mantissa (1 <= mantissa < 10) and
-    // decimal exponent: af == mantissa * 10^exp.
+    // "{:e}" gives *a* shortest round-trip mantissa (1 <= mantissa < 10) and
+    // decimal exponent: af == mantissa * 10^exp. `shortest_digits_matching_cpython`
+    // corrects it, if needed, to the exact digit string CPython's dtoa would
+    // produce (see this function's doc comment).
     let sci = format!("{af:e}");
     let (mantissa, exp_str) = sci.split_once('e').expect("LowerExp always contains 'e'");
     let exp: i32 = exp_str.parse().expect("LowerExp exponent is an integer");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let n = digits.len() as i32;
+    let raw_digits: Vec<u8> = mantissa.bytes().filter(|b| *b != b'.').collect();
     // value == 0.d1 d2 ... dn * 10^decpt
     let decpt = exp + 1;
+    let (digit_bytes, decpt) = shortest_digits_matching_cpython(raw_digits, decpt, af);
+    let digits = String::from_utf8(digit_bytes).expect("ASCII digit bytes are valid UTF-8");
+    let n = digits.len() as i32;
 
     let mut out = String::new();
     if neg {
@@ -897,6 +975,340 @@ pub fn python_float_repr(f: f64) -> String {
         out.push_str(&digits[decpt as usize..]);
     }
     out
+}
+
+/// Given `digits` (a shortest round-tripping ASCII-digit string for `target`,
+/// as produced by Rust's own `{:e}` formatter, with implied decimal point
+/// `decpt`: `target == 0.d1 d2 ... dn * 10^decpt`), corrects it if necessary
+/// to the exact digit string CPython's `_Py_dg_dtoa` mode 0 would produce.
+/// See [`python_float_repr`]'s doc comment for the reasoning; this returns
+/// `(digits, decpt)` since the corrected string can, in principle, gain a
+/// leading `0` that must be trimmed (adjusting `decpt` down by one to
+/// compensate) to keep the invariant that `digits[0]` is the first
+/// significant (nonzero) digit, as the rest of [`python_float_repr`] assumes.
+///
+/// A genuinely ambiguous tie -- where CPython's round-half-to-even rule
+/// actually applies -- is *not* "some other same-length digit string also
+/// happens to parse back to `target`": for a double whose exact value needs
+/// close to the maximum ~17 significant digits, the valid round-trip range
+/// can be several representable-length steps wide, so both `digits - 1` and
+/// `digits + 1` routinely round-trip too even though `digits` is
+/// unambiguously the *closest* one (confirmed against real `python3.12`,
+/// which agrees with Rust's original candidate in exactly these cases). A
+/// real tie means `target`'s exact value sits precisely halfway between
+/// `digits` and one neighbour -- checked here exactly, via
+/// [`decimal_equals_exact`] comparing `target`'s exact binary value against
+/// the exact decimal midpoint, not via a round-trip re-parse.
+fn shortest_digits_matching_cpython(digits: Vec<u8>, decpt: i32, target: f64) -> (Vec<u8>, i32) {
+    let minus = decrement_last_digit(&digits);
+    let plus = increment_last_digit(&digits);
+
+    // Two conditions, both required, not one or the other:
+    //
+    // 1. The candidate must actually be a *valid* representation of
+    //    `target` -- i.e. parsing it back (correctly rounded) must yield
+    //    `target`'s exact bit pattern, not some other float. This is *not*
+    //    implied by the exact-midpoint check below: at a power-of-two `target`
+    //    the gap to the float just below is only half the gap to the float
+    //    just above (the mantissa's implicit leading bit shifts down a
+    //    binade), so the decimal exactly at "target - 0.5*ulp" can be exact
+    //    real-number-wise while still parsing (correctly!) to the *lower*
+    //    neighbour float, not to `target` -- confirmed against real
+    //    `python3.12`/Rust `str::parse` for `target = 2f64.powi(-24)`, where
+    //    "5.960464477539062e-8" parses to the float below `target`, even
+    //    though it is exactly 0.5*ulp (in decimal terms) away from `target`.
+    // 2. `target`'s exact value must be the precise arithmetic midpoint
+    //    between the candidate and `digits` (checked exactly via
+    //    [`decimal_equals_exact`]) -- otherwise `digits` (or the other
+    //    neighbour) is simply closer and there is no real ambiguity, no
+    //    matter how wide `target`'s own valid-round-trip interval happens to
+    //    be (see the note on the "extensive fuzz" test below: this shows up
+    //    routinely for doubles near the ~17-significant-digit limit, where
+    //    the interval is wide enough that several neighbouring decimals all
+    //    satisfy condition 1 even though `digits` is unambiguously nearest).
+    let tie_with_minus = if let Some(m) = &minus {
+        digits_round_trip(m, decpt, target) && {
+            let mut midpoint = m.clone();
+            midpoint.push(b'5'); // m + 0.5*ulp == the exact midpoint between m and digits
+            decimal_equals_exact(&midpoint, decpt, target)
+        }
+    } else {
+        false
+    };
+    let tie_with_plus = if let Some(p) = &plus {
+        digits_round_trip(p, decpt, target) && {
+            let mut midpoint = digits.clone();
+            midpoint.push(b'5'); // digits + 0.5*ulp == the exact midpoint between digits and plus
+            decimal_equals_exact(&midpoint, decpt, target)
+        }
+    } else {
+        false
+    };
+
+    // Both can't hold at once: that would need target's exact value to
+    // equal both (digits - 0.5) and (digits + 0.5) simultaneously --
+    // contradictory unless 0.5 == -0.5. See the doc comment above.
+    debug_assert!(
+        !(tie_with_minus && tie_with_plus),
+        "unreachable simultaneous tie on both sides for {target}"
+    );
+
+    let chosen = if tie_with_minus {
+        // Tied between `digits` (last digit d) and `minus` (last digit
+        // d-1): these have opposite parity, so exactly one is even.
+        if is_even_last_digit(&digits) {
+            digits
+        } else {
+            minus.expect("tie_with_minus implies minus is Some")
+        }
+    } else if tie_with_plus {
+        // Tied between `digits` (last digit d) and `plus` (last digit d+1):
+        // same reasoning, opposite parity.
+        if is_even_last_digit(&digits) {
+            digits
+        } else {
+            plus.expect("tie_with_plus implies plus is Some")
+        }
+    } else {
+        digits
+    };
+
+    // `decrement_last_digit` can turn a leading digit '1' into '0' (when
+    // every digit after it was '0', so the borrow cascades all the way to
+    // the front) -- trim it back to a normalized (nonzero leading digit)
+    // form, the invariant `python_float_repr`'s layout code relies on.
+    if chosen.len() > 1 && chosen[0] == b'0' {
+        (chosen[1..].to_vec(), decpt - 1)
+    } else {
+        (chosen, decpt)
+    }
+}
+
+fn is_even_last_digit(digits: &[u8]) -> bool {
+    let last = *digits.last().expect("digit string is never empty");
+    (last - b'0').is_multiple_of(2)
+}
+
+/// `digits` minus 1 in its last decimal place, propagating the borrow
+/// leftward across the whole string; keeps the same length (a leading '1'
+/// can become a leading '0', which the caller normalizes away -- see
+/// [`shortest_digits_matching_cpython`]). Returns `None` only if `digits` is
+/// all zeros to begin with, which never happens here (a shortest
+/// round-trip digit string's leading digit is always 1-9).
+fn decrement_last_digit(digits: &[u8]) -> Option<Vec<u8>> {
+    let mut out = digits.to_vec();
+    for b in out.iter_mut().rev() {
+        if *b == b'0' {
+            *b = b'9';
+        } else {
+            *b -= 1;
+            return Some(out);
+        }
+    }
+    None // all zeros -- unreachable for a normalized digit string
+}
+
+/// `digits` plus 1 in its last decimal place, propagating the carry
+/// leftward. Returns `None` if the carry propagates past the first digit
+/// (all digits were '9'): that would need an extra leading digit, i.e. a
+/// *longer* string, which is not a same-length neighbour and so is never a
+/// same-length shortest-round-trip tie candidate.
+fn increment_last_digit(digits: &[u8]) -> Option<Vec<u8>> {
+    let mut out = digits.to_vec();
+    for b in out.iter_mut().rev() {
+        if *b == b'9' {
+            *b = b'0';
+        } else {
+            *b += 1;
+            return Some(out);
+        }
+    }
+    None // carry out of the leading digit -- would need one more digit
+}
+
+/// Does the digit string `digits`, laid out as `d1.d2...dn * 10^(decpt-1)`
+/// (scientific notation -- the fixed-vs-exponential display choice in
+/// [`python_float_repr`] never affects the *value* a string parses to),
+/// parse back to exactly `target`'s bit pattern? Relies only on Rust's
+/// `str::parse::<f64>` being correctly-rounded (round-to-nearest-even,
+/// including the asymmetric-boundary handling a power-of-two `target`
+/// needs), which it is. Necessary but *not* sufficient on its own for a
+/// genuine dtoa tie -- see the "two conditions" note on
+/// [`shortest_digits_matching_cpython`] for why the exact-midpoint check
+/// alone is not sufficient either, and both are required together. A
+/// leading `0` digit (from `decrement_last_digit`'s borrow cascade) parses
+/// correctly too: `f64::from_str` does not care whether the digit before the
+/// decimal point is zero.
+fn digits_round_trip(digits: &[u8], decpt: i32, target: f64) -> bool {
+    let mut literal = String::with_capacity(digits.len() + 8);
+    literal.push(digits[0] as char);
+    if digits.len() > 1 {
+        literal.push('.');
+        literal.push_str(std::str::from_utf8(&digits[1..]).expect("ASCII digits"));
+    }
+    literal.push('e');
+    let _ = write!(literal, "{}", decpt - 1);
+    literal
+        .parse::<f64>()
+        .is_ok_and(|v| v.to_bits() == target.to_bits())
+}
+
+/// Decodes a finite, positive, nonzero `f64` into its exact value
+/// `mantissa * 2^exp2` (`mantissa` a `u64` of at most 53 significant bits,
+/// `exp2` the binary exponent) -- every `f64` value is exactly this, with no
+/// rounding, whether normal or subnormal. This is the standard IEEE 754
+/// binary64 decomposition (bias 1023, 52 explicit fraction bits, implicit
+/// leading 1 bit for normals).
+fn decode_f64_exact(f: f64) -> (u64, i32) {
+    let bits = f.to_bits();
+    let exp_bits = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & 0x000f_ffff_ffff_ffff;
+    if exp_bits == 0 {
+        // Subnormal: value == frac * 2^-1074 (no implicit leading bit).
+        (frac, -1074)
+    } else {
+        // Normal: value == (2^52 + frac) * 2^(exp_bits - 1023 - 52).
+        (frac | (1u64 << 52), exp_bits - 1075)
+    }
+}
+
+/// Is the decimal number represented by `digits` (ASCII `'0'..='9'`, at most
+/// ~19 of them here) laid out as `(digits as integer) * 10^(decpt -
+/// digits.len())` *exactly* equal (as real numbers, not merely "round-trips
+/// to") to `target` (finite, positive, nonzero)? Used only for the tie check
+/// in [`shortest_digits_matching_cpython`] -- an exact equality test, not a
+/// closeness/rounding test, so a leading `'0'` digit in `digits` (from a
+/// borrow cascade) is harmless: it scales the same integer value regardless.
+///
+/// Compares exactly via arbitrary-precision integer arithmetic
+/// ([`BigUint`]): `target == mantissa * 2^exp2` (exact by construction, see
+/// [`decode_f64_exact`]) and the decimal candidate is `dnum * 10^p == dnum *
+/// 2^p * 5^p` for `p = decpt - digits.len()`. Scaling both sides by whichever
+/// factors of 2 and 5 they are *missing* relative to the other turns the
+/// comparison into one between two plain nonnegative integers -- multiplying
+/// two equal (or unequal) reals by the same positive factor preserves
+/// equality (or inequality), so this is exact, not an approximation.
+fn decimal_equals_exact(digits: &[u8], decpt: i32, target: f64) -> bool {
+    let dnum: u64 = std::str::from_utf8(digits)
+        .expect("ASCII digits")
+        .parse()
+        .expect("digit string fits u64 (at most ~19 digits)");
+    let p = decpt - digits.len() as i32;
+    let (mantissa, exp2) = decode_f64_exact(target);
+
+    // target == mantissa * 2^exp2 * 5^0
+    // decimal == dnum     * 2^p    * 5^p
+    let min_pow2 = exp2.min(p);
+    let min_pow5 = 0i32.min(p);
+    let target_shift2 = (exp2 - min_pow2) as u32;
+    let target_shift5 = (0 - min_pow5) as u32;
+    let decimal_shift2 = (p - min_pow2) as u32;
+    let decimal_shift5 = (p - min_pow5) as u32;
+
+    let target_big = BigUint::from_u64(mantissa)
+        .mul_pow5(target_shift5)
+        .shl(target_shift2);
+    let decimal_big = BigUint::from_u64(dnum)
+        .mul_pow5(decimal_shift5)
+        .shl(decimal_shift2);
+    target_big == decimal_big
+}
+
+/// Minimal arbitrary-precision unsigned integer (little-endian base-2^32
+/// limbs; no leading zero limbs except the canonical representation of zero
+/// itself, `[0]`). Exists solely to make [`decimal_equals_exact`]'s
+/// tie-check exact regardless of magnitude -- `f64` exponents range roughly
+/// ±1074, and `5^341`-ish factors, both routinely too large for any built-in
+/// integer type. Not a general-purpose bignum: only the handful of
+/// operations that function needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BigUint(Vec<u32>);
+
+impl BigUint {
+    fn from_u64(v: u64) -> Self {
+        let mut limbs = vec![(v & 0xffff_ffff) as u32, (v >> 32) as u32];
+        Self::trim(&mut limbs);
+        BigUint(limbs)
+    }
+
+    fn trim(limbs: &mut Vec<u32>) {
+        while limbs.len() > 1 && *limbs.last().expect("non-empty") == 0 {
+            limbs.pop();
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0.len() == 1 && self.0[0] == 0
+    }
+
+    /// Schoolbook long multiplication, `O(len(self) * len(other))`; more
+    /// than adequate for the few-hundred-bit operands this module ever
+    /// produces.
+    fn mul(&self, other: &BigUint) -> Self {
+        let mut out = vec![0u32; self.0.len() + other.0.len()];
+        for (i, &a) in self.0.iter().enumerate() {
+            let mut carry: u64 = 0;
+            for (j, &b) in other.0.iter().enumerate() {
+                let sum = out[i + j] as u64 + (a as u64) * (b as u64) + carry;
+                out[i + j] = (sum & 0xffff_ffff) as u32;
+                carry = sum >> 32;
+            }
+            let mut k = i + other.0.len();
+            while carry > 0 {
+                let sum = out[k] as u64 + carry;
+                out[k] = (sum & 0xffff_ffff) as u32;
+                carry = sum >> 32;
+                k += 1;
+            }
+        }
+        Self::trim(&mut out);
+        BigUint(out)
+    }
+
+    /// Multiplies by `5^exp` using binary exponentiation (`O(log exp)`
+    /// multiplications), rather than `exp` sequential multiplications by 5 --
+    /// `exp` can be in the low hundreds here.
+    fn mul_pow5(&self, mut exp: u32) -> Self {
+        if self.is_zero() || exp == 0 {
+            return self.clone();
+        }
+        let mut base = BigUint::from_u64(5);
+        let mut acc = self.clone();
+        // Standard square-and-multiply: consume `exp`'s bits from the
+        // bottom, squaring `base` each round and folding it into `acc`
+        // whenever the current bit is set.
+        loop {
+            if exp & 1 == 1 {
+                acc = acc.mul(&base);
+            }
+            exp >>= 1;
+            if exp == 0 {
+                break;
+            }
+            base = base.mul(&base);
+        }
+        acc
+    }
+
+    /// Multiplies by `2^bits` (a pure bit shift).
+    fn shl(&self, bits: u32) -> Self {
+        if self.is_zero() || bits == 0 {
+            return self.clone();
+        }
+        let limb_shift = (bits / 32) as usize;
+        let bit_shift = bits % 32;
+        let mut out = vec![0u32; self.0.len() + limb_shift + 1];
+        for (i, &limb) in self.0.iter().enumerate() {
+            let widened = (limb as u64) << bit_shift;
+            out[i + limb_shift] |= (widened & 0xffff_ffff) as u32;
+            let overflow = (widened >> 32) as u32;
+            if overflow != 0 {
+                out[i + limb_shift + 1] |= overflow;
+            }
+        }
+        Self::trim(&mut out);
+        BigUint(out)
+    }
 }
 
 #[cfg(test)]
@@ -1135,6 +1547,12 @@ mod tests {
         );
     }
 
+    // The finding's exact-tie test values (and 2^-24 below) are
+    // deliberately written with every significant digit: clippy's
+    // "excessive precision" suggestion would round them to a *different*
+    // (and, for the tie cases, exactly the pre-fix *wrong*) `f64` value,
+    // silently defeating the point of the test.
+    #[allow(clippy::excessive_precision)]
     #[test]
     fn float_repr_known_values() {
         let cases: &[(f64, &str)] = &[
@@ -1150,6 +1568,21 @@ mod tests {
             (9999999999999998.0, "9999999999999998.0"),
             (-1.5, "-1.5"),
             (1.5e-5, "1.5e-05"),
+            // Finding H-R4-2's three reported values: CPython's dtoa mode 0
+            // breaks the exact shortest-round-trip tie with round-half-to-
+            // even, which the pre-fix `{:e}`-derived rendering did not.
+            (270784837363767.125, "270784837363767.12"),
+            (599995984171052.25, "599995984171052.2"),
+            (275078784986996.625, "275078784986996.62"),
+            // A power-of-two "false positive" this fix's tie-detection had
+            // to be corrected to *not* flip: `2^-24`'s exact value is also
+            // precisely the arithmetic midpoint between two adjacent
+            // 16-digit decimals, but the lower one does not actually parse
+            // back to `2^-24` at all (a power of two's gap to the float just
+            // below is half its gap to the float just above), so there is no
+            // real tie here and the original (already-correct, matching
+            // Rust's own `{:e}`) digit string must be kept unchanged.
+            (0.000000059604644775390625, "5.960464477539063e-08"),
         ];
         for (f, expected) in cases {
             assert_eq!(python_float_repr(*f), *expected, "for {f}");
@@ -1329,22 +1762,110 @@ mod oracle_tests {
         }
     }
 
+    /// Finding H-R4-2's brute-force oracle test: [`python_float_repr`]
+    /// against real `python3.12`'s `repr()`, over every category the finding
+    /// (and this fix's own tie-detection logic) calls out by name --
+    /// deliberately exact ties, powers of two at the exponent extremes, well
+    /// over 200,000 uniformly random bit patterns, subnormals, and the
+    /// specific values the finding and PORTING.md's own float-handling notes
+    /// mention. `python3.12` is invoked in a handful of large batches (not
+    /// once per value) so this stays fast enough to run in the normal test
+    /// suite.
+    #[allow(clippy::excessive_precision)]
     #[test]
-    fn float_repr_matches_python_for_many_random_bit_patterns() {
+    fn float_repr_matches_python_extensive_fuzz() {
         let mut rng = Xorshift64(0x9E3779B97F4A7C15);
-        let mut bits = Vec::new();
-        // A mix of fully random bit patterns (covers subnormals, huge
-        // exponents, odd mantissas) and random-magnitude "nice" decimals
-        // (covers the fixed/exponential threshold boundaries in practice).
-        for _ in 0..400 {
-            let b = rng.next();
-            let f = f64::from_bits(b);
-            if f.is_finite() {
-                bits.push(b);
+        let mut bits: Vec<u64> = Vec::new();
+
+        // 1. The finding's own three reported disagreements, plus the other
+        // specific values PORTING.md/the finding call out by name.
+        for f in [
+            270784837363767.125,
+            599995984171052.25,
+            275078784986996.625,
+            1.5,
+            0.1,
+            0.0,
+            5e-324,
+            f64::MAX,
+            -f64::MAX,
+            1e16,
+            1e22,
+            1e-5,
+            1.0 / 3.0,
+        ] {
+            bits.push(f.to_bits());
+        }
+        bits.push((-0.0f64).to_bits());
+
+        // 2. Deliberately constructed exact-tie values: an integer part
+        // (14-17 digits, spanning the range where the shortest round-trip
+        // representation needs the full ~17 significant digits) plus a
+        // fraction with a small power-of-two denominator (an eighth,
+        // sixteenth, ... up to 1/2^12) -- exactly the shape of the finding's
+        // own three examples (e.g. 270784837363767 + 0.125), which forces
+        // the true decimal expansion to terminate with a bare `5` right at
+        // the digit position the shortest representation cuts off.
+        for int_exp in [13u64, 14, 15, 16] {
+            let base = 10u64.pow(int_exp as u32);
+            for i in 0..250u64 {
+                let integer_part = base + i * 97 + 1; // odd-ish spread, not just base+i
+                for denom_bits in 1u32..=12 {
+                    let denom = 1u64 << denom_bits;
+                    for numerator in (1..denom).step_by(2) {
+                        // odd numerator: `numerator/denom` is in lowest
+                        // terms, so this really does need `denom_bits` bits
+                        // of fraction, not fewer.
+                        let f = integer_part as f64 + (numerator as f64) / (denom as f64);
+                        if f.is_finite() {
+                            bits.push(f.to_bits());
+                        }
+                    }
+                }
             }
         }
+
+        // 3. Every power of two across the full exponent range, and its two
+        // immediate neighbours (next value down / up): the fixed/exponential
+        // layout thresholds and the shortest-digit-count boundary are most
+        // likely to disagree right at these transitions.
+        for biased_exp in 0i32..=2046 {
+            let pow2_bits = (biased_exp as u64) << 52; // mantissa 0 => value 2^(biased_exp-1075) (or subnormal boundary at 0)
+            let f = f64::from_bits(pow2_bits);
+            if f.is_finite() {
+                bits.push(pow2_bits);
+                if pow2_bits > 0 {
+                    bits.push(pow2_bits - 1);
+                }
+                bits.push(pow2_bits + 1);
+            }
+        }
+
+        // 4. Subnormals: random mantissas with the exponent field forced to
+        // zero.
+        for _ in 0..3_000 {
+            let mantissa = rng.next() & 0x000f_ffff_ffff_ffff;
+            if mantissa != 0 {
+                bits.push(mantissa);
+            }
+        }
+
+        // 5. >200,000 uniformly random bit patterns (finite only).
+        let random_target = 200_000;
+        let mut random_count = 0usize;
+        while random_count < random_target {
+            let b = rng.next();
+            if f64::from_bits(b).is_finite() {
+                bits.push(b);
+                random_count += 1;
+            }
+        }
+
+        // 6. Random-magnitude "nice" decimals: covers the fixed/exponential
+        // threshold boundaries with realistic-looking values (timestamps,
+        // prices, ratios) rather than only fully random bit patterns.
         for exp in -20..20 {
-            for _ in 0..5 {
+            for _ in 0..25 {
                 let mantissa = (rng.next() % 1_000_000_000) as f64 / 1e6;
                 let f = mantissa * 10f64.powi(exp);
                 if f.is_finite() {
@@ -1352,31 +1873,133 @@ mod oracle_tests {
                 }
             }
         }
-        // Known edge cases from CPython's format_float_short thresholds.
-        for f in [
-            0.0f64,
-            -0.0,
-            1e15,
-            1e16,
-            1e-4,
-            1e-5,
-            f64::MIN_POSITIVE,
-            f64::MAX,
-            -f64::MAX,
-        ] {
-            bits.push(f.to_bits());
+
+        bits.sort_unstable();
+        bits.dedup();
+        let sample_size = bits.len();
+
+        // Batch through `python3.12` in chunks: one call per value would be
+        // far too slow at this sample size, and one call for all of them
+        // risks the OS's command-line length limit.
+        const CHUNK: usize = 20_000;
+        let mut mismatches: Vec<(u64, String, String)> = Vec::new();
+        for chunk in bits.chunks(CHUNK) {
+            let script = format!(
+                "import struct\nfor b in {chunk:?}:\n    print(repr(struct.unpack('>d', struct.pack('>Q', b))[0]))",
+            );
+            let output = oracle::python(&script);
+            let expected: Vec<&str> = output.lines().collect();
+            assert_eq!(
+                expected.len(),
+                chunk.len(),
+                "python oracle produced the wrong number of lines for this chunk"
+            );
+            for (&b, want) in chunk.iter().zip(expected.iter()) {
+                let got = python_float_repr(f64::from_bits(b));
+                if got != *want {
+                    mismatches.push((b, got, want.to_string()));
+                }
+            }
         }
 
-        let script = format!(
-            "import struct\nfor b in {bits:?}:\n    print(repr(struct.unpack('>d', struct.pack('>Q', b))[0]))",
+        eprintln!(
+            "float_repr_matches_python_extensive_fuzz: {sample_size} values checked against python3.12, {} mismatches",
+            mismatches.len()
         );
-        let output = oracle::python(&script);
-        let expected: Vec<&str> = output.lines().collect();
-        assert_eq!(expected.len(), bits.len());
-        for (b, want) in bits.iter().zip(expected.iter()) {
-            let f = f64::from_bits(*b);
-            let got = python_float_repr(f);
-            assert_eq!(&got, want, "float_repr mismatch for bits {b:#x} ({f})");
+        assert!(
+            mismatches.is_empty(),
+            "{} / {sample_size} mismatches (showing up to 20): {:#?}",
+            mismatches.len(),
+            &mismatches[..mismatches.len().min(20)],
+        );
+    }
+
+    /// Finding H-R4-2's real-world consequence: `team/commit.rs` signs
+    /// `Commit::canonical_json`, so any digit mismatch in a float's rendering
+    /// breaks Ed25519 signature verification across languages. Confirms the
+    /// fix at the actual call site shape -- a JSON *document* (not a bare
+    /// number) containing each of the finding's failing values (plus the
+    /// power-of-two edge case this fix's tie-detection had to avoid a false
+    /// positive on), rendered through [`dumps`] with every [`DumpOptions`]
+    /// preset this crate actually uses, byte-for-byte against real
+    /// `python3.12`'s `json.dumps` called with the matching keyword
+    /// arguments.
+    #[allow(clippy::excessive_precision)]
+    #[test]
+    fn dumps_matches_python_json_dumps_for_finding_values_in_every_option_combination() {
+        let values = [
+            270784837363767.125,
+            599995984171052.25,
+            275078784986996.625,
+            0.000000059604644775390625, // 2^-24
+            1.5,
+            0.1,
+            -0.0,
+        ];
+
+        // One document per value, shaped like the real call sites this
+        // module's doc comment lists (`DumpOptions::compact_sorted` for
+        // audit/handle/policy/team-facts JSON, `pretty_sorted` for state
+        // files, `default_sorted` for vault backups/gateway responses,
+        // `plain` for `agent_cli.py`-style unsorted payloads) -- an object
+        // with the float alongside an int and a string, an array containing
+        // it, so both `write_number`'s direct and nested paths are
+        // exercised.
+        let docs: Vec<Value> = values
+            .iter()
+            .map(|f| json!({"value": f, "list": [f, 1, "x"], "count": 3}))
+            .collect();
+
+        let presets: [(&str, DumpOptions, &str); 4] = [
+            (
+                "compact_sorted",
+                DumpOptions::compact_sorted(),
+                "sort_keys=True, separators=(',', ':')",
+            ),
+            (
+                "pretty_sorted",
+                DumpOptions::pretty_sorted(),
+                "sort_keys=True, indent=2",
+            ),
+            (
+                "default_sorted",
+                DumpOptions::default_sorted(),
+                "sort_keys=True",
+            ),
+            ("plain", DumpOptions::plain(), ""),
+        ];
+
+        // `pretty_sorted`'s `indent=2` output has embedded newlines, so a
+        // plain `str.lines()` split can't tell docs apart -- print an
+        // explicit sentinel between docs and split on that instead.
+        for (name, opts, kwargs) in &presets {
+            let script = format!(
+                r#"
+import json, struct
+values = {values:?}
+docs = [{{"value": v, "list": [v, 1, "x"], "count": 3}} for v in values]
+for doc in docs:
+    print(json.dumps(doc, {kwargs}))
+    print("---SENTINEL---")
+"#,
+            );
+            let output = oracle::python(&script);
+            let want: Vec<&str> = output.split("---SENTINEL---\n").collect();
+            // One trailing empty chunk after the last sentinel.
+            assert_eq!(
+                want.len(),
+                docs.len() + 1,
+                "preset {name}: expected {} docs' worth of output",
+                docs.len()
+            );
+            for ((doc, f), want_chunk) in docs.iter().zip(values.iter()).zip(want.iter()) {
+                let got = dumps(doc, *opts).unwrap();
+                assert_eq!(
+                    got,
+                    want_chunk.trim_end_matches('\n'),
+                    "preset {name} mismatch for value {f}"
+                );
+            }
         }
     }
 
