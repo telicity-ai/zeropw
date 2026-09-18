@@ -6,11 +6,18 @@
 //! to build the environment document of section 5.1. State-dependent
 //! checks (author role, target existence, ...) happen here, one commit at a
 //! time, in order; an op that fails one is *skipped*, never aborts the
-//! fold. Facts (section 7.4: connection disabled, secret version revoked,
-//! member removed) are a second, order-independent input that is consulted
-//! throughout the fold and re-applied once more at the end, so they always
-//! win regardless of where in the total order the corresponding commit (if
-//! any) falls.
+//! fold -- with one deliberate exception, matching Python: a
+//! `connection.create`/`update`/`switch_credential`/`disable` op whose
+//! commit's peer-supplied `hlc` renders a timestamp real `python3.12`'s
+//! `time.gmtime` cannot represent aborts the whole fold with an `Err`, the
+//! same way Python's own uncaught `OverflowError`/`OSError` from `_commit_time`
+//! propagates out of `fold()` entirely rather than just skipping that one op
+//! (finding A-R5-3; see [`commit_time`]'s doc and `rust/DEVIATIONS.md`'s
+//! `iso` row). Facts (section 7.4: connection disabled, secret version
+//! revoked, member removed) are a second, order-independent input that is
+//! consulted throughout the fold and re-applied once more at the end, so
+//! they always win regardless of where in the total order the corresponding
+//! commit (if any) falls.
 //!
 //! [`derive_local`] then writes the parts of the document this node cares
 //! about into its own `policy/connections.json` and `vault/secrets.json`,
@@ -163,9 +170,76 @@ pub struct FoldResult {
     pub overridden: Vec<Value>,
 }
 
-fn commit_time(commit: &Commit) -> String {
-    let wall_ms = Hlc::parse(&commit.hlc).map(|(w, _)| w).unwrap_or(0);
-    crate::store::iso(Some(wall_ms as f64 / 1000.0))
+/// Largest whole-second Unix timestamp this port has directly confirmed
+/// real `python3.12`'s `time.gmtime` accepts on the platform this was probed
+/// on (finding A-R5-3). Python's actual `_commit_time` pipeline is `wall_ms
+/// / 1000` (an `int` divided by an `int`, which Python 3 computes as a
+/// **float** division, not integer floor division) fed to `store.iso`,
+/// i.e. `time.gmtime(...)` *followed by* `time.strftime(fmt, ...)` on the
+/// result -- both steps matter: `time.gmtime` alone can succeed with a
+/// nonsensical *wrapped* year (this platform's C library overflows `tm_year`
+/// as a 32-bit int well before `gmtime` itself refuses the input outright),
+/// and it is the subsequent `time.strftime` call that then raises on that
+/// wrapped year. A bound probed against `time.gmtime` in isolation (an
+/// earlier draft of this constant did exactly that) is therefore wrong --
+/// measurably so, by about 60 million ms here -- because it misses this
+/// second failure point entirely; the real cliff can only be found by
+/// probing `store.iso` itself (or, equivalently, `gmtime` immediately
+/// followed by `strftime`), which is what was actually done here: probing
+/// `python3.12` directly, `wall_ms = 67_767_976_233_532_795_999` still
+/// succeeds through the real `zeropw.store.iso(wall_ms / 1000)` call, while
+/// `wall_ms = 67_767_976_233_532_796_000` (a mere 1ms more -- and, not
+/// coincidentally, the exact reviewer-supplied repro value for this finding)
+/// already raises `OverflowError: year out of range` from `time.strftime`. A
+/// wide randomized scan (200,000 samples) between that boundary and 1,000x
+/// it found no `wall_ms` past it that succeeds through `iso`, i.e. a real,
+/// stable cliff on this platform, not a spot check. This is the platform's
+/// `gmtime`/`strftime`/`struct tm` ceiling combined with `f64`'s precision
+/// limit at this magnitude, not a value derived from any bound this crate
+/// itself imposes (`Hlc`'s `wall_ms` is `i128` since work unit H's fix,
+/// comfortably able to represent values on both sides of this boundary), and
+/// it is inherently libc/platform-dependent the way every other `iso`/
+/// `gmtime` boundary in this crate's tests already is documented to be
+/// (`rust/DEVIATIONS.md`'s `iso` row) -- it is not asserted to be portable to
+/// a different OS/libc, only confirmed on the one this port's own test suite
+/// runs on. Only an upper bound is needed here: [`Hlc::parse`] already
+/// rejects a negative `wall_ms`/`counter` exactly like Python's `Hlc.parse`
+/// does (`wall_ms < 0` raises `InvalidInput("hlc_malformed")` in both
+/// languages, checked before [`commit_time`] is ever reached, since
+/// [`sort_total_order`] already calls `Hlc::parse` on every commit up
+/// front), so `wall_ms` here is always non-negative.
+const WALL_MS_GMTIME_FAILS_AT: i128 = 67_767_976_233_532_796_000;
+
+/// Port of `zeropw.team.fold._commit_time` (fold.py:87-89).
+///
+/// Python computes `iso(wall_ms / 1000)` unconditionally, with no
+/// `try`/`except` anywhere between it and `fold()`'s own top level: if the
+/// resulting timestamp is outside what the platform's `time.gmtime` can
+/// represent, the uncaught `OverflowError`/`OSError` propagates out of
+/// `_commit_time`, out of `_apply_op`, and out of `fold()`'s whole commit
+/// loop entirely -- aborting the fold outright, not just skipping the one
+/// op. `wall_ms` comes straight from `Hlc.parse(commit.hlc)`, a **peer**-
+/// supplied value (§3.7 does not apply: team commits are signed by peer
+/// device keys, not the trusted issuer this crate's own HMAC-signed tokens
+/// are), so a single active admin peer's `connection.create`/`update`/
+/// `switch_credential`/`disable` op with a deliberately out-of-range `hlc`
+/// can crash any node's fold of that commit -- finding A-R5-3, live now
+/// that work unit H widened `Hlc`'s `wall_ms`/`counter` from `i64` to `i128`
+/// (the previous DEVIATIONS.md `iso` row's "unreachable because `Hlc` was
+/// `i64`" reasoning no longer holds: a `wall_ms` far outside `gmtime`'s
+/// range fits comfortably in `i128`).
+///
+/// `crate::store::iso`'s own `fn(Option<f64>) -> String` signature must stay
+/// infallible (other work units' callers depend on it unconditionally --
+/// see `rust/DEVIATIONS.md`'s `iso` row), so this reproduces Python's crash
+/// *before* ever calling it, via [`WALL_MS_GMTIME_FAILS_AT`], rather than
+/// changing `iso` itself.
+fn commit_time(commit: &Commit) -> Result<String> {
+    let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
+    if wall_ms >= WALL_MS_GMTIME_FAILS_AT {
+        return Err(Error::state("team_commit_time_out_of_range").with_detail(commit.hlc.as_str()));
+    }
+    Ok(crate::store::iso(Some(wall_ms as f64 / 1000.0)))
 }
 
 fn is_active_member(doc: &Map<String, Value>, fp: &str) -> bool {
@@ -220,9 +294,9 @@ fn op_connection_create(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let conn_id = op
         .get("id")
@@ -235,7 +309,7 @@ fn op_connection_create(
         .map(|c| c.contains_key(&conn_id))
         .unwrap_or(false);
     if already || facts.disabled_connections.contains(&conn_id) {
-        return Some("connection_id_taken".into());
+        return Ok(Some("connection_id_taken".into()));
     }
     let secret_id = op
         .get("secret_id")
@@ -248,19 +322,21 @@ fn op_connection_create(
         .map(|s| s.contains_key(&secret_id))
         .unwrap_or(false);
     if !has_secret {
-        return Some("secret_not_found".into());
+        return Ok(Some("secret_not_found".into()));
     }
-    let timestamp = commit_time(commit);
-    match connection_entry(&conn_id, op, "active", &timestamp, None) {
-        Ok(entry) => {
-            doc.get_mut("connections")
-                .and_then(Value::as_object_mut)
-                .expect("document shape validated at fold() entry")
-                .insert(conn_id, Value::Object(entry));
-            None
-        }
-        Err(exc) => Some(exc.reason.to_string()),
-    }
+    let timestamp = commit_time(commit)?;
+    Ok(
+        match connection_entry(&conn_id, op, "active", &timestamp, None) {
+            Ok(entry) => {
+                doc.get_mut("connections")
+                    .and_then(Value::as_object_mut)
+                    .expect("document shape validated at fold() entry")
+                    .insert(conn_id, Value::Object(entry));
+                None
+            }
+            Err(exc) => Some(exc.reason.to_string()),
+        },
+    )
 }
 
 fn op_connection_update(
@@ -269,9 +345,9 @@ fn op_connection_update(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let conn_id = op
         .get("id")
@@ -286,7 +362,7 @@ fn op_connection_update(
         .cloned();
     let current = match current {
         Some(c) => c,
-        None => return Some("connection_not_found".into()),
+        None => return Ok(Some("connection_not_found".into())),
     };
     let status = current
         .get("status")
@@ -294,7 +370,7 @@ fn op_connection_update(
         .unwrap_or("")
         .to_string();
     if status == "disabled" || facts.disabled_connections.contains(&conn_id) {
-        return Some("connection_not_found".into());
+        return Ok(Some("connection_not_found".into()));
     }
     let mut merged = current.clone();
     for name in [
@@ -309,27 +385,29 @@ fn op_connection_update(
             merged.insert(name.to_string(), v.clone());
         }
     }
-    let timestamp = commit_time(commit);
+    let timestamp = commit_time(commit)?;
     let created_at = current
         .get("created_at")
         .and_then(Value::as_str)
         .map(str::to_string);
-    match connection_entry(
-        &conn_id,
-        &merged,
-        &status,
-        &timestamp,
-        created_at.as_deref(),
-    ) {
-        Ok(entry) => {
-            doc.get_mut("connections")
-                .and_then(Value::as_object_mut)
-                .expect("document shape validated at fold() entry")
-                .insert(conn_id, Value::Object(entry));
-            None
-        }
-        Err(exc) => Some(exc.reason.to_string()),
-    }
+    Ok(
+        match connection_entry(
+            &conn_id,
+            &merged,
+            &status,
+            &timestamp,
+            created_at.as_deref(),
+        ) {
+            Ok(entry) => {
+                doc.get_mut("connections")
+                    .and_then(Value::as_object_mut)
+                    .expect("document shape validated at fold() entry")
+                    .insert(conn_id, Value::Object(entry));
+                None
+            }
+            Err(exc) => Some(exc.reason.to_string()),
+        },
+    )
 }
 
 fn op_connection_switch_credential(
@@ -338,9 +416,9 @@ fn op_connection_switch_credential(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let conn_id = op
         .get("id")
@@ -355,12 +433,12 @@ fn op_connection_switch_credential(
         .cloned();
     let current = match current {
         Some(c) => c,
-        None => return Some("connection_not_found".into()),
+        None => return Ok(Some("connection_not_found".into())),
     };
     if current.get("status").and_then(Value::as_str) == Some("disabled")
         || facts.disabled_connections.contains(&conn_id)
     {
-        return Some("connection_not_found".into());
+        return Ok(Some("connection_not_found".into()));
     }
     let secret_id = op
         .get("secret_id")
@@ -379,7 +457,7 @@ fn op_connection_switch_credential(
         .map(|s| s.contains_key(&secret_id))
         .unwrap_or(false);
     if !has_secret {
-        return Some("secret_not_found".into());
+        return Ok(Some("secret_not_found".into()));
     }
     let mut merged = current;
     merged.insert("secret_id".into(), json!(secret_id));
@@ -387,12 +465,12 @@ fn op_connection_switch_credential(
         "secret_version".into(),
         op.get("secret_version").cloned().unwrap_or(Value::Null),
     );
-    merged.insert("updated_at".into(), json!(commit_time(commit)));
+    merged.insert("updated_at".into(), json!(commit_time(commit)?));
     doc.get_mut("connections")
         .and_then(Value::as_object_mut)
         .expect("document shape validated at fold() entry")
         .insert(conn_id, Value::Object(merged));
-    None
+    Ok(None)
 }
 
 fn op_connection_disable(
@@ -401,31 +479,31 @@ fn op_connection_disable(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let conn_id = op
         .get("id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let timestamp = commit_time(commit);
+    let timestamp = commit_time(commit)?;
     let connections = doc
         .get_mut("connections")
         .and_then(Value::as_object_mut)
         .expect("document shape validated at fold() entry");
     let current = match connections.get_mut(&conn_id).and_then(Value::as_object_mut) {
         Some(c) => c,
-        None => return Some("connection_not_found".into()),
+        None => return Ok(Some("connection_not_found".into())),
     };
     if current.get("status").and_then(Value::as_str) == Some("disabled") {
-        return Some("already_disabled".into());
+        return Ok(Some("already_disabled".into()));
     }
     current.insert("status".into(), json!("disabled"));
     current.insert("updated_at".into(), json!(timestamp));
     facts.disabled_connections.insert(conn_id);
-    None
+    Ok(None)
 }
 
 // ------------------------------------------------------------------ secret ops
@@ -435,9 +513,9 @@ fn op_secret_put_version(
     _facts: &mut Facts,
     vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let secret_id = op
         .get("secret_id")
@@ -467,7 +545,7 @@ fn op_secret_put_version(
         .map(|g| g.contains_key(&generation_id))
         .unwrap_or(false);
     if !generation_known {
-        return Some("generation_unknown".into());
+        return Ok(Some("generation_unknown".into()));
     }
     let secrets = doc
         .get_mut("secrets")
@@ -480,7 +558,7 @@ fn op_secret_put_version(
         .as_object_mut()
         .expect("secret entry is always an object");
     if entry_obj.get("kind").and_then(Value::as_str) != Some(kind.as_str()) {
-        return Some("secret_kind_mismatch".into());
+        return Ok(Some("secret_kind_mismatch".into()));
     }
     let versions = entry_obj
         .entry("versions".to_string())
@@ -488,7 +566,7 @@ fn op_secret_put_version(
         .as_object_mut()
         .expect("secret entry always has a versions object");
     if versions.contains_key(&version_id) {
-        return Some("version_id_taken".into());
+        return Ok(Some("version_id_taken".into()));
     }
     let ciphertext = op.get("ciphertext").and_then(Value::as_object);
     let nonce = ciphertext
@@ -512,7 +590,7 @@ fn op_secret_put_version(
         }),
     );
     vo.entry(secret_id).or_default().push(version_id);
-    None
+    Ok(None)
 }
 
 fn set_secret_status(
@@ -596,14 +674,14 @@ fn op_secret_set_status(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let secret_id = op.get("secret_id").and_then(Value::as_str).unwrap_or("");
     let version_id = op.get("version_id").and_then(Value::as_str).unwrap_or("");
     let status = op.get("status").and_then(Value::as_str).unwrap_or("");
-    set_secret_status(doc, facts, secret_id, version_id, status)
+    Ok(set_secret_status(doc, facts, secret_id, version_id, status))
 }
 
 fn op_secret_activate(
@@ -612,13 +690,15 @@ fn op_secret_activate(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let secret_id = op.get("secret_id").and_then(Value::as_str).unwrap_or("");
     let version_id = op.get("version_id").and_then(Value::as_str).unwrap_or("");
-    set_secret_status(doc, facts, secret_id, version_id, "active")
+    Ok(set_secret_status(
+        doc, facts, secret_id, version_id, "active",
+    ))
 }
 
 // ------------------------------------------------------------------ member ops
@@ -628,21 +708,21 @@ fn op_member_add(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let device_val = op.get("device").cloned().unwrap_or(Value::Null);
     let record = match DeviceRecord::from_dict(&device_val) {
         Ok(r) => r,
-        Err(_) => return Some("member_add_malformed".into()),
+        Err(_) => return Ok(Some("member_add_malformed".into())),
     };
     if !record.verify() {
-        return Some("member_add_malformed".into());
+        return Ok(Some("member_add_malformed".into()));
     }
     let fp = record.fingerprint();
     if facts.removed_members.contains(&fp) {
-        return Some("member_removed".into());
+        return Ok(Some("member_removed".into()));
     }
     let existing_status = doc
         .get("members")
@@ -654,9 +734,9 @@ fn op_member_add(
         .map(str::to_string);
     if let Some(status) = existing_status {
         if status == "removed" {
-            return Some("member_removed".into());
+            return Ok(Some("member_removed".into()));
         }
-        return Some("member_exists".into());
+        return Ok(Some("member_exists".into()));
     }
     let name = op.get("name").cloned().unwrap_or(Value::Null);
     let role = op.get("role").cloned().unwrap_or(Value::Null);
@@ -684,7 +764,7 @@ fn op_member_add(
             }
         }
     }
-    None
+    Ok(None)
 }
 
 fn op_member_set_role(
@@ -693,9 +773,9 @@ fn op_member_set_role(
     _facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let fp = op
         .get("fingerprint")
@@ -703,10 +783,10 @@ fn op_member_set_role(
         .unwrap_or("")
         .to_string();
     if doc.get("owner").and_then(Value::as_str) == Some(fp.as_str()) {
-        return Some("cannot_change_owner_role".into());
+        return Ok(Some("cannot_change_owner_role".into()));
     }
     if !is_active_member(doc, &fp) {
-        return Some("member_not_found".into());
+        return Ok(Some("member_not_found".into()));
     }
     let role = op.get("role").cloned().unwrap_or(Value::Null);
     if let Some(m) = doc
@@ -717,7 +797,7 @@ fn op_member_set_role(
     {
         m.insert("role".into(), role);
     }
-    None
+    Ok(None)
 }
 
 fn op_member_remove(
@@ -726,20 +806,20 @@ fn op_member_remove(
     facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let fp = op
         .get("fingerprint")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
     if !(is_admin(doc, &commit.author) || commit.author == fp) {
-        return Some("not_authorized".into());
+        return Ok(Some("not_authorized".into()));
     }
     if doc.get("owner").and_then(Value::as_str) == Some(fp.as_str()) {
-        return Some("cannot_remove_owner".into());
+        return Ok(Some("cannot_remove_owner".into()));
     }
     if !is_active_member(doc, &fp) {
-        return Some("member_not_found".into());
+        return Ok(Some("member_not_found".into()));
     }
     if let Some(m) = doc
         .get_mut("members")
@@ -750,7 +830,7 @@ fn op_member_remove(
         m.insert("status".into(), json!("removed"));
     }
     facts.removed_members.insert(fp);
-    None
+    Ok(None)
 }
 
 fn op_owner_transfer(
@@ -759,9 +839,9 @@ fn op_owner_transfer(
     _facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_owner(doc, &commit.author) {
-        return Some("not_owner".into());
+        return Ok(Some("not_owner".into()));
     }
     let fp = op
         .get("fingerprint")
@@ -769,7 +849,7 @@ fn op_owner_transfer(
         .unwrap_or("")
         .to_string();
     if !is_active_member(doc, &fp) {
-        return Some("member_not_found".into());
+        return Ok(Some("member_not_found".into()));
     }
     doc.insert("owner".into(), json!(fp));
     if let Some(m) = doc
@@ -780,7 +860,7 @@ fn op_owner_transfer(
     {
         m.insert("role".into(), json!("admin"));
     }
-    None
+    Ok(None)
 }
 
 // --------------------------------------------------------------------- dek/settings
@@ -790,9 +870,9 @@ fn op_dek_rotate(
     _facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let gen_id = op
         .get("generation_id")
@@ -808,12 +888,12 @@ fn op_dek_rotate(
         .and_then(Value::as_object_mut)
         .expect("dek.generations is always an object");
     if generations.contains_key(&gen_id) {
-        return Some("generation_exists".into());
+        return Ok(Some("generation_exists".into()));
     }
     let wraps = op.get("wraps").cloned().unwrap_or_else(|| json!({}));
     generations.insert(gen_id.clone(), json!({"wraps": wraps}));
     dek.insert("current".into(), json!(gen_id));
-    None
+    Ok(None)
 }
 
 fn op_settings_update(
@@ -822,9 +902,9 @@ fn op_settings_update(
     _facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
-        return Some("not_admin".into());
+        return Ok(Some("not_admin".into()));
     }
     let value = op
         .get("sync_interval_seconds")
@@ -834,7 +914,7 @@ fn op_settings_update(
         .and_then(Value::as_object_mut)
         .expect("document shape validated at fold() entry")
         .insert("sync_interval_seconds".into(), value);
-    None
+    Ok(None)
 }
 
 // --------------------------------------------------------------------- env.init
@@ -844,27 +924,27 @@ fn op_env_init(
     _facts: &mut Facts,
     _vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if !matches!(doc.get("owner"), None | Some(Value::Null)) {
-        return Some("env_already_initialized".into());
+        return Ok(Some("env_already_initialized".into()));
     }
     if commit.author_seq != 1 {
-        return Some("env_init_not_first".into());
+        return Ok(Some("env_init_not_first".into()));
     }
     let expected_owner = match env_owner_fingerprint(&commit.env_id) {
         Ok(o) => o,
-        Err(_) => return Some("env_id_malformed".into()),
+        Err(_) => return Ok(Some("env_id_malformed".into())),
     };
     if commit.author != expected_owner {
-        return Some("env_init_wrong_owner".into());
+        return Ok(Some("env_init_wrong_owner".into()));
     }
     let device_val = op.get("owner_device").cloned().unwrap_or(Value::Null);
     let owner_record = match DeviceRecord::from_dict(&device_val) {
         Ok(r) => r,
-        Err(_) => return Some("env_init_malformed".into()),
+        Err(_) => return Ok(Some("env_init_malformed".into())),
     };
     if owner_record.fingerprint() != commit.author || !owner_record.verify() {
-        return Some("env_init_malformed".into());
+        return Ok(Some("env_init_malformed".into()));
     }
     doc.insert("owner".into(), json!(commit.author));
     let owner_name = op.get("owner_name").cloned().unwrap_or(Value::Null);
@@ -886,7 +966,7 @@ fn op_env_init(
         .and_then(Value::as_object_mut)
         .expect("dek.generations is always an object")
         .insert(gen_key, json!({"wraps": wraps}));
-    None
+    Ok(None)
 }
 
 type OpHandler = fn(
@@ -895,7 +975,7 @@ type OpHandler = fn(
     &mut Facts,
     &mut BTreeMap<String, Vec<String>>,
     &Map<String, Value>,
-) -> Option<String>;
+) -> Result<Option<String>>;
 
 fn op_handler(name: &str) -> Option<OpHandler> {
     Some(match name {
@@ -923,11 +1003,11 @@ fn apply_op(
     facts: &mut Facts,
     vo: &mut BTreeMap<String, Vec<String>>,
     op: &Map<String, Value>,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let name = op.get("op").and_then(Value::as_str).unwrap_or("");
     match op_handler(name) {
         Some(handler) => handler(doc, commit, facts, vo, op),
-        None => Some("unknown_op".into()),
+        None => Ok(Some("unknown_op".into())),
     }
 }
 
@@ -1056,7 +1136,7 @@ pub fn fold(
                 &mut working_facts,
                 &mut version_order,
                 op_obj,
-            );
+            )?;
             if let Some(reason) = reason {
                 let hash = commit.hash()?;
                 skipped.push((hash, index, reason.clone()));
@@ -1860,6 +1940,161 @@ mod tests {
         let doc = doc_obj(&result);
         assert!(doc["connections"].as_object().unwrap().contains_key("gh"));
         assert!(result.skipped.is_empty());
+    }
+
+    // A-R5-3: a peer-supplied `hlc` on a `connection.create`/`update`/
+    // `switch_credential`/`disable` commit whose `wall_ms / 1000` exceeds
+    // what real `python3.12`'s `time.gmtime` can represent must abort the
+    // whole `fold()` call with an `Err`, exactly like Python's own uncaught
+    // `OverflowError`/`OSError` from `_commit_time` propagating out of
+    // `fold()` (fold.py has no `try`/`except` anywhere between them) --
+    // never silently fold in a fabricated date the way `Hlc::parse(...)
+    // .unwrap_or(0) -> iso` used to before this fix. Live since work unit
+    // H widened `Hlc`'s `wall_ms`/`counter` from `i64` to `i128` (a value
+    // this far out of range no longer fails to parse at all, so it reaches
+    // `commit_time` as a validly-parsed, merely astronomical, `wall_ms`).
+    #[test]
+    fn connection_create_with_hlc_past_gmtime_range_aborts_the_whole_fold() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let hlc = format!("{WALL_MS_GMTIME_FAILS_AT}-0000");
+        let c2 = connection_create_commit(&env_id, &owner, 2, &hlc, "gh");
+        let err = fold(&env_id, vec![c1, c2], None, None, None, None)
+            .expect_err("a commit whose hlc python3.12 can't gmtime() must abort the whole fold");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "team_commit_time_out_of_range");
+    }
+
+    // A-R5-3 counterpart: the largest `wall_ms` real `python3.12`'s actual
+    // `_commit_time` pipeline (`int(wall_ms) / 1000` as a float, then
+    // `time.gmtime`) still accepts -- one millisecond under
+    // `WALL_MS_GMTIME_FAILS_AT` -- must still fold successfully; the fix
+    // must not be so conservative it rejects values Python itself renders
+    // without complaint.
+    #[test]
+    fn connection_create_with_hlc_at_gmtime_range_boundary_still_folds() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let boundary_wall_ms = WALL_MS_GMTIME_FAILS_AT - 1;
+        let hlc = format!("{boundary_wall_ms}-0000");
+        let c2 = connection_create_commit(&env_id, &owner, 2, &hlc, "gh");
+        let result = fold(&env_id, vec![c1, c2], None, None, None, None)
+            .expect("a wall_ms at the real gmtime boundary must still fold");
+        let doc = doc_obj(&result);
+        assert!(doc["connections"].as_object().unwrap().contains_key("gh"));
+        assert!(result.skipped.is_empty());
+    }
+
+    // A-R5-3: probes real `python3.12`'s `zeropw.team.fold._commit_time`
+    // directly (not just `time.gmtime` in isolation) end to end for the
+    // three cases this finding is about, and confirms Rust's `commit_time`
+    // agrees on the accept/reject decision (and, where both accept, on the
+    // exact rendered string) for the first two. `_commit_time` only ever
+    // reads `commit.hlc`, so a `SimpleNamespace` stands in for a real
+    // `Commit` here -- no signing/device-key machinery needed to exercise
+    // this one function directly.
+    #[test]
+    fn commit_time_matches_python_end_to_end_for_the_gmtime_boundary() {
+        let script = format!(
+            r#"
+from types import SimpleNamespace
+from zeropw.team.fold import _commit_time
+
+def probe(hlc):
+    c = SimpleNamespace(hlc=hlc)
+    try:
+        return "OK " + _commit_time(c)
+    except Exception as e:
+        return "ERR " + type(e).__name__
+
+print(probe("{boundary}-0000"))
+print(probe("{over}-0000"))
+print(probe("{huge}-0000"))
+"#,
+            boundary = WALL_MS_GMTIME_FAILS_AT - 1,
+            over = WALL_MS_GMTIME_FAILS_AT,
+            huge = "9".repeat(45),
+        );
+        let out = crate::oracle::python(&script);
+        let mut lines = out.lines();
+
+        // Case 1: one millisecond under the real cliff -- Python succeeds.
+        let want_boundary = lines.next().unwrap();
+        assert!(
+            want_boundary.starts_with("OK "),
+            "python3.12 should still accept wall_ms = WALL_MS_GMTIME_FAILS_AT - 1, got: {want_boundary}"
+        );
+        let want_rendered = want_boundary.strip_prefix("OK ").unwrap();
+        let commit = Commit {
+            format: String::new(),
+            env_id: String::new(),
+            author: String::new(),
+            author_seq: 0,
+            hlc: format!("{}-0000", WALL_MS_GMTIME_FAILS_AT - 1),
+            ops: Vec::new(),
+            seen: BTreeMap::new(),
+            sig: String::new(),
+        };
+        let got_rendered = commit_time(&commit).expect("Rust should also accept this wall_ms");
+        assert_eq!(
+            got_rendered, want_rendered,
+            "Rust and Python must render the identical timestamp at the real boundary"
+        );
+
+        // Case 2: exactly at the real cliff -- Python raises (OSError on
+        // this platform), Rust must also refuse (not silently format a
+        // bogus date).
+        let want_over = lines.next().unwrap();
+        assert!(
+            want_over.starts_with("ERR "),
+            "python3.12 should raise for wall_ms = WALL_MS_GMTIME_FAILS_AT, got: {want_over}"
+        );
+        let commit_over = Commit {
+            hlc: format!("{WALL_MS_GMTIME_FAILS_AT}-0000"),
+            ..commit
+        };
+        commit_time(&commit_over)
+            .expect_err("Rust must also refuse wall_ms = WALL_MS_GMTIME_FAILS_AT");
+
+        // Case 3: a wall_ms literal too large even for i128 -- Python's own
+        // int()/1000 float division overflows (a different exception,
+        // OverflowError, but still an uncaught one Python never recovers
+        // from); Rust's Hlc::parse already refuses this literal outright.
+        let want_huge = lines.next().unwrap();
+        assert!(
+            want_huge.starts_with("ERR "),
+            "python3.12 should also raise for a wall_ms literal beyond i128, got: {want_huge}"
+        );
+        let commit_huge = Commit {
+            hlc: format!("{}-0000", "9".repeat(45)),
+            ..commit_over
+        };
+        commit_time(&commit_huge).expect_err("Rust must also refuse a wall_ms literal beyond i128");
+    }
+
+    // A-R5-3, the other reachable shape of the same underlying hazard: a
+    // `wall_ms` literal too large even for `i128` (which `Hlc::parse` is
+    // now bounded to, per work unit H) can't be represented by Python's
+    // `Hlc.parse` either in a way that reaches `_commit_time` cleanly --
+    // Python's `int(wall_str)` parses it fine (arbitrary precision), but
+    // `wall_ms / 1000` then raises `OverflowError: integer division result
+    // too large for a float` before `_commit_time` ever calls `iso()` --
+    // an uncaught exception that also aborts `fold()` in Python, just via a
+    // different (still uncaught) exception. `fold()` already aborts for
+    // this shape today (via `sort_total_order`'s own `Hlc::parse` call,
+    // before the per-op loop ever starts, since `Hlc::parse` rejects a
+    // literal beyond `i128`'s range as malformed) -- confirmed here as
+    // already-correct behaviour, not a new code path this fix adds.
+    #[test]
+    fn connection_create_with_hlc_wall_ms_beyond_i128_also_aborts_the_whole_fold() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        // 45 digits: comfortably beyond i128::MAX (39 digits).
+        let huge = "9".repeat(45);
+        let hlc = format!("{huge}-0000");
+        let c2 = connection_create_commit(&env_id, &owner, 2, &hlc, "gh");
+        let err = fold(&env_id, vec![c1, c2], None, None, None, None).expect_err(
+            "a wall_ms literal too large for i128 must also abort the whole fold, like Python's own OverflowError",
+        );
+        assert!(err.is(crate::errors::ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "hlc_malformed");
     }
 
     #[test]

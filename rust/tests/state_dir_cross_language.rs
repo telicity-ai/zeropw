@@ -11,7 +11,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::Value;
 use zeropw::projects::Projects;
+use zeropw::pyjson;
 use zeropw::store::StateDir;
 
 fn repo_root() -> PathBuf {
@@ -173,4 +175,120 @@ for line in state.read_lines("log.jsonl", None):
     let got = state.read_lines("log.jsonl", None).unwrap();
     assert_eq!(got, want);
     assert_eq!(got, vec!["a", "b", "c", "d"]);
+}
+
+/// A Python expression that builds a value nested `n` levels deep at
+/// *runtime* (`1` wrapped in a list `n` times via a loop), for use as one
+/// argument in a larger script. Deliberately **not** a `n`-deep literal
+/// source string (`"["*n + "1" + "]"*n`): CPython's own *compiler* refuses
+/// more than 20-ish nested brackets in source text ("too many nested
+/// parentheses", a syntax-level limit distinct from the `json`/pickle
+/// runtime recursion limit this test is actually probing), so a deep
+/// literal would fail to even parse as Python source long before reaching
+/// any depth this test cares about.
+fn nested_array_expr(n: usize) -> String {
+    format!("__import__('functools').reduce(lambda a, _: [a], range({n}), 1)")
+}
+
+// A-R5-2: `pyjson::MAX_JSON_DEPTH` (500) must be strictly below CPython's own
+// real ceiling for the exact write path `StateDir::write_json` mirrors
+// (`json.dump(doc, stream, sort_keys=True, indent=2)`, measured through the
+// real `StateDir.write_json` API itself in this fix's own probing: depths
+// 993-995 succeed, 996+ raise `RecursionError` there -- see
+// `rust/DEVIATIONS.md`'s pyjson row 14), so every document this port ever
+// persists is one Python's own `StateDir.write_json` could also have
+// written. Walk the boundary in the WRITE direction at this port's own,
+// much lower cap: `pyjson::MAX_JSON_DEPTH - 1` and `pyjson::MAX_JSON_DEPTH`
+// must succeed, byte-identically, through both languages' `write_json`;
+// `pyjson::MAX_JSON_DEPTH + 1` must be refused by Rust's `write_json` (an
+// intentional, documented, much-narrower-than-CPython cap -- CPython's own
+// `StateDir.write_json` ceiling is nowhere near this low, so Python happily
+// writes the same one-level-deeper document Rust refuses; that half of this
+// test pins the divergence itself, not a bug).
+#[test]
+fn write_json_boundary_matches_python_state_dir_write_json_at_the_depth_cap() {
+    let cap = pyjson::MAX_JSON_DEPTH;
+
+    for n in [cap - 1, cap] {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let rust_path = tmp.path().join("rust_state");
+        let python_path = tmp.path().join("python_state");
+
+        let state = StateDir::new(&rust_path);
+        state.create().unwrap();
+        let mut doc = serde_json::json!(1);
+        for _ in 0..n {
+            doc = Value::Array(vec![doc]);
+        }
+        state
+            .write_json("deep.json", &doc)
+            .unwrap_or_else(|e| panic!("Rust write_json should succeed at depth {n}: {e:?}"));
+
+        run_python(&format!(
+            r#"
+from zeropw.store import StateDir
+state = StateDir({path})
+state.create()
+state.write_json("deep.json", {doc})
+"#,
+            path = py_str_literal(&python_path),
+            doc = nested_array_expr(n),
+        ));
+
+        let rust_bytes = std::fs::read(rust_path.join("deep.json")).unwrap();
+        let python_bytes = std::fs::read(python_path.join("deep.json")).unwrap();
+        assert_eq!(
+            rust_bytes, python_bytes,
+            "depth {n} (at/under the cap) must round-trip byte-identically"
+        );
+    }
+
+    // One level past the cap: Rust's write_json must refuse cleanly (no
+    // panic/abort, no partial/stale tmp file left in the target directory),
+    // while real Python -- nowhere near its own, much higher ceiling at this
+    // depth -- still writes it without complaint. An intentional,
+    // documented divergence (rust/DEVIATIONS.md pyjson row 14), not a bug.
+    let over = cap + 1;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let rust_path = tmp.path().join("rust_state");
+    let python_path = tmp.path().join("python_state");
+
+    let state = StateDir::new(&rust_path);
+    state.create().unwrap();
+    let mut doc = serde_json::json!(1);
+    for _ in 0..over {
+        doc = Value::Array(vec![doc]);
+    }
+    let err = state
+        .write_json("deep.json", &doc)
+        .expect_err("Rust write_json must refuse one level past MAX_JSON_DEPTH");
+    assert_eq!(err.reason, "state_write_failed");
+    assert!(
+        !rust_path.join("deep.json").exists(),
+        "a refused write_json must not leave a target file behind"
+    );
+    let leftover: Vec<_> = std::fs::read_dir(&rust_path)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        leftover.is_empty(),
+        "a refused write_json must not leave a stale tmp file behind, found: {leftover:?}"
+    );
+
+    run_python(&format!(
+        r#"
+from zeropw.store import StateDir
+state = StateDir({path})
+state.create()
+state.write_json("deep.json", {doc})
+"#,
+        path = py_str_literal(&python_path),
+        doc = nested_array_expr(over),
+    ));
+    assert!(
+        python_path.join("deep.json").exists(),
+        "real python3.12's StateDir.write_json should still succeed one level past Rust's much lower cap"
+    );
 }
