@@ -97,6 +97,45 @@ A unit that needs one of these uses the canonical helper. If it is missing a cas
 helper (and its full-codepoint oracle test) rather than writing a local variant; a local copy of any of
 these semantics is a review finding.
 
+**Enforcement (coordinator ruling, 2026-09-18).** This rule was written after the `int(str)` incident and
+was then violated four more times, in four different units, inside a single review round: two
+byte-identical private `repr` copies (`handles.rs`, `vault.rs`) plus a third rendering containers as JSON
+in `team/commit.rs` (H-R5-1); a strict-engine base64 decode bypassing `pybase64` (F-R4-3); and floats
+rendered through `serde_json`'s literal text instead of `pyjson::python_float_repr` in `gateway.rs`
+(F-R4-5) and `policy.rs` (D-PO-1). Fixing instances did not close the class, so the rule now has a
+mechanism: `rust/tests/canonical_helpers.rs` reads this crate's own source text and fails on a bypass
+outside the canonical home. Rules for it:
+
+- A new bypass is not made legal by adding it to the guard's allowlist. Extend the canonical helper.
+- Every allowlist entry carries a one-line reason. An entry that is genuinely a different Python function
+  (e.g. `base64.b64decode(..., validate=True)` in `crypto/ed25519.rs`, which is not the lenient decoder
+  `pybase64` reproduces) is legitimate and permanent; an entry that records an unfixed bypass is **debt**
+  and must name the finding id that owns it.
+- The guard is only worth its cost if it actually fires. Whoever changes it re-verifies that reverting a
+  real fix is still caught.
+
+## 3c. A justification is a claim about CPython, and claims get measured (coordinator ruling, 2026-09-18)
+
+Every `DEVIATIONS.md` row and every doc comment that says "Python raises here", "this field is never a
+float", "no test exercises this" is a factual claim. Round 7 measured them and found nine that were
+false, across every unit — including ones that had survived several reviews:
+
+- `projects.rs` claimed every caller raises `TypeError`; `create`'s `if name in doc` is a *substring*
+  test on a `str` and raises the documented `InvalidInput("project_exists")` instead (A-R7-1).
+- `pyjson`'s row claimed no vault/policy/handle document holds a float; `policy/grants.json` and
+  `policy/control.json` both persist raw `time.time()` floats (A-R7-3).
+- `DEVIATIONS.md` E-5 claimed closing the temp-dir gap "would need `unsafe` `libc::atexit`" and that it
+  was "not exercised by any test"; `std::process::exit` is never called in this crate, a safe
+  `Arc<Context>` closes it, and one test reproduced it on every suite run (E-R7-1).
+- `policy.rs` claimed gating a read on a non-empty set "reproduces Python's laziness exactly"; Python's
+  laziness is in the `.get()`, not in `read_json`, so a corrupt document was silently ignored (D-R7-2).
+- `policy.rs` cited §3.5 for `dict([[1,"a"]])`, which Python *returns a value* for (D-R7-5).
+
+Therefore: a justification must be accompanied by the probe that establishes it, and **a justification
+that measurement contradicts is itself a review finding**, at the severity of whatever it was hiding. §3.5
+covers an exception CPython leaves uncaught — never a case where CPython returns a value, and never a
+documented error type. Cite it only after measuring which of those three you are in.
+
 ## 4. Engineering rules
 
 - No `unsafe` except the `libc::flock` call in `store.rs`. No `unwrap`/`expect`/indexing panics on
