@@ -190,21 +190,27 @@ fn nested_array_expr(n: usize) -> String {
     format!("__import__('functools').reduce(lambda a, _: [a], range({n}), 1)")
 }
 
-// A-R5-2: `pyjson::MAX_JSON_DEPTH` (500) must be strictly below CPython's own
+// A-R5-2/X-3: `pyjson::MAX_JSON_DEPTH` must be strictly below CPython's own
 // real ceiling for the exact write path `StateDir::write_json` mirrors
 // (`json.dump(doc, stream, sort_keys=True, indent=2)`, measured through the
-// real `StateDir.write_json` API itself in this fix's own probing: depths
-// 993-995 succeed, 996+ raise `RecursionError` there -- see
-// `rust/DEVIATIONS.md`'s pyjson row 14), so every document this port ever
-// persists is one Python's own `StateDir.write_json` could also have
-// written. Walk the boundary in the WRITE direction at this port's own,
-// much lower cap: `pyjson::MAX_JSON_DEPTH - 1` and `pyjson::MAX_JSON_DEPTH`
-// must succeed, byte-identically, through both languages' `write_json`;
-// `pyjson::MAX_JSON_DEPTH + 1` must be refused by Rust's `write_json` (an
-// intentional, documented, much-narrower-than-CPython cap -- CPython's own
-// `StateDir.write_json` ceiling is nowhere near this low, so Python happily
-// writes the same one-level-deeper document Rust refuses; that half of this
-// test pins the divergence itself, not a bug).
+// real `StateDir.write_json` API itself for finding X-3's fix: last
+// accepted depth 996, `RecursionError` at 997 there -- see
+// `rust/DEVIATIONS.md`'s pyjson row 14; that ceiling is caller-frame
+// dependent, not a fixed language constant, so this port's own bound (990)
+// keeps deliberate headroom below it rather than sitting flush against it),
+// so every document this port ever persists is one Python's own
+// `StateDir.write_json` could also have written. Walk the boundary in the
+// WRITE direction at this port's own, lower cap: `pyjson::MAX_JSON_DEPTH -
+// 1` and `pyjson::MAX_JSON_DEPTH` must succeed, byte-identically, through
+// both languages' `write_json`; `pyjson::MAX_JSON_DEPTH + 1` must be
+// refused by Rust's `write_json` (an intentional, documented,
+// narrower-than-CPython cap -- CPython's own `StateDir.write_json` ceiling
+// is nowhere near this low, so Python happily writes the same
+// one-level-deeper document Rust refuses; that half of this test pins the
+// divergence itself, not a bug). `write_json_past_pythons_own_ceiling_is_refused_by_both_languages`
+// below pins the OTHER required direction: a depth genuinely past Python's
+// own ceiling, where Rust must not overshoot into accepting what Python
+// itself cannot persist.
 #[test]
 fn write_json_boundary_matches_python_state_dir_write_json_at_the_depth_cap() {
     let cap = pyjson::MAX_JSON_DEPTH;
@@ -290,5 +296,75 @@ state.write_json("deep.json", {doc})
     assert!(
         python_path.join("deep.json").exists(),
         "real python3.12's StateDir.write_json should still succeed one level past Rust's much lower cap"
+    );
+}
+
+// Finding X-3 (HIGH): the required "no overshoot" check -- raising
+// `MAX_JSON_DEPTH` must not push Rust's acceptance bound PAST what
+// `StateDir.write_json` can actually persist in Python, or this port would
+// start accepting a document Python itself cannot write, the opposite
+// direction of PORTING.md #2's invariant. Depth 1,000 is comfortably past
+// real `python3.12`'s own measured `StateDir.write_json` ceiling for this
+// exact call shape (this fix's own probing, both standalone and through the
+// real API: last accepted 996, `RecursionError` at 997 -- see
+// `rust/DEVIATIONS.md`'s pyjson row 14) while still being one Rust rejects
+// outright via its own, much cheaper up-front depth scan (no native
+// recursion attempted at all, so no `RecursionError`/stack-overflow
+// equivalent on the Rust side either). Confirm both languages refuse it,
+// and neither leaves a stray file behind.
+#[test]
+fn write_json_past_pythons_own_ceiling_is_refused_by_both_languages() {
+    let over_pythons_ceiling = 1000;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let rust_path = tmp.path().join("rust_state");
+    let python_path = tmp.path().join("python_state");
+
+    let state = StateDir::new(&rust_path);
+    state.create().unwrap();
+    let mut doc = serde_json::json!(1);
+    for _ in 0..over_pythons_ceiling {
+        doc = Value::Array(vec![doc]);
+    }
+    let err = state
+        .write_json("deep.json", &doc)
+        .expect_err("Rust write_json must refuse a document this deep");
+    assert_eq!(err.reason, "state_write_failed");
+    assert!(
+        !rust_path.join("deep.json").exists(),
+        "a refused Rust write_json must not leave a target file behind"
+    );
+
+    // Python's own real `StateDir.write_json`, at this same depth, must
+    // ALSO fail -- with a `RecursionError` that `run_python` (which asserts
+    // a zero exit code) turns into a panic, so a non-panicking run here
+    // would itself mean Rust's cap had somehow drifted past what Python can
+    // actually write. Confirmed via a script that catches exactly that
+    // exception and reports it explicitly, rather than relying on the
+    // process exit code alone to distinguish "Python raised" from some
+    // other, unrelated script failure.
+    let out = run_python(&format!(
+        r#"
+from zeropw.store import StateDir
+state = StateDir({path})
+state.create()
+try:
+    state.write_json("deep.json", {doc})
+    print("WROTE")
+except RecursionError:
+    print("RECURSION_ERROR")
+"#,
+        path = py_str_literal(&python_path),
+        doc = nested_array_expr(over_pythons_ceiling),
+    ));
+    assert_eq!(
+        out.trim(),
+        "RECURSION_ERROR",
+        "python3.12's own StateDir.write_json must also refuse depth {over_pythons_ceiling} \
+         (a depth Rust's raised MAX_JSON_DEPTH must not overshoot past)"
+    );
+    assert!(
+        !python_path.join("deep.json").exists(),
+        "python's own failed write_json must not leave a target file behind either"
     );
 }

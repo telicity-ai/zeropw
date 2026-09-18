@@ -1350,8 +1350,12 @@ fn set_version_status_versions_missing_key_is_state_corrupt() {
 /// Finding E-R5-8: `backup`'s two `pyjson::dumps` calls (the digest payload,
 /// then the full `{"manifest":...,"documents":{...}}` archive) each add a
 /// level of nesting beyond what `StateDir::write_json` already accepted, so
-/// the real per-document budget inside `backup` is `MAX_JSON_DEPTH - 2`
-/// (498), not 500. Exactly at that budget, `backup` must still succeed.
+/// the real per-document budget inside `backup` is `MAX_JSON_DEPTH - 2`,
+/// not the full `MAX_JSON_DEPTH` itself (finding X-3 raised `MAX_JSON_DEPTH`
+/// from 500 to 990, which moves this budget too -- computed from the
+/// constant below rather than hand-written, so it never goes stale like
+/// this comment's old literal numbers did). Exactly at that budget,
+/// `backup` must still succeed.
 #[test]
 fn backup_succeeds_when_document_leaves_two_levels_of_headroom() {
     let (tmp, ctx) = setup();
@@ -1388,10 +1392,10 @@ fn backup_fails_closed_instead_of_an_unexpected_error_class_past_the_headroom() 
 }
 
 /// Same finding, the other binding constraint: a document at `StateDir`'s
-/// own writable max depth (500) already exceeds `backup`'s *first* `dumps`
-/// call (the digest payload, one level of wrapping) before the archive is
-/// even assembled -- still `StateError("backup_too_deep")`, not an escaping
-/// `InvalidInput`.
+/// own writable max depth (`MAX_JSON_DEPTH`) already exceeds `backup`'s
+/// *first* `dumps` call (the digest payload, one level of wrapping) before
+/// the archive is even assembled -- still `StateError("backup_too_deep")`,
+/// not an escaping `InvalidInput`.
 #[test]
 fn backup_fails_closed_for_a_document_at_the_writable_max_depth() {
     let (tmp, ctx) = setup();

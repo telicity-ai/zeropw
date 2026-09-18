@@ -1220,3 +1220,144 @@ print(json.dumps({{
         );
     }
 }
+
+/// A minimal, non-quoting Python string literal for a temp-dir path. Every
+/// path this test builds comes from `tempfile::TempDir`, never from
+/// untrusted input, so this does not need `state_dir_cross_language.rs`'s
+/// full `py_str_literal` escaping -- just enough to survive normal path
+/// characters.
+fn py_path_literal(p: &std::path::Path) -> String {
+    format!(
+        "'{}'",
+        p.to_str()
+            .expect("utf8 path")
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+    )
+}
+
+/// Finding X-3 (HIGH): `pyjson::MAX_JSON_DEPTH` used to be 500, lowered from
+/// 1,000 purely for `dumps`'s own stack safety -- but `loads` shares the
+/// same bound, and Python's own `validate_op` places no depth limit at all
+/// on a `secret.put_version` op's `public` field (`isinstance(public, dict)`
+/// is the only check). A real Python node happily accepts, signs, folds and
+/// derives such a commit -- `derive_local` -> `_derive_vault` ->
+/// `StateDir.write_json` all succeed for `public` nested far deeper than
+/// 500 -- and the resulting `vault/secrets.json` used to be completely
+/// unreadable by this port (`StateError(state_corrupt)`), taking the WHOLE
+/// node down (vault, policy, gateway, signer all key off the same
+/// `Context::open`), not just the one deep secret. This is the real-world
+/// shape PORTING.md's own invariant names explicitly: "A state directory
+/// written by Python must load in Rust and vice versa".
+///
+/// Builds the state directory the same way a real peer would -- entirely in
+/// Python, through the real API this finding's own repro used
+/// (`validate_op`, `sign_commit`, `CommitStore.append`, `fold`,
+/// `derive_local`), with `public` nested 600 deep (the finding's own
+/// reported depth: comfortably past the OLD 500 cap this port used to
+/// reject at, comfortably under the NEW cap this fix raises it to) -- then
+/// confirms this port's `Context::open` + `Vault::list_secrets` +
+/// `CommitStore::all_commits` all succeed against that same directory, with
+/// no Rust code involved in writing it at all. Before this fix (`cargo test
+/// --offline` on the pre-fix `MAX_JSON_DEPTH = 500`), `Context::open`
+/// itself already failed with `state_corrupt` -- this test would not even
+/// reach the `list_secrets`/`all_commits` assertions.
+#[test]
+fn python_written_state_dir_with_deeply_nested_secret_public_field_opens_in_rust() {
+    let tmp = TempDir::new().expect("tempdir");
+    let state_dir = tmp.path().join("state");
+
+    let script = format!(
+        r#"
+import secrets
+from zeropw.context import Config, Context
+from zeropw.team import commit as C
+from zeropw.team import envelope
+from zeropw.team import fold as F
+from zeropw.team.identity import DeviceKey
+
+GEN0 = "0" * 16
+
+def nested_public(depth):
+    obj = {{}}
+    for _ in range(depth):
+        obj = {{"a": obj}}
+    return obj
+
+ctx = Context.initialize({state_dir}, {admin:?}, {recovery:?}, Config())
+ctx.projects.create("demo")
+owner = DeviceKey.create(ctx.state, ctx.kms)
+env_id = C.new_env_id(owner.fingerprint)
+dek = bytes(range(32))
+wraps = {{owner.fingerprint: envelope.wrap_dek(dek, env_id, GEN0, owner.record)}}
+op_init = {{"op": "env.init", "owner_device": owner.record.to_dict(), "owner_name": "alice",
+           "generation_id": GEN0, "wraps": wraps}}
+c1 = C.sign_commit(owner, env_id, 1, "1000-0000", {{}}, [op_init])
+
+public = nested_public({depth})
+version_id = secrets.token_hex(8)
+ct = envelope.encrypt_secret(dek, env_id, "gh-token", version_id, b"secretvalue012345")
+op2 = {{"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+       "generation_id": GEN0, "version_id": version_id, "ciphertext": ct, "public": public}}
+C.validate_op(op2)  # the finding: no depth check at all on `public`
+c2 = C.sign_commit(owner, env_id, 2, "2000-0000", {{}}, [op2])
+
+store = C.CommitStore(ctx.state, env_id)
+store.append(c1)
+store.append(c2)
+
+result = F.fold(env_id, store.all_commits())
+assert result.skipped == [], result.skipped
+F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit, device=owner)
+
+import os
+print(env_id)
+print(os.path.getsize({state_dir} + "/vault/secrets.json"))
+"#,
+        state_dir = py_path_literal(&state_dir),
+        admin = ADMIN,
+        recovery = RECOVERY,
+        depth = 600,
+    );
+    let out = run_python(&script);
+    let mut lines = out.lines();
+    let env_id = lines.next().expect("python printed env_id").to_string();
+    let secrets_json_size: u64 = lines
+        .next()
+        .expect("python printed vault/secrets.json size")
+        .parse()
+        .expect("size is a number");
+    assert!(
+        secrets_json_size > 500_000,
+        "sanity check: the deeply-nested public field should make vault/secrets.json large, got {secrets_json_size} bytes"
+    );
+
+    // No Rust code wrote any of this -- open it exactly the way a real node
+    // resuming from disk would.
+    let ctx = Context::open(&state_dir, Config::default(), clock::system())
+        .expect("a state directory python's own real API wrote must open in rust (PORTING.md #2)");
+
+    let secrets = ctx
+        .vault
+        .list_secrets(None, None)
+        .expect("list_secrets must succeed against the python-written vault document");
+    let gh_token = secrets
+        .iter()
+        .find(|s| s.id == "gh-token")
+        .expect("the deeply-nested secret must be visible");
+    assert_eq!(
+        gh_token.versions.len(),
+        1,
+        "the one deeply-nested-public version must be derived locally, not silently dropped"
+    );
+
+    let store = C::CommitStore::new(ctx.state, env_id);
+    let commits = store
+        .all_commits()
+        .expect("all_commits must see the peer's deep commit, not fall behind");
+    assert_eq!(
+        commits.len(),
+        2,
+        "both commits (env.init, secret.put_version with the deep public field) must be visible"
+    );
+}

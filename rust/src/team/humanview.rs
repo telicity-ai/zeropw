@@ -177,13 +177,30 @@ pub fn strip_document(doc: &Value) -> Value {
 
 /// `str(int|float)` for a parsed JSON number -- Python's `str()`/`repr()`
 /// agree for both. Classified the same way `pyjson`/`kms.rs` already do:
-/// a `.`/`e`/`E` in the raw literal means `float` syntax.
+/// a `.`/`e`/`E` in the raw literal means `float` syntax (via
+/// [`pyjson::is_float_literal`], the canonical text-based test -- PORTING.md
+/// §3b; `Number::is_f64()` would be *false* for a literal that overflows to
+/// a non-finite `f64`, wrongly routing it through the integer branch below).
+///
+/// Finding X-9: this used to get the value itself via `raw.parse::<f64>()`,
+/// the one call site in this crate that re-parsed the literal text instead
+/// of going through `Number::as_f64()` (every other float-display call site
+/// -- `audit.rs`, `pystr.rs`, `vault.rs` -- already does). Rust's `f64`
+/// parser *saturates* on an overflowing literal (`"1e400".parse::<f64>()`
+/// is `Ok(f64::INFINITY)`, not an error), so the old `.map(python_float_repr)`
+/// could feed a non-finite value straight into `python_float_repr` -- which
+/// panicked on one (see that function's doc comment). `Number::as_f64()`
+/// already filters a non-finite result to `None` (`.filter(f64::is_finite)`
+/// under `arbitrary_precision`), so routing through it instead both fixes
+/// this call site and matches the crate's own established pattern; the
+/// `None` case falls back to the raw literal text, same as the old
+/// parse-error fallback did.
 fn number_display(n: &serde_json::Number) -> String {
     let raw = n.as_str();
-    if raw.contains(['.', 'e', 'E']) {
-        raw.parse::<f64>()
+    if pyjson::is_float_literal(raw) {
+        n.as_f64()
             .map(pyjson::python_float_repr)
-            .unwrap_or_else(|_| raw.to_string())
+            .unwrap_or_else(|| raw.to_string())
     } else {
         raw.to_string()
     }
@@ -705,6 +722,44 @@ mod tests {
         assert!(
             out.contains("- GET"),
             "the nested public.connections.gh.http_scope.methods must render as an ordinary YAML list:\n{out}"
+        );
+    }
+
+    /// Finding X-9 (regression fix): `number_display` used to get a
+    /// float's value via `raw.parse::<f64>()`, which *saturates* on an
+    /// overflowing literal (`"1e400".parse::<f64>()` is
+    /// `Ok(f64::INFINITY)`, not an error) instead of failing -- so a
+    /// `Number` built from such a literal (never reachable through
+    /// `pyjson::loads`, which rejects it before a `team` document is ever
+    /// read back, but reachable here directly, and by any future caller
+    /// that hand-builds a `Value` the way this crate's own audit/handle
+    /// code does elsewhere) fed a non-finite `f64` straight into
+    /// `pyjson::python_float_repr`, which used to panic on one -- aborting
+    /// the whole process. Confirm the fixed path -- `Number::as_f64()`,
+    /// which already filters a non-finite result to `None` -- instead falls
+    /// back to the raw literal text, with no panic, matching the same
+    /// fallback `number_display` already used for a genuinely unparseable
+    /// literal.
+    #[test]
+    fn number_display_does_not_panic_on_an_overflowing_float_literal() {
+        let overflowing: Value = serde_json::from_str("1e400")
+            .expect("arbitrary_precision parses this as a raw literal");
+        // `serde_json`'s `arbitrary_precision` number deserializer keeps the
+        // literal's digits and exponent but normalizes the exponent sign
+        // (`1e400` -> `1e+400`); either way it stays an unparseable-as-a-
+        // finite-`f64` literal, which is the property under test -- the
+        // exact fallback spelling is incidental, not the point.
+        let raw = overflowing.as_number().unwrap().as_str().to_string();
+        assert_eq!(number_display(overflowing.as_number().unwrap()), raw);
+
+        // The same, reached the way a real document would carry it: nested
+        // inside a container and rendered through `to_yaml`.
+        let fresh = no_fresh_connections();
+        let doc = json!({"secrets": {"s1": {"versions": {"v1": {"public": {"expires_at": overflowing}}}}}});
+        let out = to_yaml(&doc, &fresh);
+        assert!(
+            out.contains(&format!("expires_at: {raw}")),
+            "must fall back to the raw literal text, not panic:\n{out}"
         );
     }
 }

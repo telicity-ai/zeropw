@@ -74,16 +74,34 @@
 //! `:1164`) *do* persist a raw `time.time()`-derived float (`now +
 //! ttl_seconds` / `now + APPROVAL_TTL_SECONDS`) -- always finite and
 //! comfortably in `f64` range, since `self.clock()` never returns a
-//! non-finite value. So a non-finite float stays unreachable, but this
-//! makes [`python_float_repr`]'s CPython byte-identity a **state-file
-//! compatibility requirement**, not merely a cosmetic one -- exactly the
-//! property round 4's H-R4-2 broke, for these same two documents. This port
-//! does not special-case non-finite floats: [`dumps`] returns an error for
-//! one (defensive, should be unreachable), and [`loads`] rejects the bare
+//! non-finite value. So a non-finite float stays unreachable *through this
+//! module's own JSON path*, but this makes [`python_float_repr`]'s CPython
+//! byte-identity a **state-file compatibility requirement**, not merely a
+//! cosmetic one -- exactly the property round 4's H-R4-2 broke, for these
+//! same two documents. On the JSON path itself this port does not
+//! special-case non-finite floats: [`dumps`] returns an error for one
+//! (defensive, should be unreachable), and [`loads`] rejects the bare
 //! tokens *and* any literal that would overflow to a non-finite `f64` as a
 //! parse error, like any other malformed JSON. A state file that somehow
 //! contained one would be `state_corrupt` in Rust but would silently parse
 //! in Python -- recorded in `DEVIATIONS.md`.
+//!
+//! **Finding X-9 (fixed):** [`python_float_repr`] itself, however, is a
+//! `pub fn` with callers outside this module's own JSON path -- and
+//! "unreachable through `loads`/`dumps`" is not the same claim as
+//! "unreachable, full stop". `team/humanview.rs`'s `number_display` reached
+//! it with a non-finite `f64` by re-parsing a `Number`'s raw literal text
+//! directly (`"1e400".parse::<f64>()` is `Ok(f64::INFINITY)` -- Rust's
+//! parser saturates rather than erroring), bypassing the
+//! `Number::as_f64()`-based finiteness filter every *other* float-display
+//! call site in this crate already goes through. [`python_float_repr`]
+//! used to assume its input was always finite and panicked on one (measured
+//! at this function's old first line for `inf`, `-inf` and `NaN` alike);
+//! fixed two ways, independently of each other, on the belt-and-suspenders
+//! principle a `pub fn` with unenforceable preconditions deserves:
+//! [`python_float_repr`] now handles a non-finite input directly (CPython's
+//! `repr`/`str`, not `json`'s separate token spelling -- see its own doc
+//! comment), and `number_display` no longer re-parses the literal.
 //!
 //! ## Recursion / nesting depth
 //!
@@ -164,31 +182,42 @@
 //! at ~1,800 -- ever becomes a risk, without needing a dedicated stack for
 //! them at all.
 //!
-//! [`MAX_JSON_DEPTH`] is **500** (lowered from 1,000 by finding A-R5-1;
-//! also closes finding A-R5-2, see below): comfortably above the 128-500
-//! range this port's own tests require (see above) and, combined with
-//! [`dumps`]'s dedicated-stack tier below, gives real headroom on a 2 MiB
-//! stack that already has several hundred KiB spent before ever calling
-//! into this module -- not just on one that starts empty. It is also
-//! strictly below CPython's own tightest real ceiling for the exact write
-//! path this product's persistence relies on: probing `python3.12` directly
-//! (via the real `StateDir.write_json` API, not just `json.dump` in
-//! isolation, since the ceiling is caller-frame-dependent), `json.loads`/
-//! compact `json.dumps` both raise `RecursionError` at depth 9,998 (last
-//! accepted: 9,997), while `StateDir.write_json` -- exactly
+//! [`MAX_JSON_DEPTH`] is **990** (raised from 500 by finding X-3, a HIGH
+//! whole-scope cross-unit review finding -- see below for why 500 was
+//! wrong; lowered from 1,000 to 500 in the first place by finding A-R5-1,
+//! which also closed finding A-R5-2). Comfortably above the 128-500 range
+//! this port's own tests require (see above), and strictly below CPython's
+//! own tightest real ceiling for the exact write path this product's
+//! persistence relies on: probing `python3.12` directly (via the real
+//! `StateDir.write_json` API, not just `json.dump` in isolation, since the
+//! ceiling is caller-frame-dependent -- confirmed by measuring it two ways)
+//! for finding X-3, `json.loads`/compact `json.dumps` both raise
+//! `RecursionError` around depth 9,997-9,998 (last accepted 9,996-9,997),
+//! while `StateDir.write_json` -- exactly
 //! `json.dump(doc, stream, sort_keys=True, indent=2)`, the call this port's
-//! own `StateDir::write_json` mirrors -- raises it already at depth 996
-//! (last accepted: 995), leaving a stale tmp file and no target file behind
-//! (`store.py`'s own `except OSError` around the write/rename does not catch
-//! `RecursionError`, which is not an `OSError` subclass). A document this
-//! deep is not something any writer in this crate, or the matching Python
-//! prototype, ever produces (state/audit/policy/handle documents are a
-//! handful of levels deep at most); rejecting it past 500 -- comfortably
-//! below even CPython's own tightest real ceiling of 995 for the pretty-printed
-//! form this port's state files actually use, so every document this port
-//! ever persists is also one Python's own `StateDir.write_json` could have
-//! written -- is an intentional, narrower divergence from CPython's own
-//! (considerably higher for `loads`/compact `dumps`) practical ceiling,
+//! own `StateDir::write_json` mirrors -- has a much lower ceiling that
+//! genuinely moves with the caller's own stack depth: a bare, minimal-frame
+//! call accepts up to depth 996 (raises at 997), while the real production
+//! call chain a peer-supplied commit actually drives (`validate_op` ->
+//! `sign_commit` -> `CommitStore.append` -> `fold` -> `derive_local` ->
+//! `StateDir.write_json`, measured end-to-end against a real `Context`)
+//! accepts only up to depth 987 before `derive_local` itself hits
+//! `RecursionError` first (`store.py`'s own `except OSError` around the
+//! write/rename does not catch `RecursionError`, which is not an `OSError`
+//! subclass, so a failure here leaves a stale tmp file and no target file
+//! behind). **This is, contrary to what this module's doc used to claim, a
+//! document a writer in the matching Python prototype genuinely produces**:
+//! `_validate_secret_put_version` places no depth limit at all on
+//! `secret.put_version`'s `public` field (only `isinstance(public, dict)`),
+//! so an ordinary signed peer commit can carry `public` nested arbitrarily
+//! deep and `derive_local` will persist it into `vault/secrets.json`
+//! verbatim -- measured end-to-end at depth 600 (comfortably under both
+//! ceilings above). 990 sits below BOTH measured `write_json` ceilings
+//! (996 bare, 987 via the real attack path), so every document Python's own
+//! real call chain can persist is one this port can also read, with
+//! deliberate headroom left below `write_json`'s own ceiling rather than
+//! flush against it -- an intentional, narrower divergence from CPython's
+//! own (considerably higher for `loads`/compact `dumps`) practical ceiling,
 //! recorded in `rust/DEVIATIONS.md`.
 //!
 //! Given that bound, [`loads`] uses a two-tier strategy for *parsing* (so a
@@ -256,18 +285,34 @@
 //! KiB *already spent* before the deep-document operations run -- mirroring
 //! the reviewer's exact measurement method) and
 //! `tests::dumps_rejects_one_level_past_max_json_depth_without_aborting`
-//! pin the writer/clone/compare/drop side; `oracle_tests::loads_matches_python_for_probed_nesting_depths`
-//! pins the required probe depths against real `python3.12`,
+//! pin the writer/clone/compare/drop side -- all three re-run automatically
+//! at [`MAX_JSON_DEPTH`]'s new, higher value and still pass, which is the
+//! actual proof finding X-3's raised bound does not reopen the A-R5-1/
+//! A-R7-4 stack-overflow hazard, not just an arithmetic margin claim.
+//! `oracle_tests::loads_matches_python_for_probed_nesting_depths` pins the
+//! required probe depths against real `python3.12`,
 //! `oracle_tests::python_accepts_depths_past_max_json_depth_that_rust_now_rejects`
 //! pins the intentional, narrower-than-CPython divergence past
-//! [`MAX_JSON_DEPTH`]; and
+//! [`MAX_JSON_DEPTH`] (depth 1,000 since finding X-3, with a genuine
+//! `json.loads` call on the Python side); and
 //! `crate::store::tests::write_json_then_read_json_round_trips_at_max_json_depth`
 //! (`rust/src/store.rs`) pins the real `StateDir::read_json`/`write_json`
 //! round trip this finding's real-world repro used, and
 //! `rust/tests/state_dir_cross_language.rs`'s
 //! `write_json_boundary_matches_python_state_dir_write_json_at_the_depth_cap`
 //! pins finding A-R5-2's write-direction boundary against real
-//! `StateDir.write_json`.
+//! `StateDir.write_json` -- with finding X-3's own
+//! `write_json_past_pythons_own_ceiling_is_refused_by_both_languages`
+//! (same file) pinning the required *other* direction, that the raised
+//! bound still refuses a depth Python's own `write_json` cannot persist
+//! either. `rust/tests/team_fold.rs`'s
+//! `python_written_state_dir_with_deeply_nested_secret_public_field_opens_in_rust`
+//! is finding X-3's own end-to-end repro: a state directory built entirely
+//! by real `python3.12` through the actual attack path (`validate_op` ->
+//! `sign_commit` -> `CommitStore.append` -> `fold` -> `derive_local`, no
+//! Rust code writing anything), with `public` nested 600 deep, then opened
+//! by this port's own `Context::open` + `Vault::list_secrets` +
+//! `CommitStore::all_commits`.
 //!
 //! ## Lone surrogates
 //!
@@ -288,18 +333,32 @@ use crate::errors::{Error, Result};
 
 /// Maximum array/object nesting depth [`loads`] accepts, and [`dumps`]
 /// will render, at all. See the module doc's "Recursion / nesting depth"
-/// section for the full reasoning (findings A-R4-1, A-R5-1, A-R5-2): this
-/// bound is shared by both directions specifically so that every `Value`
-/// this crate ever builds or accepts stays low enough that cloning/
-/// comparing/dropping it (the three operations no dedicated-stack thread
-/// can help with, see below) stay safe with a wide margin on an ordinary,
-/// partly-used small-stack thread — not just `serde_json`'s own built-in
-/// 128-level default, which this value also replaces. Lowered from 1,000 to
-/// 500 by finding A-R5-1 (500 still comfortably covers every depth this
-/// port's own tests exercise), which also closes finding A-R5-2 (every
-/// document this port persists is now well within what CPython's own
-/// `StateDir.write_json` can also write, not just close to its ceiling).
-pub const MAX_JSON_DEPTH: usize = 500;
+/// section for the full reasoning (findings A-R4-1, A-R5-1, A-R5-2, X-3):
+/// this bound is shared by both directions specifically so that every
+/// `Value` this crate ever builds or accepts stays low enough that
+/// cloning/comparing/dropping it (the three operations no dedicated-stack
+/// thread can help with, see below) stay safe with a wide margin on an
+/// ordinary, partly-used small-stack thread — not just `serde_json`'s own
+/// built-in 128-level default, which this value also replaces.
+///
+/// Lowered from 1,000 to 500 by finding A-R5-1 (closing finding A-R5-2);
+/// **raised from 500 to 990 by finding X-3** (HIGH): 500 was chosen purely
+/// for `dumps`'s own inline-render stack safety, a concern the dedicated
+/// 64 MiB-stack tier below already fully covers past [`SAFE_INLINE_DEPTH`]
+/// — but this same constant is also [`loads`]'s acceptance bound, and 500
+/// silently rejected a real, unauthenticated-peer-reachable state directory
+/// Python's own `derive_local` writes (`secret.put_version`'s `public`
+/// field has no depth check in Python at all), taking down `Context::open`
+/// for the WHOLE node. 990 is chosen from Python's own measured
+/// `StateDir.write_json` ceiling (996 for a bare call, 987 through the real
+/// attack's own call chain — both measured for this fix, see the module
+/// doc) with deliberate headroom below it, so every document Python's real
+/// code can persist is one this port can read back, without accepting
+/// anything Python itself cannot write. `clone`/`==`/drop safety at 990
+/// (the one genuinely bound-sensitive concern left, since those three can't
+/// be routed to a dedicated stack) is re-confirmed, not assumed, by the
+/// existing held-caller-stack tests re-run at the new value.
+pub const MAX_JSON_DEPTH: usize = 990;
 
 /// Maximum nesting depth [`loads`] parses, and [`dumps`] renders, directly
 /// on the calling thread; anything deeper (up to [`MAX_JSON_DEPTH`]) is
@@ -968,6 +1027,44 @@ fn write_number(n: &Number, out: &mut String) -> Result<()> {
 /// its immediate neighbours, >200,000 random bit patterns, subnormals) and
 /// `tests::float_repr_known_values` (the finding's own reported values).
 pub fn python_float_repr(f: f64) -> String {
+    // Finding X-9: this function used to assume its input was always
+    // finite -- true for every call reachable *through* this crate's own
+    // JSON writer (`write_number` above filters non-finite before ever
+    // calling here, returning `pyjson_non_finite_float` instead) but not
+    // for a caller elsewhere in the crate that reaches a `Number` some
+    // other way. `team/humanview.rs`'s `number_display` was exactly that
+    // caller (fixed alongside this, see its doc comment): Rust's `f64`
+    // parser *saturates* on an overflowing literal like `"1e400"`
+    // (`Ok(f64::INFINITY)`, not an error), so a value built by re-parsing
+    // raw literal text -- rather than going through `Number::as_f64()`,
+    // which already filters non-finite to `None` -- could carry a
+    // non-finite `f64` into this function. `format!("{af:e}", ...)` for an
+    // infinite or NaN `af` produces the literal text `"inf"`/`"NaN"`, which
+    // contains no `'e'`, so the `split_once('e').expect(...)` a few lines
+    // below panicked (measured: `python_float_repr(f64::INFINITY)`,
+    // `(f64::NEG_INFINITY)` and `(f64::NAN)` all panicked at this
+    // function's old first line, before this guard existed) -- aborting the
+    // whole process for any input, trusted or not, that reached it. Rather
+    // than rely on every current and future caller upholding "never pass a
+    // non-finite value" as an unstated precondition, handle it here
+    // directly: CPython's `repr(float)`/`str(float)` (this function's own
+    // documented contract -- *not* `json.dumps`'s separate `Infinity`/
+    // `-Infinity`/`NaN` token spelling, which is a `json.encoder`-only
+    // special case this function was never responsible for) print `"inf"`,
+    // `"-inf"` and `"nan"` for these three values -- measured directly
+    // against `python3.12`: `repr(float("inf"))` == `str(float("inf"))` ==
+    // `"inf"`, `repr(float("-inf"))` == `"-inf"`, `repr(float("nan"))` ==
+    // `"nan"`. Pinned by `tests::float_repr_non_finite_does_not_panic`.
+    if f.is_nan() {
+        return "nan".to_string();
+    }
+    if f.is_infinite() {
+        return if f.is_sign_negative() {
+            "-inf".to_string()
+        } else {
+            "inf".to_string()
+        };
+    }
     if f == 0.0 {
         return if f.is_sign_negative() {
             "-0.0".to_string()
@@ -1676,6 +1773,31 @@ mod tests {
         }
     }
 
+    // Finding X-9 (regression fix): `python_float_repr` used to assume its
+    // input was always finite and panicked on `inf`/`-inf`/`NaN` (measured,
+    // pre-fix: all three panicked at the `split_once('e')` line, because
+    // `format!("{:e}", f64::INFINITY)` is the literal text `"inf"`, which
+    // contains no `'e'`). Values match CPython's `repr(float)`/`str(float)`
+    // (measured directly against `python3.12`: `repr(float("inf"))` ==
+    // `"inf"`, `repr(float("-inf"))` == `"-inf"`, `repr(float("nan"))` ==
+    // `"nan"`) -- not `json.dumps`'s separate `Infinity`/`-Infinity`/`NaN`
+    // token spelling, which is a `json.encoder`-only special case this
+    // function was never responsible for and which `write_number` (this
+    // module's own JSON writer) never reaches it for in the first place
+    // (non-finite is filtered and turned into an error before the call).
+    #[test]
+    fn float_repr_non_finite_does_not_panic() {
+        assert_eq!(python_float_repr(f64::INFINITY), "inf");
+        assert_eq!(python_float_repr(f64::NEG_INFINITY), "-inf");
+        assert_eq!(python_float_repr(f64::NAN), "nan");
+        // NaN has no canonical sign in IEEE 754 comparison terms, but
+        // CPython's `repr` never prints `-nan` for the *negative* NaN bit
+        // pattern either (`math.copysign(float("nan"), -1)` still `repr`s
+        // as `"nan"`) -- confirm this holds for the bit pattern Rust's own
+        // `-f64::NAN` produces too, not just the default NaN.
+        assert_eq!(python_float_repr(-f64::NAN), "nan");
+    }
+
     #[test]
     fn big_int_round_trips() {
         let text = "12345678901234567890123456789012345678901234567890";
@@ -1804,27 +1926,43 @@ mod oracle_tests {
         }
     }
 
-    // A-R5-1: finding A-R5-1 lowered `MAX_JSON_DEPTH` from 1,000 to 500 (round
-    // 3's own probed depths above, 128-500, are still all comfortably
-    // accepted). Depth 900 -- previously required to be *accepted* by round
-    // 3's version of this same test, since real `python3.12` parses it fine
-    // with no complaint at all -- is now intentionally rejected by Rust: a
-    // real, narrower-than-CPython divergence (like the lone-surrogate and
-    // overflowing-float-literal ones below), recorded in `rust/DEVIATIONS.md`,
-    // not a bug. Confirm both halves directly: Python still accepts it, and
-    // Rust's rejection is a clean error, never a silent truncation or abort.
+    // A-R5-1 lowered `MAX_JSON_DEPTH` from 1,000 to 500; finding X-3 (round
+    // 7 whole-scope cross-unit review) then raised it back up to 990 --
+    // `loads`/`dumps`'s shared acceptance bound was never supposed to be set
+    // by `dumps`'s own narrow render-safety margin alone (that concern is
+    // `SAFE_INLINE_DEPTH` plus the dedicated-stack tier's job, see the
+    // module doc), and 500 silently rejected real state directories Python
+    // itself both writes and reads (`rust/DEVIATIONS.md`'s pyjson row 14).
+    // Depth 1,000 -- 10 past the new cap, and comfortably inside real
+    // `python3.12`'s own `json.loads` ceiling (measured directly against
+    // `python3.12` for this fix: `json.loads` accepts up to 9,997) -- is
+    // still intentionally rejected by Rust: a real, narrower-than-CPython
+    // divergence (like the lone-surrogate and overflowing-float-literal ones
+    // below), recorded in `rust/DEVIATIONS.md`, not a bug. Confirm both
+    // halves directly, with a genuine `json.loads` call on the Python side
+    // (not just string construction -- a prior version of this test only
+    // built the bracket text and asserted `n > MAX_JSON_DEPTH` by
+    // inspection, never actually exercising Python's parser at all): Python
+    // still accepts it, and Rust's rejection is a clean error, never a
+    // silent truncation or abort.
     #[test]
     fn python_accepts_depths_past_max_json_depth_that_rust_now_rejects() {
-        let n = 900;
-        let script = format!("print('[' * {n} + '1' + ']' * {n})");
+        let n = 1000;
+        assert!(
+            n > MAX_JSON_DEPTH,
+            "this test's whole point is n > MAX_JSON_DEPTH"
+        );
+        let script =
+            format!("import json\ndoc = '[' * {n} + '1' + ']' * {n}\njson.loads(doc)\nprint(doc)");
         let py_doc = oracle::python(&script);
         let py_doc = py_doc.trim_end_matches('\n');
         let rust_doc = super::tests::nested_array(n);
         assert_eq!(rust_doc, py_doc, "depth {n} document text mismatch");
 
-        // Python parsed it without raising (`oracle::python` would have
-        // panicked on a non-zero exit otherwise).
-        assert!(n > MAX_JSON_DEPTH);
+        // `json.loads(doc)` above already ran, on the Python side, without
+        // raising (`oracle::python` would have panicked on `RecursionError`'s
+        // non-zero exit otherwise) -- this is a real measurement, not an
+        // assumption carried over from the module doc's own probing.
         let err = loads(py_doc).expect_err(
             "depth past MAX_JSON_DEPTH must be a clean rejection, even though python3.12 accepts it",
         );
