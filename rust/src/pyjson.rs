@@ -68,14 +68,22 @@
 //! Separately, CPython's `float()` silently *overflows* rather than erroring
 //! -- a numeric literal like `1e400` parses to `inf` with no exception. No
 //! writer in `zeropw/` ever produces a non-finite float or an overflowing
-//! literal (audit fields are `round(time.time(), 3)`-derived; vault/policy
-//! documents hold no floats at all), so this port does not special-case
-//! them: [`dumps`] returns an error for a non-finite float (defensive,
-//! should be unreachable), and [`loads`] rejects the bare tokens *and* any
-//! literal that would overflow to a non-finite `f64` as a parse error, like
-//! any other malformed JSON. A state file that somehow contained one would
-//! be `state_corrupt` in Rust but would silently parse in Python -- recorded
-//! in `DEVIATIONS.md`.
+//! literal: audit fields are `round(time.time(), 3)`-derived, and
+//! `policy/grants.json` (`Grant.expires_at`, `policy.py:920`) and
+//! `policy/control.json` (`approvals[*].expires_at`, `policy.py:1142`/
+//! `:1164`) *do* persist a raw `time.time()`-derived float (`now +
+//! ttl_seconds` / `now + APPROVAL_TTL_SECONDS`) -- always finite and
+//! comfortably in `f64` range, since `self.clock()` never returns a
+//! non-finite value. So a non-finite float stays unreachable, but this
+//! makes [`python_float_repr`]'s CPython byte-identity a **state-file
+//! compatibility requirement**, not merely a cosmetic one -- exactly the
+//! property round 4's H-R4-2 broke, for these same two documents. This port
+//! does not special-case non-finite floats: [`dumps`] returns an error for
+//! one (defensive, should be unreachable), and [`loads`] rejects the bare
+//! tokens *and* any literal that would overflow to a non-finite `f64` as a
+//! parse error, like any other malformed JSON. A state file that somehow
+//! contained one would be `state_corrupt` in Rust but would silently parse
+//! in Python -- recorded in `DEVIATIONS.md`.
 //!
 //! ## Recursion / nesting depth
 //!
@@ -209,17 +217,34 @@
 //!    never at the mercy of how much of the *caller's* stack is already
 //!    spent -- closing finding A-R5-1's actual hazard directly, rather than
 //!    only relying on a lower [`MAX_JSON_DEPTH`] to leave margin on the
-//!    caller's own stack. [`dumps`] clones the input `Value` first (cheap
-//!    and safe at this depth -- ~1,800 levels of headroom below the clone
-//!    hazard above -- and needed so the render can run as an owned,
-//!    `'static` closure on the new thread) and moves the clone across;
-//!    dropping that clone also happens on the dedicated thread.
+//!    caller's own stack. **A-R7-4 correction:** an earlier version of
+//!    [`dumps`] cloned the input `Value` first and moved the owned clone
+//!    into a plain `thread::spawn` closure -- but building that clone is
+//!    itself a recursive `Value::clone()` that ran on the *calling* thread,
+//!    before the spawned thread even started, quietly reintroducing the
+//!    exact caller-stack dependency this dedicated-stack tier exists to
+//!    remove (the doc comment here called the clone "cheap and safe at this
+//!    depth -- ~1,800 levels of headroom", a figure derived from an *idle*
+//!    2 MiB stack -- the same reasoning error finding A-R5-1 itself was
+//!    raised about, just with a larger margin). Measured with a harness
+//!    that genuinely *holds* the caller's stack (recurses, does the work at
+//!    the bottom, unwinds after -- not one that burns stack and returns
+//!    before calling in): the clone-based `dumps` of a depth-500 document
+//!    **aborted the process** with `fatal runtime error: stack overflow` on
+//!    a 2 MiB caller stack once ≥1.5 MiB of it was already held, because
+//!    `clone` alone needs >512 KiB at that depth (`loads` and `drop` only
+//!    need 256 KiB at the same depth). [`render_on_dedicated_stack`] now
+//!    uses `std::thread::scope` so the spawned closure can borrow
+//!    `value: &Value` directly -- no clone, no caller-stack recursion of
+//!    any kind, regardless of how much of the caller's stack is already
+//!    spent.
 //!
 //! A document at or below [`MAX_JSON_DEPTH`] is therefore never rendered by
 //! [`dumps`] in a way that depends on how much of the calling thread's own
 //! stack is already spent: at or below [`SAFE_INLINE_DEPTH`] the inline
 //! render's own footprint is small enough to tolerate realistic prior use,
-//! and above it the render happens on a fresh 64 MiB stack instead.
+//! and above it the render happens on a fresh 64 MiB stack instead, reached
+//! by reference with no caller-side clone.
 //!
 //! Tests: `tests::inline_path_is_safe_on_a_small_stack_thread`,
 //! `tests::dedicated_stack_path_parses_up_to_max_json_depth`,
@@ -390,6 +415,20 @@ impl DumpOptions {
 /// depth cap chosen to leave margin on an otherwise-empty 2 MiB stack) was
 /// not enough on its own, since a real caller thread has already used part
 /// of its stack by the time it calls this.
+///
+/// A-R7-4: `render_on_dedicated_stack` takes `value` **by reference**, via
+/// `std::thread::scope`, not by owned clone. An earlier version passed
+/// `value.clone()` to a plain `thread::spawn` closure, which forced the
+/// recursive `Value::clone()` (needed to produce that owned copy) to run on
+/// the *calling* thread before the spawned thread ever started -- silently
+/// reintroducing the exact caller-stack dependency this whole
+/// dedicated-stack mechanism exists to remove. Measured with a harness that
+/// genuinely holds the caller's stack (not just burns and returns it): the
+/// clone-based version aborted a depth-500 `dumps` with `fatal runtime
+/// error: stack overflow` on a 2 MiB caller stack once ≥1.5 MiB of it was
+/// already held. `thread::scope`'s borrowed closure needs no clone at all,
+/// so the calling thread does only the fixed, shallow work of setting up
+/// the scope — see [`render_on_dedicated_stack`].
 pub fn dumps(value: &Value, opts: DumpOptions) -> Result<String> {
     let depth = value_depth_within(value, MAX_JSON_DEPTH)
         .ok_or_else(|| Error::invalid_input("pyjson_max_depth_exceeded").with_detail("dumps"))?;
@@ -398,7 +437,7 @@ pub fn dumps(value: &Value, opts: DumpOptions) -> Result<String> {
         write_value(value, &opts, 0, &mut out)?;
         Ok(out)
     } else {
-        render_on_dedicated_stack(value.clone(), opts)
+        render_on_dedicated_stack(value, &opts)
     }
 }
 
@@ -407,23 +446,29 @@ pub fn dumps(value: &Value, opts: DumpOptions) -> Result<String> {
 /// thread with an explicit [`LARGE_RENDER_STACK_BYTES`]-sized stack, so a
 /// deep-but-within-bound document is never rendered in a way that depends on
 /// how much of the *calling* thread's (possibly small, possibly
-/// already-partly-used) stack remains — finding A-R5-1. Mirrors
-/// [`parse_on_dedicated_stack`]'s shape; `value` is passed by owned clone
-/// (cheap and safe at this depth, see the module doc) rather than by
-/// reference, so the render — and the clone's own drop at the end of the
-/// spawned closure — both run entirely on the new thread's large stack.
-fn render_on_dedicated_stack(value: Value, opts: DumpOptions) -> Result<String> {
-    let handle = std::thread::Builder::new()
-        .stack_size(LARGE_RENDER_STACK_BYTES)
-        .spawn(move || -> Result<String> {
-            let mut out = String::new();
-            write_value(&value, &opts, 0, &mut out)?;
-            Ok(out)
-        })
-        .map_err(|_| Error::state("pyjson_render_thread_spawn_failed"))?;
-    handle
-        .join()
-        .unwrap_or_else(|_| Err(Error::state("pyjson_render_thread_panicked")))
+/// already-partly-used) stack remains — finding A-R5-1.
+///
+/// A-R7-4: uses `std::thread::scope` (not `thread::Builder::spawn`) so the
+/// spawned closure can borrow `value: &Value` directly instead of requiring
+/// an owned `Value` produced by a caller-stack-recursive `.clone()` first.
+/// `write_value`'s own recursion — the only stack-heavy work here — now runs
+/// exclusively on the new thread's large stack; the calling thread's
+/// contribution is the fixed, shallow cost of `thread::scope` itself,
+/// regardless of `value`'s depth.
+fn render_on_dedicated_stack(value: &Value, opts: &DumpOptions) -> Result<String> {
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(LARGE_RENDER_STACK_BYTES)
+            .spawn_scoped(scope, move || -> Result<String> {
+                let mut out = String::new();
+                write_value(value, opts, 0, &mut out)?;
+                Ok(out)
+            })
+            .map_err(|_| Error::state("pyjson_render_thread_spawn_failed"))?;
+        handle
+            .join()
+            .unwrap_or_else(|_| Err(Error::state("pyjson_render_thread_panicked")))
+    })
 }
 
 /// `json.dumps(text)` (or `ensure_ascii=False`): encode a single JSON string,
@@ -1494,6 +1539,41 @@ mod tests {
             .join()
             .unwrap()
             .expect("all ops should succeed at MAX_JSON_DEPTH with prior stack usage");
+    }
+
+    // A-R7-4 (regression fix): the equivalence reviewer's own repro for this
+    // finding -- a harness that genuinely *holds* the caller's stack around
+    // the call (recurse, do the work at the bottom, unwind after -- not
+    // burn-and-return) -- found that the *previous* `dumps`
+    // (`render_on_dedicated_stack(value.clone(), opts)`, a plain
+    // `thread::spawn` fed by a caller-side `Value::clone()`) aborted the
+    // process with `fatal runtime error: stack overflow` rendering a
+    // depth-500 document on a 2 MiB caller stack once >=1.5 MiB of it was
+    // already held (clone alone needs >512 KiB at that depth). This test
+    // holds well past that threshold -- 1,700,000 bytes of a 2 MiB stack --
+    // around a `dumps`-only call (no `loads`/clone/compare, isolating
+    // exactly the operation the finding was about) at `MAX_JSON_DEPTH`.
+    // `render_on_dedicated_stack` now borrows `value: &Value` across
+    // `std::thread::scope` instead of cloning it, so the calling thread's
+    // own stack use is fixed and shallow regardless of how much of it is
+    // already held -- this must no longer abort.
+    #[test]
+    fn dumps_at_max_json_depth_does_not_abort_with_1_7mib_of_caller_stack_already_held() {
+        let doc = nested_array(MAX_JSON_DEPTH);
+        let value = loads(&doc).expect("MAX_JSON_DEPTH should parse");
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || -> Result<()> {
+                with_burned_stack(1_700_000, || {
+                    let rendered = dumps(&value, DumpOptions::pretty_sorted())?;
+                    assert!(!rendered.is_empty());
+                    Ok(())
+                })
+            })
+            .unwrap();
+        handle.join().unwrap().expect(
+            "dumps at MAX_JSON_DEPTH must not abort with most of a 2 MiB caller stack already held",
+        );
     }
 
     // A-R4-1: `dumps` must reject a document one level past `MAX_JSON_DEPTH`

@@ -58,6 +58,15 @@ pub struct Projects<'a> {
     state: &'a StateDir,
 }
 
+/// Result of [`Projects::load_raw`]: either the parsed document map (a
+/// present JSON object, or the empty-document substitute for any falsy
+/// value), or a truthy non-object value preserved as-is so `create` can
+/// reproduce Python's `if name in doc` on it (finding A-R7-1).
+enum LoadedDoc {
+    Object(Map<String, Value>),
+    NonObject(Value),
+}
+
 impl<'a> Projects<'a> {
     pub fn new(state: &'a StateDir) -> Self {
         Projects { state }
@@ -66,28 +75,49 @@ impl<'a> Projects<'a> {
     /// `Projects._load`: `self.state.read_json(DOC, {}) or {}`. Python's `or`
     /// only substitutes `{}` for a *falsy* loaded value (`None`, `False`,
     /// `0`/`0.0`, `""`, `[]`, `{}`) -- a *truthy* non-dict value (`[1]`,
-    /// `"abc"`, `True`, a nonzero number) is returned as-is, and every
-    /// caller (`get`/`list`/`create`) then raises an uncaught
-    /// `AttributeError`/`TypeError` trying to use dict-only operations on it
-    /// (`.get`, `.items()`, `doc[name] = ...`), *before* `create` ever
-    /// reaches `write_json` -- so the file is left untouched.
+    /// `"abc"`, `True`, a nonzero number) is returned as-is.
     ///
-    /// A-R2-6(c): the previous port collapsed every non-object value (falsy
-    /// *and* truthy) into an empty map, which silently fabricated an empty
-    /// document for a truthy non-dict `projects.json` and let `create` then
-    /// overwrite that corrupt file with a single-entry document (fail-open).
-    /// PORTING.md §3.5 applies to the truthy case: `state_corrupt` is the
-    /// closest error every caller of `_load` already handles, and returning
-    /// it here (instead of a substitute `{}`) means `create` never reaches
-    /// `write_json`, matching Python's file-untouched behaviour.
+    /// `get`/`list` then always raise an uncaught `AttributeError` on a
+    /// truthy non-dict document -- `doc.get(name)` and `sorted(doc.items())`
+    /// have no equivalent on `str`/`list`/`bool`/`int` -- confirmed for
+    /// every truthy shape by `python_oracle_confirms_load_get_create_edge_cases`.
+    /// `state_corrupt` is the closest error either caller already handles
+    /// (PORTING.md §3.5), so `load` (used only by `get`/`list`) collapses
+    /// every truthy non-object into that error.
+    ///
+    /// **`create` is different (finding A-R7-1)**: its very next statement,
+    /// `if name in doc`, runs *before* any dict-only operation. `in` is a
+    /// **substring test** on a `str` document and a **membership test** on a
+    /// `list` document, and neither raises -- measured: `"abc"` +
+    /// `create("a")`, `"dev-prod-a"` + `create("prod")`, `["acme"]` +
+    /// `create("acme")`, `["a","b"]` + `create("a")` all return
+    /// `InvalidInput("project_exists")`, not a crash. Only when `name` is
+    /// *not* contained does Python's `create` then fall through to the
+    /// dict-only `doc[name] = ...` and raise an uncaught `TypeError`. `bool`/
+    /// `int` documents raise `TypeError` from `in` itself ("argument of type
+    /// 'bool'/'int' is not iterable"), unconditionally. `create` therefore
+    /// cannot reuse this `load` helper: see `load_raw`/`create`'s own
+    /// containment check below.
     fn load(&self) -> Result<Map<String, Value>, Error> {
+        match self.load_raw()? {
+            LoadedDoc::Object(map) => Ok(map),
+            LoadedDoc::NonObject(_) => Err(state_corrupt()),
+        }
+    }
+
+    /// Like [`Self::load`] but preserves a truthy non-object document
+    /// instead of collapsing it into `state_corrupt`, so `create` can
+    /// reproduce Python's `if name in doc` substring/membership test on it
+    /// (finding A-R7-1) before falling back to the same `state_corrupt` any
+    /// other caller would hit.
+    fn load_raw(&self) -> Result<LoadedDoc, Error> {
         let loaded = self.state.read_json(DOC, json!({}))?;
         if is_falsy(&loaded) {
-            return Ok(Map::new());
+            return Ok(LoadedDoc::Object(Map::new()));
         }
         match loaded {
-            Value::Object(map) => Ok(map),
-            _ => Err(state_corrupt()),
+            Value::Object(map) => Ok(LoadedDoc::Object(map)),
+            other => Ok(LoadedDoc::NonObject(other)),
         }
     }
 
@@ -103,7 +133,38 @@ impl<'a> Projects<'a> {
             return Err(Error::invalid_input("no_environments"));
         }
         let _lock = self.state.lock()?;
-        let mut doc = self.load()?;
+        let mut doc = match self.load_raw()? {
+            LoadedDoc::Object(map) => map,
+            // A-R7-1: `if name in doc` on a truthy non-dict document is a
+            // substring test (`str`) or membership test (`list`) in Python,
+            // and succeeds without raising -- `project_exists` fires before
+            // any dict-only operation is attempted. Only when `name` is
+            // *not* contained does Python fall through to `doc[name] = ...`
+            // and hit the uncaught `TypeError` (str/list don't support
+            // string-keyed assignment), which this port reports as the
+            // closest documented error (`state_corrupt`, PORTING.md §3.5).
+            LoadedDoc::NonObject(Value::String(s)) => {
+                if s.contains(name.as_str()) {
+                    return Err(Error::invalid_input("project_exists"));
+                }
+                return Err(state_corrupt());
+            }
+            LoadedDoc::NonObject(Value::Array(items)) => {
+                let contained = items.iter().any(|item| match item {
+                    Value::String(s) => *s == name,
+                    _ => false,
+                });
+                if contained {
+                    return Err(Error::invalid_input("project_exists"));
+                }
+                return Err(state_corrupt());
+            }
+            // `bool`/number documents: Python's `in` itself raises
+            // `TypeError` ("argument of type 'bool'/'int' is not
+            // iterable"), unconditionally -- no substring/membership test
+            // is even attempted.
+            LoadedDoc::NonObject(_) => return Err(state_corrupt()),
+        };
         if doc.contains_key(&name) {
             return Err(Error::invalid_input("project_exists"));
         }
@@ -344,10 +405,15 @@ mod tests {
 
     // A-R2-6(c): a truthy non-dict `projects.json` (a nonempty array, a
     // nonempty string, `true`, a nonzero number) must not be silently
-    // treated as an empty document -- `get`/`list`/`create` all report
-    // `state_corrupt`, and `create` must leave the file untouched (Python's
-    // own `create` crashes with an uncaught `TypeError` trying to assign
-    // into a non-dict `doc`, *before* ever calling `write_json`).
+    // treated as an empty document -- `get`/`list` always report
+    // `state_corrupt` (Python's uncaught `AttributeError`). For `create`,
+    // this specifically covers the *not-contained* case ("acme" is not a
+    // substring of "abc", not an element of `[1]`, and `in` itself raises
+    // for `true`/`7`), which still falls through to Python's uncaught
+    // `TypeError` on `doc[name] = ...` -- `state_corrupt` here too, and the
+    // file is left untouched. See `create_project_exists_on_truthy_non_dict_document_when_name_is_contained`
+    // (finding A-R7-1, below) for the *contained* case, which Python
+    // resolves as `InvalidInput("project_exists")` instead.
     #[test]
     fn truthy_non_dict_document_is_state_corrupt_and_create_does_not_overwrite() {
         let (_tmp, state) = new_state();
@@ -370,6 +436,68 @@ mod tests {
             let on_disk = state.read_json(DOC, json!(null)).unwrap();
             assert_eq!(on_disk, corrupt, "create must leave the file untouched");
         }
+    }
+
+    // A-R7-1: `create`'s `if name in doc` is a *substring* test on a `str`
+    // document and a *membership* test on a `list` document, both of which
+    // succeed (without raising) when `name` IS contained -- Python then
+    // raises the documented `InvalidInput("project_exists")`, never reaching
+    // the dict-only `TypeError` the previous port assumed unconditionally.
+    // Measured against real `python3.12`: `"abc"` + `create("a")`,
+    // `"dev-prod-a"` + `create("prod")`, `["acme"]` + `create("acme")`,
+    // `["a","b"]` + `create("a")` all return `InvalidInput("project_exists")`
+    // and leave the file untouched (the error fires before `write_json`).
+    #[test]
+    fn create_project_exists_on_truthy_non_dict_document_when_name_is_contained() {
+        let (_tmp, state) = new_state();
+        let projects = Projects::new(&state);
+        let cases: [(Value, &str); 5] = [
+            (json!("abc"), "a"),
+            (json!("dev-prod-a"), "prod"),
+            (json!("zzz"), "z"),
+            (json!(["acme"]), "acme"),
+            (json!(["a", "b"]), "a"),
+        ];
+        for (doc, name) in cases {
+            state.write_json(DOC, &doc).unwrap();
+
+            let err = projects.create(name, &["dev"]).unwrap_err();
+            assert!(
+                err.is(ErrorClass::InvalidInput),
+                "doc={doc:?} name={name:?}"
+            );
+            assert_eq!(err.reason, "project_exists", "doc={doc:?} name={name:?}");
+
+            let on_disk = state.read_json(DOC, json!(null)).unwrap();
+            assert_eq!(
+                on_disk, doc,
+                "create must leave the file untouched: doc={doc:?} name={name:?}"
+            );
+        }
+    }
+
+    // A-R7-1: a non-string array element never equals a string `name`
+    // (Python's `==` between `str` and another type is `False`, not an
+    // error), so it neither triggers `project_exists` nor blocks a *later*
+    // matching string element from being found.
+    #[test]
+    fn create_array_document_ignores_non_string_elements_for_containment() {
+        let (_tmp, state) = new_state();
+        let projects = Projects::new(&state);
+
+        // "5" (str) does not equal 5 (number) -> not contained -> falls
+        // through to the not-contained TypeError-equivalent, state_corrupt.
+        state.write_json(DOC, &json!(["a", 5])).unwrap();
+        let err = projects.create("5", &["dev"]).unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+
+        // "a" (str) does equal the string element "a", even with an
+        // unrelated non-string element also present.
+        state.write_json(DOC, &json!(["a", 5])).unwrap();
+        let err = projects.create("a", &["dev"]).unwrap_err();
+        assert!(err.is(ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "project_exists");
     }
 
     // A-R2-6(c): every *falsy* non-dict value (`null`/`0`/`0.0`/`""`/`[]`/
@@ -561,6 +689,27 @@ def probe_get(entry):
         p = projects.get("acme")
         print("env=" + repr(list(p.environments)) + " created_at=" + repr(p.created_at))
 
+def probe_named(doc, name):
+    """A-R7-1: like `probe`, but with `name` chosen so `if name in doc`
+    (the very first thing `create` does after acquiring the lock) succeeds
+    as a substring/membership test on a truthy non-dict document -- the
+    case the original `probe(doc)` (fixed at name="acme") never exercised
+    because "acme" was never contained in any of its truthy-non-dict
+    fixtures."""
+    with tempfile.TemporaryDirectory() as d:
+        state = StateDir(os.path.join(d, "state"))
+        state.create()
+        state.write_json("projects.json", doc)
+        projects = Projects(state)
+        try:
+            projects.create(name, ["dev"])
+            create_result = "OK"
+        except Exception as exc:
+            create_result = type(exc).__name__ + (":" + str(exc) if hasattr(exc, "detail") else "")
+        on_disk = state.read_json("projects.json", None)
+        unchanged = on_disk == doc
+        print(create_result, "|", "unchanged" if unchanged else "changed")
+
 # (a) null entry -> get() is NotFound, same as a missing key.
 probe({"acme": None})
 # (c) truthy non-dict documents -> get/list/create all raise, file untouched.
@@ -579,10 +728,17 @@ probe(False)
 probe_get({"environments": [1, 2], "created_at": "2024-01-01T00:00:00Z"})
 probe_get({"environments": "dev", "created_at": "2024-01-01T00:00:00Z"})
 probe_get({"environments": ["dev"], "created_at": None})
+# A-R7-1: name IS a substring (str doc) / IS an element (list doc) ->
+# create raises the *documented* InvalidInput("project_exists"), not a
+# builtin exception, and the file is left untouched either way.
+probe_named("abc", "a")
+probe_named("dev-prod-a", "prod")
+probe_named(["acme"], "acme")
+probe_named(["a", "b"], "a")
 "#;
         let out = oracle::python(script);
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 13, "expected exactly 13 probe cases");
+        assert_eq!(lines.len(), 17, "expected exactly 17 probe cases");
 
         // (a): null entry -> NotFound (not AttributeError/KeyError).
         assert!(
@@ -624,5 +780,19 @@ probe_get({"environments": ["dev"], "created_at": None})
             "string iterated into characters"
         );
         assert_eq!(lines[12], "env=['dev'] created_at=None", "None created_at");
+
+        // A-R7-1: a contained name resolves to the documented
+        // InvalidInput("project_exists"), file untouched -- not a builtin
+        // exception the way the not-contained cases above are.
+        for line in &lines[13..17] {
+            assert!(
+                line.starts_with("InvalidInput"),
+                "contained-name case: {line}"
+            );
+            assert!(
+                line.ends_with("unchanged"),
+                "create must not overwrite even on project_exists: {line}"
+            );
+        }
     }
 }

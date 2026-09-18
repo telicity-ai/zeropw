@@ -54,6 +54,32 @@ impl StateDir {
         }
     }
 
+    /// Joins a caller-supplied `name` onto `self.path` the way Python's
+    /// `self.path / name` (`pathlib.PurePath.__truediv__`) does, not the way
+    /// `std::path::Path::join` does on its own (finding A-R7-2).
+    ///
+    /// `pathlib` normalizes the *right-hand* operand while composing a path:
+    /// it drops any `.` component and any empty component produced by a
+    /// leading/trailing/doubled `/`, but it does **not** resolve `..`
+    /// components -- confirmed against real `python3.12`:
+    /// `Path("/tmp/state") / "sub/"`, `.../ "sub//"`, `.../ "./sub"` all give
+    /// `PosixPath("/tmp/state/sub")`, while `Path("/tmp/state") / ".."`
+    /// gives the *unresolved* `PosixPath("/tmp/state/..")`.
+    /// `Path::join`, by contrast, keeps a trailing/doubled `/` and any `.`
+    /// verbatim in the resulting `PathBuf` -- which the kernel then
+    /// interprets as "this must be a directory", diverging from every
+    /// `StateDir` operation on a `name` that happens to end in `/` (see
+    /// [`normalize_join_name`] for the measured fail-open consequence on
+    /// `read_json`).
+    ///
+    /// An absolute `name` (leading `/`) is passed straight through:
+    /// `Path::join` already reproduces pathlib's own "an absolute right-hand
+    /// operand replaces the base entirely" behaviour with no help needed
+    /// here, confirmed against both languages.
+    fn join(&self, name: &str) -> PathBuf {
+        self.path.join(normalize_join_name(name))
+    }
+
     // ------------------------------------------------------------------ setup
     /// `StateDir.create`: `self.path.mkdir(mode=DIR_MODE, parents=True)` then
     /// an unconditional `os.chmod(self.path, DIR_MODE)`. A-R2-7: Python only
@@ -107,7 +133,7 @@ impl StateDir {
     /// previous fail-*open* behaviour of silently creating the missing
     /// parent via `mkdir_p`.
     pub fn subdir(&self, name: &str) -> Result<PathBuf, Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         mkdir_leaf(&target)?;
         Ok(target)
     }
@@ -200,7 +226,7 @@ impl StateDir {
     // ------------------------------------------------------------------- json
     /// `StateDir.read_json`.
     pub fn read_json(&self, name: &str, default: Value) -> Result<Value, Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         if !target.exists() {
             return Ok(default);
         }
@@ -215,7 +241,7 @@ impl StateDir {
     /// behind, unlike [`StateDir::write_bytes`] (store.py:139-147, which
     /// has no such `except` clause and leaves the tmp file in place).
     pub fn write_json(&self, name: &str, value: &Value) -> Result<(), Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         if let Some(parent) = target.parent() {
             mkdir_p(parent)?;
         }
@@ -247,7 +273,7 @@ impl StateDir {
         if line.contains('\n') {
             return Err(Error::state("state_invalid_line").with_detail(name));
         }
-        let target = self.path.join(name);
+        let target = self.join(name);
         if let Some(parent) = target.parent() {
             mkdir_p(parent)?;
         }
@@ -268,7 +294,7 @@ impl StateDir {
 
     /// `StateDir.read_lines`.
     pub fn read_lines(&self, name: &str, limit: Option<usize>) -> Result<Vec<String>, Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         if !target.exists() {
             return Ok(Vec::new());
         }
@@ -292,7 +318,7 @@ impl StateDir {
     /// a failed write *or* a failed `os.replace` leaves the tmp file
     /// behind. Match that exactly (no cleanup on any failure path).
     pub fn write_bytes(&self, name: &str, data: &[u8]) -> Result<(), Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         if let Some(parent) = target.parent() {
             mkdir_p(parent)?;
         }
@@ -316,7 +342,7 @@ impl StateDir {
 
     /// `StateDir.read_bytes`.
     pub fn read_bytes(&self, name: &str) -> Result<Vec<u8>, Error> {
-        let target = self.path.join(name);
+        let target = self.join(name);
         let mut buf = Vec::new();
         File::open(&target)
             .and_then(|mut f| f.read_to_end(&mut buf))
@@ -326,7 +352,7 @@ impl StateDir {
 
     /// `StateDir.exists`.
     pub fn exists(&self, name: &str) -> bool {
-        self.path.join(name).exists()
+        self.join(name).exists()
     }
 }
 
@@ -354,6 +380,29 @@ impl Drop for StateLock<'_> {
             self.dir.lock_cond.notify_all();
         }
     }
+}
+
+/// Normalizes a `name` the way `pathlib` does before composing
+/// `Path(base) / name`: splits on `/`, drops every empty component (from a
+/// leading, trailing, or doubled `/`) and every `.` component, and rejoins
+/// with a single `/` between the survivors -- without resolving `..`
+/// components, exactly like pathlib. An absolute `name` (starts with `/`)
+/// is returned unchanged; [`StateDir::join`] relies on `Path::join`'s own
+/// existing "an absolute joined path replaces the base" behaviour for that
+/// case, which already matches pathlib's.
+///
+/// This crate is Unix-only (`std::os::unix::fs::*` is used throughout
+/// `store.rs`), so a plain byte-wise `/`-split is exact here -- no need for
+/// `Path::components()`, which (unlike pathlib) keeps a *leading* `.`
+/// component rather than dropping it.
+fn normalize_join_name(name: &str) -> String {
+    if name.starts_with('/') {
+        return name.to_string();
+    }
+    name.split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `open(target, "r", encoding="utf-8")` + `[line.rstrip("\n") for line in
@@ -1295,5 +1344,125 @@ print(oct(os.stat(sub).st_mode & 0o777))
         let err = state.write_json("too_deep.json", &doc).unwrap_err();
         assert!(err.is(ErrorClass::StateError));
         assert_eq!(err.reason, "state_write_failed");
+    }
+
+    // A-R7-2: `normalize_join_name` must drop a trailing `/`, a doubled
+    // `/`, and a `.` component exactly like `pathlib` does when composing
+    // `Path(base) / name`, while leaving `..` components unresolved (see
+    // the oracle test below for the real-`python3.12`-driven version of
+    // this same table).
+    #[test]
+    fn normalize_join_name_matches_pathlib_shape() {
+        let cases: &[(&str, &str)] = &[
+            ("sub", "sub"),
+            ("sub/", "sub"),
+            ("sub//", "sub"),
+            ("./sub", "sub"),
+            ("sub/./x", "sub/x"),
+            ("a//b", "a/b"),
+            ("a/b/", "a/b"),
+            ("a/./b/", "a/b"),
+            ("..", ".."),
+            ("../escape", "../escape"),
+            ("sub/../other", "sub/../other"),
+            (".", ""),
+        ];
+        for (input, want) in cases {
+            assert_eq!(normalize_join_name(input), *want, "input: {input:?}");
+        }
+    }
+
+    // A-R7-2: the reviewer's exact repro -- `<state>/sub` is an existing
+    // regular file holding `{"k":1}`; every `StateDir` operation on the
+    // trailing-slash name `"sub/"` must behave exactly as it would on
+    // `"sub"`, not diverge the way `self.path.join("sub/")` did (a
+    // `PathBuf` ending in `/`, which the kernel requires to name a
+    // directory). Measured against real `python3.12`
+    // (`pathlib_join_matches_python_for_normalization_cases` below) that
+    // `read_json("sub/")`, `read_lines("sub/")`, `read_bytes("sub/")`,
+    // `exists("sub/")`, `write_json("sub/", ...)`, and
+    // `append_line("sub/", ...)` all succeed against the *same* file
+    // `"sub"` names, in both languages -- this test pins the Rust side of
+    // that equivalence directly (the fail-open direction the finding
+    // flagged: before this fix, `read_json("sub/")` silently returned the
+    // caller's default instead of the stored document).
+    #[test]
+    fn state_dir_operations_normalize_a_trailing_slash_like_pathlib() {
+        let (_tmp, state) = new_state();
+        state.write_json("sub", &json!({"k": 1})).unwrap();
+
+        assert_eq!(
+            state.read_json("sub/", json!(null)).unwrap(),
+            json!({"k": 1}),
+            "read_json must not silently fall back to the default"
+        );
+        assert!(state.exists("sub/"));
+        let bytes = state.read_bytes("sub/").unwrap();
+        assert!(String::from_utf8(bytes).unwrap().contains("\"k\""));
+
+        // append_line/read_lines against a fresh trailing-slash name.
+        state.append_line("lines/", "line one").unwrap();
+        assert_eq!(state.read_lines("lines/", None).unwrap(), vec!["line one"]);
+        assert_eq!(
+            state.read_lines("lines", None).unwrap(),
+            vec!["line one"],
+            "the slash-free name must see the same file"
+        );
+
+        // write_json/write_bytes through a trailing-slash name land on the
+        // slash-free file.
+        state.write_json("written/", &json!({"v": 2})).unwrap();
+        assert_eq!(
+            state.read_json("written", json!(null)).unwrap(),
+            json!({"v": 2})
+        );
+
+        // subdir: doubled slash and a leading "./" component (the parent
+        // must already exist -- `subdir` has no `parents=True`, matching
+        // Python's own `target.mkdir(mode=DIR_MODE, exist_ok=True)`).
+        state.subdir("nested").unwrap();
+        let dir = state.subdir("nested//dir").unwrap();
+        assert!(dir.is_dir());
+        assert_eq!(dir, state.path.join("nested/dir"));
+        let dir2 = state.subdir("./nested/dir2").unwrap();
+        assert!(dir2.is_dir());
+        assert_eq!(dir2, state.path.join("nested/dir2"));
+    }
+
+    // A-R7-2: differential confirmation that `normalize_join_name`'s table
+    // matches real `python3.12` `pathlib.Path.__truediv__` -- trailing
+    // slash, doubled slash, a `./` component, and an unresolved `..`
+    // component, as the finding specifically asked to pin.
+    #[test]
+    fn pathlib_join_matches_python_for_normalization_cases() {
+        let names = [
+            "sub",
+            "sub/",
+            "sub//",
+            "./sub",
+            "sub/./x",
+            "a//b",
+            "a/b/",
+            "a/./b/",
+            "..",
+            "../escape",
+            "sub/../other",
+        ];
+        let script = format!(
+            r#"
+from pathlib import Path
+base = Path("/tmp/zpw-a-r7-2-base")
+for name in {names:?}:
+    print(base / name)
+"#
+        );
+        let out = crate::oracle::python(&script);
+        let want: Vec<&str> = out.lines().collect();
+        assert_eq!(want.len(), names.len());
+        for (name, want) in names.iter().zip(want.iter()) {
+            let base = Path::new("/tmp/zpw-a-r7-2-base");
+            let got = base.join(normalize_join_name(name));
+            assert_eq!(got, Path::new(want), "name: {name:?}");
+        }
     }
 }
