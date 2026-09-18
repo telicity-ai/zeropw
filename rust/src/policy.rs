@@ -1187,11 +1187,50 @@ pub struct HttpAuth {
     /// `create_connection`/`update_connection`/`disable_connection` and
     /// `team::fold`'s connection derivation) must render from this field
     /// whenever it is `Some`, never from `basic_username` itself, which
-    /// only ever holds a placeholder in that case. (`public_view` never
-    /// renders `basic_username` at all, so unlike `CliProfile.program` this
-    /// field has no agent-facing view exposure -- only the persisted
-    /// document.)
+    /// only ever holds a placeholder in that case. `public_view` never
+    /// renders `basic_username` at all, so this field has no agent-facing
+    /// view exposure -- only the persisted document -- **but the wire is a
+    /// third exposure `public_view` doesn't cover**: cross-unit finding X-1
+    /// found `gateway::auth_header` rendering the placeholder straight onto
+    /// an outgoing `Authorization: Basic` header, spending the real
+    /// credential where Python sends nothing. `gateway.rs` must check this
+    /// field (never `basic_username` alone) before building or scrubbing
+    /// any wire credential.
+    ///
+    /// Round 9 (finding X-2) widened this field's cases: it is now also set
+    /// for ANY non-string, non-null `basic_username` when `mode != "basic"`
+    /// -- Python's `HttpAuth.__post_init__` only ever inspects
+    /// `basic_username` when `mode == "basic"`, so a scalar (`5`) or a
+    /// container is equally unchecked and kept verbatim in that case, not
+    /// just the colon-free-container-under-`mode=="basic"` case this field
+    /// originally covered.
     pub raw_basic_username: Option<Value>,
+    /// The original JSON value for `header_name` when `mode != "header"`
+    /// and the value is present, non-null and not a string (finding X-2's
+    /// sibling gap, the same one [`Self::raw_basic_username`] documents for
+    /// `basic_username`). Python's `HttpAuth.__post_init__` only inspects
+    /// `header_name` when `mode == "header"`
+    /// (`if self.mode == "header": ...`), so for every other mode any JSON
+    /// shape loads and is kept verbatim; `header_name`'s typed
+    /// `Option<String>` field cannot hold it, so it is set to a placeholder
+    /// there and the real value lives here instead. `None` whenever
+    /// `header_name` is already faithful (an ordinary string, absent, or
+    /// `mode == "header"` -- in which case a truthy non-string is instead
+    /// Python's own uncaught `TypeError`, `state_corrupt` per PORTING.md
+    /// §3.5, unchanged from before this field existed).
+    pub raw_header_name: Option<Value>,
+    /// The original JSON value for `value_prefix` when it is present,
+    /// non-null and not a string. `HttpAuth.value_prefix` has **no**
+    /// `__post_init__` check at all in Python, for any `mode` -- unlike
+    /// `header_name`/`basic_username`, which are validated only when their
+    /// mode applies, `value_prefix` is never validated at construction time
+    /// regardless of mode (finding X-2). It IS read later, at relay time,
+    /// by `gateway::auth_header`'s `mode == "header"` branch
+    /// (`_HEADER_VALUE_RE.match`, which requires a real `str`/`bytes` and
+    /// raises an uncaught `TypeError` for anything else) -- `gateway.rs`
+    /// must check this field there and fail closed rather than silently
+    /// treating a container as an empty prefix.
+    pub raw_value_prefix: Option<Value>,
 }
 
 impl HttpAuth {
@@ -1232,6 +1271,8 @@ impl HttpAuth {
             value_prefix,
             basic_username,
             raw_basic_username: None,
+            raw_header_name: None,
+            raw_value_prefix: None,
         })
     }
 
@@ -1243,6 +1284,8 @@ impl HttpAuth {
             value_prefix: None,
             basic_username: None,
             raw_basic_username: None,
+            raw_header_name: None,
+            raw_value_prefix: None,
         }
     }
 
@@ -1254,9 +1297,23 @@ impl HttpAuth {
                     Some(s) => Value::String(s.clone()),
                     None => Value::Null,
                 });
+        let header_name = self
+            .raw_header_name
+            .clone()
+            .unwrap_or_else(|| match &self.header_name {
+                Some(s) => Value::String(s.clone()),
+                None => Value::Null,
+            });
+        let value_prefix =
+            self.raw_value_prefix
+                .clone()
+                .unwrap_or_else(|| match &self.value_prefix {
+                    Some(s) => Value::String(s.clone()),
+                    None => Value::Null,
+                });
         json!({
-            "mode": self.mode, "header_name": self.header_name,
-            "value_prefix": self.value_prefix, "basic_username": basic_username,
+            "mode": self.mode, "header_name": header_name,
+            "value_prefix": value_prefix, "basic_username": basic_username,
         })
     }
 
@@ -1264,15 +1321,46 @@ impl HttpAuth {
     /// AUTH_MODES` is a plain equality check with no `isinstance` guard, so
     /// a non-string, present `mode` gets the same documented
     /// `unsupported_auth_mode` a wrong-string mode would, not
-    /// `state_corrupt`. `header_name`/`value_prefix`/`basic_username`
-    /// remain `state_corrupt` for any present non-string/non-null value:
-    /// see the `policy` row in `DEVIATIONS.md` for the residual this still
-    /// leaves (Python's own checks on those fields are considerably more
-    /// irregular -- see the `DEVIATIONS.md` row for exactly which shapes
-    /// that covers). An unknown key in `value` makes the `**value`
+    /// `state_corrupt`. An unknown key in `value` makes the `**value`
     /// unpacking raise an uncaught `TypeError` (`__init__() got an
     /// unexpected keyword argument ...`), likewise `state_corrupt`
     /// (finding D-R2-6).
+    ///
+    /// `header_name`/`basic_username` are only validated by Python at all
+    /// when `mode` requires them (`if self.mode == "header": ...`); when it
+    /// does, `if not self.header_name or not HEADER_NAME_RE.match(...)`
+    /// (`self.basic_username` similarly) short-circuits on a *falsy* value
+    /// before ever reaching `isinstance`/the regex, so a present but falsy
+    /// non-string value (`0`, `false`, `[]`, `{}`) still gets the documented
+    /// `invalid_header_name`/`invalid_basic_username` reason in Python, not
+    /// an uncaught `TypeError` -- coercing it to `None` reproduces that
+    /// (`HttpAuth::new` treats a `None` `header_name`/`basic_username` the
+    /// same falsy way). A *truthy* non-string `header_name` when the field
+    /// applies still reaches Python's `re.match` and is an uncaught
+    /// `TypeError` there in every case this crate's own tests exercise
+    /// (`state_corrupt`, PORTING.md §3.5); a truthy non-string
+    /// `basic_username` under `mode == "basic"` does NOT, per
+    /// [`basic_username_decision`]'s doc comment (finding H-R5-3) --
+    /// handled separately below instead of through `opt_str`.
+    ///
+    /// **Finding X-2** (correcting the `policy` row in `DEVIATIONS.md`,
+    /// which previously claimed the gap this closes was "unreachable
+    /// outside a hand-edited or bit-rotted state file" -- false, since
+    /// `team::commit::build_http_auth`/`http_auth_value` write exactly this
+    /// shape into the FOLDED document for a peer's own
+    /// `connection.create`/`connection.update` op): when a field does not
+    /// apply to the given `mode` at all, Python validates it not at all and
+    /// keeps whatever value it was given verbatim (`value_prefix`: never
+    /// validated, for ANY mode; `header_name`/`basic_username`: unchecked
+    /// whenever `mode` isn't the one that reads them). Rust's typed
+    /// `Option<String>` field cannot hold an arbitrary JSON shape, so in
+    /// that case a colon/regex-safe placeholder goes in the typed field
+    /// (never read by any Python-equivalent check for that mode) and the
+    /// real value is carried in [`Self::raw_header_name`]/
+    /// [`Self::raw_value_prefix`]/[`Self::raw_basic_username`] instead, so
+    /// `to_value` can round-trip it and `Connection::from_value` no longer
+    /// aborts the WHOLE containing document load over one representational
+    /// gap (PORTING.md §3d) the way returning `state_corrupt` here used to.
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
@@ -1287,27 +1375,6 @@ impl HttpAuth {
             Some(s) if AUTH_MODES.contains(&s) => s.to_string(),
             _ => return Err(Error::invalid_input("unsupported_auth_mode")),
         };
-        // `header_name`/`basic_username` are only validated by Python at all
-        // when `mode` requires them (`if self.mode == "header": ...`); when
-        // it does, `if not self.header_name or not HEADER_NAME_RE.match(...)`
-        // (`self.basic_username` similarly) short-circuits on a *falsy*
-        // value before ever reaching `isinstance`/the regex, so a present
-        // but falsy non-string value (`0`, `false`, `[]`, `{}`) still gets
-        // the documented `invalid_header_name`/`invalid_basic_username`
-        // reason in Python, not an uncaught `TypeError` -- coercing it to
-        // `None` here reproduces that (`HttpAuth::new` treats a `None`
-        // `header_name`/`basic_username` the same falsy way). A *truthy*
-        // non-string `header_name` when the field applies still reaches
-        // Python's `re.match` and is an uncaught `TypeError` there in every
-        // case this crate's own tests exercise (`state_corrupt`, PORTING.md
-        // §3.5); a truthy non-string `basic_username` does NOT, per
-        // [`basic_username_decision`]'s doc comment (finding H-R5-3,
-        // correcting this row's previous blanket claim) -- handled
-        // separately below instead of through this closure. When a field
-        // does not apply to this `mode` at all, Python validates it not at
-        // all, which Rust's typed `Option<String>` still cannot represent
-        // for a non-string value -- a real, narrower residual (see
-        // `DEVIATIONS.md`).
         let opt_str = |key: &str, applies_for_mode: bool| -> Result<Option<String>, Error> {
             match obj.get(key) {
                 None | Some(Value::Null) => Ok(None),
@@ -1316,40 +1383,70 @@ impl HttpAuth {
                 _ => Err(bad()),
             }
         };
-        // Finding H-R5-3: when `mode == "basic"`, resolve through
-        // [`basic_username_decision`] instead of `opt_str` so a truthy,
-        // colon-free list/dict is accepted (matching Python) rather than
-        // rejected as `state_corrupt` -- a state file this crate's own
-        // `team::commit::build_http_auth` can now legitimately write, since
-        // it folds a peer's `connection.create`/`connection.update` op the
-        // same way Python does. When `mode != "basic"` the field is
-        // unchecked in Python either way, so `opt_str`'s existing
-        // (documented, narrower) residual for that case is unchanged.
-        let basic_username_raw = obj.get("basic_username");
-        // Cross-unit finding (round 8): whether `basic_username_decision`
-        // is about to return the accepted, colon-free CONTAINER placeholder
-        // (`"\u{1}"`) rather than a faithful string -- computed the same
-        // way [`basic_username_decision`] itself decides a truthy container
-        // is in play, so this can only be `true` exactly when the
-        // constructed `HttpAuth` below is going to need
-        // `raw_basic_username` to round-trip the real value.
-        let basic_username_is_container = mode == "basic"
-            && json_truthy(basic_username_raw)
-            && matches!(basic_username_raw, Some(Value::Array(_) | Value::Object(_)));
-        let basic_username = if mode == "basic" {
-            basic_username_decision(basic_username_raw)
-        } else {
-            opt_str("basic_username", false)?
+        // Finding X-2: a present, non-null, non-string value for a field
+        // that Python does not validate in this `mode` -- kept verbatim via
+        // a raw passthrough (a colon/regex-safe placeholder, `"\u{1}"`, in
+        // the typed field) instead of `state_corrupt`.
+        let passthrough = |raw: Option<&Value>| -> (Option<String>, Option<Value>) {
+            match raw {
+                None | Some(Value::Null) => (None, None),
+                Some(Value::String(s)) => (Some(s.clone()), None),
+                Some(v) => (Some("\u{1}".to_string()), Some(v.clone())),
+            }
         };
-        let mut auth = HttpAuth::new(
-            mode.clone(),
-            opt_str("header_name", mode == "header")?,
-            opt_str("value_prefix", false)?,
-            basic_username,
-        )?;
-        if basic_username_is_container {
-            auth.raw_basic_username = basic_username_raw.cloned();
-        }
+        // `header_name`: unchecked by Python whenever `mode != "header"`
+        // (finding X-2's sibling gap to `basic_username`'s). When
+        // `mode == "header"` the existing strict `opt_str` handling is
+        // unchanged (truthy non-string there is Python's own uncaught
+        // `TypeError`, §3.5).
+        let header_name_raw = obj.get("header_name");
+        let (header_name, raw_header_name) = if mode == "header" {
+            (opt_str("header_name", true)?, None)
+        } else {
+            passthrough(header_name_raw)
+        };
+        // `value_prefix`: unchecked by Python for EVERY mode (no
+        // `__post_init__` branch reads it at all), so this is always a raw
+        // passthrough regardless of `mode`. It IS read later at relay time
+        // by `gateway::auth_header`'s `mode == "header"` branch, which
+        // checks `raw_value_prefix` itself and fails closed rather than
+        // treating a container as an empty prefix.
+        let value_prefix_raw = obj.get("value_prefix");
+        let (value_prefix, raw_value_prefix) = passthrough(value_prefix_raw);
+        // `basic_username`: `mode == "basic"` resolves through
+        // [`basic_username_decision`] (finding H-R5-3, unchanged) so a
+        // truthy, colon-free list/dict is accepted (matching Python)
+        // rather than rejected as `state_corrupt`. `mode != "basic"` is a
+        // plain raw passthrough (finding X-2): Python's own check is
+        // `if self.mode == "basic" and (...)`, so any OTHER mode never
+        // inspects `basic_username` at all, not even to reject a scalar.
+        let basic_username_raw = obj.get("basic_username");
+        let (basic_username, raw_basic_username) = if mode == "basic" {
+            // Cross-unit finding (round 8): whether
+            // `basic_username_decision` is about to return the accepted,
+            // colon-free CONTAINER placeholder (`"\u{1}"`) rather than a
+            // faithful string -- computed the same way
+            // [`basic_username_decision`] itself decides a truthy
+            // container is in play, so this can only be `true` exactly
+            // when the constructed `HttpAuth` below is going to need
+            // `raw_basic_username` to round-trip the real value.
+            let is_container = json_truthy(basic_username_raw)
+                && matches!(basic_username_raw, Some(Value::Array(_) | Value::Object(_)));
+            (
+                basic_username_decision(basic_username_raw),
+                if is_container {
+                    basic_username_raw.cloned()
+                } else {
+                    None
+                },
+            )
+        } else {
+            passthrough(basic_username_raw)
+        };
+        let mut auth = HttpAuth::new(mode.clone(), header_name, value_prefix, basic_username)?;
+        auth.raw_header_name = raw_header_name;
+        auth.raw_value_prefix = raw_value_prefix;
+        auth.raw_basic_username = raw_basic_username;
         Ok(auth)
     }
 }

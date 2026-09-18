@@ -324,7 +324,7 @@ fn one_connection_two_operations_placeholder_replaced() {
     let first = t.relay_h("GET", "/repos", &client_headers);
     assert_eq!((first.status, first.reason.clone()), (200, None));
     assert_eq!(
-        first.json(),
+        first.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!([{"name": "demo"}, {"name": "tools"}])
     );
 
@@ -340,7 +340,10 @@ fn one_connection_two_operations_placeholder_replaced() {
         None,
     );
     assert_eq!((second.status, second.reason.clone()), (201, None));
-    assert_eq!(second.json()["title"], "from agent");
+    assert_eq!(
+        second.json().expect("test body is valid utf-8 JSON")["title"],
+        "from agent"
+    );
 
     let seen = t.fake.requests();
     assert_eq!(seen.len(), 2);
@@ -449,7 +452,7 @@ fn basic_mode() {
     );
     assert_eq!(result.status, 200);
     assert_eq!(
-        result.json(),
+        result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"login": "synthetic-user"})
     );
     use base64::Engine as _;
@@ -553,7 +556,7 @@ fn relay_for_caller_without_handle() {
     );
     assert_eq!(result.status, 200);
     assert_eq!(
-        result.json(),
+        result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"login": "synthetic-user"})
     );
     assert_eq!(
@@ -621,7 +624,10 @@ fn head_and_no_content_responses() {
         (head.status, head.body.clone(), head.reason.clone()),
         (200, Vec::new(), None)
     );
-    let digest = t.relay("DELETE", "/repos/demo").json()["approval_digest"]
+    let digest = t
+        .relay("DELETE", "/repos/demo")
+        .json()
+        .expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -678,7 +684,10 @@ fn response_header_filter_and_upstream_401() {
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!((result.status, result.reason.clone()), (401, None));
     assert!(!header_names(&result).contains("www-authenticate"));
-    assert_eq!(result.json(), serde_json::json!({"error": "unauthorized"}));
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON"),
+        serde_json::json!({"error": "unauthorized"})
+    );
 }
 
 #[test]
@@ -894,7 +903,10 @@ fn scope_method_and_path_denied_with_reason() {
             (403, Some(reason)),
             "{method} {path}"
         );
-        assert_eq!(result.json()["reason"], reason);
+        assert_eq!(
+            result.json().expect("test body is valid utf-8 JSON")["reason"],
+            reason
+        );
     }
     assert_eq!(t.fake.requests().len(), 2);
     assert_eq!(
@@ -1038,7 +1050,10 @@ fn tampered_or_foreign_handles_are_unauthorized() {
             (result.status, result.reason.as_deref()),
             (401, Some(reason))
         );
-        assert_eq!(result.json()["error"], "AuthFailed");
+        assert_eq!(
+            result.json().expect("test body is valid utf-8 JSON")["error"],
+            "AuthFailed"
+        );
     }
     use zeropw::handles::HandleIssuer;
     let foreign_key = HandleIssuer::generate_key();
@@ -1079,7 +1094,7 @@ fn assert_denied(t: &GatewayTest, reason: &str, handle: Option<&str>) {
         (403, Some(reason))
     );
     assert_eq!(
-        result.json(),
+        result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"error": "PolicyDenied", "reason": reason})
     );
     assert_eq!(t.fake.requests().len(), before);
@@ -1290,7 +1305,7 @@ fn assert_blocked(t: &GatewayTest, path: &str, reason: &str) -> RelayResult {
         "path={path}"
     );
     assert_eq!(
-        result.json(),
+        result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"error": "UpstreamError", "reason": reason})
     );
     t.assert_result_credential_free(&result);
@@ -1324,6 +1339,52 @@ fn reflection_in_body_and_headers_is_blocked() {
     t.assert_credential_free(
         &t.state_text(&["audit/audit.jsonl", "audit/alerts.jsonl"]),
         &[SECRET_A, SECRET_B],
+    );
+}
+
+#[test]
+fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
+    // Finding X-19: `RelayResult.json()` is `json.loads(self.body.
+    // decode("utf-8"))` in Python -- a catchable `UnicodeDecodeError` for
+    // non-UTF-8 bytes, a catchable `json.JSONDecodeError` for text that
+    // isn't valid JSON. `body` is upstream socket data, which PORTING.md
+    // §4 names untrusted and forbids panicking on; the previous Rust
+    // `.expect()`-panicked on both failure modes instead of returning an
+    // error the caller can handle.
+    let non_utf8 = RelayResult {
+        status: 200,
+        headers: Headers::new(),
+        body: vec![0xff, 0xfe, 0xfd],
+        reason: None,
+    };
+    assert_eq!(
+        non_utf8.json(),
+        None,
+        "non-UTF-8 body must return None, not panic"
+    );
+
+    let non_json = RelayResult {
+        status: 200,
+        headers: Headers::new(),
+        body: b"not json at all {".to_vec(),
+        reason: None,
+    };
+    assert_eq!(
+        non_json.json(),
+        None,
+        "UTF-8 but non-JSON body must return None, not panic"
+    );
+
+    let valid = RelayResult {
+        status: 200,
+        headers: Headers::new(),
+        body: b"{\"ok\": true}".to_vec(),
+        reason: None,
+    };
+    assert_eq!(
+        valid.json(),
+        Some(serde_json::json!({"ok": true})),
+        "a well-formed body must still parse normally"
     );
 }
 
@@ -1398,7 +1459,7 @@ fn lowercase_percent_encoded_reflection_is_blocked() {
             "path={path}"
         );
         assert_eq!(
-            result.json(),
+            result.json().expect("test body is valid utf-8 JSON"),
             serde_json::json!({"error": "UpstreamError", "reason": "credential_reflection_blocked"})
         );
         t.assert_credential_free(&String::from_utf8_lossy(&result.body), &[SECRET_RESERVED]);
@@ -1473,7 +1534,10 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
             None,
         );
         assert_eq!(
-            (result.status, result.json()),
+            (
+                result.status,
+                result.json().expect("test body is valid utf-8 JSON")
+            ),
             (200, serde_json::json!({"login": "synthetic-user"})),
             "{mode}"
         );
@@ -1496,7 +1560,7 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
                 "{mode} {form}"
             );
             assert_eq!(
-                result.json(),
+                result.json().expect("test body is valid utf-8 JSON"),
                 serde_json::json!({"error": "UpstreamError", "reason": "credential_reflection_blocked"})
             );
             assert!(!result.body.windows(5).any(|w| w == b"leak="));
@@ -1515,7 +1579,11 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
             None,
         );
         assert_eq!(
-            (result.status, result.reason.clone(), result.json()),
+            (
+                result.status,
+                result.reason.clone(),
+                result.json().expect("test body is valid utf-8 JSON")
+            ),
             (400, None, serde_json::json!({"error": "unknown_form"}))
         );
         assert_eq!(fake.requests().len(), forms.len() + 2);
@@ -1627,6 +1695,53 @@ fn upstream_down_and_timeout() {
 }
 
 #[test]
+fn non_finite_or_negative_upstream_timeout_fails_closed_without_panicking() {
+    // Finding X-18: Python's `timeout = float(self.ctx.config.
+    // upstream_timeout)` never raises -- the failure happens later, inside
+    // `socket.create_connection`/`.settimeout()` when `conn.connect()`
+    // runs, and `_exchange`'s own `except (socket.timeout, TimeoutError)` /
+    // `except OSError` around that call does NOT catch it. Confirmed
+    // against a real `python3.12` socket: `.settimeout(float('inf'))` and
+    // `.settimeout(1e30)` both raise `OverflowError: timestamp out of range
+    // for platform time_t`, `.settimeout(float('nan'))` raises `ValueError:
+    // Invalid value NaN (not a number)`, and `.settimeout(-1.0)` raises
+    // `ValueError: Timeout value out of range` -- all four uncaught, so the
+    // relay is refused as `upstream_timeout` (this path's existing closest
+    // handled reason, PORTING.md §3.5).
+    //
+    // `Duration::from_secs_f64` PANICS on `inf`/`1e30` (a Rust panic on
+    // in-process config -- PORTING.md §4's untrusted-input rule does not
+    // strictly require a fix here, since `upstream_timeout` is not agent/
+    // peer/file-supplied, but a panic is still worse than Python's own
+    // catchable exception), and the previous `.max(0.0)` clamp silently
+    // turned a NaN timeout into a ZERO-duration one instead of failing at
+    // all (`f64::NAN.max(0.0) == 0.0`, Rust's `f64::max` returns the
+    // non-NaN operand) -- relaying with no timeout budget rather than
+    // refusing. `-1.0` was ALSO silently clamped to zero by the same
+    // `.max(0.0)`, an unrecorded gap beyond the two cases this finding's
+    // text named.
+    for (label, timeout) in [
+        ("infinity", f64::INFINITY),
+        ("neg_infinity", f64::NEG_INFINITY),
+        ("huge_finite", 1e30),
+        ("nan", f64::NAN),
+        ("negative", -1.0),
+    ] {
+        let mut t = GatewayTest::new();
+        t.ctx.config.upstream_timeout = timeout;
+        let result = t.relay("GET", "/repos");
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (502, Some("upstream_timeout")),
+            "{label}: a non-finite/negative upstream_timeout must fail closed as \
+             upstream_timeout without panicking, matching python's own uncaught \
+             OverflowError/ValueError there"
+        );
+        t.assert_result_credential_free(&result);
+    }
+}
+
+#[test]
 fn unsupported_auth_mode_and_unsafe_credential_fail_closed() {
     let t = GatewayTest::new();
     t.ctx
@@ -1712,7 +1827,10 @@ fn unsupported_auth_mode_via_corrupted_stored_document() {
     let result = t.relay("GET", "/repos");
     assert_eq!(result.reason.as_deref(), Some("unsupported_auth_mode"));
     assert_eq!(result.status, 400);
-    assert_eq!(result.json()["error"], "InvalidInput");
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON")["error"],
+        "InvalidInput"
+    );
     assert_eq!(t.fake.requests().len(), 0);
 }
 
@@ -1889,7 +2007,7 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
         (first.status, first.reason.as_deref()),
         (428, Some("approval_required"))
     );
-    let digest = first.json()["approval_digest"]
+    let digest = first.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -1914,7 +2032,10 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     t.ctx.policy.approve(&digest).unwrap();
     let other = t.relay("DELETE", "/repos/other");
     assert_eq!(other.status, 428);
-    assert_ne!(other.json()["approval_digest"], digest);
+    assert_ne!(
+        other.json().expect("test body is valid utf-8 JSON")["approval_digest"],
+        digest
+    );
     assert_eq!(t.fake.requests().len(), 0);
     let done = t.relay("DELETE", "/repos/demo");
     assert_eq!((done.status, done.reason.clone()), (204, None));
@@ -1974,11 +2095,14 @@ fn pending_approval_shows_what_the_digest_binds() {
         (Some("approval_required"), Some("approval_required"))
     );
     let approvals = t.ctx.policy.list_approvals().unwrap();
-    let benign_digest = benign.json()["approval_digest"]
+    let benign_digest = benign.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
-    let evil_digest = evil.json()["approval_digest"].as_str().unwrap().to_string();
+    let evil_digest = evil.json().expect("test body is valid utf-8 JSON")["approval_digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let benign_entry = &approvals[&benign_digest];
     let evil_entry = &approvals[&evil_digest];
     let origin = format!("http://127.0.0.1:{}", t.fake.port());
@@ -2047,7 +2171,7 @@ fn pending_approval_shows_what_the_digest_binds() {
         None,
     );
     assert_eq!(retyped.reason.as_deref(), Some("approval_required"));
-    let retyped_digest = retyped.json()["approval_digest"]
+    let retyped_digest = retyped.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2069,7 +2193,7 @@ fn pending_approval_shows_what_the_digest_binds() {
         Some(&handle),
         None,
     );
-    let long_digest = long_result.json()["approval_digest"]
+    let long_digest = long_result.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2087,10 +2211,11 @@ fn pending_approval_shows_what_the_digest_binds() {
         Some(&handle),
         None,
     );
-    let binary_digest = binary_result.json()["approval_digest"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let binary_digest =
+        binary_result.json().expect("test body is valid utf-8 JSON")["approval_digest"]
+            .as_str()
+            .unwrap()
+            .to_string();
     let binary_entry = t.ctx.policy.list_approvals().unwrap()[&binary_digest].clone();
     assert_eq!(binary_entry["body_preview"], Value::Null);
     assert_eq!(binary_entry["body_bytes"], 9);
@@ -2113,7 +2238,7 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
     // version is refused under another).
     let t = GatewayTest::new();
     let first = t.relay("DELETE", "/repos/demo");
-    let digest = first.json()["approval_digest"]
+    let digest = first.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2145,10 +2270,11 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         (after_move.status, after_move.reason.as_deref()),
         (428, Some("approval_required"))
     );
-    let after_move_digest = after_move.json()["approval_digest"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let after_move_digest =
+        after_move.json().expect("test body is valid utf-8 JSON")["approval_digest"]
+            .as_str()
+            .unwrap()
+            .to_string();
     assert_ne!(after_move_digest, digest);
     assert_eq!(
         t.ctx.policy.list_approvals().unwrap()[&after_move_digest]["origin"],
@@ -2175,7 +2301,7 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         (renamed.status, renamed.reason.as_deref()),
         (428, Some("approval_required"))
     );
-    let renamed_digest = renamed.json()["approval_digest"]
+    let renamed_digest = renamed.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -2485,6 +2611,93 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
 }
 
 #[test]
+fn replay_status_never_truncates_out_of_range_magnitudes() {
+    // Finding X-5: Python's `int(v)` (`RequestLedger.replay`,
+    // `status = int(response.get("status", 502))`) has no upper/lower
+    // bound -- CPython's arbitrary-precision `int` never raises here, so
+    // `relayed=True` for every case below, confirmed against real
+    // `python3.12`: `int(65736) == 65736`, `int(65536) == 65536`,
+    // `int(1000000) == 1000000`, `int(1e300)` is exact to the last digit (a
+    // 303-digit integer), `int("18446744073709551816") ==
+    // 18446744073709551816`, `int(" 65736_0 ") == 657360`.
+    //
+    // `RelayResult::status` is a fixed `u16` (PORTING.md §3d: every OTHER
+    // status field in this module uses the same type for a real HTTP
+    // status code) -- a genuine representational gap this crate cannot
+    // avoid. The previous three-step lossy path (a saturating parse, `as
+    // i64`, `as u16`) silently wrapped every one of these into a small,
+    // plausible-looking, WRONG status instead of failing: `65736 -> 200`,
+    // `65536 -> 0`, `1000000 -> 16960`, `1e300 -> 65535`,
+    // `"18446744073709551816" -> 200`, `" 65736_0 " -> 2000` -- and the
+    // truncated value reached the audit record too (`self.audit(...,
+    // Some(replayed.status), ...)`). The fix never truncates: any
+    // magnitude Python accepts but this crate's `u16` field cannot hold now
+    // fails closed with `state_corrupt` instead.
+    let t = GatewayTest::new();
+    let out_of_range: [(&str, serde_json::Value); 6] = [
+        ("65736", serde_json::json!(65736)),
+        ("65536", serde_json::json!(65536)),
+        ("1000000", serde_json::json!(1_000_000)),
+        ("1e300", serde_json::json!(1e300)),
+        (
+            "numeric_string_huge",
+            serde_json::json!("18446744073709551816"),
+        ),
+        ("numeric_string_underscore", serde_json::json!(" 65736_0 ")),
+    ];
+    for (label, status) in out_of_range {
+        let request_id = format!("req-status-oor-{label}");
+        assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
+        set_ledger_response(
+            &t,
+            "agent-1",
+            &request_id,
+            serde_json::json!({
+                "status": status, "headers": [], "reason": null,
+                "body_b64": "YWJj", "body_stored": true,
+            }),
+        );
+        let replayed = issue_ledger(&t, &request_id, "same");
+        assert_eq!(
+            (replayed.status, replayed.reason.as_deref()),
+            (503, Some("state_corrupt")),
+            "{label}: a status magnitude python accepts but u16 cannot hold must fail \
+             closed, not truncate into a plausible-looking wrong status"
+        );
+    }
+
+    // In-range values (including the u16::MAX boundary) must still match
+    // Python exactly -- this fix must not turn a VALID status into an
+    // error.
+    let in_range: [(&str, serde_json::Value, u16); 5] = [
+        ("plain_200", serde_json::json!(200), 200),
+        ("float_truncates", serde_json::json!(200.9), 200),
+        ("bool_true", serde_json::json!(true), 1),
+        ("numeric_string", serde_json::json!("404"), 404),
+        ("u16_max_boundary", serde_json::json!(65535), 65535),
+    ];
+    for (label, status, expected) in in_range {
+        let request_id = format!("req-status-ok-{label}");
+        assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
+        set_ledger_response(
+            &t,
+            "agent-1",
+            &request_id,
+            serde_json::json!({
+                "status": status, "headers": [], "reason": null,
+                "body_b64": "YWJj", "body_stored": true,
+            }),
+        );
+        let replayed = issue_ledger(&t, &request_id, "same");
+        assert_eq!(
+            (replayed.status, replayed.reason.clone()),
+            (expected, None),
+            "{label}: an in-range status must match python's int() exactly, not fail"
+        );
+    }
+}
+
+#[test]
 fn same_id_different_request_is_rejected() {
     let t = GatewayTest::new();
     assert_eq!(issue_ledger(&t, "req-2", "same").status, 201);
@@ -2719,7 +2932,10 @@ fn large_replay_body_is_not_stored() {
         (replay.status, replay.reason.as_deref()),
         (200, Some("replay_body_unavailable"))
     );
-    assert_eq!(replay.json()["reason"], "replay_body_unavailable");
+    assert_eq!(
+        replay.json().expect("test body is valid utf-8 JSON")["reason"],
+        "replay_body_unavailable"
+    );
     assert_eq!(t.fake.requests().len(), 1);
 }
 
@@ -3203,7 +3419,7 @@ fn address_refusal_spends_no_grant_use_approval_or_credential() {
         (pending.status, pending.reason.as_deref()),
         (428, Some("approval_required"))
     );
-    let digest = pending.json()["approval_digest"]
+    let digest = pending.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
         .unwrap()
         .to_string();
@@ -3665,7 +3881,10 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-good", &grant.id, None, 300);
     let trusted = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (trusted.status, trusted.json()),
+        (
+            trusted.status,
+            trusted.json().expect("test body is valid utf-8 JSON")
+        ),
         (200, serde_json::json!({"login": "synthetic-user"}))
     );
     assert_eq!(
@@ -3956,7 +4175,10 @@ fn ledger_corruption_fails_closed_before_reaching_upstream() {
     let second = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-1"));
     assert_eq!(second.status, 503);
     assert_eq!(second.reason.as_deref(), Some("state_corrupt"));
-    assert_eq!(second.json()["error"], "StateError");
+    assert_eq!(
+        second.json().expect("test body is valid utf-8 JSON")["error"],
+        "StateError"
+    );
     assert_eq!(
         t.fake.requests().len(),
         1,
@@ -5379,7 +5601,10 @@ fn ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream() {
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-1"));
     assert_eq!(result.status, 503);
     assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
-    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON")["error"],
+        "StateError"
+    );
     assert_eq!(
         t.fake.requests().len(),
         0,
@@ -5400,7 +5625,10 @@ fn ledger_wrong_typed_request_entry_fails_closed_before_reaching_upstream() {
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-2"));
     assert_eq!(result.status, 503);
     assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
-    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON")["error"],
+        "StateError"
+    );
     assert_eq!(
         t.fake.requests().len(),
         0,
@@ -5423,7 +5651,10 @@ fn ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream() {
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-3"));
     assert_eq!(result.status, 503);
     assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
-    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON")["error"],
+        "StateError"
+    );
     assert_eq!(
         t.fake.requests().len(),
         0,
@@ -5454,7 +5685,10 @@ fn ledger_save_fails_closed_for_a_corrupted_entry_of_a_different_request_id() {
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-2"));
     assert_eq!(result.status, 503);
     assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
-    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        result.json().expect("test body is valid utf-8 JSON")["error"],
+        "StateError"
+    );
     assert_eq!(
         t.fake.requests().len(),
         0,

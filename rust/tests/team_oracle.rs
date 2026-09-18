@@ -2720,6 +2720,48 @@ except InvalidInput as e:
     );
 }
 
+/// Finding X-4: `HttpAuth.__post_init__` only inspects `header_name` when
+/// `mode == "header"` (`if self.mode == "header": ...`) -- for every other
+/// mode, Python validates it not at all and keeps whatever value it was
+/// given verbatim. Confirmed against real `python3.12`:
+/// `build_connection_fields({"http_auth": {"mode": "bearer", "header_name":
+/// ["X-Foo"]}, ...})` returns `header_name: ["X-Foo"]`, `value_prefix: None`,
+/// `basic_username: None`. Before this fix, `http_auth_value` (`team/
+/// commit.rs`) rendered `a.header_name` -- which `build_http_auth`'s local
+/// `opt_string` had already collapsed to `None` regardless of mode -- into
+/// the folded document, silently losing the real value (`"header_name":
+/// null` instead of `["X-Foo"]`): a Python node and a Rust node folding the
+/// same commit chain would produce different documents.
+#[test]
+fn http_auth_container_header_name_matches_python_for_non_header_mode() {
+    let args = connection_create_args("null", r#"{"mode": "bearer", "header_name": ["X-Foo"]}"#);
+    let op: Map<String, Value> = serde_json::from_str(&args).unwrap();
+    let rust_fields =
+        C::build_connection_fields(&op).expect("rust must accept an unchecked header_name");
+    assert_eq!(
+        rust_fields.get("http_auth").unwrap(),
+        &json!({"mode": "bearer", "header_name": ["X-Foo"], "value_prefix": null, "basic_username": null}),
+        "the header_name container must be folded VERBATIM into the document, not dropped to null"
+    );
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+args = json.loads({raw})
+fields = C.build_connection_fields(args)
+print(json.dumps(fields["http_auth"], sort_keys=True))
+"#,
+        raw = py_str_literal(&args),
+    );
+    let py_out = run_python(&script);
+    let py_http_auth: Value = serde_json::from_str(py_out.trim()).unwrap();
+    assert_eq!(
+        py_http_auth,
+        json!({"mode": "bearer", "header_name": ["X-Foo"], "value_prefix": null, "basic_username": null}),
+        "python's own header_name field must also be the verbatim list"
+    );
+}
+
 /// Finding H-R2-9(c): a truthy plain *string* `extra_env` (e.g. `"ab"`) is
 /// Python's uncaught `dict("ab")` `ValueError` (each character has length
 /// 1, not the length-2 pair `dict()` needs) -- `_build_cli_profile`'s

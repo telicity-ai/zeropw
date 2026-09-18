@@ -417,7 +417,7 @@ fn rust_relay_reaches_a_live_python_fake_upstream() {
     );
     assert_eq!(result.status, 200);
     assert_eq!(
-        result.json(),
+        result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"login": "synthetic-user"})
     );
 }

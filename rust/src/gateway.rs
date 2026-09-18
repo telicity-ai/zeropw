@@ -181,10 +181,21 @@ impl RelayResult {
     pub fn relayed(&self) -> bool {
         self.reason.is_none()
     }
-    /// `RelayResult.json()`.
-    pub fn json(&self) -> Value {
-        let text = std::str::from_utf8(&self.body).expect("body is UTF-8 JSON");
-        pyjson::loads(text).expect("body is valid JSON")
+    /// `RelayResult.json()`: `json.loads(self.body.decode("utf-8"))`,
+    /// raising a catchable `UnicodeDecodeError`/`json.JSONDecodeError` for a
+    /// non-UTF-8 or non-JSON body.
+    ///
+    /// **Finding X-19.** `body` is upstream socket data -- untrusted input
+    /// PORTING.md §4 forbids panicking on -- so a malformed body returns
+    /// `None` here instead of the `.expect()`-panic this used to reach for
+    /// both failure modes. Only this crate's own tests call this method
+    /// within this half's scope (its real callers, `tools.request` and
+    /// friends, are second-half), so nothing in this half's production path
+    /// could trigger the panic today -- but §4 is a rule about what the
+    /// method itself may do, not about which callers currently exist.
+    pub fn json(&self) -> Option<Value> {
+        let text = std::str::from_utf8(&self.body).ok()?;
+        pyjson::loads(text).ok()
     }
 }
 
@@ -572,6 +583,28 @@ fn auth_header(connection: &Connection, secret: &[u8]) -> Result<(String, String
         return Err(Invalid("self_referential_credential"));
     }
     if auth.mode == "basic" {
+        // Finding X-1: `auth.basic_username` only ever holds a faithful
+        // string OR (per `HttpAuth::from_value`/`basic_username_decision`,
+        // `policy.rs`) a colon-free placeholder standing in for a truthy
+        // list/dict container that Python's `":" in self.basic_username`
+        // accepted without raising. Python's own `_auth_header`, given that
+        // same container, never reaches this branch's `":" in ...` check
+        // successfully at all: `auth.basic_username.encode("utf-8")` raises
+        // an uncaught `AttributeError: 'list' object has no attribute
+        // 'encode'` (confirmed against real `python3.12`,
+        // `HttpAuth(mode="basic", basic_username=["curl"])` constructs
+        // fine, then `_auth_header` raises), which nothing up to `relay`
+        // catches (`except _Invalid` does not match `AttributeError`), so NO
+        // upstream request is made and no credential leaves the process.
+        // Rendering the placeholder here instead would relay
+        // `"\u{1}:<the real secret>"` on the wire -- spending the grant use
+        // and leaking the credential where Python sends nothing. Fail
+        // closed the same way PORTING.md §3.5 already treats an uncaught
+        // built-in exception: the closest handled error this path already
+        // uses for a rejected `basic_username`, `unsupported_auth_mode`.
+        if auth.raw_basic_username.is_some() {
+            return Err(Invalid("unsupported_auth_mode"));
+        }
         let username = auth.basic_username.as_deref().unwrap_or("");
         if username.is_empty() || username.contains(':') {
             return Err(Invalid("unsupported_auth_mode"));
@@ -602,6 +635,25 @@ fn auth_header(connection: &Connection, secret: &[u8]) -> Result<(String, String
         // custom header's own name.
         if name.is_empty() || !matches_with_trailing_newline(&CUSTOM_HEADER_NAME_RE, name) {
             return Err(Invalid("unsupported_auth_mode"));
+        }
+        // Finding X-2's sibling gap to X-1: `HttpAuth.value_prefix` has no
+        // `__post_init__` check in Python for any mode, so
+        // `HttpAuth::from_value` (`policy.rs`) now accepts a non-string
+        // `value_prefix` verbatim via `raw_value_prefix`, keeping
+        // `value_prefix` itself a colon/regex-safe placeholder. Python's
+        // `_auth_header`, given that same real container, reaches
+        // `_HEADER_VALUE_RE.match(prefix)` with `prefix` still the
+        // container (`prefix = auth.value_prefix or ""` only substitutes
+        // for a FALSY value) and raises an uncaught
+        // `TypeError: expected string or bytes-like object` there
+        // (confirmed against real `python3.12`) -- nothing up to `relay`
+        // catches it, so no upstream request is made. Rendering the
+        // placeholder's empty string here instead would silently relay the
+        // credential with no prefix where Python sends nothing. Fail closed
+        // with the same reason this branch already uses for a
+        // prefix that fails the regex.
+        if auth.raw_value_prefix.is_some() {
+            return Err(Invalid("credential_header_unsafe"));
         }
         let prefix = auth.value_prefix.as_deref().unwrap_or("");
         if !matches_with_trailing_newline(&HEADER_VALUE_RE, prefix) {
@@ -915,18 +967,70 @@ fn python_float(v: &Value) -> Option<f64> {
 /// F-R3-5, `RequestLedger.replay`): a JSON integer converts directly; a
 /// JSON float truncates towards zero (`int(200.9) == 200`, no error, unlike
 /// `float()`); a JSON bool is `0`/`1` (Python bools are an `int` subclass);
-/// a JSON string is parsed with the canonical [`crate::pystr::int_from_str`]
-/// (PORTING.md §3b) -- this crate's own writer always stores a plain
-/// integer, so a string here only occurs under deliberate corruption, but
-/// it is still exactly `int(str)` when it does. `null`/array/object have no
-/// non-panicking `int()` equivalent and are treated as unconvertible.
-fn python_int_status(v: &Value) -> Option<i64> {
-    match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.trunc() as i64)),
-        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::String(s) => crate::pystr::int_from_str(s).map(|n| n as i64),
-        _ => None,
-    }
+/// a JSON string is parsed with the canonical
+/// [`crate::pystr::int_from_str_checked`] (PORTING.md §3b) -- this crate's
+/// own writer always stores a plain integer, so a string here only occurs
+/// under deliberate corruption, but it is still exactly `int(str)` when it
+/// does. `null`/array/object have no non-panicking `int()` equivalent and
+/// are treated as unconvertible.
+///
+/// **Finding X-5.** Python's `int(v)` never raises for any of these shapes
+/// -- CPython's arbitrary-precision `int` holds any magnitude, so
+/// `int(1e300)` is a real (if absurd) 303-digit integer, `relayed=True`,
+/// same as `int(65736)` or `int(" 65736_0 ")`. Measured against real
+/// `python3.12`: `int(65736) == 65736`, `int(65536) == 65536`,
+/// `int(1000000) == 1000000`, `int(1e300)` is exact to the last digit,
+/// `int("18446744073709551816") == 18446744073709551816`,
+/// `int(" 65736_0 ") == 657360` -- none of these raise.
+///
+/// [`RelayResult::status`], unlike Python's `RelayResult.status: int`, is a
+/// fixed `u16` -- the same type every OTHER status field in this module
+/// uses for a real HTTP status code. That is a genuine representational gap
+/// (PORTING.md §3d): three lossy steps used to paper over it silently
+/// (a saturating parse, `as i64`, `as u16`), stacking into `65736 -> 200`,
+/// `65536 -> 0`, `1000000 -> 16960`, `1e300 -> 65535`,
+/// `"18446744073709551816" -> 200`, `" 65736_0 " -> 2000` -- a corrupt
+/// ledger entry silently rendering as a plausible-looking, wrong, in-range
+/// status in both the relayed response AND the audit record
+/// (`RequestLedger::replay`'s caller passes `replayed.status` straight to
+/// `self.audit`, so the fix here covers both without a second edit).
+/// Parsing through the checked helper (no saturation) and then requiring
+/// the resulting exact value to fit `u16` turns every one of those six
+/// cases into `state_corrupt("request_ledger_status")` instead -- fails
+/// loud rather than silently lying. The residual `0..=65535` bound this
+/// leaves (a magnitude Python accepts that this crate's `status: u16` field
+/// genuinely cannot represent) is recorded in `DEVIATIONS.md` citing this
+/// finding.
+fn python_int_status(v: &Value) -> Option<u16> {
+    let n: i128 = match v {
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i128::from(i)
+            } else if let Some(u) = n.as_u64() {
+                i128::from(u)
+            } else {
+                // A JSON number that is neither an i64 nor a u64 is a
+                // float (`serde_json`'s arbitrary-precision feature is not
+                // enabled in this crate -- see `pyjson`); `n.as_f64()` is
+                // therefore always `Some` and always finite (a bare JSON
+                // number literal can never spell `inf`/`nan`). `int(f)`
+                // truncates toward zero exactly; only a magnitude this
+                // crate's own `u16` check below rejects anyway can exceed
+                // `i128`'s range, so the bounds check before the cast (not
+                // the cast itself) is what keeps this exact.
+                let f = n.as_f64()?;
+                let truncated = f.trunc();
+                if !(i128::MIN as f64..=i128::MAX as f64).contains(&truncated) {
+                    return None;
+                }
+                truncated as i128
+            }
+        }
+        Value::Bool(b) => i128::from(*b),
+        Value::String(s) => crate::pystr::int_from_str_checked(s)?,
+        _ => return None,
+    };
+    u16::try_from(n).ok()
 }
 
 /// `str(x)` for a JSON value already known to be a header name/value
@@ -1372,9 +1476,9 @@ impl<'a> RequestLedger<'a> {
             Some(_) => return Err(corrupt("request_ledger_response")),
         };
         let status = match response.get("status") {
-            None => 502i64,
+            None => 502u16,
             Some(v) => python_int_status(v).ok_or_else(|| corrupt("request_ledger_status"))?,
-        } as u16;
+        };
         let mut headers: Headers = python_headers_from_json(response.get("headers"))?;
         let reason = match response.get("reason") {
             None | Some(Value::Null) => None,
@@ -2669,7 +2773,35 @@ impl<'a> Relay<'a> {
         pinned_address: &str,
     ) -> Result<UpstreamResponse, UpstreamFailure> {
         let connection = self.connection.as_ref().expect("checked").clone();
-        let timeout = Duration::from_secs_f64(self.ctx.config.upstream_timeout.max(0.0));
+        // Finding X-18: `timeout = float(self.ctx.config.upstream_timeout)`
+        // never raises in Python -- the failure happens later, inside
+        // `socket.create_connection`/`.settimeout()` when `conn.connect()`
+        // runs, and `_exchange`'s own `except (socket.timeout, TimeoutError)`
+        // / `except OSError` around that call does NOT catch it: confirmed
+        // against a real `python3.12` socket, `.settimeout(float('inf'))`
+        // and `.settimeout(1e30)` both raise `OverflowError: timestamp out
+        // of range for platform time_t`, `.settimeout(float('nan'))` raises
+        // `ValueError: Invalid value NaN (not a number)`, and
+        // `.settimeout(-1.0)` raises `ValueError: Timeout value out of
+        // range` -- all four uncaught. `Duration::from_secs_f64` panics on
+        // a non-finite input where Python raises (PORTING.md §4: no panic
+        // on untrusted input), and the previous `.max(0.0)` clamp silently
+        // turned a NaN timeout into a ZERO-duration one instead of failing
+        // at all (Rust's `f64::max` returns the non-NaN operand for a NaN
+        // input) -- and separately never reproduced the negative-timeout
+        // `ValueError` either, silently clamping it to zero instead of
+        // failing. `Duration::try_from_secs_f64` rejects negative,
+        // non-finite AND Duration-overflowing input uniformly (covering all
+        // four probed cases, not just the two originally reported) with an
+        // `Err` instead of panicking; mapped onto the same `upstream_timeout`
+        // reason `classify_connect_error` already uses for a real socket
+        // timeout at this exact call site (PORTING.md §3.5).
+        // `upstream_timeout` is this crate's own in-process config (not
+        // untrusted network/state input), so this is a defensive fix for an
+        // unrecorded behavioural gap rather than a §4 panic-on-untrusted-input
+        // fix.
+        let timeout = Duration::try_from_secs_f64(self.ctx.config.upstream_timeout)
+            .map_err(|_| UpstreamFailure::error("upstream_timeout"))?;
         let limit = self.ctx.config.max_response_bytes.max(0) as usize;
         let mut stream = open_connection(&connection, timeout, pinned_address)?;
         stream.set_timeouts(Some(timeout));
@@ -3056,6 +3188,28 @@ impl<'a> Relay<'a> {
                 );
             }
         };
+        // Finding X-1: `auth_header` above already fails closed
+        // (`unsupported_auth_mode`) whenever `mode == "basic"` and
+        // `raw_basic_username` is set, so this point is only reached with a
+        // faithful `basic_username` string. Guarded again here, defensively,
+        // so a future reordering of these two calls cannot resurrect the
+        // placeholder leaking into the response-scrubbing pattern list the
+        // same way it once leaked onto the wire.
+        if connection
+            .http_auth
+            .as_ref()
+            .is_some_and(|a| a.mode == "basic" && a.raw_basic_username.is_some())
+        {
+            return self.refuse(
+                501,
+                "unsupported_auth_mode",
+                "denied",
+                Some("Unsupported"),
+                None,
+                Vec::new(),
+                true,
+            );
+        }
         let basic_username = connection
             .http_auth
             .as_ref()

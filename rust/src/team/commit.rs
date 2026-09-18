@@ -891,12 +891,33 @@ fn http_target_value(t: &policy::HttpTarget, raw_ca_file: &Value) -> Value {
 /// `HttpAuth::basic_username: Option<String>` field cannot hold for a
 /// container -- so the document is built from the original JSON value,
 /// not from `a.basic_username`.
+///
+/// `raw_header_name` (finding X-4, correcting this row's previous
+/// `a.header_name`-only rendering): Python's `HttpAuth.__post_init__` only
+/// ever inspects `header_name` when `mode == "header"`
+/// (`if self.mode == "header": ...`), so for every other mode it is kept
+/// completely verbatim -- confirmed against real `python3.12`,
+/// `build_connection_fields` with `{"mode": "bearer", "header_name":
+/// ["X-Foo"]}` returns `header_name: ["X-Foo"]`, not `None`. `build_http_auth`
+/// (below) uses the local `opt_string`, which collapses any non-string
+/// `header_name` to `None` regardless of mode -- correct for the
+/// `mode == "header"` case (`HttpAuth::new` then raises the documented
+/// `invalid_header_name` there, matching Python's own uncaught `TypeError`
+/// substitution, PORTING.md §3.5) but WRONG for every other mode, where
+/// Python never touches the field at all. `a.header_name` (the typed,
+/// `opt_string`-collapsed field) is therefore only trustworthy when
+/// `mode == "header"` -- exactly when it equals the raw JSON value anyway,
+/// since a non-`mode == "header"` divergence would already have made
+/// `build_http_auth` reject the op before reaching here. So, like the other
+/// three raw fields, the document is built from the original JSON value
+/// unconditionally, not from `a.header_name`.
 fn http_auth_value(
-    a: &policy::HttpAuth,
+    raw_header_name: &Value,
     raw_value_prefix: &Value,
     raw_basic_username: &Value,
+    a: &policy::HttpAuth,
 ) -> Value {
-    json!({"mode": a.mode, "header_name": a.header_name, "value_prefix": raw_value_prefix,
+    json!({"mode": a.mode, "header_name": raw_header_name, "value_prefix": raw_value_prefix,
           "basic_username": raw_basic_username})
 }
 fn http_scope_value(s: &policy::HttpScope) -> Value {
@@ -1404,6 +1425,12 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
         .and_then(|o| o.get("ca_file"))
         .cloned()
         .unwrap_or(Value::Null);
+    let raw_header_name = args
+        .get("http_auth")
+        .and_then(Value::as_object)
+        .and_then(|o| o.get("header_name"))
+        .cloned()
+        .unwrap_or(Value::Null);
     let raw_value_prefix = args
         .get("http_auth")
         .and_then(Value::as_object)
@@ -1427,7 +1454,7 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
         "http_auth".into(),
         http_auth
             .as_ref()
-            .map(|a| http_auth_value(a, &raw_value_prefix, &raw_basic_username))
+            .map(|a| http_auth_value(&raw_header_name, &raw_value_prefix, &raw_basic_username, a))
             .unwrap_or(Value::Null),
     );
     out.insert(

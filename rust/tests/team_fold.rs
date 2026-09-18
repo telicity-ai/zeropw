@@ -1361,3 +1361,131 @@ print(os.path.getsize({state_dir} + "/vault/secrets.json"))
         "both commits (env.init, secret.put_version with the deep public field) must be visible"
     );
 }
+
+// ---------------------------------------------------------------- X-2 value_prefix
+/// Cross-unit finding X-2: unlike `ca_file` (which `HttpTarget::from_value`
+/// still cannot represent, the documented H-R6-1 residual just above),
+/// `HttpAuth::from_value`'s `value_prefix`/`basic_username` (for a
+/// non-"basic" mode) now carry the real value through `raw_value_prefix`/
+/// `raw_basic_username` -- so unlike `ca_file`, this shape does NOT get
+/// skipped at all: both the "odd"-shaped connection and its well-formed
+/// sibling derive locally, matching Python's `Connection.from_dict`, which
+/// never fails on either field for these shapes.
+///
+/// Before this fix, `HttpAuth::from_value`'s `opt_str("value_prefix",
+/// false)` rejected ANY non-string, non-null `value_prefix` regardless of
+/// mode as `state_corrupt` -- and, measured directly (temporarily reverting
+/// just this fix and re-running this exact test): `document_connection_
+/// object`'s existing `Err(_) => continue` (the SAME per-item catch the
+/// `ca_file` test above exercises, from H-R6-1) already limited the damage
+/// to the one connection even before this fix -- the `local["good"]`
+/// assertion below passed against the unfixed code too, only the
+/// `local["odd"]` one failed. So, for this exact "two fresh connections in
+/// one fold" shape, "NEITHER connection is derived" does not reproduce;
+/// what actually reproduces is the SAME "unrepresentable connection
+/// silently absent from the local derive" residual the `ca_file` test
+/// documents. This test pins the STRONGER, correct outcome finding X-2
+/// asks for regardless: `derive_local` must derive BOTH connections,
+/// matching Python exactly, not silently drop the representable one.
+#[test]
+fn derive_connections_represents_container_value_prefix_for_every_mode_and_derives_both_connections()
+ {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let odd_op = json!({"op": "connection.create", "id": "odd", "project": "demo", "environment": "dev",
+                        "service": "api", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+                        "description": "", "http_target": {"scheme": "https", "host": "api.example.com", "port": 443},
+                        "http_auth": {"mode": "bearer", "value_prefix": ["pre"]},
+                        "http_scope": {"methods": ["GET"], "path_prefixes": ["/x"]}});
+    let c2 = C::sign_commit(
+        &owner,
+        &env_id,
+        2,
+        "2000-0000",
+        &BTreeMap::new(),
+        vec![odd_op],
+    )
+    .unwrap();
+    let c3 = simple_connection_create(&env_id, &owner, 3, "3000-0000", "good");
+    let commits = vec![c1.clone(), c2.clone(), c3.clone()];
+
+    let result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    assert_eq!(
+        result.skipped,
+        Vec::<(String, usize, String)>::new(),
+        "fold() must not skip either op -- Python never rejects value_prefix for any mode"
+    );
+    assert_eq!(
+        result.document["connections"]["odd"]["http_auth"]["value_prefix"],
+        json!(["pre"]),
+        "folded document must keep value_prefix byte-identical (team/commit.rs's raw_value_prefix passthrough)"
+    );
+
+    F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .expect("derive_local must succeed -- neither connection's shape is rejected by Python");
+
+    let local = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert!(
+        local["good"].is_object(),
+        "the sibling well-formed connection must derive locally"
+    );
+    // Finding X-2's actual point (stronger than the ca_file residual above):
+    // "odd" is NOT a documented-absent residual -- it must derive too, with
+    // the real value.
+    assert_eq!(
+        local["odd"]["http_auth"]["value_prefix"],
+        json!(["pre"]),
+        "the container value_prefix connection must ALSO derive locally, byte-identical to the fold document"
+    );
+
+    // Cross-check against real python3.12: both connections derive, and
+    // value_prefix stays byte-identical throughout.
+    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
+    let commits_text =
+        pyjson::dumps(&json!(commits_json), pyjson::DumpOptions::compact_sorted()).unwrap();
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.context import Config, Context
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+raw = json.loads({commits_text:?})
+commits = [C.Commit.from_dict(c) for c in raw]
+env_id = {env_id:?}
+result = F.fold(env_id, commits)
+assert result.skipped == [], result.skipped
+with tempfile.TemporaryDirectory() as tmp:
+    ctx = Context.initialize(Path(tmp) / "state", "admin-pass-1", "recovery-pass-1", Config())
+    ctx.projects.create("demo")
+    F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit)
+    connections = ctx.state.read_json("policy/connections.json")
+print(json.dumps({{
+    "document_value_prefix": result.document["connections"]["odd"]["http_auth"]["value_prefix"],
+    "local_odd_value_prefix": connections.get("odd", {{}}).get("http_auth", {{}}).get("value_prefix", "__ABSENT__"),
+    "local_good_present": "good" in connections,
+    "local_odd_present": "odd" in connections,
+}}, sort_keys=True))
+"#,
+    );
+    let out = run_python(&script);
+    let py: Value = pyjson::loads(out.trim()).unwrap();
+    assert_eq!(py["document_value_prefix"], json!(["pre"]));
+    assert_eq!(py["local_good_present"], json!(true));
+    assert_eq!(
+        py["local_odd_present"],
+        json!(true),
+        "python must derive BOTH connections -- confirming rust must too, not skip one"
+    );
+    assert_eq!(py["local_odd_value_prefix"], json!(["pre"]));
+}

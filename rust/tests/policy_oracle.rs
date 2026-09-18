@@ -5547,3 +5547,348 @@ with tempfile.TemporaryDirectory() as d:
         "rust and python persisted documents must agree after disable_connection"
     );
 }
+
+/// Cross-unit finding X-2: `HttpAuth.value_prefix` has **no**
+/// `__post_init__` check in Python at all, for ANY `mode` (unlike
+/// `header_name`/`basic_username`, which are validated only when their mode
+/// applies) -- confirmed against real `python3.12`,
+/// `build_connection_fields({"http_auth": {"mode": "bearer",
+/// "value_prefix": ["pre"]}, ...})` returns `value_prefix: ["pre"]`
+/// verbatim, and `Connection.from_dict` on that document loads without
+/// error. Before this fix, `HttpAuth::from_value`'s `opt_str("value_prefix",
+/// false)` rejected ANY non-string, non-null `value_prefix` as
+/// `state_corrupt` regardless of mode -- so a state document a peer's own
+/// `connection.create`/`connection.update` op can legitimately produce
+/// (`team::commit::http_auth_value` already writes the raw value verbatim)
+/// failed to reload at all. `HttpAuth::raw_value_prefix` now carries the
+/// real value through both `from_value` and `to_value`.
+#[test]
+fn http_auth_container_value_prefix_loads_and_round_trips_for_every_mode() {
+    let script = r#"
+import json, tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+with tempfile.TemporaryDirectory() as d:
+    state_path = os.path.join(d, "state")
+    state = StateDir(state_path)
+    state.create()
+    p = P.Policy(state, clock=lambda: 1700000000.0)
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=None,
+        policy_version=0, status="active", created_at="", updated_at="",
+    )
+    p.create_connection(conn)
+
+    doc = state.read_json(P.CONNECTIONS, {})
+    doc["gh"]["http_auth"]["value_prefix"] = ["pre"]
+    state.write_json(P.CONNECTIONS, doc)
+
+    c = p.get_connection("gh")
+    print("get_prefix", json.dumps(c.http_auth.value_prefix))
+
+    c2, widened = p.update_connection("gh", description="mutated")
+    after = state.read_json(P.CONNECTIONS, {})
+    print("update_prefix", json.dumps(after["gh"]["http_auth"]["value_prefix"]))
+
+    c3 = p.disable_connection("gh")
+    after2 = state.read_json(P.CONNECTIONS, {})
+    print("disable_prefix", json.dumps(after2["gh"]["http_auth"]["value_prefix"]))
+"#;
+    let out = run_python(script);
+    let mut py_lines = out.lines();
+    let parse = |line: &str, prefix: &str| -> serde_json::Value {
+        serde_json::from_str(line.strip_prefix(prefix).expect("prefix")).expect("valid json")
+    };
+    let py_get_prefix = parse(py_lines.next().unwrap(), "get_prefix ");
+    let py_update_prefix = parse(py_lines.next().unwrap(), "update_prefix ");
+    let py_disable_prefix = parse(py_lines.next().unwrap(), "disable_prefix ");
+
+    let expected = serde_json::json!(["pre"]);
+    assert_eq!(
+        py_get_prefix, expected,
+        "python keeps the container verbatim"
+    );
+    assert_eq!(py_update_prefix, expected);
+    assert_eq!(py_disable_prefix, expected);
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let conn = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "fake-github",
+        "http",
+        "gh-token",
+        None,
+        "demo",
+        Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
+        Some(HttpAuth::bearer()),
+        Some(
+            HttpScope::new(
+                Some(vec!["GET".into(), "POST".into()]),
+                Some(vec!["/repos".into(), "/me".into()]),
+                vec![],
+            )
+            .unwrap(),
+        ),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    policy.create_connection(conn).unwrap();
+
+    let mut doc = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    doc["gh"]["http_auth"]["value_prefix"] = serde_json::json!(["pre"]);
+    state.write_json(policy::CONNECTIONS, &doc).unwrap();
+
+    // Before finding X-2's fix, this `get_connection` call returned
+    // `Err(state_corrupt)`, aborting the whole load over one field Python's
+    // own loader never rejects for any mode.
+    let loaded = policy.get_connection("gh").expect(
+        "X-2: a container value_prefix must load for every mode, not just when the mode reads it",
+    );
+    assert_eq!(
+        loaded.http_auth.as_ref().unwrap().raw_value_prefix,
+        Some(expected.clone()),
+        "the real container must survive HttpAuth::from_value"
+    );
+
+    let (_rust_updated, _widened) = policy
+        .update_connection("gh", ConnectionChanges::new().description("mutated"))
+        .unwrap();
+    let after = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after["gh"]["http_auth"]["value_prefix"], expected,
+        "rust must persist the real container after update_connection"
+    );
+    assert_eq!(after["gh"]["http_auth"]["value_prefix"], py_update_prefix);
+
+    let _rust_disabled = policy.disable_connection("gh").unwrap();
+    let after2 = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after2["gh"]["http_auth"]["value_prefix"], expected);
+    assert_eq!(after2["gh"]["http_auth"]["value_prefix"], py_disable_prefix);
+}
+
+/// Cross-unit finding X-2 (the `basic_username` sibling case): Python's
+/// `HttpAuth.__post_init__` only inspects `basic_username` when
+/// `mode == "basic"` (`if self.mode == "basic" and (...)`) -- for every
+/// other mode, ANY value (a scalar `5`, not just a colon-free container)
+/// is unchecked and kept verbatim. Confirmed against real `python3.12`:
+/// `build_connection_fields({"http_auth": {"mode": "bearer",
+/// "basic_username": 5}, ...})` returns `basic_username: 5`. Before this
+/// fix, `HttpAuth::from_value`'s `opt_str("basic_username", false)` for
+/// `mode != "basic"` rejected ANY non-string, non-null value (a scalar
+/// included) as `state_corrupt`.
+#[test]
+fn http_auth_scalar_basic_username_loads_for_non_basic_mode() {
+    let script = r#"
+import json, tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+with tempfile.TemporaryDirectory() as d:
+    state_path = os.path.join(d, "state")
+    state = StateDir(state_path)
+    state.create()
+    p = P.Policy(state, clock=lambda: 1700000000.0)
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=None,
+        policy_version=0, status="active", created_at="", updated_at="",
+    )
+    p.create_connection(conn)
+
+    doc = state.read_json(P.CONNECTIONS, {})
+    doc["gh"]["http_auth"]["basic_username"] = 5
+    state.write_json(P.CONNECTIONS, doc)
+
+    c = p.get_connection("gh")
+    print("get_username", json.dumps(c.http_auth.basic_username))
+"#;
+    let out = run_python(script);
+    let py_get_username = out
+        .lines()
+        .next()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l.strip_prefix("get_username ").unwrap())
+                .unwrap()
+        })
+        .unwrap();
+    assert_eq!(py_get_username, serde_json::json!(5));
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let conn = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "fake-github",
+        "http",
+        "gh-token",
+        None,
+        "demo",
+        Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
+        Some(HttpAuth::bearer()),
+        Some(
+            HttpScope::new(
+                Some(vec!["GET".into(), "POST".into()]),
+                Some(vec!["/repos".into(), "/me".into()]),
+                vec![],
+            )
+            .unwrap(),
+        ),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    policy.create_connection(conn).unwrap();
+
+    let mut doc = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    doc["gh"]["http_auth"]["basic_username"] = serde_json::json!(5);
+    state.write_json(policy::CONNECTIONS, &doc).unwrap();
+
+    // Before finding X-2's fix, this `get_connection` call returned
+    // `Err(state_corrupt)`, aborting the whole load.
+    let loaded = policy.get_connection("gh").expect(
+        "X-2: a scalar basic_username under a non-basic mode must load, matching Python's \
+         mode-gated __post_init__ check",
+    );
+    assert_eq!(
+        loaded.http_auth.as_ref().unwrap().raw_basic_username,
+        Some(serde_json::json!(5)),
+        "the real scalar must survive HttpAuth::from_value"
+    );
+}
+
+/// Finding X-4's sibling gap on the STATE-DOCUMENT loading path (as opposed
+/// to `team_oracle.rs`'s `http_auth_container_header_name_matches_python_for_non_header_mode`,
+/// which covers the fold-document WRITING path): once `team::commit::
+/// http_auth_value` starts writing the real `header_name` container into
+/// the folded document for a non-"header" mode (finding X-4's fix), that
+/// same document must also load back through `HttpAuth::from_value` without
+/// aborting -- otherwise fixing X-4 alone would resurrect finding X-2's
+/// "one representational gap aborts the whole document load" defect, just
+/// for `header_name` instead of `value_prefix`/`basic_username`. Confirmed
+/// against real `python3.12`: `Connection.from_dict` on a document with
+/// `http_auth: {"mode": "bearer", "header_name": ["X-Foo"], ...}` loads
+/// fine (`HttpAuth.__post_init__` never inspects `header_name` unless
+/// `mode == "header"`).
+#[test]
+fn http_auth_container_header_name_loads_for_non_header_mode() {
+    let script = r#"
+import json, tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+with tempfile.TemporaryDirectory() as d:
+    state_path = os.path.join(d, "state")
+    state = StateDir(state_path)
+    state.create()
+    p = P.Policy(state, clock=lambda: 1700000000.0)
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=None,
+        policy_version=0, status="active", created_at="", updated_at="",
+    )
+    p.create_connection(conn)
+
+    doc = state.read_json(P.CONNECTIONS, {})
+    doc["gh"]["http_auth"]["header_name"] = ["X-Foo"]
+    state.write_json(P.CONNECTIONS, doc)
+
+    c = p.get_connection("gh")
+    print("get_header_name", json.dumps(c.http_auth.header_name))
+"#;
+    let out = run_python(script);
+    let py_header_name: serde_json::Value = out
+        .lines()
+        .next()
+        .map(|l| serde_json::from_str(l.strip_prefix("get_header_name ").unwrap()).unwrap())
+        .unwrap();
+    assert_eq!(py_header_name, serde_json::json!(["X-Foo"]));
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let conn = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "fake-github",
+        "http",
+        "gh-token",
+        None,
+        "demo",
+        Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
+        Some(HttpAuth::bearer()),
+        Some(
+            HttpScope::new(
+                Some(vec!["GET".into(), "POST".into()]),
+                Some(vec!["/repos".into(), "/me".into()]),
+                vec![],
+            )
+            .unwrap(),
+        ),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    policy.create_connection(conn).unwrap();
+
+    let mut doc = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    doc["gh"]["http_auth"]["header_name"] = serde_json::json!(["X-Foo"]);
+    state.write_json(policy::CONNECTIONS, &doc).unwrap();
+
+    let loaded = policy.get_connection("gh").expect(
+        "X-4's sibling gap: a container header_name under a non-header mode must load, \
+         matching Python's mode-gated __post_init__ check -- otherwise fixing X-4's fold-\
+         document write would abort derive_local for every connection in the environment",
+    );
+    assert_eq!(
+        loaded.http_auth.as_ref().unwrap().raw_header_name,
+        Some(serde_json::json!(["X-Foo"])),
+        "the real container must survive HttpAuth::from_value"
+    );
+}
