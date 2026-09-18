@@ -153,20 +153,48 @@ const NUMBER_TO_STRING_ALLOWLIST: &[Allow] = &[
     },
     Allow {
         file: "policy.rs",
-        marker: "Value::Number(n) => n.to_string(),",
-        reason: "REAL, KNOWN DEBT, not fixed this round (out of work-unit F's scope -- \
-                 policy.rs belongs to a different work unit): python_str_for_error's \
-                 Number arm is an UNGUARDED str()-coercion of any number, including a \
-                 float, and its own doc comment already says so ('unlike kms.rs's \
-                 python_number_str this does not reproduce CPython's float repr, since no \
-                 field this crate formats this way is ever a float') -- the same shape \
-                 finding F-R4-5 just fixed in gateway.rs's python_str_of, left open here \
-                 because the field is reachable only via an incident-open value never \
-                 populated as a float in the current data model, per that comment's own \
-                 reasoning. A future change to route incident-open handling through this \
-                 helper for a genuinely float-valued field should fix this properly \
-                 (route through pyjson::python_float_repr like the row above), not extend \
-                 this allowlist entry",
+        marker: "Value::Number(n) if number_is_python_int(n) => n.to_string() == \"0\",",
+        reason: "grant_num_value_is_zero's Number arm: guarded by number_is_python_int, same \
+                 shape as grant_num_max_with_zero's sibling `.starts_with('-')` entry above -- \
+                 an integer-shaped literal is never the string \"0\" unless its decimal value \
+                 genuinely is zero, and the very next arm handles the real float branch via \
+                 exact `f64` equality, not a rendered string.",
+    },
+    Allow {
+        file: "policy.rs",
+        marker: "let Ok(secs) = n.to_string().parse::<i128>()",
+        reason: "iso_for_raw_value's exact-integer fast path (finding D-R7-3): only reached \
+                 once number_is_python_int has confirmed the literal is integer-shaped (the \
+                 guard one line above, in the same `if let ... && ... &&` chain), so this \
+                 parses the exact decimal digits into i128 to avoid numeric_value_as_f64's \
+                 precision loss above 2**53 -- not a rendered string; the fallback path below \
+                 goes through the ordinary f64/`store::iso` route for anything this doesn't \
+                 catch.",
+    },
+    Allow {
+        file: "policy.rs",
+        marker: "let Ok(exp_i128) = n.to_string().parse::<i128>()",
+        reason: "now_at_least_exact's exact-integer fast path (finding D-R7-3): same shape as \
+                 iso_for_raw_value's entry above -- guarded by number_is_python_int one line \
+                 up in the same let-chain, parses exact decimal digits into i128 for an exact \
+                 `floor(now) >= exp` comparison, not a rendered string; anything else falls \
+                 back to the existing f64 comparison.",
+    },
+    Allow {
+        file: "policy.rs",
+        marker: "Value::Number(n) if number_is_python_int(n) => n.to_string(),",
+        reason: "python_str_for_error's Number arm (same guarded-int-branch shape as the \
+                 gateway.rs/team/commit.rs entries above, and policy.rs's own \
+                 python_numeric_eq_value entry): only reached once number_is_python_int has \
+                 confirmed the literal is integer-shaped, so Python's str(int) is exactly \
+                 the decimal digits -- the very next match arm renders the real float branch \
+                 through the canonical pyjson::python_float_repr. This function previously \
+                 had an UNGUARDED `Value::Number(n) => n.to_string(),` arm, recorded as real \
+                 debt in a since-removed allowlist entry -- PORTING.md §3b's round-7 addendum \
+                 names this exact gap (D-PO-1) as fixed by the SAME eb88e3a commit that never \
+                 updated this guard's allowlist to match, so the guard was left failing on a \
+                 stale marker describing debt the code no longer has. This entry replaces \
+                 that stale one.",
     },
 ];
 
@@ -292,9 +320,12 @@ fn no_base64_engine_decode_outside_pybase64() {
 /// other spelling of a `Number`-to-`String` render -- none currently
 /// exist), not a differently-named variable or a hand-rolled digit-by-digit
 /// formatter. Every current match is catalogued in
-/// `NUMBER_TO_STRING_ALLOWLIST` above, including one entry recorded as real
-/// debt rather than fixed (`policy.rs`'s `python_str_for_error`, out of
-/// this round's scope).
+/// `NUMBER_TO_STRING_ALLOWLIST` above; every entry is a guarded int-shaped
+/// branch or a source-text inspection, not a live "known debt" render (the
+/// one entry that used to record real debt, `policy.rs`'s
+/// `python_str_for_error`, was fixed by PORTING.md §3b's D-PO-1 and its
+/// entry updated to match the fix, rather than left describing code that no
+/// longer exists).
 ///
 /// Verified to catch a reintroduction, two ways: (1) temporarily replacing
 /// `python_str_of`'s whole `Value::Number` arm with the pre-F-R4-5 bug

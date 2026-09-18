@@ -1171,6 +1171,27 @@ pub struct HttpAuth {
     pub header_name: Option<String>,
     pub value_prefix: Option<String>,
     pub basic_username: Option<String>,
+    /// The original JSON value for `basic_username` when it is a truthy,
+    /// colon-free list/dict that [`basic_username_decision`] accepts
+    /// without raising (finding H-R5-3's sibling gap on this STATE-
+    /// DOCUMENT loading path, `HttpAuth::from_value`). `basic_username`
+    /// (typed `Option<String>`, PORTING.md §3b/§4's typed-field limit)
+    /// cannot hold a list/dict, so it is set to a colon-free placeholder in
+    /// that case and this field holds `Some(<the real container>)` instead
+    /// -- `None` whenever `basic_username` itself is already faithful (an
+    /// ordinary string, or genuinely absent/falsy).
+    ///
+    /// Cross-unit finding (round 8), the same one [`CliProfile::raw_program`]
+    /// documents: [`HttpAuth::to_value`] (the persisted document, read by
+    /// `Connection::to_value` and written by
+    /// `create_connection`/`update_connection`/`disable_connection` and
+    /// `team::fold`'s connection derivation) must render from this field
+    /// whenever it is `Some`, never from `basic_username` itself, which
+    /// only ever holds a placeholder in that case. (`public_view` never
+    /// renders `basic_username` at all, so unlike `CliProfile.program` this
+    /// field has no agent-facing view exposure -- only the persisted
+    /// document.)
+    pub raw_basic_username: Option<Value>,
 }
 
 impl HttpAuth {
@@ -1210,6 +1231,7 @@ impl HttpAuth {
             header_name,
             value_prefix,
             basic_username,
+            raw_basic_username: None,
         })
     }
 
@@ -1220,13 +1242,21 @@ impl HttpAuth {
             header_name: None,
             value_prefix: None,
             basic_username: None,
+            raw_basic_username: None,
         }
     }
 
     fn to_value(&self) -> Value {
+        let basic_username =
+            self.raw_basic_username
+                .clone()
+                .unwrap_or_else(|| match &self.basic_username {
+                    Some(s) => Value::String(s.clone()),
+                    None => Value::Null,
+                });
         json!({
             "mode": self.mode, "header_name": self.header_name,
-            "value_prefix": self.value_prefix, "basic_username": self.basic_username,
+            "value_prefix": self.value_prefix, "basic_username": basic_username,
         })
     }
 
@@ -1295,17 +1325,32 @@ impl HttpAuth {
         // same way Python does. When `mode != "basic"` the field is
         // unchecked in Python either way, so `opt_str`'s existing
         // (documented, narrower) residual for that case is unchanged.
+        let basic_username_raw = obj.get("basic_username");
+        // Cross-unit finding (round 8): whether `basic_username_decision`
+        // is about to return the accepted, colon-free CONTAINER placeholder
+        // (`"\u{1}"`) rather than a faithful string -- computed the same
+        // way [`basic_username_decision`] itself decides a truthy container
+        // is in play, so this can only be `true` exactly when the
+        // constructed `HttpAuth` below is going to need
+        // `raw_basic_username` to round-trip the real value.
+        let basic_username_is_container = mode == "basic"
+            && json_truthy(basic_username_raw)
+            && matches!(basic_username_raw, Some(Value::Array(_) | Value::Object(_)));
         let basic_username = if mode == "basic" {
-            basic_username_decision(obj.get("basic_username"))
+            basic_username_decision(basic_username_raw)
         } else {
             opt_str("basic_username", false)?
         };
-        HttpAuth::new(
+        let mut auth = HttpAuth::new(
             mode.clone(),
             opt_str("header_name", mode == "header")?,
             opt_str("value_prefix", false)?,
             basic_username,
-        )
+        )?;
+        if basic_username_is_container {
+            auth.raw_basic_username = basic_username_raw.cloned();
+        }
+        Ok(auth)
     }
 }
 
@@ -1571,9 +1616,44 @@ pub struct CliProfile {
     pub kind: String,
     pub base_url_env: String,
     pub extra_env: std::collections::BTreeMap<String, String>,
+    /// The original JSON value for `program` when it is a truthy list/dict
+    /// that Python's `"\x00" in self.program` membership test does not
+    /// reject and keeps verbatim (finding H-R5-2's sibling gap on this
+    /// STATE-DOCUMENT loading path, `CliProfile::from_value`). `program`
+    /// (typed `String`, PORTING.md §3b/§4's typed-field limit) cannot hold
+    /// a list/dict, so it is set to the placeholder
+    /// `"\u{1}container-program"` in that case and this field holds
+    /// `Some(<the real container>)` instead -- `None` for an ordinary
+    /// string `program`, where `program` itself is already the faithful
+    /// value and no substitution ever happened.
+    ///
+    /// Cross-unit finding (round 8): every renderer that turns a
+    /// `CliProfile` back into JSON -- [`CliProfile::to_value`] (the
+    /// persisted document, read by [`Connection::to_value`] and written by
+    /// `create_connection`/`update_connection`/`disable_connection` and
+    /// `team::fold`'s connection derivation) and [`Connection::public_view`]
+    /// (the agent-facing `get_connection`/`list_connections`/
+    /// `update_connection`/`disable_connection` response) -- must render
+    /// from this field whenever it is `Some`, never from `program` itself:
+    /// `program` only holds a placeholder in that case, not a faithful
+    /// round-trip, and DEVIATIONS.md's previous claim that nothing in this
+    /// half's scope reads `CliProfile.program` back out of a loaded
+    /// `Connection` was false -- `Connection::public_view` (`policy.rs`)
+    /// always has, in every version of this file since `CliProfile` first
+    /// gained a `program` field.
+    pub raw_program: Option<Value>,
 }
 
 impl CliProfile {
+    /// The JSON value `program` should render as: the original container
+    /// from [`Self::raw_program`] when set, otherwise the (faithful, for an
+    /// ordinary string `program`) typed field itself.
+    fn program_value(&self) -> Value {
+        self.raw_program
+            .clone()
+            .unwrap_or_else(|| Value::String(self.program.clone()))
+    }
+
     pub fn new(
         program: impl Into<String>,
         kind: impl Into<String>,
@@ -1605,6 +1685,7 @@ impl CliProfile {
             kind,
             base_url_env,
             extra_env,
+            raw_program: None,
         })
     }
 
@@ -1660,12 +1741,13 @@ impl CliProfile {
             kind,
             base_url_env,
             extra_env: extra_env.into_iter().collect(),
+            raw_program: None,
         })
     }
 
     fn to_value(&self) -> Value {
         json!({
-            "program": self.program, "kind": self.kind, "base_url_env": self.base_url_env,
+            "program": self.program_value(), "kind": self.kind, "base_url_env": self.base_url_env,
             "extra_env": self.extra_env,
         })
     }
@@ -1750,10 +1832,16 @@ impl CliProfile {
         // whole document with `state_corrupt`. `CliProfile.program` is
         // typed `String` here and cannot hold the real list/dict (PORTING.md
         // §3b's typed-field limit, same as `ca_file`); the value substituted
-        // below is a placeholder guaranteed to pass the checks after it,
-        // not a faithful round-trip of the original container -- narrower
-        // residual than an outright load failure, recorded in
-        // `DEVIATIONS.md`.
+        // below is a placeholder guaranteed to pass the checks after it, not
+        // a faithful round-trip of the original container through the typed
+        // field itself -- but [`CliProfile::raw_program`] (populated below)
+        // carries the real container through unchanged, and every renderer
+        // (`to_value`, `Connection::public_view`) reads that instead of
+        // `program` whenever it is set, so the public view and the
+        // persisted document are still byte-identical to Python's (cross-
+        // unit finding, round 8: DEVIATIONS.md previously and wrongly
+        // claimed this placeholder was never read back by anything in this
+        // half's scope).
         let program_contains_nul = match &program_raw {
             Value::String(s) => s.contains('\0'),
             Value::Array(items) => items.iter().any(|v| v.as_str() == Some("\u{0}")),
@@ -1805,7 +1893,11 @@ impl CliProfile {
             }
             extra_env.insert(key_str.to_string(), val_str.to_string());
         }
-        CliProfile::new(program, kind, base_url_env, extra_env)
+        let mut profile = CliProfile::new(program, kind, base_url_env, extra_env)?;
+        if program_is_container {
+            profile.raw_program = Some(program_raw.clone());
+        }
+        Ok(profile)
     }
 }
 
@@ -2176,7 +2268,7 @@ impl Connection {
         view.insert(
             "cli".into(),
             match &self.cli {
-                Some(c) => json!({"program": c.program}),
+                Some(c) => json!({"program": c.program_value()}),
                 None => Value::Null,
             },
         );
@@ -2719,7 +2811,7 @@ fn value_eq_str(v: &Value, s: &str) -> bool {
 /// instead of this function; this one remains for the cases that are
 /// genuinely fine to approximate (a real `Float`, or a magnitude beyond even
 /// `i128`, which nothing this crate or `zeropw/policy.py` itself ever
-/// writes).
+///   writes).
 fn numeric_value_as_f64(v: &Value) -> Option<f64> {
     match v {
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
@@ -4631,10 +4723,7 @@ impl<'a> Policy<'a> {
         // `Value` now flows straight through [`Policy::create_grant_exact`]
         // to the fresh grant's `raw_max_uses`/persisted document instead.
         let remaining_uses_raw: Option<Value> = match &old.raw_max_uses {
-            Some(max) => Some(grant_num_max_with_zero(grant_num_sub(
-                max,
-                &old.raw_uses,
-            )?)),
+            Some(max) => Some(grant_num_max_with_zero(grant_num_sub(max, &old.raw_uses)?)),
             None => None,
         };
         if remaining_uses_raw
@@ -7700,10 +7789,7 @@ mod tests {
 
         let fresh = policy.regrant(&grant.id).unwrap();
         let raw = state.read_json(GRANTS, json!({})).unwrap();
-        assert_eq!(
-            raw[&fresh.id]["max_uses"],
-            json!(9_007_199_254_740_993i64)
-        );
+        assert_eq!(raw[&fresh.id]["max_uses"], json!(9_007_199_254_740_993i64));
     }
 
     /// Finding D-R7-2: Python's `self._grants()` (`reapply_revocations`)
@@ -7846,9 +7932,7 @@ mod tests {
         doc.as_object_mut().unwrap()[&grant.id]["uses"] = json!({"a": 1});
         doc.as_object_mut().unwrap()[&grant.id]["max_uses"] = json!({"b": 2});
         state.write_json(GRANTS, &doc).unwrap();
-        let err = policy
-            .check_grant("agent-1", "gh", &grant.id)
-            .unwrap_err();
+        let err = policy.check_grant("agent-1", "gh", &grant.id).unwrap_err();
         assert!(err.is(ErrorClass::StateError), "{err:?}");
         assert_eq!(err.reason, "state_corrupt");
     }
@@ -7896,8 +7980,7 @@ mod tests {
         let digest_object = approval_helper(&policy, "/repos/object");
         policy.approve(&digest_object).unwrap();
         let mut control = state.read_json(CONTROL, json!({})).unwrap();
-        control.as_object_mut().unwrap()["approvals"][&digest_object]["grant"] =
-            json!({"a": 1});
+        control.as_object_mut().unwrap()["approvals"][&digest_object]["grant"] = json!({"a": 1});
         state.write_json(CONTROL, &control).unwrap();
         let err = policy
             .consume_approval(&digest_object, "agent-1", "gh", None, None)
@@ -7939,10 +8022,10 @@ mod tests {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         let mut control = state.read_json(CONTROL, json!({})).unwrap();
-        control.as_object_mut().unwrap().insert(
-            "approvals".to_string(),
-            json!([[1, "a"]]),
-        );
+        control
+            .as_object_mut()
+            .unwrap()
+            .insert("approvals".to_string(), json!([[1, "a"]]));
         state.write_json(CONTROL, &control).unwrap();
         let err = policy.list_approvals().unwrap_err();
         assert!(err.is(ErrorClass::StateError), "{err:?}");

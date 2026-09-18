@@ -5186,3 +5186,364 @@ shutil.rmtree(d, ignore_errors=True)"#;
     );
     assert_eq!(restore_records[0]["result"], serde_json::json!("ok"));
 }
+
+// -------------------------------------------------------------- round 8
+
+/// Cross-unit finding (round 8): work unit H's H-R5-2 fix made
+/// `CliProfile::from_value` accept a truthy, `"\x00"`-free list/dict
+/// `program` (the same `"\x00" in program` membership-test relaxation
+/// `team::commit::build_cli_profile` already had) instead of rejecting the
+/// whole connection record with `state_corrupt` -- but `CliProfile.program`
+/// is typed `String` (PORTING.md §3b/§4's typed-field limit) and
+/// substituted the placeholder `"\u{1}container-program"` for the real
+/// container. Before this round's fix, `Connection::public_view`
+/// (`get_connection`/`list_connections`/`update_connection`/
+/// `disable_connection`'s agent-facing response) and `Connection::to_value`
+/// (the persisted document, written by every one of those four operations)
+/// both rendered that placeholder VERBATIM -- an agent-visible fabricated
+/// program name where Python shows the real value, and a byte-level
+/// document divergence the moment any of those operations touched the
+/// connection. `CliProfile::raw_program` now carries the original value
+/// through both renderers instead.
+///
+/// Confirmed against real `python3.12`: `CliProfile.__post_init__` keeps a
+/// truthy, `"\x00"`-free list/dict `program` completely verbatim, and so
+/// does every operation below that returns or re-persists the connection.
+#[test]
+fn cli_profile_truthy_container_program_round_trips_through_view_and_document() {
+    let script = r#"
+import json, tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+with tempfile.TemporaryDirectory() as d:
+    state_path = os.path.join(d, "state")
+    state = StateDir(state_path)
+    state.create()
+    p = P.Policy(state, clock=lambda: 1700000000.0)
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=P.CliProfile("placeholder", "http"),
+        policy_version=0, status="active", created_at="", updated_at="",
+    )
+    p.create_connection(conn)
+
+    doc = state.read_json(P.CONNECTIONS, {})
+    doc["gh"]["cli"]["program"] = ["curl", "--silent"]
+    state.write_json(P.CONNECTIONS, doc)
+
+    c = p.get_connection("gh")
+    print("get", json.dumps(c.public_view()["cli"]))
+
+    conns = p.list_connections()
+    print("list", json.dumps(conns[0].public_view()["cli"]))
+
+    c2, widened = p.update_connection("gh", description="mutated")
+    print("update", json.dumps(c2.public_view()["cli"]))
+    after = state.read_json(P.CONNECTIONS, {})
+    print("update_doc", json.dumps(after["gh"]["cli"]))
+
+    c3 = p.disable_connection("gh")
+    print("disable", json.dumps(c3.public_view()["cli"]))
+    after2 = state.read_json(P.CONNECTIONS, {})
+    print("disable_doc", json.dumps(after2["gh"]["cli"]))
+"#;
+    let out = run_python(script);
+    let mut py_lines = out.lines();
+    let parse = |line: &str, prefix: &str| -> serde_json::Value {
+        serde_json::from_str(line.strip_prefix(prefix).expect("prefix")).expect("valid json")
+    };
+    let py_get = parse(py_lines.next().unwrap(), "get ");
+    let py_list = parse(py_lines.next().unwrap(), "list ");
+    let py_update = parse(py_lines.next().unwrap(), "update ");
+    let py_update_doc = parse(py_lines.next().unwrap(), "update_doc ");
+    let py_disable = parse(py_lines.next().unwrap(), "disable ");
+    let py_disable_doc = parse(py_lines.next().unwrap(), "disable_doc ");
+
+    let expected = serde_json::json!({"program": ["curl", "--silent"]});
+    for (label, v) in [
+        ("get", &py_get),
+        ("list", &py_list),
+        ("update", &py_update),
+        ("disable", &py_disable),
+    ] {
+        assert_eq!(
+            v, &expected,
+            "python view ({label}) must show the real container"
+        );
+    }
+    for (label, v) in [
+        ("update_doc", &py_update_doc),
+        ("disable_doc", &py_disable_doc),
+    ] {
+        assert_eq!(
+            v["program"], expected["program"],
+            "python persisted document ({label}) must keep the real container"
+        );
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let conn = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "fake-github",
+        "http",
+        "gh-token",
+        None,
+        "demo",
+        Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
+        Some(HttpAuth::bearer()),
+        Some(
+            HttpScope::new(
+                Some(vec!["GET".into(), "POST".into()]),
+                Some(vec!["/repos".into(), "/me".into()]),
+                vec![],
+            )
+            .unwrap(),
+        ),
+        None,
+        Some(CliProfile::new("placeholder", "http", None, Default::default()).unwrap()),
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    policy.create_connection(conn).unwrap();
+
+    let mut doc = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    doc["gh"]["cli"]["program"] = serde_json::json!(["curl", "--silent"]);
+    state.write_json(policy::CONNECTIONS, &doc).unwrap();
+
+    let rust_get = policy.get_connection("gh").unwrap().public_view()["cli"].clone();
+    assert_eq!(
+        rust_get, expected,
+        "rust get_connection must show the real container"
+    );
+    assert_eq!(
+        rust_get, py_get,
+        "rust and python get_connection views must agree"
+    );
+
+    let rust_list = policy.list_connections().unwrap()[0].public_view()["cli"].clone();
+    assert_eq!(
+        rust_list, expected,
+        "rust list_connections must show the real container"
+    );
+    assert_eq!(
+        rust_list, py_list,
+        "rust and python list_connections views must agree"
+    );
+
+    let (rust_updated, _widened) = policy
+        .update_connection("gh", ConnectionChanges::new().description("mutated"))
+        .unwrap();
+    let rust_update_view = rust_updated.public_view()["cli"].clone();
+    assert_eq!(
+        rust_update_view, expected,
+        "rust update_connection's returned view must show the real container"
+    );
+    assert_eq!(
+        rust_update_view, py_update,
+        "rust and python update_connection views must agree"
+    );
+    let after = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after["gh"]["cli"]["program"], expected["program"],
+        "rust must persist the real container after update_connection"
+    );
+    assert_eq!(
+        after["gh"]["cli"], py_update_doc,
+        "rust and python persisted documents must agree after update_connection"
+    );
+
+    let rust_disabled = policy.disable_connection("gh").unwrap();
+    let rust_disable_view = rust_disabled.public_view()["cli"].clone();
+    assert_eq!(
+        rust_disable_view, expected,
+        "rust disable_connection's returned view must show the real container"
+    );
+    assert_eq!(
+        rust_disable_view, py_disable,
+        "rust and python disable_connection views must agree"
+    );
+    let after2 = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after2["gh"]["cli"]["program"], expected["program"],
+        "rust must persist the real container after disable_connection"
+    );
+    assert_eq!(
+        after2["gh"]["cli"], py_disable_doc,
+        "rust and python persisted documents must agree after disable_connection"
+    );
+}
+
+/// Cross-unit finding (round 8), the same shape as the `program` test
+/// above: `HttpAuth::from_value`'s `basic_username_decision` (finding
+/// H-R5-3) accepts a truthy, colon-free list/dict `basic_username` and
+/// substitutes a colon-free placeholder for the typed
+/// `HttpAuth.basic_username: Option<String>` field -- and
+/// `HttpAuth::to_value` (reached by `Connection::to_value`, hence every
+/// write path that re-persists the connection) rendered that placeholder
+/// verbatim into the stored document instead of the real container.
+/// `Connection::public_view` never renders `basic_username` at all (only
+/// `auth_mode`), so unlike `program` this field has no agent-facing view
+/// exposure -- confirmed below by checking the view omits it in both
+/// languages -- but the persisted document is agent-*reachable* state a
+/// team-fold admin op can legitimately populate with a container
+/// `basic_username` (see `DEVIATIONS.md`'s team/commit row), so a later
+/// local `update_connection`/`disable_connection` on that same connection
+/// must not silently corrupt it. `HttpAuth::raw_basic_username` now carries
+/// the original value through `to_value` instead.
+#[test]
+fn http_auth_truthy_container_basic_username_round_trips_through_persisted_document() {
+    let script = r#"
+import json, tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+with tempfile.TemporaryDirectory() as d:
+    state_path = os.path.join(d, "state")
+    state = StateDir(state_path)
+    state.create()
+    p = P.Policy(state, clock=lambda: 1700000000.0)
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("basic", basic_username="placeholder"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=None,
+        policy_version=0, status="active", created_at="", updated_at="",
+    )
+    p.create_connection(conn)
+
+    doc = state.read_json(P.CONNECTIONS, {})
+    doc["gh"]["http_auth"]["basic_username"] = ["svc-account"]
+    state.write_json(P.CONNECTIONS, doc)
+
+    c = p.get_connection("gh")
+    print("get_view", json.dumps(c.public_view()))
+
+    c2, widened = p.update_connection("gh", description="mutated")
+    after = state.read_json(P.CONNECTIONS, {})
+    print("update_doc", json.dumps(after["gh"]["http_auth"]["basic_username"]))
+
+    c3 = p.disable_connection("gh")
+    after2 = state.read_json(P.CONNECTIONS, {})
+    print("disable_doc", json.dumps(after2["gh"]["http_auth"]["basic_username"]))
+"#;
+    let out = run_python(script);
+    let mut py_lines = out.lines();
+    let parse = |line: &str, prefix: &str| -> serde_json::Value {
+        serde_json::from_str(line.strip_prefix(prefix).expect("prefix")).expect("valid json")
+    };
+    let py_get_view = parse(py_lines.next().unwrap(), "get_view ");
+    let py_update_doc = parse(py_lines.next().unwrap(), "update_doc ");
+    let py_disable_doc = parse(py_lines.next().unwrap(), "disable_doc ");
+
+    assert!(
+        py_get_view.get("basic_username").is_none(),
+        "python's public_view must never render basic_username at all"
+    );
+    let expected = serde_json::json!(["svc-account"]);
+    assert_eq!(
+        py_update_doc, expected,
+        "python must persist the real container"
+    );
+    assert_eq!(
+        py_disable_doc, expected,
+        "python must persist the real container"
+    );
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let conn = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "fake-github",
+        "http",
+        "gh-token",
+        None,
+        "demo",
+        Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
+        Some(HttpAuth::new("basic", None, None, Some("placeholder".to_string())).unwrap()),
+        Some(
+            HttpScope::new(
+                Some(vec!["GET".into(), "POST".into()]),
+                Some(vec!["/repos".into(), "/me".into()]),
+                vec![],
+            )
+            .unwrap(),
+        ),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    policy.create_connection(conn).unwrap();
+
+    let mut doc = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    doc["gh"]["http_auth"]["basic_username"] = serde_json::json!(["svc-account"]);
+    state.write_json(policy::CONNECTIONS, &doc).unwrap();
+
+    let rust_get_view = policy.get_connection("gh").unwrap().public_view();
+    assert!(
+        rust_get_view.get("basic_username").is_none(),
+        "rust's public_view must never render basic_username at all either"
+    );
+    assert_eq!(
+        rust_get_view, py_get_view,
+        "rust and python get_connection views must agree"
+    );
+
+    let (_rust_updated, _widened) = policy
+        .update_connection("gh", ConnectionChanges::new().description("mutated"))
+        .unwrap();
+    let after = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after["gh"]["http_auth"]["basic_username"], expected,
+        "rust must persist the real container after update_connection"
+    );
+    assert_eq!(
+        after["gh"]["http_auth"]["basic_username"], py_update_doc,
+        "rust and python persisted documents must agree after update_connection"
+    );
+
+    let _rust_disabled = policy.disable_connection("gh").unwrap();
+    let after2 = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after2["gh"]["http_auth"]["basic_username"], expected,
+        "rust must persist the real container after disable_connection"
+    );
+    assert_eq!(
+        after2["gh"]["http_auth"]["basic_username"], py_disable_doc,
+        "rust and python persisted documents must agree after disable_connection"
+    );
+}

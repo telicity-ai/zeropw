@@ -1113,7 +1113,8 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
         applies: |doc, path, missing, label, _op| {
             !missing
                 && matches!(label, "i64_max")
-                && ((doc == "connections" && path.last().map(String::as_str) == Some("policy_version"))
+                && ((doc == "connections"
+                    && path.last().map(String::as_str) == Some("policy_version"))
                     || (doc == "control" && path.last().map(String::as_str) == Some("cycle")))
         },
         judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
@@ -1624,7 +1625,6 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
             }
         }
     }
-
 
     panic::set_hook(previous_hook);
 
