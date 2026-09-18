@@ -1229,7 +1229,7 @@ mod oracle_tests {
     #[test]
     fn record_and_alert_lines_are_byte_identical_to_python() {
         let script = r#"
-import tempfile, pathlib
+import tempfile, pathlib, shutil
 from zeropw.audit import Audit
 from zeropw.store import StateDir
 
@@ -1250,6 +1250,7 @@ audit.record("incident_open", caller="admin", extra={"scope": "connection", "inc
 print((pathlib.Path(tmp) / "state" / "audit" / "audit.jsonl").read_text(), end="")
 print("---ALERTS---")
 print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end="")
+shutil.rmtree(tmp, ignore_errors=True)
 "#;
         let py_out = oracle::python(script);
         let (py_audit, py_alerts) = py_out.split_once("---ALERTS---\n").expect("marker present");
@@ -1347,7 +1348,7 @@ print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end=
     #[test]
     fn incident_alert_detail_matches_python_for_scope_and_reason_kinds() {
         let script = r#"
-import tempfile, pathlib
+import tempfile, pathlib, shutil
 from zeropw.audit import Audit
 from zeropw.store import StateDir
 
@@ -1366,6 +1367,7 @@ audit.record("incident_widen", caller="admin", extra={"scope": "project", "incid
 audit.record("incident_widen", caller="admin", extra={"scope": None, "incident_id": "inc-1"})
 
 print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end="")
+shutil.rmtree(tmp, ignore_errors=True)
 "#;
         let py_alerts = oracle::python(script);
 
