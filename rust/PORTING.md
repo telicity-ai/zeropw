@@ -136,6 +136,27 @@ that measurement contradicts is itself a review finding**, at the severity of wh
 covers an exception CPython leaves uncaught — never a case where CPython returns a value, and never a
 documented error type. Cite it only after measuring which of those three you are in.
 
+## 3d. A representational failure must not widen its blast radius (coordinator ruling, 2026-09-18)
+
+Rust's typed structs cannot hold every shape Python's dynamic dicts can, so this port sometimes fails
+where Python succeeds. That is allowed under §3 only at the ORIGINAL SCOPE: Python raising inside a
+per-item loop skips one item, and the Rust equivalent must skip that one item too. Three findings in two
+rounds were the same mistake:
+
+- `validate_document_shape` rejected nine documents Python folds without error (H-R5-6).
+- `derive_vault`'s `secrets` type check ran unconditionally, aborting `derive_local` for a document with
+  nothing to derive, where Python only fails inside the loop body (H-R5-7).
+- `derive_connections` propagated one connection's `state_corrupt` out of the whole loop with `?`, so
+  `write_json` never ran and every OTHER connection's and secret's derivation was silently discarded —
+  reachable by one signed peer op, i.e. denial of sync for the environment (H-R6-1).
+
+Therefore: a `team::fold` derive-stage site that reconstructs a typed struct from a document entry which
+already passed `fold()`'s op-application validation must not let a purely representational reconstruction
+failure abort more than that one entry. It skips the entry, records it the way Python's `_op_*`
+catch-and-skip does, and continues. The same rule applies to any other per-item loop over document
+entries (`Policy`/`Vault` document loading included): measure the SCOPE of Python's failure, not just its
+identity, and reproduce that scope.
+
 ## 4. Engineering rules
 
 - No `unsafe` except the `libc::flock` call in `store.rs`. No `unwrap`/`expect`/indexing panics on
