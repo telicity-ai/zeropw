@@ -348,11 +348,22 @@ fn python_tuple_iter(v: &Value, on_not_iterable: impl Fn() -> Error) -> Result<V
 /// or a two-character JSON string whose two characters become the key and
 /// the value) becomes one entry per element, a later element overwriting
 /// an earlier one with the same key (ordinary `dict` construction
-/// semantics); a plain (non-empty) string is iterated by individual
-/// character, each of length 1, so it always fails; anything else (a bare
-/// number/bool, an array holding a non-pair element) is a genuinely
-/// uncaught `TypeError`/`ValueError` in Python (PORTING.md §3.5, finding
-/// D-R3-5).
+/// semantics -- last value wins, but the key keeps its *first* insertion
+/// position, exactly like [`python_dict_coerce`]'s `serde_json::Map` does);
+/// a plain (non-empty) string is iterated by individual character, each of
+/// length 1, so it always fails; anything else (a bare number/bool, an
+/// array holding a non-pair element) is a genuinely uncaught
+/// `TypeError`/`ValueError` in Python (PORTING.md §3.5, finding D-R3-5).
+///
+/// The de-duplication matters beyond just the returned shape (finding
+/// D-R4-5): `dict(...)` collapses duplicate keys to their last value
+/// *before* `CliProfile.__post_init__`'s per-entry `extra_env` validation
+/// ever runs, so only the surviving value is checked. `extra_env =
+/// [["AA", 5], ["AA", "x"]]` validates and loads in Python (the collapsed
+/// `{"AA": "x"}` is a valid string value) even though the first, discarded
+/// pair's value (`5`) is not a string -- returning every pair verbatim, as
+/// this function previously did, made the caller validate `5` too and
+/// reject the whole document.
 fn python_dict_from_pairs(
     v: &Value,
     bad: impl Fn() -> Error,
@@ -360,17 +371,21 @@ fn python_dict_from_pairs(
     let Value::Array(items) = v else {
         return Err(bad());
     };
-    let mut pairs = Vec::with_capacity(items.len());
+    let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(items.len());
     for item in items {
-        match item {
-            Value::Array(p) if p.len() == 2 => pairs.push((p[0].clone(), p[1].clone())),
+        let (key, val) = match item {
+            Value::Array(p) if p.len() == 2 => (p[0].clone(), p[1].clone()),
             Value::String(s) if s.chars().count() == 2 => {
                 let mut chars = s.chars();
                 let k = chars.next().expect("checked count == 2").to_string();
                 let val = chars.next().expect("checked count == 2").to_string();
-                pairs.push((Value::String(k), Value::String(val)));
+                (Value::String(k), Value::String(val))
             }
             _ => return Err(bad()),
+        };
+        match pairs.iter_mut().find(|(k, _)| *k == key) {
+            Some(existing) => existing.1 = val,
+            None => pairs.push((key, val)),
         }
     }
     Ok(pairs)
@@ -448,6 +463,55 @@ fn python_int_from_str(s: &str) -> Option<i64> {
     }
     let magnitude: i64 = cleaned.parse().ok()?;
     Some(if negative { -magnitude } else { magnitude })
+}
+
+/// Python `str()` of a parsed JSON value, used only to format an
+/// `InvalidInput` `detail` that Python built from a raw stored value rather
+/// than a fixed string (`resume`'s `InvalidInput("incident_open",
+/// open_incident)`, finding D-R4-1). Scalars: a string passes through
+/// unchanged (Python's `str()` of a `str` has no quoting); `true`/`false` as
+/// `"True"`/`"False"`; `null` as `"None"`; a number via its JSON literal
+/// text (adequate for the small integers `incident_open` ever holds; unlike
+/// `kms.rs`'s `python_number_str` this does not reproduce CPython's float
+/// `repr`, since no field this crate formats this way is ever a float).
+/// Arrays/objects fall back to `repr()` (Python's `str()` of a container
+/// delegates to `repr()`), with each string element/key/value quoted via
+/// [`crate::pystr::repr_str`] -- CPython 3.12's exact `repr(str)`.
+fn python_str_for_error(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Null => "None".to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::Array(_) | Value::Object(_) => python_repr_for_error(value),
+    }
+}
+
+/// `repr()` half of [`python_str_for_error`]: a string is quoted, everything
+/// else falls back to the same rules `str()` uses.
+fn python_repr_for_error(value: &Value) -> String {
+    match value {
+        Value::String(s) => crate::pystr::repr_str(s),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(python_repr_for_error).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        crate::pystr::repr_str(k),
+                        python_repr_for_error(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+        other => python_str_for_error(other),
+    }
 }
 
 // --------------------------------------------------------------------- models
@@ -1378,6 +1442,61 @@ impl CliProfile {
         })
     }
 
+    /// Order-preserving counterpart of [`CliProfile::new`] (finding
+    /// D-R4-8). `CliProfile.__post_init__`'s `for key, value in self.
+    /// extra_env.items(): ...` iterates in the dataclass field's *insertion*
+    /// order and raises on the first entry that fails, so which reason a
+    /// malformed `extra_env` gets depends on that order: `{"zz": "x", "AA":
+    /// "\x00"}` raises `invalid_env_name` in Python (`"zz"` checked first),
+    /// but `new`'s `BTreeMap<String, String>` parameter always iterates in
+    /// *key-sorted* order, so the same map there checks `"AA"` first and
+    /// raises `invalid_env_value` instead.
+    ///
+    /// `CliProfile::from_value` is unaffected -- round 2 already made it
+    /// validate its own document-ordered pairs before ever calling `new`,
+    /// so by the time `new` re-checks them every entry already passed. This
+    /// only matters for a caller that constructs a `CliProfile` directly
+    /// with an `extra_env` whose original document order it still has and
+    /// wants to reproduce; `team::commit::build_cli_profile` (the crate's
+    /// only current caller of `new`) builds its `extra_env` from a
+    /// `serde_json::Map` from a JSON object without preserving that as a
+    /// separate ordered list, so it keeps calling `new` -- changing `new`'s
+    /// signature would break that call site, which is owned by another
+    /// engineer's concurrent work. See `rust/DEVIATIONS.md`.
+    pub fn new_ordered(
+        program: impl Into<String>,
+        kind: impl Into<String>,
+        base_url_env: Option<String>,
+        extra_env: Vec<(String, String)>,
+    ) -> Result<Self, Error> {
+        let program = program.into();
+        let kind = kind.into();
+        let base_url_env = base_url_env.unwrap_or_else(|| "ZEROPW_API_BASE_URL".to_string());
+        if !CONNECTION_KINDS.contains(&kind.as_str()) {
+            return Err(Error::invalid_input("invalid_cli_kind"));
+        }
+        if program.is_empty() || program.contains('\0') {
+            return Err(Error::invalid_input("invalid_cli_program"));
+        }
+        if !env_name_matches(&base_url_env) {
+            return Err(Error::invalid_input("invalid_env_name"));
+        }
+        for (key, value) in &extra_env {
+            if !env_name_matches(key) || key == "SSH_AUTH_SOCK" || key == &base_url_env {
+                return Err(Error::invalid_input("invalid_env_name"));
+            }
+            if value.contains('\0') {
+                return Err(Error::invalid_input("invalid_env_value"));
+            }
+        }
+        Ok(CliProfile {
+            program,
+            kind,
+            base_url_env,
+            extra_env: extra_env.into_iter().collect(),
+        })
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "program": self.program, "kind": self.kind, "base_url_env": self.base_url_env,
@@ -1974,6 +2093,31 @@ impl Grant {
     /// `**value`-unpacking shape `HttpTarget::from_value`/`HttpAuth::from_value`
     /// already reject (finding D-R2-6), extended here to `Grant` (finding
     /// D-R3-7).
+    ///
+    /// `expires_at`/`max_uses` have **no** dataclass default in Python
+    /// (unlike `revoked_at`/`credential_version`, which do) -- an absent key
+    /// makes `Grant(**entry)` raise `TypeError: missing 1 required
+    /// positional argument`, the same as a missing `uses`. A present `null`
+    /// is a genuine value for these two `T | None` fields, not an absence,
+    /// so it still loads as `None` (finding D-R4-4: the previous `None |
+    /// Some(Value::Null) => None` conflated "absent" with "present and
+    /// null", silently loading an unlimited grant where Python fails
+    /// closed).
+    ///
+    /// `policy_version`/`max_uses`/`uses`/`credential_version` are read here
+    /// with no `int()`/`isinstance` conversion at all in Python -- the
+    /// dataclass keeps whatever JSON-shaped value was stored, and every use
+    /// site compares it with plain `==`/`!=`/ordering, which CPython permits
+    /// (and resolves numerically) across `int`/`float`/`bool`. A stored
+    /// integral float (`3.0`) is therefore not an error in Python: `3.0 ==
+    /// 3` is `True`, `"remaining_uses": 3.0` in `public_view()`. The
+    /// previous strict `Value::as_i64` rejected that shape outright
+    /// (`state_corrupt` for every policy operation touching the grant --
+    /// finding D-R4-7); [`python_int_coerce`] accepts it (and a bool) the
+    /// same way `int()` would, which is close enough for every comparison
+    /// these fields are ever put through (see `rust/DEVIATIONS.md` for the
+    /// residual gap: a numeric *string* here would coerce successfully in
+    /// Rust where an ordering comparison against it raises in Python).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let bad = || Error::state("state_corrupt").with_detail("grant");
         let obj = v.as_object().ok_or_else(bad)?;
@@ -1999,17 +2143,22 @@ impl Grant {
                 .map(str::to_string)
                 .ok_or_else(bad)
         };
+        let int_field = |key: &str| -> Result<i64, Error> {
+            obj.get(key).and_then(python_int_coerce).ok_or_else(bad)
+        };
         let expires_at = match obj.get("expires_at") {
-            None | Some(Value::Null) => None,
+            None => return Err(bad()),
+            Some(Value::Null) => None,
             Some(v) => Some(v.as_f64().ok_or_else(bad)?),
         };
         let max_uses = match obj.get("max_uses") {
-            None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_i64().ok_or_else(bad)?),
+            None => return Err(bad()),
+            Some(Value::Null) => None,
+            Some(v) => Some(python_int_coerce(v).ok_or_else(bad)?),
         };
         let credential_version = match obj.get("credential_version") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(v.as_i64().ok_or_else(bad)?),
+            Some(v) => Some(python_int_coerce(v).ok_or_else(bad)?),
         };
         let revoked_at = match obj.get("revoked_at") {
             None | Some(Value::Null) => None,
@@ -2020,13 +2169,10 @@ impl Grant {
             id: str_field("id")?,
             principal: str_field("principal")?,
             connection: str_field("connection")?,
-            policy_version: obj
-                .get("policy_version")
-                .and_then(Value::as_i64)
-                .ok_or_else(bad)?,
+            policy_version: int_field("policy_version")?,
             expires_at,
             max_uses,
-            uses: obj.get("uses").and_then(Value::as_i64).ok_or_else(bad)?,
+            uses: int_field("uses")?,
             status: str_field("status")?,
             created_at: str_field("created_at")?,
             revoked_at,
@@ -2654,6 +2800,18 @@ impl<'a> Policy<'a> {
     /// see `RunRegistry.on_revoke`). The compromise-response incident module
     /// uses this to disable a principal without over-cancelling other
     /// principals' work; it does its own precise per-principal cancellation.
+    ///
+    /// `doc[principal_id]["status"] = "disabled"`: a raw subscript
+    /// *assignment*, not `.get()` -- if the stored entry is not a dict (a
+    /// string, a list, ...), this raises an uncaught `TypeError` in Python
+    /// (found by this round's exhaustive sweep of every raw index in
+    /// `policy.py`, alongside the eight numbered findings), aborting before
+    /// `principals.json` is ever written, though the best-effort revocation
+    /// ledger line above it was already appended. The previous `if let
+    /// Some(entry) = ... .and_then(Value::as_object_mut) { ... }` here
+    /// silently skipped the assignment for a non-object entry instead and
+    /// fell through to write the *unchanged* document and return `Ok(())`,
+    /// so a corrupted principal entry could never actually be disabled.
     pub fn disable_principal(&self, principal_id: &str, notify: bool) -> Result<(), Error> {
         {
             let _lock = self.state.lock()?;
@@ -2664,9 +2822,11 @@ impl<'a> Policy<'a> {
             let mut fields = Map::new();
             fields.insert("id".into(), json!(principal_id));
             append_revocation(self.state, "principal", fields);
-            if let Some(entry) = doc.get_mut(principal_id).and_then(Value::as_object_mut) {
-                entry.insert("status".into(), json!("disabled"));
-            }
+            let entry = doc
+                .get_mut(principal_id)
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("principal"))?;
+            entry.insert("status".into(), json!("disabled"));
             self.state.write_json(PRINCIPALS, &Value::Object(doc))?;
             self.invalidate_approvals(
                 |e| e.get("caller").and_then(Value::as_str) == Some(principal_id),
@@ -2978,6 +3138,21 @@ impl<'a> Policy<'a> {
     /// `pub(crate)`: called directly by `zeropw/team/fold.py`'s
     /// `policy._reevaluate_grants` (and `team/membership.py`) once those
     /// modules land, exactly as `Policy::widens` above.
+    ///
+    /// `for gid, entry in grants.items(): if entry["connection"] !=
+    /// connection_id or entry["status"] != "active": continue`: both are raw
+    /// dict indices, evaluated for *every* entry in the document regardless
+    /// of whether it belongs to this connection -- a non-object entry raises
+    /// an uncaught `TypeError` and a missing `connection`/`status` key an
+    /// uncaught `KeyError`, aborting `update_connection`/
+    /// `credential_versions_changed` entirely (finding D-R4-2) after the
+    /// connections document was already written. The previous `let Some(obj)
+    /// = ... else { continue }` / `.and_then(Value::as_str)` here silently
+    /// skipped exactly those malformed entries instead, leaving other grants
+    /// re-evaluated (or not) from a partial pass Python would never reach.
+    /// A present-but-wrong-*type* value for either key is not an error in
+    /// Python (`!=` across types is just `True`, no exception), so only a
+    /// non-object entry or an outright missing key fails closed here.
     pub(crate) fn reevaluate_grants(
         &self,
         connection_id: &str,
@@ -2988,13 +3163,21 @@ impl<'a> Policy<'a> {
         let mut grants = self.grants()?;
         let mut changed = false;
         for (_, entry) in grants.iter_mut() {
-            let Some(obj) = entry.as_object_mut() else {
-                continue;
-            };
-            if obj.get("connection").and_then(Value::as_str) != Some(connection_id) {
+            let obj = entry
+                .as_object_mut()
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+            let connection_val = obj
+                .get("connection")
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
+                .clone();
+            let status_val = obj
+                .get("status")
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
+                .clone();
+            if connection_val.as_str() != Some(connection_id) {
                 continue;
             }
-            if obj.get("status").and_then(Value::as_str) != Some("active") {
+            if status_val.as_str() != Some("active") {
                 continue;
             }
             if widened {
@@ -3087,35 +3270,78 @@ impl<'a> Policy<'a> {
         Grant::from_value(entry)
     }
 
+    /// `[Grant(**e) for _, e in sorted(self._grants().items()) if
+    /// principal_id is None or e["principal"] == principal_id]`. Python's
+    /// `or` short-circuits: `e["principal"]` -- a raw dict index -- is only
+    /// ever evaluated when `principal_id is not None`, but then it is
+    /// evaluated for *every* entry in sorted-key order, eagerly, before the
+    /// list comprehension moves on; a non-object entry (`TypeError`) or one
+    /// missing `principal` (`KeyError`) aborts the whole call there, not a
+    /// silent skip. That includes `decide`'s no-grant-id path and
+    /// `usable_connections` (both call `list_grants(Some(caller))`), which
+    /// must refuse to decide from a partial grant set the same way (finding
+    /// D-R4-3). A present-but-non-string `principal` is not an error in
+    /// Python (`5 == "caller"` is just `False`, no exception) -- only a
+    /// non-object entry or an outright missing key fails closed here; the
+    /// previous `.as_object().and_then(|o| o.get("principal"))
+    /// .and_then(Value::as_str) == Some(p)` chain silently treated both of
+    /// those shapes as "does not match" and moved on.
     pub fn list_grants(&self, principal_id: Option<&str>) -> Result<Vec<Grant>, Error> {
         let doc = self.grants()?;
         let mut ids: Vec<&String> = doc.keys().collect();
         ids.sort();
-        ids.into_iter()
-            .filter(|id| {
-                principal_id.is_none_or(|p| {
-                    doc[*id]
-                        .as_object()
-                        .and_then(|o| o.get("principal"))
-                        .and_then(Value::as_str)
-                        == Some(p)
-                })
-            })
-            .map(|id| Grant::from_value(&doc[id]))
-            .collect()
+        let mut result = Vec::with_capacity(ids.len());
+        for id in ids {
+            let entry = &doc[id];
+            if let Some(p) = principal_id {
+                let obj = entry
+                    .as_object()
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+                let principal = obj
+                    .get("principal")
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+                if principal.as_str() != Some(p) {
+                    continue;
+                }
+            }
+            result.push(Grant::from_value(entry)?);
+        }
+        Ok(result)
     }
 
     /// Approvals recorded for this grant, or recorded without a grant for
     /// its caller and connection.
+    ///
+    /// `entry.get("caller") == grant.get("principal") and entry.get(
+    /// "connection") == grant.get("connection")`: both are `.get()` calls on
+    /// the *raw stored grant dict* (`grant` here is `revoke_grant`'s own
+    /// `entry`/`regrant`'s `doc[grant_id]`, not the parsed `Grant`), so a
+    /// missing `principal`/`connection` key on the grant compares as `None`,
+    /// which *matches* an approval whose own `caller`/`connection` is
+    /// likewise absent (`None == None` is `True` in Python) -- closing that
+    /// approval. The previous `grant_principal: &str`/`grant_connection:
+    /// &str` parameters collapsed "missing or non-string" to `""` at the two
+    /// call sites (`.unwrap_or("")`), so `Some("")` never matched the
+    /// approval's absent `caller`/`connection` (`None`), leaving a usable
+    /// approved approval where Python invalidates it (finding D-R4-6, a
+    /// fail-open state divergence). Taking `Option<&str>` here instead and
+    /// comparing it directly against the approval's own
+    /// `.and_then(Value::as_str)` (which is `None` for both "missing" and
+    /// "present but non-string", exactly as `grant_principal`/
+    /// `grant_connection` now are) reproduces the None-to-None match.
+    /// (`regrant`'s call site is unaffected in practice -- `get_grant` runs
+    /// first there and already requires `principal`/`connection` to be
+    /// non-empty strings, so its `entry_snapshot` values are never actually
+    /// missing/non-string by the time this runs; see `rust/DEVIATIONS.md`.)
     fn approval_matches_grant<'g>(
-        grant_principal: &'g str,
-        grant_connection: &'g str,
+        grant_principal: Option<&'g str>,
+        grant_connection: Option<&'g str>,
         grant_id: &'g str,
     ) -> impl Fn(&Map<String, Value>) -> bool + 'g {
         move |entry: &Map<String, Value>| match entry.get("grant") {
             Some(Value::Null) | None => {
-                entry.get("caller").and_then(Value::as_str) == Some(grant_principal)
-                    && entry.get("connection").and_then(Value::as_str) == Some(grant_connection)
+                entry.get("caller").and_then(Value::as_str) == grant_principal
+                    && entry.get("connection").and_then(Value::as_str) == grant_connection
             }
             Some(Value::String(g)) => g == grant_id,
             Some(_) => false,
@@ -3141,18 +3367,10 @@ impl<'a> Policy<'a> {
             entry.insert("status".into(), json!("revoked"));
             entry.insert("revoked_at".into(), json!(iso(Some(self.now()))));
             self.state.write_json(GRANTS, &Value::Object(doc))?;
-            let principal = entry_obj
-                .get("principal")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let connection = entry_obj
-                .get("connection")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let principal = entry_obj.get("principal").and_then(Value::as_str);
+            let connection = entry_obj.get("connection").and_then(Value::as_str);
             self.invalidate_approvals(
-                Self::approval_matches_grant(&principal, &connection, grant_id),
+                Self::approval_matches_grant(principal, connection, grant_id),
                 "grant_revoked",
             )?;
             grant = self.get_grant(grant_id)?;
@@ -3295,18 +3513,18 @@ impl<'a> Policy<'a> {
         entry.insert("revoked_at".into(), json!(iso(Some(self.now()))));
         let entry_snapshot = entry.clone();
         self.state.write_json(GRANTS, &Value::Object(doc))?;
-        let principal = entry_snapshot
-            .get("principal")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let connection = entry_snapshot
-            .get("connection")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        // `.unwrap_or("")` here (unlike `revoke_grant`'s equivalent, finding
+        // D-R4-6) can never actually collapse a missing/non-string value:
+        // `old = self.get_grant(grant_id)?` above already ran `Grant::from_
+        // value` on this same entry and requires `principal`/`connection`
+        // to be present, non-empty strings, so `entry_snapshot` is
+        // guaranteed to have both as strings by the time we get here. Passed
+        // through as `Option<&str>` only to match `approval_matches_grant`'s
+        // signature.
+        let principal = entry_snapshot.get("principal").and_then(Value::as_str);
+        let connection = entry_snapshot.get("connection").and_then(Value::as_str);
         self.invalidate_approvals(
-            Self::approval_matches_grant(&principal, &connection, grant_id),
+            Self::approval_matches_grant(principal, connection, grant_id),
             "grant_revoked",
         )?;
         self.create_grant(
@@ -3428,20 +3646,31 @@ impl<'a> Policy<'a> {
         Ok(())
     }
 
+    /// `open_incident = control.get("incident_open"); if open_incident: raise
+    /// InvalidInput("incident_open", open_incident)`: Python's `if` is plain
+    /// truthiness over *any* stored type, not an `isinstance(str)` narrowing
+    /// -- unlike [`Policy::open_incident_id`] below, which deliberately does
+    /// narrow with `isinstance(str)` and is unaffected. A stored
+    /// `incident_open` of `5`, `["x"]` or `{"a": 1}` is truthy in Python and
+    /// refuses the resume; the previous `.and_then(Value::as_str).filter(|s|
+    /// !s.is_empty())` here only recognised a non-empty *string*, so those
+    /// shapes silently cleared the global stop instead (finding D-R4-1, a
+    /// fail-open lockdown-gate bug). `InvalidInput`'s `detail` passes the raw
+    /// value in Python (formatted via `str()` wherever the exception is
+    /// stringified/`to_dict()`-ed); `Error::detail` here is a plain `String`
+    /// (PORTING.md has no primitive for an arbitrary JSON `detail`), so
+    /// [`python_str_for_error`] reproduces that `str()` formatting -- see
+    /// `rust/DEVIATIONS.md`.
     pub fn resume(&self) -> Result<(), Error> {
         let _lock = self.state.lock()?;
         let mut control = self.control()?;
-        if let Some(open) = control
-            .get("incident_open")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-        {
-            // `InvalidInput("incident_open", open_incident)`: Python passes
-            // the incident id as `detail`.
+        let open_incident = control.get("incident_open").cloned();
+        if json_truthy(open_incident.as_ref()) {
+            let open_incident = open_incident.expect("truthy implies present");
             return Err(Error::new(
                 ErrorClass::InvalidInput,
                 "incident_open",
-                open.to_string(),
+                python_str_for_error(&open_incident),
             ));
         }
         control.insert("stopped".into(), json!(false));

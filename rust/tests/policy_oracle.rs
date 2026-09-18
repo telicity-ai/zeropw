@@ -3283,3 +3283,726 @@ except Exception as e:
             .is(zeropw::errors::ErrorClass::StateError)
     );
 }
+
+// ------------------------------------------------------- round-4 findings
+// (equivalence review of work unit D, `policy.rs`) -- D-R4-1..D-R4-8, plus
+// one further fail-open bug found by this round's exhaustive raw-index
+// sweep (`disable_principal`).
+
+// D-R4-1: `resume`'s `if open_incident:` is plain Python truthiness over any
+// stored type, not an `isinstance(str)` narrowing -- a stored `incident_open`
+// of `5`, `["x"]` or `{"a": 1}` must refuse the resume exactly like a
+// non-empty string does. All seven probe values from the finding.
+#[test]
+fn resume_gates_on_truthiness_of_any_incident_open_type_like_python() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+probes = [
+    ("int5", 5),
+    ("list_x", ["x"]),
+    ("dict_a1", {"a": 1}),
+    ("str_inc1", "inc-1"),
+    ("empty_str", ""),
+    ("null", None),
+    ("zero", 0),
+]
+for label, v in probes:
+    d = tempfile.mkdtemp()
+    state = StateDir(os.path.join(d, "state"))
+    state.create()
+    state.write_json(P.CONTROL, {"stopped": True, "restore_pending": False, "approvals": {}, "incident_open": v})
+    pol = P.Policy(state)
+    try:
+        pol.resume()
+        after = state.read_json(P.CONTROL, None)
+        print(f"{label}|OK|{after['stopped']}")
+    except Exception as e:
+        print(f"{label}|{type(e).__name__}|{e.reason}|{e.detail}")
+"#;
+    let out = run_python(script);
+    let results: std::collections::HashMap<&str, &str> = out
+        .lines()
+        .map(|l| l.split_once('|').expect("label|rest"))
+        .collect();
+
+    let truthy_probes: Vec<(&str, serde_json::Value)> = vec![
+        ("int5", serde_json::json!(5)),
+        ("list_x", serde_json::json!(["x"])),
+        ("dict_a1", serde_json::json!({"a": 1})),
+        ("str_inc1", serde_json::json!("inc-1")),
+    ];
+    let falsy_probes: Vec<(&str, serde_json::Value)> = vec![
+        ("empty_str", serde_json::json!("")),
+        ("null", serde_json::Value::Null),
+        ("zero", serde_json::json!(0)),
+    ];
+
+    for (label, v) in truthy_probes {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let mut control = serde_json::Map::new();
+        control.insert("stopped".into(), serde_json::json!(true));
+        control.insert("restore_pending".into(), serde_json::json!(false));
+        control.insert("approvals".into(), serde_json::json!({}));
+        control.insert("incident_open".into(), v);
+        state
+            .write_json(policy::CONTROL, &serde_json::Value::Object(control))
+            .unwrap();
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        let err = pol
+            .resume()
+            .expect_err(&format!("label={label} must refuse"));
+        assert!(
+            err.is(zeropw::errors::ErrorClass::InvalidInput),
+            "label={label}"
+        );
+        assert_eq!(err.reason, "incident_open", "label={label}");
+        let expected = format!("InvalidInput|incident_open|{}", err.detail);
+        assert_eq!(results[label], expected, "label={label}");
+        // The global stop must be left untouched -- `resume` refused before
+        // ever writing `control.json`.
+        let after = state
+            .read_json(policy::CONTROL, serde_json::json!({}))
+            .unwrap();
+        assert_eq!(after["stopped"], serde_json::json!(true), "label={label}");
+    }
+
+    for (label, v) in falsy_probes {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let mut control = serde_json::Map::new();
+        control.insert("stopped".into(), serde_json::json!(true));
+        control.insert("restore_pending".into(), serde_json::json!(false));
+        control.insert("approvals".into(), serde_json::json!({}));
+        control.insert("incident_open".into(), v);
+        state
+            .write_json(policy::CONTROL, &serde_json::Value::Object(control))
+            .unwrap();
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        pol.resume()
+            .unwrap_or_else(|e| panic!("label={label} must resume: {e:?}"));
+        assert_eq!(results[label], "OK|False", "label={label}");
+        let after = state
+            .read_json(policy::CONTROL, serde_json::json!({}))
+            .unwrap();
+        assert_eq!(after["stopped"], serde_json::json!(false), "label={label}");
+    }
+}
+
+// D-R4-4 / D-R4-7: `expires_at`/`max_uses` have no dataclass default in
+// Python (unlike `revoked_at`/`credential_version`), so a missing key is an
+// uncaught `TypeError`, not an unlimited grant; and `policy_version`/
+// `max_uses`/`uses`/`credential_version` get no `int()`/`isinstance`
+// conversion at all in Python, so an integral-float grant (`3.0`) loads and
+// authorizes normally there. Both were previously wrong in the opposite
+// direction from each other (fail-open silently-unlimited vs.
+// fail-closed-on-every-operation).
+#[test]
+fn grant_from_value_integral_float_and_bool_fields_load_and_authorize_like_python() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {"agent-1": {"token_hash": P.hash_token("zpwc_abc"), "status": "active", "created_at": ""}})
+conn = {
+    "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False},
+    "http_auth": {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None},
+    "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+    "ssh_target": None, "cli": None, "policy_version": 3, "status": "active", "created_at": "", "updated_at": "",
+}
+state.write_json(P.CONNECTIONS, {"gh": conn})
+grant = {
+    "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 3.0,
+    "expires_at": None, "max_uses": 3.0, "uses": 0.0, "status": "active",
+    "created_at": "", "revoked_at": None, "credential_version": 2.0,
+}
+state.write_json(P.GRANTS, {"g-1": grant})
+
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+gs = pol.list_grants()
+print("list_grants", len(gs), gs[0].policy_version == 3, gs[0].max_uses == 3, gs[0].uses == 0, gs[0].credential_version == 2)
+d2 = pol.check_grant("agent-1", "gh", "g-1")
+print("check_grant", d2.allowed, d2.reason)
+uc = pol.usable_connections("agent-1")
+print("usable_connections", len(uc))
+g2 = pol.consume("g-1", caller="agent-1", connection_id="gh", action=P.Action("http", "GET", "/repos"), policy_version=3)
+print("consume_uses", g2.uses)
+
+for missing_key in ("expires_at", "max_uses"):
+    bad = dict(grant)
+    del bad[missing_key]
+    try:
+        P.Grant(**bad)
+        print(f"missing_{missing_key} OK")
+    except TypeError:
+        print(f"missing_{missing_key} TypeError")
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "list_grants 1 True True True True");
+    assert_eq!(lines[1], "check_grant True allowed");
+    assert_eq!(lines[2], "usable_connections 1");
+    // Python's `uses` field keeps whatever type was stored (`entry["uses"] =
+    // grant.uses + 1` where `grant.uses` is the raw `0.0` float read back --
+    // `0.0 + 1 == 1.0`, still a float); Rust's `uses: i64` normalises it to
+    // a plain integer on write. Both count one use; only the JSON type of
+    // the persisted value differs (see `rust/DEVIATIONS.md`'s D-R4-4/D-R4-7
+    // addendum).
+    assert_eq!(lines[3], "consume_uses 1.0");
+    assert_eq!(lines[4], "missing_expires_at TypeError");
+    assert_eq!(lines[5], "missing_max_uses TypeError");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut principals = serde_json::Map::new();
+    principals.insert(
+        "agent-1".into(),
+        serde_json::json!({
+            "token_hash": policy::hash_token("zpwc_abc"), "status": "active", "created_at": "",
+        }),
+    );
+    state
+        .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+        .unwrap();
+    let conn = serde_json::json!({
+        "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+        "secret_id": "gh-token", "secret_version": null, "description": "demo",
+        "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+        "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+        "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+        "ssh_target": null, "cli": null, "policy_version": 3, "status": "active", "created_at": "", "updated_at": "",
+    });
+    let mut connections = serde_json::Map::new();
+    connections.insert("gh".into(), conn);
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+        .unwrap();
+    let grant = serde_json::json!({
+        "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 3.0,
+        "expires_at": null, "max_uses": 3.0, "uses": 0.0, "status": "active",
+        "created_at": "", "revoked_at": null, "credential_version": 2.0,
+    });
+    let mut grants = serde_json::Map::new();
+    grants.insert("g-1".into(), grant.clone());
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let gs = pol.list_grants(None).unwrap();
+    assert_eq!(gs.len(), 1);
+    assert_eq!(gs[0].policy_version, 3);
+    assert_eq!(gs[0].max_uses, Some(3));
+    assert_eq!(gs[0].uses, 0);
+    assert_eq!(gs[0].credential_version, Some(2));
+
+    let decision = pol.check_grant("agent-1", "gh", "g-1").unwrap();
+    assert!(decision.allowed, "reason={}", decision.reason);
+
+    let usable = pol.usable_connections("agent-1").unwrap();
+    assert_eq!(usable.len(), 1);
+
+    let consumed = pol
+        .consume(
+            "g-1",
+            Some("agent-1"),
+            Some("gh"),
+            Some(Action::http("GET", "/repos")),
+            Some(3),
+        )
+        .unwrap();
+    assert_eq!(consumed.uses, 1);
+
+    for missing_key in ["expires_at", "max_uses"] {
+        let mut bad = grant.as_object().unwrap().clone();
+        bad.remove(missing_key);
+        let mut grants = serde_json::Map::new();
+        grants.insert("g-1".into(), serde_json::Value::Object(bad));
+        state
+            .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+            .unwrap();
+        assert!(
+            pol.get_grant("g-1")
+                .unwrap_err()
+                .is(zeropw::errors::ErrorClass::StateError),
+            "missing_key={missing_key}"
+        );
+    }
+}
+
+// D-R4-2: `_reevaluate_grants`'s `entry["connection"] != connection_id or
+// entry["status"] != "active"` raw-indexes every grant entry in the
+// document, regardless of whether it matches the connection being updated
+// -- a non-object entry or one missing either key aborts the whole
+// `update_connection` call, even though `connections.json` was already
+// written by that point.
+#[test]
+fn reevaluate_grants_fails_closed_on_malformed_entries_like_python() {
+    fn conn_doc() -> serde_json::Value {
+        serde_json::json!({
+            "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+            "secret_id": "gh-token", "secret_version": null, "description": "demo",
+            "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+            "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+            "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+            "ssh_target": null, "cli": null, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+        })
+    }
+
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+def setup(grants):
+    d = tempfile.mkdtemp()
+    state = StateDir(os.path.join(d, "state"))
+    state.create()
+    conn = {
+        "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+        "secret_id": "gh-token", "secret_version": None, "description": "demo",
+        "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False},
+        "http_auth": {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None},
+        "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+        "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+    }
+    state.write_json(P.CONNECTIONS, {"gh": conn})
+    state.write_json(P.GRANTS, grants)
+    return state
+
+state = setup({"bad": "not-a-dict"})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+try:
+    pol.update_connection("gh", description="new")
+    print("nonobject OK")
+except Exception as e:
+    print("nonobject", type(e).__name__)
+after = state.read_json(P.CONNECTIONS, None)
+print("nonobject_connection_written", after["gh"]["description"])
+
+state2 = setup({"bad": {"status": "active"}})
+pol2 = P.Policy(state2, clock=lambda: 1700000000.0)
+try:
+    pol2.update_connection("gh", description="new")
+    print("missingkey OK")
+except Exception as e:
+    print("missingkey", type(e).__name__)
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "nonobject TypeError");
+    assert_eq!(lines[1], "nonobject_connection_written new");
+    assert_eq!(lines[2], "missingkey KeyError");
+
+    // Non-object grant entry.
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut connections = serde_json::Map::new();
+    connections.insert("gh".into(), conn_doc());
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+        .unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert("bad".into(), serde_json::json!("not-a-dict"));
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.update_connection(
+            "gh",
+            ConnectionChanges::new().description("new".to_string())
+        )
+        .unwrap_err()
+        .is(zeropw::errors::ErrorClass::StateError)
+    );
+    // The connections document was already written before the malformed
+    // grant was reached (matches Python's ordering exactly).
+    let after = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after["gh"]["description"], serde_json::json!("new"));
+
+    // Object entry missing the `connection` key.
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut connections = serde_json::Map::new();
+    connections.insert("gh".into(), conn_doc());
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+        .unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert("bad".into(), serde_json::json!({"status": "active"}));
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.update_connection(
+            "gh",
+            ConnectionChanges::new().description("new".to_string())
+        )
+        .unwrap_err()
+        .is(zeropw::errors::ErrorClass::StateError)
+    );
+}
+
+// D-R4-3: `list_grants`'s principal filter raw-indexes `e["principal"]`
+// for every entry (in sorted-key order) once `principal_id` is not `None`,
+// aborting on the first malformed entry -- not silently excluding it while
+// still returning a matching later entry. This also covers `decide`'s
+// no-grant-id path and `usable_connections`, which both call
+// `list_grants(Some(caller))`.
+#[test]
+fn list_grants_fails_closed_when_filtering_by_principal_on_malformed_entries() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.GRANTS, {
+    "bad": "not-a-dict",
+    "good": {"id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+             "expires_at": None, "max_uses": None, "uses": 0, "status": "active",
+             "created_at": "", "revoked_at": None, "credential_version": None},
+})
+pol = P.Policy(state)
+try:
+    gs = pol.list_grants("agent-1")
+    print("nonobject OK", len(gs))
+except Exception as e:
+    print("nonobject", type(e).__name__)
+
+d2 = tempfile.mkdtemp()
+state2 = StateDir(os.path.join(d2, "state"))
+state2.create()
+state2.write_json(P.GRANTS, {
+    "aaa": {"id": "g-0", "connection": "gh", "policy_version": 1,
+            "expires_at": None, "max_uses": None, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": None, "credential_version": None},
+    "zzz": {"id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+            "expires_at": None, "max_uses": None, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": None, "credential_version": None},
+})
+pol2 = P.Policy(state2)
+try:
+    gs2 = pol2.list_grants("agent-1")
+    print("missingkey OK", len(gs2))
+except Exception as e:
+    print("missingkey", type(e).__name__)
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "nonobject TypeError");
+    assert_eq!(lines[1], "missingkey KeyError");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert("bad".into(), serde_json::json!("not-a-dict"));
+    grants.insert(
+        "good".into(),
+        serde_json::json!({
+            "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+            "expires_at": null, "max_uses": null, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        }),
+    );
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.list_grants(Some("agent-1"))
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+    // `decide`'s no-grant-id path and `usable_connections` both call
+    // `list_grants(Some(caller))` and must refuse the same way.
+    assert!(
+        pol.usable_connections("agent-1")
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+
+    let tmp2 = TempDir::new().unwrap();
+    let state2 = StateDir::new(tmp2.path().join("state"));
+    state2.create().unwrap();
+    let mut grants2 = serde_json::Map::new();
+    grants2.insert(
+        "aaa".into(),
+        serde_json::json!({
+            "id": "g-0", "connection": "gh", "policy_version": 1,
+            "expires_at": null, "max_uses": null, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        }),
+    );
+    grants2.insert(
+        "zzz".into(),
+        serde_json::json!({
+            "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+            "expires_at": null, "max_uses": null, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        }),
+    );
+    state2
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants2))
+        .unwrap();
+    let pol2 = Policy::new(&state2, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol2.list_grants(Some("agent-1"))
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+}
+
+// D-R4-5: `python_dict_from_pairs` did not de-duplicate, so
+// `extra_env = [["AA", 5], ["AA", "x"]]` validated *every* pair (including
+// the discarded `5`) and rejected the whole document, where Python's
+// `dict(...)` collapses to `{"AA": "x"}` first and only that survives to
+// validation. Tested both orders.
+#[test]
+fn extra_env_duplicate_pairs_collapse_to_last_value_like_pythons_dict() {
+    let script = r#"
+from zeropw import policy as P
+
+extra_env = dict([["AA", 5], ["AA", "x"]])
+c = P.CliProfile("git", "http", "ZEROPW_API_BASE_URL", extra_env)
+print("order1 OK", c.extra_env)
+
+extra_env2 = dict([["AA", "x"], ["AA", 5]])
+try:
+    P.CliProfile("git", "http", "ZEROPW_API_BASE_URL", extra_env2)
+    print("order2 OK")
+except Exception as e:
+    print("order2", type(e).__name__, e.reason)
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "order1 OK {'AA': 'x'}");
+    assert_eq!(lines[1], "order2 InvalidInput invalid_env_value");
+
+    let cli_conn = |extra_env: serde_json::Value| {
+        let mut d = rust_connection().to_value();
+        d["cli"] = serde_json::json!({
+            "program": "git", "kind": "http", "base_url_env": "ZEROPW_API_BASE_URL",
+            "extra_env": extra_env,
+        });
+        d
+    };
+
+    let d1 = cli_conn(serde_json::json!([["AA", 5], ["AA", "x"]]));
+    let profile = Connection::from_value(&d1).unwrap().cli.unwrap();
+    assert_eq!(profile.extra_env.len(), 1);
+    assert_eq!(profile.extra_env.get("AA"), Some(&"x".to_string()));
+
+    let d2 = cli_conn(serde_json::json!([["AA", "x"], ["AA", 5]]));
+    assert_eq!(
+        Connection::from_value(&d2).unwrap_err().reason,
+        "invalid_env_value"
+    );
+}
+
+// D-R4-6: `approval_matches_grant` collapsed a missing/non-string
+// `principal`/`connection` on the revoked grant's raw stored entry to
+// `""`, so it never matched an approval whose own `caller`/`connection` was
+// absent (`None`) -- but Python's `entry.get("caller") ==
+// grant.get("principal")` matches `None == None`, closing the approval
+// before `revoke_grant`'s own final `Grant(**entry)` raises. Both languages
+// must close the approval despite the ultimate error.
+#[test]
+fn revoke_grant_closes_approvals_by_none_to_none_match_before_its_own_error() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.GRANTS, {"g-1": {
+    "id": "g-1", "connection": "gh", "policy_version": 1, "expires_at": None,
+    "max_uses": None, "uses": 0, "status": "active", "created_at": "",
+    "revoked_at": None, "credential_version": None,
+}})
+state.write_json(P.CONTROL, {"stopped": False, "restore_pending": False,
+                              "approvals": {"ap-1": {"connection": "gh", "status": "pending"}}})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+try:
+    pol.revoke_grant("g-1")
+    print("revoke OK")
+except Exception as e:
+    print("revoke", type(e).__name__)
+after_grants = state.read_json(P.GRANTS, None)
+print("grant_status", after_grants["g-1"]["status"])
+after_control = state.read_json(P.CONTROL, None)
+approval = after_control["approvals"]["ap-1"]
+print("approval_status", approval["status"])
+print("approval_reason", approval.get("closed_reason"))
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "revoke TypeError");
+    assert_eq!(lines[1], "grant_status revoked");
+    assert_eq!(lines[2], "approval_status invalidated");
+    assert_eq!(lines[3], "approval_reason grant_revoked");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert(
+        "g-1".into(),
+        serde_json::json!({
+            "id": "g-1", "connection": "gh", "policy_version": 1, "expires_at": null,
+            "max_uses": null, "uses": 0, "status": "active", "created_at": "",
+            "revoked_at": null, "credential_version": null,
+        }),
+    );
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let mut approvals = serde_json::Map::new();
+    approvals.insert(
+        "ap-1".into(),
+        serde_json::json!({"connection": "gh", "status": "pending"}),
+    );
+    let mut control = serde_json::Map::new();
+    control.insert("stopped".into(), serde_json::json!(false));
+    control.insert("restore_pending".into(), serde_json::json!(false));
+    control.insert("approvals".into(), serde_json::Value::Object(approvals));
+    state
+        .write_json(policy::CONTROL, &serde_json::Value::Object(control))
+        .unwrap();
+
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.revoke_grant("g-1")
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+    let after_grants = state
+        .read_json(policy::GRANTS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after_grants["g-1"]["status"], serde_json::json!("revoked"));
+    let after_control = state
+        .read_json(policy::CONTROL, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(
+        after_control["approvals"]["ap-1"]["status"],
+        serde_json::json!("invalidated")
+    );
+    assert_eq!(
+        after_control["approvals"]["ap-1"]["closed_reason"],
+        serde_json::json!("grant_revoked")
+    );
+}
+
+// D-R4-8: `CliProfile.__post_init__` iterates `extra_env` in insertion
+// order and raises on the first failing entry; `CliProfile::new`'s
+// `BTreeMap` parameter always iterates key-sorted, disagreeing with Python
+// on *which* reason a malformed map gets. `new_ordered` reproduces Python's
+// order; `new` is left unchanged for `team::commit`'s sake.
+#[test]
+fn cli_profile_new_ordered_reports_first_failing_reason_in_insertion_order_like_python() {
+    let script = r#"
+from zeropw import policy as P
+try:
+    P.CliProfile("git", "http", "ZEROPW_API_BASE_URL", {"zz": "x", "AA": "\x00"})
+    print("OK")
+except Exception as e:
+    print(type(e).__name__, e.reason)
+"#;
+    let out = run_python(script);
+    assert_eq!(out.trim(), "InvalidInput invalid_env_name");
+
+    // `new_ordered`, given the same insertion order, agrees with Python.
+    let ordered = vec![
+        ("zz".to_string(), "x".to_string()),
+        ("AA".to_string(), "\u{0}".to_string()),
+    ];
+    let err = CliProfile::new_ordered("git", "http", None, ordered).unwrap_err();
+    assert_eq!(err.reason, "invalid_env_name");
+
+    // `new`'s unchanged `BTreeMap` parameter iterates key-sorted ("AA"
+    // before "zz") and disagrees with Python on the same input -- this is
+    // the documented, accepted gap `new_ordered` exists to close for a
+    // caller that has the original order available (`rust/DEVIATIONS.md`).
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("zz".to_string(), "x".to_string());
+    map.insert("AA".to_string(), "\u{0}".to_string());
+    let err2 = CliProfile::new("git", "http", None, map).unwrap_err();
+    assert_eq!(err2.reason, "invalid_env_value");
+}
+
+// Found by this round's exhaustive sweep of every raw index in policy.py
+// (mandatory sweep (a), beyond the eight numbered findings):
+// `disable_principal`'s `doc[principal_id]["status"] = "disabled"` is a raw
+// subscript *assignment* on the stored entry -- if it is not a dict, Python
+// raises an uncaught `TypeError`, aborting before `principals.json` is
+// rewritten. The previous `if let Some(entry) = ...
+// .and_then(Value::as_object_mut) { ... }` silently skipped the assignment
+// instead and fell through to write the document unchanged and return
+// `Ok(())`, so a corrupted principal could never actually be disabled.
+#[test]
+fn disable_principal_fails_closed_on_a_non_object_entry_instead_of_silently_succeeding() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {"agent-1": "not-a-dict"})
+pol = P.Policy(state)
+try:
+    pol.disable_principal("agent-1")
+    print("OK")
+except Exception as e:
+    print(type(e).__name__)
+after = state.read_json(P.PRINCIPALS, None)
+print("unchanged", after["agent-1"])
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "TypeError");
+    assert_eq!(lines[1], "unchanged not-a-dict");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut principals = serde_json::Map::new();
+    principals.insert("agent-1".into(), serde_json::json!("not-a-dict"));
+    state
+        .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.disable_principal("agent-1", true)
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+    let after = state
+        .read_json(policy::PRINCIPALS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after["agent-1"], serde_json::json!("not-a-dict"));
+}
