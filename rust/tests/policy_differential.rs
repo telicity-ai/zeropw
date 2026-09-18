@@ -36,14 +36,48 @@
 //! use `std::mem::forget`/`ManuallyDrop` anywhere).
 
 use std::collections::{BTreeMap, HashSet};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use regex::Regex;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use zeropw::clock;
 use zeropw::policy::{self, Action, ConnectionChanges, Policy, Revocations};
 use zeropw::store::StateDir;
+
+/// Same normalisation as the Python driver's `normalize_regrant_id`
+/// (finding D-R7-3's harness gap: `regrant` is now in `WRITE_OPS`, and its
+/// fresh grant gets a random id neither language can predict) -- replaces
+/// any freshly generated `"g-" + 16 hex chars` id with a fixed placeholder
+/// so the rest of the document is still byte-comparable. No baseline grant
+/// id matches this pattern (they are all `"g-" + a name`, never 16 raw hex
+/// characters), so this can never mis-normalise a real id.
+fn normalize_regrant_id(text: &str) -> String {
+    static PATTERN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = PATTERN.get_or_init(|| Regex::new(r"g-[0-9a-f]{16}").expect("valid regex"));
+    re.replace_all(text, "g-REGRANT").into_owned()
+}
+
+/// Applies [`normalize_regrant_id`] to the `grants` document text and every
+/// ledger line in a [`read_docs`] result, in place.
+fn normalize_regrant_id_in_docs(docs: &mut Map<String, Value>) {
+    if let Some(Value::String(s)) = docs.get("grants") {
+        let normalized = normalize_regrant_id(s);
+        docs.insert("grants".to_string(), Value::String(normalized));
+    }
+    if let Some(Value::Array(items)) = docs.get("ledger").cloned() {
+        let normalized: Vec<Value> = items
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => Value::String(normalize_regrant_id(&s)),
+                other => other,
+            })
+            .collect();
+        docs.insert("ledger".to_string(), Value::Array(normalized));
+    }
+}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -99,18 +133,24 @@ def baseline():
         },
     }
 
-    def http_conn(id_, auth, secret_id="gh-token"):
+    def http_conn(id_, auth, secret_id="gh-token", cli=None):
         return {
             "id": id_, "project": "demo", "environment": "dev", "service": "svc", "kind": "http",
             "secret_id": secret_id, "secret_version": None, "description": "demo",
             "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False},
             "http_auth": auth,
             "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
-            "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+            "ssh_target": None, "cli": cli, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
         }
 
     connections = {
-        "gh-bearer": http_conn("gh-bearer", {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None}),
+        # round 7 (harness gap named by the D-R7 review): a CLI-bearing
+        # connection -- the previous baseline had none, so every
+        # `cli.*`-mutating case was unreachable.
+        "gh-bearer": http_conn(
+            "gh-bearer", {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None},
+            cli={"program": "ghcli", "kind": "http", "base_url_env": "ZEROPW_API_BASE_URL", "extra_env": {}},
+        ),
         "gh-header": http_conn("gh-header", {"mode": "header", "header_name": "X-Token", "value_prefix": None, "basic_username": None}),
         "gh-basic": http_conn("gh-basic", {"mode": "basic", "header_name": None, "value_prefix": None, "basic_username": "svc"}),
         "box-ssh": {
@@ -145,6 +185,16 @@ def baseline():
             "dg1": {
                 "caller": "agent-1", "connection": "gh-bearer", "method": "GET", "path": "/repos",
                 "status": "pending", "created_at": "", "expires_at": CLOCK + 300.0,
+                "grant": "g-gh-bearer", "policy_version": 1, "cycle": 1,
+            },
+            # round 7 (harness gap named by the D-R7 review): an *approved*
+            # approval -- the previous baseline had only a pending one, so
+            # `approve`/`consume_approval`'s approved-status branches were
+            # unreachable.
+            "dg2": {
+                "caller": "agent-1", "connection": "gh-bearer", "method": "GET", "path": "/me",
+                "status": "approved", "created_at": "", "approved_at": "",
+                "expires_at": CLOCK + 300.0,
                 "grant": "g-gh-bearer", "policy_version": 1, "cycle": 1,
             },
         },
@@ -186,9 +236,43 @@ FIELD_PATHS = [
     ("control", ["approval_history"]),
     ("principals", ["agent-1", "token_hash"]),
     ("vault_secrets", ["secrets", "gh-token", "active_version"]),
+    # Round 7 additions (harness gaps named by the D-R7 review): nested
+    # http_target/http_scope/cli paths, plus top-level connection/grant/
+    # principal/approval fields the committed harness never mutated at all.
+    ("connections", ["gh-bearer", "http_target", "scheme"]),
+    ("connections", ["gh-bearer", "http_target", "host"]),
+    ("connections", ["gh-bearer", "http_target", "port"]),
+    ("connections", ["gh-bearer", "http_target", "ca_file"]),
+    ("connections", ["gh-bearer", "http_target", "allow_private_network"]),
+    ("connections", ["gh-bearer", "http_scope", "methods"]),
+    ("connections", ["gh-bearer", "http_scope", "path_prefixes"]),
+    ("connections", ["gh-bearer", "http_scope", "confirm_methods"]),
+    ("connections", ["gh-bearer", "cli", "program"]),
+    ("connections", ["gh-bearer", "cli", "kind"]),
+    ("connections", ["gh-bearer", "cli", "base_url_env"]),
+    ("connections", ["gh-bearer", "cli", "extra_env"]),
+    ("connections", ["gh-bearer", "kind"]),
+    ("connections", ["gh-bearer", "secret_id"]),
+    ("connections", ["gh-bearer", "id"]),
+    ("grants", ["g-gh-bearer", "principal"]),
+    ("grants", ["g-gh-bearer", "connection"]),
+    ("principals", ["agent-1", "status"]),
+    ("principals", ["agent-1", "runtime"]),
+    ("control", ["approvals", "dg1", "policy_version"]),
+    ("control", ["approvals", "dg1", "cycle"]),
+    # `dg2` (the *approved* baseline approval) specifically, not `dg1`
+    # (pending): `consume_approval` only ever targets `dg2` in this
+    # harness's `WRITE_OPS`, so this is the field path that actually
+    # exercises finding D-R7-4's unhashable-`grant`-lookup bug through the
+    # matrix (mutating `dg1.grant` is irrelevant to `consume_approval`,
+    # which never reads `dg1`).
+    ("control", ["approvals", "dg2", "grant"]),
 ]
 
 HUGE_INT = 10 ** 30
+I64_MAX = 2 ** 63 - 1
+I64_MIN = -(2 ** 63)
+TWO_POW_53_PLUS_1 = 2 ** 53 + 1
 ODD_VALUES = [
     ("null", None),
     ("empty_array", []),
@@ -202,12 +286,23 @@ ODD_VALUES = [
     ("non_ascii_string", "café"),
     ("whitespace_padded", "  3  "),
     ("missing", "__MISSING__"),
+    # Round 7 additions (harness gaps the D-R7 review named explicitly):
+    # truthy *containers* -- the exact class of the D-R5-1/D-R4-1 fail-open
+    # bugs, and (combined with the cross-field mutation mode below) of
+    # D-R7-6's two-array `grant_num_ge` gap -- plus the `i64` arithmetic
+    # boundary (D-R7-1) and the `f64` 53-bit exactness boundary (D-R7-3).
+    ("truthy_array", [1]),
+    ("truthy_object", {"a": 1}),
+    ("negative_one", -1),
+    ("i64_max", I64_MAX),
+    ("i64_min", I64_MIN),
+    ("two_pow_53_plus_1", TWO_POW_53_PLUS_1),
 ]
 
-# Runtime control (round 6): the full `FIELD_PATHS x ODD_VALUES` cross
-# product exercises every (field, odd-value) combination, but most fields
-# only ever see *type* confusion, not *content* confusion -- once a value is
-# "some non-matching string", `value_eq_str`/`GrantNum::Str`/
+# Runtime control (round 6, extended round 7): the full `FIELD_PATHS x
+# ODD_VALUES` cross product exercises every (field, odd-value) combination,
+# but most fields only ever see *type* confusion, not *content* confusion --
+# once a value is "some non-matching string", `value_eq_str`/`GrantNum::Str`/
 # `numeric_value_as_f64`/`Option::as_str` all treat "3", "٣", "café" and
 # "  3  " identically (none of them route through `python_int_coerce`'s
 # Unicode-digit/whitespace-stripping grammar). The exception is
@@ -219,23 +314,29 @@ ODD_VALUES = [
 # falsy string (`empty_string`), one truthy non-numeric string
 # (`numeric_string`), both empty containers, both truthy-numeric shapes
 # (`bool_true`, `integral_float`), the exact-precision boundary
-# (`huge_int`), and the no-default/missing-key case. This keeps the
-# case_count (and so total runtime) roughly stable even as this round adds
-# two more field paths -- fixed, not randomly sampled, so it is exactly
-# reproducible and never silently drops the specific (field, label) pairs
-# this round's fixes are pinned against (every label this round's four
-# fixed exceptions cared about -- `huge_int`, `empty_array`, `empty_object`
-# -- is in `CORE_VALUES`).
+# (`huge_int`), the no-default/missing-key case, and (round 7) the two
+# truthy containers and the three integer-boundary values above. This keeps
+# the case_count (and so total runtime) from exploding even as this round
+# adds many more field paths -- fixed, not randomly sampled, so it is
+# exactly reproducible and never silently drops the specific (field, label)
+# pairs any round's fixes are pinned against.
 FULL_ODD_VALUE_PATHS = {
     ("connections", ("gh-bearer", "policy_version")),
     ("connections", ("box-ssh", "policy_version")),
     ("connections", ("gh-basic", "policy_version")),
+    # Round 7: the fields D-R7-1/D-R7-3's arithmetic actually touches get
+    # the complete value set too, not just the reduced `CORE_VALUES`.
+    ("grants", ("g-gh-bearer", "max_uses")),
+    ("grants", ("g-gh-bearer", "uses")),
+    ("grants", ("g-gh-bearer", "expires_at")),
+    ("control", ("approvals", "dg1", "cycle")),
 }
 CORE_VALUES = [
     v for v in ODD_VALUES
     if v[0] in ("null", "empty_array", "empty_object", "empty_string",
                 "numeric_string", "integral_float", "bool_true", "huge_int",
-                "missing")
+                "missing", "truthy_array", "truthy_object", "i64_max",
+                "i64_min", "two_pow_53_plus_1")
 ]
 
 
@@ -364,7 +465,26 @@ WRITE_OPS = [
     "resume", "request_approval", "revoke_grant", "revoke_all", "reapply_revocations",
     "credential_versions_changed", "update_connection", "disable_principal",
     "disable_connection", "consume",
+    # Round 7 additions (harness gap named by the D-R7 review): a third of
+    # the public write API -- including `regrant`, the one operation
+    # finding D-R7-3's `max_uses` exactness bug lives in -- was absent.
+    "regrant", "approve", "consume_approval", "revoke_grants_of", "stop_all",
 ]
+
+# `regrant` (round 7) creates a fresh grant with a random id
+# (`"g-" + uuid4().hex[:16]`), so its own persisted `grants.json` and its
+# `public_view()["id"]` can never byte-match Rust's independently-random id.
+# Neither language's *decision* depends on the id's actual value, only on it
+# being fresh, so normalising it to a fixed placeholder (the same way the
+# ledger's real-wall-clock `ts` is stripped above) makes the rest of the
+# document still comparable. Only a freshly generated id is touched -- every
+# *baseline* grant id (`g-gh-bearer`, ...) is `"g-" + a name`, never 16 raw
+# hex characters, so this can never mis-normalise a real, meaningful id.
+_REGRANT_ID_RE = __import__("re").compile(r"g-[0-9a-f]{16}")
+
+
+def normalize_regrant_id(text):
+    return _REGRANT_ID_RE.sub("g-REGRANT", text)
 
 
 def run_write_op(state_path, docs, name):
@@ -410,10 +530,35 @@ def run_write_op(state_path, docs, name):
                 action=P.Action("http", "GET", "/repos"), policy_version=None,
             )
             result = ok(g.public_view())
+        elif name == "regrant":
+            g = pol.regrant("g-gh-bearer")
+            result = ok(g.public_view())
+        elif name == "approve":
+            entry = pol.approve("dg1")
+            result = ok(entry)
+        elif name == "consume_approval":
+            # No `grant_id`/`policy_version` (finding D-R7-4): passing an
+            # explicit `grant_id` that differs from a malformed stored
+            # `grant` short-circuits `_approval_mismatch` via `!=` *before*
+            # it ever reaches `self.get_grant(recorded_grant)` -- the
+            # `dict.get()` call whose `TypeError` on an unhashable
+            # `recorded_grant` is the actual bug. Omitting both (as no
+            # preceding `evaluate()` call population would too) is what
+            # actually exercises that path.
+            ok_bool = pol.consume_approval("dg2", "agent-1", "gh-bearer")
+            result = ok(ok_bool)
+        elif name == "revoke_grants_of":
+            n = pol.revoke_grants_of("agent-1")
+            result = ok(n)
+        elif name == "stop_all":
+            pol.stop_all()
+            result = ok(None)
         else:
             raise AssertionError(name)
     except Exception as e:
         result = err_tuple(e)
+    if name == "regrant" and "ok" in result and isinstance(result["ok"], dict) and "id" in result["ok"]:
+        result["ok"]["id"] = "g-REGRANT"
     docs_out = {
         "principals": doc_text(state_path, P.PRINCIPALS),
         "connections": doc_text(state_path, P.CONNECTIONS),
@@ -422,7 +567,76 @@ def run_write_op(state_path, docs, name):
         "vault_secrets": doc_text(state_path, P.VAULT_SECRETS),
         "ledger": ledger_lines_normalized(state_path),
     }
+    if name == "regrant":
+        docs_out["grants"] = normalize_regrant_id(docs_out["grants"])
+        docs_out["ledger"] = [normalize_regrant_id(line) for line in docs_out["ledger"]]
     return {"outcome": result, "docs": docs_out}
+
+
+def apply_mutations(base, mutations):
+    """Like `apply_mutation`, but applies *several* (doc, path, label,
+    value) mutations to the same document set at once (round 7, the
+    cross-field mutation mode finding D-R7-6 needs: that bug only exists
+    when *both* `uses` and `max_uses` are arrays at once, which a
+    one-field-at-a-time mutation can never reach)."""
+    docs = {k: copy.deepcopy(v) for k, v in base.items()}
+    for doc_name, path, label, value in mutations:
+        if label == "missing":
+            del_path(docs[doc_name], path)
+        else:
+            set_path(docs[doc_name], path, value)
+    return docs
+
+
+# Round 7 (harness gap named by the D-R7 review, finding D-R7-6): the main
+# matrix above only ever mutates one field at a time, so a bug that only
+# manifests when *two* fields are simultaneously odd (exactly D-R7-6's
+# `uses`/`max_uses` both-arrays case) is structurally unreachable there.
+# `CROSS_FIELD_CASES` starts with that exact repro (a must-have, not left to
+# chance), then adds a small, fixed (seeded, not exhaustive -- a full
+# `FIELD_PATHS` x `FIELD_PATHS` x `CORE_VALUES` x `CORE_VALUES` cross
+# product would explode the runtime for very little extra signal) sample of
+# further two-field combinations drawn from a curated pool of fields real
+# decisions actually read *together* (a connection and its own grant's
+# fields, a grant and the approval bound to it, ...), so the sample is
+# reproducible across runs rather than silently different every time.
+CROSS_FIELD_CASES = [
+    (("grants", ["g-gh-bearer", "uses"], "empty_array", []),
+     ("grants", ["g-gh-bearer", "max_uses"], "truthy_array", [1])),
+]
+
+
+def _sample_cross_field_cases(seed, count):
+    rng = __import__("random").Random(seed)
+    pool_paths = [
+        ("connections", ["gh-bearer", "policy_version"]),
+        ("connections", ["gh-bearer", "secret_id"]),
+        ("connections", ["gh-bearer", "status"]),
+        ("connections", ["gh-bearer", "kind"]),
+        ("grants", ["g-gh-bearer", "policy_version"]),
+        ("grants", ["g-gh-bearer", "max_uses"]),
+        ("grants", ["g-gh-bearer", "uses"]),
+        ("grants", ["g-gh-bearer", "status"]),
+        ("grants", ["g-gh-bearer", "expires_at"]),
+        ("control", ["approvals", "dg1", "grant"]),
+        ("control", ["approvals", "dg1", "policy_version"]),
+        ("control", ["approvals", "dg2", "policy_version"]),
+    ]
+    sampled = []
+    for _ in range(count):
+        doc1, path1 = rng.choice(pool_paths)
+        remaining = [p for p in pool_paths if p != (doc1, path1)]
+        doc2, path2 = rng.choice(remaining)
+        label1, value1 = rng.choice(CORE_VALUES)
+        label2, value2 = rng.choice(CORE_VALUES)
+        sampled.append((
+            (doc1, path1, label1, value1),
+            (doc2, path2, label2, value2),
+        ))
+    return sampled
+
+
+CROSS_FIELD_CASES += _sample_cross_field_cases(seed=20260918, count=8)
 
 
 def main():
@@ -456,6 +670,34 @@ def main():
                 "reads": reads, "writes": writes,
             }
             print(json.dumps(case_obj, sort_keys=True))
+
+    for mutations in CROSS_FIELD_CASES:
+        idx += 1
+        mutated = apply_mutations(base, mutations)
+
+        with tempfile.TemporaryDirectory() as d:
+            state_path = os.path.join(d, "state")
+            state = StateDir(state_path)
+            state.create()
+            write_docs(state, mutated)
+            pol = P.Policy(state, clock=clock)
+            reads = run_read_ops(pol)
+
+        writes = {}
+        for wname in WRITE_OPS:
+            with tempfile.TemporaryDirectory() as d:
+                state_path = os.path.join(d, "state")
+                writes[wname] = run_write_op(state_path, mutated, wname)
+
+        case_obj = {
+            "case": idx, "cross_field": True,
+            "fields": [
+                [d, p, l, (None if l == "missing" else v)]
+                for (d, p, l, v) in mutations
+            ],
+            "reads": reads, "writes": writes,
+        }
+        print(json.dumps(case_obj, sort_keys=True))
 
 
 main()
@@ -502,6 +744,25 @@ fn apply_mutation(
     docs
 }
 
+/// Plural form of [`apply_mutation`] for the cross-field mutation mode
+/// (finding D-R7-6): applies every `(doc, path, missing, value)` mutation
+/// to the same document set at once.
+fn apply_mutations(
+    baseline: &Map<String, Value>,
+    mutations: &[(String, Vec<String>, bool, Value)],
+) -> Map<String, Value> {
+    let mut docs = baseline.clone();
+    for (doc, path, missing, value) in mutations {
+        let target = docs.get_mut(doc.as_str()).expect("doc name");
+        if *missing {
+            del_path(target, path);
+        } else {
+            set_path(target, path, value.clone());
+        }
+    }
+    docs
+}
+
 fn write_docs(state: &StateDir, docs: &Map<String, Value>) {
     state
         .write_json(policy::PRINCIPALS, &docs["principals"])
@@ -529,6 +790,14 @@ enum Outcome {
     /// §3.5 allows Rust to map this to *any* handled error, so only
     /// "did it fail" is compared, not the specific class/reason.
     BuiltinErr,
+    /// Round 7 (finding D-R7-1): the Rust side panicked (e.g. `attempt to
+    /// add with overflow`), caught via `std::panic::catch_unwind` so the
+    /// whole harness run reports it as an ordinary divergence instead of
+    /// aborting -- Python never panics, so this variant only ever appears
+    /// on the Rust side, and `matches`/`check_case`'s default fall-through
+    /// already treats it as a real, unexplained divergence against every
+    /// Python outcome (nothing should ever need a named exception for it).
+    Panic(String),
 }
 
 impl Outcome {
@@ -557,6 +826,13 @@ impl Outcome {
     /// `BuiltinErr` tolerance described on the enum itself.
     fn matches(&self, other: &Outcome) -> bool {
         match (self, other) {
+            // A Rust panic never "matches" anything, including Python's own
+            // `BuiltinErr` (which the `BuiltinErr` arm below would
+            // otherwise treat as "any failure" and silently accept) --
+            // Python never panics, so this is always a real divergence
+            // (finding D-R7-1: this is exactly the case that would have
+            // aborted the whole harness before `catch_unwind` was added).
+            (Outcome::Panic(_), _) | (_, Outcome::Panic(_)) => false,
             (Outcome::Ok(a), Outcome::Ok(b)) => a == b,
             (Outcome::BuiltinErr, o) | (o, Outcome::BuiltinErr) => !matches!(o, Outcome::Ok(_)),
             (Outcome::ZeroPwErr(c1, r1), Outcome::ZeroPwErr(c2, r2)) => c1 == c2 && r1 == r2,
@@ -633,21 +909,49 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
     // could reintroduce the same ordering hazard for any predicate that
     // doesn't exclude `label == "huge_int"`.
     NamedException {
-        description: "Newly discovered, undocumented until this round's \
-            differential harness (reported, not fixed): Python's `iso()` \
-            (`time.strftime`/`time.gmtime`) raises an uncaught `OverflowError` \
-            for a timestamp magnitude the platform C library can't represent \
-            (e.g. `grant.expires_at` beyond `i64` range, kept exact by \
-            Python's arbitrary-precision `int`); this port's own ISO \
-            formatting has no such bound and happily renders an absurd but \
-            well-formed date instead.",
+        // Round-7 correction (finding D-R7-8): this exception's description
+        // previously claimed the divergence was "newly discovered,
+        // undocumented until this round's differential harness" -- false.
+        // It is already recorded, and named `Grant.expires_at` explicitly,
+        // in `DEVIATIONS.md`'s `store (iso, findings A-R4-2, A-R5-3)` row
+        // (line 41): Python's `time.gmtime`/`time.strftime` raise for a
+        // timestamp magnitude the platform C library can't represent (or a
+        // non-finite `ts`), uncaught by `iso`, where this port's own `iso`
+        // has no such bound (by design -- callers across the whole crate
+        // depend on its `-> String` signature never failing) and renders a
+        // physically meaningless but well-formed date instead.
+        description: "Documented divergence: DEVIATIONS.md's `store (iso, \
+            findings A-R4-2, A-R5-3)` row, which names `Grant.expires_at` \
+            explicitly. Python's `iso()` raises an uncaught `OverflowError`/\
+            `OSError` for a timestamp magnitude the platform C library \
+            can't represent (e.g. `grant.expires_at` beyond what \
+            `time.gmtime` accepts, reachable via Python's arbitrary- \
+            precision `int`); this port's own ISO formatting has no such \
+            bound and renders an absurd but well-formed date instead.",
         applies: |doc, path, missing, label, _op| {
             doc == "grants"
                 && !missing
-                && label == "huge_int"
+                // `i64_max`/`i64_min` (round 7's new boundary values) hit
+                // the identical platform `gmtime`/`OSError` limit `python3.12`
+                // confirms directly (`iso(2**63-1)`/`iso(-(2**63))` both
+                // raise `OSError [Errno 84] Value too large...`);
+                // `two_pow_53_plus_1` deliberately does NOT get this
+                // exception -- `python3.12` confirms `iso(2**53+1)` returns
+                // normally, and finding D-R7-3's fix makes this port match
+                // it exactly (`exact_iso_seconds`), pinned by
+                // `grant_public_view_expires_at_is_exact_past_f64_53_bit_precision`.
+                && matches!(label, "huge_int" | "i64_max" | "i64_min")
                 && path.last().map(String::as_str) == Some("expires_at")
         },
-        judge: |_py, _rust| true,
+        // Round-7 correction (finding D-R7-8): `|_py, _rust| true` accepted
+        // *any* pair of outcomes, including a future regression where Rust
+        // starts disagreeing with Python in some entirely different way --
+        // directly contradicting this harness's own contract that a judge
+        // must "confirm the disagreement takes exactly its documented
+        // shape ... never a silent 'ignore this case'". The real shape is:
+        // Python raises the uncaught built-in error this row documents,
+        // and Rust still succeeds.
+        judge: |py, rust| matches!(py, Outcome::BuiltinErr) && matches!(rust, Outcome::Ok(_)),
         skip_doc_compare: true,
     },
     NamedException {
@@ -677,6 +981,140 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
                         | "huge_int"
                 )
                 && matches!(op, "evaluate" | "check_grant" | "consume")
+        },
+        judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
+        skip_doc_compare: true,
+    },
+    NamedException {
+        // Round 7's own harness extension surfaced this whole class: it
+        // added mutated field paths (`connections.secret_id`, `connections.
+        // cli.program`, `connections.http_target.ca_file`, `connections.
+        // http_auth.basic_username`/`header_name`, every `http_scope.*`
+        // field, `grants.principal`/`connection`, `principals.status`/
+        // `runtime`) that the committed harness never exercised before,
+        // and essentially all of them land in the *same*, already-
+        // documented bucket: `DEVIATIONS.md` row 95 (`Grant`/`Principal`/
+        // `Connection` fields with no `isinstance` guard in Python at
+        // all) and row 71 (`HttpTarget.ca_file`, the same shape). Once any
+        // one of these fields is malformed, Python's own dataclasses keep
+        // loading it completely untyped and every operation that never
+        // actually reads that specific field's value succeeds normally --
+        // but this crate's `from_value` readers use one `corrupt` flag (or
+        // an outright required-string check) that fails the *entire*
+        // record's load, so *every* operation that merely touches the
+        // record (not just the ones that read the bad field) fails
+        // `state_corrupt` instead. Hand-enumerating every (field, op) pair
+        // this reaches is impractical (dozens, confirmed by running the
+        // extended matrix) and was already flagged by the review that
+        // demanded this harness extension: 'Most of the ~740 raw
+        // disagreements my extended matrix produced *are* legitimately
+        // covered by row 95 ... the ones [named as findings] are not.'
+        // This exception is therefore intentionally broad -- scoped to
+        // the exact observable *shape* row 95/71 describes (Rust fails
+        // closed with `state_corrupt` where Rust's `from_value` can't
+        // even load the record, regardless of what Python itself decides
+        // once it does load it: an outright success, or a documented
+        // denial reached via the malformed value comparing/looking-up as
+        // "no match" -- see the code comment below), not to a fixed
+        // field/op list -- so it keeps absorbing this already-accepted
+        // class as the harness's own field-path coverage grows, without
+        // needing a new named exception added by hand every time. It does
+        // NOT absorb a different failure shape (Rust succeeding, Rust
+        // panicking, or any Rust error other than `state_corrupt`):
+        // `judge` still requires exactly Rust-`state_corrupt`, so an
+        // unrelated regression with a different shape still fails the
+        // harness. Every finding this round's reviewer actually named and
+        // fixed (D-R7-1/2/3/4/5/6/7/9) changed Rust's behaviour to match
+        // Python, so none of them fall into this bucket any more; a
+        // future round narrowing
+        // this back to an explicit field list (once `principal_from_entry`/
+        // `Connection::from_value`/`Grant::from_value` are made lazy
+        // per-field, the way the `raw_*` fields already did for `Grant`'s
+        // numeric fields in round 5-6) would close it for good.
+        description: "DEVIATIONS.md rows 95 and 71 (policy, no-\
+            isinstance-guard `Connection`/`Grant`/`Principal` fields): \
+            broad, shape-scoped catch-all for the general class those \
+            rows document, surfaced widely by this round's new field \
+            paths. See the code comment on this exception for the full \
+            reasoning and the explicit list of fields it was confirmed \
+            against this round.",
+        applies: |doc, path, missing, _label, _op| {
+            !missing
+                && ((doc == "connections"
+                    && matches!(
+                        path.last().map(String::as_str),
+                        Some(
+                            "project"
+                                | "environment"
+                                | "service"
+                                | "secret_id"
+                                | "created_at"
+                                | "updated_at"
+                                | "description"
+                                | "ca_file"
+                                | "program"
+                                | "value_prefix"
+                                | "header_name"
+                                | "basic_username"
+                                | "methods"
+                                | "path_prefixes"
+                                | "confirm_methods"
+                        )
+                    ))
+                    || (doc == "grants"
+                        && matches!(
+                            path.last().map(String::as_str),
+                            Some("principal" | "connection" | "created_at")
+                        ))
+                    || (doc == "principals"
+                        && matches!(
+                            path.last().map(String::as_str),
+                            Some("token_hash" | "status" | "created_at" | "runtime")
+                        )))
+        },
+        // `matches!(py, Outcome::Ok(_))` alone under-scoped this: measured
+        // with `grants["g-gh-bearer"]["connection"] = null`, Python's
+        // `consume`/`regrant` don't succeed outright -- they reach the
+        // malformed value in a comparison/lookup that itself decides a
+        // *documented* denial (`consume` -> `PolicyDenied
+        // "grant_mismatch"`, since `None != "gh-bearer"`; `regrant` ->
+        // `NotFound "connection_not_found"`, since `self.get_connection(
+        // None)` doesn't find one) -- never an exception either way. The
+        // root cause is identical (Rust's `Grant::from_value` can't load
+        // the record at all, so it never reaches *any* decision), so the
+        // judge accepts any Python outcome paired with Rust's
+        // `state_corrupt`, not just an outright Python success.
+        judge: |_py, rust| is_state_corrupt(rust),
+        skip_doc_compare: true,
+    },
+    NamedException {
+        // Finding D-R7-1's own deliberate, documented residual: see
+        // `DEVIATIONS.md`'s `policy (Connection::policy_version/approval
+        // cycle i64 counter overflow, finding D-R7-1)` row. Measured
+        // directly against `python3.12`: with `connections["gh-bearer"]
+        // ["policy_version"] = 2**63 - 1` (`i64::MAX`), `update_connection`/
+        // `credential_versions_changed`/`reapply_revocations` all succeed
+        // and persist `9223372036854775808` (one past `i64::MAX`) --
+        // Python's `int` never overflows. This crate's `Connection::
+        // policy_version` stays a plain `i64` (relied on outside this
+        // work unit's files), so `checked_add(1)` fails closed with
+        // `state_corrupt` instead of panicking or silently wrapping to
+        // `i64::MIN` and persisting it -- a deliberate divergence at an
+        // astronomically unreachable boundary, not a bug (unlike the
+        // panic/silent-wrap this same finding fixed).
+        description: "DEVIATIONS.md row (policy, Connection::policy_version/\
+            approval cycle i64 counter overflow, finding D-R7-1): Python's \
+            arbitrary-precision `int` never overflows at `i64::MAX`; this \
+            crate's `policy_version`/`cycle` stay plain `i64` (no exact- \
+            widening representation available outside this work unit's \
+            files) and fail closed with `state_corrupt` via `checked_add` \
+            instead of panicking or silently wrapping to a negative value \
+            and persisting it.",
+        applies: |doc, path, missing, label, _op| {
+            !missing
+                && matches!(label, "i64_max")
+                && ((doc == "connections" && path.last().map(String::as_str) == Some("policy_version"))
+                    || (doc == "control" && path.last().map(String::as_str) == Some("cycle")))
         },
         judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
         skip_doc_compare: true,
@@ -723,6 +1161,12 @@ const WRITE_OPS: &[&str] = &[
     "disable_principal",
     "disable_connection",
     "consume",
+    // Round 7 additions (harness gap named by the D-R7 review).
+    "regrant",
+    "approve",
+    "consume_approval",
+    "revoke_grants_of",
+    "stop_all",
 ];
 
 fn run_rust_read_op(pol: &Policy, op: &str) -> Outcome {
@@ -817,10 +1261,55 @@ fn run_rust_write_op(state: &StateDir, pol: &Policy, op: &str) -> Outcome {
                 None,
             )
             .and_then(|g| g.public_view()),
+        "regrant" => pol.regrant("g-gh-bearer").and_then(|g| g.public_view()),
+        "approve" => pol.approve("dg1"),
+        // No `grant_id`/`policy_version` (finding D-R7-4): see the matching
+        // comment in the Python driver's `consume_approval` branch.
+        "consume_approval" => pol
+            .consume_approval("dg2", "agent-1", "gh-bearer", None, None)
+            .map(|b| json!(b)),
+        "revoke_grants_of" => pol.revoke_grants_of("agent-1").map(|n| json!(n)),
+        "stop_all" => pol.stop_all().map(|_| Value::Null),
         _ => unreachable!("unknown write op {op}"),
     };
     let _ = state; // state is written to by the ops above via `pol`
     Outcome::from_rust_result(r)
+}
+
+/// Extracts a human-readable message from a `catch_unwind` panic payload
+/// (a `&str` or `String`, the two shapes `panic!`/`.expect`/an arithmetic
+/// overflow's own panic message use; anything else falls back to a fixed
+/// placeholder rather than failing to build a divergence message).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
+/// Finding D-R7-1: without this, a Rust panic (e.g. `attempt to add with
+/// overflow`, exactly what the unchecked `+ 1` sites this finding fixed
+/// used to do) would abort the whole `cargo test` process instead of being
+/// reported as a divergence -- so reverting that fix would make the harness
+/// itself stop running rather than fail with a clear diagnosis. Wrapping
+/// every Rust operation call in `catch_unwind` turns a panic into an
+/// ordinary [`Outcome::Panic`], which [`Outcome::matches`] never treats as
+/// agreeing with any Python outcome.
+fn run_rust_read_op_catching(pol: &Policy, op: &str) -> Outcome {
+    match panic::catch_unwind(AssertUnwindSafe(|| run_rust_read_op(pol, op))) {
+        Ok(outcome) => outcome,
+        Err(payload) => Outcome::Panic(panic_message(payload.as_ref())),
+    }
+}
+
+fn run_rust_write_op_catching(state: &StateDir, pol: &Policy, op: &str) -> Outcome {
+    match panic::catch_unwind(AssertUnwindSafe(|| run_rust_write_op(state, pol, op))) {
+        Ok(outcome) => outcome,
+        Err(payload) => Outcome::Panic(panic_message(payload.as_ref())),
+    }
 }
 
 /// The document text plus the revocation ledger (ts-stripped), read back
@@ -873,6 +1362,17 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
     let mut divergences: Vec<String> = Vec::new();
     let mut exceptions_hit = 0usize;
 
+    // Finding D-R7-1: a caught panic (see `run_rust_read_op_catching`/
+    // `run_rust_write_op_catching`) still fires Rust's default panic hook,
+    // which prints a full "thread panicked" message plus backtrace hint to
+    // stderr for every single occurrence -- across the whole matrix that
+    // can be thousands of lines of noise even though the harness now
+    // handles it gracefully. Silenced only for the duration of this loop
+    // and always restored afterward (`std::panic::set_hook` is a global,
+    // process-wide setting).
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+
     for line in lines {
         if line.trim().is_empty() {
             continue;
@@ -880,6 +1380,122 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
         let case: Value =
             serde_json::from_str(line).unwrap_or_else(|e| panic!("bad case line: {e}: {line}"));
         case_count += 1;
+
+        // ---------------- cross-field mutation mode (finding D-R7-6) ----------------
+        if case
+            .get("cross_field")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let fields = case["fields"].as_array().unwrap();
+            let mutations: Vec<(String, Vec<String>, bool, Value)> = fields
+                .iter()
+                .map(|f| {
+                    let arr = f.as_array().unwrap();
+                    let d = arr[0].as_str().unwrap().to_string();
+                    let p: Vec<String> = arr[1]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
+                    let label = arr[2].as_str().unwrap();
+                    (d, p, label == "missing", arr[3].clone())
+                })
+                .collect();
+            // For `matching_exception` lookups: each field's own (doc,
+            // path, missing, label), independent of the mutations vec
+            // above (which drops the label string).
+            let field_labels: Vec<(String, Vec<String>, bool, String)> = fields
+                .iter()
+                .map(|f| {
+                    let arr = f.as_array().unwrap();
+                    let d = arr[0].as_str().unwrap().to_string();
+                    let p: Vec<String> = arr[1]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
+                    let label = arr[2].as_str().unwrap().to_string();
+                    let missing = label == "missing";
+                    (d, p, missing, label)
+                })
+                .collect();
+            // A cross-field case's divergence can be fully explained by
+            // *either* of its two individual field mutations independently
+            // (e.g. the `connections.secret_id` exception below fires
+            // regardless of what the other, unrelated field is doing) --
+            // try each field's own single-field named exception in turn.
+            let cross_field_exception = |op: &str| -> Option<&'static NamedException> {
+                field_labels
+                    .iter()
+                    .find_map(|(d, p, m, l)| matching_exception(d, p, *m, l, op))
+            };
+            let case_desc = format!("cross_field={fields:?}");
+            let mutated_docs = apply_mutations(&baseline, &mutations);
+
+            // Cross-field cases compare outcomes only (not persisted-
+            // document bytes): their purpose is proving the *decision* an
+            // interacting pair of fields drives agrees (exactly D-R7-6's
+            // `check_grant`/`consume` allow-vs-deny outcome), which the
+            // main per-field loop below already covers byte-for-byte for
+            // every single-field case.
+            {
+                let tmp = TempDir::new().unwrap();
+                let state_path = tmp.path().join("state");
+                let state = StateDir::new(&state_path);
+                state.create().unwrap();
+                write_docs(&state, &mutated_docs);
+                let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+
+                for op in READ_OPS {
+                    op_count += 1;
+                    let rust_outcome = run_rust_read_op_catching(&pol, op);
+                    let py_outcome = Outcome::from_manifest(&case["reads"][op]);
+                    check_case(
+                        &case_desc,
+                        op,
+                        cross_field_exception(op),
+                        &py_outcome,
+                        &rust_outcome,
+                        &mut divergences,
+                        &mut exceptions_hit,
+                    );
+                }
+            }
+            for op in WRITE_OPS {
+                op_count += 1;
+                let tmp = TempDir::new().unwrap();
+                let state_path = tmp.path().join("state");
+                let state = StateDir::new(&state_path);
+                state.create().unwrap();
+                write_docs(&state, &mutated_docs);
+                let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+
+                let mut rust_outcome = run_rust_write_op_catching(&state, &pol, op);
+                // Same `regrant` random-id normalisation as the main
+                // per-field loop below (see its matching comment).
+                if *op == "regrant"
+                    && let Outcome::Ok(Value::Object(obj)) = &mut rust_outcome
+                    && obj.contains_key("id")
+                {
+                    obj.insert("id".to_string(), json!("g-REGRANT"));
+                }
+                let py_outcome = Outcome::from_manifest(&case["writes"][op]["outcome"]);
+                check_case(
+                    &case_desc,
+                    op,
+                    cross_field_exception(op),
+                    &py_outcome,
+                    &rust_outcome,
+                    &mut divergences,
+                    &mut exceptions_hit,
+                );
+            }
+            continue;
+        }
+
         let doc = case["doc"].as_str().unwrap().to_string();
         let path: Vec<String> = case["path"]
             .as_array()
@@ -906,7 +1522,7 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
 
             for op in READ_OPS {
                 op_count += 1;
-                let rust_outcome = run_rust_read_op(&pol, op);
+                let rust_outcome = run_rust_read_op_catching(&pol, op);
                 let py_outcome = Outcome::from_manifest(&case["reads"][op]);
                 let exception = matching_exception(&doc, &path, missing, &label, op);
                 check_case(
@@ -931,7 +1547,18 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
             write_docs(&state, &mutated_docs);
             let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
 
-            let rust_outcome = run_rust_write_op(&state, &pol, op);
+            let mut rust_outcome = run_rust_write_op_catching(&state, &pol, op);
+            // `regrant` (finding D-R7-3's harness gap) creates a fresh
+            // grant with a random id neither language can predict --
+            // normalise it the same way the Python driver already
+            // normalises its own recording (see `normalize_regrant_id`),
+            // so the rest of the outcome/document is still comparable.
+            if *op == "regrant"
+                && let Outcome::Ok(Value::Object(obj)) = &mut rust_outcome
+                && obj.contains_key("id")
+            {
+                obj.insert("id".to_string(), json!("g-REGRANT"));
+            }
             let py_outcome = Outcome::from_manifest(&case["writes"][op]["outcome"]);
             let exception = matching_exception(&doc, &path, missing, &label, op);
             let matched = check_case(
@@ -946,7 +1573,10 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
 
             let skip_docs = exception.is_some_and(|e| e.skip_doc_compare);
             if matched && !skip_docs {
-                let rust_docs = read_docs(&state, &state_path);
+                let mut rust_docs = read_docs(&state, &state_path);
+                if *op == "regrant" {
+                    normalize_regrant_id_in_docs(&mut rust_docs);
+                }
                 let py_docs = case["writes"][op]["docs"].as_object().unwrap();
                 for key in [
                     "principals",
@@ -955,7 +1585,30 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
                     "control",
                     "vault_secrets",
                 ] {
-                    if rust_docs[key] != py_docs[key] {
+                    // `regrant`'s fresh grant's *original* random id (before
+                    // `normalize_regrant_id` relabels it to the fixed
+                    // `"g-REGRANT"` placeholder) still decided where
+                    // `write_json`'s `sort_keys=True` placed that entry in
+                    // the document -- Python's and Rust's independently
+                    // generated random ids sort into different positions,
+                    // so a raw byte/text comparison of the *relabelled*
+                    // text would spuriously "differ" on key order alone,
+                    // not on any real content difference. Only for
+                    // `grants` under `regrant`, compare structurally
+                    // (`serde_json::Value`'s `PartialEq`, which -- built on
+                    // `indexmap`'s own map equality -- is order-independent)
+                    // instead of by raw text.
+                    let differs = if key == "grants" && *op == "regrant" {
+                        let py_val: Value = serde_json::from_str(py_docs[key].as_str().unwrap())
+                            .expect("python grants doc is valid json");
+                        let rust_val: Value =
+                            serde_json::from_str(rust_docs[key].as_str().unwrap())
+                                .expect("rust grants doc is valid json");
+                        py_val != rust_val
+                    } else {
+                        rust_docs[key] != py_docs[key]
+                    };
+                    if differs {
                         divergences.push(format!(
                             "{case_desc} op={op}: document {key} bytes differ\n  python: {}\n  rust:   {}",
                             py_docs[key], rust_docs[key]
@@ -971,6 +1624,9 @@ fn policy_differential_matrix_matches_python_across_mutations_and_operations() {
             }
         }
     }
+
+
+    panic::set_hook(previous_hook);
 
     eprintln!(
         "policy_differential: {case_count} mutation cases x ~{} ops = {op_count} checks, {exceptions_hit} named-exception hits",
