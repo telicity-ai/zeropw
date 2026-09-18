@@ -33,11 +33,20 @@ const FIXED_NOW: f64 = 1_700_000_000.0;
 
 fn setup() -> (TempDir, Context) {
     let tmp = TempDir::new().expect("tempdir");
+    // Explicit `socket_dir`/`run_dir` under this test's own `TempDir` (unit G's fixtures already
+    // do this, e.g. `signer_oracle.rs`'s `build_fixture`): `Config::default()` leaves both `None`,
+    // which `Context::initialize` fills in with fresh private directories under the *system* temp
+    // dir instead of this test's own, disposable one.
+    let config = Config {
+        socket_dir: Some(tmp.path().join("ctx-sockets")),
+        run_dir: Some(tmp.path().join("ctx-run")),
+        ..Config::default()
+    };
     let ctx = Context::initialize(
         tmp.path().join("state"),
         ADMIN,
         RECOVERY,
-        Config::default(),
+        config,
         clock::fixed(FIXED_NOW),
     )
     .expect("Context::initialize");

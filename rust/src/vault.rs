@@ -106,6 +106,69 @@ fn get_or_null<'v>(m: &'v Map<String, Value>, key: &str) -> &'v Value {
     m.get(key).unwrap_or(&Value::Null)
 }
 
+fn corrupt() -> Error {
+    Error::state("state_corrupt").with_detail("vault")
+}
+
+/// A required string field of a `vault/secrets.json` record (`entry["project"]`,
+/// `entry["environment"]`, `entry["kind"]`, `r["status"]`, `r["created_at"]`).
+/// Python reads each of these with direct indexing and stores the raw value,
+/// whatever its type, onto a `SecretMeta`/`VersionMeta` field with no runtime
+/// check; `SecretMeta`/`VersionMeta`'s Rust fields are plain `String`s, which
+/// cannot hold an arbitrary JSON value, so a missing key (Python: uncaught
+/// `KeyError`, PORTING.md §3.5) *and* a present key of the wrong type (Python:
+/// silently returns a `SecretMeta`/`VersionMeta` holding that value) both
+/// become `state_corrupt` here -- finding E-R4-3, `DEVIATIONS.md` (module row,
+/// "vault"). Every writer in this crate (`Vault::initialize`/`put_secret`/
+/// `set_version_status`) only ever writes a JSON string for each of these
+/// fields, so this is unreachable for any state this crate, or the Python
+/// prototype on the matching write paths, produced itself.
+fn require_str_field<'m>(m: &'m Map<String, Value>, key: &str) -> Result<&'m str, Error> {
+    m.get(key).and_then(Value::as_str).ok_or_else(corrupt)
+}
+
+/// `entry["active_version"]`: `None` (JSON `null`) for no active version, an
+/// `i64` version number, or -- for a missing key or a present value of any
+/// other JSON type -- `state_corrupt` (finding E-R4-3, same reasoning as
+/// [`require_str_field`]: Python returns the raw value unchecked, but
+/// `SecretMeta::active_version` is a plain `Option<i64>`, and every writer in
+/// this crate only ever stores `null` or a plain integer here).
+fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> {
+    match m.get("active_version") {
+        None => Err(corrupt()),
+        Some(Value::Null) => Ok(None),
+        Some(v) => v.as_i64().map(Some).ok_or_else(corrupt),
+    }
+}
+
+/// `dict(r.get("public") or {})`: Python's `or` first replaces any *falsy*
+/// value (`None`/missing, `false`, `0`, `""`, `[]`, `{}`) with `{}`, then
+/// `dict(...)` accepts an already-a-mapping value unchanged or coerces a
+/// *sequence of pairs* (e.g. `[["a", 1]]` -> `{"a": 1}`); anything else
+/// (a truthy scalar, or a truthy array that isn't a pair sequence) makes
+/// `dict(...)` raise an uncaught `TypeError`/`ValueError` (finding E-R4-3).
+/// This port reproduces the falsy-to-`{}` step and the already-a-mapping
+/// case exactly (both cover every `public` value any writer in this crate
+/// or `zeropw/vault.py` itself ever produces: `Vault::public_metadata`
+/// writes only `{}` or a 3-key SSH object), and folds every other case --
+/// including the pair-sequence coercion `dict()` supports for a JSON array
+/// -- into `state_corrupt` rather than reproducing that coercion exactly,
+/// per PORTING.md's "reproduce the coercion, or error" allowance for this
+/// finding: a hand-edited or bit-rotted `public` field of some other shape
+/// is already outside anything this module's own writers produce, so
+/// failing closed here is preferable to silently exposing a non-object
+/// value to a caller (the previous behaviour: `public: "ab"` was returned
+/// as the bare `Value::String("ab")`, a substituted value PORTING.md §3.5
+/// forbids, in place of Python's own uncaught `ValueError` there).
+fn coerce_public_field(v: Option<&Value>) -> Result<Value, Error> {
+    match v {
+        None => Ok(json!({})),
+        Some(val) if json_falsy(val) => Ok(json!({})),
+        Some(Value::Object(m)) => Ok(Value::Object(m.clone())),
+        Some(_) => Err(corrupt()),
+    }
+}
+
 /// Python `str()` on a JSON value, used where `vault.py` coerces a stored
 /// field with `str(...)` (`manifest.get("sha256")`, `manifest.get(
 /// "backup_id")`). A well-formed manifest this crate's own `backup()` writes
@@ -220,7 +283,11 @@ fn python_strip(s: &str) -> &str {
 /// single, non-leading/trailing underscores allowed between them
 /// (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Returns `None` for anything
 /// `int()` would raise `ValueError` on, *and* for a magnitude Python's
-/// arbitrary-precision `int` can hold but Rust's `i64` cannot.
+/// arbitrary-precision `int` can hold but Rust's `i64` cannot (finding
+/// E-R4-1: `i64::MIN` itself is representable and must not be one of these
+/// rejections -- its magnitude, 9223372036854775808, does not fit in an
+/// `i64`, so it is parsed via `i128` and negated there, never via a
+/// same-width unsigned-then-negate step that would reject it).
 ///
 /// Used for `vault.py`'s `int(v)` over a `versions` object's own keys
 /// (finding E-R3-4: `put_secret`'s `max(int(v) for v in entry["versions"])`,
@@ -229,7 +296,10 @@ fn python_strip(s: &str) -> &str {
 /// `python_int_coerce` (PORTING.md §3.7 -- reachable only via a payload
 /// already authenticated with the HMAC signing key), a vault `versions` key
 /// is state-file content, not signed input, so this port must accept
-/// exactly what Python's own `int()` accepts, not a stricter subset.
+/// exactly what Python's own `int()` accepts, not a stricter subset -- see
+/// `DEVIATIONS.md` (finding E-R4-1) for the one gap this still leaves open
+/// (a magnitude outside `i64`, which Python's `int()` has no limit on at
+/// all).
 fn python_int_from_str(s: &str) -> Option<i64> {
     let trimmed = python_strip(s);
     let (negative, digits_part) = match trimmed.strip_prefix('-') {
@@ -253,8 +323,16 @@ fn python_int_from_str(s: &str) -> Option<i64> {
         prev_underscore = false;
         cleaned.push((b'0' + digit as u8) as char);
     }
-    let magnitude: i64 = cleaned.parse().ok()?;
-    Some(if negative { -magnitude } else { magnitude })
+    // Parsed as `i128` (not `i64`) so that `i64::MIN`'s magnitude --
+    // 9223372036854775808, one past `i64::MAX` -- has somewhere to live
+    // before the sign is applied; only the final, signed value is narrowed
+    // back to `i64`. A magnitude wider than `i128` (or a signed value
+    // outside `i64` after negation) still falls through to `None` here,
+    // exactly like Python's own arbitrary-precision `int` when this port
+    // cannot widen further (finding E-R4-1, `DEVIATIONS.md`).
+    let magnitude: i128 = cleaned.parse().ok()?;
+    let value = if negative { -magnitude } else { magnitude };
+    i64::try_from(value).ok()
 }
 
 /// A `versions` object key, parsed exactly like Python's `int(v)` (finding
@@ -709,36 +787,61 @@ impl<'a> Vault<'a> {
                 .or_insert_with(|| json!({}));
             let secrets_obj = as_obj_mut(secrets_entry)?;
 
-            let mut entry: Map<String, Value> = match secrets_obj.get(&secret_id) {
-                Some(existing) => {
-                    let existing_obj = as_obj(existing)?;
-                    let matches = existing_obj.get("project").and_then(Value::as_str)
-                        == Some(project)
-                        && existing_obj.get("environment").and_then(Value::as_str)
-                            == Some(environment)
-                        && existing_obj.get("kind").and_then(Value::as_str) == Some(kind);
-                    if !matches {
-                        return Err(Error::invalid_input("secret_identity_mismatch"));
+            // Python: `entry = doc["secrets"].get(secret_id); if entry is None: entry = {...}`.
+            // `dict.get` returns `None` both when the key is absent *and* when it maps to a JSON
+            // `null` (finding E-R4-2), so a `"secrets": {"ghost": null}` entry must take the
+            // fresh-entry branch below, not the existing-entry branch (where `as_obj` would reject
+            // `Value::Null` as `state_corrupt`, and Python would instead go on to create a fresh
+            // entry successfully -- the closest existing bug class to
+            // `secret_for_trusted_use_treats_explicit_null_secret_entry_as_absent`, E-R2-4a).
+            let mut entry: Map<String, Value> =
+                match secrets_obj.get(&secret_id).filter(|v| !v.is_null()) {
+                    Some(existing) => {
+                        let existing_obj = as_obj(existing)?;
+                        // Python: `(entry["project"], entry["environment"], entry["kind"]) != (project,
+                        // environment, kind)`, direct indexing: a *missing* field raises an uncaught
+                        // `KeyError` (state_corrupt, PORTING.md §3.5), but a *present* field of the
+                        // wrong type just compares unequal to the caller's string, exactly like any
+                        // other mismatch (`secret_identity_mismatch`) -- sweep finding, round 4: the
+                        // previous `.and_then(Value::as_str) == Some(...)` conflated the two, turning a
+                        // missing field into a mismatch instead of `state_corrupt`.
+                        let corrupt = || Error::state("state_corrupt").with_detail("vault");
+                        let field_matches = |key: &str, expected: &str| -> Result<bool, Error> {
+                            match existing_obj.get(key) {
+                                None => Err(corrupt()),
+                                Some(v) => Ok(v.as_str() == Some(expected)),
+                            }
+                        };
+                        let matches = field_matches("project", project)?
+                            && field_matches("environment", environment)?
+                            && field_matches("kind", kind)?;
+                        if !matches {
+                            return Err(Error::invalid_input("secret_identity_mismatch"));
+                        }
+                        existing_obj.clone()
                     }
-                    existing_obj.clone()
-                }
-                None => {
-                    let mut m = Map::new();
-                    m.insert("project".into(), json!(project));
-                    m.insert("environment".into(), json!(environment));
-                    m.insert("kind".into(), json!(kind));
-                    m.insert("created_at".into(), json!(iso(None)));
-                    m.insert("active_version".into(), Value::Null);
-                    m.insert("versions".into(), json!({}));
-                    m
-                }
-            };
+                    None => {
+                        let mut m = Map::new();
+                        m.insert("project".into(), json!(project));
+                        m.insert("environment".into(), json!(environment));
+                        m.insert("kind".into(), json!(kind));
+                        m.insert("created_at".into(), json!(iso(None)));
+                        m.insert("active_version".into(), Value::Null);
+                        m.insert("versions".into(), json!({}));
+                        m
+                    }
+                };
 
+            // Python: `entry["versions"]`, direct indexing -- a missing or wrong-typed `versions`
+            // field raises an uncaught `KeyError`/`TypeError` (state_corrupt, PORTING.md §3.5).
+            // Sweep finding, round 4: the previous `.unwrap_or_default()` silently treated a
+            // malformed `versions` field as an empty one, which would compute `next_version = 1`
+            // and *overwrite* whatever the field actually held instead of failing closed.
             let mut versions_obj = entry
                 .get("versions")
                 .and_then(Value::as_object)
                 .cloned()
-                .unwrap_or_default();
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
             let next_version = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k))
@@ -757,22 +860,33 @@ impl<'a> Vault<'a> {
             versions_obj.insert(next_version.to_string(), Value::Object(record));
 
             if activate {
-                let previous = entry.get("active_version").and_then(Value::as_i64);
+                // Python: `previous = entry["active_version"]; ...; if previous is not None and
+                // entry["versions"][str(previous)]["status"] == "active": ...`. `str(previous)` is
+                // computed from whatever raw JSON value `active_version` holds (not necessarily an
+                // `int`), and the subsequent indexing is unguarded: if that key names a version
+                // that doesn't exist (`7`) or isn't a plain int (`1.0`, `str()` -> `"1.0"`), Python
+                // raises an uncaught `KeyError`/`TypeError` *before* `state.write_json` ever runs,
+                // so nothing is committed (finding E-R4-4). The previous
+                // `.and_then(Value::as_i64)` silently treated any non-i64 `active_version` as "no
+                // previous version" and let the write through, leaving two versions marked
+                // `active`.
+                let previous = get_or_null(&entry, "active_version").clone();
                 entry.insert("active_version".into(), json!(next_version));
-                if let Some(prev) = previous {
-                    let mut retire = false;
-                    if let Some(prev_rec) = versions_obj
-                        .get(&prev.to_string())
-                        .and_then(Value::as_object)
-                        && prev_rec.get("status").and_then(Value::as_str) == Some("active")
-                    {
-                        retire = true;
-                    }
-                    if retire {
-                        let prev_rec = versions_obj
-                            .get_mut(&prev.to_string())
-                            .and_then(Value::as_object_mut)
-                            .expect("checked above");
+                if !previous.is_null() {
+                    let prev_key = python_str_scalar(&previous);
+                    let prev_rec = versions_obj
+                        .get_mut(&prev_key)
+                        .and_then(Value::as_object_mut)
+                        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+                    // Python: `entry["versions"][str(previous)]["status"]`, direct indexing again
+                    // -- a missing `status` field on the previous record raises an uncaught
+                    // `KeyError` (state_corrupt, sweep finding); a present field of the wrong type
+                    // just compares unequal to `"active"` (skip), like any other mismatch.
+                    let prev_status = match prev_rec.get("status") {
+                        None => return Err(Error::state("state_corrupt").with_detail("vault")),
+                        Some(v) => v.as_str(),
+                    };
+                    if prev_status == Some("active") {
                         prev_rec.insert("status".into(), json!("retired"));
                     }
                 }
@@ -853,24 +967,42 @@ impl<'a> Vault<'a> {
                 .get_mut("secrets")
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            let Some(entry_val) = secrets_obj.get(secret_id).cloned() else {
+            // Python: `entry = doc["secrets"].get(secret_id); if entry is None or str(version) not
+            // in entry["versions"]: raise NotFound(...)`. `dict.get` returns `None` both when the
+            // key is absent *and* when it maps to a JSON `null` (finding E-R4-2, same shape as
+            // `secret_for_trusted_use`'s E-R2-4a fix): the previous plain `else` branch only
+            // caught the missing-key case, letting an explicit-null entry fall through to `as_obj`
+            // and surface as `state_corrupt` instead of this method's own documented
+            // `NotFound("secret_version_not_found")`.
+            let entry_val = secrets_obj.get(secret_id).filter(|v| !v.is_null()).cloned();
+            let Some(entry_val) = entry_val else {
                 return Err(Error::not_found("secret_version_not_found"));
             };
             let mut entry = as_obj(&entry_val)?.clone();
+            // Python: `entry["versions"]`, direct indexing (sweep finding, round 4: the previous
+            // `.unwrap_or_default()` treated a missing/wrong-typed `versions` field as empty
+            // instead of failing closed like every other raw-indexed read in this module,
+            // DEVIATIONS.md row 52).
             let mut versions = entry
                 .get("versions")
                 .and_then(Value::as_object)
                 .cloned()
-                .unwrap_or_default();
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
             let key = version.to_string();
             if !versions.contains_key(&key) {
                 return Err(Error::not_found("secret_version_not_found"));
             }
             {
                 let record = as_obj(versions.get(&key).expect("checked above"))?;
-                if record.get("status").and_then(Value::as_str) == Some("revoked")
-                    && status != "revoked"
-                {
+                // Python: `record["status"]`, direct indexing -- a missing `status` field raises
+                // an uncaught `KeyError` (state_corrupt); a *present* field of the wrong type just
+                // compares unequal to `"revoked"`, like any other mismatch (sweep finding, round
+                // 4: the previous `.and_then(Value::as_str) == Some("revoked")` conflated the two).
+                let record_status = match record.get("status") {
+                    None => return Err(Error::state("state_corrupt").with_detail("vault")),
+                    Some(v) => v.as_str(),
+                };
+                if record_status == Some("revoked") && status != "revoked" {
                     return Err(Error::invalid_input("version_revoked"));
                 }
             }
@@ -887,32 +1019,39 @@ impl<'a> Vault<'a> {
                     .expect("checked above");
                 record.insert("status".into(), json!(status));
             }
-            let before_active = entry.get("active_version").and_then(Value::as_i64);
+            // Python: `before_active = entry["active_version"]`, a raw JSON value (not narrowed to
+            // `int`), used both for the `!= version` skip and, via `str(previous)`, as a `versions`
+            // key (finding E-R4-4: `entry["versions"][str(previous)]["status"]` is unguarded, so a
+            // `previous` naming a missing version or a non-canonical-int form like `1.0` raises an
+            // uncaught `KeyError`/`TypeError` and commits nothing). The previous
+            // `.and_then(Value::as_i64)` here silently treated any non-i64 `active_version` as "no
+            // previous version", skipping the retire step and still committing the write.
+            let before_active = get_or_null(&entry, "active_version").clone();
             if status == "active" {
                 entry.insert("active_version".into(), json!(version));
-                if let Some(prev) = before_active
-                    && prev != version
-                {
-                    let mut retire = false;
-                    if let Some(prev_rec) =
-                        versions.get(&prev.to_string()).and_then(Value::as_object)
-                        && prev_rec.get("status").and_then(Value::as_str) == Some("active")
-                    {
-                        retire = true;
-                    }
-                    if retire {
-                        let prev_rec = versions
-                            .get_mut(&prev.to_string())
-                            .and_then(Value::as_object_mut)
-                            .expect("checked above");
+                if !before_active.is_null() && before_active != json!(version) {
+                    let prev_key = python_str_scalar(&before_active);
+                    let prev_rec = versions
+                        .get_mut(&prev_key)
+                        .and_then(Value::as_object_mut)
+                        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+                    // Python: `entry["versions"][str(previous)]["status"]`, direct indexing again
+                    // -- a missing `status` field on the previous record raises an uncaught
+                    // `KeyError` (state_corrupt, sweep finding); a present field of the wrong type
+                    // just compares unequal to `"active"` (skip), like any other mismatch.
+                    let prev_status = match prev_rec.get("status") {
+                        None => return Err(Error::state("state_corrupt").with_detail("vault")),
+                        Some(v) => v.as_str(),
+                    };
+                    if prev_status == Some("active") {
                         prev_rec.insert("status".into(), json!("retired"));
                     }
                 }
-            } else if before_active == Some(version) {
+            } else if before_active == json!(version) {
                 entry.insert("active_version".into(), Value::Null);
             }
             entry.insert("versions".into(), Value::Object(versions));
-            let after_active = entry.get("active_version").and_then(Value::as_i64);
+            let after_active = get_or_null(&entry, "active_version").clone();
             secrets_obj.insert(secret_id.to_string(), Value::Object(entry));
             self.state.write_json(VAULT_DOC, &doc_val)?;
             rebound = if after_active != before_active {
@@ -957,11 +1096,12 @@ impl<'a> Vault<'a> {
         let mut result = Vec::new();
         for secret_id in ids {
             let entry = as_obj(secrets_obj.get(&secret_id).expect("from keys"))?;
-            let p = entry.get("project").and_then(Value::as_str).unwrap_or("");
-            let e = entry
-                .get("environment")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            // Python: `entry["project"]`/`entry["environment"]`, direct indexing, read
+            // unconditionally further down (`SecretMeta(secret_id, entry["project"], ...)`) even
+            // when no filter is given, so a missing/wrongly-typed field always raises regardless
+            // of whether this entry would end up filtered out -- see `require_str_field`.
+            let p = require_str_field(entry, "project")?;
+            let e = require_str_field(entry, "environment")?;
             if let Some(pf) = project
                 && pf != p
             {
@@ -975,7 +1115,7 @@ impl<'a> Vault<'a> {
             let versions_obj = entry
                 .get("versions")
                 .and_then(Value::as_object)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+                .ok_or_else(corrupt)?;
             let mut vkeys: Vec<(i64, &String)> = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k).map(|n| (n, k)))
@@ -987,33 +1127,31 @@ impl<'a> Vault<'a> {
                 versions.push(VersionMeta {
                     secret_id: secret_id.clone(),
                     version: n,
-                    status: r
-                        .get("status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    created_at: r
-                        .get("created_at")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    public: r
-                        .get("public")
-                        .cloned()
-                        .filter(|v| !json_falsy(v))
-                        .unwrap_or_else(|| json!({})),
+                    // `status` is deliberately *not* `require_str_field` (unlike every other
+                    // field here): `resolve_version`/`get_meta` route through this same
+                    // `list_secrets` call for the *resolved* version's own record, and
+                    // `secret_for_trusted_use`'s independent `record["status"]` check (below) must
+                    // still run and carry a present-but-wrong-type status into its
+                    // `NotFound("secret_version_unusable")` detail exactly like Python (finding
+                    // E-R4-3) -- hard-erroring here first would make that unreachable. A missing
+                    // key is still `state_corrupt` (Python's uncaught `KeyError`); a present value
+                    // of any type is stringified with `python_str_scalar`, the same best-effort
+                    // representation `Vault::restore` already uses for a raw JSON scalar that must
+                    // live in a Rust `String`.
+                    status: match r.get("status") {
+                        None => return Err(corrupt()),
+                        Some(v) => python_str_scalar(v),
+                    },
+                    created_at: require_str_field(r, "created_at")?.to_string(),
+                    public: coerce_public_field(r.get("public"))?,
                 });
             }
             result.push(SecretMeta {
                 id: secret_id.clone(),
                 project: p.to_string(),
                 environment: e.to_string(),
-                kind: entry
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                active_version: entry.get("active_version").and_then(Value::as_i64),
+                kind: require_str_field(entry, "kind")?.to_string(),
+                active_version: require_active_version(entry)?,
                 versions,
             });
         }
@@ -1074,9 +1212,22 @@ impl<'a> Vault<'a> {
                 .get(&resolved.to_string())
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
         )?;
-        let status = record.get("status").and_then(Value::as_str).unwrap_or("");
-        if status != "active" && status != "staged" {
-            return Err(Error::not_found("secret_version_unusable").with_detail(status));
+        // Python: `if record["status"] not in ("active", "staged"): raise
+        // NotFound("secret_version_unusable", record["status"])`. Direct indexing: a missing
+        // `status` field raises an uncaught `KeyError` (state_corrupt), but a *present* field of
+        // the wrong type (e.g. the JSON number `5`) is not an error at all -- it simply isn't
+        // `"active"`/`"staged"`, so Python raises the *documented* `NotFound` carrying that raw
+        // value as `detail` (finding E-R4-3). The previous `.and_then(Value::as_str).unwrap_or("")`
+        // conflated "missing" with "present but not a string", turning a missing field into this
+        // `NotFound` with an empty detail instead of `state_corrupt`, and always discarding the
+        // real stored value from a wrongly-typed field's detail.
+        let status_value = match record.get("status") {
+            None => return Err(Error::state("state_corrupt").with_detail("vault")),
+            Some(v) => v,
+        };
+        if status_value.as_str() != Some("active") && status_value.as_str() != Some("staged") {
+            return Err(Error::not_found("secret_version_unusable")
+                .with_detail(python_str_scalar(status_value)));
         }
         self.decrypt(secret_id, resolved, record)
     }

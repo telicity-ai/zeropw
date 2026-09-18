@@ -563,11 +563,19 @@ fn rename_sole_version_key(ctx: &Context, secret_id: &str, new_key: &str) {
 
 fn setup_single_secret_context(tmp: &TempDir) -> Context {
     let state = tmp.path().join("state");
+    // Explicit `socket_dir`/`run_dir` under this test's own `TempDir` (unit G's fixtures already
+    // do this): `Config::default()` leaves both `None`, which `Context::initialize` fills in with
+    // fresh private directories under the *system* temp dir instead of this test's own.
+    let config = Config {
+        socket_dir: Some(tmp.path().join("ctx-sockets")),
+        run_dir: Some(tmp.path().join("ctx-run")),
+        ..Config::default()
+    };
     let ctx = Context::initialize(
         &state,
         "admin-passphrase-1",
         "recovery-passphrase-1",
-        Config::default(),
+        config,
         clock::fixed(FIXED_NOW),
     )
     .unwrap();
@@ -681,7 +689,20 @@ except Exception as exc:
 /// number that could overwrite an existing version. After renaming the
 /// existing `"1"` key to `"01"` (still parses to version 1), putting a new
 /// value must land on version 2, exactly as if the key had never been
-/// renamed.
+/// renamed. `activate: false` here: `setup_single_secret_context` leaves
+/// `active_version = 1` (a plain JSON integer) from the first `put_secret`
+/// call, so renaming the *version* key to `"01"` (without also touching
+/// `active_version`) leaves the two inconsistent -- with `activate: true`,
+/// `entry["versions"][str(previous)]` (`str(1) == "1"`) would no longer
+/// find a `"1"` key at all, and *this* function's own finding (E-R4-4)
+/// requires that to fail closed. Confirmed directly against `python3.12`:
+/// the same on-disk corruption raises `KeyError: '1'` there too (real
+/// Python, not just this port) when `activate=True`; passing `False`
+/// skips that whole branch in both languages (`vault.py`: the retire
+/// logic sits entirely inside `if activate:`), isolating this test back
+/// down to the next-version computation it's actually about. See
+/// `put_secret_retire_step_fails_closed_for_a_version_key_active_version_disagrees_with`
+/// below for the `activate: true` / E-R4-4 case itself.
 #[test]
 fn put_secret_next_version_accounts_for_non_canonical_version_keys() {
     let tmp = TempDir::new().unwrap();
@@ -696,10 +717,550 @@ fn put_secret_next_version_accounts_for_non_canonical_version_keys() {
             b"another-synthetic-token-012345",
             "demo",
             "dev",
-            true,
+            false,
         )
         .unwrap();
     assert_eq!(version, 2, "must not overwrite version 1");
+}
+
+// ------------------------------------------------ put_secret retire step (finding E-R4-4)
+/// Reviewer requirement (finding E-R4-4): `put_secret`'s retire step
+/// (`entry["versions"][str(previous)]["status"]`, run only when
+/// `activate=True`) is unguarded in Python -- if `active_version` names a
+/// version that doesn't exist as a key (renamed away, exactly like the test
+/// above but *with* `activate: true`), Python raises an uncaught `KeyError`
+/// and commits nothing (`self.state.write_json` never runs). Cross-checked
+/// against real `python3.12` on the same on-disk state directory: both
+/// languages must reject the write and leave `vault/secrets.json`
+/// byte-for-byte unchanged.
+#[test]
+fn put_secret_retire_step_fails_closed_for_a_version_key_active_version_disagrees_with() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    rename_sole_version_key(&ctx, "gh-token", "01");
+    let before = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+
+    let err = ctx
+        .vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"another-synthetic-token-012345",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+    let after = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    assert_eq!(before, after, "a failed put_secret must not write anything");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.put_secret("gh-token", "api_key", b"another-synthetic-token-012345", "demo", "dev", True)
+    print("ok")
+except KeyError as exc:
+    print(f"keyerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("keyerror:"),
+        "python must raise an uncaught KeyError here, got: {out}"
+    );
+}
+
+// ------------------------------------------ version key magnitude (finding E-R4-1)
+/// Reviewer requirement (finding E-R4-1): `python_int_from_str` must accept `i64::MIN` (its
+/// magnitude, one past `i64::MAX`, was previously rejected by a same-width unsigned-then-negate
+/// parse step), and a `versions` key whose magnitude is wider than `i64` altogether -- something
+/// Python's unbounded `int()` has no trouble with -- is a recorded, intentional narrowing
+/// (`DEVIATIONS.md`, finding E-R4-1), not a silent drop.
+#[test]
+fn list_secrets_version_key_i64_min_matches_python() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    rename_sole_version_key(&ctx, "gh-token", "-9223372036854775808");
+
+    let metas = ctx.vault.list_secrets(None, None).expect("list_secrets");
+    assert_eq!(metas[0].versions[0].version, i64::MIN);
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+metas = ctx.vault.list_secrets()
+print(metas[0].versions[0].version)
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(out.trim(), i64::MIN.to_string());
+}
+
+/// Reviewer case: a `versions` key magnitude outside `i64` (`10**20`) is a magnitude Python's own
+/// unbounded `int()` parses without complaint, but this port cannot widen `VersionMeta::version`
+/// (an `i64`) to match without rippling into `signer.rs`/`policy.rs` types outside this fix's
+/// scope (`DEVIATIONS.md`, finding E-R4-1) -- pinned here as the intentional, narrower-than-Python
+/// divergence it is, not silently dropped or misparsed.
+#[test]
+fn list_secrets_version_key_magnitude_outside_i64_is_state_corrupt_python_still_parses() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    rename_sole_version_key(&ctx, "gh-token", "100000000000000000000");
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+metas = ctx.vault.list_secrets()
+print(metas[0].versions[0].version)
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "100000000000000000000",
+        "python oracle sanity check: real python must still parse this key"
+    );
+}
+
+// ------------------------------------------------- put_secret sweep findings (round 4)
+/// Sweep finding (round 4): `put_secret`'s existing-entry identity check
+/// (`entry["project"]`/`entry["environment"]`/`entry["kind"]`, direct indexing in Python) must
+/// fail closed with `state_corrupt` for a *missing* field, not silently treat it as an identity
+/// mismatch (`InvalidInput("secret_identity_mismatch")`, the previous behaviour whenever
+/// `.and_then(Value::as_str) == Some(...)` saw `None`, whether from a missing key or a present
+/// wrong-typed one).
+#[test]
+fn put_secret_existing_entry_missing_project_field_is_state_corrupt_matching_python() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_entry_field_removing(&ctx, "gh-token", "project");
+
+    let err = ctx
+        .vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"another-synthetic-token-012345",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.put_secret("gh-token", "api_key", b"another-synthetic-token-012345", "demo", "dev", True)
+    print("ok")
+except KeyError as exc:
+    print(f"keyerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("keyerror:"),
+        "python must raise an uncaught KeyError for entry[\"project\"], got: {out}"
+    );
+}
+
+/// Sweep finding (round 4): `entry["versions"]` is direct indexing in Python too -- a missing
+/// `versions` field must fail closed with `state_corrupt`, not silently reset to `{}` (the
+/// previous `.unwrap_or_default()`), which would have computed `next_version = 1` and overwritten
+/// whatever the field actually held.
+fn overwrite_entry_field_removing(ctx: &Context, secret_id: &str, key: &str) {
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    doc["secrets"][secret_id]
+        .as_object_mut()
+        .expect("entry object")
+        .remove(key);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+}
+
+#[test]
+fn put_secret_missing_versions_field_is_state_corrupt_matching_python() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_entry_field_removing(&ctx, "gh-token", "versions");
+
+    let err = ctx
+        .vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"another-synthetic-token-012345",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.put_secret("gh-token", "api_key", b"another-synthetic-token-012345", "demo", "dev", True)
+    print("ok")
+except KeyError as exc:
+    print(f"keyerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("keyerror:"),
+        "python must raise an uncaught KeyError for entry[\"versions\"], got: {out}"
+    );
+}
+
+// ------------------------------------------ null secret entry (finding E-R4-2)
+/// `secrets_obj.get(secret_id)` conflates a missing key with an explicit JSON `null`
+/// (`dict.get` semantics) -- already fixed for `secret_for_trusted_use` in round 2 (E-R2-4a).
+/// Round 4 found the same gap in `put_secret` (must create a fresh entry, returning version 1,
+/// exactly like a genuinely absent secret id) and `set_version_status` (must raise the documented
+/// `NotFound("secret_version_not_found")`), pinned here against real `python3.12` on matching
+/// on-disk state directories.
+fn init_context_with_null_ghost_entry(state: &Path) -> Context {
+    // Explicit `socket_dir`/`run_dir` as siblings of `state` (both under the caller's own
+    // `TempDir`), same reasoning as `setup_single_secret_context` above.
+    let parent = state.parent().expect("state has a parent directory");
+    let config = Config {
+        socket_dir: Some(parent.join("ctx-sockets")),
+        run_dir: Some(parent.join("ctx-run")),
+        ..Config::default()
+    };
+    let ctx = Context::initialize(
+        state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        config,
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    doc["secrets"]
+        .as_object_mut()
+        .unwrap()
+        .insert("ghost".to_string(), Value::Null);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+    ctx
+}
+
+#[test]
+fn put_secret_treats_explicit_null_secret_entry_as_absent_like_python() {
+    let tmp = TempDir::new().unwrap();
+    let rust_state = tmp.path().join("state-rust");
+    let ctx = init_context_with_null_ghost_entry(&rust_state);
+    let version = ctx
+        .vault
+        .put_secret(
+            "ghost",
+            "api_key",
+            b"synthetic-token-0123456789",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        version, 1,
+        "a null entry must be treated as absent, not corrupt"
+    );
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+ctx.projects.create("demo")
+doc = ctx.state.read_json("vault/secrets.json")
+doc["secrets"]["ghost"] = None
+ctx.state.write_json("vault/secrets.json", doc)
+version = ctx.vault.put_secret("ghost", "api_key", b"synthetic-token-0123456789", "demo", "dev", True)
+print(version)
+"#,
+        state = py_str(&py_state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
+fn set_version_status_treats_explicit_null_secret_entry_as_absent_like_python() {
+    let tmp = TempDir::new().unwrap();
+    let rust_state = tmp.path().join("state-rust");
+    let ctx = init_context_with_null_ghost_entry(&rust_state);
+    let err = ctx
+        .vault
+        .set_version_status("ghost", 1, "revoked")
+        .unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_version_not_found");
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+from zeropw.errors import NotFound
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+ctx.projects.create("demo")
+doc = ctx.state.read_json("vault/secrets.json")
+doc["secrets"]["ghost"] = None
+ctx.state.write_json("vault/secrets.json", doc)
+try:
+    ctx.vault.set_version_status("ghost", 1, "revoked")
+    print("ok")
+except NotFound as exc:
+    print(f"notfound:{{exc.reason}}")
+"#,
+        state = py_str(&py_state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(out.trim(), "notfound:secret_version_not_found");
+}
+
+// ------------------------------------------ scalar field typing (finding E-R4-3)
+/// Overwrites a top-level field of `secret_id`'s vault entry (`project`, `active_version`, ...).
+fn overwrite_entry_field(ctx: &Context, secret_id: &str, key: &str, value: Value) {
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    doc["secrets"][secret_id]
+        .as_object_mut()
+        .expect("entry object")
+        .insert(key.to_string(), value);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+}
+
+/// Overwrites a field of `secret_id`'s sole version record (`status`, `public`, ...).
+fn overwrite_sole_version_field(ctx: &Context, secret_id: &str, key: &str, value: Value) {
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    let versions = doc["secrets"][secret_id]["versions"]
+        .as_object_mut()
+        .expect("versions object");
+    let k = versions.keys().next().cloned().expect("one version key");
+    versions
+        .get_mut(&k)
+        .and_then(Value::as_object_mut)
+        .expect("version record")
+        .insert(key.to_string(), value);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+}
+
+/// Reviewer case: `active_version` is the JSON string `"1"`, not the integer `1`. Python's raw
+/// `entry["active_version"]` is not `None`, so `resolve_version`/`secret_for_trusted_use` treat it
+/// as the active version and `str("1") == "1"` still finds the real version record -- Python
+/// *succeeds*, returning the plaintext. `SecretMeta::active_version` is a plain `Option<i64>`, which
+/// cannot hold a string, so this port fails closed (`state_corrupt`) instead of reproducing that
+/// success -- a recorded, intentional divergence (`DEVIATIONS.md`, finding E-R4-3), confirmed here
+/// against real `python3.12` rather than assumed.
+#[test]
+fn list_secrets_active_version_wrong_type_is_state_corrupt_python_still_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_entry_field(&ctx, "gh-token", "active_version", json!("1"));
+
+    assert_eq!(
+        ctx.vault
+            .list_secrets(None, None)
+            .unwrap_err()
+            .reason
+            .to_string(),
+        "state_corrupt"
+    );
+    assert_eq!(
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap_err()
+            .reason
+            .to_string(),
+        "state_corrupt"
+    );
+
+    let script = format!(
+        r#"
+import hashlib
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+value = ctx.vault.secret_for_trusted_use("gh-token")
+print(hashlib.sha256(value).hexdigest())
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        sha256_hex(b"synthetic-token-0123456789"),
+        "python oracle sanity check: real python must still succeed here"
+    );
+}
+
+/// Reviewer case: the active version's `status` field is the JSON number `5`, not a string.
+/// Python's `record["status"] not in ("active", "staged")` is simply `True` (no error), and the
+/// raised `NotFound("secret_version_unusable", record["status"])` carries the raw int `5` as
+/// `detail`. `secret_for_trusted_use` isn't storing this into a typed struct field, so this port
+/// matches Python's return-a-value behaviour exactly (via `python_str_scalar`) instead of folding
+/// it into `state_corrupt`.
+#[test]
+fn secret_for_trusted_use_carries_wrong_type_status_into_notfound_detail_matching_python() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_sole_version_field(&ctx, "gh-token", "status", json!(5));
+
+    let err = ctx
+        .vault
+        .secret_for_trusted_use("gh-token", None)
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "secret_version_unusable");
+    assert_eq!(err.detail, "5");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+from zeropw.errors import NotFound
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.secret_for_trusted_use("gh-token")
+    print("ok")
+except NotFound as exc:
+    print(f"notfound:{{exc.reason}}:{{exc.detail}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(out.trim(), "notfound:secret_version_unusable:5");
+}
+
+/// Reviewer case: `public` is `[["a", 1]]`, a JSON array. Python's `dict(r.get("public") or {})`
+/// coerces a pair-sequence array to a mapping (`{"a": 1}`); this port folds that coercion into
+/// `state_corrupt` instead of reproducing it (`DEVIATIONS.md`, finding E-R4-3, the "or error"
+/// alternative), confirmed here against real `python3.12` rather than assumed.
+#[test]
+fn list_secrets_public_pair_sequence_is_state_corrupt_python_coerces_to_dict() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_sole_version_field(&ctx, "gh-token", "public", json!([["a", 1]]));
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+metas = ctx.vault.list_secrets()
+print(metas[0].versions[0].public)
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "{'a': 1}",
+        "python oracle sanity check: dict() really does coerce a pair sequence"
+    );
+}
+
+/// Reviewer case: `public` is `"ab"`, a two-character string. Unlike the pair-sequence array
+/// above, Python's `dict("ab")` genuinely raises an uncaught `ValueError` here (each character is
+/// a length-1 "pair", not length-2) -- both languages must reject this record.
+#[test]
+fn list_secrets_public_non_pair_string_is_state_corrupt_in_both_languages() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_sole_version_field(&ctx, "gh-token", "public", json!("ab"));
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.list_secrets()
+    print("ok")
+except ValueError as exc:
+    print(f"valueerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("valueerror:"),
+        "python must raise an uncaught ValueError for dict(\"ab\"), got: {out}"
+    );
 }
 
 // ----------------------------------------------------- admin passphrase auth
@@ -1184,5 +1745,69 @@ b.close()
         lines.next().unwrap(),
         "0",
         "python's second context does not own (and will not remove) the shared dir"
+    );
+}
+
+// ------------------------------------ restore overflowing numeric literal (finding E-R4-5)
+/// Reviewer case: the manifest's `backup_id` field is the bare numeric literal `1e999`, which
+/// overflows `float` -- CPython's `float()` parses it to `inf` with no exception, so
+/// `Vault.restore` proceeds normally and returns successfully with `backup_id`/`restored_from`
+/// set to the string `"inf"`. `manifest` is not covered by the archive's digest (only `documents`
+/// is), so this field is attacker/caller controlled in an otherwise digest-valid archive.
+/// `pyjson::loads` -- the module-wide, existing convention for any numeric literal that would
+/// overflow to a non-finite `f64` -- rejects the *whole* archive as malformed before
+/// `Vault::restore` ever inspects `manifest`, which is the deliberate, fail-closed choice recorded
+/// in `DEVIATIONS.md` (finding E-R4-5) rather than an attempt to reproduce Python's `inf`.
+#[test]
+fn restore_rejects_overflowing_numeric_literal_in_manifest_python_parses_to_inf() {
+    let tmp = TempDir::new().unwrap();
+    let documents = json!({});
+    let payload = pyjson::dumps(&documents, DumpOptions::compact_sorted()).unwrap();
+    let digest = hex::encode(Sha256::digest(payload.as_bytes()));
+    // Built by hand (not via `serde_json::Value`, which cannot represent an overflowing numeric
+    // literal at all) so the raw `1e999` token reaches `pyjson::loads` unmodified.
+    let archive_text = format!(
+        r#"{{"manifest":{{"format":"zeropw-backup-v1","created_at":"2024-01-01T00:00:00Z","sha256":"{digest}","kms_key_id":"irrelevant-for-this-probe","backup_id":1e999}},"documents":{payload}}}"#,
+    );
+    let archive_path = tmp.path().join("archive.json");
+    fs::write(&archive_path, &archive_text).unwrap();
+
+    let rust_state = tmp.path().join("state-rust");
+    let config = Config {
+        socket_dir: Some(tmp.path().join("ctx-sockets")),
+        run_dir: Some(tmp.path().join("ctx-run")),
+        ..Config::default()
+    };
+    let ctx = Context::initialize(
+        &rust_state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        config,
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    let err = zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, Some(ctx.kms))
+        .unwrap_err();
+    assert_eq!(err.reason.to_string(), "backup_malformed");
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.context import Context, Config
+from zeropw.vault import Vault
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+manifest = Vault.restore(ctx.state, Path({archive}), ctx.audit, kms=None)
+print(manifest["backup_id"])
+"#,
+        state = py_str(&py_state),
+        archive = py_str(&archive_path),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert_eq!(
+        out.trim(),
+        "inf",
+        "python oracle sanity check: python must parse 1e999 to inf and restore successfully"
     );
 }
