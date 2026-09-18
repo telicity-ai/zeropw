@@ -294,14 +294,24 @@ fn normalize_path_inner(raw: &str) -> Result<(String, String), Invalid> {
 /// CPython's `bytes.decode("utf-8", "replace")` used internally by
 /// `unquote`. Only `%XX` triplets are decoded; other bytes pass through.
 fn percent_decode_lossy(s: &str) -> String {
+    // finding F-R2-1: this used to index `&s[i+1..i+3]` on the *str*, which
+    // panics whenever that slice boundary lands inside a multi-byte UTF-8
+    // character -- reachable on the second decode pass (e.g. `/%25%E4%B8%AD`
+    // first decodes to bytes `2f 25 e4 b8 ad`, and byte offset 4 is inside
+    // `中`). Decode over the raw bytes throughout, reading the two hex
+    // digits as bytes (never as a `str` slice), and only build the final
+    // `String` once, lossily, at the end -- exactly mirroring
+    // `bytes.decode("utf-8", "replace")`, which never panics on untrusted
+    // input.
     let bytes = s.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                out.push(byte);
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push(((hi << 4) | lo) as u8);
                 i += 3;
                 continue;
             }
@@ -341,7 +351,11 @@ fn normalize_request_id(
     if candidate.is_empty() {
         return Ok(None);
     }
-    if !REQUEST_ID_RE.is_match(&candidate) {
+    // `_REQUEST_ID_RE.match(request_id)`: CPython's `$` matches just before
+    // a single trailing `"\n"` too (finding F-R2-8) -- a request id ending
+    // in `"\n"` is accepted here, and that exact string (newline included)
+    // becomes the ledger key, matching Python's own `dict` key.
+    if !matches_with_trailing_newline(&REQUEST_ID_RE, &candidate) {
         return Err(Invalid("invalid_request_id"));
     }
     Ok(Some(candidate))
@@ -362,7 +376,12 @@ fn forwardable_headers(headers: &Headers) -> Result<Headers, Invalid> {
         if !REQUEST_HEADER_ALLOWLIST.contains(&name.as_str()) {
             continue;
         }
-        if !HEADER_VALUE_RE.is_match(value) {
+        // `_HEADER_VALUE_RE.match(value)`: accepts a single trailing `"\n"`
+        // (finding F-R2-8); a value that only matches this way is still
+        // forwarded here, and fails later, downstream, when it is actually
+        // written on the wire (`write_request`'s illegal-header-value
+        // check, mirroring `putheader`'s `_is_illegal_header_value`).
+        if !matches_with_trailing_newline(&HEADER_VALUE_RE, value) {
             return Err(Invalid("invalid_header_value"));
         }
         dict_set(&mut forwarded, name.clone(), value.clone());
@@ -567,7 +586,11 @@ fn auth_header(connection: &Connection, secret: &[u8]) -> Result<(String, String
     let Ok(text) = std::str::from_utf8(secret) else {
         return Err(Invalid("credential_not_text"));
     };
-    if !HEADER_CREDENTIAL_RE.is_match(text) {
+    // `_HEADER_CREDENTIAL_RE.match(text)`: accepts a single trailing `"\n"`
+    // (finding F-R2-8) -- a credential ending in `"\n"` is accepted here and
+    // only rejected later, downstream, when it is actually written on the
+    // wire (`write_request`'s illegal-header-value check).
+    if !matches_with_trailing_newline(&HEADER_CREDENTIAL_RE, text) {
         return Err(Invalid("credential_header_unsafe"));
     }
     if auth.mode == "bearer" {
@@ -575,11 +598,13 @@ fn auth_header(connection: &Connection, secret: &[u8]) -> Result<(String, String
     }
     if auth.mode == "header" {
         let name = auth.header_name.as_deref().unwrap_or("");
-        if name.is_empty() || !CUSTOM_HEADER_NAME_RE.is_match(name) {
+        // Same finding F-R2-8 trailing-newline allowance as above, for the
+        // custom header's own name.
+        if name.is_empty() || !matches_with_trailing_newline(&CUSTOM_HEADER_NAME_RE, name) {
             return Err(Invalid("unsupported_auth_mode"));
         }
         let prefix = auth.value_prefix.as_deref().unwrap_or("");
-        if !HEADER_VALUE_RE.is_match(prefix) {
+        if !matches_with_trailing_newline(&HEADER_VALUE_RE, prefix) {
             return Err(Invalid("credential_header_unsafe"));
         }
         return Ok((name.to_string(), format!("{prefix}{text}")));
@@ -700,11 +725,33 @@ fn parse_authority(url: &str) -> Option<(String, i64)> {
         };
         return Some((host.to_lowercase(), port));
     }
-    match hostport.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            Some((host.to_lowercase(), port.parse().ok()?))
+    // `_hostinfo`'s unbracketed branch: `hostname, _, port =
+    // hostinfo.partition(':')` -- `str.partition` splits on the *first*
+    // occurrence, not the last, so `"::1:8443"` gives hostname `""` (not
+    // `"::1"`) and port `"1:8443"` (not `"8443"`). An empty port (no colon,
+    // or a colon with nothing after it) means "unspecified" and falls back
+    // to `default_port` (`.port` returns `None` for that case, and
+    // `parts.port or default` applies the default); a non-empty port that
+    // isn't all-ASCII-digits, or is out of the `0..=65535` range accepted by
+    // `SplitResult.port`, raises `ValueError` there, which the caller's
+    // `except ValueError: pass` swallows -- so this returns `None`,
+    // matching "no usable port, skip the comparison" rather than "no port,
+    // use the default" (finding F-R2-10).
+    match hostport.split_once(':') {
+        Some((host, port)) => {
+            if port.is_empty() {
+                Some((host.to_lowercase(), default_port))
+            } else if port.bytes().all(|b| b.is_ascii_digit()) {
+                let port: i64 = port.parse().ok()?;
+                if (0..=65535).contains(&port) {
+                    Some((host.to_lowercase(), port))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
-        Some(_) => None,
         None => Some((hostport.to_lowercase(), default_port)),
     }
 }
@@ -1246,6 +1293,17 @@ fn open_connection(
     pinned_address: &str,
 ) -> Result<UpstreamStream, UpstreamFailure> {
     let target = connection.http_target.as_ref().expect("http connection");
+    // Python's `_open_connection` builds the `ssl.SSLContext` (including
+    // `load_verify_locations(cafile=target.ca_file)`, which is where a bad
+    // `ca_file` actually fails) *before* `_exchange` ever calls
+    // `conn.connect()`; build the TLS config here, before the TCP connect,
+    // so a bad `ca_file` for an otherwise-unreachable target still surfaces
+    // as `ca_file_unavailable`, not `upstream_unreachable` (finding F-R2-9).
+    let tls_config = if target.scheme == "https" {
+        Some(build_tls_config(target.ca_file.as_deref())?)
+    } else {
+        None
+    };
     let ip: IpAddr = pinned_address
         .parse()
         .map_err(|_| UpstreamFailure::error("upstream_unreachable"))?;
@@ -1253,8 +1311,7 @@ fn open_connection(
     let tcp = TcpStream::connect_timeout(&sockaddr, timeout)
         .map_err(|e| UpstreamFailure::error(classify_connect_error(&e)))?;
     let _ = tcp.set_nodelay(true);
-    if target.scheme == "https" {
-        let config = build_tls_config(target.ca_file.as_deref())?;
+    if let Some(config) = tls_config {
         let server_name = rustls_pki_types::ServerName::try_from(target.host.clone())
             .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
         let conn = rustls::ClientConnection::new(config, server_name)
@@ -1289,6 +1346,20 @@ fn content_length_for(method: &str, body: &[u8]) -> Option<usize> {
     }
 }
 
+/// `http.client.HTTPConnection.putheader`'s illegal-value guard, as it
+/// applies to the one shape of "illegal" value that can actually reach this
+/// function: every header name/value here has already passed
+/// [`forwardable_headers`]/[`auth_header`]'s own validation, which (per
+/// finding F-R2-8) accepts a value ending in exactly one trailing `"\n"`
+/// with no other `\r`/`\n` anywhere -- the only case CPython's own
+/// `_is_legal_header_name`/`_is_illegal_header_value` regexes still reject
+/// (a bare trailing `\n` with nothing after it fails
+/// `\n(?![ \t])`/`[^:\r\n]*`'s fullmatch). Detecting a raw `'\n'` anywhere in
+/// a name or value is therefore sufficient to reproduce that failure.
+fn header_line_is_illegal(name: &str, value: &str) -> bool {
+    name.contains('\n') || value.contains('\n')
+}
+
 fn write_request(
     stream: &mut dyn Write,
     method: &str,
@@ -1296,6 +1367,20 @@ fn write_request(
     headers: &Headers,
     body: &[u8],
 ) -> std::io::Result<()> {
+    // `conn.request(...)` -> `putheader` raises `ValueError` for such a
+    // header, *after* `self.transmitted = True` has already been set by the
+    // caller (finding F-R2-8): map it to a plain I/O error so the caller's
+    // existing `classify_read_write_error` turns it into
+    // `upstream_connection_lost`, exactly like Python's `except (OSError,
+    // ValueError)` clause around `conn.request(...)` does.
+    for (name, value) in headers {
+        if header_line_is_illegal(name, value) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "illegal header name or value",
+            ));
+        }
+    }
     let mut out = Vec::new();
     out.extend_from_slice(format!("{method} {target} HTTP/1.1\r\n").as_bytes());
     if let Some(len) = content_length_for(method, body) {
@@ -1317,16 +1402,117 @@ struct StatusAndHeaders {
     headers: Headers,
 }
 
-fn read_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
+/// `http.client._MAXLINE`: every physical line `HTTPResponse` reads off the
+/// wire (status line, header line, chunk-size line, trailer line) is capped
+/// at this many bytes; a longer line is `LineTooLong`, an
+/// `http.client.HTTPException` -> `upstream_protocol_error` (finding
+/// F-R2-2).
+const HTTP_MAX_LINE: usize = 65536;
+/// `http.client._MAXHEADERS`: the physical line count `_read_headers` allows
+/// (status-line's own header block *and* the final response's headers
+/// alike -- both call sites share `_read_headers`), counting the
+/// terminating blank/EOF line too; line 101 raises `HTTPException` ->
+/// `upstream_protocol_error` (finding F-R2-2).
+const HTTP_MAX_HEADERS: usize = 100;
+
+/// `fp.readline(_MAXLINE + 1)` plus the `len(line) > _MAXLINE` check shared
+/// by every line-oriented read in `http.client` (finding F-R2-2): reads at
+/// most `HTTP_MAX_LINE + 1` bytes looking for `\n` (never more, so a
+/// pathological line cannot force an unbounded allocation), strips a
+/// trailing `\r`/`\n`, and returns `Ok(None)` only on true EOF (zero bytes
+/// read) -- callers that treat EOF as a protocol error do so themselves;
+/// several (finding F-R2-3) instead treat it exactly like a blank line.
+fn read_line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, UpstreamFailure> {
     let mut line = Vec::new();
-    let n = reader.read_until(b'\n', &mut line)?;
-    if n == 0 {
+    {
+        let mut limited = reader.by_ref().take(HTTP_MAX_LINE as u64 + 1);
+        limited
+            .read_until(b'\n', &mut line)
+            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
+    }
+    if line.is_empty() {
         return Ok(None);
+    }
+    if line.len() > HTTP_MAX_LINE {
+        return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
     while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
         line.pop();
     }
     Ok(Some(line))
+}
+
+/// CPython `int(text)` / `int(text, base)` semantics for `base` 10 or 16, as
+/// used by `http.client`'s own `int(status)`, `int(length)` and
+/// `int(chunk_size_text, 16)` parses (finding F-R2-5): optional surrounding
+/// whitespace (`str.strip()`'s predicate, [`crate::pystr::is_space`]), an
+/// optional leading `+`/`-` sign, an optional case-insensitive `0x`/`0X`
+/// prefix when `base == 16` (after which exactly one leading `_` is
+/// permitted, as if the prefix itself were a digit -- `int("0x_10", 16) ==
+/// 16`), and single underscores permitted strictly between two digits
+/// (`"1_000"` ok; `"_1"`, `"1_"`, `"1__0"` are not). Returns `None` for
+/// anything CPython's `int()` would raise `ValueError` for. A magnitude too
+/// large for `i128` saturates (with sign) rather than erroring, since every
+/// caller here only ever compares the result against a small range or a
+/// `usize` byte count -- never round-trips it back to text.
+fn python_int(text: &str, base: u32) -> Option<i128> {
+    let trimmed = text.trim_matches(crate::pystr::is_space);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (neg, rest) = match trimmed.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let (rest, mut prev_was_digit) = if base == 16 {
+        match rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+            Some(r) => (r, true),
+            None => (rest, false),
+        }
+    } else {
+        (rest, false)
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = rest.chars().collect();
+    let mut digits = String::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_digit(base));
+            if !prev_was_digit || !next_is_digit {
+                return None;
+            }
+            prev_was_digit = false;
+            continue;
+        }
+        c.to_digit(base)?;
+        digits.push(c);
+        prev_was_digit = true;
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    // Too many digits for `i128`: treat the magnitude as "very large" (every
+    // caller only ever compares the result against a small range or uses it
+    // as a byte count, never round-trips it back to text).
+    let magnitude = i128::from_str_radix(&digits, base).unwrap_or(i128::MAX);
+    Some(if neg { -magnitude } else { magnitude })
+}
+
+/// Saturating `i128` -> `usize` conversion for a parsed `Content-Length` (or
+/// similar byte count): a magnitude that does not fit `usize` is clamped to
+/// `usize::MAX`, which the caller's own `limit`-bytes cap turns into
+/// `response_too_large` long before it could matter, exactly as Python's
+/// unbounded `int` would still be bounded by the same explicit check.
+fn i128_to_usize_saturating(v: i128) -> usize {
+    if v < 0 {
+        0
+    } else if v > usize::MAX as i128 {
+        usize::MAX
+    } else {
+        v as usize
+    }
 }
 
 fn latin1_decode(bytes: &[u8]) -> String {
@@ -1376,46 +1562,54 @@ fn python_split_none_2(line: &str) -> Vec<String> {
     parts
 }
 
-/// One `_read_status()` call: the status line only, no headers. `version`
-/// is only used for the `HTTP/` prefix check ported here; callers that need
-/// the HTTP version do not exist in this crate.
-fn read_one_status_line(reader: &mut impl BufRead) -> Result<u16, UpstreamFailure> {
-    let raw = read_line(reader)
-        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-        .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
+/// One `_read_status()` call: the status line only, no headers. Returns
+/// `(version, status)`; `version` feeds the strict `HTTPResponse.begin`
+/// check in [`read_status_and_headers`] (finding F-R2-6), which only
+/// applies to the *final* (non-100) status line, not to an interim `100
+/// Continue`'s own version.
+fn read_one_status_line(reader: &mut impl BufRead) -> Result<(String, u16), UpstreamFailure> {
+    let raw = read_line(reader)?.ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
     let line = latin1_decode(&raw);
     let parts = python_split_none_2(&line);
-    let version = parts.first().map(String::as_str).unwrap_or("");
+    let version = parts.first().cloned().unwrap_or_default();
     let status_text = parts.get(1).map(String::as_str).unwrap_or("");
     if !version.starts_with("HTTP/") {
         return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
-    // CPython's `int(status)` (arbitrary precision) followed by a
-    // `100 <= status <= 999` range check; a `u16` parse failure (including
-    // magnitudes that don't fit) is folded into the same `BadStatusLine` ->
-    // `upstream_protocol_error` outcome as an out-of-range in-range-for-u16
-    // value (finding F-6).
-    let status: u16 = status_text
-        .parse()
-        .map_err(|_| UpstreamFailure::error("upstream_protocol_error"))?;
+    // CPython's `int(status)` (arbitrary precision, PEP 515 underscores
+    // allowed) followed by a `100 <= status <= 999` range check; a parse
+    // failure (including magnitudes that don't fit) is folded into the same
+    // `BadStatusLine` -> `upstream_protocol_error` outcome as an
+    // out-of-range value (findings F-6, F-R2-5).
+    let status =
+        python_int(status_text, 10).ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
     if !(100..=999).contains(&status) {
         return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
-    Ok(status)
+    Ok((version, status as u16))
 }
 
 /// Port of `http.client._read_headers`' physical byte consumption with no
 /// header recognition at all: reads and discards lines up to (and
-/// including) the blank separator line. Used to skip a `100 Continue`
-/// interim response's headers (`HTTPResponse.begin`'s `skipped_headers =
-/// _read_headers(self.fp)`, finding F-7).
+/// including) the blank separator line -- or EOF, which ends the block just
+/// as successfully (finding F-R2-3a: `b''` is one of `_read_headers`'
+/// terminator values, `line in (b'\r\n', b'\n', b'')`). Used to skip a `100
+/// Continue` interim response's headers (`HTTPResponse.begin`'s
+/// `skipped_headers = _read_headers(self.fp)`, finding F-7). Every physical
+/// line, including the terminator, counts against `HTTP_MAX_HEADERS`
+/// (finding F-R2-2).
 fn skip_header_block(reader: &mut impl BufRead) -> Result<(), UpstreamFailure> {
+    let mut count = 0usize;
     loop {
-        let line = read_line(reader)
-            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-            .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
-        if line.is_empty() {
-            return Ok(());
+        let line = read_line(reader)?;
+        count += 1;
+        if count > HTTP_MAX_HEADERS {
+            return Err(UpstreamFailure::error("upstream_protocol_error"));
+        }
+        match line {
+            None => return Ok(()),
+            Some(l) if l.is_empty() => return Ok(()),
+            Some(_) => continue,
         }
     }
 }
@@ -1424,32 +1618,48 @@ fn read_status_and_headers(reader: &mut impl BufRead) -> Result<StatusAndHeaders
     // `HTTPResponse.begin`: "read until we get a non-100 response", skipping
     // each `100 Continue`'s own header block and relaying whatever response
     // finally follows (finding F-7).
-    let status = loop {
-        let status = read_one_status_line(reader)?;
+    let (version, status) = loop {
+        let (version, status) = read_one_status_line(reader)?;
         if status == 100 {
             skip_header_block(reader)?;
             continue;
         }
-        break status;
+        break (version, status);
     };
+    // `HTTPResponse.begin`'s own strict version gate, separate from
+    // `_read_status`'s loose `"HTTP/"`-prefix check: only `HTTP/1.0`,
+    // `HTTP/0.9`, or anything starting `HTTP/1.` is accepted; anything else
+    // (`HTTP/2`, `HTTP/2.0`, a bare `HTTP/`) is `UnknownProtocol` ->
+    // `upstream_protocol_error` (finding F-R2-6). Applies only to the final
+    // (non-100) status line's version.
+    if version != "HTTP/0.9" && !version.starts_with("HTTP/1.") {
+        return Err(UpstreamFailure::error("upstream_protocol_error"));
+    }
     // Port of `email.feedparser`'s header leniency as exercised through
     // `http.client.parse_headers` (finding F-9): a continuation line (starts
     // with a space or tab) folds into the previous header's value; a line
     // with no colon that is not a continuation ends the *recognised* header
     // block without error (`_parsegen`'s `headerRE` mismatch just stops its
-    // for-loop, no exception) -- but every line up to the blank line is
-    // still physically read off the wire (`_read_headers`' own, separate,
-    // colon-agnostic boundary), so `recognizing` only gates what gets added
-    // to `headers`, never how many lines we read.
+    // for-loop, no exception) -- but every line up to the blank line (or
+    // EOF, finding F-R2-3a) is still physically read off the wire
+    // (`_read_headers`' own, separate, colon-agnostic boundary), so
+    // `recognizing` only gates what gets added to `headers`, never how many
+    // lines we read. Every physical line, including the terminator, counts
+    // against `HTTP_MAX_HEADERS` (finding F-R2-2).
     let mut headers = Headers::new();
     let mut recognizing = true;
+    let mut count = 0usize;
     loop {
-        let line = read_line(reader)
-            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-            .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
-        if line.is_empty() {
-            break;
+        let line = read_line(reader)?;
+        count += 1;
+        if count > HTTP_MAX_HEADERS {
+            return Err(UpstreamFailure::error("upstream_protocol_error"));
         }
+        let line = match line {
+            None => break,
+            Some(l) if l.is_empty() => break,
+            Some(l) => l,
+        };
         if !recognizing {
             continue;
         }
@@ -1491,8 +1701,18 @@ enum BodyMode {
     UntilClose,
 }
 
+/// Port of the body-framing decision `HTTPResponse.begin`/`read` make
+/// together (finding F-R2-7): `read()` checks `self._method == "HEAD"`
+/// first (always empty, regardless of everything else), *then*
+/// `self.chunked` (set independently of the 204/304/1xx override below), and
+/// only afterwards would fall into the `self.length` branch where
+/// `begin()`'s `self.length = 0` override for `NO_CONTENT`/`NOT_MODIFIED`/1xx
+/// actually applies. So a `204`/`304`/1xx response with `Transfer-Encoding:
+/// chunked` still gets its chunked body decoded and relayed in Python --
+/// the length-zero override is dead code on that path. `HEAD` must stay
+/// first: `read()` short-circuits on it before ever consulting `chunked`.
 fn body_mode(method: &str, status: u16, headers: &Headers) -> BodyMode {
-    if method == "HEAD" || status == 204 || status == 304 || (100..200).contains(&status) {
+    if method == "HEAD" {
         return BodyMode::Empty;
     }
     // `tr_enc.lower() == "chunked"`, no stripping: a trailing space (now
@@ -1503,10 +1723,17 @@ fn body_mode(method: &str, status: u16, headers: &Headers) -> BodyMode {
     {
         return BodyMode::Chunked;
     }
+    if status == 204 || status == 304 || (100..200).contains(&status) {
+        return BodyMode::Empty;
+    }
+    // CPython's `int(length)` (PEP 515 underscores allowed); a parse
+    // failure *or* a negative result both make Python fall back to
+    // `self.length = None` (finding F-R2-5).
     if let Some(cl) = headers_get(headers, "content-length")
-        && let Ok(n) = cl.trim().parse::<usize>()
+        && let Some(n) = python_int(cl, 10)
+        && n >= 0
     {
-        return BodyMode::ContentLength(n);
+        return BodyMode::ContentLength(i128_to_usize_saturating(n));
     }
     BodyMode::UntilClose
 }
@@ -1531,7 +1758,14 @@ fn read_body(
                     .read(&mut buf)
                     .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
                 if n == 0 {
-                    return Err(UpstreamFailure::error("upstream_protocol_error"));
+                    // `HTTPResponse.read(amt)`'s amt-limited branch calls
+                    // plain `self.fp.read(amt)`, not `_safe_read`: a short
+                    // (or empty) read at EOF is returned as-is, not an
+                    // `IncompleteRead` -- the caller's own loop just sees
+                    // `piece == b""` and stops (finding F-R2-3c: a
+                    // `Content-Length` bigger than the bytes actually sent
+                    // still relays as a 200 with the short body).
+                    break;
                 }
                 out.extend_from_slice(&buf[..n]);
                 total += n;
@@ -1545,27 +1779,36 @@ fn read_body(
         BodyMode::Chunked => {
             let mut total = 0usize;
             loop {
-                let line = read_line(reader)
-                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-                    .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
+                let line =
+                    read_line(reader)?.ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
                 let line = latin1_decode(&line);
-                let size_text = line.split(';').next().unwrap_or("").trim();
+                let size_text = line.split(';').next().unwrap_or("");
                 // `_read_next_chunk_size`'s `int(line, 16)` `ValueError` is
                 // caught by `_get_chunk_left` and re-raised as
                 // `IncompleteRead(b"")` (an `http.client.HTTPException`),
                 // not left as a bare `ValueError` -- so it maps to
                 // `upstream_protocol_error`, not `upstream_connection_lost`
-                // (finding F-9).
-                let mut size = usize::from_str_radix(size_text, 16)
-                    .map_err(|_| UpstreamFailure::error("upstream_protocol_error"))?;
+                // (finding F-9). PEP 515 underscores are accepted, and so is
+                // an optional `0x`/`0X` prefix, matching CPython's
+                // `int(text, 16)` (finding F-R2-5).
+                let size = python_int(size_text, 16)
+                    .filter(|n| *n >= 0)
+                    .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
+                let mut size = i128_to_usize_saturating(size);
                 if size == 0 {
-                    // Trailers, until the blank line.
+                    // Trailers, until the blank line -- or EOF, which ends
+                    // the block just as successfully as a blank line would
+                    // ("a vanishingly small number of sites EOF without
+                    // sending the trailer", finding F-R2-3d). No
+                    // `HTTP_MAX_HEADERS` count cap here: only
+                    // `_read_headers` (status/header block) enforces one,
+                    // `_read_and_discard_trailer` does not.
                     loop {
-                        let trailer = read_line(reader)
-                            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-                            .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
-                        if trailer.is_empty() {
-                            break;
+                        let trailer = read_line(reader)?;
+                        match trailer {
+                            None => break,
+                            Some(t) if t.is_empty() => break,
+                            Some(_) => continue,
                         }
                     }
                     break;
@@ -1586,11 +1829,20 @@ fn read_body(
                         return Err(UpstreamFailure::blocked("response_too_large", 0));
                     }
                 }
-                let trailer = read_line(reader)
-                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
-                    .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
-                if !trailer.is_empty() {
-                    return Err(UpstreamFailure::error("upstream_protocol_error"));
+                // `_get_chunk_left`'s `self._safe_read(2)`: unconditionally
+                // consumes exactly 2 bytes (the chunk's trailing CRLF)
+                // without ever validating their content -- erroring only if
+                // fewer than 2 bytes are available before EOF (finding
+                // F-R2-4; previously this read a whole line and required it
+                // empty, which both rejected valid-but-unchecked terminators
+                // and accepted an LF-only framing Python itself refuses).
+                let mut crlf = [0u8; 2];
+                if let Err(e) = reader.read_exact(&mut crlf) {
+                    return Err(if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                        UpstreamFailure::error("upstream_protocol_error")
+                    } else {
+                        UpstreamFailure::error(classify_read_write_error(&e))
+                    });
                 }
             }
             Ok(out)
@@ -1772,7 +2024,16 @@ impl<'a> Relay<'a> {
         pyjson::dumps(&value, DumpOptions::compact_sorted()).expect("representable")
     }
 
-    fn annotate_approval(&self, digest: &str, content_type: Option<&str>) {
+    /// `_annotate_approval`: both `state.read_json`/`state.write_json` calls
+    /// are unguarded in Python, so a `StateError` from either propagates
+    /// uncaught out of `_annotate_approval`, out of `run`, to `relay`'s
+    /// top-level fail-closed conversion (`DEVIATIONS.md`'s
+    /// `unexpected_error_result` row). Previously this swallowed both
+    /// failures (`let Ok(..) = .. else { return }` / `let _ = ..`), so a
+    /// state failure still returned `428 approval_required` with an
+    /// under-annotated approval entry instead of failing closed (finding
+    /// F-R2-12).
+    fn annotate_approval(&self, digest: &str, content_type: Option<&str>) -> Result<(), Error> {
         let connection = self.connection.as_ref().expect("checked");
         let (query, has_query) = match self.target.split_once('?') {
             Some((_, q)) => (Some(q.to_string()), true),
@@ -1823,11 +2084,9 @@ impl<'a> Relay<'a> {
         );
         details.insert("policy_version".into(), json!(connection.policy_version));
 
-        let Ok(control) = self.ctx.state.read_json(policy::CONTROL, Value::Null) else {
-            return;
-        };
+        let control = self.ctx.state.read_json(policy::CONTROL, Value::Null)?;
         let Value::Object(mut control) = control else {
-            return;
+            return Ok(());
         };
         let Some(entry) = control
             .get_mut("approvals")
@@ -1835,7 +2094,7 @@ impl<'a> Relay<'a> {
             .and_then(|a| a.get_mut(digest))
             .and_then(|e| e.as_object_mut())
         else {
-            return;
+            return Ok(());
         };
         let mut changed = false;
         for (key, value) in details {
@@ -1845,11 +2104,11 @@ impl<'a> Relay<'a> {
             }
         }
         if changed {
-            let _ = self
-                .ctx
+            self.ctx
                 .state
-                .write_json(policy::CONTROL, &Value::Object(control));
+                .write_json(policy::CONTROL, &Value::Object(control))?;
         }
+        Ok(())
     }
 
     fn refuse_failure(&mut self, failure: UpstreamFailure) -> Result<RelayResult, Error> {
@@ -2230,7 +2489,7 @@ impl<'a> Relay<'a> {
                         &self.method,
                         &self.path,
                     )?;
-                    self.annotate_approval(&digest, content_type.as_deref());
+                    self.annotate_approval(&digest, content_type.as_deref())?;
                 }
                 let mut extra_body = Map::new();
                 extra_body.insert("approval_digest".into(), json!(digest));
@@ -2396,10 +2655,14 @@ fn refuse_unauthenticated(
     // parameter, not Python's duck-typed `Any`), so the `isinstance` checks
     // always pass.
     let upper_method = method.to_uppercase();
-    let action = METHOD_RE.is_match(&upper_method).then_some(upper_method);
+    // Both regexes match here with CPython's `$`-before-trailing-`"\n"`
+    // leniency (finding F-R2-8), unlike `_normalize_method`'s own use of
+    // `_METHOD_RE` (which never sees a trailing newline at all, since
+    // `.strip()` already removed it first).
+    let action = matches_with_trailing_newline(&METHOD_RE, &upper_method).then_some(upper_method);
     let safe_path = strip_query(path);
     let safe_request_id = request_id
-        .filter(|r| REQUEST_ID_RE.is_match(r))
+        .filter(|r| matches_with_trailing_newline(&REQUEST_ID_RE, r))
         .map(str::to_string);
     let result = ctx.audit.record(
         "http_relay",
@@ -2536,3 +2799,548 @@ pub fn relay_for_caller_with_resolver(
 
 #[allow(unused)]
 fn unused_type_anchor(_: HashMap<(), ()>) {}
+
+/// `annotate_approval` (finding F-R2-12) is private to this module, so this
+/// direct-call regression test lives here rather than in `rust/tests/`,
+/// which cannot see it. Testing it through the full `relay(...)` pipeline
+/// would require the *first* `request_approval` write (which shares the
+/// same `policy/control.json`) to succeed while a *later* one fails --
+/// awkward to arrange with plain file permissions; calling
+/// `annotate_approval` directly against an already-corrupt state file is
+/// both simpler and more precise.
+#[cfg(test)]
+mod annotate_approval_tests {
+    use super::*;
+    use crate::clock;
+    use crate::context::Config;
+    use crate::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
+
+    #[test]
+    fn annotate_approval_fails_closed_on_corrupt_state_instead_of_swallowing_the_error() {
+        // Python's `_annotate_approval` has no `try`/`except` around either
+        // `state.read_json(CONTROL, None)` or `state.write_json(CONTROL,
+        // control)`: a `StateError` from either propagates uncaught out of
+        // `_annotate_approval`, out of `run`, to `relay`'s top-level
+        // fail-closed conversion (`DEVIATIONS.md`'s `unexpected_error_result`
+        // row). This used to `let Ok(..) = .. else { return }` (silently
+        // giving up) and `let _ = ..` (silently ignoring a write failure)
+        // instead, so a state failure here still returned `428
+        // approval_required` with an under-annotated approval entry.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ctx = Context::initialize(
+            tmp.path().join("state"),
+            "admin-passphrase-1",
+            "recovery-passphrase-1",
+            Config::default(),
+            clock::fixed(1_700_000_000.0),
+        )
+        .unwrap();
+        ctx.projects
+            .create("demo", crate::projects::DEFAULT_ENVIRONMENTS)
+            .unwrap();
+        let target = HttpTarget::new("http", "127.0.0.1", 1, None, false).unwrap();
+        let connection = Connection::new(
+            "cid",
+            "demo",
+            "dev",
+            "test",
+            "http",
+            "secret",
+            None,
+            "",
+            Some(target),
+            Some(HttpAuth::bearer()),
+            Some(HttpScope::new(None, None, vec![]).unwrap()),
+            None,
+            None,
+            0,
+            "active",
+            "",
+            "",
+        )
+        .unwrap();
+
+        // `policy/control.json` exists (created by `Context::initialize`'s
+        // `state.subdir("policy")`) but is not valid JSON: `read_json` must
+        // fail with a `StateError`.
+        std::fs::write(ctx.state.path.join(policy::CONTROL), b"not json").unwrap();
+
+        let mut relay = Relay::new(
+            &ctx,
+            "agent-1",
+            "cid",
+            None,
+            None,
+            "POST",
+            "/x",
+            &Headers::new(),
+            b"",
+            None,
+            default_resolver(),
+        );
+        relay.connection = Some(connection);
+        relay.target = "/x".to_string();
+
+        let result = relay.annotate_approval("some-digest", None);
+        assert!(
+            result.is_err(),
+            "annotate_approval must fail closed (propagate the StateError) on a \
+             corrupt policy/control.json, not silently return Ok"
+        );
+    }
+}
+
+// ------------------------------------------------------- differential fuzzing
+//
+// Equivalence-review round 2, "Also:" item: fuzz `read_status_and_headers`/
+// `body_mode`/`read_body` directly against real `python3.12` `http.client`,
+// generating several thousand random and adversarial raw responses (status
+// lines, header blocks, chunked framings, truncations) and asserting Rust
+// never panics and always agrees with Python's outcome class and relayed
+// body bytes. These three functions are private to this module, so the
+// fuzzer lives here (a unit test module) rather than in `rust/tests/`, which
+// cannot see them.
+#[cfg(test)]
+mod http_framing_fuzz {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Small, fast, seeded xorshift64* PRNG -- deterministic across runs (no
+    /// `rand` dependency needed for this generator), so a failure is always
+    /// reproducible from the seed printed in the panic/assert message.
+    struct Lcg(u64);
+    impl Lcg {
+        fn new(seed: u64) -> Self {
+            Lcg(seed | 1)
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn below(&mut self, n: usize) -> usize {
+            if n == 0 {
+                0
+            } else {
+                (self.next_u64() % n as u64) as usize
+            }
+        }
+        fn one_in(&mut self, n: usize) -> bool {
+            self.below(n) == 0
+        }
+        fn choice<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+            &items[self.below(items.len())]
+        }
+    }
+
+    const READ_CHUNK_FOR_FUZZ: usize = 65536;
+    const FUZZ_LIMIT: usize = 200_000;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum FuzzOutcome {
+        Ok(u16, Vec<u8>),
+        ProtocolError,
+        TooLarge,
+    }
+
+    /// Runs exactly the read sequence `_Relay._exchange` performs on a
+    /// `conn.getresponse()` result (`begin()` via `read_status_and_headers`,
+    /// then the `resp.read(min(READ_CHUNK, limit + 1 - total))` loop), over
+    /// an in-memory `Cursor` standing in for the socket. A `Cursor` never
+    /// produces a real I/O error, so the only failure category reachable
+    /// here is `upstream_protocol_error` (never `upstream_timeout`/
+    /// `upstream_connection_lost`, which only come from a genuine transport
+    /// error) -- exactly mirroring a `python3.12` `http.client.HTTPResponse`
+    /// fed the same bytes via an `io.BytesIO`-backed fake socket, which can
+    /// only ever raise an `http.client.HTTPException` subclass here, never a
+    /// real `OSError`.
+    fn rust_outcome(method: &str, raw: &[u8]) -> FuzzOutcome {
+        let mut reader = Cursor::new(raw);
+        let head = match read_status_and_headers(&mut reader) {
+            Ok(h) => h,
+            Err(_) => return FuzzOutcome::ProtocolError,
+        };
+        let mode = body_mode(method, head.status, &head.headers);
+        // `read_body` already loops internally in `READ_CHUNK`-sized steps
+        // and applies the same running `> limit` check Python's own
+        // per-`resp.read(amt)`-call loop does, so reading the whole body in
+        // one call here is equivalent to replaying that loop by hand.
+        match read_body(&mut reader, mode, FUZZ_LIMIT) {
+            Ok(body) => FuzzOutcome::Ok(head.status, body),
+            Err(f) if f.reason == "response_too_large" => FuzzOutcome::TooLarge,
+            Err(_) => FuzzOutcome::ProtocolError,
+        }
+    }
+
+    fn python_outcome(interpreter: &str, cases: &[(&'static str, Vec<u8>)]) -> Vec<FuzzOutcome> {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let payload: Vec<serde_json::Value> = cases
+            .iter()
+            .map(|(method, raw)| {
+                use base64::Engine as _;
+                json!({
+                    "method": method,
+                    "raw": base64::engine::general_purpose::STANDARD.encode(raw),
+                })
+            })
+            .collect();
+        let script = format!(
+            r#"
+import sys, io, json, base64, http.client
+
+READ_CHUNK = {read_chunk}
+LIMIT = {limit}
+
+class FakeSock:
+    def __init__(self, data):
+        self._data = data
+    def makefile(self, mode):
+        return io.BytesIO(self._data)
+
+def run_one(method, raw):
+    resp = http.client.HTTPResponse(FakeSock(raw), method=method)
+    try:
+        resp.begin()
+        chunks = []
+        total = 0
+        while True:
+            piece = resp.read(min(READ_CHUNK, LIMIT + 1 - total))
+            if not piece:
+                break
+            chunks.append(piece)
+            total += len(piece)
+            if total > LIMIT:
+                return ["too_large"]
+        body = b"".join(chunks)
+        return ["ok", resp.status, base64.b64encode(body).decode("ascii")]
+    except http.client.HTTPException:
+        return ["protocol_error"]
+    except (OSError, ValueError):
+        return ["connection_lost"]
+    except Exception as e:
+        return ["other_error", type(e).__name__, str(e)]
+
+cases = json.loads(sys.stdin.read())
+out = []
+for case in cases:
+    raw = base64.b64decode(case["raw"])
+    out.append(run_one(case["method"], raw))
+sys.stdout.write(json.dumps(out))
+"#,
+            read_chunk = READ_CHUNK_FOR_FUZZ,
+            limit = FUZZ_LIMIT,
+        );
+        let mut child = Command::new(interpreter)
+            .arg("-c")
+            .arg(&script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "python oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let raw_out = String::from_utf8(output.stdout).expect("utf8 stdout");
+        let parsed: Vec<Vec<Value>> = serde_json::from_str(&raw_out).expect("json stdout");
+        parsed
+            .into_iter()
+            .map(|entry| match entry[0].as_str().unwrap() {
+                "ok" => {
+                    use base64::Engine as _;
+                    let status = entry[1].as_u64().unwrap() as u16;
+                    let body = base64::engine::general_purpose::STANDARD
+                        .decode(entry[2].as_str().unwrap())
+                        .unwrap();
+                    FuzzOutcome::Ok(status, body)
+                }
+                "too_large" => FuzzOutcome::TooLarge,
+                "protocol_error" => FuzzOutcome::ProtocolError,
+                other => panic!(
+                    "python oracle produced an outcome this harness has no bucket for \
+                     (findings F-R2-2..7 assume every failure here is an \
+                     http.client.HTTPException, never a real OSError/ValueError, since \
+                     the fake socket is an in-memory io.BytesIO): {other:?} / {entry:?}"
+                ),
+            })
+            .collect()
+    }
+
+    // --------------------------------------------------------- generators
+
+    fn random_status_line(rng: &mut Lcg) -> Vec<u8> {
+        let version: &str = rng.choice(&[
+            "HTTP/1.1",
+            "HTTP/1.0",
+            "HTTP/0.9",
+            "HTTP/1.",
+            "HTTP/2",
+            "HTTP/2.0",
+            "HTTP/",
+            "http/1.1",
+            "HTTP/1.100",
+        ]);
+        let status: String = if rng.one_in(4) {
+            // PEP 515 underscore variant, e.g. "2_00".
+            let digits: Vec<char> = format!("{}", 100 + rng.below(800)).chars().collect();
+            let mut s = String::new();
+            for (i, c) in digits.iter().enumerate() {
+                s.push(*c);
+                if i == 0 && digits.len() > 1 && rng.one_in(2) {
+                    s.push('_');
+                }
+            }
+            s
+        } else if rng.one_in(6) {
+            // Out of range / malformed.
+            rng.choice(&["12", "1000", "-5", "abc", "", "99999999999999999999"])
+                .to_string()
+        } else {
+            format!("{}", 100 + rng.below(800))
+        };
+        let sep: &str = rng.choice(&[" ", "\t", "  "]);
+        let mut line = format!("{version}{sep}{status}{sep}OK\r\n").into_bytes();
+        if rng.one_in(20) {
+            // LF-only status line terminator.
+            line = format!("{version}{sep}{status}{sep}OK\n").into_bytes();
+        }
+        line
+    }
+
+    fn random_header_name(rng: &mut Lcg) -> String {
+        rng.choice(&[
+            "Content-Length",
+            "Transfer-Encoding",
+            "Content-Type",
+            "X-Custom",
+            "ETag",
+            "Cache-Control",
+        ])
+        .to_string()
+    }
+
+    fn random_header_value(rng: &mut Lcg) -> String {
+        if rng.one_in(50) {
+            // Oversized value, sometimes past HTTP_MAX_LINE.
+            let n = if rng.one_in(2) {
+                HTTP_MAX_LINE + 1 + rng.below(200)
+            } else {
+                rng.below(200)
+            };
+            "a".repeat(n)
+        } else {
+            let words: &[&str] = &[
+                "chunked",
+                "identity",
+                "text/plain",
+                "close",
+                "keep-alive",
+                "",
+            ];
+            rng.choice(words).to_string()
+        }
+    }
+
+    /// Picks one of `candidates` by index (owned variant of `Lcg::choice`, for
+    /// building a `Vec<String>` inline without fighting borrow lifetimes).
+    fn pick_owned<T: Clone>(rng: &mut Lcg, candidates: &[T]) -> T {
+        candidates[rng.below(candidates.len())].clone()
+    }
+
+    fn random_content_length_value(rng: &mut Lcg, actual_body_len: usize) -> String {
+        let underscored = {
+            let mut s = actual_body_len.to_string();
+            if s.len() > 1 {
+                s.insert(1, '_');
+            }
+            s
+        };
+        let candidates = [
+            actual_body_len.to_string(),
+            format!("{}", actual_body_len + 1 + rng.below(50)), // bigger than sent (F-R2-3c)
+            underscored,                                        // underscore (F-R2-5)
+            "-1".to_string(),
+            "not-a-number".to_string(),
+            "".to_string(),
+        ];
+        pick_owned(rng, &candidates)
+    }
+
+    fn random_chunk_size_text(rng: &mut Lcg, actual: usize) -> String {
+        let hex = format!("{actual:x}");
+        let underscored = {
+            let mut s = hex.clone();
+            if s.len() > 1 {
+                s.insert(1, '_');
+            }
+            s
+        };
+        let mut candidates = vec![hex.clone(), "zz".to_string(), format!("{hex};ext=1")];
+        if actual > 0 {
+            candidates.push(underscored);
+            candidates.push(format!("0x{hex}"));
+            candidates.push(format!("0X{hex}"));
+        }
+        pick_owned(rng, &candidates)
+    }
+
+    fn random_body_bytes(rng: &mut Lcg) -> Vec<u8> {
+        let n = rng.below(64);
+        (0..n).map(|_| (rng.next_u64() % 256) as u8).collect()
+    }
+
+    /// Builds one full raw response: a status line, a random header block
+    /// (possibly with a `Content-Length` or `Transfer-Encoding: chunked`
+    /// framing, possibly with too many headers or an oversized line),
+    /// and a body framed accordingly -- then, sometimes, truncates the
+    /// whole thing at a random byte offset (simulating an early-closing
+    /// connection, findings F-R2-3/F-R2-4).
+    fn random_response(rng: &mut Lcg) -> (&'static str, Vec<u8>) {
+        let method: &str = if rng.one_in(8) { "HEAD" } else { "GET" };
+        let mut out = random_status_line(rng);
+
+        let use_chunked = rng.one_in(3);
+        let use_too_many_headers = rng.one_in(30);
+        let header_count = if use_too_many_headers {
+            HTTP_MAX_HEADERS + rng.below(20)
+        } else {
+            rng.below(6)
+        };
+        let body = random_body_bytes(rng);
+
+        let mut wrote_framing_header = false;
+        for _ in 0..header_count {
+            let name = random_header_name(rng);
+            let value = if name == "Content-Length" && !use_chunked && !wrote_framing_header {
+                wrote_framing_header = true;
+                random_content_length_value(rng, body.len())
+            } else if name == "Transfer-Encoding" && use_chunked && !wrote_framing_header {
+                wrote_framing_header = true;
+                if rng.one_in(10) {
+                    "chunked ".to_string() // trailing space: must NOT be treated as chunked
+                } else {
+                    "chunked".to_string()
+                }
+            } else {
+                random_header_value(rng)
+            };
+            out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+        }
+        if !wrote_framing_header && use_chunked {
+            out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
+        } else if !wrote_framing_header && !use_chunked && rng.one_in(2) {
+            out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+        }
+
+        let header_terminator: &[u8] = if rng.one_in(15) { b"" } else { b"\r\n" };
+        out.extend_from_slice(header_terminator);
+
+        if use_chunked && (wrote_framing_header || header_terminator == b"\r\n") {
+            // Body framed as one or two chunks, with a randomized chunk-size
+            // encoding and terminator (F-R2-4, F-R2-5).
+            let mid = if body.len() > 1 && rng.one_in(2) {
+                1 + rng.below(body.len() - 1)
+            } else {
+                body.len()
+            };
+            for piece in [&body[..mid], &body[mid..]] {
+                if piece.is_empty() {
+                    continue;
+                }
+                out.extend_from_slice(random_chunk_size_text(rng, piece.len()).as_bytes());
+                out.extend_from_slice(b"\r\n");
+                out.extend_from_slice(piece);
+                if rng.one_in(10) {
+                    out.extend_from_slice(b"\n"); // LF-only terminator (F-R2-4)
+                } else {
+                    out.extend_from_slice(b"\r\n");
+                }
+            }
+            out.extend_from_slice(random_chunk_size_text(rng, 0).as_bytes());
+            out.extend_from_slice(b"\r\n");
+            if !rng.one_in(20) {
+                out.extend_from_slice(b"\r\n"); // final trailer-block terminator
+            }
+            // else: leave it EOF-terminated (F-R2-3d).
+        } else if !use_chunked {
+            out.extend_from_slice(&body);
+        }
+
+        if rng.one_in(8) {
+            // Truncate the whole response at a random point (including
+            // possibly mid-header-block, mid-status-line, or mid-body).
+            let cut = rng.below(out.len().max(1));
+            out.truncate(cut);
+        }
+
+        (method, out)
+    }
+
+    #[test]
+    fn read_status_and_headers_body_mode_read_body_match_http_client() {
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        let mut rng = Lcg::new(0xC0FF_EE12_3456_789A);
+        let case_count = 4000usize;
+        let mut cases: Vec<(&'static str, Vec<u8>)> = Vec::with_capacity(case_count);
+        for _ in 0..case_count {
+            cases.push(random_response(&mut rng));
+        }
+
+        // No panic: computing every Rust outcome up front is itself part of
+        // the assertion (a panic here fails the test with a backtrace
+        // pointing at the offending case's index).
+        let rust_outcomes: Vec<FuzzOutcome> = cases
+            .iter()
+            .map(|(method, raw)| rust_outcome(method, raw))
+            .collect();
+
+        // One Python subprocess for the whole batch (thousands of separate
+        // `python3.12 -c` invocations would dominate the test's runtime).
+        let python_outcomes = python_outcome(&interpreter, &cases);
+        assert_eq!(python_outcomes.len(), cases.len());
+
+        let mut mismatches = Vec::new();
+        for (i, ((method, raw), (rust, python))) in cases
+            .iter()
+            .zip(rust_outcomes.iter().zip(python_outcomes.iter()))
+            .enumerate()
+        {
+            let same_class = match (rust, python) {
+                (FuzzOutcome::Ok(rs, rb), FuzzOutcome::Ok(ps, pb)) => rs == ps && rb == pb,
+                (FuzzOutcome::ProtocolError, FuzzOutcome::ProtocolError) => true,
+                (FuzzOutcome::TooLarge, FuzzOutcome::TooLarge) => true,
+                _ => false,
+            };
+            if !same_class {
+                mismatches.push(format!(
+                    "case {i} (method={method:?}, raw={raw:?}): rust={rust:?} python={python:?}"
+                ));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} / {} cases diverged from python3.12 http.client:\n{}",
+            mismatches.len(),
+            cases.len(),
+            mismatches.join("\n")
+        );
+        eprintln!(
+            "read_status_and_headers/body_mode/read_body fuzz: {} cases, 0 divergences, 0 panics",
+            cases.len()
+        );
+    }
+}

@@ -1666,43 +1666,42 @@ fn unsupported_auth_mode_and_unsafe_credential_fail_closed() {
 
 #[test]
 fn unsupported_auth_mode_via_corrupted_stored_document() {
-    // finding F-18 (tests/test_gateway.py:574-596's
-    // `test_unsupported_auth_mode_fails_closed`, `unsupported_auth_mode`
-    // half only -- the `credential_header_unsafe` half is the test just
-    // above, already ported). Python reaches this scenario only via
-    // `object.__new__(P.HttpAuth)`: it constructs an `HttpAuth` whose
-    // `mode` is `"digest"` while *bypassing* `__post_init__`'s own `mode
-    // not in AUTH_MODES` check, then injects it into a `Decision` via
-    // `mock.patch.object(self.ctx.policy, "evaluate", return_value=decision)`.
+    // finding F-R2-11 (correcting round-1 finding F-18's mischaracterization
+    // of this exact scenario): a hand-edited stored `connections.json` with
+    // `http_auth.mode: "digest"` makes the real Python
+    // `HttpAuth(**value)` constructor's own `__post_init__` reject the
+    // unknown mode with `InvalidInput("unsupported_auth_mode")`
+    // (`policy.py:248`) *at connection-load time* -- before `_Relay.run`
+    // ever reaches `_auth_header` -- propagating uncaught through
+    // `Policy.evaluate` to `relay`'s top level, exactly the shape
+    // `DEVIATIONS.md`'s `unexpected_error_result` row already documents.
+    // Confirmed directly against real `python3.12`, not just reasoned
+    // about.
     //
-    // Rust's `HttpAuth` has no such backdoor: `HttpAuth::new`/`from_value`
-    // are the only ways to construct one, and both already reject an
-    // unknown `mode` eagerly -- matching what `HttpAuth.__post_init__`
-    // itself would do if Python's test called the real constructor instead
-    // of bypassing it. In other words, Python's own dataclass validation
-    // makes this scenario just as unreachable through ordinary
-    // construction; the test is exercising a defensive fallback inside
-    // `_auth_header` (`gateway.py:377`) that nothing in real operation can
-    // trigger either.
+    // Rust's `Connection::from_value` -> `HttpAuth::from_value` fails the
+    // same way, at the same point, propagating to `relay`'s own
+    // `unexpected_error_result` and surfacing as `(400, "InvalidInput",
+    // "unsupported_auth_mode")` -- matching Python for this input, not
+    // diverging from it. `HttpAuth::new`/`from_value` are the only ways to
+    // construct an `HttpAuth` in Rust, and both already reject an unknown
+    // `mode` eagerly, same as the real Python constructor.
     //
-    // The closest portable equivalent is a hand-edited stored
-    // `connections.json` (the same technique
-    // `stored_metadata_literal_loads_and_is_refused_at_use` uses for a
-    // similarly "record predates a later, stricter check" gap). That
-    // reaches a *different* path than Python's mocked one, though: Rust
-    // validates `http_auth.mode` at connection-*load* time
-    // (`Connection::from_value` -> `HttpAuth::from_value`), not lazily at
-    // header-building time, so the failure surfaces while evaluating policy
-    // -- before `Relay::run` ever reaches `auth_header` -- as
-    // `Error::InvalidInput` (400, error name `"InvalidInput"`), not
-    // `Error::Unsupported` (501, error name `"Unsupported"`) as Python's
-    // test asserts. Confirmed empirically (not just reasoned about): this
-    // is a real, newly-observed divergence for this specific
-    // unreachable-via-normal-construction case -- see the "gateway
+    // Round-1's `test_unsupported_auth_mode_fails_closed` (a *different*
+    // Python test, `tests/test_gateway.py:574-596`) reaches `_auth_header`'s
+    // own defensive fallback (`gateway.py:377`, raising
+    // `Unsupported("unsupported_auth_mode")`, i.e. 501) only via
+    // `object.__new__(P.HttpAuth)`, which bypasses `__post_init__` entirely
+    // and then injects the resulting object into a `Decision` via
+    // `mock.patch.object(policy, "evaluate", ...)`. That is a
+    // PORTING.md §3.4 case (a Python-only mechanism -- reflection bypassing
+    // a constructor's own validation -- with no Rust equivalent): Rust's
+    // `HttpAuth` has no `object.__new__`-style backdoor, so there is no way
+    // to reach `auth_header`'s analogous fallback with an invalid `mode` in
+    // the first place, and this test does not attempt to reproduce that
+    // unreachable scenario -- it instead pins the *reachable* hand-edited-
+    // document scenario, which matches Python exactly. See the "gateway
     // (`unsupported_auth_mode` via a hand-edited stored document)" row in
-    // `DEVIATIONS.md`. The assertions below pin the *actual* Rust outcome
-    // rather than Python's, since weakening this to only check the shared
-    // `reason` string would hide that divergence.
+    // `DEVIATIONS.md`.
     let t = GatewayTest::new();
     let path = t.ctx.state.path.join(P::CONNECTIONS);
     let text = std::fs::read_to_string(&path).unwrap();
@@ -3949,6 +3948,457 @@ fn malformed_chunk_size_is_a_protocol_error_not_connection_lost() {
     );
 }
 
+// ---------------------------------------------- equivalence review round 2
+
+#[test]
+fn more_than_max_headers_is_a_protocol_error() {
+    // Finding F-R2-2: `http.client._MAXHEADERS` (100) caps the physical
+    // line count `_read_headers` allows, counting the terminating blank
+    // line too; probe from the finding (120 header lines).
+    let t = GatewayTest::new();
+    let mut response = b"HTTP/1.1 200 OK\r\n".to_vec();
+    for i in 0..120 {
+        response.extend_from_slice(format!("X-Many-{i}: v\r\n").as_bytes());
+    }
+    response.extend_from_slice(b"\r\nbody");
+    let result = relay_via_raw_response(&t, "too-many-headers", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn oversized_header_line_is_a_protocol_error() {
+    // Finding F-R2-2: `http.client._MAXLINE` (65536) caps every physical
+    // line; probe from the finding (a 70000-byte header value).
+    let t = GatewayTest::new();
+    let mut response = b"HTTP/1.1 200 OK\r\n".to_vec();
+    response.extend_from_slice(b"X-Huge: ");
+    response.extend_from_slice(&vec![b'a'; 70_000]);
+    response.extend_from_slice(b"\r\n\r\nbody");
+    let result = relay_via_raw_response(&t, "oversized-header-line", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn header_block_ended_by_eof_is_relayed_normally() {
+    // Finding F-R2-3a: `_read_headers`' own terminator set is `(b'\r\n',
+    // b'\n', b'')` -- EOF (`b''`) ends the header block exactly like a
+    // blank line, not an error.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nX-Custom: value".to_vec();
+    let result = relay_via_raw_response(&t, "headers-end-at-eof", response);
+    assert_eq!((result.status, result.reason.as_deref()), (200, None));
+    assert_eq!(result.body, Vec::<u8>::new());
+    assert!(
+        !header_names(&result).contains("x-custom"),
+        "X-Custom is not on the response allowlist, so it must still be filtered out"
+    );
+}
+
+#[test]
+fn status_line_then_immediate_eof_is_relayed_as_empty_ok() {
+    // Finding F-R2-3b: a status line with no headers at all, immediately
+    // followed by EOF, still parses (empty header block via the same EOF
+    // terminator as F-R2-3a) and relays as a 200 with an empty body
+    // (`UntilClose` framing, no bytes available).
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\n".to_vec();
+    let result = relay_via_raw_response(&t, "status-then-eof", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, Vec::new(), None)
+    );
+}
+
+#[test]
+fn content_length_larger_than_bytes_sent_relays_the_short_body() {
+    // Finding F-R2-3c: `HTTPResponse.read(amt)`'s amt-limited branch calls
+    // plain `self.fp.read(amt)`, not `_safe_read`: a `Content-Length`
+    // bigger than what the server actually sends does not raise
+    // `IncompleteRead` -- the short body is relayed as a 200.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort".to_vec();
+    let result = relay_via_raw_response(&t, "content-length-too-big", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, b"short".to_vec(), None)
+    );
+}
+
+#[test]
+fn chunked_body_ending_at_eof_after_terminal_chunk_is_relayed_normally() {
+    // Finding F-R2-3d: `_read_and_discard_trailer` ends its own block on
+    // EOF too ("a vanishingly small number of sites EOF without sending
+    // the trailer"), not an error; the decoded body is still relayed.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n".to_vec();
+    let result = relay_via_raw_response(&t, "chunked-eof-after-terminal", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, b"hello".to_vec(), None)
+    );
+}
+
+#[test]
+fn chunk_terminator_bytes_are_consumed_without_validation() {
+    // Finding F-R2-4: `_get_chunk_left`'s `self._safe_read(2)` discards
+    // exactly 2 bytes after a chunk's data, unconditionally -- it never
+    // checks they are `\r\n`. Probe from the finding: `5\r\nhelloXY0\r\n\r\n`
+    // relays body `hello` (the "XY" bytes are simply discarded, and the
+    // "0\r\n\r\n" that follows is read as the terminal chunk + trailer).
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXY0\r\n\r\n".to_vec();
+    let result = relay_via_raw_response(&t, "chunk-terminator-unchecked", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, b"hello".to_vec(), None)
+    );
+}
+
+#[test]
+fn chunk_terminator_lf_only_framing_is_a_protocol_error() {
+    // Finding F-R2-4 (the inverse probe): `5\nhello\n0\n\n` uses bare `\n`
+    // chunk-size-line and chunk-terminator bytes throughout. The chunk-size
+    // lines themselves parse fine (`readline` splits on `\n` alone), but
+    // the *unconditional* 2-byte terminator discard after `hello`'s data
+    // consumes `"\n0"` (not `"\r\n"`), leaving just `"\n\n"` -- so the next
+    // chunk-size line read is empty, which fails to parse as hex and is a
+    // protocol error. (Rust used to instead read a full line and require it
+    // *empty*, which happened to accept this framing -- exactly backwards
+    // from Python, which refuses it.)
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\nhello\n0\n\n".to_vec();
+    let result = relay_via_raw_response(&t, "chunk-terminator-lf-only", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn content_length_with_pep515_underscore_is_parsed_like_python_int() {
+    // Finding F-R2-5: CPython's `int(length)` accepts PEP 515 underscore
+    // separators between digits; `Content-Length: 1_0` frames exactly 10
+    // bytes, not "fall through to UntilClose and relay everything sent".
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1_0\r\n\r\n0123456789tail".to_vec();
+    let result = relay_via_raw_response(&t, "content-length-underscore", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, b"0123456789".to_vec(), None)
+    );
+}
+
+#[test]
+fn chunk_size_with_pep515_underscore_is_parsed_like_python_int() {
+    // Finding F-R2-5: `int(line, 16)` accepts underscores too; chunk size
+    // `1_0` is 16 (decimal), not a parse failure.
+    let t = GatewayTest::new();
+    let body = b"0123456789abcdef".to_vec(); // 16 bytes
+    let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1_0\r\n".to_vec();
+    response.extend_from_slice(&body);
+    response.extend_from_slice(b"\r\n0\r\n\r\n");
+    let result = relay_via_raw_response(&t, "chunk-size-underscore", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, body, None)
+    );
+}
+
+#[test]
+fn status_code_with_pep515_underscore_is_parsed_like_python_int() {
+    // Finding F-R2-5: `int(status)` accepts underscores too; `2_00` is 200.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 2_00 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "status-underscore", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, b"hi".to_vec(), None)
+    );
+}
+
+#[test]
+fn only_http_1_x_and_0_9_versions_are_accepted() {
+    // Finding F-R2-6: `HTTPResponse.begin` accepts only `HTTP/1.0`,
+    // `HTTP/0.9`, or anything starting `HTTP/1.`; anything else
+    // (`HTTP/2`, `HTTP/2.0`, a bare `HTTP/`) is `UnknownProtocol` ->
+    // `upstream_protocol_error`, even though `_read_status`'s own looser
+    // `"HTTP/"`-prefix check would have accepted all of them. Probes from
+    // the finding.
+    let t = GatewayTest::new();
+    for (name, version) in [
+        ("http2", "HTTP/2"),
+        ("http2.0", "HTTP/2.0"),
+        ("bare-http-slash", "HTTP/"),
+    ] {
+        let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
+        let result = relay_via_raw_response(&t, &format!("bad-version-{name}"), response);
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (502, Some("upstream_protocol_error")),
+            "version {version:?} should have been refused"
+        );
+    }
+    // And the accepted forms still work.
+    for (name, version) in [
+        ("1.0", "HTTP/1.0"),
+        ("0.9", "HTTP/0.9"),
+        ("1.1", "HTTP/1.1"),
+    ] {
+        let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
+        let result = relay_via_raw_response(&t, &format!("good-version-{name}"), response);
+        assert_eq!(
+            (result.status, result.body.clone(), result.reason.as_deref()),
+            (200, b"hi".to_vec(), None),
+            "version {version:?} should have been accepted"
+        );
+    }
+}
+
+#[test]
+fn no_content_status_with_chunked_transfer_encoding_still_decodes_the_body() {
+    // Finding F-R2-7: `HTTPResponse.read` checks `self._method == "HEAD"`
+    // first, then `self.chunked` (set independently of the 204/304/1xx
+    // `self.length = 0` override) -- so a `204` with `Transfer-Encoding:
+    // chunked` still gets its chunked body decoded and relayed in Python.
+    // Probe from the finding: `204 bodylen=5 'hello'`.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "204-chunked-has-body", response);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (204, b"hello".to_vec(), None)
+    );
+}
+
+#[test]
+fn head_request_still_forces_an_empty_body_even_when_chunked() {
+    // Finding F-R2-7 (the ordering's other half): `HEAD` must stay the
+    // *first* check -- `read()` short-circuits on it before ever consulting
+    // `self.chunked`, so a `HEAD` response is always empty regardless of
+    // `Transfer-Encoding`.
+    let t = GatewayTest::new();
+    let port = raw_response_port(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n".to_vec(),
+    );
+    let handle = raw_port_connection(
+        &t,
+        "head-with-chunked",
+        "gh-token",
+        HttpAuth::bearer(),
+        port,
+    );
+    let result = gateway::relay(&t.ctx, &handle, "HEAD", "/me", &no_headers(), b"", None);
+    assert_eq!(
+        (result.status, result.body.clone(), result.reason.as_deref()),
+        (200, Vec::new(), None)
+    );
+}
+
+#[test]
+fn header_value_ending_in_newline_is_accepted_then_fails_after_transmission() {
+    // Finding F-R2-8: `_HEADER_VALUE_RE.match(value)` accepts a single
+    // trailing `"\n"` (CPython's `$` matches just before one); the value is
+    // forwarded, and only fails downstream, at `conn.request(...)` ->
+    // `putheader`'s own illegal-value check, *after* `self.transmitted =
+    // True` -- so the outcome is `502 upstream_connection_lost`, and the
+    // ledger entry (since a request id was given) ends up `"uncertain"`,
+    // not released, because the request may have partially reached the
+    // upstream from Python's perspective.
+    let t = GatewayTest::new();
+    let result = t.relay_full(
+        "GET",
+        "/me",
+        &headers(&[("user-agent", "bad-value\n")]),
+        b"",
+        None,
+        Some("req-header-newline"),
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_connection_lost"))
+    );
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "the illegal header must never actually reach the wire"
+    );
+    let doc = t
+        .ctx
+        .state
+        .read_json(gateway::LEDGER_DOC, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(doc["agent-1"]["req-header-newline"]["state"], "uncertain");
+}
+
+#[test]
+fn bearer_credential_ending_in_newline_is_accepted_then_fails_after_transmission() {
+    // Finding F-R2-8, the credential half: `_HEADER_CREDENTIAL_RE.match`
+    // has the same trailing-`"\n"` leniency; a credential ending in `"\n"`
+    // is accepted by `_auth_header` and only fails downstream the same way.
+    let t = GatewayTest::new();
+    t.ctx
+        .vault
+        .put_secret(
+            "nl-token",
+            "api_key",
+            b"secret-value\n",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    t.ctx
+        .policy
+        .create_connection(http_connection(
+            "nl-conn",
+            &t.fake,
+            "nl-token",
+            HttpAuth::bearer(),
+            HttpScope::new(None, None, vec![]).unwrap(),
+        ))
+        .unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", "nl-conn", Some(3600), None)
+        .unwrap();
+    let handle = t.issue_handle_for("agent-1", "nl-conn", &grant.id, None, 300);
+    let result = t.relay_full(
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        Some(&handle),
+        Some("req-cred-newline"),
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_connection_lost"))
+    );
+    assert_eq!(t.fake.requests().len(), 0);
+}
+
+#[test]
+fn ca_file_unavailable_takes_priority_over_an_unreachable_target() {
+    // Finding F-R2-9: Python's `_open_connection` builds the whole
+    // `ssl.SSLContext` (including `load_verify_locations(cafile=...)`,
+    // which is where a bad `ca_file` actually fails) *before* `_exchange`
+    // ever calls `conn.connect()` -- so for an unreachable target with a
+    // bad `ca_file`, the reason is always `ca_file_unavailable`, never
+    // `upstream_unreachable`.
+    let t = GatewayTest::new();
+    t.ctx
+        .vault
+        .put_secret(
+            "ca-token",
+            "api_key",
+            SECRET_B.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    // A `FakeUpstream` bound then immediately dropped: the OS-assigned port
+    // is very likely still free, but nothing listens there, so a TCP
+    // connect attempt is refused essentially immediately.
+    let unreachable = FakeUpstream::new("x").start();
+    let port = unreachable.port();
+    drop(unreachable);
+    let bad_ca_path = std::env::temp_dir().join(format!(
+        "zeropw-test-missing-ca-{}-{port}.pem",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&bad_ca_path); // ensure it does not exist
+    let target = HttpTarget::new(
+        "https",
+        "127.0.0.1",
+        port as i64,
+        Some(bad_ca_path.to_string_lossy().into_owned()),
+        false,
+    )
+    .unwrap();
+    t.ctx
+        .policy
+        .create_connection(
+            Connection::new(
+                "ca-unreachable",
+                "demo",
+                "dev",
+                "test",
+                "http",
+                "ca-token",
+                None,
+                "",
+                Some(target),
+                Some(HttpAuth::bearer()),
+                Some(HttpScope::new(None, None, vec![]).unwrap()),
+                None,
+                None,
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", "ca-unreachable", Some(3600), None)
+        .unwrap();
+    let handle = t.issue_handle_for("agent-1", "ca-unreachable", &grant.id, None, 300);
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("ca_file_unavailable"))
+    );
+}
+
+#[test]
+fn unbracketed_ipv6_like_public_url_does_not_false_positive_self_referential() {
+    // Finding F-R2-10: `urlsplit`'s `_hostinfo` partitions the unbracketed
+    // authority on the *first* colon, not the last, so
+    // `public_url = "http://::1:8443"` gives Python `hostname=None` (empty
+    // string before the first colon) and a `.port` access that raises
+    // `ValueError` (swallowed by the surrounding `except ValueError: pass`)
+    // -- NOT self-referential, regardless of what `target.host`/`.port`
+    // are. The old last-colon `rsplit_once` implementation instead parsed
+    // this as host `"::1"` port `8443`, which spuriously matched a
+    // same-valued target and refused it as self-referential -- a false
+    // positive Python itself does not produce. With the connection's own
+    // target literally at `::1:8443` (a literal-IP target skips the
+    // private-network gate entirely -- see `resolve_pinned_address`, only
+    // the DNS-resolved-answer path consults `allow_private_network`), the
+    // real outcome once the self-referential shortcut is correctly skipped
+    // is an ordinary failed connection attempt to a real, but
+    // unlistened-on, address: `502 upstream_unreachable`. The only thing
+    // this test pins is that it is *not* `501 self_referential_target`.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("http://::1:8443".to_string()),
+    );
+    let handle = named_connection_port(&t, "v6-unbracketed", "::1", 8443, false);
+    let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_unreachable")),
+        "must not be refused as self_referential_target (that would be the pre-fix, \
+         Python-diverging false positive)"
+    );
+}
+
 #[test]
 fn refuse_unauthenticated_audits_stripped_path_unconditionally_and_untrimmed_method() {
     // Finding F-10: Python audits `strip_query(path)` for *any* `str` path
@@ -4025,6 +4475,222 @@ print([bool(pat.match(t)) for t in tests])
 "#,
     );
     assert_eq!(out.trim(), "[True, False, False, True]");
+}
+
+/// Small seeded xorshift64* PRNG, same technique used by the internal
+/// `http_framing_fuzz` module in `rust/src/gateway.rs` -- deterministic
+/// across runs, no extra crate dependency.
+struct Lcg(u64);
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Lcg(seed | 1)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    fn below(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+    fn one_in(&mut self, n: usize) -> bool {
+        self.below(n) == 0
+    }
+}
+
+/// Encodes `cp` (a Unicode scalar value) as its UTF-8 bytes, each rendered
+/// as an uppercase or lowercase `%XX` triplet (mixed per byte, to also
+/// exercise `credential`/percent-decoding's case-insensitivity elsewhere).
+fn percent_encode_codepoint(rng: &mut Lcg, cp: u32, double_encode_percent: bool) -> String {
+    let ch = char::from_u32(cp).unwrap_or('?');
+    let mut buf = [0u8; 4];
+    let bytes = ch.encode_utf8(&mut buf).as_bytes();
+    let mut out = String::new();
+    for &b in bytes {
+        let hex = if rng.one_in(2) {
+            format!("{b:02X}")
+        } else {
+            format!("{b:02x}")
+        };
+        if double_encode_percent {
+            // First-pass-decodes-to-a-literal-percent nesting: "%25" decodes
+            // once to "%", so "%25E4" decodes *twice* to the same byte "%E4"
+            // would decode to once -- this is the exact shape that used to
+            // panic (finding F-R2-1: a percent-triplet whose first decode
+            // pass lands the '%' + hex digits *inside* a multi-byte
+            // character produced by an earlier triplet in the same pass).
+            out.push_str("%25");
+            out.push_str(&hex);
+        } else {
+            out.push('%');
+            out.push_str(&hex);
+        }
+    }
+    out
+}
+
+/// One random adversarial path candidate: a `/`-prefixed mix of literal
+/// printable-ASCII characters, well-formed and malformed `%XX` triplets, and
+/// percent-encoded multi-byte Unicode codepoints (1-4 UTF-8 bytes), some of
+/// them double-percent-encoded to chain across `normalize_path`'s two decode
+/// passes -- the exact shape finding F-R2-1's panic needed.
+fn random_path_candidate(rng: &mut Lcg) -> String {
+    let mut s = String::from("/");
+    let pieces = 1 + rng.below(10);
+    for _ in 0..pieces {
+        match rng.below(6) {
+            0 => {
+                // Literal printable-ASCII byte (0x21-0x7e), skipping '%' so
+                // stray literal percents are covered by arm 3 below instead.
+                let b = 0x21u8 + (rng.below(0x7e - 0x21 + 1) as u8);
+                let b = if b == b'%' { b'a' } else { b };
+                s.push(b as char);
+            }
+            1 => {
+                // Well-formed hex triplet.
+                let byte = (rng.next_u64() % 256) as u8;
+                s.push_str(&format!("%{byte:02X}"));
+            }
+            2 => {
+                // Malformed/truncated triplet.
+                let bad: &[&str] = &["%", "%g", "%1", "%zz", "%%"];
+                s.push_str(bad[rng.below(bad.len())]);
+            }
+            3 => {
+                // A random multi-byte codepoint, single-percent-encoded.
+                let codepoints: &[u32] = &[0xE9, 0x4E2D, 0x1F600, 0x80, 0x7FF];
+                let cp = codepoints[rng.below(codepoints.len())];
+                s.push_str(&percent_encode_codepoint(rng, cp, false));
+            }
+            4 => {
+                // Same, but double-percent-encoded (the panic shape).
+                let codepoints: &[u32] = &[0xE9, 0x4E2D, 0x1F600, 0x2764, 0x10FFFF];
+                let cp = codepoints[rng.below(codepoints.len())];
+                s.push_str(&percent_encode_codepoint(rng, cp, true));
+            }
+            _ => {
+                // A literal '/' or '?' to exercise segment/query splitting.
+                let seps: &[char] = &['/', '?', '.'];
+                s.push(seps[rng.below(seps.len())]);
+            }
+        }
+    }
+    s
+}
+
+#[test]
+fn normalize_path_percent_decoding_never_panics_and_matches_python() {
+    // Finding F-R2-1: `percent_decode_lossy` used to index a `str` slice at
+    // a byte offset that can land inside a multi-byte UTF-8 character
+    // produced by the *first* decode pass (e.g. `/%25%E4%B8%AD` decodes
+    // once to bytes `2f 25 e4 b8 ad`, and offset 4 sits inside `中`),
+    // panicking on agent-supplied input. Generate several thousand random
+    // and adversarial percent-sequences (including ones specifically
+    // engineered to reproduce that exact shape) and assert `normalize_path`
+    // never panics on any of them, and its accept/reject outcome (and, when
+    // accepted, its `(path, target)` pair) matches the real
+    // `zeropw.gateway.normalize_path` for every one of them.
+    let mut rng = Lcg::new(0xA5A5_1234_5678_9ABC);
+    let case_count = 6000usize;
+    let cases: Vec<String> = (0..case_count)
+        .map(|_| random_path_candidate(&mut rng))
+        .collect();
+
+    // No panic: computing every outcome up front is itself the assertion
+    // (a panic fails the test with a backtrace pointing at the case).
+    let rust_results: Vec<Result<(String, String), &'static str>> =
+        cases.iter().map(|c| gateway::normalize_path(c)).collect();
+
+    let script = r#"
+import sys, json
+from zeropw import gateway as G
+cases = json.loads(sys.stdin.read())
+out = []
+for raw in cases:
+    try:
+        path, target = G.normalize_path(raw)
+        out.append(["ok", path, target])
+    except G._Invalid as e:
+        out.append(["err", e.reason])
+sys.stdout.write(json.dumps(out))
+"#;
+    let stdin_json = serde_json::to_string(&cases).unwrap();
+    let py_out = run_python_oracle_stdin(script, &stdin_json);
+    let py_results: Vec<Value> = serde_json::from_str(py_out.trim()).unwrap();
+    assert_eq!(py_results.len(), cases.len());
+
+    let mut mismatches = Vec::new();
+    for (i, (case, rust_result)) in cases.iter().zip(rust_results.iter()).enumerate() {
+        let py = &py_results[i];
+        let matches = match (rust_result, py[0].as_str().unwrap()) {
+            (Ok((path, target)), "ok") => {
+                path.as_str() == py[1].as_str().unwrap()
+                    && target.as_str() == py[2].as_str().unwrap()
+            }
+            (Err(_), "err") => true,
+            _ => false,
+        };
+        if !matches {
+            mismatches.push(format!(
+                "case {i} ({case:?}): rust={rust_result:?} python={py:?}"
+            ));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} / {} cases diverged from python3.12 gateway.normalize_path:\n{}",
+        mismatches.len(),
+        cases.len(),
+        mismatches.join("\n")
+    );
+    eprintln!(
+        "normalize_path percent-decode fuzz: {} cases, 0 divergences, 0 panics",
+        cases.len()
+    );
+}
+
+/// Like `run_python_oracle`, but pipes `stdin_data` to the script's stdin
+/// (for a batch of test cases too large to embed as a `-c` argument) and
+/// sets `PYTHONPATH` to the repository root so `import zeropw...` works,
+/// same as `rust/tests/gateway_oracle.rs`'s `run_python`.
+fn run_python_oracle_stdin(script: &str, stdin_data: &str) -> String {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .to_path_buf();
+    let mut child = std::process::Command::new(&interpreter)
+        .arg("-c")
+        .arg(script)
+        .env("PYTHONPATH", repo_root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin_data.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "python stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
 /// Minimal Python runner for the oracle checks above -- same technique as
