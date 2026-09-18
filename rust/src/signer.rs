@@ -52,7 +52,7 @@
 //!   platform's default backlog).
 
 use std::collections::HashMap;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -77,7 +77,16 @@ pub const MAX_UNIX_PATH: usize = 100;
 pub const DEFAULT_MAX_AGENT_CLIENTS: usize = 32;
 const CLIENT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// Bound on waiting for the accept thread to notice `closed` and return, the
+/// same 2s Python gives `self._accept_thread.join(timeout=2)`.
+const ACCEPT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// How many times `close()` retries connecting to its own socket to wake a
+/// blocked `accept()` call, in case the very first attempt races the kernel
+/// still finishing the `bind`/`listen` setup. Each retry is cheap (a local
+/// Unix socket connect attempt); this is not a polling interval on the
+/// accept path itself (see `accept_loop`, which blocks in `accept()` with no
+/// sleep), just a small, bounded retry budget for the wakeup nudge.
+const CLOSE_WAKEUP_ATTEMPTS: u32 = 5;
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[sshwire::SESSION_BIND_EXTENSION];
 pub const SSH_ED25519: &str = "ssh-ed25519";
@@ -167,6 +176,12 @@ struct BindingServer {
     handles: Mutex<HashMap<u64, JoinHandle<()>>>,
     next_client_id: AtomicU64,
     accept_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Signalled (by `accept_loop` sending, right before it returns) once the
+    /// accept thread has finished; `close()` waits on this with a bound
+    /// instead of an untimed `JoinHandle::join()` (`std` has no timed join),
+    /// so a wedged accept thread cannot block `close()` forever (finding
+    /// G-4).
+    accept_done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     max_agent_clients: Arc<AtomicUsize>,
 }
 
@@ -186,30 +201,70 @@ impl BindingServer {
             handles: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(0),
             accept_handle: Mutex::new(None),
+            accept_done: Mutex::new(None),
             max_agent_clients,
         });
         let accept_server = Arc::clone(&server);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
         let handle = thread::Builder::new()
             .name(format!("zeropw-signer-{}", server.binding.grant_id))
-            .spawn(move || accept_server.accept_loop())
+            .spawn(move || {
+                accept_server.accept_loop();
+                let _ = done_tx.send(());
+            })
             .map_err(|e| Error::state("signer_thread_spawn_failed").with_detail(e.to_string()))?;
         *server
             .accept_handle
             .lock()
             .expect("accept_handle mutex poisoned") = Some(handle);
+        *server
+            .accept_done
+            .lock()
+            .expect("accept_done mutex poisoned") = Some(done_rx);
         Ok(server)
     }
 
     // ---------------------------------------------------------- lifecycle
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        // The listener is blocking (see `accept_loop`/`bind_and_listen`), so
+        // a thread parked in `accept()` needs an explicit nudge: connecting
+        // to our own socket makes the kernel hand that connection to the
+        // blocked `accept()` call, which then observes `closed` (via
+        // `handle_accepted`) and returns at once -- Python's equivalent is
+        // closing the listening socket out from under a 0.2s-timeout
+        // `accept()`. `std` has no safe way to force-close the listener's fd
+        // out from under another thread without an `unsafe` FFI call (barred
+        // everywhere but `store.rs`), so this is the safe-Rust substitute.
+        for _ in 0..CLOSE_WAKEUP_ATTEMPTS {
+            if UnixStream::connect(&self.binding.socket_path).is_ok() {
+                break;
+            }
+        }
+        // Bound the wait the way Python's `self._accept_thread.join(timeout=2)`
+        // does: `JoinHandle::join` has no timeout, so wait on a completion
+        // signal sent right before `accept_loop` returns, and give up
+        // (detaching the handle) past the deadline instead of blocking
+        // `close()` forever on a wedged accept thread.
+        let done = self
+            .accept_done
+            .lock()
+            .expect("accept_done mutex poisoned")
+            .take();
+        if let Some(done) = done {
+            let _ = done.recv_timeout(ACCEPT_JOIN_TIMEOUT);
+        }
         if let Some(handle) = self
             .accept_handle
             .lock()
             .expect("accept_handle mutex poisoned")
             .take()
         {
-            let _ = handle.join();
+            // By the time `done` fired, the thread is finished or finishing;
+            // if it never fired (deadline elapsed), detach rather than block
+            // indefinitely -- matching Python's "move on past the deadline"
+            // behaviour for a wedged thread.
+            drop(handle);
         }
         let _ = std::fs::remove_file(&self.binding.socket_path);
         // Shut down every live client connection so a blocking read in a
@@ -248,21 +303,22 @@ impl BindingServer {
     }
 
     fn accept_loop(self: Arc<Self>) {
+        // `accept()` blocks (see `bind_and_listen`): a new connection is
+        // served the instant it arrives, exactly like Python's blocking
+        // `accept()` with a 0.2s `settimeout` (that timeout only bounds
+        // `close()`, never ordinary accept latency -- see finding G-1).
+        // `close()` wakes a parked `accept()` call by connecting to this
+        // same socket once `closed` is set; `handle_accepted` immediately
+        // refuses that connection (and any genuine client that raced with
+        // `close()`) once it observes the flag, so no fixed sleep is ever on
+        // this path.
         loop {
-            if self.closed.load(Ordering::SeqCst) {
-                break;
-            }
             match self.listener.accept() {
                 Ok((stream, _addr)) => self.handle_accepted(stream),
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    thread::sleep(ACCEPT_POLL_INTERVAL);
-                }
                 Err(_) => break,
+            }
+            if self.closed.load(Ordering::SeqCst) {
+                break;
             }
         }
     }
@@ -272,11 +328,6 @@ impl BindingServer {
             let _ = stream.shutdown(std::net::Shutdown::Both);
             return;
         }
-        // The listener is non-blocking so the accept loop can poll `closed`
-        // (see `bind_and_listen`); an accepted connection must not inherit
-        // that, since `serve_client` relies on blocking reads with a
-        // timeout (`set_read_timeout`, which nonblocking sockets ignore).
-        let _ = stream.set_nonblocking(false);
         let id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
         let max = self.max_agent_clients.load(Ordering::SeqCst);
         let admitted = {
@@ -1031,13 +1082,32 @@ pub fn socket_mode_ok(path: &Path) -> bool {
 // Socket plumbing helpers
 // ---------------------------------------------------------------------------
 
-/// Port of `SignerManager._choose_socket_dir`.
+/// Port of `SignerManager._choose_socket_dir`. Both branches create their
+/// leaf directory at mode 0700 atomically in the `mkdir` syscall itself (via
+/// `DirBuilder::mode`, the same technique `context.rs`'s
+/// `mkdir_private_0700`, `kms.rs` and `store.rs` already use), matching
+/// Python's `Path.mkdir(mode=0o700, ...)` / `tempfile.mkdtemp` -- neither
+/// leaves a window where the directory holding agent sockets is created at a
+/// wider mode and only narrowed afterwards (finding G-2). Any *missing
+/// parents* of the candidate path are still created at the process default
+/// mode first, matching `Path.mkdir(parents=True)`'s own documented
+/// behaviour of leaving intermediate parents at their default mode and only
+/// applying the given `mode` to the final component.
 fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     if let Some(candidate) = preferred {
         let probe = candidate.join("s".repeat(24));
         if probe.to_string_lossy().len() <= MAX_UNIX_PATH {
-            std::fs::create_dir_all(&candidate)
+            if let Some(parent) = candidate.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    Error::state("signer_socket_dir_failed").with_detail(e.to_string())
+                })?;
+            }
+            mkdir_leaf_private_0700(&candidate)
                 .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+            // Defensive backstop against a masking umask, same as
+            // `context.rs`'s `create_private_dir`; the `mkdir` syscall above
+            // already requested 0700 directly, so this is redundant in the
+            // common case, not the primary guarantee.
             std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))
                 .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
             return Ok(candidate);
@@ -1049,14 +1119,43 @@ fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     Ok(short)
 }
 
+/// Create `path` at mode 0700 atomically (`DirBuilder::mode`), treating an
+/// already-existing *directory* at that path as success -- Python's
+/// `exist_ok=True` -- while still erroring if something else (e.g. a
+/// regular file) occupies it, since a bare `AlreadyExists` from a
+/// non-recursive `DirBuilder::create` cannot itself distinguish the two.
+fn mkdir_leaf_private_0700(path: &Path) -> std::io::Result<()> {
+    match std::fs::DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            if std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Port of the fallback branch of `SignerManager._choose_socket_dir`
+/// (`tempfile.mkdtemp(prefix="zpws-")`). Python's `mkdtemp` names its
+/// directory with an 8-character random suffix; this used to encode 8
+/// random *bytes* as hex (16 characters), making the resulting path 8 bytes
+/// longer than Python's and shifting exactly where the `MAX_UNIX_PATH`
+/// length check trips relative to Python (finding G-3). Encoding 4 random
+/// bytes as hex instead yields the same 8-character suffix length as
+/// Python's (the alphabet differs -- hex vs. Python's own candidate
+/// charset -- but no caller depends on anything beyond length and
+/// uniqueness).
 fn make_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
     let base = std::env::temp_dir();
     for _ in 0..64 {
-        let mut suffix = [0u8; 8];
+        let mut suffix = [0u8; 4];
         use rand::RngCore;
         rand::rngs::OsRng.fill_bytes(&mut suffix);
         let path = base.join(format!("{prefix}{}", hex::encode(suffix)));
-        match std::fs::create_dir(&path) {
+        match std::fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => return Ok(path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
@@ -1074,17 +1173,17 @@ fn short_hex_id() -> String {
     hex::encode(buf)
 }
 
-/// Bind, chmod 0600 and switch to non-blocking so the accept loop can poll
-/// `closed` instead of blocking forever (Python's equivalent is a 0.2s
-/// socket timeout). See the module doc comment for the umask/backlog
-/// deviations from Python's `socket.bind`/`listen(16)`.
+/// Bind and chmod 0600. The listener stays blocking, exactly like Python's
+/// socket -- `accept_loop` calls `accept()` directly, so a new connection is
+/// served the instant it arrives rather than waiting out a fixed poll
+/// interval (finding G-1); `close()` wakes a parked `accept()` call by
+/// connecting to this same socket once `closed` is set. See the module doc
+/// comment for the umask/backlog deviations from Python's
+/// `socket.bind`/`listen(16)`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     let listener = UnixListener::bind(path)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
-    listener
-        .set_nonblocking(true)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
     Ok(listener)
 }
@@ -1352,6 +1451,82 @@ mod tests {
             std::fs::metadata(f.manager.socket_dir()).unwrap().mode() & 0o077,
             0
         );
+    }
+
+    // Regression test for finding G-2: `choose_socket_dir`'s preferred-path
+    // branch used to `create_dir_all` at the process default mode and only
+    // `chmod` to 0700 afterwards, leaving a window where the directory
+    // holding agent sockets was world-traversable. `mkdir_leaf_private_0700`
+    // now requests mode 0700 in the `mkdir` syscall itself (`DirBuilder::mode`),
+    // so the mode is correct immediately after creation, with no separate
+    // narrowing step needed for it to already hold. Also exercises a missing
+    // parent (`parents=True`'s job in Python), which stays at the process
+    // default mode per `Path.mkdir(parents=True)`'s own documented
+    // behaviour -- only the leaf gets 0700.
+    #[test]
+    fn choose_socket_dir_sets_leaf_mode_0700_immediately_after_creation() {
+        // A short, literal `/tmp`-rooted base: `TempDir::new()` places its
+        // directory under the platform `TMPDIR` (on macOS, a long
+        // per-process path), which can itself already exceed the probe this
+        // test needs room under (`MAX_UNIX_PATH`, the same bind-time length
+        // budget `choose_socket_dir` itself enforces) once a nested missing
+        // parent is appended.
+        let base = PathBuf::from("/tmp").join(format!("zpws-test-{}", short_hex_id()));
+        let candidate = base.join("missing-parent").join("sockdir");
+        assert!(!candidate.parent().unwrap().exists());
+        let dir = choose_socket_dir(Some(candidate.clone())).unwrap();
+        assert_eq!(dir, candidate);
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "leaf directory mode immediately after creation"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    // Calling `choose_socket_dir` again for an already-existing directory
+    // (the common case: a `SignerManager` re-created against the same
+    // configured `socket_dir`) must still succeed, matching Python's
+    // `exist_ok=True`.
+    #[test]
+    fn choose_socket_dir_is_idempotent_for_an_existing_directory() {
+        let candidate = PathBuf::from("/tmp").join(format!("zpws-test-{}", short_hex_id()));
+        choose_socket_dir(Some(candidate.clone())).unwrap();
+        let dir = choose_socket_dir(Some(candidate.clone())).unwrap();
+        assert_eq!(dir, candidate);
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        std::fs::remove_dir_all(&candidate).unwrap();
+    }
+
+    // Regression test for finding G-3: the fallback branch's random
+    // directory suffix used to be 8 raw bytes hex-encoded (16 characters),
+    // 8 bytes longer than Python's `tempfile.mkdtemp(prefix="zpws-")` own
+    // 8-character suffix, which shifts exactly where the `MAX_UNIX_PATH`
+    // bind-time length check trips relative to Python. Also covers G-2 for
+    // this branch: mode 0700 immediately after creation.
+    #[test]
+    fn make_temp_dir_suffix_length_matches_python_mkdtemp() {
+        let python_suffix_len: usize = crate::oracle::python(
+            "import tempfile, os\n\
+             path = tempfile.mkdtemp(prefix='zpws-')\n\
+             print(len(os.path.basename(path)) - len('zpws-'))\n\
+             os.rmdir(path)",
+        )
+        .trim()
+        .parse()
+        .expect("python prints an integer suffix length");
+        let dir = choose_socket_dir(None).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "fallback directory mode immediately after creation"
+        );
+        let name = dir.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("zpws-"), "{name}");
+        let rust_suffix_len = name.len() - "zpws-".len();
+        assert_eq!(rust_suffix_len, python_suffix_len);
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     // Port of test_identities_lists_only_the_bound_key_without_touching_plaintext
@@ -1837,6 +2012,36 @@ mod tests {
         assert!(f.manager.active_bindings().is_empty());
     }
 
+    // Regression test for finding G-1: the accept loop used to set the
+    // listener non-blocking and sleep a fixed 200ms (`ACCEPT_POLL_INTERVAL`)
+    // on every `WouldBlock`, so a *new* connection could wait out nearly the
+    // whole poll interval before being accepted at all -- ten sequential
+    // connect+request cycles measured ~1.85s (~205ms each) instead of
+    // Python's ~4.3ms. The listener is blocking again (`bind_and_listen`),
+    // so a connection is served the instant the kernel hands it to
+    // `accept()`; this asserts ten sequential cycles finish in a small
+    // fraction of the 2s (10 x 200ms) the old poll-bound implementation
+    // would need, with a generous margin so the assertion is not flaky on a
+    // loaded CI host.
+    #[test]
+    fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
+        let f = fixture();
+        let started = Instant::now();
+        for _ in 0..10 {
+            let mut conn = f.connect();
+            let reply = conn
+                .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                .unwrap();
+            assert_eq!(reply[0], sshwire::SSH_AGENT_IDENTITIES_ANSWER);
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "10 sequential connections took {elapsed:?}, expected well under the old \
+             poll-bound ~2s (10 x 200ms)"
+        );
+    }
+
     // ------------------------------------------------- client tracking (SSH-3)
 
     // Port of test_finished_client_threads_are_pruned
@@ -2058,13 +2263,19 @@ mod tests {
 
     // ------------------------------------------------------------ OpenSSH interop
 
-    // Port of test_ssh_add_lists_key_but_cannot_sign_random_data_or_delete
+    // Port of test_ssh_add_lists_key_but_cannot_sign_random_data_or_delete.
+    // Python uses a real `unittest.skipIf` here (visible as "skipped", never
+    // "ok"); this test instead fails loudly when `ssh-add` is missing rather
+    // than printing a message and returning, which `libtest` would otherwise
+    // report as a silent, misleading pass (finding G-5).
     #[test]
     fn ssh_add_lists_key_but_cannot_sign_random_data_or_delete() {
         use std::process::Command;
         if Command::new("ssh-add").arg("-h").output().is_err() {
-            eprintln!("skipping: ssh-add not available");
-            return;
+            panic!(
+                "ssh-add is not available on PATH: this test requires OpenSSH client tools \
+                 and must fail rather than silently report as passing when they are missing"
+            );
         }
         let f = fixture();
         let env: Vec<(&str, String)> = vec![

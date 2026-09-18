@@ -4,9 +4,15 @@
 //!
 //! The real `ssh` client authenticates with nothing but `SSH_AUTH_SOCK`
 //! pointing at a `zeropw::signer` socket: the private key never leaves the
-//! trusted process. Skipped (with a printed reason, never a silent pass)
-//! when `sshd`/`ssh`/`ssh-keygen` are missing, or when `sshd` cannot start
-//! as the current user in this environment.
+//! trusted process. Python's `SshEndToEndTestCase` uses a real
+//! `unittest.skipIf` for missing tooling, which `unittest`/CI report as
+//! "skipped", never "ok". `libtest` has no equivalent status for an
+//! ordinary `#[test]` run without `--ignored`, and printing a message then
+//! returning early is silently reported as "ok" -- a false green (finding
+//! G-5). So this suite instead **fails** the test (a clear panic message,
+//! never a silent early return) when `sshd`/`ssh`/`ssh-keygen` are missing,
+//! or when `sshd` cannot start as the current user in this environment: a
+//! host that cannot actually run this coverage cannot report green either.
 //!
 //! The exec-tool variant of the Python suite
 //! (`ExecToolSshEndToEndTestCase`) is not ported: it drives `zeropw.tools`,
@@ -48,17 +54,19 @@ fn sshd_path() -> Option<PathBuf> {
     })
 }
 
-/// True when `sshd`, `ssh` and `ssh-keygen` are all on `PATH` (or, for
-/// `sshd`, at the usual system path). Prints why a test is skipped instead
-/// of silently passing, matching `tests/test_ssh_e2e.py`'s
-/// `unittest.skipIf` (whose reason string appears in `-v` output).
-fn tools_available() -> Option<(PathBuf, PathBuf, PathBuf)> {
+/// `sshd`, `ssh` and `ssh-keygen`, all on `PATH` (or, for `sshd`, at the
+/// usual system path). Panics with a clear reason instead of silently
+/// skipping: unlike `tests/test_ssh_e2e.py`'s `unittest.skipIf` (reported as
+/// "skipped"), a `libtest` test that prints a message and returns early is
+/// reported as "ok", a false pass this project's rule for the SSH e2e
+/// coverage forbids (finding G-5).
+fn tools_available() -> (PathBuf, PathBuf, PathBuf) {
     match (sshd_path(), which("ssh"), which("ssh-keygen")) {
-        (Some(sshd), Some(ssh), Some(keygen)) => Some((sshd, ssh, keygen)),
-        _ => {
-            eprintln!("skipping: sshd, ssh, or ssh-keygen not available");
-            None
-        }
+        (Some(sshd), Some(ssh), Some(keygen)) => (sshd, ssh, keygen),
+        _ => panic!(
+            "sshd, ssh, or ssh-keygen not available on PATH: this end-to-end SSH test \
+             requires real OpenSSH tooling and must fail, not silently pass, when it is missing"
+        ),
     }
 }
 
@@ -284,8 +292,8 @@ struct Fixture {
     ssh_bin: PathBuf,
 }
 
-fn build_fixture() -> Option<Fixture> {
-    let (sshd_bin, ssh_bin, keygen_bin) = tools_available()?;
+fn build_fixture() -> Fixture {
+    let (sshd_bin, ssh_bin, keygen_bin) = tools_available();
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let ctx: &'static Context = Box::leak(Box::new(
@@ -319,11 +327,13 @@ fn build_fixture() -> Option<Fixture> {
         &user_key.public.to_authorized_key("agent").unwrap(),
     );
     if !sshd.started() {
-        eprintln!("skipping: sshd could not start as a non-root user in this environment");
-        return None;
+        panic!(
+            "sshd could not start as a non-root user in this environment: this end-to-end \
+             SSH test must fail, not silently pass, when it cannot actually run"
+        );
     }
     let manager = signer::install(ctx, None).unwrap();
-    Some(Fixture {
+    Fixture {
         _tmp: tmp,
         root,
         ctx,
@@ -332,7 +342,7 @@ fn build_fixture() -> Option<Fixture> {
         sshd,
         username,
         ssh_bin,
-    })
+    }
 }
 
 fn whoami() -> String {
@@ -404,7 +414,7 @@ impl Fixture {
 // Port of SshEndToEndTestCase::test_real_ssh_client_authenticates_through_signer_without_private_key
 #[test]
 fn real_ssh_client_authenticates_through_signer_without_private_key() {
-    let Some(f) = build_fixture() else { return };
+    let f = build_fixture();
     f.connection(&f.sshd.host_key_line);
     let grant = f
         .ctx
@@ -478,7 +488,7 @@ fn real_ssh_client_authenticates_through_signer_without_private_key() {
 // Port of SshEndToEndTestCase::test_wrong_destination_host_key_is_refused
 #[test]
 fn wrong_destination_host_key_is_refused() {
-    let Some(f) = build_fixture() else { return };
+    let f = build_fixture();
     let impostor = sshwire::generate_ed25519_private_key("impostor");
     f.connection(&impostor.public.to_authorized_key("impostor").unwrap());
     let grant = f
@@ -520,7 +530,7 @@ fn wrong_destination_host_key_is_refused() {
 // Port of SshEndToEndTestCase::test_revoked_grant_cannot_authenticate
 #[test]
 fn revoked_grant_cannot_authenticate() {
-    let Some(f) = build_fixture() else { return };
+    let f = build_fixture();
     f.connection(&f.sshd.host_key_line);
     let grant = f
         .ctx
