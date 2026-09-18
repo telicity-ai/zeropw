@@ -1516,25 +1516,122 @@ fn restore_approval_history_falsy_value_becomes_empty_list() {
     assert_eq!(after["approval_history"], json!([]));
 }
 
-/// `Policy::reapply_revocations` aborting `Vault::restore` and skipping the
-/// handle-key rotation (finding E-R5-3) is assigned to the `policy` work
-/// unit's own next round -- out of scope here (`rust/src/policy.rs` is not
-/// an editable file for this fix). Documented as `#[ignore]`d so the
-/// expected end state is recorded and can be turned on once `policy.rs`'s
-/// fix lands: today, if `Policy::reapply_revocations` returns an error
-/// partway through, `Vault::restore` propagates it (via `?`) *before*
-/// reaching the `state.write_bytes(HANDLE_KEY, ...)` handle-key rotation a
-/// few lines below -- so a restore that hits this path leaves the old
-/// (potentially leaked) handle key in place. Once fixed, this same restore
-/// should still rotate the handle key even when the policy side reports a
-/// (recoverable) error reapplying revocations.
+/// Rewrites one document inside an on-disk backup archive and recomputes
+/// the manifest's `sha256` digest to match, the same way `Vault::backup`
+/// itself computes it (`pyjson::dumps(&documents,
+/// DumpOptions::compact_sorted())`, then `sha256` hex) -- otherwise the
+/// corrupted archive would be rejected as `backup_digest_mismatch` before
+/// `Vault::restore` ever reaches the document this helper is meant to
+/// exercise.
+fn corrupt_document_in_backup(path: &Path, doc_name: &str, new_value: Value) {
+    let text = fs::read_to_string(path).unwrap();
+    let mut archive: Value = serde_json::from_str(&text).unwrap();
+    archive["documents"][doc_name] = new_value;
+    let documents = archive["documents"].clone();
+    let payload =
+        zeropw::pyjson::dumps(&documents, zeropw::pyjson::DumpOptions::compact_sorted()).unwrap();
+    let digest = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(payload.as_bytes()))
+    };
+    archive["manifest"]["sha256"] = json!(digest);
+    fs::write(path, serde_json::to_string(&archive).unwrap()).unwrap();
+}
+
+/// E-R6-2 (correcting the coordinator's own drafting error in the
+/// `#[ignore]`d placeholder this replaces): Python's `Vault.restore` is
+/// strictly sequential (`reapply_revocations` at vault.py:573 runs *before*
+/// the `write_bytes(HANDLE_KEY, ...)`-equivalent handle-key rotation at
+/// vault.py:578, both inside the same `with state.lock():` block, with no
+/// enclosing `try`/`except` around either), so there is no Python execution
+/// where `restore` fails partway through and the handle key still rotates
+/// -- a failure and a rotation are mutually exclusive outcomes of the same
+/// call, not independent. `Policy::reapply_revocations` itself only reads
+/// `policy/connections.json` (via `self.connections()?`) when there is at
+/// least one pending connection revocation to look up (unit D's round-6
+/// lazy-read fix, `policy.rs`) -- mirroring Python's own
+/// `connections.get(connection_id)` only running inside a `for` loop over
+/// `revocations.connections`. So a `policy/connections.json` that is a
+/// truthy non-dict (e.g. a JSON string) must not by itself fail a restore:
+/// only a *pending* connection revocation forces the read that discovers
+/// the corruption. This is the "no pending revocation" half: `restore`
+/// must succeed, write `restore_reapplied`, and rotate `context::HANDLE_KEY`
+/// exactly as Python does. Verified against real `python3.12` by
+/// `vault_context_oracle.rs`'s
+/// `restore_reapply_revocations_connections_doc_corruption_matches_python`.
 #[test]
-#[ignore = "E-R5-3 is assigned to the policy work unit's own next round"]
-fn restore_still_rotates_handle_key_even_if_policy_reapply_revocations_errors() {
-    unimplemented!(
-        "once policy.rs's E-R5-3 fix lands: force Policy::reapply_revocations to return an \
-         error (e.g. a corrupted policy/connections.json) during Vault::restore, then assert \
-         that context::HANDLE_KEY was still rotated (differs from its pre-restore value) even \
-         though restore's own Result was Err"
+fn restore_succeeds_and_rotates_handle_key_when_corrupt_connections_doc_has_no_pending_revocation()
+{
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+    corrupt_document_in_backup(&out, policy::CONNECTIONS, json!("not-a-dict"));
+
+    let key_before = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+
+    Vault::restore(ctx.state, &out, ctx.audit, None)
+        .expect("no pending connection revocation: restore must succeed like Python does");
+
+    let connections_after = ctx
+        .state
+        .read_json(policy::CONNECTIONS, Value::Null)
+        .unwrap();
+    assert_eq!(
+        connections_after,
+        json!("not-a-dict"),
+        "the corrupted document itself is written through verbatim, same as any other archived document"
+    );
+    let control_after = ctx.state.read_json(policy::CONTROL, Value::Null).unwrap();
+    assert!(
+        control_after.get("restore_reapplied").is_some(),
+        "restore_reapplied must be written on a successful restore"
+    );
+    let key_after = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+    assert_ne!(
+        key_before, key_after,
+        "the handle key must be rotated on a successful restore"
+    );
+}
+
+/// E-R6-2's companion case: the same corrupted `policy/connections.json`,
+/// but *with* a pending connection revocation. Python's
+/// `Policy.reapply_revocations` for-loop now actually runs
+/// `connections.get(connection_id)` against the corrupted (non-dict) value,
+/// raising an uncaught `AttributeError` that propagates out of
+/// `Vault.restore` entirely -- so the whole restore fails and, per this
+/// finding's own reasoning above, the handle key must be left untouched
+/// (never reaching the rotation a few lines below the failed
+/// `reapply_revocations` call). Verified against real `python3.12` by
+/// `vault_context_oracle.rs`'s
+/// `restore_reapply_revocations_connections_doc_corruption_matches_python`.
+#[test]
+fn restore_fails_and_leaves_handle_key_untouched_when_corrupt_connections_doc_has_a_pending_revocation()
+ {
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+    corrupt_document_in_backup(&out, policy::CONNECTIONS, json!("not-a-dict"));
+
+    let mut fields = serde_json::Map::new();
+    fields.insert("id".into(), json!("conn-pending-revocation"));
+    policy::append_revocation(ctx.state, "connection", fields);
+
+    let key_before = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+
+    let err = Vault::restore(ctx.state, &out, ctx.audit, None)
+        .expect_err("a pending connection revocation forces the corrupted read: restore must fail like Python's uncaught AttributeError does");
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let key_after = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+    assert_eq!(
+        key_before, key_after,
+        "a failed restore must never rotate the handle key"
     );
 }

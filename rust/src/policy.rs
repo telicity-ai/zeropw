@@ -507,83 +507,16 @@ const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
 /// "truncates to a representable `i64`".
 const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
 
-/// The digit value (`0..=9`) of `c` under CPython 3.12 `int(str)`'s digit
-/// grammar: ASCII `0`-`9`, or any Unicode `Nd` code point. Generated the
-/// same way as `team/commit.rs`'s own copy (`rust/tools/gen_digit_table.py`,
-/// re-run directly against this environment's `python3.12` for finding
-/// D-R5-4a: `int("٣") == 3`, `int("１２３") == 123`, neither of which the
-/// previous ASCII-only `python_int_from_str` accepted, `state_corrupt`ing
-/// every handle/state field it touches for a Unicode-digit numeral). Kept
-/// as a private copy rather than a shared one: `team/commit.rs` is another
-/// engineer's file this round, and its own table returns `i128` digit
-/// positions for a `Hlc`/`Commit` grammar this module doesn't share.
-const UNICODE_DECIMAL_DIGIT_BLOCKS: &[u32] = &[
-    0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6,
-    0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50,
-    0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
-    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
-    0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0,
-    0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950,
-    0x1FBF0,
-];
-
-fn unicode_digit_value(c: char) -> Option<u32> {
-    let cp = c as u32;
-    if c.is_ascii_digit() {
-        return Some(cp - '0' as u32);
-    }
-    for &start in UNICODE_DECIMAL_DIGIT_BLOCKS {
-        if cp >= start && cp <= start + 9 {
-            return Some(cp - start);
-        }
-    }
-    None
-}
-
-/// The whitespace CPython 3.12's `int(str)` actually strips from both
-/// ends before parsing -- **not** the same set as `str.isspace()`
-/// (`crate::pystr::is_space`, used by [`python_strip`] elsewhere in this
-/// module for `str.strip()` itself). Of `str.isspace()`'s 29 code points,
-/// `int()` accepts 25 and rejects exactly four -- U+001C..U+001F
-/// (INFORMATION SEPARATOR FOUR/THREE/TWO/ONE) -- e.g. `int("\x1c5")` raises
-/// `ValueError` even though `"\x1c".isspace()` is `True` (finding D-R5-4b;
-/// confirmed directly against `python3.12`, and already fixed the same way
-/// for `team/commit.rs`'s own `int()`-alike, finding H-R2-1).
-fn is_int_strip_space(c: char) -> bool {
-    crate::pystr::is_space(c) && !matches!(c as u32, 0x1C..=0x1F)
-}
-
-/// The numeric-literal grammar CPython's `int(str)` accepts: optional
-/// [`is_int_strip_space`] padding (not full `str.isspace()`), an optional
-/// `+`/`-` sign, then one or more decimal digits -- ASCII or any Unicode
-/// `Nd` code point (see [`unicode_digit_value`]) -- with single,
-/// non-leading/trailing underscores allowed between them (`"1_000"`, not
-/// `"_1"`/`"1_"`/`"1__0"`). Bounded to `i64` (unlike `team/commit.rs`'s
+/// The numeric-literal grammar CPython's `int(str)` accepts -- padding,
+/// sign, PEP 515 underscores, any Unicode decimal digit (not just ASCII
+/// `0`-`9`) -- is `crate::pystr::int_from_str`, the one canonical home for
+/// CPython's `int(str)` semantics (PORTING.md §3b; a former private copy of
+/// this grammar lived here, finding D-R5-4). This function's only remaining
+/// job is narrowing that `i128` result to this module's `i64` (`None` for a
+/// magnitude that doesn't fit, unlike `team/commit.rs`'s
 /// `python_int_parse_i128`, this module's fields never need more).
 fn python_int_from_str(s: &str) -> Option<i64> {
-    let trimmed = s.trim_matches(is_int_strip_space);
-    let (negative, digits_part) = match trimmed.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
-    if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
-        return None;
-    }
-    let mut magnitude: i64 = 0;
-    let mut prev_underscore = false;
-    for c in digits_part.chars() {
-        if c == '_' {
-            if prev_underscore {
-                return None;
-            }
-            prev_underscore = true;
-            continue;
-        }
-        let digit = unicode_digit_value(c)?;
-        prev_underscore = false;
-        magnitude = magnitude.checked_mul(10)?.checked_add(digit as i64)?;
-    }
-    Some(if negative { -magnitude } else { magnitude })
+    crate::pystr::int_from_str(s).and_then(|v| i64::try_from(v).ok())
 }
 
 /// Python `str()` of a parsed JSON value, used only to format an
@@ -5301,6 +5234,24 @@ mod tests {
         assert!(!number_is_python_int(float_tok.as_number().unwrap()));
         assert!(number_is_python_int(huge_int_tok.as_number().unwrap()));
         assert_eq!(huge_int_tok.as_i64(), None);
+    }
+
+    /// Round-6 de-duplication (PORTING.md §3b, finding E-R6-1): a former
+    /// local copy of `int(str)`'s grammar in `python_int_from_str` built the
+    /// unsigned magnitude directly in `i64` via `checked_mul`/`checked_add`,
+    /// which cannot hold `i64::MIN`'s own magnitude
+    /// (`9223372036854775808`, one past `i64::MAX`) even momentarily, so
+    /// `int("-9223372036854775808")` was wrongly rejected even though
+    /// `i64::MIN` itself is representable -- the same shape of bug
+    /// `vault.rs`'s `python_int_from_str` was already fixed for at finding
+    /// E-R4-1. Delegating to `crate::pystr::int_from_str` (which parses the
+    /// magnitude via `i128` before narrowing) fixes this as a byproduct.
+    #[test]
+    fn python_int_from_str_accepts_i64_min() {
+        assert_eq!(python_int_from_str("-9223372036854775808"), Some(i64::MIN));
+        assert_eq!(python_int_from_str("9223372036854775807"), Some(i64::MAX));
+        assert_eq!(python_int_from_str("-9223372036854775809"), None); // one past i64::MIN
+        assert_eq!(python_int_from_str("9223372036854775808"), None); // one past i64::MAX
     }
 
     fn new_state_and_clock() -> (TempDir, StateDir, Arc<Mutex<f64>>) {

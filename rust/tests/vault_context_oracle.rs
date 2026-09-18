@@ -216,6 +216,144 @@ print(hashlib.sha256(value).hexdigest())
     assert_eq!(out.trim(), sha256_hex(value));
 }
 
+// ---------------------------------------------- restore reapply_revocations
+// (finding E-R6-2: corrects the coordinator's own drafting error about
+// which end state is correct here -- see `vault_context.rs`'s replacement
+// tests for the full reasoning)
+
+/// A minimal, digest-valid backup archive whose only document is
+/// `policy/connections.json`, set to a truthy non-dict (`"not-a-dict"`).
+fn connections_corruption_archive() -> Value {
+    let mut documents = serde_json::Map::new();
+    documents.insert(zeropw::policy::CONNECTIONS.to_string(), json!("not-a-dict"));
+    let documents = Value::Object(documents);
+    let payload = pyjson::dumps(&documents, DumpOptions::compact_sorted()).unwrap();
+    let digest = hex::encode(Sha256::digest(payload.as_bytes()));
+    json!({
+        "manifest": {
+            "format": "zeropw-backup-v1",
+            "created_at": "2024-01-01T00:00:00Z",
+            "sha256": digest,
+            "kms_key_id": "irrelevant-for-this-probe",
+            "backup_id": "e6-2-probe",
+        },
+        "documents": documents,
+    })
+}
+
+/// Runs `Vault::restore`/`Vault.restore` over [`connections_corruption_archive`]
+/// on two freshly (and identically) initialized state directories, one per
+/// language, optionally with a pending `"connection"` revocation appended to
+/// the ledger first (`policy::append_revocation`/`zeropw.policy.append_revocation`,
+/// same `kind`/`id` shape in both). Returns `((rust_ok, rust_key_rotated),
+/// (py_ok, py_key_rotated))`.
+fn probe_connections_corruption(with_pending_revocation: bool) -> ((bool, bool), (bool, bool)) {
+    let tmp = TempDir::new().unwrap();
+    let archive = connections_corruption_archive();
+    let archive_path = tmp.path().join("archive.json");
+    fs::write(&archive_path, serde_json::to_string(&archive).unwrap()).unwrap();
+
+    let rust_state = tmp.path().join("state-rust");
+    let (rust_ok, rust_key_rotated) = {
+        let ctx = Context::initialize(
+            &rust_state,
+            "admin-passphrase-1",
+            "recovery-passphrase-1",
+            Config::default(),
+            clock::fixed(FIXED_NOW),
+        )
+        .unwrap();
+        if with_pending_revocation {
+            let mut fields = serde_json::Map::new();
+            fields.insert("id".into(), json!("conn-pending-revocation"));
+            zeropw::policy::append_revocation(ctx.state, "connection", fields);
+        }
+        let key_before = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+        let ok = zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, None).is_ok();
+        let key_after = ctx.state.read_bytes(zeropw::context::HANDLE_KEY).unwrap();
+        (ok, key_before != key_after)
+    };
+
+    let py_state = tmp.path().join("state-py");
+    let revoke_line = if with_pending_revocation {
+        r#"from zeropw.policy import append_revocation
+append_revocation(ctx.state, "connection", id="conn-pending-revocation")"#
+    } else {
+        ""
+    };
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.context import Context, Config, HANDLE_KEY
+from zeropw.vault import Vault
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+{revoke_line}
+key_before = ctx.state.read_bytes(HANDLE_KEY)
+try:
+    Vault.restore(ctx.state, Path({archive}), ctx.audit)
+    ok = True
+except AttributeError:
+    ok = False
+except Exception as exc:
+    print(f"unexpected:{{type(exc).__name__}}:{{exc}}")
+    raise SystemExit(1)
+key_after = ctx.state.read_bytes(HANDLE_KEY)
+print("ok" if ok else "err", int(key_before != key_after))
+"#,
+        state = py_str(&py_state),
+        archive = py_str(&archive_path),
+        now = FIXED_NOW,
+        revoke_line = revoke_line,
+    );
+    let out = run_python(&script);
+    let mut parts = out.split_whitespace();
+    let py_ok = parts.next().unwrap() == "ok";
+    let py_key_rotated: u8 = parts.next().unwrap().parse().unwrap();
+    let py_key_rotated = py_key_rotated != 0;
+    ((rust_ok, rust_key_rotated), (py_ok, py_key_rotated))
+}
+
+/// No pending connection revocation: `Policy::reapply_revocations`'s lazy
+/// read of `policy/connections.json` never runs, so the corrupted document
+/// is never even looked at -- `restore` succeeds and rotates the handle key
+/// in both languages.
+#[test]
+fn restore_reapply_revocations_connections_doc_corruption_matches_python_without_pending_revocation()
+ {
+    let (rust, py) = probe_connections_corruption(false);
+    assert_eq!(
+        rust,
+        (true, true),
+        "rust: restore must succeed and rotate the handle key"
+    );
+    assert_eq!(
+        py,
+        (true, true),
+        "python: restore must succeed and rotate the handle key"
+    );
+}
+
+/// A pending connection revocation forces the read: Python's
+/// `connections.get(connection_id)` raises an uncaught `AttributeError` on
+/// the corrupted (non-dict) document, aborting `Vault.restore` entirely
+/// before the handle-key rotation a few lines later ever runs; Rust must
+/// fail the same way (`StateError("state_corrupt")`) and also leave the
+/// handle key untouched.
+#[test]
+fn restore_reapply_revocations_connections_doc_corruption_matches_python_with_pending_revocation() {
+    let (rust, py) = probe_connections_corruption(true);
+    assert_eq!(
+        rust,
+        (false, false),
+        "rust: restore must fail and leave the handle key untouched"
+    );
+    assert_eq!(
+        py,
+        (false, false),
+        "python: restore must fail (AttributeError) and leave the handle key untouched"
+    );
+}
+
 // -------------------------------------------------- inside_state (finding E-1)
 /// Builds one on-disk state directory (via a throwaway `Context::initialize`
 /// with default config, so `socket_dir`/`run_dir` land outside `tmp`

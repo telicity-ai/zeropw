@@ -673,7 +673,14 @@ fn reject_non_finite_numbers(value: &Value) -> serde_json::Result<()> {
     }
 }
 
-fn is_float_literal(raw: &str) -> bool {
+/// True when `raw` -- a `serde_json::Number`'s own literal text
+/// (`arbitrary_precision`'s raw-text backing) -- is syntactically a float
+/// literal (has a `.`/`e`/`E`) rather than a plain, possibly huge, integer
+/// literal. `pub(crate)`, not just a local helper: `team/commit.rs`'s
+/// `python_int_coerce`/its `ops` numeric-value coercion previously kept its
+/// own byte-identical copy of this one-line check (PORTING.md §3b, finding
+/// E-R6-1 round 6) -- deleted in favour of this one.
+pub(crate) fn is_float_literal(raw: &str) -> bool {
     raw.contains(['.', 'e', 'E'])
 }
 

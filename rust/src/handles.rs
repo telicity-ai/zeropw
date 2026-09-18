@@ -243,41 +243,36 @@ fn python_int_coerce(value: &Value) -> Result<i64, ()> {
 /// surrounding whitespace, an optional leading `+`/`-`, ASCII digits with
 /// single underscores allowed only strictly between two digits (`"1_000"`
 /// ok; `"_1"`, `"1_"`, `"1__0"` are not).
+///
+/// Deliberately narrower than CPython's real grammar in exactly the two
+/// ways this module's own `python_int_coerce` doc comment already
+/// documents (finding A-R2-1, PORTING.md §3.7, pinned by
+/// `forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected`):
+/// only ASCII `0`-`9` digits, and only a magnitude that fits `i64`. The
+/// boundary-whitespace strip and the sign/underscore/digit *grammar*
+/// itself, though, are not re-implemented here -- both go through
+/// `crate::pystr::int_from_str`, the one canonical home for CPython's
+/// `int(str)` semantics (PORTING.md §3b); this function's own job is only
+/// the ASCII-digit guard (checked on the already-`trim`med string, so a
+/// non-ASCII character stripped as boundary whitespace by `trim()` itself
+/// -- e.g. a leading/trailing NBSP -- is not mistaken for a rejected
+/// digit) and the final `i64` narrowing. Narrowing through `i128` first
+/// (rather than parsing the unsigned magnitude directly into `i64`) also
+/// fixes a previously-latent bug this local copy shared with `policy.rs`'s
+/// own pre-fix version (round-6, findings E-R6-1/D-R5-4): `i64::MIN`'s
+/// magnitude, 9223372036854775808, does not fit in an `i64` even though
+/// `i64::MIN` itself is representable, so a same-width unsigned-parse step
+/// wrongly rejected `"-9223372036854775808"` where Python's `int()`
+/// succeeds -- not reachable by any real issued handle either way (`issue`
+/// never emits a `pv`/`iat`/`exp` anywhere near `i64::MIN`), but no longer
+/// wrong now that the grammar is shared.
 fn python_int_from_str(s: &str) -> Result<i64, ()> {
     let trimmed = s.trim();
-    if trimmed.is_empty() {
+    if !trimmed.is_ascii() {
         return Err(());
     }
-    let (neg, digits_part) = match trimmed.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
-    if digits_part.is_empty() {
-        return Err(());
-    }
-    let chars: Vec<char> = digits_part.chars().collect();
-    let mut digits = String::new();
-    let mut prev_was_digit = false;
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' {
-            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
-            if !prev_was_digit || !next_is_digit {
-                return Err(());
-            }
-            prev_was_digit = false;
-            continue;
-        }
-        if !c.is_ascii_digit() {
-            return Err(());
-        }
-        digits.push(c);
-        prev_was_digit = true;
-    }
-    if digits.is_empty() {
-        return Err(());
-    }
-    let magnitude: i64 = digits.parse().map_err(|_| ())?;
-    Ok(if neg { -magnitude } else { magnitude })
+    let value = crate::pystr::int_from_str(trimmed).ok_or(())?;
+    i64::try_from(value).map_err(|_| ())
 }
 
 /// Parses and validates the handle payload (the `parts[1]` base64 segment),
@@ -545,6 +540,28 @@ mod tests {
                 .expect_err("non-ASCII-digit / oversized pv must be rejected");
             assert_eq!(err.reason, "handle_malformed", "pv={pv:?}");
         }
+    }
+
+    /// Round-6 de-duplication (PORTING.md §3b, finding E-R6-1): a former
+    /// local copy of `int(str)`'s grammar in `python_int_from_str` parsed
+    /// the unsigned magnitude directly into `i64`
+    /// (`digits.parse::<i64>()`), which cannot hold `i64::MIN`'s own
+    /// magnitude (`9223372036854775808`, one past `i64::MAX`) even
+    /// momentarily, so `"-9223372036854775808"` was wrongly rejected even
+    /// though `i64::MIN` itself is representable -- not reachable via any
+    /// real issued handle either way (`issue` never emits a `pv`/`iat`/`exp`
+    /// near `i64::MIN`), but wrong regardless. Delegating to
+    /// `crate::pystr::int_from_str` (which parses the magnitude via `i128`
+    /// before narrowing) fixes this as a byproduct, while the deliberate
+    /// ASCII-only/`i64`-bounded narrowing this module's own
+    /// `forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected`
+    /// test above pins is unchanged.
+    #[test]
+    fn python_int_from_str_accepts_i64_min() {
+        assert_eq!(python_int_from_str("-9223372036854775808"), Ok(i64::MIN));
+        assert_eq!(python_int_from_str("9223372036854775807"), Ok(i64::MAX));
+        assert!(python_int_from_str("-9223372036854775809").is_err()); // one past i64::MIN
+        assert!(python_int_from_str("9223372036854775808").is_err()); // one past i64::MAX
     }
 }
 

@@ -142,15 +142,18 @@ fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> 
 }
 
 /// Python `==` between two JSON-decoded values, restricted to the shapes
-/// `entry["active_version"]` can hold (`null`, a `bool`, or a number):
-/// `null` is equal only to `null`, and otherwise CPython compares
+/// `entry["active_version"]` can hold (`null`, a `bool`, a number, or --
+/// after finding E-R6-3's fix below -- any other JSON shape too): `null` is
+/// equal only to `null`; when at least one side is a `bool`/number, CPython
+/// compares
 /// numerically (`bool` as 0/1, an integral `float` as its integer) rather
-/// than by JSON shape -- `True == 1`, `1.0 == 1`. A string, array or object
-/// is never numerically equal to anything here and compares unequal without
-/// raising (finding E-R5-4). Used everywhere `set_version_status`/
-/// `reapply_revocations` compare a stored `active_version` against a
-/// version number (`active_version_matches`) or against each other (the
-/// `entry["active_version"] != before_active` rebind trigger).
+/// than by JSON shape -- `True == 1`, `1.0 == 1`; a string, array or object
+/// paired with a `bool`/number is never numerically equal to it and compares
+/// unequal without raising (finding E-R5-4). Used everywhere
+/// `set_version_status`/`reapply_revocations` compare a stored
+/// `active_version` against a version number (`active_version_matches`) or
+/// against each other (the `entry["active_version"] != before_active` rebind
+/// trigger).
 fn active_version_numeric(v: &Value) -> Option<f64> {
     match v {
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
@@ -159,13 +162,24 @@ fn active_version_numeric(v: &Value) -> Option<f64> {
     }
 }
 
+/// See [`active_version_numeric`]'s doc comment. When *neither* side is
+/// numerically comparable (both non-numeric, or a mix `active_version_numeric`
+/// can't reconcile), Python's `==` does not raise and does not simply
+/// return `false` either -- it falls through to ordinary structural
+/// equality, which two equal non-numeric values (`"abc" == "abc"`, `[1] ==
+/// [1]`) satisfy (finding E-R6-3, correcting this function's own previous
+/// unconditional `_ => false` fallback arm, which made Rust call no rebind
+/// where Python's `==` said the two values were equal). A mismatched
+/// non-numeric shape (a string vs. an array, or a number vs. a string)
+/// still compares unequal via the same structural check, matching Python's
+/// `==` there too (never `true`, never raises).
 fn active_version_values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Null, _) | (_, Value::Null) => false,
         _ => match (active_version_numeric(a), active_version_numeric(b)) {
             (Some(x), Some(y)) => x == y,
-            _ => false,
+            _ => a == b,
         },
     }
 }
@@ -302,132 +316,28 @@ fn python_repr_value(v: &Value) -> String {
     }
 }
 
-/// Unicode decimal-digit (category Nd) block starts, Unicode Character
-/// Database version 15.0.0 -- the version CPython 3.12 bundles, matching
-/// `pystr.rs`'s own tables. Every Nd block is exactly 10 consecutive
-/// codepoints representing digits 0-9 in that order (a structural guarantee
-/// of the Unicode Standard, verified directly against `python3.12`'s
-/// `unicodedata` module for every block below): `unicode_decimal_digit_
-/// value` finds the block containing a codepoint and returns its offset
-/// within it. Used by [`python_int_from_str`] (finding E-R3-4) to match
-/// CPython's `int(str)`, which accepts *any* script's decimal digits, not
-/// just ASCII (`int("１") == 1`, the fullwidth digit one).
-const DECIMAL_DIGIT_BLOCK_STARTS: &[u32] = &[
-    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
-    0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
-    0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10,
-    0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650,
-    0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0,
-    0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950,
-    0x1fbf0,
-];
-
-/// The decimal digit value (0-9) of `c` per CPython 3.12's Unicode decimal
-/// digit (Nd) classification, or `None` if `c` is not a decimal digit in any
-/// script.
-fn unicode_decimal_digit_value(c: char) -> Option<u32> {
-    let cp = c as u32;
-    match DECIMAL_DIGIT_BLOCK_STARTS.binary_search(&cp) {
-        Ok(_) => Some(0),
-        Err(0) => None,
-        Err(idx) => {
-            let start = DECIMAL_DIGIT_BLOCK_STARTS[idx - 1];
-            let offset = cp - start;
-            if offset < 10 { Some(offset) } else { None }
-        }
-    }
-}
-
-/// The whitespace CPython 3.12's `int(str)` actually strips from both ends
-/// before parsing -- **not** the same set as `str.isspace()`
-/// (`crate::pystr::is_space`). Confirmed against real `python3.12` (finding
-/// E-R5-5, the identical bug independently found and fixed for
-/// `team/commit.rs`'s private `is_int_strip_space` -- not reused here since
-/// it is not `pub(crate)`): of `str.isspace()`'s 29 code points, `int()`
-/// accepts 25 and rejects exactly four -- U+001C..U+001F (INFORMATION
-/// SEPARATOR FOUR/THREE/TWO/ONE, `Bidi_Class=B`) -- e.g. `int("\x1c1")`
-/// raises `ValueError` even though `"\x1c".isspace()` is `True`. A previous
-/// version of this port stripped with the full `str.isspace()` predicate, so
-/// a `versions` key of `"\u{1c}1"` was accepted as version 1 where Python's
-/// own `int(v)` raises.
-fn is_int_strip_space(c: char) -> bool {
-    crate::pystr::is_space(c) && !matches!(c as u32, 0x1c..=0x1f)
-}
-
-/// `str.strip()` using [`is_int_strip_space`] -- CPython `int()`'s own
-/// padding predicate, not the full `str.isspace()` set `str.strip()` itself
-/// uses (finding E-R5-5).
-fn python_int_strip(s: &str) -> &str {
-    s.trim_matches(is_int_strip_space)
-}
-
-/// `int(str)` matching CPython 3.12 exactly: optional padding (CPython
-/// `int()`'s own predicate, [`is_int_strip_space`] -- *not* the full
-/// `str.isspace()` set, finding E-R5-5), an optional `+`/`-` sign, then one
-/// or more Unicode decimal digits (any script -- `int("１") == 1`, not just
-/// ASCII `0`-`9`) with single, non-leading/trailing underscores allowed
-/// between them (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Returns `None` for
-/// anything `int()` would raise `ValueError` on, *and* for a magnitude
-/// Python's arbitrary-precision `int` can hold but Rust's `i64` cannot
-/// (finding E-R4-1: `i64::MIN` itself is representable and must not be one
-/// of these rejections -- its magnitude, 9223372036854775808, does not fit
-/// in an `i64`, so it is parsed via `i128` and negated there, never via a
-/// same-width unsigned-then-negate step that would reject it).
-///
-/// Used for `vault.py`'s `int(v)` over a `versions` object's own keys
-/// (finding E-R3-4: `put_secret`'s `max(int(v) for v in entry["versions"])`,
-/// `list_secrets`/`values_for_trusted_scan`'s `sorted(..., key=lambda item:
-/// int(item[0]))`). Unlike `handles.rs`'s deliberately ASCII-only
-/// `python_int_coerce` (PORTING.md §3.7 -- reachable only via a payload
-/// already authenticated with the HMAC signing key), a vault `versions` key
-/// is state-file content, not signed input, so this port must accept
-/// exactly what Python's own `int()` accepts, not a stricter subset -- see
-/// `DEVIATIONS.md` (finding E-R4-1) for the one gap this still leaves open
-/// (a magnitude outside `i64`, which Python's `int()` has no limit on at
-/// all).
-fn python_int_from_str(s: &str) -> Option<i64> {
-    let trimmed = python_int_strip(s);
-    let (negative, digits_part) = match trimmed.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
-    if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
-        return None;
-    }
-    let mut cleaned = String::with_capacity(digits_part.len());
-    let mut prev_underscore = false;
-    for c in digits_part.chars() {
-        if c == '_' {
-            if prev_underscore {
-                return None;
-            }
-            prev_underscore = true;
-            continue;
-        }
-        let digit = unicode_decimal_digit_value(c)?;
-        prev_underscore = false;
-        cleaned.push((b'0' + digit as u8) as char);
-    }
-    // Parsed as `i128` (not `i64`) so that `i64::MIN`'s magnitude --
-    // 9223372036854775808, one past `i64::MAX` -- has somewhere to live
-    // before the sign is applied; only the final, signed value is narrowed
-    // back to `i64`. A magnitude wider than `i128` (or a signed value
-    // outside `i64` after negation) still falls through to `None` here,
-    // exactly like Python's own arbitrary-precision `int` when this port
-    // cannot widen further (finding E-R4-1, `DEVIATIONS.md`).
-    let magnitude: i128 = cleaned.parse().ok()?;
-    let value = if negative { -magnitude } else { magnitude };
-    i64::try_from(value).ok()
-}
-
 /// A `versions` object key, parsed exactly like Python's `int(v)` (finding
 /// E-R3-4). `vault.py` never guards this conversion with a `try`/`except`,
 /// so a version key `int()` cannot parse raises an uncaught `ValueError`
 /// there; the closest handled error a caller of a `Vault` method already
 /// expects for corrupted state is `StateError("state_corrupt")` (this
 /// module's own top-of-file DEVIATIONS note, PORTING.md §3.5).
+///
+/// The grammar itself (padding, sign, PEP 515 underscores, any Unicode
+/// decimal digit -- not just ASCII `0`-`9`) is `crate::pystr::int_from_str`,
+/// the one canonical home for CPython's `int(str)` semantics (PORTING.md
+/// §3b); this function's only own job is narrowing that `i128` result to
+/// this module's `i64` (`None` for a magnitude that doesn't fit, same as
+/// before -- finding E-R4-1, `DEVIATIONS.md`). Unlike `handles.rs`'s
+/// deliberately ASCII-only `python_int_coerce` (PORTING.md §3.7 --
+/// reachable only via a payload already authenticated with the HMAC signing
+/// key), a vault `versions` key is state-file content, not signed input, so
+/// this port must accept exactly what Python's own `int()` accepts, not a
+/// stricter subset.
 fn parse_version_key(k: &str) -> Result<i64, Error> {
-    python_int_from_str(k).ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+    crate::pystr::int_from_str(k)
+        .and_then(|v| i64::try_from(v).ok())
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
 }
 
 /// `key not in versions` (Python's `in` operator), used by
@@ -1852,5 +1762,50 @@ fn write_backup_atomic(out_path: &Path, contents: &str) -> Result<(), Error> {
             let _ = fs::remove_file(&tmp_path);
             Err(Error::state("backup_write_failed").with_detail(e.to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// E-R6-3: two non-numeric `active_version` shapes that are
+    /// structurally equal (Python's `"abc" == "abc"`) must compare equal
+    /// here too -- the previous unconditional `_ => false` fallback arm
+    /// said they never did, so `set_version_status`'s `rebound = if
+    /// !active_version_values_equal(&after_active, &before_active) { ... }`
+    /// read a non-"active" call, whose `before_active`/`after_active` are
+    /// both left as the same corrupted, non-numeric value (that branch
+    /// only *reads* `active_version`, via `active_version_matches`, never
+    /// writes it unless the value numerically matches the version being
+    /// retired/revoked), as "the active version changed" and called
+    /// `rebind_connections` where Python's own `entry["active_version"] !=
+    /// before_active` is `False` and triggers no rebind at all. Masked in
+    /// practice today because `policy.rs`'s `resolved_credential_version`
+    /// already treats a non-numeric `active_version` as "no credential" and
+    /// writes nothing either way an unpinned connection's credential
+    /// version resolves to -- but the equality helper itself was still
+    /// wrong, and this pins it directly rather than relying on that
+    /// downstream masking to stay true forever.
+    #[test]
+    fn active_version_values_equal_uses_structural_equality_for_non_numeric_shapes() {
+        assert!(active_version_values_equal(&json!("abc"), &json!("abc")));
+        assert!(active_version_values_equal(&json!([1]), &json!([1])));
+        assert!(active_version_values_equal(
+            &json!({"a": 1}),
+            &json!({"a": 1})
+        ));
+        assert!(!active_version_values_equal(&json!("abc"), &json!("xyz")));
+        assert!(!active_version_values_equal(&json!("1"), &json!(1))); // string vs number: never numerically equal, never structurally equal
+        assert!(!active_version_values_equal(&json!([1]), &json!("x")));
+
+        // The exact `set_version_status` non-"active"-branch shape this
+        // finding is about: a stored `active_version` of `"abc"` does not
+        // numerically match a plain `version: i64` being retired/revoked
+        // (so it is left untouched, `before_active == after_active ==
+        // "abc"`), and comparing that unchanged value against itself must
+        // not spuriously read as "changed".
+        assert!(!active_version_matches(&json!("abc"), 1));
+        assert!(active_version_values_equal(&json!("abc"), &json!("abc")));
     }
 }

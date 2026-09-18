@@ -133,7 +133,7 @@ pub fn is_int_space(c: char) -> bool {
 /// ever broke it), so a codepoint's value is simply its offset from the
 /// block it falls in. Pinned per-codepoint by
 /// `oracle_digit_value_matches_python_for_every_codepoint` below.
-fn unicode_decimal_digit(c: char) -> Option<u32> {
+pub(crate) fn unicode_decimal_digit(c: char) -> Option<u32> {
     let cp = c as u32;
     DIGIT_BLOCK_STARTS
         .binary_search_by(|&start| {
@@ -180,9 +180,13 @@ pub fn int_from_str(s: &str) -> Option<i128> {
 ///
 /// Returns `None` for anything CPython's `int()` would raise `ValueError`
 /// for. A magnitude too large for `i128` saturates (with sign) rather than
-/// erroring, since every caller in this crate only ever compares the result
-/// against a small range or a `usize` byte count -- never round-trips it
-/// back to text.
+/// erroring: this is the right choice for every caller that only ever
+/// compares the result against a small range or a `usize` byte count and
+/// never round-trips it back out -- for a caller that *does* store or
+/// re-serialize the parsed value itself (where a saturated sentinel would
+/// be silently wrong rather than merely out of range), use
+/// [`int_from_str_radix_checked`] instead, which returns `None` at that same
+/// boundary rather than substituting `i128::MAX`/`i128::MIN`.
 ///
 /// See `oracle_digit_value_matches_python_for_every_codepoint` (pins
 /// [`unicode_decimal_digit`] against every codepoint) and
@@ -190,6 +194,64 @@ pub fn int_from_str(s: &str) -> Option<i128> {
 /// fuzz against a live `python3.12`) below, plus the `Content-Length`/chunk-
 /// size/status oracle cases in `gateway.rs`'s test suite (finding F-R3-2).
 pub fn int_from_str_radix(s: &str, base: u32) -> Option<i128> {
+    let (neg, digits) = parse_int_grammar(s, base)?;
+    Some(magnitude_to_signed(&digits, base, neg).unwrap_or(if neg { i128::MIN } else { i128::MAX }))
+}
+
+/// `int(s)` (base 10), like [`int_from_str`], but `None` (not a saturated
+/// `i128::MAX`/`i128::MIN`) for a magnitude that does not fit `i128` -- see
+/// [`int_from_str_radix_checked`].
+pub fn int_from_str_checked(s: &str) -> Option<i128> {
+    int_from_str_radix_checked(s, 10)
+}
+
+/// Like [`int_from_str_radix`] (same grammar, same doc comment), but `None`
+/// instead of a saturated `i128::MAX`/`i128::MIN` when the magnitude does
+/// not fit `i128` -- for a caller (like `team::commit`'s `Hlc`/`Commit`
+/// numeric fields, which store and re-serialize the parsed `i128` itself
+/// rather than merely bounds-checking it) where CPython's own arbitrary
+/// precision has no equivalent "clamp to the nearest representable value"
+/// behaviour at all: Python would keep going, an `i128`-typed field cannot,
+/// and silently substituting the boundary value would be a different (and
+/// worse) wrong answer than failing closed the same way this port already
+/// does for every other over-wide numeral (`rust/DEVIATIONS.md`).
+pub fn int_from_str_radix_checked(s: &str, base: u32) -> Option<i128> {
+    let (neg, digits) = parse_int_grammar(s, base)?;
+    magnitude_to_signed(&digits, base, neg)
+}
+
+/// Parses `digits` (an unsigned numeral, `base` 10 or 16, already validated
+/// by [`parse_int_grammar`]) and applies `neg`, correctly across the full
+/// `i128` range *including its own asymmetric boundary*: `i128::MIN`'s
+/// magnitude is `2^127`, one past `i128::MAX` (`2^127 - 1`), so
+/// `i128::from_str_radix` on the bare unsigned digit string can never
+/// represent it at all (it parses into a *signed* `i128`, whose positive
+/// range tops out at `i128::MAX`) -- the same "same-width unsigned-then-
+/// negate step rejects the width's own MIN" shape as finding E-R4-1
+/// (`vault.rs`, `i64::MIN`), just one level up. Parsing into `u128` first
+/// (which comfortably holds `2^127`) and only *then* negating fixes it:
+/// `None` here means the magnitude does not fit `i128` at all, for either
+/// sign.
+fn magnitude_to_signed(digits: &str, base: u32, neg: bool) -> Option<i128> {
+    let magnitude: u128 = u128::from_str_radix(digits, base).ok()?;
+    if neg {
+        if magnitude == i128::MIN.unsigned_abs() {
+            Some(i128::MIN)
+        } else {
+            i128::try_from(magnitude).ok().map(|m| -m)
+        }
+    } else {
+        i128::try_from(magnitude).ok()
+    }
+}
+
+/// Shared grammar core for [`int_from_str_radix`]/[`int_from_str_radix_checked`]:
+/// everything CPython's `int(s, base)` grammar validates *except* the final
+/// magnitude parse (which the two callers handle differently -- saturating
+/// vs. `None` -- on overflow). Returns `(negative, unsigned_ascii_digits)`
+/// with all `_` separators already removed (validated, not merely
+/// stripped), ready for [`magnitude_to_signed`].
+fn parse_int_grammar(s: &str, base: u32) -> Option<(bool, String)> {
     debug_assert!(base == 10 || base == 16, "only base 10/16 are needed");
     // Stage 1: `_PyUnicode_TransformDecimalAndSpaceToASCII`.
     let mut ascii = String::with_capacity(s.len());
@@ -242,8 +304,7 @@ pub fn int_from_str_radix(s: &str, base: u32) -> Option<i128> {
     if digits.is_empty() {
         return None;
     }
-    let magnitude = i128::from_str_radix(&digits, base).unwrap_or(i128::MAX);
-    Some(if neg { -magnitude } else { magnitude })
+    Some((neg, digits))
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,6 +1242,49 @@ print(h.hexdigest())
         assert_eq!(int_from_str_radix("0X\u{661}\u{665}", 16), Some(0x15));
         assert_eq!(int_from_str_radix("", 10), None);
         assert_eq!(int_from_str_radix("   ", 10), None);
+    }
+
+    /// `int_from_str_radix_checked` shares every accept/reject decision with
+    /// the saturating `int_from_str_radix` *except* right at the `i128`
+    /// magnitude boundary, where CPython's own arbitrary precision has no
+    /// analogue at all: `int_from_str_radix` clamps to `i128::MAX`/`MIN` (a
+    /// deliberately wrong-but-in-range sentinel for callers that only ever
+    /// bounds-check the result), while the checked variant returns `None`
+    /// instead of ever returning that wrong value to a caller that would
+    /// store or re-serialize it.
+    #[test]
+    fn int_from_str_radix_checked_matches_saturating_below_the_boundary_and_diverges_at_it() {
+        // Ordinary, in-range grammar: identical on both sides, sign included.
+        for s in ["0", "-0", "1_000", "-1_000", "١٥", " 42 ", "\u{a0}9\u{a0}"] {
+            assert_eq!(
+                int_from_str_checked(s),
+                int_from_str(s),
+                "input {s:?} must agree below the i128 boundary"
+            );
+        }
+        // Exactly at the boundary: both sides agree (no overflow yet).
+        let max_digits = i128::MAX.to_string();
+        let min_digits = i128::MIN.to_string();
+        assert_eq!(int_from_str_checked(&max_digits), Some(i128::MAX));
+        assert_eq!(int_from_str(&max_digits), Some(i128::MAX));
+        assert_eq!(int_from_str_checked(&min_digits), Some(i128::MIN));
+        assert_eq!(int_from_str(&min_digits), Some(i128::MIN));
+        // One past the boundary: the saturating variant clamps, the checked
+        // variant refuses.
+        let one_past_max = "170141183460469231731687303715884105728"; // i128::MAX + 1
+        let one_past_min = "-170141183460469231731687303715884105729"; // i128::MIN - 1
+        let way_past = "9".repeat(50);
+        assert_eq!(int_from_str_checked(one_past_max), None);
+        assert_eq!(int_from_str(one_past_max), Some(i128::MAX));
+        assert_eq!(int_from_str_checked(one_past_min), None);
+        assert_eq!(int_from_str(one_past_min), Some(i128::MIN));
+        assert_eq!(int_from_str_checked(&way_past), None);
+        assert_eq!(int_from_str(&way_past), Some(i128::MAX));
+        // Grammar-invalid input is `None` on both sides regardless of
+        // magnitude -- overflow handling must never mask a real syntax
+        // rejection (e.g. a double underscore in an otherwise-huge numeral).
+        assert_eq!(int_from_str_checked("9__9".repeat(20).as_str()), None);
+        assert_eq!(int_from_str("9__9".repeat(20).as_str()), None);
     }
 
     /// Random/adversarial fuzz against a live `python3.12`, weighted toward
