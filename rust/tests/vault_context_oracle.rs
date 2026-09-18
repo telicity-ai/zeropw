@@ -1751,13 +1751,21 @@ b.close()
 // ------------------------------------ restore overflowing numeric literal (finding E-R4-5)
 /// Reviewer case: the manifest's `backup_id` field is the bare numeric literal `1e999`, which
 /// overflows `float` -- CPython's `float()` parses it to `inf` with no exception, so
-/// `Vault.restore` proceeds normally and returns successfully with `backup_id`/`restored_from`
-/// set to the string `"inf"`. `manifest` is not covered by the archive's digest (only `documents`
-/// is), so this field is attacker/caller controlled in an otherwise digest-valid archive.
-/// `pyjson::loads` -- the module-wide, existing convention for any numeric literal that would
-/// overflow to a non-finite `f64` -- rejects the *whole* archive as malformed before
-/// `Vault::restore` ever inspects `manifest`, which is the deliberate, fail-closed choice recorded
-/// in `DEVIATIONS.md` (finding E-R4-5) rather than an attempt to reproduce Python's `inf`.
+/// `Vault.restore` proceeds normally and returns successfully. The *raw* float `inf` propagates
+/// into `policy/control.json`'s `restored_from` field (`control["restored_from"] =
+/// manifest.get("backup_id")`, an unconverted assignment -- serialized as the bare `Infinity`
+/// token, since `json.dump`'s default `allow_nan=True` writes a non-finite float verbatim), while
+/// a *separate* `str(manifest.get("backup_id"))` computed once up front for the `restore` audit
+/// record's own `backup_id` field is the distinct *string* `"inf"` -- the two are not the same
+/// value taking two paths, they are two different Python expressions over the same source field
+/// (a previous version of this comment conflated them, claiming both ended up as the string
+/// `"inf"`). `manifest` is not covered by the archive's digest (only `documents` is), so this
+/// field is attacker/caller controlled in an otherwise digest-valid archive. `pyjson::loads` --
+/// the module-wide, existing convention for any numeric literal that would overflow to a
+/// non-finite `f64` -- rejects the *whole* archive as malformed before `Vault::restore` ever
+/// inspects `manifest`, which is the deliberate, fail-closed choice recorded in `DEVIATIONS.md`
+/// (finding E-R4-5) rather than an attempt to reproduce either of Python's two `inf`-derived
+/// values.
 #[test]
 fn restore_rejects_overflowing_numeric_literal_in_manifest_python_parses_to_inf() {
     let tmp = TempDir::new().unwrap();
@@ -1793,21 +1801,192 @@ fn restore_rejects_overflowing_numeric_literal_in_manifest_python_parses_to_inf(
     let py_state = tmp.path().join("state-py");
     let script = format!(
         r#"
+import json
 from pathlib import Path
 from zeropw.context import Context, Config
 from zeropw.vault import Vault
 ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
 manifest = Vault.restore(ctx.state, Path({archive}), ctx.audit, kms=None)
 print(manifest["backup_id"])
+control_raw = (Path({state}) / "policy" / "control.json").read_text()
+control = json.loads(control_raw)
+print(type(control["restored_from"]).__name__, control["restored_from"])
+print("Infinity" in control_raw)
+audit_lines = (Path({state}) / "audit" / "audit.jsonl").read_text().strip().splitlines()
+last = json.loads(audit_lines[-1])
+print(last["event"], type(last["backup_id"]).__name__, repr(last["backup_id"]))
 "#,
         state = py_str(&py_state),
         archive = py_str(&archive_path),
         now = FIXED_NOW,
     );
     let out = run_python(&script);
+    let mut lines = out.lines();
     assert_eq!(
-        out.trim(),
+        lines.next().unwrap().trim(),
         "inf",
         "python oracle sanity check: python must parse 1e999 to inf and restore successfully"
+    );
+    assert_eq!(
+        lines.next().unwrap().trim(),
+        "float inf",
+        "control.json's `restored_from` must hold the *raw* float `inf`, not a string"
+    );
+    assert_eq!(
+        lines.next().unwrap().trim(),
+        "True",
+        "the raw float must serialize as the bare `Infinity` token (json.dump's allow_nan=True)"
+    );
+    assert_eq!(
+        lines.next().unwrap().trim(),
+        "restore str 'inf'",
+        "the restore audit record's `backup_id` must be the separately-computed *string* \"inf\", \
+         not the same raw float `control.json` holds"
+    );
+}
+
+// ------------------------------------ versions-key int() padding predicate (finding E-R5-5)
+/// Ground truth against real `python3.12`: `int()` strips ordinary whitespace but *not*
+/// U+001C-U+001F (`str.isspace()` is `True` for them, `int()` still raises `ValueError`).
+/// Confirms the exact padding predicate `python_int_from_str` must use in `vault.rs`, then
+/// checks the same divergence shows up through the real `Vault` API: a `versions` key with a
+/// leading U+001C must be `state_corrupt`, not silently parsed as version 1.
+#[test]
+fn versions_key_int_padding_matches_pythons_int_not_str_isspace() {
+    let script = r#"
+ok = int(" 1\t")
+try:
+    int("\x1c1")
+    bad_accepted = True
+except ValueError:
+    bad_accepted = False
+print(ok, bad_accepted, "\x1c".isspace())
+"#;
+    let out = run_python(script);
+    assert_eq!(
+        out.trim(),
+        "1 False True",
+        "python3.12 ground truth: int() accepts ordinary whitespace but rejects U+001C even \
+         though str.isspace() is True for it"
+    );
+
+    let tmp = TempDir::new().unwrap();
+    let config = Config {
+        socket_dir: Some(tmp.path().join("ctx-sockets")),
+        run_dir: Some(tmp.path().join("ctx-run")),
+        ..Config::default()
+    };
+    let ctx = Context::initialize(
+        tmp.path().join("state"),
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        config,
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    ctx.vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"synthetic-token-0123456789",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    let versions = doc["secrets"]["gh-token"]["versions"]
+        .as_object_mut()
+        .unwrap();
+    let v1 = versions.remove("1").unwrap();
+    versions.insert("\u{1c}1".to_string(), v1);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+// ------------------------------------ falsy NotFound detail suppression (finding E-R5-6)
+/// Ground truth against real `python3.12`: `ZeroPWError.__init__`/`to_dict` suppress a *falsy*
+/// `detail` (`0`, `False`, `None`, `[]`, `{}`) entirely, but keep a *truthy* one even when its
+/// string form looks falsy (`"0"`, `"False"` are non-empty strings). This is the exact rule
+/// `secret_for_trusted_use`'s `NotFound("secret_version_unusable", record["status"])` must
+/// reproduce (finding E-R5-6); the Rust-side behaviour for both cases is pinned separately by
+/// `vault_context.rs`'s `secret_version_unusable_suppresses_falsy_status_detail`/
+/// `secret_version_unusable_keeps_truthy_string_status_detail`.
+#[test]
+fn zeropw_error_falsy_detail_suppression_ground_truth() {
+    let script = r#"
+from zeropw.errors import NotFound
+for status in (0, False, None, [], {}, "0", "False"):
+    exc = NotFound("secret_version_unusable", status)
+    d = exc.to_dict()
+    print(repr(status), "detail" in d, d.get("detail"))
+"#;
+    let out = run_python(script);
+    let expected = "0 False None\n\
+False False None\n\
+None False None\n\
+[] False None\n\
+{} False None\n\
+'0' True 0\n\
+'False' True False";
+    assert_eq!(out.trim(), expected);
+}
+
+// ------------------------------------ versions membership test shapes (finding E-R5-7)
+/// Ground truth against real `python3.12`, reproducing `set_version_status`'s exact two
+/// statements (`str(version) not in entry["versions"]` as a membership test, then the separate
+/// `entry["versions"][str(version)]` indexing) over every non-dict `versions` shape this port
+/// must handle identically.
+#[test]
+fn set_version_status_membership_test_matches_python_for_non_dict_versions_shapes() {
+    let script = r#"
+def probe(versions):
+    entry = {"versions": versions}
+    version = 1
+    if str(version) not in entry["versions"]:
+        return "not_found"
+    try:
+        entry["versions"][str(version)]
+        return "indexed_ok"
+    except TypeError:
+        return "index_typeerror"
+
+print(probe([]))
+print(probe(["1"]))
+print(probe("abc"))
+print(probe("a1c"))
+try:
+    probe(None)
+    print("none_ok")
+except TypeError:
+    print("none_typeerror")
+try:
+    probe(5)
+    print("number_ok")
+except TypeError:
+    print("number_typeerror")
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "not_found",        // []: membership test finds nothing, documented NotFound
+            "index_typeerror",  // ["1"]: membership finds "1", but list[str] indexing then fails
+            "not_found",        // "abc": substring membership finds nothing
+            "index_typeerror",  // "a1c": substring membership finds "1", but str[str] then fails
+            "none_typeerror",   // missing/None: `in` itself raises (not iterable)
+            "number_typeerror", // a number: `in` itself raises (not iterable)
+        ]
     );
 }

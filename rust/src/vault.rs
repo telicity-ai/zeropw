@@ -141,6 +141,45 @@ fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> 
     }
 }
 
+/// Python `==` between two JSON-decoded values, restricted to the shapes
+/// `entry["active_version"]` can hold (`null`, a `bool`, or a number):
+/// `null` is equal only to `null`, and otherwise CPython compares
+/// numerically (`bool` as 0/1, an integral `float` as its integer) rather
+/// than by JSON shape -- `True == 1`, `1.0 == 1`. A string, array or object
+/// is never numerically equal to anything here and compares unequal without
+/// raising (finding E-R5-4). Used everywhere `set_version_status`/
+/// `reapply_revocations` compare a stored `active_version` against a
+/// version number (`active_version_matches`) or against each other (the
+/// `entry["active_version"] != before_active` rebind trigger).
+fn active_version_numeric(v: &Value) -> Option<f64> {
+    match v {
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
+}
+
+fn active_version_values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Null, _) | (_, Value::Null) => false,
+        _ => match (active_version_numeric(a), active_version_numeric(b)) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        },
+    }
+}
+
+/// `value == version` (Python numeric equality, see
+/// [`active_version_values_equal`]) for a stored `active_version` compared
+/// against a plain `version: i64`, e.g. `set_version_status`'s
+/// `previous != version`/`entry["active_version"] == version` and
+/// `reapply_revocations`'s `entry.get("active_version") == version`
+/// (finding E-R5-4).
+fn active_version_matches(value: &Value, version: i64) -> bool {
+    active_version_values_equal(value, &json!(version))
+}
+
 /// `dict(r.get("public") or {})`: Python's `or` first replaces any *falsy*
 /// value (`None`/missing, `false`, `0`, `""`, `[]`, `{}`) with `{}`, then
 /// `dict(...)` accepts an already-a-mapping value unchanged or coerces a
@@ -166,6 +205,34 @@ fn coerce_public_field(v: Option<&Value>) -> Result<Value, Error> {
         Some(val) if json_falsy(val) => Ok(json!({})),
         Some(Value::Object(m)) => Ok(Value::Object(m.clone())),
         Some(_) => Err(corrupt()),
+    }
+}
+
+/// `list(current.get("approval_history") or [])` (`Vault.restore`, finding
+/// E-R5-9). Python's `or` first replaces a *falsy* `approval_history`
+/// (missing/`null`, `false`, `0`/`0.0`, `""`, `[]`, `{}`) with `[]`, then
+/// `list(...)` iterates whatever remains: a `list` is shallow-copied
+/// unchanged, a non-empty `str` yields its individual Unicode characters
+/// (`list("ab") == ["a", "b"]`), and a non-empty `dict` yields its *keys*
+/// (`list({"x": 1}) == ["x"]`, insertion order -- matching Python's own
+/// `dict` iteration order and this crate's `preserve_order` `serde_json`
+/// build). A truthy non-iterable scalar (a nonzero number, `true`) makes
+/// `list(...)` raise an uncaught `TypeError`, closest handled error
+/// `state_corrupt` (PORTING.md §3.5) -- reachable only *after* every backup
+/// document has already been written (Python's own control-flow: this call
+/// happens partway through the same `with state.lock()` block, after the
+/// other archive documents are restored). A previous version of this port
+/// silently substituted `[]` for any non-array value here, including a
+/// truthy one Python does not silently discard.
+fn python_list_over_value(v: &Value) -> Result<Vec<Value>, Error> {
+    if json_falsy(v) {
+        return Ok(Vec::new());
+    }
+    match v {
+        Value::Array(a) => Ok(a.clone()),
+        Value::String(s) => Ok(s.chars().map(|c| Value::String(c.to_string())).collect()),
+        Value::Object(m) => Ok(m.keys().map(|k| Value::String(k.clone())).collect()),
+        _ => Err(corrupt()),
     }
 }
 
@@ -271,22 +338,40 @@ fn unicode_decimal_digit_value(c: char) -> Option<u32> {
     }
 }
 
-/// `str.strip()` with CPython's exact `str.isspace()` predicate (see
-/// `crate::pystr::is_space`), not Rust's narrower `char::is_whitespace()`.
-fn python_strip(s: &str) -> &str {
-    s.trim_matches(crate::pystr::is_space)
+/// The whitespace CPython 3.12's `int(str)` actually strips from both ends
+/// before parsing -- **not** the same set as `str.isspace()`
+/// (`crate::pystr::is_space`). Confirmed against real `python3.12` (finding
+/// E-R5-5, the identical bug independently found and fixed for
+/// `team/commit.rs`'s private `is_int_strip_space` -- not reused here since
+/// it is not `pub(crate)`): of `str.isspace()`'s 29 code points, `int()`
+/// accepts 25 and rejects exactly four -- U+001C..U+001F (INFORMATION
+/// SEPARATOR FOUR/THREE/TWO/ONE, `Bidi_Class=B`) -- e.g. `int("\x1c1")`
+/// raises `ValueError` even though `"\x1c".isspace()` is `True`. A previous
+/// version of this port stripped with the full `str.isspace()` predicate, so
+/// a `versions` key of `"\u{1c}1"` was accepted as version 1 where Python's
+/// own `int(v)` raises.
+fn is_int_strip_space(c: char) -> bool {
+    crate::pystr::is_space(c) && !matches!(c as u32, 0x1c..=0x1f)
 }
 
-/// `int(str)` matching CPython 3.12 exactly: optional `str.isspace()`
-/// padding, an optional `+`/`-` sign, then one or more Unicode decimal
-/// digits (any script -- `int("１") == 1`, not just ASCII `0`-`9`) with
-/// single, non-leading/trailing underscores allowed between them
-/// (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Returns `None` for anything
-/// `int()` would raise `ValueError` on, *and* for a magnitude Python's
-/// arbitrary-precision `int` can hold but Rust's `i64` cannot (finding
-/// E-R4-1: `i64::MIN` itself is representable and must not be one of these
-/// rejections -- its magnitude, 9223372036854775808, does not fit in an
-/// `i64`, so it is parsed via `i128` and negated there, never via a
+/// `str.strip()` using [`is_int_strip_space`] -- CPython `int()`'s own
+/// padding predicate, not the full `str.isspace()` set `str.strip()` itself
+/// uses (finding E-R5-5).
+fn python_int_strip(s: &str) -> &str {
+    s.trim_matches(is_int_strip_space)
+}
+
+/// `int(str)` matching CPython 3.12 exactly: optional padding (CPython
+/// `int()`'s own predicate, [`is_int_strip_space`] -- *not* the full
+/// `str.isspace()` set, finding E-R5-5), an optional `+`/`-` sign, then one
+/// or more Unicode decimal digits (any script -- `int("１") == 1`, not just
+/// ASCII `0`-`9`) with single, non-leading/trailing underscores allowed
+/// between them (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Returns `None` for
+/// anything `int()` would raise `ValueError` on, *and* for a magnitude
+/// Python's arbitrary-precision `int` can hold but Rust's `i64` cannot
+/// (finding E-R4-1: `i64::MIN` itself is representable and must not be one
+/// of these rejections -- its magnitude, 9223372036854775808, does not fit
+/// in an `i64`, so it is parsed via `i128` and negated there, never via a
 /// same-width unsigned-then-negate step that would reject it).
 ///
 /// Used for `vault.py`'s `int(v)` over a `versions` object's own keys
@@ -301,7 +386,7 @@ fn python_strip(s: &str) -> &str {
 /// (a magnitude outside `i64`, which Python's `int()` has no limit on at
 /// all).
 fn python_int_from_str(s: &str) -> Option<i64> {
-    let trimmed = python_strip(s);
+    let trimmed = python_int_strip(s);
     let (negative, digits_part) = match trimmed.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
@@ -343,6 +428,24 @@ fn python_int_from_str(s: &str) -> Option<i64> {
 /// module's own top-of-file DEVIATIONS note, PORTING.md §3.5).
 fn parse_version_key(k: &str) -> Result<i64, Error> {
     python_int_from_str(k).ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+}
+
+/// `key not in versions` (Python's `in` operator), used by
+/// `set_version_status`'s `str(version) not in entry["versions"]` existence
+/// check (finding E-R5-7). A `dict` checks membership among its *keys*; a
+/// `list` checks membership among its *elements* via `==` (so a list of
+/// numbers never contains a Python `str`); a `str` checks *substring*
+/// containment. A missing `versions` key, or a present value that is not
+/// iterable at all (`null`, a number, a bool), makes Python's `in` itself
+/// raise an uncaught `KeyError`/`TypeError` -- `state_corrupt`
+/// (PORTING.md §3.5).
+fn versions_contains(versions: Option<&Value>, key: &str) -> Result<bool, Error> {
+    match versions {
+        Some(Value::Object(m)) => Ok(m.contains_key(key)),
+        Some(Value::Array(a)) => Ok(a.iter().any(|v| v.as_str() == Some(key))),
+        Some(Value::String(s)) => Ok(s.contains(key)),
+        None | Some(_) => Err(Error::state("state_corrupt").with_detail("vault")),
+    }
 }
 
 /// `vault.derive_key`: scrypt(N=2**14, r=8, p=1, dklen=32). `len(passphrase)`
@@ -782,10 +885,18 @@ impl<'a> Vault<'a> {
             let _lock = self.state.lock()?;
             let mut doc_val = self.doc()?;
             let doc_obj = as_obj_mut(&mut doc_val)?;
-            let secrets_entry = doc_obj
-                .entry("secrets".to_string())
-                .or_insert_with(|| json!({}));
-            let secrets_obj = as_obj_mut(secrets_entry)?;
+            // Python: `doc["secrets"].get(secret_id)`, direct indexing of `doc["secrets"]` itself
+            // first -- a missing or wrong-typed `secrets` field raises an uncaught
+            // `KeyError`/`TypeError` (state_corrupt, PORTING.md §3.5), matching every other
+            // raw-indexed access in this module. Finding E-R5-1 (a round-4 sweep sibling this file's
+            // `set_version_status` already got right): the previous
+            // `.entry("secrets").or_insert_with(|| json!({}))` silently *created* a missing
+            // `secrets` key and proceeded to write a new secret into it, where Python raises and
+            // commits nothing.
+            let secrets_obj = doc_obj
+                .get_mut("secrets")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
 
             // Python: `entry = doc["secrets"].get(secret_id); if entry is None: entry = {...}`.
             // `dict.get` returns `None` both when the key is absent *and* when it maps to a JSON
@@ -979,19 +1090,29 @@ impl<'a> Vault<'a> {
                 return Err(Error::not_found("secret_version_not_found"));
             };
             let mut entry = as_obj(&entry_val)?.clone();
-            // Python: `entry["versions"]`, direct indexing (sweep finding, round 4: the previous
-            // `.unwrap_or_default()` treated a missing/wrong-typed `versions` field as empty
-            // instead of failing closed like every other raw-indexed read in this module,
-            // DEVIATIONS.md row 52).
-            let mut versions = entry
-                .get("versions")
-                .and_then(Value::as_object)
-                .cloned()
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+            // Python: `str(version) not in entry["versions"]` is an ordinary membership test
+            // (`in`), evaluated as a *separate* statement from the `entry["versions"][str(version)]`
+            // indexing two lines below (finding E-R5-7, correcting DEVIATIONS.md row 52's blanket
+            // claim that every raw-indexed `versions` read here already fails closed identically):
+            // a missing `versions` key, or a present value that is not iterable at all (`null`, a
+            // number, a bool), makes `in` itself raise an uncaught `KeyError`/`TypeError` --
+            // `state_corrupt`. But a `list`/`str` `versions` *is* iterable: `in` checks membership
+            // among elements (`list`) or substring containment (`str`), and only raises the
+            // *documented* `NotFound("secret_version_not_found")` when the key isn't found that
+            // way -- it is the *next* line's `entry["versions"][str(version)]` indexing that then
+            // raises (list/str don't support string-keyed indexing) if the membership test did
+            // find something, which is `state_corrupt` per the usual PORTING.md §3.5 convention. A
+            // previous version of this port required a JSON object here unconditionally, turning an
+            // array/string `versions` that plainly doesn't contain the key into `state_corrupt`
+            // instead of the documented `NotFound`.
             let key = version.to_string();
-            if !versions.contains_key(&key) {
+            if !versions_contains(entry.get("versions"), &key)? {
                 return Err(Error::not_found("secret_version_not_found"));
             }
+            let mut versions = match entry.get("versions") {
+                Some(Value::Object(m)) => m.clone(),
+                _ => return Err(Error::state("state_corrupt").with_detail("vault")),
+            };
             {
                 let record = as_obj(versions.get(&key).expect("checked above"))?;
                 // Python: `record["status"]`, direct indexing -- a missing `status` field raises
@@ -1026,10 +1147,22 @@ impl<'a> Vault<'a> {
             // uncaught `KeyError`/`TypeError` and commits nothing). The previous
             // `.and_then(Value::as_i64)` here silently treated any non-i64 `active_version` as "no
             // previous version", skipping the retire step and still committing the write.
+            //
+            // Every comparison below against `version`/`before_active`/`after_active` uses Python's
+            // numeric `==` (`active_version_matches`/`active_version_values_equal`), not JSON-shape
+            // equality (finding E-R5-4): Python's `bool`/`int`/`float` compare by value (`True == 1`,
+            // `1.0 == 1`), so a stored `active_version: true` or `1.0` is the *same* version as `1`.
+            // A previous version of this port compared `serde_json::Value`s directly, so an
+            // `active_version` of `true` (meaning version 1) being re-activated at version 1 wrongly
+            // took the retire branch below and failed with `state_corrupt` (Python: `previous != 1`
+            // is `False`, retire is skipped, the call succeeds with no rebind), and the same
+            // `active_version: true` being explicitly retired wrongly *stayed* `true` instead of
+            // being cleared to `null` (Python: `entry["active_version"] == version` is `True`, so it
+            // clears) -- a fail-open gap on a revocation-adjacent path.
             let before_active = get_or_null(&entry, "active_version").clone();
             if status == "active" {
                 entry.insert("active_version".into(), json!(version));
-                if !before_active.is_null() && before_active != json!(version) {
+                if !before_active.is_null() && !active_version_matches(&before_active, version) {
                     let prev_key = python_str_scalar(&before_active);
                     let prev_rec = versions
                         .get_mut(&prev_key)
@@ -1047,14 +1180,14 @@ impl<'a> Vault<'a> {
                         prev_rec.insert("status".into(), json!("retired"));
                     }
                 }
-            } else if before_active == json!(version) {
+            } else if active_version_matches(&before_active, version) {
                 entry.insert("active_version".into(), Value::Null);
             }
             entry.insert("versions".into(), Value::Object(versions));
             let after_active = get_or_null(&entry, "active_version").clone();
             secrets_obj.insert(secret_id.to_string(), Value::Object(entry));
             self.state.write_json(VAULT_DOC, &doc_val)?;
-            rebound = if after_active != before_active {
+            rebound = if !active_version_values_equal(&after_active, &before_active) {
                 self.rebind_connections(secret_id)?
             } else {
                 Vec::new()
@@ -1226,8 +1359,19 @@ impl<'a> Vault<'a> {
             Some(v) => v,
         };
         if status_value.as_str() != Some("active") && status_value.as_str() != Some("staged") {
-            return Err(Error::not_found("secret_version_unusable")
-                .with_detail(python_str_scalar(status_value)));
+            // `ZeroPWError.__init__` suppresses a *falsy* `detail` (`0`, `false`, `null`, `[]`,
+            // `{}`): `str(exc)` is just the reason and `to_dict()` omits `detail` entirely --
+            // `json_falsy` is the same Python-truthiness check this module already uses elsewhere
+            // (finding E-R5-6, completing E-R4-3: a status of `0`/`false`/`null`/`[]`/`{}`
+            // previously still rendered as the literal string `"0"`/`"False"`/`"None"`/`"[]"`/
+            // `"{}"` in this error's `detail`, where Python's own `NotFound(..., 0)` etc. carries
+            // no visible detail at all).
+            let detail = if json_falsy(status_value) {
+                String::new()
+            } else {
+                python_str_scalar(status_value)
+            };
+            return Err(Error::not_found("secret_version_unusable").with_detail(detail));
         }
         self.decrypt(secret_id, resolved, record)
     }
@@ -1324,6 +1468,21 @@ impl<'a> Vault<'a> {
 
     /// Encrypted backup: ciphertexts plus the KMS- and recovery-wrapped DEK.
     /// The archive contains no plaintext.
+    ///
+    /// Finding E-R5-8: the archive nests every document two levels deeper
+    /// than `StateDir` itself does (`{"manifest": ..., "documents": {name:
+    /// <document>, ...}}`), so a document at or near `pyjson`'s
+    /// `MAX_JSON_DEPTH` (500) -- which `StateDir::write_json`/`read_json`
+    /// happily wrote/read -- can push `pyjson::dumps` here past that same
+    /// cap. `pyjson::dumps`'s only failure mode is exactly this depth check
+    /// (`InvalidInput("pyjson_max_depth_exceeded")`), an error class no
+    /// caller of `backup` otherwise ever sees from it (every other failure
+    /// in this function is a `StateError`); both call sites below map that
+    /// failure to `StateError("backup_too_deep")` instead of letting it
+    /// escape as-is, per the `DEVIATIONS.md` `vault (Vault::backup, finding
+    /// E-R5-8)` row (not reproducing Python's unlimited depth here, for the
+    /// same fail-closed reasoning already applied to `Vault::restore`'s own
+    /// depth handling, finding E-R4-5).
     pub fn backup(&self, out_path: &Path) -> Result<Value, Error> {
         let mut documents = Map::new();
         {
@@ -1338,7 +1497,8 @@ impl<'a> Vault<'a> {
         let payload = pyjson::dumps(
             &Value::Object(documents.clone()),
             DumpOptions::compact_sorted(),
-        )?;
+        )
+        .map_err(|_| Error::state("backup_too_deep"))?;
         let digest = hex::encode(sha256(payload.as_bytes()));
         let backup_id = hex::encode(random_bytes(8));
         let manifest = json!({
@@ -1349,7 +1509,8 @@ impl<'a> Vault<'a> {
             "backup_id": backup_id,
         });
         let archive = json!({"manifest": manifest, "documents": Value::Object(documents)});
-        let text = pyjson::dumps(&archive, DumpOptions::default_sorted())?;
+        let text = pyjson::dumps(&archive, DumpOptions::default_sorted())
+            .map_err(|_| Error::state("backup_too_deep"))?;
         write_backup_atomic(out_path, &text)?;
         self.audit.record(
             "backup",
@@ -1396,21 +1557,44 @@ impl<'a> Vault<'a> {
                     else {
                         continue;
                     };
+                    // Python: `entry.get("versions", {}).get(str(version))` -- a *missing*
+                    // `versions` key falls back to `{}`, whose `.get(...)` is `None` (skip, no
+                    // error), but a *present* `versions` value that isn't a dict has no `.get`
+                    // method at all, so Python's own `.get(str(version))` call raises an uncaught
+                    // `AttributeError` there -- aborting this whole `reapply_revocations` call (and
+                    // therefore `Vault::restore`) rather than reporting success with the revocation
+                    // silently un-applied (finding E-R5-2, correcting DEVIATIONS.md row 52's claim
+                    // that this path already fails closed like every other raw-indexed `versions`
+                    // read in this module: a previous version of this port treated a non-object
+                    // `versions` the same as a missing one here, fail-*open* on a revocation-reapply
+                    // path).
                     let mut was_revoked = false;
-                    if let Some(versions_obj) =
-                        entry.get_mut("versions").and_then(Value::as_object_mut)
-                        && let Some(record) = versions_obj
-                            .get_mut(&version.to_string())
-                            .and_then(Value::as_object_mut)
-                        && record.get("status").and_then(Value::as_str) != Some("revoked")
-                    {
-                        record.insert("status".into(), json!("revoked"));
-                        was_revoked = true;
+                    match entry.get_mut("versions") {
+                        None => {}
+                        Some(Value::Object(versions_obj)) => {
+                            if let Some(record) = versions_obj
+                                .get_mut(&version.to_string())
+                                .and_then(Value::as_object_mut)
+                                && record.get("status").and_then(Value::as_str) != Some("revoked")
+                            {
+                                record.insert("status".into(), json!("revoked"));
+                                was_revoked = true;
+                            }
+                        }
+                        Some(_) => {
+                            return Err(Error::state("state_corrupt").with_detail("vault"));
+                        }
                     }
                     if was_revoked {
                         touched = true;
                         changed += 1;
-                        if entry.get("active_version").and_then(Value::as_i64) == Some(*version) {
+                        // Python `==`: numeric equality, not JSON-shape equality (finding E-R5-4;
+                        // see `active_version_matches`'s doc comment) -- an `active_version` of
+                        // `true`/`1.0` naming this same revoked version must still be cleared.
+                        if entry
+                            .get("active_version")
+                            .is_some_and(|v| active_version_matches(v, *version))
+                        {
                             entry.insert("active_version".into(), Value::Null);
                         }
                     }
@@ -1456,6 +1640,16 @@ impl<'a> Vault<'a> {
 
     /// Restore documents and leave the system closed until `restore_ack`.
     /// Port of the `@staticmethod Vault.restore`.
+    ///
+    /// Finding E-R5-8: a real Python-written archive can legitimately
+    /// contain a document up to `pyjson`'s `MAX_JSON_DEPTH` (Python's own
+    /// `json` has no such limit at all), but the archive's own two levels of
+    /// wrapping (`manifest`/`documents`) put such a document past this
+    /// port's parse-time depth cap, so `pyjson::loads` below already fails
+    /// closed on it as an ordinary parse error -- mapped, like every other
+    /// unparseable archive, to the handled `StateError("backup_malformed")`
+    /// rather than a class no caller of `restore` expects. See the
+    /// `DEVIATIONS.md` `vault (Vault::backup, finding E-R5-8)` row.
     pub fn restore(
         state: &StateDir,
         in_path: &Path,
@@ -1558,10 +1752,8 @@ impl<'a> Vault<'a> {
                 get_or_null(&control, "approvals"),
             );
             control.insert("approvals".into(), Value::Object(merged_approvals));
-            let approval_history = match current.get("approval_history") {
-                Some(Value::Array(a)) => a.clone(),
-                _ => Vec::new(),
-            };
+            let approval_history =
+                python_list_over_value(get_or_null(&current, "approval_history"))?;
             control.insert("approval_history".into(), Value::Array(approval_history));
             control.insert("restore_pending".into(), json!(true));
             control.insert(

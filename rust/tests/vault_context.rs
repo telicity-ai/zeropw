@@ -944,3 +944,597 @@ fn signer_socket_dir_matches_configured_directory_under_this_machines_default_tm
         "signer must bind in the Context-owned socket_dir, not fall back to an unrelated temp dir"
     );
 }
+
+// ------------------------------------------------------- round-5 findings (E-R5-*)
+
+/// A JSON value nested `depth` array levels deep (each level adds exactly 1
+/// to `pyjson::value_depth_within`'s count), used by the `E-R5-8` tests
+/// below to probe the archive's extra two levels of wrapping.
+fn nested_array(depth: usize) -> Value {
+    let mut v = Value::Null;
+    for _ in 0..depth {
+        v = Value::Array(vec![v]);
+    }
+    v
+}
+
+/// Finding E-R5-1: `put_secret`'s `doc["secrets"].get(secret_id)` first
+/// indexes `doc["secrets"]` itself, direct indexing -- a missing or
+/// wrong-typed `secrets` field raises an uncaught `KeyError`/`TypeError`
+/// (state_corrupt) and commits nothing. A previous version of this port's
+/// `.entry("secrets").or_insert_with(|| json!({}))` silently created the
+/// missing key and wrote a brand-new secret into it instead.
+#[test]
+fn put_secret_missing_secrets_key_is_state_corrupt_not_silently_created() {
+    let (_tmp, ctx) = setup();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc.as_object_mut().unwrap().remove("secrets");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    // Nothing committed: `secrets` is still missing, not silently created with the new secret in
+    // it.
+    let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert!(doc_after.get("secrets").is_none());
+}
+
+/// Same finding, the wrong-type (rather than missing-key) half: a present
+/// `secrets` field of the wrong JSON type is also `state_corrupt`, not a
+/// silently-created fresh object either.
+#[test]
+fn put_secret_secrets_field_of_wrong_type_is_state_corrupt() {
+    let (_tmp, ctx) = setup();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"] = json!("not-an-object");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// Finding E-R5-2: `reapply_revocations`'s `entry.get("versions", {}).get(
+/// str(version))` has no `.get` method at all once `versions` is present but
+/// not a dict -- Python's own `.get(...)` call raises an uncaught
+/// `AttributeError`, aborting the whole call (and therefore `Vault::restore`)
+/// rather than silently leaving the revoked secret version un-revoked.
+#[test]
+fn reapply_revocations_aborts_when_versions_field_is_not_an_object() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    ctx.vault
+        .set_version_status("gh-token", 1, "revoked")
+        .unwrap();
+
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"] = json!(["not", "an", "object"]);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = Vault::reapply_revocations(ctx.state).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// Same finding, the *missing*-key half (which must keep skipping, not
+/// error): Python's `.get("versions", {})` falls back to `{}` for an absent
+/// key, whose own `.get(...)` is simply `None` -- no exception, no change.
+#[test]
+fn reapply_revocations_skips_silently_when_versions_key_is_entirely_missing() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    ctx.vault
+        .set_version_status("gh-token", 1, "revoked")
+        .unwrap();
+
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]
+        .as_object_mut()
+        .unwrap()
+        .remove("versions");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let counts = Vault::reapply_revocations(ctx.state).unwrap();
+    assert_eq!(counts["secret_versions"], 0);
+}
+
+/// Finding E-R5-4: `set_version_status`'s activate branch compares a stored
+/// `active_version` against the version being activated with Python's
+/// numeric `==` (`True == 1`), not JSON-shape equality. Re-activating the
+/// same version that is already (numerically) active must be a no-op
+/// success, not a `state_corrupt` from trying to "retire" a `versions["True"]`
+/// key that doesn't exist.
+#[test]
+fn set_version_status_reactivating_bool_true_active_version_as_one_succeeds() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["active_version"] = json!(true);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    ctx.vault
+        .set_version_status("gh-token", 1, "active")
+        .expect(
+            "Python: `previous != version` (`True != 1`) is False, retire is skipped, call succeeds",
+        );
+
+    let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(doc_after["secrets"]["gh-token"]["active_version"], json!(1));
+    assert_eq!(
+        doc_after["secrets"]["gh-token"]["versions"]["1"]["status"],
+        json!("active")
+    );
+}
+
+/// Same finding, the retire-clears-to-null direction: an `active_version`
+/// stored as the integral float `1.0` must still be recognised as "version
+/// 1 is active" and cleared to `null` when that version is explicitly
+/// retired.
+#[test]
+fn set_version_status_retiring_clears_active_version_stored_as_integral_float() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["active_version"] = json!(1.0);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    ctx.vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap();
+
+    let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert!(doc_after["secrets"]["gh-token"]["active_version"].is_null());
+}
+
+/// Same finding, `reapply_revocations`'s own `entry.get("active_version") ==
+/// version` comparison: a stored `active_version` of the bool `true` must
+/// still be cleared for the matching revoked version 1, not left dangling
+/// (a fail-open gap on a revocation-adjacent path).
+#[test]
+fn reapply_revocations_clears_active_version_stored_as_bool_true() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["active_version"] = json!(true);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let mut fields = serde_json::Map::new();
+    fields.insert("secret_id".into(), json!("gh-token"));
+    fields.insert("version".into(), json!(1));
+    zeropw::policy::append_revocation(ctx.state, "secret_version", fields);
+
+    let counts = Vault::reapply_revocations(ctx.state).unwrap();
+    assert_eq!(counts["secret_versions"], 1);
+
+    let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(
+        doc_after["secrets"]["gh-token"]["versions"]["1"]["status"],
+        json!("revoked")
+    );
+    assert!(
+        doc_after["secrets"]["gh-token"]["active_version"].is_null(),
+        "active_version stored as `true` must still be cleared for the matching revoked version 1"
+    );
+}
+
+/// Finding E-R5-5: `python_int_from_str`'s padding predicate must be
+/// CPython `int()`'s own (which excludes U+001C..U+001F), not the full
+/// `str.isspace()` set `str.strip()` uses -- a `versions` key of
+/// `"\u{1c}1"` is `state_corrupt` (Python: `int("\x1c1")` raises
+/// `ValueError`), not silently accepted as version 1.
+#[test]
+fn versions_key_with_information_separator_padding_is_state_corrupt() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    let versions = doc["secrets"]["gh-token"]["versions"]
+        .as_object_mut()
+        .unwrap();
+    let v1 = versions.remove("1").unwrap();
+    versions.insert("\u{1c}1".to_string(), v1);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// The same padding predicate must still accept an ordinary ASCII space,
+/// which both `str.isspace()` and CPython's `int()` treat as valid padding.
+#[test]
+fn versions_key_with_ordinary_space_padding_still_parses() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    let versions = doc["secrets"]["gh-token"]["versions"]
+        .as_object_mut()
+        .unwrap();
+    let v1 = versions.remove("1").unwrap();
+    versions.insert(" 1 ".to_string(), v1);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let meta = ctx.vault.get_meta("gh-token").unwrap();
+    assert_eq!(meta.versions[0].version, 1);
+}
+
+/// Finding E-R5-6: `NotFound("secret_version_unusable", status)` must
+/// suppress a *falsy* `status` detail exactly like `ZeroPWError.__init__`
+/// (`str(exc)` is bare, `to_dict()` omits `detail`) -- a status of the JSON
+/// number `0` produces no visible detail at all, not the literal string
+/// `"0"`.
+#[test]
+fn secret_version_unusable_suppresses_falsy_status_detail() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"]["1"]["status"] = json!(0);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .secret_for_trusted_use("gh-token", Some(1))
+        .unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_version_unusable");
+    assert_eq!(err.detail, "");
+    assert!(err.to_dict().get("detail").is_none());
+}
+
+/// Same finding, the truthy-string counter-case: a status of the *string*
+/// `"0"` is truthy in Python (a non-empty string), so its detail must still
+/// render, unlike the falsy JSON number `0` above.
+#[test]
+fn secret_version_unusable_keeps_truthy_string_status_detail() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"]["1"]["status"] = json!("0");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .secret_for_trusted_use("gh-token", Some(1))
+        .unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_version_unusable");
+    assert_eq!(err.detail, "0");
+    assert_eq!(err.to_dict()["detail"], "0");
+}
+
+/// Finding E-R5-7: `set_version_status`'s `str(version) not in
+/// entry["versions"]` is an ordinary Python `in` membership test -- an empty
+/// array `versions` simply doesn't contain the key (documented
+/// `NotFound`), it is not `state_corrupt` the way a non-iterable `versions`
+/// (`null`/a number/a bool) or a missing key would be.
+#[test]
+fn set_version_status_versions_as_empty_array_is_not_found() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"] = json!([]);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_version_not_found");
+}
+
+/// Same finding: an array `versions` that *does* contain the key (as a
+/// string element) passes the membership test, but the next line's
+/// `entry["versions"][str(version)]` indexing then fails (a list has no
+/// string-keyed indexing) -- `state_corrupt`, not `NotFound`.
+#[test]
+fn set_version_status_versions_as_array_containing_the_key_is_state_corrupt() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"] = json!(["1"]);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// Same finding, the `str` case: Python's `in` checks *substring*
+/// containment for a string `versions`.
+#[test]
+fn set_version_status_versions_as_string_uses_substring_membership() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]["versions"] = json!("abc");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+    let err = ctx
+        .vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_version_not_found");
+
+    let mut doc2 = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc2["secrets"]["gh-token"]["versions"] = json!("a1c");
+    ctx.state.write_json(vault::VAULT_DOC, &doc2).unwrap();
+    let err2 = ctx
+        .vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap_err();
+    assert!(err2.is(ErrorClass::StateError));
+    assert_eq!(err2.reason.to_string(), "state_corrupt");
+}
+
+/// Same finding, the missing-key case (Python's uncaught `KeyError`
+/// evaluating `entry["versions"]` at all): still `state_corrupt`.
+#[test]
+fn set_version_status_versions_missing_key_is_state_corrupt() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]["gh-token"]
+        .as_object_mut()
+        .unwrap()
+        .remove("versions");
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let err = ctx
+        .vault
+        .set_version_status("gh-token", 1, "retired")
+        .unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// Finding E-R5-8: `backup`'s two `pyjson::dumps` calls (the digest payload,
+/// then the full `{"manifest":...,"documents":{...}}` archive) each add a
+/// level of nesting beyond what `StateDir::write_json` already accepted, so
+/// the real per-document budget inside `backup` is `MAX_JSON_DEPTH - 2`
+/// (498), not 500. Exactly at that budget, `backup` must still succeed.
+#[test]
+fn backup_succeeds_when_document_leaves_two_levels_of_headroom() {
+    let (tmp, ctx) = setup();
+    ctx.state
+        .write_json(
+            policy::CONTROL,
+            &nested_array(zeropw::pyjson::MAX_JSON_DEPTH - 2),
+        )
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault
+        .backup(&out)
+        .expect("a document with 2 levels of headroom must still back up");
+}
+
+/// Same finding: one level past that per-document budget, `backup` must
+/// fail *closed* with the same `StateError` class every other `backup`
+/// failure already uses, not the `InvalidInput("pyjson_max_depth_exceeded")`
+/// class `pyjson::dumps` itself raises for the archive's own extra
+/// wrapping -- a class no caller of `backup` otherwise ever sees from it.
+#[test]
+fn backup_fails_closed_instead_of_an_unexpected_error_class_past_the_headroom() {
+    let (tmp, ctx) = setup();
+    ctx.state
+        .write_json(
+            policy::CONTROL,
+            &nested_array(zeropw::pyjson::MAX_JSON_DEPTH - 1),
+        )
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    let err = ctx.vault.backup(&out).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "backup_too_deep");
+}
+
+/// Same finding, the other binding constraint: a document at `StateDir`'s
+/// own writable max depth (500) already exceeds `backup`'s *first* `dumps`
+/// call (the digest payload, one level of wrapping) before the archive is
+/// even assembled -- still `StateError("backup_too_deep")`, not an escaping
+/// `InvalidInput`.
+#[test]
+fn backup_fails_closed_for_a_document_at_the_writable_max_depth() {
+    let (tmp, ctx) = setup();
+    ctx.state
+        .write_json(
+            policy::CONTROL,
+            &nested_array(zeropw::pyjson::MAX_JSON_DEPTH),
+        )
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    let err = ctx.vault.backup(&out).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "backup_too_deep");
+}
+
+/// Same finding, `restore`'s side: a real Python-written archive (Python's
+/// `json` has no depth limit at all) can legitimately carry a document
+/// right at `StateDir`'s own writable max depth, wrapped two levels deeper
+/// by the archive itself -- past this port's own parse-time cap. `restore`
+/// must fail *closed* with the ordinary, already-handled
+/// `StateError("backup_malformed")` (the same class every other unparseable
+/// archive already gets), not panic or succeed with truncated data. Built
+/// with plain `serde_json` (not `pyjson`, which enforces the very cap this
+/// test is probing) to stand in for output Python could really produce.
+#[test]
+fn restore_rejects_a_python_built_archive_whose_document_is_at_the_writable_max_depth() {
+    let (tmp, ctx) = setup();
+    let deep_doc = nested_array(zeropw::pyjson::MAX_JSON_DEPTH);
+    let archive = json!({
+        "manifest": {"format": "zeropw-backup-v1", "sha256": "0", "backup_id": "test"},
+        "documents": {policy::CONTROL: deep_doc},
+    });
+    let text = serde_json::to_string(&archive).unwrap();
+    let path = tmp.path().join("deep-backup.json");
+    fs::write(&path, text).unwrap();
+
+    let err = Vault::restore(ctx.state, &path, ctx.audit, None).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "backup_malformed");
+}
+
+/// Finding E-R5-9: `restore`'s `list(current.get("approval_history") or
+/// [])` iterates a truthy non-list value instead of discarding it -- a
+/// string yields its characters, a dict yields its keys.
+#[test]
+fn restore_approval_history_iterates_a_truthy_string_into_characters() {
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+
+    let mut control = ctx
+        .state
+        .read_json(policy::CONTROL, Value::Null)
+        .unwrap_or_else(|_| json!({}));
+    if !control.is_object() {
+        control = json!({});
+    }
+    control["approval_history"] = json!("ab");
+    ctx.state.write_json(policy::CONTROL, &control).unwrap();
+
+    Vault::restore(ctx.state, &out, ctx.audit, None).unwrap();
+    let after = ctx.state.read_json(policy::CONTROL, Value::Null).unwrap();
+    assert_eq!(after["approval_history"], json!(["a", "b"]));
+}
+
+/// Same finding, the dict-yields-keys case.
+#[test]
+fn restore_approval_history_iterates_a_truthy_object_into_its_keys() {
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+
+    let mut control = ctx
+        .state
+        .read_json(policy::CONTROL, Value::Null)
+        .unwrap_or_else(|_| json!({}));
+    if !control.is_object() {
+        control = json!({});
+    }
+    control["approval_history"] = json!({"x": 1, "y": 2});
+    ctx.state.write_json(policy::CONTROL, &control).unwrap();
+
+    Vault::restore(ctx.state, &out, ctx.audit, None).unwrap();
+    let after = ctx.state.read_json(policy::CONTROL, Value::Null).unwrap();
+    assert_eq!(after["approval_history"], json!(["x", "y"]));
+}
+
+/// Same finding, the truthy-non-iterable-scalar case: `list(5)` raises an
+/// uncaught `TypeError` in Python -- `state_corrupt` here, not a silent
+/// `[]` substitution.
+#[test]
+fn restore_approval_history_truthy_scalar_is_state_corrupt() {
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+
+    let mut control = ctx
+        .state
+        .read_json(policy::CONTROL, Value::Null)
+        .unwrap_or_else(|_| json!({}));
+    if !control.is_object() {
+        control = json!({});
+    }
+    control["approval_history"] = json!(5);
+    ctx.state.write_json(policy::CONTROL, &control).unwrap();
+
+    let err = Vault::restore(ctx.state, &out, ctx.audit, None).unwrap_err();
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+}
+
+/// Same finding: a *falsy* `approval_history` (missing, `0`, `false`, `[]`,
+/// `{}`) is simply replaced with `[]`, same as before this fix.
+#[test]
+fn restore_approval_history_falsy_value_becomes_empty_list() {
+    let (tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let out = tmp.path().join("backup.json");
+    ctx.vault.backup(&out).unwrap();
+
+    let mut control = ctx
+        .state
+        .read_json(policy::CONTROL, Value::Null)
+        .unwrap_or_else(|_| json!({}));
+    if !control.is_object() {
+        control = json!({});
+    }
+    control["approval_history"] = json!(0);
+    ctx.state.write_json(policy::CONTROL, &control).unwrap();
+
+    Vault::restore(ctx.state, &out, ctx.audit, None).unwrap();
+    let after = ctx.state.read_json(policy::CONTROL, Value::Null).unwrap();
+    assert_eq!(after["approval_history"], json!([]));
+}
+
+/// `Policy::reapply_revocations` aborting `Vault::restore` and skipping the
+/// handle-key rotation (finding E-R5-3) is assigned to the `policy` work
+/// unit's own next round -- out of scope here (`rust/src/policy.rs` is not
+/// an editable file for this fix). Documented as `#[ignore]`d so the
+/// expected end state is recorded and can be turned on once `policy.rs`'s
+/// fix lands: today, if `Policy::reapply_revocations` returns an error
+/// partway through, `Vault::restore` propagates it (via `?`) *before*
+/// reaching the `state.write_bytes(HANDLE_KEY, ...)` handle-key rotation a
+/// few lines below -- so a restore that hits this path leaves the old
+/// (potentially leaked) handle key in place. Once fixed, this same restore
+/// should still rotate the handle key even when the policy side reports a
+/// (recoverable) error reapplying revocations.
+#[test]
+#[ignore = "E-R5-3 is assigned to the policy work unit's own next round"]
+fn restore_still_rotates_handle_key_even_if_policy_reapply_revocations_errors() {
+    unimplemented!(
+        "once policy.rs's E-R5-3 fix lands: force Policy::reapply_revocations to return an \
+         error (e.g. a corrupted policy/connections.json) during Vault::restore, then assert \
+         that context::HANDLE_KEY was still rotated (differs from its pre-restore value) even \
+         though restore's own Result was Err"
+    );
+}
