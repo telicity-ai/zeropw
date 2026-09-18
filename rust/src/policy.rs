@@ -206,6 +206,21 @@ fn number_is_python_int(n: &serde_json::Number) -> bool {
     !n.to_string().contains(['.', 'e', 'E'])
 }
 
+/// `isinstance(x, int)` for a JSON value, as used by
+/// `_collect_revocations`'s `isinstance(entry.get("version"), int)` guards
+/// (finding D-R2-4). CPython's `bool` is an `int` subclass, so a JSON `true`/
+/// `false` counts too (`True == 1`, `False == 0`) -- unlike
+/// `python_int_coerce`, a *float*-shaped JSON number (even `3.0`) is not an
+/// `int` in Python and must return `None` here, matching
+/// `isinstance(3.0, int) is False`.
+fn json_isinstance_int(v: &Value) -> Option<i64> {
+    match v {
+        Value::Bool(b) => Some(i64::from(*b)),
+        Value::Number(n) if number_is_python_int(n) => n.as_i64(),
+        _ => None,
+    }
+}
+
 /// `_validate_port(port)`: `isinstance(port, bool) or not isinstance(port,
 /// int) or not 1 <= port <= 65535` -- every one of those disjuncts raises
 /// the same `invalid_port`, so *any* JSON shape other than an in-range
@@ -838,12 +853,21 @@ impl HttpTarget {
     /// a wrong *value*, not `state_corrupt`; only a missing required key
     /// (`scheme`/`host`/`port` have no dataclass default, so kwarg
     /// unpacking raises an uncaught `TypeError` for them) falls back to
-    /// `state_corrupt` (PORTING.md §3.5).
+    /// `state_corrupt` (PORTING.md §3.5). An *unknown* key in `value` --
+    /// including `check_address`, which `Connection.from_dict` itself
+    /// already passes -- makes the `**value` unpacking collide with (or add
+    /// to) `HttpTarget`'s own keyword arguments, an uncaught `TypeError`
+    /// (`__init__() got multiple/unexpected keyword argument(s)`), likewise
+    /// `state_corrupt` (finding D-R2-6).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("http_target"))?;
         let missing = || Error::state("state_corrupt").with_detail("http_target");
+        const KNOWN_KEYS: &[&str] = &["scheme", "host", "port", "ca_file", "allow_private_network"];
+        if obj.keys().any(|k| !KNOWN_KEYS.contains(&k.as_str())) {
+            return Err(missing());
+        }
         let scheme_v = obj.get("scheme").ok_or_else(missing)?;
         let scheme = match scheme_v.as_str() {
             // `self.scheme not in ("http", "https")`: a plain equality
@@ -946,12 +970,19 @@ impl HttpAuth {
     /// see the `policy` row in `DEVIATIONS.md` for the residual this still
     /// leaves (Python's own checks on those fields are considerably more
     /// irregular -- see the `DEVIATIONS.md` row for exactly which shapes
-    /// that covers).
+    /// that covers). An unknown key in `value` makes the `**value`
+    /// unpacking raise an uncaught `TypeError` (`__init__() got an
+    /// unexpected keyword argument ...`), likewise `state_corrupt`
+    /// (finding D-R2-6).
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt").with_detail("http_auth"))?;
         let bad = || Error::state("state_corrupt").with_detail("http_auth");
+        const KNOWN_KEYS: &[&str] = &["mode", "header_name", "value_prefix", "basic_username"];
+        if obj.keys().any(|k| !KNOWN_KEYS.contains(&k.as_str())) {
+            return Err(bad());
+        }
         let mode_v = obj.get("mode").ok_or_else(bad)?;
         let mode = match mode_v.as_str() {
             Some(s) if AUTH_MODES.contains(&s) => s.to_string(),
@@ -1278,6 +1309,23 @@ impl CliProfile {
     /// (`invalid_env_value`), and a falsy (not just missing) `extra_env`
     /// itself is replaced with `{}` by Python's `... or {}` before `dict()`
     /// ever runs.
+    ///
+    /// `__post_init__` checks `extra_env` name-then-value *per entry, in
+    /// dict insertion order*, so the first faulty entry in document order
+    /// decides the reported reason (finding D-R2-5). `extra_env`'s value
+    /// type can no longer be checked up front while building a `BTreeMap`
+    /// (that discards order and, worse, can reject on a later entry's value
+    /// fault before an earlier entry's name fault is ever seen) -- instead
+    /// walk the raw, insertion-ordered `serde_json::Map` (this crate builds
+    /// `serde_json` with the `preserve_order` feature) once, replicating
+    /// `CliProfile::new`'s own name-then-value checks per entry, and only
+    /// build the final `BTreeMap` (order no longer matters for storage --
+    /// `write_json` sorts keys same as Python) after every entry has passed.
+    /// `CliProfile::new` is still called at the end as the single source of
+    /// truth for the scalar (`kind`/`program`/`base_url_env`) checks and to
+    /// construct the value; by then every `extra_env` entry already passed,
+    /// so its own (key-sorted) `extra_env` loop can only ever re-confirm
+    /// success.
     fn from_value(v: &Value) -> Result<Self, Error> {
         let obj = v
             .as_object()
@@ -1298,19 +1346,34 @@ impl CliProfile {
             Some(Value::String(s)) => Some(s.clone()),
             Some(_) => return Err(bad()),
         };
-        let extra_env = match obj.get("extra_env") {
-            None => std::collections::BTreeMap::new(),
-            Some(Value::Object(m)) => m
-                .iter()
-                .map(|(k, val)| {
-                    val.as_str()
-                        .map(|s| (k.clone(), s.to_string()))
-                        .ok_or_else(|| Error::invalid_input("invalid_env_value"))
-                })
-                .collect::<Result<_, _>>()?,
-            Some(other) if !json_truthy(Some(other)) => std::collections::BTreeMap::new(),
+        // Python's own default, applied before `__post_init__`'s per-entry
+        // loop compares each key against it.
+        let resolved_base_url_env = base_url_env
+            .clone()
+            .unwrap_or_else(|| "ZEROPW_API_BASE_URL".to_string());
+        let mut extra_env = std::collections::BTreeMap::new();
+        match obj.get("extra_env") {
+            None => {}
+            Some(Value::Object(m)) => {
+                for (key, val) in m {
+                    if !env_name_matches(key)
+                        || key == "SSH_AUTH_SOCK"
+                        || key == &resolved_base_url_env
+                    {
+                        return Err(Error::invalid_input("invalid_env_name"));
+                    }
+                    let s = val
+                        .as_str()
+                        .ok_or_else(|| Error::invalid_input("invalid_env_value"))?;
+                    if s.contains('\0') {
+                        return Err(Error::invalid_input("invalid_env_value"));
+                    }
+                    extra_env.insert(key.clone(), s.to_string());
+                }
+            }
+            Some(other) if !json_truthy(Some(other)) => {}
             Some(_) => return Err(bad()),
-        };
+        }
         CliProfile::new(program, kind, base_url_env, extra_env)
     }
 }
@@ -1587,10 +1650,21 @@ impl Connection {
             kind,
             str_field("secret_id")?,
             secret_version,
-            obj.get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            // `description=data.get("description", "")`: defaults to `""`
+            // only when the key is *absent*; a present value of any JSON
+            // type (including `null`) is otherwise kept completely
+            // verbatim by Python, with no `__post_init__` check at all.
+            // Silently substituting the default for a present non-string
+            // value would make `public_view()`/`to_dict()` lie about what
+            // is actually stored; treat it the same exact-type-or-
+            // `state_corrupt` way as the sibling string fields above
+            // (finding D-R2-7; see the updated `policy` row in
+            // `DEVIATIONS.md`).
+            match obj.get("description") {
+                None => String::new(),
+                Some(Value::String(s)) => s.clone(),
+                Some(_) => return Err(bad()),
+            },
             opt_val("http_target")
                 .map(HttpTarget::from_value)
                 .transpose()?,
@@ -1943,7 +2017,7 @@ pub fn collect_revocations<'a>(
             }
             Some("secret_version") => {
                 let secret_id = obj.get("secret_id").and_then(Value::as_str);
-                let version = obj.get("version").and_then(Value::as_i64);
+                let version = obj.get("version").and_then(json_isinstance_int);
                 if let (Some(secret_id), Some(version)) = (secret_id, version) {
                     found
                         .secret_versions
@@ -1984,7 +2058,7 @@ pub fn collect_revocations<'a>(
             }
             Some("secret_revoke") => {
                 let secret_id = obj.get("secret_id").and_then(Value::as_str);
-                let version = obj.get("version").and_then(Value::as_i64);
+                let version = obj.get("version").and_then(json_isinstance_int);
                 if let (Some(secret_id), Some(version)) = (secret_id, version) {
                     found
                         .secret_versions
@@ -2105,11 +2179,21 @@ impl<'a> Policy<'a> {
     }
     /// `self.state.read_json(CONTROL, None) or {...defaults...}`: Python's
     /// `or` falls back to the default dict for *any* falsy read (missing
-    /// file -> `None`, or a stored `{}`), not just a missing file.
+    /// file -> `None`, or a stored `{}`), not just a missing file. A
+    /// *truthy* non-dict read (`[1]`, `"x"`, `5`) is returned as-is by
+    /// Python's `or`, and every caller's subsequent `control.get(...)` then
+    /// raises an uncaught `AttributeError` -- fail closed (PORTING.md §3.5,
+    /// finding D-R2-1): the closest handled error every caller of
+    /// `control()` (`decide`, `is_stopped`, `restore_pending`,
+    /// `usable_connections`, ...) already propagates with `?`.
     fn control(&self) -> Result<Map<String, Value>, Error> {
-        match self.state.read_json(CONTROL, Value::Null)? {
-            Value::Object(m) if !m.is_empty() => Ok(m),
-            _ => Ok(default_control()),
+        let value = self.state.read_json(CONTROL, Value::Null)?;
+        if !json_truthy(Some(&value)) {
+            return Ok(default_control());
+        }
+        match value {
+            Value::Object(m) => Ok(m),
+            _ => Err(Error::state("state_corrupt").with_detail(CONTROL)),
         }
     }
 
@@ -2179,10 +2263,16 @@ impl<'a> Policy<'a> {
     }
 
     // ------------------------------------------------- credential version
-    fn vault_doc(&self) -> Map<String, Value> {
-        match self.state.read_json(VAULT_SECRETS, Value::Null) {
-            Ok(Value::Object(m)) => m,
-            _ => Map::new(),
+    /// `doc = self.state.read_json(VAULT_SECRETS, None); return doc if
+    /// isinstance(doc, dict) else {}`. An unparseable `vault/secrets.json`
+    /// makes `read_json` itself raise `StateError("state_corrupt", ...)`,
+    /// uncaught by `_vault_doc` -- propagate that here too (finding
+    /// D-R2-2); only a *successfully parsed* non-dict value (`[1]`, `"x"`,
+    /// `null`, a missing file) is replaced with `{}`.
+    fn vault_doc(&self) -> Result<Map<String, Value>, Error> {
+        match self.state.read_json(VAULT_SECRETS, Value::Null)? {
+            Value::Object(m) => Ok(m),
+            _ => Ok(Map::new()),
         }
     }
 
@@ -2192,27 +2282,26 @@ impl<'a> Policy<'a> {
         &self,
         connection: &Connection,
         vault_doc: Option<&Map<String, Value>>,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>, Error> {
         if let Some(v) = connection.secret_version {
-            return Some(v);
+            return Ok(Some(v));
         }
         let owned;
         let doc = match vault_doc {
             Some(d) => d,
             None => {
-                owned = self.vault_doc();
+                owned = self.vault_doc()?;
                 &owned
             }
         };
         let entry = doc
-            .get("secrets")?
-            .as_object()?
-            .get(&connection.secret_id)?
-            .as_object()?;
-        match entry.get("active_version") {
-            Some(v) => v.as_i64(),
-            None => None,
-        }
+            .get("secrets")
+            .and_then(Value::as_object)
+            .and_then(|m| m.get(&connection.secret_id))
+            .and_then(Value::as_object);
+        Ok(entry
+            .and_then(|e| e.get("active_version"))
+            .and_then(Value::as_i64))
     }
 
     /// Re-bind unpinned connections that follow `secret_id` to its current
@@ -2231,7 +2320,7 @@ impl<'a> Policy<'a> {
         let _lock = self.state.lock()?;
         let mut doc = self.connections()?;
         let grants = self.grants()?;
-        let vault_doc = self.vault_doc();
+        let vault_doc = self.vault_doc()?;
         let mut ids: Vec<String> = doc.keys().cloned().collect();
         ids.sort();
         for connection_id in ids {
@@ -2250,7 +2339,7 @@ impl<'a> Policy<'a> {
                 continue;
             }
             let connection = Connection::from_value(&entry)?;
-            let Some(resolved) = self.resolved_credential_version(&connection, Some(&vault_doc))
+            let Some(resolved) = self.resolved_credential_version(&connection, Some(&vault_doc))?
             else {
                 continue;
             };
@@ -2432,11 +2521,20 @@ fn principal_from_entry(id: &str, entry: &Value) -> Result<Principal, Error> {
             .and_then(Value::as_str)
             .ok_or_else(bad)?
             .to_string(),
-        runtime: obj
-            .get("runtime")
-            .and_then(Value::as_str)
-            .unwrap_or("default")
-            .to_string(),
+        // `entry.get("runtime", "default")`: defaults only when the key is
+        // *absent*; a present value of any type (including `null`) is kept
+        // verbatim, with no check anywhere -- `principals_in_runtime`
+        // compares it by equality, so a stored non-string `runtime` would
+        // never match any `str` runtime name in Python either. Silently
+        // substituting `"default"` here would instead make a
+        // corrupt-`runtime` principal match `principals_in_runtime("default")`,
+        // which incident/intrusion scoping relies on; keep it consistent
+        // with the sibling fields above (finding D-R2-7).
+        runtime: match obj.get("runtime") {
+            None => "default".to_string(),
+            Some(Value::String(s)) => s.clone(),
+            Some(_) => return Err(bad()),
+        },
     })
 }
 
@@ -2535,7 +2633,7 @@ impl<'a> Policy<'a> {
             }
             doc.insert(connection_id.to_string(), after.to_value());
             self.state.write_json(CONNECTIONS, &Value::Object(doc))?;
-            let resolved = self.resolved_credential_version(&after, None);
+            let resolved = self.resolved_credential_version(&after, None)?;
             self.reevaluate_grants(connection_id, after.policy_version, widened, resolved)?;
             // Approvals are bound to the policy version they were requested under.
             let reason = if after.status == "disabled" {
@@ -2722,7 +2820,7 @@ impl<'a> Policy<'a> {
             status: "active".to_string(),
             created_at: iso(Some(now)),
             revoked_at: None,
-            credential_version: self.resolved_credential_version(&connection, None),
+            credential_version: self.resolved_credential_version(&connection, None)?,
         };
         let mut doc = self.grants()?;
         doc.insert(grant.id.clone(), grant.to_value());
@@ -3181,7 +3279,19 @@ impl<'a> Policy<'a> {
                 Self::close_approval(&mut entry_mut, "expired", Some("approval_expired"), now);
             }
             Self::archive_approval(&mut control, digest, &entry_mut);
-            cycle = entry_mut.get("cycle").and_then(Value::as_i64).unwrap_or(1) + 1;
+            // `cycle = int(entry.get("cycle") or 1) + 1`: Python's `or`
+            // falls back to `1` for any *falsy* stored `cycle` (`0`,
+            // `null`, `""`, missing), not just a missing one; a truthy
+            // value still goes through `int()`'s full coercion (a numeric
+            // string, a float truncated toward zero, a bool) rather than a
+            // plain `as_i64` (finding D-R2-8).
+            let raw_cycle = entry_mut.get("cycle").cloned();
+            let base = if json_truthy(raw_cycle.as_ref()) {
+                raw_cycle.as_ref().and_then(python_int_coerce).unwrap_or(1)
+            } else {
+                1
+            };
+            cycle = base + 1;
         }
         let evaluated = self.recall_pair(caller, connection);
         let mut policy_version = match self.get_connection(connection) {
@@ -3335,23 +3445,34 @@ impl<'a> Policy<'a> {
         {
             return Ok(Some("policy_changed"));
         }
-        if let Some(recorded_grant) = entry.get("grant").and_then(Value::as_str) {
-            if let Some(iug) = in_use_grant
-                && iug != recorded_grant
-            {
-                return Ok(Some("grant_changed"));
+        // `recorded_grant = entry.get("grant")`: Python checks `is not
+        // None`, so a present *non-string* value (e.g. `5`) is not skipped
+        // -- it reaches `self.get_grant(recorded_grant)`, which can never
+        // find a match (grant ids are strings) and raises `NotFound` ->
+        // `"grant_changed"`. `Policy::approval_matches_grant` already
+        // treats this shape as a mismatch (`Some(_) => false`); this must
+        // agree (finding D-R2-3).
+        match entry.get("grant") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(recorded_grant)) => {
+                if let Some(iug) = in_use_grant
+                    && iug != recorded_grant
+                {
+                    return Ok(Some("grant_changed"));
+                }
+                let grant = match self.get_grant(recorded_grant) {
+                    Ok(g) => g,
+                    Err(e) if e.is(ErrorClass::NotFound) => return Ok(Some("grant_changed")),
+                    Err(e) => return Err(e),
+                };
+                if grant.principal != caller || grant.connection != connection_id {
+                    return Ok(Some("grant_changed"));
+                }
+                if let Some(state) = self.grant_state(&grant, &connection) {
+                    return Ok(Some(state));
+                }
             }
-            let grant = match self.get_grant(recorded_grant) {
-                Ok(g) => g,
-                Err(e) if e.is(ErrorClass::NotFound) => return Ok(Some("grant_changed")),
-                Err(e) => return Err(e),
-            };
-            if grant.principal != caller || grant.connection != connection_id {
-                return Ok(Some("grant_changed"));
-            }
-            if let Some(state) = self.grant_state(&grant, &connection) {
-                return Ok(Some(state));
-            }
+            Some(_) => return Ok(Some("grant_changed")),
         }
         Ok(None)
     }
@@ -3395,12 +3516,17 @@ impl<'a> Policy<'a> {
                 && entry.get("status").and_then(Value::as_str) != Some("revoked")
             {
                 entry.insert("status".into(), json!("revoked"));
-                let revoked_at = entry
-                    .get("revoked_at")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| now.clone());
-                entry.insert("revoked_at".into(), json!(revoked_at));
+                // `entry["revoked_at"] = entry.get("revoked_at") or now`:
+                // Python's `or` keeps *any* truthy stored value verbatim
+                // (even a non-string one), replacing only a falsy one
+                // (`None`, `""`, `0`, ...) with `now` (finding D-R2-9).
+                let existing_revoked_at = entry.get("revoked_at").cloned();
+                let revoked_at = if json_truthy(existing_revoked_at.as_ref()) {
+                    existing_revoked_at.unwrap()
+                } else {
+                    json!(now.clone())
+                };
+                entry.insert("revoked_at".into(), revoked_at);
                 *counts.get_mut("grants").unwrap() += 1;
             }
         }
@@ -3430,9 +3556,13 @@ impl<'a> Policy<'a> {
                 && entry.get("status").and_then(Value::as_str) != Some("disabled")
             {
                 entry.insert("status".into(), json!("disabled"));
+                // `int(entry.get("policy_version", 0)) + 1`: `int()`
+                // coerces a numeric string/float/bool the same way
+                // `python_int_coerce` does, not just a plain integer
+                // (finding D-R2-9).
                 let pv = entry
                     .get("policy_version")
-                    .and_then(Value::as_i64)
+                    .and_then(python_int_coerce)
                     .unwrap_or(0)
                     + 1;
                 entry.insert("policy_version".into(), json!(pv));
