@@ -78,6 +78,24 @@ Identical, unless listed in §3:
 Anything else that differs must be recorded in `DEVIATIONS.md` (module, Python behaviour, Rust
 behaviour, why). An unrecorded difference is a defect.
 
+## 3b. Canonical Python-semantics helpers (coordinator ruling, 2026-09-18)
+
+Three separate units re-implemented CPython's `int(str)` grammar and each got the same detail wrong
+(`int()` strips only ` \t\n\v\f\r`, **not** U+001C-U+001F, which `str.isspace()`/`str.strip()` do
+include; and it accepts every Unicode `Nd` digit). Emulations of CPython behaviour therefore live in
+ONE place and are reused, never copied:
+
+| Semantics | Canonical home |
+| --- | --- |
+| `str.isspace`, `str.isprintable`, `repr(str)` | `crate::pystr` |
+| `int(str)` grammar (its own whitespace set, `_` separators, sign, Unicode `Nd` digits) | `crate::pystr` |
+| `base64` (lenient `b64decode`, urlsafe, encode) | `crate::pybase64` |
+| `json.dump`/`load` byte compatibility | `crate::pyjson` |
+
+A unit that needs one of these uses the canonical helper. If it is missing a case, extend the canonical
+helper (and its full-codepoint oracle test) rather than writing a local variant; a local copy of any of
+these semantics is a review finding.
+
 ## 4. Engineering rules
 
 - No `unsafe` except the `libc::flock` call in `store.rs`. No `unwrap`/`expect`/indexing panics on
