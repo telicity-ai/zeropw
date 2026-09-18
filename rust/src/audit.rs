@@ -265,7 +265,9 @@ fn clean(value: Value) -> Result<Value, Error> {
 /// same correctly-rounded, ties-to-even conversion from the exact binary
 /// value, so formatting and reparsing reproduces `round(x, 3)` exactly
 /// without a bignum-decimal dependency; verified against the CPython oracle
-/// for the classic trap cases in the test below.
+/// for the classic trap cases plus 200 randomized values --
+/// `oracle_tests::round_3dp_matches_python_oracle`, below `tests`'
+/// (non-oracle, hardcoded-literal) `round_3dp_matches_python_examples`.
 fn round_half_even_3dp(f: f64) -> f64 {
     if !f.is_finite() {
         return f;
@@ -1461,5 +1463,50 @@ print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end=
         let rust_alerts =
             std::fs::read_to_string(tmp.path().join("state/audit/alerts.jsonl")).unwrap();
         assert_eq!(rust_alerts, py_alerts);
+    }
+
+    // A-R3-3: `round_half_even_3dp`'s doc comment claims CPython-oracle
+    // verification for the classic tie-trap cases; before this test existed
+    // that claim was backed only by hardcoded literals
+    // (`round_3dp_matches_python_examples`, `super::tests`), not an actual
+    // comparison against Python. Run the same trap values (plus a batch of
+    // randomized ones) through real `python3.12` `round(x, 3)` and compare.
+    #[test]
+    fn round_3dp_matches_python_oracle() {
+        struct Xorshift64(u64);
+        impl Xorshift64 {
+            fn next_f64(&mut self) -> f64 {
+                let mut x = self.0;
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                self.0 = x;
+                // A mix of magnitudes, including many that land near a
+                // *.*5 tie at 3 decimal places.
+                ((x as i64) as f64 / i64::MAX as f64) * 10_000.0
+            }
+        }
+        let mut values = vec![
+            2.675, 0.0005, -0.0005, 0.0015, 0.1234, 1.0, 0.5005, 0.1235, -2.675, -0.1235, 0.0, -0.0,
+        ];
+        let mut rng = Xorshift64(0xA24BAED4963EE407);
+        for _ in 0..200 {
+            values.push(rng.next_f64());
+        }
+
+        let script = format!("for x in {values:?}:\n    print(repr(round(x, 3)))\n",);
+        let output = oracle::python(&script);
+        let py_lines: Vec<&str> = output.lines().collect();
+        assert_eq!(py_lines.len(), values.len());
+
+        for (x, want) in values.iter().zip(py_lines.iter()) {
+            let got = round_half_even_3dp(*x);
+            let want: f64 = want.parse().unwrap();
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "round_half_even_3dp({x}) = {got}, python round({x}, 3) = {want}"
+            );
+        }
     }
 }

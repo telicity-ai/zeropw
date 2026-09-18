@@ -59,6 +59,79 @@
 //! be `state_corrupt` in Rust but would silently parse in Python -- recorded
 //! in `DEVIATIONS.md`.
 //!
+//! ## Recursion / nesting depth
+//!
+//! `serde_json`'s `Value` deserializer refuses more than a hardcoded 128
+//! levels of array/object nesting by default (`RECURSION_LIMIT`), a limit
+//! CPython's `json` module does not share: probing `python3.12` directly
+//! shows `json.loads` happily parsing depths of 128, 129, 200, 500 and 900
+//! (this port's specific reviewer-probed depths -- pinned by
+//! `oracle_tests::loads_matches_python_for_probed_nesting_depths`), and
+//! considerably deeper still before it exhausts the interpreter's own
+//! recursion accounting. A document Python parses without complaint was,
+//! before A-R3-1, silently turned into `state_corrupt`
+//! (`StateDir::read_json`, `Audit::tail`/`alerts`), a silent skip
+//! (`Audit::iter_records`), or a malformed-input error (handle payloads,
+//! peer/agent JSON bodies) in this port -- for anything past a mere 128
+//! levels.
+//!
+//! Simply disabling `serde_json`'s limit and picking one higher fixed bound
+//! is not enough, because *two* separate operations recurse over a `Value`
+//! tree's native stack frames, not just one:
+//!
+//! - **Building** it: `serde_json`'s recursive-descent parser, which (an ad
+//!   hoc development-time probe found) overflows a 2 MiB stack somewhere
+//!   between 800 and 900 levels of nesting in an unoptimized/debug build --
+//!   uncomfortably close to this port's own required 900-level probe.
+//! - **Dropping** it: once parsed, the returned `Value` crosses back to
+//!   whatever thread [`loads`]'s caller runs on (this crate has no control
+//!   over that, or over how long the caller holds onto it before it goes out
+//!   of scope) and its ordinary recursive `Drop` glue then walks the same
+//!   depth again, on *that* thread. Cheaper per level than parsing, but not
+//!   free: the same kind of probe found a 2 MiB stack overflowing somewhere
+//!   between 8,000 and 9,000 levels here.
+//!
+//! [`loads`] therefore uses a two-tier strategy for parsing (so a rare deep
+//! document doesn't risk overflowing whatever stack a caller happens to be
+//! on, while the overwhelming majority of calls -- a handful of levels deep
+//! at most -- pay no extra cost), *and* keeps [`MAX_JSON_DEPTH`] itself
+//! comfortably under the lower (drop) danger zone above, since that hazard
+//! isn't something a dedicated parsing thread can fix:
+//!
+//! 1. [`scan_nesting_depth`] pre-scans the raw text (no parsing yet) for its
+//!    maximum `{`/`[` nesting depth, rejecting outright anything past
+//!    [`MAX_JSON_DEPTH`] (4,096) -- comfortably past every depth this
+//!    product ever writes (state/audit/policy/handle documents are a
+//!    handful of levels deep at most), past every depth this port's probes
+//!    require (900), and still roughly 2x under the empirical 8,000-9,000
+//!    level *drop* danger zone above, leaving real margin for a build or
+//!    platform with tighter stack frames than the one this was measured on.
+//!    A document this deep is not something any writer in this crate, or
+//!    the matching Python prototype, ever produces; rejecting it is a
+//!    residual, intentional divergence from CPython's own (considerably
+//!    higher, and itself uncaught-`RecursionError`-bounded rather than a
+//!    documented contract) practical ceiling, recorded in
+//!    `rust/DEVIATIONS.md`.
+//! 2. A document at or below [`SAFE_INLINE_DEPTH`] (200) parses directly on
+//!    the calling thread: `serde_json`'s built-in limit is disabled
+//!    (`Deserializer::disable_recursion_limit`, which additionally requires
+//!    this crate's `unbounded_depth` Cargo feature to take effect for
+//!    `Value` specifically -- see that method's own doc). 200 levels of
+//!    *building* is safe on any thread's stack, including a freshly spawned
+//!    `std::thread`'s small platform default -- pinned by
+//!    `tests::inline_path_is_safe_on_a_small_stack_thread` -- with a wide
+//!    margin below the 800-900 build danger zone above.
+//! 3. A deeper document (up to [`MAX_JSON_DEPTH`]) is instead *built* on a
+//!    dedicated thread with an explicit large stack
+//!    (`LARGE_PARSE_STACK_BYTES`, 64 MiB) via [`parse_on_dedicated_stack`].
+//!    The *drop* danger zone (8,000-9,000) is still comfortably above
+//!    `MAX_JSON_DEPTH` itself, so the caller receiving the parsed `Value`
+//!    back and eventually dropping it on its own (possibly small-stack)
+//!    thread remains safe too --
+//!    `tests::dedicated_stack_result_is_safe_to_drop_on_a_small_stack` pins
+//!    exactly that end-to-end path (build on the dedicated thread, hand the
+//!    deepest-allowed result back, drop it on a small one).
+//!
 //! ## Lone surrogates
 //!
 //! A JSON string may contain an unpaired UTF-16 surrogate `\u` escape (e.g.
@@ -71,9 +144,27 @@
 
 use std::fmt::Write as _;
 
+use serde::Deserialize as _;
 use serde_json::{Number, Value};
 
 use crate::errors::{Error, Result};
+
+/// Maximum array/object nesting depth [`loads`] accepts at all. See the
+/// module doc's "Recursion / nesting depth" section for why this value (and
+/// not `serde_json`'s built-in 128-level default) was chosen.
+pub const MAX_JSON_DEPTH: usize = 4096;
+
+/// Maximum nesting depth [`loads`] will parse directly on the calling
+/// thread; anything deeper (up to [`MAX_JSON_DEPTH`]) is instead parsed on a
+/// dedicated large-stack thread. See the module doc's "Recursion / nesting
+/// depth" section.
+const SAFE_INLINE_DEPTH: usize = 200;
+
+/// Stack size for the dedicated thread [`parse_on_dedicated_stack`] spawns
+/// for a document deeper than [`SAFE_INLINE_DEPTH`]. See the module doc's
+/// "Recursion / nesting depth" section for the empirical test backing this
+/// number.
+const LARGE_PARSE_STACK_BYTES: usize = 64 * 1024 * 1024;
 
 /// How to render a [`Value`] tree, mirroring one Python `json.dumps`/`dump`
 /// call's keyword arguments.
@@ -172,14 +263,69 @@ pub fn encode_str(s: &str, ensure_ascii: bool) -> String {
 /// tokens Python's decoder accepts by default, any numeric literal that
 /// would overflow to a non-finite `f64` the way CPython's `float()` silently
 /// overflows to `inf`/`-inf` (`pyjson_non_finite_float`; see the module doc's
-/// "NaN / Infinity" note and `rust/DEVIATIONS.md`), and any lone (unpaired)
+/// "NaN / Infinity" note and `rust/DEVIATIONS.md`), any lone (unpaired)
 /// UTF-16 surrogate `\u` escape in a string (PORTING.md §3.6;
-/// `rust/DEVIATIONS.md`).
+/// `rust/DEVIATIONS.md`), and any document nested deeper than
+/// [`MAX_JSON_DEPTH`] (module doc's "Recursion / nesting depth" note;
+/// `rust/DEVIATIONS.md`) -- `serde_json`'s own built-in recursion limit is
+/// disabled (see [`MAX_JSON_DEPTH`]'s doc for why) in favour of that
+/// pre-scanned bound.
 pub fn loads(text: &str) -> serde_json::Result<Value> {
     reject_lone_surrogate_escapes(text)?;
-    let value: Value = serde_json::from_str(text)?;
+    let depth = scan_nesting_depth(text, MAX_JSON_DEPTH)?;
+    if depth <= SAFE_INLINE_DEPTH {
+        parse_and_validate(text)
+    } else {
+        parse_on_dedicated_stack(text)
+    }
+}
+
+/// The actual parse plus the (also-recursive, over the same depth)
+/// non-finite-number check, run together so both stay on whichever thread
+/// [`loads`] decided is safe for this document's depth -- see that
+/// function's callers ([`parse_on_dedicated_stack`] in particular) for why
+/// running only the parse there and the validation back on the original
+/// thread would defeat the whole point of picking a safe stack.
+///
+/// `disable_recursion_limit` lifts `serde_json`'s own hardcoded 128-level
+/// check; for `Value` specifically this also requires the crate's
+/// `unbounded_depth` Cargo feature (enabled in `Cargo.toml`) -- without it,
+/// `Value`'s deserialization keeps enforcing the 128-level limit on its own
+/// regardless of this call. [`scan_nesting_depth`] is this port's real depth
+/// bound; disabling the built-in one just lets a document past 128 levels
+/// reach it. `end()` reproduces `serde_json::from_str`'s own
+/// trailing-garbage check (its internal `from_trait` calls it right after
+/// `Deserialize::deserialize`).
+fn parse_and_validate(text: &str) -> serde_json::Result<Value> {
+    let mut de = serde_json::Deserializer::from_str(text);
+    de.disable_recursion_limit();
+    let value = Value::deserialize(&mut de)?;
+    de.end()?;
     reject_non_finite_numbers(&value)?;
     Ok(value)
+}
+
+/// Parses `text` (already confirmed to be at most [`MAX_JSON_DEPTH`] deep by
+/// [`scan_nesting_depth`]) on a freshly spawned thread with an explicit
+/// [`LARGE_PARSE_STACK_BYTES`]-sized stack, so a deep-but-within-bound
+/// document never risks overflowing whatever (possibly small) stack the
+/// calling thread happens to have. See the module doc's "Recursion / nesting
+/// depth" section.
+fn parse_on_dedicated_stack(text: &str) -> serde_json::Result<Value> {
+    let owned = text.to_string();
+    let handle = std::thread::Builder::new()
+        .stack_size(LARGE_PARSE_STACK_BYTES)
+        .spawn(move || parse_and_validate(&owned))
+        .map_err(|_| {
+            <serde_json::Error as serde::de::Error>::custom(
+                "failed to spawn the depth-safe JSON parser thread",
+            )
+        })?;
+    handle.join().unwrap_or_else(|_| {
+        Err(<serde_json::Error as serde::de::Error>::custom(
+            "the depth-safe JSON parser thread panicked",
+        ))
+    })
 }
 
 /// Pre-scan for a lone (unpaired) surrogate `\u` escape inside a JSON string
@@ -257,6 +403,68 @@ fn reject_lone_surrogate_escapes(text: &str) -> serde_json::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Pre-scans `text` for its maximum array/object nesting depth, before
+/// handing it to `serde_json` -- see [`MAX_JSON_DEPTH`]'s doc (the module's
+/// "Recursion / nesting depth" section) for why this exists at all instead
+/// of relying on `serde_json`'s own (now disabled, for depths past 128)
+/// built-in limit, and for how the returned depth picks between the inline
+/// and dedicated-stack parse paths in [`loads`]. Tracks "inside a string
+/// literal" state exactly like [`reject_lone_surrogate_escapes`] (respecting
+/// backslash escapes, and safe to scan byte-at-a-time for the same reason:
+/// every UTF-8 continuation byte is `>= 0x80` and so never collides with the
+/// ASCII bytes compared against here), and counts `{`/`[` against `}`/`]`
+/// outside of strings. This does not itself validate that the JSON is
+/// well-formed (unbalanced or malformed brackets are left for `serde_json`
+/// to reject as a syntax error) -- it only ever needs to *reject early* on
+/// depth, never accept early on syntax.
+fn scan_nesting_depth(text: &str, max_depth: usize) -> serde_json::Result<usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    let mut depth: usize = 0;
+    let mut max_seen: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            match b {
+                b'"' => {
+                    in_string = false;
+                    i += 1;
+                }
+                b'\\' => {
+                    // Skip the backslash and the one byte after it (the
+                    // escaped character, always ASCII in valid JSON).
+                    i += 2;
+                }
+                _ => i += 1,
+            }
+            continue;
+        }
+        match b {
+            b'"' => {
+                in_string = true;
+                i += 1;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                max_seen = max_seen.max(depth);
+                if depth > max_depth {
+                    return Err(<serde_json::Error as serde::de::Error>::custom(
+                        "json nesting exceeds the maximum supported depth",
+                    ));
+                }
+                i += 1;
+            }
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(max_seen)
 }
 
 /// Rejects any `Number` in the tree that is a `.`/exponent-bearing literal
@@ -502,6 +710,74 @@ mod tests {
 
     use super::*;
 
+    /// Builds a JSON document nested `n` levels deep: `n` open brackets, a
+    /// scalar, `n` close brackets (e.g. `n=2` -> `"[[1]]"`). `pub(super)` so
+    /// `oracle_tests` (a sibling test module below) can reuse it.
+    pub(super) fn nested_array(n: usize) -> String {
+        let mut s = String::with_capacity(n * 2 + 2);
+        for _ in 0..n {
+            s.push('[');
+        }
+        s.push('1');
+        for _ in 0..n {
+            s.push(']');
+        }
+        s
+    }
+
+    // A-R3-1: `loads`' inline path (depth <= `SAFE_INLINE_DEPTH`) must not
+    // risk a stack overflow even on a thread with a small stack -- run it on
+    // a deliberately small (2 MiB) stack, at exactly the inline threshold.
+    #[test]
+    fn inline_path_is_safe_on_a_small_stack_thread() {
+        let doc = nested_array(SAFE_INLINE_DEPTH);
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || loads(&doc).map(|_| ()))
+            .unwrap();
+        assert!(handle.join().unwrap().is_ok());
+    }
+
+    // A-R3-1: a document deeper than `SAFE_INLINE_DEPTH` must still parse
+    // successfully, all the way out to `MAX_JSON_DEPTH`, via the
+    // dedicated-stack path.
+    #[test]
+    fn dedicated_stack_path_parses_up_to_max_json_depth() {
+        for n in [SAFE_INLINE_DEPTH + 1, 1000, MAX_JSON_DEPTH] {
+            let doc = nested_array(n);
+            assert!(loads(&doc).is_ok(), "depth {n} should parse");
+        }
+    }
+
+    // A-R3-1: anything past `MAX_JSON_DEPTH` is rejected outright (by the
+    // cheap pre-scan, before any parsing is attempted), not silently
+    // accepted and not a stack overflow.
+    #[test]
+    fn depth_past_max_json_depth_is_rejected() {
+        let doc = nested_array(MAX_JSON_DEPTH + 1);
+        assert!(loads(&doc).is_err());
+    }
+
+    // A-R3-1: the hazard the module doc's "Recursion / nesting depth"
+    // section calls out -- building a deep `Value` on a dedicated
+    // large-stack thread only solves half the problem, because the result
+    // crosses back to the caller's own thread and is dropped there. Confirm
+    // the *whole* round trip -- `loads` a `MAX_JSON_DEPTH` document, then
+    // drop the result -- is safe even when driven from a small (2 MiB)
+    // stack throughout.
+    #[test]
+    fn dedicated_stack_result_is_safe_to_drop_on_a_small_stack() {
+        let doc = nested_array(MAX_JSON_DEPTH);
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let value = loads(&doc).expect("MAX_JSON_DEPTH should parse");
+                drop(value); // the hazard under test: must not overflow
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
     #[test]
     fn compact_sorted_matches_audit_style() {
         let v = json!({"b": 1, "a": "x", "c": null});
@@ -651,6 +927,39 @@ mod oracle_tests {
     use super::*;
     use crate::oracle;
     use serde_json::json;
+
+    // A-R3-1: the exact depths the equivalence review probed against
+    // `python3.12` (all confirmed there to parse without error) must also
+    // parse in Rust -- pinning the fix for the bug where anything past a
+    // mere 128 levels of nesting became `state_corrupt`/a silent skip/a
+    // malformed-input error in this port despite Python handling it fine.
+    #[test]
+    fn loads_matches_python_for_probed_nesting_depths() {
+        let depths = [128, 129, 200, 500, 900];
+        let script = format!("for n in {depths:?}:\n    print('[' * n + '1' + ']' * n)\n",);
+        let output = oracle::python(&script);
+        let py_lines: Vec<&str> = output.lines().collect();
+        assert_eq!(py_lines.len(), depths.len());
+        for (&n, py_doc) in depths.iter().zip(py_lines.iter()) {
+            // Python parsed it without raising (otherwise the script above
+            // would have thrown and `oracle::python` would have panicked on
+            // the non-zero exit) -- confirm Rust parses the identical text
+            // too, and that the two produce the same logical value.
+            let rust_doc = super::tests::nested_array(n);
+            assert_eq!(&rust_doc, py_doc, "depth {n} document text mismatch");
+            let mut value = loads(py_doc).unwrap_or_else(|e| {
+                panic!("depth {n} (confirmed OK in Python) failed to parse in Rust: {e}")
+            });
+            for _ in 0..n {
+                let mut arr = match value {
+                    Value::Array(arr) if arr.len() == 1 => arr,
+                    other => panic!("depth {n}: expected a single-element array, got {other:?}"),
+                };
+                value = arr.pop().unwrap();
+            }
+            assert_eq!(value, json!(1), "depth {n} should unwrap to the scalar 1");
+        }
+    }
 
     /// A small, deterministic xorshift64 PRNG -- good enough to fuzz float
     /// bit patterns reproducibly without pulling `rand` into a test that's

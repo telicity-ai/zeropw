@@ -221,7 +221,7 @@ impl StateDir {
         }
         let text = pyjson::dumps(value, DumpOptions::pretty_sorted())
             .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
-        let tmp = tmp_path(&target);
+        let tmp = tmp_path_write_json(&target);
         let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -296,7 +296,7 @@ impl StateDir {
         if let Some(parent) = target.parent() {
             mkdir_p(parent)?;
         }
-        let tmp = tmp_path(&target);
+        let tmp = tmp_path_write_bytes(&target);
         let result = (|| -> std::io::Result<()> {
             let mut file = OpenOptions::new()
                 .write(true)
@@ -451,7 +451,10 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
         .map_err(|_| Error::state("state_write_failed").with_detail(path_str(path)))
 }
 
-fn tmp_path(target: &Path) -> PathBuf {
+/// `write_json`'s temp name (store.py:97: `.{name}.{pid}.{tid}.tmp`), pid
+/// *and* thread-id qualified so two threads in the same process never
+/// collide on one temp path.
+fn tmp_path_write_json(target: &Path) -> PathBuf {
     let name = target
         .file_name()
         .and_then(|n| n.to_str())
@@ -459,6 +462,25 @@ fn tmp_path(target: &Path) -> PathBuf {
     let tid = format!("{:?}", thread::current().id());
     let tid: String = tid.chars().filter(|c| c.is_ascii_digit()).collect();
     let tmp_name = format!(".{name}.{}.{tid}.tmp", std::process::id());
+    target.with_file_name(tmp_name)
+}
+
+/// `write_bytes`' own temp name (store.py:138: `.{name}.{pid}.tmp`) --
+/// A-R3-4: deliberately *pid-only*, unlike [`tmp_path_write_json`]'s
+/// pid-and-thread-id name, so two threads in the same process calling
+/// `write_bytes` on the same `name` concurrently share one temp path. That
+/// also means the leftover tmp file `write_bytes` intentionally does not
+/// clean up on failure (store.py has no `except` clause unlinking it; see
+/// [`StateDir::write_bytes`]'s own doc) has exactly this pid-only name, not
+/// a thread-qualified one -- pinned by
+/// `tests::write_json_cleans_tmp_on_failure_but_write_bytes_does_not`, which
+/// asserts the exact leftover filename rather than just a prefix match.
+fn tmp_path_write_bytes(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("state");
+    let tmp_name = format!(".{name}.{}.tmp", std::process::id());
     target.with_file_name(tmp_name)
 }
 
@@ -476,7 +498,10 @@ pub fn now() -> f64 {
 
 /// `store.iso(ts)`: `time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))`.
 /// `time.gmtime` floors a fractional timestamp to whole seconds (verified
-/// against CPython, not just assumed -- see `rust/tests/store_oracle.rs`).
+/// against CPython, not just assumed -- see
+/// `rust/tests/store_oracle.rs`'s `iso_matches_python_time_gmtime_over_a_timestamp_table`,
+/// which covers the epoch, negative and fractional timestamps, 2000-02-29,
+/// years 1 and 9999/10000, the `i32` boundaries, and 200 randomized values).
 pub fn iso(ts: Option<f64>) -> String {
     let ts = ts.unwrap_or_else(now);
     let secs = ts.floor() as i64;
@@ -705,6 +730,24 @@ mod tests {
         );
     }
 
+    // A-R3-5: `subdir`'s Python source (`target.mkdir(mode=DIR_MODE,
+    // exist_ok=True)`) also raises an uncaught `FileExistsError` when a
+    // regular file already occupies the target path -- `exist_ok=True` only
+    // suppresses the error when the path already exists *as a directory*;
+    // confirmed against `python3.12` (`state.subdir(...)` against a
+    // pre-existing regular file raises `FileExistsError`, not `StateError`).
+    // DEVIATIONS.md's row for this function must cover both uncaught cases
+    // (missing parent, above, and this one), not just the first.
+    #[test]
+    fn subdir_on_path_occupied_by_a_file_is_state_write_failed() {
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("occupied"), b"x").unwrap();
+        let err = state.subdir("occupied").unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+        assert!(state.path.join("occupied").is_file());
+    }
+
     // A-R2-7: `create()` only raises `StateError("state_exists")` from its
     // own initial `path.exists()` probe in Python -- any other `mkdir`
     // failure (e.g. a read-only parent directory) is an uncaught raw
@@ -748,6 +791,180 @@ mod tests {
                 assert_eq!(err.reason, "state_lock_failed");
             }
         }
+    }
+
+    // A-R3-2: `write_json`/`write_bytes`/`append_line` each have at least
+    // one `mkdir`/`os.open` call site that sits *before* Python's own
+    // `try`/`except` (store.py:96-98 `write_json`, store.py:137-139
+    // `write_bytes`, store.py:117-118 `append_line` -- the last has no
+    // `except` at all; see its own doc comment and its `DEVIATIONS.md` row).
+    // A failure there is Python's own uncaught `PermissionError` (a
+    // read-only parent directory) or `FileExistsError` (a regular file
+    // occupying the parent path) -- confirmed against real `python3.12`
+    // below, not just asserted -- rather than the `StateError
+    // ("state_write_failed")` each function's own `except` clause raises for
+    // every *other* failure. This port folds all of these into that same
+    // `state_write_failed` reason (PORTING.md §3.5; `DEVIATIONS.md`); these
+    // tests pin that folding the way `lock_open_failure_is_state_lock_failed`
+    // pins the analogous `lock()` row.
+    fn confirm_python_raises(op: &str, expect: &str) {
+        let script = format!(
+            r#"
+import tempfile, os
+from zeropw.store import StateDir
+with tempfile.TemporaryDirectory() as d:
+    state = StateDir(os.path.join(d, "state"))
+    state.create()
+    {op}
+"#
+        );
+        let out = crate::oracle::python(&script);
+        assert_eq!(out.trim(), expect, "python oracle script:\n{script}");
+    }
+
+    #[test]
+    fn write_json_parent_permission_denied_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    os.chmod(state.path, 0o500)
+    try:
+        state.write_json("doc.json", {"a": 1})
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+    finally:
+        os.chmod(state.path, 0o700)
+"#,
+            "PermissionError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = state.write_json("doc.json", &json!({"a": 1}));
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
+        let err = result.unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    #[test]
+    fn write_json_parent_occupied_by_file_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    with open(os.path.join(state.path, "occupied"), "w") as f:
+        f.write("x")
+    try:
+        state.write_json("occupied/doc.json", {"a": 1})
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+"#,
+            "FileExistsError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("occupied"), b"x").unwrap();
+        let err = state
+            .write_json("occupied/doc.json", &json!({"a": 1}))
+            .unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    #[test]
+    fn write_bytes_parent_permission_denied_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    os.chmod(state.path, 0o500)
+    try:
+        state.write_bytes("blob.bin", b"x")
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+    finally:
+        os.chmod(state.path, 0o700)
+"#,
+            "PermissionError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = state.write_bytes("blob.bin", b"x");
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
+        let err = result.unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    #[test]
+    fn write_bytes_parent_occupied_by_file_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    with open(os.path.join(state.path, "occupied"), "w") as f:
+        f.write("x")
+    try:
+        state.write_bytes("occupied/blob.bin", b"x")
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+"#,
+            "FileExistsError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("occupied"), b"x").unwrap();
+        let err = state.write_bytes("occupied/blob.bin", b"x").unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    #[test]
+    fn append_line_parent_permission_denied_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    os.chmod(state.path, 0o500)
+    try:
+        state.append_line("log.jsonl", "hello")
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+    finally:
+        os.chmod(state.path, 0o700)
+"#,
+            "PermissionError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = state.append_line("log.jsonl", "hello");
+        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
+        let err = result.unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
+    }
+
+    #[test]
+    fn append_line_parent_occupied_by_file_is_state_write_failed() {
+        confirm_python_raises(
+            r#"
+    with open(os.path.join(state.path, "occupied"), "w") as f:
+        f.write("x")
+    try:
+        state.append_line("occupied/log.jsonl", "hello")
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+"#,
+            "FileExistsError",
+        );
+
+        let (_tmp, state) = new_state();
+        fs::write(state.path.join("occupied"), b"x").unwrap();
+        let err = state
+            .append_line("occupied/log.jsonl", "hello")
+            .unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
     }
 
     // A-R2-5: `mkdir_p`'s leaf (via `create()` and `subdir()`) must land on
@@ -874,10 +1091,13 @@ print(oct(os.stat(sub).st_mode & 0o777))
         fs::create_dir(state.path.join("blob.bin")).unwrap();
         let err = state.write_bytes("blob.bin", b"x").unwrap_err();
         assert_eq!(err.reason, "state_write_failed");
+        // A-R3-4: not just "some tmp file was left behind" -- the exact
+        // pid-only name Python's `write_bytes` uses (store.py:138), not the
+        // pid-*and*-thread-id name `write_json` uses (store.py:97).
         assert_eq!(
-            tmp_leftovers(&state.path, "blob.bin").len(),
-            1,
-            "write_bytes must leave its tmp file behind on failure, like Python"
+            tmp_leftovers(&state.path, "blob.bin"),
+            vec![format!(".blob.bin.{}.tmp", std::process::id())],
+            "write_bytes must leave its tmp file behind on failure, with Python's pid-only name"
         );
     }
 
