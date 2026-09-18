@@ -54,13 +54,21 @@
 //!   purely so `close()` can eventually notice `self._closed`; a genuine
 //!   connection is always served the instant it arrives. `std` has no
 //!   equivalent "blocking accept with a timeout" for `UnixListener`, so this
-//!   port instead makes the listener non-blocking and polls it every
-//!   [`ACCEPT_POLL_INTERVAL`] (1ms, comfortably under Python's own measured
-//!   ~0.4-2.7ms per-connection accept latency) -- see `BindingServer::close`
-//!   and `accept_loop` for why this needs no durable, connectable "wakeup"
-//!   alias for the socket (finding G-R3-1).
+//!   port makes the listener non-blocking and waits for it with a real
+//!   OS-level readiness notification (`mio::Poll`, an epoll/kqueue wrapper)
+//!   instead of a fixed poll interval: `accept_loop` blocks in
+//!   `Poll::poll(..., None)` -- no timeout, no busy loop -- until either the
+//!   listener becomes readable or `close()` signals a [`mio::Waker`]
+//!   registered on the same `Poll`. See `BindingServer::close` and
+//!   `accept_loop` for why this needs no durable, connectable "wakeup" alias
+//!   for the socket (finding G-R3-1, still withdrawn) and no fixed poll
+//!   interval (finding G-R4-1, replacing round 3's 1ms busy-poll, which a
+//!   re-measurement against the real Python signer showed was both slower
+//!   per accept and far more idle-CPU-hungry than Python -- see
+//!   `DEVIATIONS.md` for the measured numbers).
 
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -70,6 +78,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use mio::unix::SourceFd;
+use mio::{Events, Interest, Poll, Token, Waker};
 use serde_json::{Value, json};
 
 use crate::audit::RecordArgs;
@@ -88,21 +98,26 @@ pub const DEFAULT_MAX_AGENT_CLIENTS: usize = 32;
 const CLIENT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on waiting for the accept thread to notice `closed` and return, the
-/// same 2s Python gives `self._accept_thread.join(timeout=2)`. With the
-/// non-blocking accept loop below (finding G-R3-1) the accept thread should
-/// always notice within one [`ACCEPT_POLL_INTERVAL`], so this bound is
-/// defence in depth rather than the normal path.
+/// same 2s Python gives `self._accept_thread.join(timeout=2)`. `close()`
+/// wakes `accept_loop` with [`mio::Waker::wake`] (finding G-R4-1), which
+/// interrupts a blocked `Poll::poll` immediately rather than relying on a
+/// poll interval, so the accept thread should always notice essentially at
+/// once; this bound is defence in depth rather than the normal path (e.g. a
+/// wedged OS scheduler decision outside this process's control).
 const ACCEPT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-/// How long `accept_loop` sleeps after a non-blocking `accept()` returns
-/// `WouldBlock` before checking `closed` (and the listener) again and
-/// retrying. This is the *only* thing that bounds how quickly `close()`'s
-/// `closed = true` / listener removal is noticed -- it creates no filesystem
-/// state (finding G-R3-1, replacing the round-2 hard-link "wakeup" design)
-/// and, at 1ms, is far below Python's own per-connection accept latency
-/// (~0.4-2.7ms measured against the real signer), so it does not regress
-/// ordinary accept latency the way a fixed 200ms poll would have (finding
-/// G-1).
-const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+/// `Token` identifying the listening socket's readiness registration on this
+/// binding's `mio::Poll` (finding G-R4-1).
+const LISTENER_TOKEN: Token = Token(0);
+/// `Token` identifying the [`mio::Waker`] registration `close()` uses to
+/// interrupt a blocked `accept_loop` -- the event-driven replacement for
+/// round 3's fixed 1ms busy-poll (finding G-R4-1: a re-measurement against
+/// the real Python signer showed that poll interval regressed both
+/// per-connection accept latency (~7x slower than Python, not "far below" as
+/// a prior version of this module claimed) and idle CPU (each live binding's
+/// accept thread woke 700-1000 times/second forever, 25-70x Python's own
+/// idle CPU depending on binding count -- see `DEVIATIONS.md` for the full
+/// measurements).
+const WAKE_TOKEN: Token = Token(1);
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[sshwire::SESSION_BIND_EXTENSION];
 pub const SSH_ED25519: &str = "ssh-ed25519";
@@ -205,16 +220,25 @@ struct ClientSlot {
 struct BindingServer {
     ctx: &'static Context,
     binding: SignerBinding,
-    /// The listening socket, non-blocking (finding G-R3-1: `accept_loop`
-    /// polls it rather than blocking, so no durable wakeup alias is ever
-    /// needed to interrupt it). Wrapped so `close()` can `take()` and drop
-    /// it, releasing the listening fd immediately and independently of
-    /// whether some other `Arc<BindingServer>` clone (e.g. a client thread
-    /// detached past its join deadline) keeps the rest of this struct alive
-    /// (finding G-R3-3) -- Python's `close()` releases its listening fd
+    /// The listening socket, non-blocking (finding G-R3-1/G-R4-1:
+    /// `accept_loop` waits on it through `mio::Poll` rather than blocking in
+    /// `accept()` directly, so no durable wakeup alias is ever needed to
+    /// interrupt it). Wrapped so `close()` can `take()` and drop it,
+    /// releasing the listening fd immediately and independently of whether
+    /// some other `Arc<BindingServer>` clone (e.g. a client thread detached
+    /// past its join deadline) keeps the rest of this struct alive (finding
+    /// G-R3-3) -- Python's `close()` releases its listening fd
     /// unconditionally as its second statement (`self._sock.close()`),
     /// before any joins.
     listener: Mutex<Option<UnixListener>>,
+    /// Wakes `accept_loop`'s blocking `Poll::poll` the instant `close()` sets
+    /// `closed`, with no fixed poll interval and no filesystem state
+    /// (finding G-R4-1, replacing round 3's `ACCEPT_POLL_INTERVAL` busy-poll,
+    /// which a re-measurement against the real Python signer showed
+    /// regressed both accept latency and idle CPU -- see `DEVIATIONS.md`).
+    /// Registered on the same `Poll` instance `accept_loop` owns and blocks
+    /// on, under [`WAKE_TOKEN`].
+    waker: Waker,
     closed: AtomicBool,
     /// Live client connections, keyed by a monotonic per-connection id (not
     /// by `ThreadId`, so a client is registered — and admission is decided —
@@ -243,10 +267,33 @@ impl BindingServer {
         listener
             .set_nonblocking(true)
             .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+        // Event-driven accept wait (finding G-R4-1): one `mio::Poll` per
+        // binding, set up here (before the accept thread starts) and then
+        // handed to it by value. `SourceFd` only borrows the raw fd for the
+        // duration of `register` -- it does not take ownership -- so the
+        // listener itself stays in `listener: Mutex<Option<UnixListener>>`,
+        // exactly as before, for `close()` to `take()` and drop
+        // independently (finding G-R3-3). No `unsafe`: `mio::Registry`'s
+        // `register`/`Waker::new` are safe functions (unlike e.g. the
+        // `polling` crate's `Poller::add`, which is `unsafe fn` because it
+        // requires the caller to `delete()` the source before dropping it).
+        let poll = Poll::new()
+            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+        let listener_fd = listener.as_raw_fd();
+        poll.registry()
+            .register(
+                &mut SourceFd(&listener_fd),
+                LISTENER_TOKEN,
+                Interest::READABLE,
+            )
+            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+        let waker = Waker::new(poll.registry(), WAKE_TOKEN)
+            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
         let server = Arc::new(BindingServer {
             ctx,
             binding,
             listener: Mutex::new(Some(listener)),
+            waker,
             closed: AtomicBool::new(false),
             clients: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(0),
@@ -259,7 +306,7 @@ impl BindingServer {
         let handle = thread::Builder::new()
             .name(format!("zeropw-signer-{}", server.binding.grant_id))
             .spawn(move || {
-                accept_server.accept_loop();
+                accept_server.accept_loop(poll);
                 let _ = done_tx.send(());
             })
             .map_err(|e| Error::state("signer_thread_spawn_failed").with_detail(e.to_string()))?;
@@ -277,21 +324,37 @@ impl BindingServer {
     // ---------------------------------------------------------- lifecycle
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        // Wake `accept_loop` immediately if it is blocked in `Poll::poll`
+        // (finding G-R4-1): `closed` is stored first, so by the time the
+        // accept thread wakes and re-checks it, there is no race where it
+        // could go back to sleep. This replaces round 3's fixed
+        // `ACCEPT_POLL_INTERVAL` busy-poll with a real event -- no polling
+        // interval bounds how quickly `close()` is noticed, the OS wakes the
+        // blocked thread directly, the same way Python's blocking
+        // `accept()`+`settimeout` is woken by the socket itself becoming
+        // ready or by the timeout elapsing, not by rechecking on a schedule.
+        let _ = self.waker.wake();
         // Take and drop the listener immediately -- Python's `close()`
         // closes `self._sock` as its second statement, before any joins, so
         // the listening fd is released unconditionally rather than only
         // when the last `Arc<BindingServer>` clone drops (finding G-R3-3: a
         // client thread detached past its join deadline below used to keep
         // this whole struct, and therefore the listener fd, alive
-        // indefinitely). This also wakes `accept_loop`: it re-locks
-        // `listener` every polling iteration (at most `ACCEPT_POLL_INTERVAL`
-        // apart -- see `accept_loop`) and exits as soon as it observes
-        // `None`, without ever needing a durable, connectable alias to the
-        // socket (finding G-R3-1 -- the round-2 hard-link "wakeup" design is
-        // withdrawn: the reviewer showed that link was a second, fully
-        // functional agent endpoint reachable even after the directory
-        // holding the real socket was removed, widening the capability
-        // boundary `SSH_AUTH_SOCK` is supposed to be).
+        // indefinitely). `accept_loop` re-locks `listener` after every wakeup
+        // and exits as soon as it observes `None`, without ever needing a
+        // durable, connectable alias to the socket (finding G-R3-1 -- the
+        // round-2 hard-link "wakeup" design is withdrawn: the reviewer showed
+        // that link was a second, fully functional agent endpoint reachable
+        // even after the directory holding the real socket was removed,
+        // widening the capability boundary `SSH_AUTH_SOCK` is supposed to
+        // be). Closing this fd also automatically drops any pending
+        // epoll/kqueue registration for it (both remove a descriptor's
+        // registrations synchronously on `close(2)`), so there is no window
+        // where a reused fd number could be confused for this listener --
+        // and even if the OS behaved otherwise, `accept_loop` never trusts
+        // the poll event's identity for anything beyond "recheck now": it
+        // always re-reads the actual accept result through this same
+        // `Mutex<Option<UnixListener>>`.
         let listener = self
             .listener
             .lock()
@@ -302,9 +365,9 @@ impl BindingServer {
         // does: `JoinHandle::join` has no timeout, so wait on a completion
         // signal sent right before `accept_loop` returns, and give up
         // (detaching the handle) past the deadline instead of blocking
-        // `close()` forever on a wedged accept thread. With the listener
-        // gone, `accept_loop` should notice within one `ACCEPT_POLL_INTERVAL`
-        // (a couple of milliseconds), so this bound is defence in depth.
+        // `close()` forever on a wedged accept thread. With the waker above,
+        // `accept_loop` should notice essentially at once; this bound is
+        // defence in depth.
         let done = self
             .accept_done
             .lock()
@@ -396,51 +459,72 @@ impl BindingServer {
         }
     }
 
-    fn accept_loop(self: Arc<Self>) {
-        // The listener is non-blocking (`BindingServer::start`): a genuine
-        // connection is accepted and served the moment `accept()` sees it,
-        // and a `WouldBlock` just means "nothing pending yet", so this loop
-        // rechecks at most `ACCEPT_POLL_INTERVAL` (1ms) later. That interval
-        // is the entire wakeup mechanism `close()` relies on -- there is no
-        // durable, connectable alias for a blocked accept to wait on
-        // (finding G-R3-1, replacing the round-2 hard-link "wakeup" design:
-        // that link was a second, fully functional agent endpoint, not
-        // merely a wakeup nudge, and stayed reachable even after the
-        // directory holding the real socket was removed). `close()` sets
-        // `closed` and takes the listener out from under this loop; both are
-        // checked every iteration, so this thread exits within about one
-        // `ACCEPT_POLL_INTERVAL` of either happening, with no fixed 200ms
-        // poll (finding G-1) and no filesystem state created to make it
-        // happen sooner.
-        loop {
+    /// `poll` is the `mio::Poll` `BindingServer::start` created and
+    /// registered the listener (`LISTENER_TOKEN`) and `self.waker`
+    /// (`WAKE_TOKEN`) on, moved here by value so this thread is the only one
+    /// ever calling `Poll::poll` on it (finding G-R4-1).
+    fn accept_loop(self: Arc<Self>, mut poll: Poll) {
+        // Event-driven wait, no fixed poll interval and no busy loop: this
+        // thread blocks in `Poll::poll(..., None)` (no timeout) until the OS
+        // reports the listener readable or `close()` fires the waker, then
+        // rechecks `closed`/the listener exactly once per real event -- the
+        // direct replacement for round 3's `ACCEPT_POLL_INTERVAL` busy-poll,
+        // which a re-measurement against the real Python signer showed was
+        // both ~7x slower per accept and, far more seriously, kept every
+        // live binding's thread waking 700-1000 times/second forever even
+        // when fully idle (25-70x Python's own idle CPU -- see
+        // `DEVIATIONS.md` for the measured numbers, finding G-R4-1). The
+        // listener stays non-blocking (`BindingServer::start`) so a stray
+        // wakeup with nothing pending (a spurious event, mio's own
+        // documented possibility on every backend) just sees `WouldBlock`
+        // and loops back to `poll.poll` instead of blocking in `accept()`.
+        let mut events = Events::with_capacity(4);
+        'outer: loop {
             if self.closed.load(Ordering::SeqCst) {
                 break;
             }
-            let accepted = {
-                let guard = self.listener.lock().expect("listener mutex poisoned");
-                guard.as_ref().map(UnixListener::accept)
-            };
-            match accepted {
-                Some(Ok((stream, _addr))) => {
-                    // On some platforms (observed on macOS/Darwin) a socket
-                    // returned by `accept()` inherits the non-blocking flag
-                    // of the *listening* socket, even though POSIX gives it
-                    // a fresh open file description. `serve_client` (and
-                    // Python's own `client.settimeout(30)`) needs ordinary
-                    // blocking-with-timeout reads/writes, so force it back
-                    // explicitly rather than relying on it starting that way.
-                    let _ = stream.set_nonblocking(false);
-                    self.handle_accepted(stream)
-                }
-                Some(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(ACCEPT_POLL_INTERVAL);
-                    continue;
-                }
-                Some(Err(_)) => break,
-                None => break, // `close()` already took the listener
+            match poll.poll(&mut events, None) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break, // no sane way to keep waiting; exit like a fatal accept error
             }
             if self.closed.load(Ordering::SeqCst) {
                 break;
+            }
+            // A readiness event only means "something may have changed", not
+            // how many connections are queued (mio's own documented
+            // contract, true on both epoll and kqueue): drain until
+            // `WouldBlock` rather than accepting once per event. This also
+            // means the loop never needs to inspect which token fired --
+            // `WAKE_TOKEN` and `LISTENER_TOKEN` both just mean "go check
+            // `closed` and the listener again", exactly like re-checking
+            // both every `ACCEPT_POLL_INTERVAL` used to.
+            loop {
+                let accepted = {
+                    let guard = self.listener.lock().expect("listener mutex poisoned");
+                    guard.as_ref().map(UnixListener::accept)
+                };
+                match accepted {
+                    Some(Ok((stream, _addr))) => {
+                        // On some platforms (observed on macOS/Darwin) a
+                        // socket returned by `accept()` inherits the
+                        // non-blocking flag of the *listening* socket, even
+                        // though POSIX gives it a fresh open file
+                        // description. `serve_client` (and Python's own
+                        // `client.settimeout(30)`) needs ordinary
+                        // blocking-with-timeout reads/writes, so force it
+                        // back explicitly rather than relying on it starting
+                        // that way.
+                        let _ = stream.set_nonblocking(false);
+                        self.handle_accepted(stream);
+                        if self.closed.load(Ordering::SeqCst) {
+                            break 'outer;
+                        }
+                    }
+                    Some(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Some(Err(_)) => break 'outer,
+                    None => break 'outer, // `close()` already took the listener
+                }
             }
         }
     }
@@ -1410,11 +1494,13 @@ fn short_hex_id() -> String {
 }
 
 /// Bind and chmod 0600. `BindingServer::start` sets the returned listener
-/// non-blocking right after this returns (finding G-R3-1): `accept_loop`
-/// polls it every `ACCEPT_POLL_INTERVAL` rather than blocking in `accept()`,
-/// so `close()` can wake it by simply taking the listener away, with no
-/// durable connectable alias needed. See the module doc comment for the
-/// umask/backlog deviations from Python's `socket.bind`/`listen(16)`.
+/// non-blocking right after this returns (finding G-R3-1/G-R4-1):
+/// `accept_loop` waits on it through a per-binding `mio::Poll` (event-driven,
+/// no fixed poll interval) rather than blocking in `accept()` directly, so
+/// `close()` can wake it with `Waker::wake()` and by simply taking the
+/// listener away, with no durable connectable alias needed. See the module
+/// doc comment for the umask/backlog deviations from Python's
+/// `socket.bind`/`listen(16)`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     let listener = UnixListener::bind(path)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
@@ -2394,20 +2480,32 @@ mod tests {
     }
 
     // Regression test for finding G-1, re-measured for the round-3 rewrite
-    // (G-R3-1): a round-1 accept loop set the listener non-blocking and slept
-    // a fixed 200ms on every `WouldBlock`, so a *new* connection could wait
-    // out nearly the whole poll interval before being accepted at all -- ten
-    // sequential connect+request cycles measured ~1.85s (~205ms each)
-    // instead of Python's own ~0.4-2.7ms per connection. Round 2 avoided
-    // that regression with a *blocking* accept woken by a hard-linked
-    // "wakeup" socket; round 3 withdraws that design (it was a second, fully
-    // functional agent endpoint -- finding G-R3-1) in favour of a
-    // non-blocking accept polled every `ACCEPT_POLL_INTERVAL` (1ms). Prints
-    // per-connection latency under `--nocapture` so it can be compared
-    // directly against the real Python signer's own numbers; the assertion
-    // itself just needs to stay well clear of the old 200ms-per-connection
-    // regression, with a generous margin so it is not flaky on a loaded CI
-    // host.
+    // (G-R3-1) and again for round 4 (G-R4-1): a round-1 accept loop set the
+    // listener non-blocking and slept a fixed 200ms on every `WouldBlock`, so
+    // a *new* connection could wait out nearly the whole poll interval before
+    // being accepted at all -- ten sequential connect+request cycles measured
+    // ~1.85s (~205ms each) instead of Python's own real per-cycle latency
+    // (measured directly against `python3.12`: 0.15-0.38ms typical, 10
+    // cycles ~6.8-22ms total including one-off thread-startup jitter on the
+    // first cycle or two). Round 2 avoided that regression with a *blocking*
+    // accept woken by a hard-linked "wakeup" socket (withdrawn: finding
+    // G-R3-1, a real second agent endpoint). Round 3's replacement -- a
+    // non-blocking accept polled every fixed 1ms -- was *itself* a
+    // regression the round-3 report's own (unreproducible) Python numbers
+    // missed: re-measured directly against real Python this round, round 3's
+    // design cost ~1.5ms/cycle (10 cycles ~13.6-14.1ms), about 7x Python's
+    // real number, not "far below" it. This round replaces the fixed
+    // interval with the event-driven `mio::Poll`/`Waker` wait in
+    // `accept_loop` (finding G-R4-1): ten sequential cycles now measure
+    // consistently in the low single-digit milliseconds (repeated runs in
+    // this environment: ~4.0-6.3ms total, ~0.35-1.1ms per cycle), the same
+    // order of magnitude as Python's own real number and no longer
+    // dominated by any fixed interval at all. Prints per-connection latency
+    // under `--nocapture` so it can be compared directly against the real
+    // Python signer's own numbers; the assertion pins a bound well above
+    // this environment's measured range but far tighter than the old,
+    // 35x-loose 500ms (which would not have caught either the round-1 or the
+    // round-3 regression).
     #[test]
     fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
         let f = fixture();
@@ -2424,13 +2522,79 @@ mod tests {
         }
         let elapsed = started.elapsed();
         eprintln!(
-            "[G-R3-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
-             {elapsed:?})"
+            "[G-R4-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
+             {elapsed:?}; real python3.12 measured 6.8-22ms total for the same 10 cycles, \
+             0.15-0.38ms/cycle typical)"
         );
         assert!(
-            elapsed < Duration::from_millis(500),
-            "10 sequential connections took {elapsed:?}, expected well under the old \
-             poll-bound ~2s (10 x 200ms)"
+            elapsed < Duration::from_millis(25),
+            "10 sequential connections took {elapsed:?}; this environment measures 4.0-6.3ms \
+             for the same workload with the event-driven accept wait (finding G-R4-1) -- \
+             25ms is a real, tight pin (not the old, 35x-loose 500ms) with headroom for a \
+             loaded CI host, and is still far below round 3's own busy-poll regression \
+             (~13.6-14.1ms measured against real Python this round)"
+        );
+    }
+
+    // Measurement-only, not a correctness assertion: idle CPU with 1 and
+    // with 9 live bindings, the second half of finding G-R4-2's ruling
+    // (round 3's fixed 1ms busy-poll accept loop woke every live binding's
+    // accept thread 700-1000 times/second forever, even fully idle --
+    // measured at the time as 10ms/5s with 1 binding and 160ms/5s with 9,
+    // 25-70x Python's own idle CPU). Ignored by default (measuring 2 x 5.3s
+    // of real wall-clock idle time is not something an ordinary `cargo test`
+    // run should pay for); run explicitly with `--ignored --nocapture` to
+    // reproduce the numbers quoted in `DEVIATIONS.md`. Uses `ps -o time=`
+    // (whole-process cumulative CPU time, centisecond resolution on macOS)
+    // rather than `libc::getrusage`, since an FFI call would need `unsafe`,
+    // which `rust/PORTING.md`'s engineering rules bar outside `store.rs`.
+    #[test]
+    #[ignore]
+    fn idle_cpu_with_one_and_nine_live_bindings() {
+        fn cpu_time_secs() -> f64 {
+            let pid = std::process::id().to_string();
+            let out = std::process::Command::new("ps")
+                .args(["-o", "time=", "-p", &pid])
+                .output()
+                .expect("ps must be available to measure idle CPU");
+            let text = String::from_utf8_lossy(&out.stdout);
+            let text = text.trim();
+            let mut fields: Vec<f64> = text
+                .rsplit(':')
+                .map(|f| f.parse::<f64>().expect("ps TIME field must be numeric"))
+                .collect();
+            fields.resize(3, 0.0); // [ss, mm, hh], missing higher fields default to 0
+            fields[2] * 3600.0 + fields[1] * 60.0 + fields[0]
+        }
+
+        let f = fixture();
+        thread::sleep(Duration::from_millis(300));
+        let before = cpu_time_secs();
+        thread::sleep(Duration::from_secs(5));
+        let after = cpu_time_secs();
+        eprintln!(
+            "[G-R4-2] Rust idle CPU over 5s with 1 live binding: {:.4}s (real python3.12 \
+             measured ~0.0006s for the same scenario)",
+            after - before
+        );
+
+        let mut _extra = Vec::with_capacity(8);
+        for _ in 0..8 {
+            let grant = f
+                .ctx
+                .policy
+                .create_grant("agent-1", "box", Some(3600), None)
+                .unwrap();
+            _extra.push(f.manager.bind("agent-1", "box", &grant.id).unwrap());
+        }
+        thread::sleep(Duration::from_millis(300));
+        let before = cpu_time_secs();
+        thread::sleep(Duration::from_secs(5));
+        let after = cpu_time_secs();
+        eprintln!(
+            "[G-R4-2] Rust idle CPU over 5s with 9 live bindings: {:.4}s (real python3.12 \
+             measured ~0.0037s for the same scenario)",
+            after - before
         );
     }
 
@@ -2562,6 +2726,7 @@ mod tests {
     #[test]
     fn close_is_not_blocked_by_a_client_thread_wedged_on_the_state_lock() {
         let f = fixture();
+        let server = f.server();
         let mut conn = f.connect();
         assert_eq!(
             conn.request(&f.bind_message()).unwrap(),
@@ -2606,6 +2771,30 @@ mod tests {
 
         let _ = release_tx.send(());
         holder.join().unwrap();
+
+        // Finding G-R4-3: `close()` detaches (does not join) the client
+        // thread that was wedged on `state.lock()` above, since it is well
+        // past `CLIENT_JOIN_TIMEOUT` by the time `close()` gives up on it.
+        // Once `release_tx` unblocks the holder thread, that detached
+        // client thread resumes inside `policy.consume` -> `state.lock()`,
+        // finishes handling the sign request, and writes an `ssh_sign`
+        // audit record -- all *after* this test function would otherwise
+        // have returned and let `f`'s `TempDir` be removed. A detached
+        // thread that outlives the fixture and later recreates
+        // `<tmp>/state/.lock`/`<tmp>/state/audit/audit.jsonl` under an
+        // already-deleted path is exactly the leak this finding describes,
+        // so wait for it to actually finish (it removes its own `ClientSlot`
+        // from `clients`, right before returning, as the single point that
+        // ever does so -- see `serve_client`) before letting `f` drop.
+        assert!(
+            f.wait_until(
+                || server.clients.lock().unwrap().is_empty(),
+                Duration::from_secs(5)
+            ),
+            "the wedged client thread must finish (and remove its own slot) before the test \
+             ends, so it cannot outlive the fixture's TempDir and recreate state under a \
+             deleted path"
+        );
     }
 
     // Regression test for finding G-R3-3: `close()` never closed or dropped
@@ -2684,6 +2873,26 @@ mod tests {
 
         let _ = release_tx.send(());
         holder.join().unwrap();
+
+        // Finding G-R4-3: as in the test above, releasing the holder thread
+        // lets the detached, wedged client thread resume and finish its sign
+        // request (writing an `ssh_sign` audit record) well after `close()`
+        // already returned. Wait for it to remove its own `ClientSlot` from
+        // `clients` (the single point that ever does so, right before it
+        // returns) before this test ends and `f`'s `TempDir` is removed --
+        // otherwise that thread can still be running when the directory it
+        // writes state/audit files under is gone, recreating
+        // `<tmp>/state/.lock`/`<tmp>/state/audit/audit.jsonl` under an
+        // already-deleted path.
+        assert!(
+            f.wait_until(
+                || server.clients.lock().unwrap().is_empty(),
+                Duration::from_secs(5)
+            ),
+            "the wedged client thread must finish (and remove its own slot) before the test \
+             ends, so it cannot outlive the fixture's TempDir and recreate state under a \
+             deleted path"
+        );
     }
 
     // --------------------------------------------- audit policy version (F8)
@@ -2926,11 +3135,13 @@ mod tests {
         let socket_path;
         let socket_dir;
         let server_weak;
+        let tmp_root;
         {
             let f = fixture();
             socket_path = f.binding.socket_path.clone();
             socket_dir = f.manager.socket_dir().to_path_buf();
             server_weak = Arc::downgrade(&f.server());
+            tmp_root = f._tmp.path().to_path_buf();
             assert!(
                 socket_path.exists(),
                 "sanity: socket should exist while bound"
@@ -2956,6 +3167,21 @@ mod tests {
         assert!(
             server_weak.upgrade().is_none(),
             "BindingServer (and therefore its listener) must not survive Fixture teardown"
+        );
+        // Finding G-R4-3: checking only the socket file, `socket_dir` and the
+        // `BindingServer` weak ref missed a detached client thread left
+        // wedged on `state.lock()` by `close()` (finding G-R2-5's bounded
+        // detach path) -- once whatever held that lock let go, the detached
+        // thread would resume, finish handling its sign request, and
+        // recreate `<tmp>/state/.lock`/`<tmp>/state/audit/audit.jsonl` under
+        // this already-removed fixture root. Asserting the whole `TempDir`
+        // root is gone catches that (and any other stray write under it)
+        // regardless of which specific path it recreates.
+        assert!(
+            !tmp_root.exists(),
+            "the fixture's whole TempDir root must not survive teardown -- a surviving \
+             directory here means something (e.g. a detached client thread wedged past \
+             close()'s deadline) wrote under it after the fixture was supposed to be gone"
         );
     }
 }

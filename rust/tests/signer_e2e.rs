@@ -613,6 +613,7 @@ fn revoked_grant_cannot_authenticate() {
 fn teardown_leaves_no_socket_file_or_signer_created_directory() {
     let socket_path;
     let socket_dir;
+    let tmp_root;
     {
         let f = build_fixture();
         f.connection(&f.sshd.host_key_line);
@@ -624,6 +625,7 @@ fn teardown_leaves_no_socket_file_or_signer_created_directory() {
         let binding = f.manager.bind("agent-1", "box", &grant.id).unwrap();
         socket_path = binding.socket_path.clone();
         socket_dir = f.manager.socket_dir().to_path_buf();
+        tmp_root = f.root.clone();
         assert!(
             socket_path.exists(),
             "sanity: socket should exist while bound"
@@ -645,6 +647,15 @@ fn teardown_leaves_no_socket_file_or_signer_created_directory() {
     assert!(
         !socket_dir.exists(),
         "signer-created socket_dir must not survive Fixture teardown"
+    );
+    // Finding G-R4-3: the socket-file/socket_dir checks above miss a
+    // detached client thread left wedged past close()'s join deadline (e.g.
+    // `signer.rs`'s state-lock wedge regression tests) -- once unblocked, it
+    // can resume and write under this fixture's root after the fixture is
+    // supposed to be gone. Assert the whole TempDir root is gone too.
+    assert!(
+        !tmp_root.exists(),
+        "the fixture's whole TempDir root must not survive teardown"
     );
 }
 
