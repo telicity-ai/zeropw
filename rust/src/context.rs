@@ -434,9 +434,21 @@ fn mkdir_private_0700(path: &Path) -> std::io::Result<()> {
     builder.create(path)
 }
 
+/// Finding E-R3-2: this used to encode 8 raw random bytes as hex (16
+/// characters), 8 characters longer than Python's `tempfile.mkdtemp`'s own
+/// 8-character random suffix (`zeropw-sockets-`/`zeropw-runs-` basenames
+/// ended up 8 bytes longer than Python's for the same prefix). That silently
+/// defeated `signer.rs`'s own `MAX_UNIX_PATH` bind-time length check: a
+/// `ctx.config.socket_dir` that Python's shorter basename keeps under the
+/// limit could push Rust's longer one over it, making `choose_socket_dir`
+/// discard the configured directory and fall back to a `zpws-` temp dir that
+/// `Context` neither owns nor removes. 4 random bytes hex-encoded yields the
+/// same 8-character suffix length as `mkdtemp`'s own alphabet (different
+/// character set, same length), matching the fix already applied to
+/// `signer.rs`'s `make_temp_dir` (findings G-2/G-3).
 fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
     for _ in 0..64 {
-        let mut suffix = [0u8; 8];
+        let mut suffix = [0u8; 4];
         {
             use rand::RngCore;
             rand::rngs::OsRng.fill_bytes(&mut suffix);
@@ -483,14 +495,17 @@ fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
 /// oracle-compared against `Path.resolve(strict=False)` for the exact cases
 /// that previously diverged.
 ///
-/// This is *not* a byte-identical reimplementation of `pathlib`'s internals
-/// (see `resolve_components` for the one place that still differs: cycle
-/// handling), only an observable-behaviour match for how `Context` uses it.
-/// A genuine symlink loop is CPython's one case where `Path.resolve(strict=
-/// False)` still raises (`RuntimeError("Symlink loop from ...")`, via a
-/// `stat()` call *after* the lenient walk -- see the comment below); that
-/// escape is recorded in `DEVIATIONS.md` (finding E-R2-2a) since Rust has no
-/// exception to let propagate the same way.
+/// This is a byte-identical reimplementation of CPython 3.12's
+/// `posixpath._joinrealpath` short-circuit-on-cycle behaviour as of round 3
+/// (finding E-R3-1; see [`resolve_components`]'s doc comment for the
+/// remaining, deliberate simplification -- everything *before* a cycle is
+/// hit walks component by component exactly like Python's loop, so the only
+/// difference left is structural, not behavioural). A genuine symlink loop
+/// is CPython's one case where `Path.resolve(strict=False)` still raises
+/// (`RuntimeError("Symlink loop from ...")`, via a `stat()` call *after* the
+/// lenient walk -- see the comment below); that escape is recorded in
+/// `DEVIATIONS.md` (finding E-R2-2a) since Rust has no exception to let
+/// propagate the same way.
 fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
@@ -498,7 +513,19 @@ fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
         std::env::current_dir()?.join(path)
     };
     let mut seen: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
-    let resolved = resolve_components(&abs, &mut seen)?;
+    let comps: Vec<std::path::Component> = abs.components().collect();
+    let resolved = match resolve_components(PathBuf::from("/"), &comps, &mut seen)? {
+        Ok(resolved) => resolved,
+        // A cycle short-circuited resolution somewhere in the walk: `resolve_components`
+        // already appended every remaining component *literally* (unprocessed, exactly like
+        // Python's plain string `join(newpath, rest)`), so the result can still contain
+        // literal `.`/`..` segments that were never structurally interpreted. CPython's
+        // `realpath()` unconditionally finishes with `abspath(path)` == `normpath(path)` for
+        // an already-absolute path, which is a no-op on a fully-resolved path but is exactly
+        // what cleans up this literal remainder -- reproduce that same final normalisation
+        // here (finding E-R3-1).
+        Err(literal) => posix_normpath_absolute(&literal),
+    };
     // CPython's non-strict `os.path.realpath` (the engine `pathlib.Path.resolve(strict=False)`
     // delegates to) never raises for a symlink loop by itself -- `resolve_components`'s `seen`
     // map, just like `posixpath._joinrealpath`, leaves an unresolved cycle as a literal path
@@ -515,6 +542,33 @@ fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
     // Any other `stat()` failure (not found, permission denied, ...) is ignored here, just
     // like Python's `except OSError as e: check_eloop(e)` only re-raises for `ELOOP`.
     Ok(resolved)
+}
+
+/// Port of `posixpath.normpath`, restricted to the absolute-path case (the
+/// only one `resolve_lenient` ever needs): collapses `.`/empty segments and
+/// structurally pops a `..` against whatever real segment precedes it,
+/// silently dropping a leading `..` at the root exactly like Python (an
+/// absolute path's `new_comps` starts empty, and popping an already-empty
+/// `new_comps` is a no-op) -- matching `PathBuf::pop()`'s own no-op-at-root
+/// behaviour. Purely lexical, no filesystem access, used only to clean up
+/// the literal, unprocessed remainder [`resolve_components`] appends after a
+/// symlink cycle short-circuits resolution (finding E-R3-1); a no-op on an
+/// already-fully-resolved path.
+fn posix_normpath_absolute(path: &Path) -> PathBuf {
+    let mut out = PathBuf::from("/");
+    for comp in path.components() {
+        match comp {
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::Normal(part) => {
+                out.push(part);
+            }
+        }
+    }
+    out
 }
 
 /// One pass of the component walk described on [`resolve_lenient`], mirroring CPython 3.12's
@@ -534,12 +588,40 @@ fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
 /// (still-literal) result (see `resolve_lenient`'s post-check, finding E-R2-2a). See
 /// `DEVIATIONS.md` (findings E-R2-1, E-R2-2a) and `rust/tests/vault_context_oracle.rs`'s
 /// `inside_state_matches_python_for_51_hop_symlink_chain*` / `*_self_symlink_loop` tests.
+///
+/// Round 3 (finding E-R3-1) fixed a remaining fail-*open* gap in the cycle
+/// arm: it used to set `resolved = candidate` and `continue` the *same*
+/// loop, so components *after* a detected cycle were still `lstat`'ed and
+/// resolved as if nothing had happened, and the bogus result got cached in
+/// `seen`. CPython's `_joinrealpath` does something stricter on a cycle: it
+/// returns `(join(newpath, rest), False)` immediately, propagating `ok =
+/// False` out of the *recursive* call used to resolve a symlink's target (if
+/// any) and, from there, out of every enclosing frame in turn -- each frame
+/// appends only its *own* remaining, unprocessed components (verbatim, not
+/// even lexically normalised yet) before returning `False` itself. Nothing
+/// past the cycle is ever `lstat`'ed, resolved, or written into `seen`. This
+/// function now takes the remaining components as an explicit slice (so it
+/// can slice off "everything after the cycle" the same way Python's `rest`
+/// string does after `partition`) and returns `Ok(resolved)` on full success
+/// or `Err(literal_path)` -- the short-circuited, not-yet-normalised path --
+/// on a cycle, which every recursive caller re-propagates by appending its
+/// *own* remaining components to the `Err` payload and returning `Err`
+/// again, exactly mirroring Python's bubbling `(path, False)` returns.
+/// [`resolve_lenient`] applies the final `posixpath.normpath`-equivalent
+/// cleanup ([`posix_normpath_absolute`]) once resolution finishes, matching
+/// `realpath()`'s own unconditional `abspath(path)` call. See
+/// `rust/tests/vault_context_oracle.rs`'s
+/// `inside_state_matches_python_for_loop_then_dotdot_then_symlink` (the
+/// probe shape the equivalence reviewer gave: a self-loop followed by
+/// `../<other-symlink>/../x`, which the previous version resolved into the
+/// wrong directory).
 fn resolve_components(
-    path: &Path,
+    start: PathBuf,
+    comps: &[std::path::Component],
     seen: &mut HashMap<PathBuf, Option<PathBuf>>,
-) -> std::io::Result<PathBuf> {
-    let mut resolved = PathBuf::from("/");
-    for comp in path.components() {
+) -> std::io::Result<Result<PathBuf, PathBuf>> {
+    let mut resolved = start;
+    for (i, comp) in comps.iter().enumerate() {
         match comp {
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
             std::path::Component::CurDir => {}
@@ -559,10 +641,15 @@ fn resolve_components(
                     Some(None) => {
                         // This symlink is an ancestor of itself in the current resolution --
                         // a genuine cycle. Python's non-strict `_joinrealpath` does not raise
-                        // here; it leaves the symlink's own path unresolved and moves on. The
-                        // loop is only detected later (`resolve_lenient`'s `stat()` post-check).
-                        resolved = candidate;
-                        continue;
+                        // here, but it does stop resolving immediately: `return join(newpath,
+                        // rest), False`. Reproduce that exactly -- append every remaining
+                        // component *literally* (not processed by this loop at all) and hand
+                        // the short-circuit back to the caller instead of continuing.
+                        let mut literal = candidate;
+                        for rest in &comps[i + 1..] {
+                            literal.push(rest.as_os_str());
+                        }
+                        return Ok(Err(literal));
                     }
                     None => {}
                 }
@@ -570,14 +657,32 @@ fn resolve_components(
                     Ok(meta) if meta.file_type().is_symlink() => {
                         seen.insert(candidate.clone(), None);
                         let target = fs::read_link(&candidate)?;
-                        let joined = if target.is_absolute() {
-                            target
+                        let target_comps: Vec<std::path::Component> = target.components().collect();
+                        let base = if target.is_absolute() {
+                            PathBuf::from("/")
                         } else {
-                            resolved.join(&target)
+                            // Python resolves a relative symlink target against `path` as it
+                            // stood *before* this component (`newpath`'s own name is not part
+                            // of the prefix passed into the recursive `_joinrealpath` call).
+                            resolved.clone()
                         };
-                        let resolved_target = resolve_components(&joined, seen)?;
-                        seen.insert(candidate.clone(), Some(resolved_target.clone()));
-                        resolved = resolved_target;
+                        match resolve_components(base, &target_comps, seen)? {
+                            Ok(resolved_target) => {
+                                seen.insert(candidate.clone(), Some(resolved_target.clone()));
+                                resolved = resolved_target;
+                            }
+                            Err(mut literal) => {
+                                // The symlink's own target resolution hit a cycle further
+                                // down: propagate the short-circuit, appending *this* frame's
+                                // remaining components literally, same as Python's `if not
+                                // ok: return join(path, rest), False`. No `seen` entry is
+                                // written for `candidate` -- it stays `None` (unresolved).
+                                for rest in &comps[i + 1..] {
+                                    literal.push(rest.as_os_str());
+                                }
+                                return Ok(Err(literal));
+                            }
+                        }
                     }
                     // Exists but is not a symlink, or does not exist at all
                     // (or is otherwise unreadable): keep it literally, the
@@ -587,7 +692,7 @@ fn resolve_components(
             }
         }
     }
-    Ok(resolved)
+    Ok(Ok(resolved))
 }
 
 #[cfg(test)]
@@ -636,5 +741,81 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         fs::remove_dir(&path).unwrap();
         assert_eq!(mode, 0o700);
+    }
+
+    /// Finding E-R3-2: `create_private_dir`'s random suffix used to be 8 raw
+    /// bytes hex-encoded (16 characters), 8 characters longer than Python's
+    /// `tempfile.mkdtemp`'s own suffix for the same prefix -- oracle-compared
+    /// here directly against real `python3.12`, mirroring `signer.rs`'s own
+    /// `make_temp_dir_suffix_length_matches_python_mkdtemp` (the identical
+    /// fix for the identical bug, findings G-2/G-3).
+    #[test]
+    fn create_private_dir_suffix_length_matches_python_mkdtemp() {
+        let python_suffix_len: usize = crate::oracle::python(
+            "import tempfile, os\n\
+             path = tempfile.mkdtemp(prefix='zeropw-sockets-')\n\
+             print(len(os.path.basename(path)) - len('zeropw-sockets-'))\n",
+        )
+        .trim()
+        .parse()
+        .expect("python prints an integer suffix length");
+        let base = std::env::temp_dir();
+        let path = create_private_dir(&base, "zeropw-sockets-").unwrap();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("utf8 basename")
+            .to_string();
+        fs::remove_dir(&path).unwrap();
+        assert!(name.starts_with("zeropw-sockets-"), "{name}");
+        let rust_suffix_len = name.len() - "zeropw-sockets-".len();
+        assert_eq!(rust_suffix_len, python_suffix_len);
+    }
+
+    /// Finding E-R3-1: the reviewer's probe shape for the fail-*open* cycle-handling gap.
+    /// `base/L` is a **self-loop** symlink (`L -> L`); `base/M` is a symlink to a real,
+    /// unrelated directory (`base/other/deep`). The candidate path walks *through* the loop
+    /// first, then backs out of it with `..`, then through the unrelated symlink, then backs
+    /// out of *that* too, landing on a fresh leaf `x`. CPython's `posixpath._joinrealpath`
+    /// resolves this to `<base>/x`: once the self-loop is detected, it stops resolving
+    /// entirely and appends every remaining component (`../M/../x`) *literally*, and only
+    /// `normpath`-cleans the whole thing at the very end -- so the `M` symlink is never even
+    /// looked at, because it comes *after* the point where resolution gave up. The previous
+    /// Rust implementation kept resolving past the cycle, so it *did* follow `M`, giving the
+    /// wrong answer `<base>/other/x`.
+    #[test]
+    fn resolve_lenient_matches_python_for_loop_then_dotdot_then_symlink() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let base = tmp.path().to_path_buf();
+        let loop_path = base.join("L");
+        std::os::unix::fs::symlink(&loop_path, &loop_path).expect("self-loop symlink");
+        let other_deep = base.join("other").join("deep");
+        fs::create_dir_all(&other_deep).expect("mkdir other/deep");
+        let m_path = base.join("M");
+        std::os::unix::fs::symlink(&other_deep, &m_path).expect("M symlink");
+        let candidate = base.join("L").join("..").join("M").join("..").join("x");
+
+        let rust_resolved = resolve_lenient(&candidate).expect("resolve_lenient");
+
+        let python_resolved = crate::oracle::python(&format!(
+            "import pathlib\n\
+             print(pathlib.Path({candidate:?}).resolve(strict=False))\n",
+        ));
+        let python_resolved = PathBuf::from(python_resolved.trim());
+
+        assert_eq!(
+            rust_resolved, python_resolved,
+            "rust={rust_resolved:?} python={python_resolved:?}"
+        );
+        assert_eq!(
+            rust_resolved.file_name().and_then(|n| n.to_str()),
+            Some("x"),
+            "must land on the fresh leaf, not resolve through the M symlink: {rust_resolved:?}"
+        );
+        assert_eq!(
+            rust_resolved.parent().and_then(|p| p.file_name()),
+            base.file_name(),
+            "must land directly under base, not base/other: {rust_resolved:?}"
+        );
     }
 }

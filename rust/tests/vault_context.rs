@@ -899,3 +899,39 @@ fn decrypt_shared_coerces_non_string_scalar_fields_like_pythons_str() {
     let value = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
     assert_eq!(value.expose(), SYNTHETIC);
 }
+
+/// Finding E-R3-2: a `create_private_dir` random suffix 8 characters longer
+/// than Python's own `tempfile.mkdtemp` suffix silently defeated the
+/// signer's `choose_socket_dir` probe (`candidate.join("s" * 24)` must fit
+/// under `MAX_UNIX_PATH` = 100): on this machine, the over-long Rust
+/// basename made that probe 105 bytes (Python's equivalent probe is 97),
+/// so `choose_socket_dir` discarded `ctx.config.socket_dir` entirely and
+/// fell back to an unrelated `zpws-` temp dir that `Context` neither owns
+/// nor removes. With the suffix length fixed to match Python, the signer
+/// must actually use the configured directory under this machine's default
+/// `TMPDIR`, not silently fall back.
+#[test]
+fn signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ctx: &'static Context = Box::leak(Box::new(
+        Context::initialize(
+            tmp.path().join("state"),
+            ADMIN,
+            RECOVERY,
+            Config::default(),
+            clock::fixed(FIXED_NOW),
+        )
+        .expect("Context::initialize"),
+    ));
+    let configured = ctx
+        .config
+        .socket_dir
+        .clone()
+        .expect("apply_config_defaults always sets socket_dir");
+    let manager = zeropw::signer::install(ctx, None).expect("signer::install");
+    assert_eq!(
+        manager.socket_dir(),
+        configured.as_path(),
+        "signer must bind in the Context-owned socket_dir, not fall back to an unrelated temp dir"
+    );
+}

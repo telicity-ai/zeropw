@@ -26,7 +26,14 @@
 //! returns `StateError("state_corrupt")` instead (the closest handled error a
 //! caller of a `Vault` method already expects for corrupted state), recorded
 //! once here rather than at each call site (same pattern as the `policy`,
-//! `audit` and `handles` rows in `DEVIATIONS.md`).
+//! `audit` and `handles` rows in `DEVIATIONS.md`). This also covers
+//! `int(v)` over a `versions` object's own keys (`put_secret`,
+//! `list_secrets`, `values_for_trusted_scan`): a key `int()` cannot parse
+//! raises an uncaught `ValueError`, matched here by [`parse_version_key`]
+//! (finding E-R3-4 -- a previous version of this port silently *dropped*
+//! such a key instead of erroring, via `.parse::<i64>().ok()` inside a
+//! `filter_map`, which is neither Python's behaviour nor this module's own
+//! documented `state_corrupt` convention for exactly this class of error).
 
 use std::collections::HashMap;
 use std::fs;
@@ -99,10 +106,18 @@ fn get_or_null<'v>(m: &'v Map<String, Value>, key: &str) -> &'v Value {
     m.get(key).unwrap_or(&Value::Null)
 }
 
-/// Python `str()` on a scalar JSON value, used where `vault.py` coerces a
-/// stored field with `str(...)` (`manifest.get("sha256")`,
-/// `manifest.get("backup_id")`). Arrays/objects are not reachable through any
-/// well-formed manifest this crate's own `backup()` writes.
+/// Python `str()` on a JSON value, used where `vault.py` coerces a stored
+/// field with `str(...)` (`manifest.get("sha256")`, `manifest.get(
+/// "backup_id")`). A well-formed manifest this crate's own `backup()` writes
+/// never puts an array/object in either field, but the manifest is
+/// completely attacker-controlled in an otherwise digest-valid archive (the
+/// digest only covers `documents`, never `manifest`) -- so `restore` must
+/// still produce Python's exact `str()` output for that case, not merely
+/// something plausible: `str()` on a `dict`/`list` falls back to `repr()`
+/// (`str({'a': 1}) == "{'a': 1}"`, `str([1, 2]) == "[1, 2]"`), so the
+/// catch-all here defers to [`python_repr_value`] instead of a compact JSON
+/// rendering (finding E-R3-3; the previous version used `Value::to_string()`
+/// here, e.g. `{"a":1}`, which is not what Python's `str()` produces).
 fn python_str_scalar(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
@@ -116,8 +131,140 @@ fn python_str_scalar(v: &Value) -> String {
                 n.as_str().to_string()
             }
         }
-        other => other.to_string(),
+        Value::Array(_) | Value::Object(_) => python_repr_value(v),
     }
+}
+
+/// Python `repr()` of a value parsed by `json.loads`. `str()` on a
+/// `dict`/`list` (see [`python_str_scalar`]) falls back to `__repr__`, which
+/// renders every *nested* element with, in turn, its own `repr()` --
+/// `str({'a': 1}) == "{'a': 1}"`, `str([1, 'x', None, True]) == "[1, 'x',
+/// None, True]"`. Dict/list iteration order matches Python's own (both
+/// preserve JSON document insertion order; this crate's `serde_json` is
+/// built with the `preserve_order` feature for exactly this reason). Nested
+/// strings reuse [`crate::pystr::repr_str`] (dict keys are always JSON
+/// strings, and Python's `dict.__repr__` reprs its keys the same as any
+/// other value).
+fn python_repr_value(v: &Value) -> String {
+    match v {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::String(s) => crate::pystr::repr_str(s),
+        Value::Number(n) => {
+            if n.is_f64() {
+                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
+            } else {
+                n.as_str().to_string()
+            }
+        }
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(python_repr_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", crate::pystr::repr_str(k), python_repr_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+    }
+}
+
+/// Unicode decimal-digit (category Nd) block starts, Unicode Character
+/// Database version 15.0.0 -- the version CPython 3.12 bundles, matching
+/// `pystr.rs`'s own tables. Every Nd block is exactly 10 consecutive
+/// codepoints representing digits 0-9 in that order (a structural guarantee
+/// of the Unicode Standard, verified directly against `python3.12`'s
+/// `unicodedata` module for every block below): `unicode_decimal_digit_
+/// value` finds the block containing a codepoint and returns its offset
+/// within it. Used by [`python_int_from_str`] (finding E-R3-4) to match
+/// CPython's `int(str)`, which accepts *any* script's decimal digits, not
+/// just ASCII (`int("１") == 1`, the fullwidth digit one).
+const DECIMAL_DIGIT_BLOCK_STARTS: &[u32] = &[
+    0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
+    0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
+    0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0, 0xff10,
+    0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650,
+    0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0,
+    0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950,
+    0x1fbf0,
+];
+
+/// The decimal digit value (0-9) of `c` per CPython 3.12's Unicode decimal
+/// digit (Nd) classification, or `None` if `c` is not a decimal digit in any
+/// script.
+fn unicode_decimal_digit_value(c: char) -> Option<u32> {
+    let cp = c as u32;
+    match DECIMAL_DIGIT_BLOCK_STARTS.binary_search(&cp) {
+        Ok(_) => Some(0),
+        Err(0) => None,
+        Err(idx) => {
+            let start = DECIMAL_DIGIT_BLOCK_STARTS[idx - 1];
+            let offset = cp - start;
+            if offset < 10 { Some(offset) } else { None }
+        }
+    }
+}
+
+/// `str.strip()` with CPython's exact `str.isspace()` predicate (see
+/// `crate::pystr::is_space`), not Rust's narrower `char::is_whitespace()`.
+fn python_strip(s: &str) -> &str {
+    s.trim_matches(crate::pystr::is_space)
+}
+
+/// `int(str)` matching CPython 3.12 exactly: optional `str.isspace()`
+/// padding, an optional `+`/`-` sign, then one or more Unicode decimal
+/// digits (any script -- `int("１") == 1`, not just ASCII `0`-`9`) with
+/// single, non-leading/trailing underscores allowed between them
+/// (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`). Returns `None` for anything
+/// `int()` would raise `ValueError` on, *and* for a magnitude Python's
+/// arbitrary-precision `int` can hold but Rust's `i64` cannot.
+///
+/// Used for `vault.py`'s `int(v)` over a `versions` object's own keys
+/// (finding E-R3-4: `put_secret`'s `max(int(v) for v in entry["versions"])`,
+/// `list_secrets`/`values_for_trusted_scan`'s `sorted(..., key=lambda item:
+/// int(item[0]))`). Unlike `handles.rs`'s deliberately ASCII-only
+/// `python_int_coerce` (PORTING.md §3.7 -- reachable only via a payload
+/// already authenticated with the HMAC signing key), a vault `versions` key
+/// is state-file content, not signed input, so this port must accept
+/// exactly what Python's own `int()` accepts, not a stricter subset.
+fn python_int_from_str(s: &str) -> Option<i64> {
+    let trimmed = python_strip(s);
+    let (negative, digits_part) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
+        return None;
+    }
+    let mut cleaned = String::with_capacity(digits_part.len());
+    let mut prev_underscore = false;
+    for c in digits_part.chars() {
+        if c == '_' {
+            if prev_underscore {
+                return None;
+            }
+            prev_underscore = true;
+            continue;
+        }
+        let digit = unicode_decimal_digit_value(c)?;
+        prev_underscore = false;
+        cleaned.push((b'0' + digit as u8) as char);
+    }
+    let magnitude: i64 = cleaned.parse().ok()?;
+    Some(if negative { -magnitude } else { magnitude })
+}
+
+/// A `versions` object key, parsed exactly like Python's `int(v)` (finding
+/// E-R3-4). `vault.py` never guards this conversion with a `try`/`except`,
+/// so a version key `int()` cannot parse raises an uncaught `ValueError`
+/// there; the closest handled error a caller of a `Vault` method already
+/// expects for corrupted state is `StateError("state_corrupt")` (this
+/// module's own top-of-file DEVIATIONS note, PORTING.md §3.5).
+fn parse_version_key(k: &str) -> Result<i64, Error> {
+    python_int_from_str(k).ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
 }
 
 /// `vault.derive_key`: scrypt(N=2**14, r=8, p=1, dklen=32). `len(passphrase)`
@@ -594,7 +741,9 @@ impl<'a> Vault<'a> {
                 .unwrap_or_default();
             let next_version = versions_obj
                 .keys()
-                .filter_map(|k| k.parse::<i64>().ok())
+                .map(|k| parse_version_key(k))
+                .collect::<Result<Vec<i64>, Error>>()?
+                .into_iter()
                 .max()
                 .unwrap_or(0)
                 + 1;
@@ -829,8 +978,8 @@ impl<'a> Vault<'a> {
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
             let mut vkeys: Vec<(i64, &String)> = versions_obj
                 .keys()
-                .filter_map(|k| k.parse::<i64>().ok().map(|n| (n, k)))
-                .collect();
+                .map(|k| parse_version_key(k).map(|n| (n, k)))
+                .collect::<Result<Vec<_>, Error>>()?;
             vkeys.sort_by_key(|(n, _)| *n);
             let mut versions = Vec::new();
             for (n, k) in vkeys {
@@ -949,8 +1098,8 @@ impl<'a> Vault<'a> {
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
             let mut vkeys: Vec<(i64, &String)> = versions_obj
                 .keys()
-                .filter_map(|k| k.parse::<i64>().ok().map(|n| (n, k)))
-                .collect();
+                .map(|k| parse_version_key(k).map(|n| (n, k)))
+                .collect::<Result<Vec<_>, Error>>()?;
             vkeys.sort_by_key(|(n, _)| *n);
             for (n, k) in vkeys {
                 let record = as_obj(versions_obj.get(k).expect("from keys"))?;

@@ -448,6 +448,260 @@ fn restore_rejects_vault_doc_with_non_dict_dek_in_both_languages() {
     assert_eq!(py, Err("backup_malformed".to_string()));
 }
 
+// ---------------------------------- restore manifest backup_id repr (finding E-R3-3)
+/// Builds a minimal, digest-valid backup archive (empty `documents`, so no
+/// `vault_doc`/KMS interaction at all) whose `manifest.backup_id` is
+/// `backup_id` verbatim -- the manifest is otherwise unauthenticated (the
+/// digest only ever covers `documents`), so an attacker who can hand the
+/// admin a backup file to restore controls this field completely, including
+/// giving it a non-scalar JSON shape.
+fn backup_id_manifest_archive(backup_id: Value) -> Value {
+    let documents = json!({});
+    let payload = pyjson::dumps(&documents, DumpOptions::compact_sorted()).unwrap();
+    let digest = hex::encode(Sha256::digest(payload.as_bytes()));
+    json!({
+        "manifest": {
+            "format": "zeropw-backup-v1",
+            "created_at": "2024-01-01T00:00:00Z",
+            "sha256": digest,
+            "kms_key_id": "irrelevant-for-this-probe",
+            "backup_id": backup_id,
+        },
+        "documents": documents,
+    })
+}
+
+/// Runs `Vault::restore` (Rust) and `Vault.restore` (Python) against the same
+/// `backup_id`-carrying archive, each on its own freshly initialized state
+/// directory, and returns the `backup_id` field of the `restore` audit
+/// record's `extra` each language actually wrote (`vault.py`: `backup_id =
+/// str(manifest.get("backup_id"))`, stored into the audit record verbatim).
+fn probe_restore_backup_id_repr(backup_id: &Value) -> (String, String) {
+    let tmp = TempDir::new().unwrap();
+    let archive = backup_id_manifest_archive(backup_id.clone());
+    let archive_path = tmp.path().join("archive.json");
+    fs::write(&archive_path, serde_json::to_string(&archive).unwrap()).unwrap();
+
+    let rust_state = tmp.path().join("state-rust");
+    let ctx = Context::initialize(
+        &rust_state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, None).unwrap();
+    let records = ctx.audit.tail(1).unwrap();
+    let rust_backup_id = records[0]
+        .get("backup_id")
+        .and_then(Value::as_str)
+        .expect("restore audit record has a string backup_id field")
+        .to_string();
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.context import Context, Config
+from zeropw.vault import Vault
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+Vault.restore(ctx.state, Path({archive}), ctx.audit, kms=None)
+records = ctx.audit.tail(1)
+print(records[0]["backup_id"])
+"#,
+        state = py_str(&py_state),
+        archive = py_str(&archive_path),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    (rust_backup_id, out.trim_end_matches('\n').to_string())
+}
+
+/// Reviewer case: `manifest.backup_id` is a JSON object. Python's `str(dict)`
+/// falls back to `repr(dict)` (`"{'a': 1}"`), not a compact JSON rendering
+/// (`{"a":1}` -- what the previous, buggy `python_str_scalar` catch-all
+/// produced via `Value::to_string()`).
+#[test]
+fn restore_audit_backup_id_object_matches_python_repr() {
+    let (rust, py) = probe_restore_backup_id_repr(&json!({"a": 1}));
+    assert_eq!(py, "{'a': 1}", "python oracle sanity check");
+    assert_eq!(rust, py);
+}
+
+/// Reviewer case: `manifest.backup_id` is a JSON array. Python's `str(list)`
+/// falls back to `repr(list)` (`"[1, 2]"`).
+#[test]
+fn restore_audit_backup_id_array_matches_python_repr() {
+    let (rust, py) = probe_restore_backup_id_repr(&json!([1, 2]));
+    assert_eq!(py, "[1, 2]", "python oracle sanity check");
+    assert_eq!(rust, py);
+}
+
+// ------------------------------------ vault version-key parsing (finding E-R3-4)
+/// Overwrites the sole version key of `secret_id`'s `versions` object in the
+/// on-disk `vault/secrets.json` with `new_key`, leaving the encrypted
+/// record itself untouched. Safe for probes that only read *metadata*
+/// (`list_secrets`/`get_meta`) -- they never decrypt anything, so a renamed
+/// key does not need to match the AAD `version` baked into the ciphertext
+/// at encryption time.
+fn rename_sole_version_key(ctx: &Context, secret_id: &str, new_key: &str) {
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    let versions = doc["secrets"][secret_id]["versions"]
+        .as_object_mut()
+        .expect("versions object");
+    let old_key = versions.keys().next().cloned().expect("one version key");
+    let record = versions.remove(&old_key).expect("record");
+    versions.insert(new_key.to_string(), record);
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
+}
+
+fn setup_single_secret_context(tmp: &TempDir) -> Context {
+    let state = tmp.path().join("state");
+    let ctx = Context::initialize(
+        &state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    ctx.vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"synthetic-token-0123456789",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    ctx
+}
+
+/// Reviewer requirement (finding E-R3-4): `int(v)` over a `versions` key
+/// must match Python's `int()` exactly, not silently drop a key Python
+/// accepts. Each of these forms is one Python's `int()` accepts but is not
+/// a plain ASCII integer literal: leading/trailing whitespace, an
+/// underscore digit-group separator, a fullwidth (non-ASCII) Unicode
+/// decimal digit, a leading zero, and an explicit `+` sign. Cross-checked
+/// against real `python3.12`'s own `list_secrets()` on the *same* on-disk
+/// state directory (sequential opens, not concurrent -- `Vault::doc`/
+/// `Vault._doc` both re-read the JSON file fresh on every call, so no
+/// reopen is needed between the Rust write and the Rust read, and the
+/// Python open happens strictly after both).
+#[test]
+fn list_secrets_version_key_parsing_matches_pythons_int_for_non_canonical_forms() {
+    let cases: &[(&str, i64)] = &[
+        (" 1", 1),
+        ("1_0", 10),
+        ("\u{ff11}", 1), // fullwidth digit one
+        ("01", 1),
+        ("+1", 1),
+    ];
+    for (key, expected) in cases {
+        let tmp = TempDir::new().unwrap();
+        let ctx = setup_single_secret_context(&tmp);
+        let state = tmp.path().join("state");
+        rename_sole_version_key(&ctx, "gh-token", key);
+
+        let metas = ctx.vault.list_secrets(None, None).expect("list_secrets");
+        assert_eq!(metas.len(), 1, "key={key:?}");
+        assert_eq!(metas[0].versions.len(), 1, "key={key:?}");
+        assert_eq!(metas[0].versions[0].version, *expected, "key={key:?}");
+
+        let script = format!(
+            r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+metas = ctx.vault.list_secrets()
+print(metas[0].versions[0].version)
+"#,
+            state = py_str(&state),
+            now = FIXED_NOW,
+        );
+        let out = run_python(&script);
+        let py_version: i64 = out
+            .trim()
+            .parse()
+            .expect("python prints an integer version");
+        assert_eq!(py_version, *expected, "key={key:?}");
+    }
+}
+
+/// Reviewer requirement: a version key `int()` cannot parse at all (e.g.
+/// `"x"`) raises an uncaught `ValueError` in Python (`vault.py` never
+/// guards `int(v)` with a `try`/`except`); Rust must fail closed with the
+/// `StateError("state_corrupt")` this module's own DEVIATIONS row already
+/// documents for exactly this class of corrupted state, not silently drop
+/// the version the way the previous `.parse::<i64>().ok()` inside a
+/// `filter_map` did.
+#[test]
+fn list_secrets_non_integer_version_key_is_state_corrupt_not_silently_dropped() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    rename_sole_version_key(&ctx, "gh-token", "x");
+
+    let err = ctx.vault.list_secrets(None, None).unwrap_err();
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.list_secrets()
+    print("ok")
+except ValueError as exc:
+    print(f"valueerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("valueerror:"),
+        "python must raise an uncaught ValueError for int(\"x\"), got: {out}"
+    );
+}
+
+/// Reviewer requirement: `put_secret`'s next-version computation must also
+/// account for a non-canonical version key, not compute a next-version
+/// number that could overwrite an existing version. After renaming the
+/// existing `"1"` key to `"01"` (still parses to version 1), putting a new
+/// value must land on version 2, exactly as if the key had never been
+/// renamed.
+#[test]
+fn put_secret_next_version_accounts_for_non_canonical_version_keys() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    rename_sole_version_key(&ctx, "gh-token", "01");
+
+    let version = ctx
+        .vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            b"another-synthetic-token-012345",
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    assert_eq!(version, 2, "must not overwrite version 1");
+}
+
 // ----------------------------------------------------- admin passphrase auth
 #[test]
 fn admin_passphrase_set_by_python_authenticates_in_rust() {
@@ -692,6 +946,46 @@ fn inside_state_matches_python_for_51_hop_symlink_chain_with_nonexistent_leaf() 
         rust.0,
         "a 51-hop chain with a nonexistent trailing leaf must still be accepted: {rust:?}"
     );
+}
+
+// ------------------------------------ loop + .. + symlink cycle short-circuit (finding E-R3-1)
+/// Reviewer probe: unlike the self-loop-only case above, this shape has real components
+/// *after* the cycle, so it actually exercises the fail-*open* gap in round-2's cycle handling
+/// (finding E-R3-1) -- the self-loop test alone never reached it because nothing followed the
+/// loop. `tmp/L` is a self-loop symlink; `tmp/M` is a symlink to a real, unrelated directory
+/// outside the state dir (`tmp/other/deep`); the candidate is
+/// `tmp/L/../M/../state/x`. CPython's `posixpath._joinrealpath` stops resolving the instant it
+/// hits the `L` cycle and appends every remaining component (`../M/../state/x`) *literally*,
+/// never even looking `M` up on the filesystem -- a plain lexical `normpath` then collapses
+/// `L/..` and `M/..` away, landing on the *real* trusted `state` directory's own `x`, which
+/// `Context._inside_state` correctly refuses. Round-2's Rust code kept resolving past the
+/// cycle instead: it popped back out of the loop, then *actually* followed the `M` symlink
+/// to `tmp/other/deep`, then appended a literal (nonexistent) `state/x` under *that* --
+/// landing far outside the real state dir and wrongly **accepting** a socket_dir that is, in
+/// truth, inside the trusted store.
+#[test]
+fn inside_state_matches_python_for_loop_then_dotdot_then_symlink() {
+    let (rust, py) = probe_inside_state(|tmp, _state| {
+        let loop_path = tmp.path().join("L");
+        std::os::unix::fs::symlink(&loop_path, &loop_path).unwrap();
+        let other_deep = tmp.path().join("other").join("deep");
+        fs::create_dir_all(&other_deep).unwrap();
+        let m_path = tmp.path().join("M");
+        std::os::unix::fs::symlink(&other_deep, &m_path).unwrap();
+        tmp.path()
+            .join("L")
+            .join("..")
+            .join("M")
+            .join("..")
+            .join("state")
+            .join("x")
+    });
+    assert_eq!(rust, py);
+    assert!(
+        !rust.0,
+        "must be refused as inside the state dir, like Python: {rust:?}"
+    );
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
 }
 
 // ------------------------------------ symlink loop escape (finding E-R2-2a)
