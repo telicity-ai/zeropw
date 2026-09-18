@@ -1427,6 +1427,15 @@ control["restore_pending"] = [1]  # truthy non-bool
 state.write_json(P.CONTROL, control)
 print(p.restore_pending())
 print(p.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos"), grant.id).reason)
+
+# D-R5-1: a `stopped` magnitude beyond `f64` range is still truthy in
+# Python -- previously read as falsy here (`as_f64`-based truthiness),
+# fail-open (`decide` skipped the `global_stop` arm entirely).
+control["restore_pending"] = False
+control["stopped"] = 10**400
+state.write_json(P.CONTROL, control)
+print(p.is_stopped())
+print(p.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos"), grant.id).reason)
 "#,
         path = py_str_literal(&state_path),
     );
@@ -1438,6 +1447,8 @@ print(p.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos"), grant.id).r
     assert_eq!(lines.next().unwrap(), "[]"); // p.usable_connections(...)
     assert_eq!(lines.next().unwrap(), "True"); // p.restore_pending()
     assert_eq!(lines.next().unwrap(), "restore_pending");
+    assert_eq!(lines.next().unwrap(), "True"); // p.is_stopped() with a huge int
+    assert_eq!(lines.next().unwrap(), "global_stop");
 
     // Rust: the exact same state directory Python just wrote (with
     // `"stopped": 1` still on disk from the first half of the script above,
@@ -1483,6 +1494,24 @@ print(p.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos"), grant.id).r
             .unwrap()
             .reason,
         "restore_pending"
+    );
+
+    // D-R5-1: same probe against a `stopped` magnitude beyond `f64` range.
+    control["restore_pending"] = serde_json::json!(false);
+    control["stopped"] = serde_json::from_str(&format!("1{}", "0".repeat(400))).unwrap();
+    state.write_json(policy::CONTROL, &control).unwrap();
+    assert!(policy.is_stopped().unwrap());
+    assert_eq!(
+        policy
+            .evaluate(
+                "agent-1",
+                "gh",
+                &Action::http("GET", "/repos"),
+                Some(&grant_id)
+            )
+            .unwrap()
+            .reason,
+        "global_stop"
     );
 }
 
@@ -3047,6 +3076,96 @@ for c in ([1], {"a": 1}, "abc", None):
         assert_eq!(after["c-bad"]["status"], serde_json::json!("active"));
     }
 
+    // D-R5-4: `python_int_coerce`/`python_int_from_str`'s string branch now
+    // matches CPython's full `int(str)` grammar -- Unicode `Nd` digits (not
+    // just ASCII `0`-9`), `int()`'s own whitespace set (not the full
+    // `str.isspace()`, which additionally strips U+001C-U+001F), and an
+    // inclusive-of-the-real-boundary float-to-`i64` range.
+    for (label, raw, want_new_version) in [
+        ("unicode_digits_arabic", serde_json::json!("٣"), Some(4i64)),
+        (
+            "unicode_digits_fullwidth",
+            serde_json::json!("１２３"),
+            Some(124i64),
+        ),
+        // int()-specific whitespace (25 of `str.isspace()`'s 29 code
+        // points) still strips around a valid numeral.
+        (
+            "int_specific_whitespace",
+            serde_json::json!("\u{2003}5\u{2003}"),
+            Some(6i64),
+        ),
+        // U+001C is `str.isspace()` but NOT part of `int()`'s whitespace
+        // set -- `int("\x1c5")` raises `ValueError` in Python.
+        (
+            "non_int_whitespace_u001c",
+            serde_json::json!("\u{1c}5"),
+            None,
+        ),
+        // The real, representable `f64` boundary `int(9.223372036854775e18)
+        // == 9223372036854774784` in Python (previously rejected by a
+        // rounded, strict `<` threshold).
+        (
+            "float_boundary",
+            serde_json::json!(9.223_372_036_854_775e18),
+            Some(9_223_372_036_854_774_785i64),
+        ),
+    ] {
+        let py_literal = match &raw {
+            serde_json::Value::String(s) => py_str_literal_any(s),
+            other => other.to_string(),
+        };
+        let py_script = format!(
+            "try:\n    print(int({py_literal}) + 1)\nexcept Exception as e:\n    print(type(e).__name__)\n"
+        );
+        let out = run_python(&py_script);
+        match want_new_version {
+            Some(v) => assert_eq!(out.trim(), v.to_string(), "label={label}"),
+            None => assert_eq!(out.trim(), "ValueError", "label={label}"),
+        }
+
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        let mut connections = serde_json::Map::new();
+        connections.insert(
+            "c-bad".into(),
+            serde_json::json!({"status": "active", "policy_version": raw}),
+        );
+        state
+            .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+            .unwrap();
+        let revocations = policy::Revocations {
+            grants: Default::default(),
+            principals: Default::default(),
+            connections: ["c-bad"].into_iter().map(String::from).collect(),
+            secret_versions: Default::default(),
+        };
+        match want_new_version {
+            Some(v) => {
+                pol.reapply_revocations(&revocations)
+                    .unwrap_or_else(|e| panic!("label={label} must succeed: {e:?}"));
+                let after = state
+                    .read_json(policy::CONNECTIONS, serde_json::json!({}))
+                    .unwrap();
+                assert_eq!(
+                    after["c-bad"]["policy_version"],
+                    serde_json::json!(v),
+                    "label={label}"
+                );
+            }
+            None => {
+                assert!(
+                    pol.reapply_revocations(&revocations)
+                        .unwrap_err()
+                        .is(zeropw::errors::ErrorClass::StateError),
+                    "label={label}"
+                );
+            }
+        }
+    }
+
     // Missing key still legitimately defaults (unaffected by this fix).
     let tmp = TempDir::new().unwrap();
     let state = StateDir::new(tmp.path().join("state"));
@@ -3082,6 +3201,7 @@ print(2.0 != 2)
 print(True != 1)
 print(1.0 != 1)
 print("2" != 2)
+print(9007199254740993 != 9007199254740992)
 "#;
     let out = run_python(script);
     let mut lines = out.lines();
@@ -3089,68 +3209,165 @@ print("2" != 2)
     assert_eq!(lines.next().unwrap(), "False");
     assert_eq!(lines.next().unwrap(), "False");
     assert_eq!(lines.next().unwrap(), "True");
+    assert_eq!(lines.next().unwrap(), "True");
 
-    assert!(python_numeric_eq_for_test(Some(&serde_json::json!(2.0)), 2));
-    assert!(python_numeric_eq_for_test(
-        Some(&serde_json::json!(true)),
-        1
-    ));
-    assert!(python_numeric_eq_for_test(Some(&serde_json::json!(1.0)), 1));
-    assert!(!python_numeric_eq_for_test(
-        Some(&serde_json::json!("2")),
-        2
-    ));
-    assert!(!python_numeric_eq_for_test(None, 2));
+    // End-to-end through the real `credential_versions_changed`/
+    // `python_numeric_eq` (finding D-R5-7 drives this through the public
+    // API rather than a private re-implementation, which pinned nothing):
+    // for each (stored `credential_version`, resolved active version), does
+    // a policy-version bump happen (a real mismatch) or not (numerically
+    // equal, nothing to do)?
+    let cases: &[(&str, serde_json::Value, i64, bool)] = &[
+        ("float_equal", serde_json::json!(1.0), 1, false),
+        ("bool_equal", serde_json::json!(true), 1, false),
+        ("string_never_equal", serde_json::json!("2"), 2, true),
+        // D-R5-7 regression: two distinct `i64`s whose magnitude exceeds
+        // 2**53 round to the *same* `f64`; the previous `||`-chained
+        // fallback compared them equal anyway (missing a real credential
+        // rotation). They must compare unequal, so this must bump.
+        (
+            "distinct_above_2_pow_53_must_not_collide",
+            serde_json::json!(9_007_199_254_740_993i64),
+            9_007_199_254_740_992,
+            true,
+        ),
+    ];
+    for (label, stored_credential_version, active_version, want_changed) in cases {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        pol.create_principal("agent-1", "default").unwrap();
+        let connection = pol.create_connection(rust_connection()).unwrap();
+        let grant = pol
+            .create_grant("agent-1", &connection.id, None, None)
+            .unwrap();
 
-    // End-to-end through `credential_versions_changed`: a stored grant
-    // `credential_version: 1.0` (float) must NOT be treated as a mismatch
-    // against a resolved active version of `1`.
+        let mut vault = serde_json::Map::new();
+        let mut secrets = serde_json::Map::new();
+        secrets.insert(
+            "gh-token".into(),
+            serde_json::json!({"active_version": active_version}),
+        );
+        vault.insert("secrets".into(), serde_json::Value::Object(secrets));
+        state
+            .write_json(policy::VAULT_SECRETS, &serde_json::Value::Object(vault))
+            .unwrap();
+
+        let mut grants = state
+            .read_json(policy::GRANTS, serde_json::json!({}))
+            .unwrap();
+        grants[&grant.id]["credential_version"] = stored_credential_version.clone();
+        state.write_json(policy::GRANTS, &grants).unwrap();
+
+        let before_version = pol.get_connection(&connection.id).unwrap().policy_version;
+        let changed = pol.credential_versions_changed("gh-token").unwrap();
+        assert_eq!(!changed.is_empty(), *want_changed, "label={label}");
+        let after_version = pol.get_connection(&connection.id).unwrap().policy_version;
+        if *want_changed {
+            assert_eq!(after_version, before_version + 1, "label={label}");
+        } else {
+            assert_eq!(after_version, before_version, "label={label}");
+        }
+    }
+}
+
+// D-R5-9: `recorded = [g for g in grants.values() if ...]` is a full list
+// comprehension -- it validates every grant entry's shape (`.get()`/`in`
+// raise for a non-dict entry) over the *whole* `grants.values()` before
+// `any(...)` ever runs. `break`-ing out of the Rust loop on the first
+// mismatch stopped validating entries after that point, so a malformed
+// later entry was never noticed and the whole operation succeeded (bumping
+// the policy version) where Python raises before doing anything.
+#[test]
+fn credential_versions_changed_validates_every_grant_before_deciding_any_mismatch() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+conn = {
+    "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False},
+    "http_auth": {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None},
+    "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+    "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+}
+state.write_json(P.CONNECTIONS, {"gh": conn})
+state.write_json(P.VAULT_SECRETS, {"secrets": {"gh-token": {"active_version": 1, "versions": {}}}})
+# `g-1-mismatch` sorts (and is iterated) before `g-2-malformed`; a `break`
+# on the first mismatch would never reach -- and never shape-check -- the
+# second, malformed entry.
+state.write_json(P.GRANTS, {
+    "g-1-mismatch": {"connection": "gh", "status": "active", "credential_version": 99},
+    "g-2-malformed": "not-a-dict",
+})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+try:
+    pol.credential_versions_changed("gh-token")
+    print("OK")
+except Exception as e:
+    print(type(e).__name__)
+after = state.read_json(P.CONNECTIONS, None)
+print("policy_version_untouched", after["gh"]["policy_version"] == 1)
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "AttributeError");
+    assert_eq!(lines[1], "policy_version_untouched True");
+
     let tmp = TempDir::new().unwrap();
     let state = StateDir::new(tmp.path().join("state"));
     state.create().unwrap();
-    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
-    pol.create_principal("agent-1", "default").unwrap();
-    let connection = pol.create_connection(rust_connection()).unwrap();
-    let grant = pol
-        .create_grant("agent-1", &connection.id, None, None)
+    let mut connections = serde_json::Map::new();
+    connections.insert(
+        "gh".into(),
+        serde_json::json!({
+            "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+            "secret_id": "gh-token", "secret_version": null, "description": "demo",
+            "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+            "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+            "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+            "ssh_target": null, "cli": null, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+        }),
+    );
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
         .unwrap();
-
     let mut vault = serde_json::Map::new();
     let mut secrets = serde_json::Map::new();
-    secrets.insert("gh-token".into(), serde_json::json!({"active_version": 1}));
+    secrets.insert(
+        "gh-token".into(),
+        serde_json::json!({"active_version": 1, "versions": {}}),
+    );
     vault.insert("secrets".into(), serde_json::Value::Object(secrets));
     state
         .write_json(policy::VAULT_SECRETS, &serde_json::Value::Object(vault))
         .unwrap();
-
-    let mut grants = state
-        .read_json(policy::GRANTS, serde_json::json!({}))
-        .unwrap();
-    grants[&grant.id]["credential_version"] = serde_json::json!(1.0);
-    state.write_json(policy::GRANTS, &grants).unwrap();
-
-    let before_version = pol.get_connection(&connection.id).unwrap().policy_version;
-    let changed = pol.credential_versions_changed("gh-token").unwrap();
-    assert!(
-        changed.is_empty(),
-        "a numerically-equal float credential_version must not trigger a change"
+    let mut grants = serde_json::Map::new();
+    grants.insert(
+        "g-1-mismatch".into(),
+        serde_json::json!({"connection": "gh", "status": "active", "credential_version": 99}),
     );
-    let after_version = pol.get_connection(&connection.id).unwrap().policy_version;
-    assert_eq!(before_version, after_version);
-}
+    grants.insert("g-2-malformed".into(), serde_json::json!("not-a-dict"));
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
 
-/// Exercises the same private numeric-equality logic `credential_versions_changed`
-/// and `_approval_mismatch` use, via the observable `credential_versions_changed`
-/// path above; this small standalone helper documents the exact truth table
-/// asserted against Python above without re-deriving it by hand.
-fn python_numeric_eq_for_test(stored: Option<&serde_json::Value>, resolved: i64) -> bool {
-    match stored {
-        Some(serde_json::Value::Bool(b)) => i64::from(*b) == resolved,
-        Some(serde_json::Value::Number(n)) => {
-            n.as_i64() == Some(resolved) || n.as_f64() == Some(resolved as f64)
-        }
-        _ => false,
-    }
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.credential_versions_changed("gh-token")
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+    let after = state
+        .read_json(policy::CONNECTIONS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after["gh"]["policy_version"], serde_json::json!(1));
 }
 
 // D-R3-10: Python indexes `entry["token_hash"]` in `authenticate` and
@@ -3284,6 +3501,116 @@ except Exception as e:
     );
 }
 
+// D-R5-5: `entry["status"] in ("active", "stale")` is a raw index (missing
+// key -> uncaught `KeyError`) plus a *membership* test -- a present
+// non-string `status` simply never matches, same as any other value not in
+// the tuple, so that one grant is skipped while every other grant is still
+// revoked. Treating "present but not a string" the same as "missing"
+// refused to revoke *anything* the moment one grant had a non-string
+// `status`.
+#[test]
+fn revoke_all_skips_a_present_non_string_status_but_still_revokes_the_rest() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.GRANTS, {
+    "weird": {"status": 5, "principal": "agent-1"},
+    "good": {"status": "active", "principal": "agent-1"},
+})
+pol = P.Policy(state)
+n = pol.revoke_all()
+after = state.read_json(P.GRANTS, None)
+print(n, after["weird"]["status"], after["good"]["status"])
+"#;
+    let out = run_python(script);
+    assert_eq!(out.trim(), "1 5 revoked");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert(
+        "weird".into(),
+        serde_json::json!({"status": 5, "principal": "agent-1"}),
+    );
+    grants.insert(
+        "good".into(),
+        serde_json::json!({"status": "active", "principal": "agent-1"}),
+    );
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let n = pol.revoke_all().unwrap();
+    assert_eq!(n, 1);
+    let after = state
+        .read_json(policy::GRANTS, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(after["weird"]["status"], serde_json::json!(5));
+    assert_eq!(after["good"]["status"], serde_json::json!("revoked"));
+}
+
+// D-R5-6: `secrets.compare_digest(str, str)` raises an uncaught `TypeError`
+// the moment either argument has a non-ASCII character; `digest` (a hex
+// sha256) is always ASCII, so only a non-ASCII *stored* `token_hash` can
+// trigger it, aborting the whole scan -- no later (even well-formed)
+// principal can authenticate while such an entry exists. Comparing raw
+// bytes never raises, so it previously just failed to match and let every
+// other principal keep authenticating.
+#[test]
+fn authenticate_fails_closed_on_a_non_ascii_stored_token_hash() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {
+    "a-nonascii": {"token_hash": "café", "status": "active", "created_at": ""},
+    "good": {"token_hash": P.hash_token("zpwc_abc"), "status": "active", "created_at": ""},
+})
+pol = P.Policy(state)
+try:
+    pol.authenticate("zpwc_abc")
+    print("OK")
+except Exception as e:
+    print(type(e).__name__)
+"#;
+    let out = run_python(script);
+    assert_eq!(out.trim(), "TypeError");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut principals = serde_json::Map::new();
+    principals.insert(
+        "a-nonascii".into(),
+        serde_json::json!({"token_hash": "caf\u{e9}", "status": "active", "created_at": ""}),
+    );
+    principals.insert(
+        "good".into(),
+        serde_json::json!({
+            "token_hash": policy::hash_token("zpwc_abc"), "status": "active", "created_at": "",
+        }),
+    );
+    state
+        .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.authenticate("zpwc_abc")
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+}
+
 // ------------------------------------------------------- round-4 findings
 // (equivalence review of work unit D, `policy.rs`) -- D-R4-1..D-R4-8, plus
 // one further fail-open bug found by this round's exhaustive raw-index
@@ -3308,6 +3635,12 @@ probes = [
     ("empty_str", ""),
     ("null", None),
     ("zero", 0),
+    # D-R5-1: an integer whose magnitude overflows `f64` is still truthy in
+    # Python (`bool` never looks at magnitude for an `int`) -- the previous
+    # `as_f64`-based truthiness treated this as falsy, so `resume()` would
+    # have silently cleared the global stop instead of refusing.
+    ("huge_int", 10**400),
+    ("huge_negative_int", -(10**400)),
 ]
 for label, v in probes:
     d = tempfile.mkdtemp()
@@ -3333,6 +3666,14 @@ for label, v in probes:
         ("list_x", serde_json::json!(["x"])),
         ("dict_a1", serde_json::json!({"a": 1})),
         ("str_inc1", serde_json::json!("inc-1")),
+        (
+            "huge_int",
+            serde_json::from_str(&format!("1{}", "0".repeat(400))).unwrap(),
+        ),
+        (
+            "huge_negative_int",
+            serde_json::from_str(&format!("-1{}", "0".repeat(400))).unwrap(),
+        ),
     ];
     let falsy_probes: Vec<(&str, serde_json::Value)> = vec![
         ("empty_str", serde_json::json!("")),
@@ -3391,6 +3732,91 @@ for label, v in probes:
             .read_json(policy::CONTROL, serde_json::json!({}))
             .unwrap();
         assert_eq!(after["stopped"], serde_json::json!(false), "label={label}");
+    }
+}
+
+// D-R5-1's second call site: `Policy::approval_expired` also reached for
+// `as_f64` on the same out-of-range-integer shape. `request_approval`
+// returns the *existing* pending entry verbatim (same `cycle`) when it is
+// not expired; the previous fallback treated a huge `expires_at` as
+// expired, wrongly starting a brand new cycle (and a fresh `expires_at`)
+// for an approval Python would still consider open.
+#[test]
+fn approval_expired_treats_out_of_range_expires_at_by_its_sign_like_python() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+for label, expires in (("huge_positive", 10**400), ("huge_negative", -(10**400))):
+    d = tempfile.mkdtemp()
+    state = StateDir(os.path.join(d, "state"))
+    state.create()
+    pol = P.Policy(state, clock=lambda: 1700000000.0)
+    pol.create_principal("agent-1")
+    conn = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=None, description="demo",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(("GET", "POST"), ("/repos", "/me"), ()),
+        ssh_target=None, cli=None, policy_version=0, status="active", created_at="", updated_at="",
+    )
+    pol.create_connection(conn)
+    control = state.read_json(P.CONTROL, {})
+    control["approvals"] = {"dg1": {
+        "caller": "agent-1", "connection": "gh", "method": "GET", "path": "/repos",
+        "status": "pending", "created_at": "", "expires_at": expires,
+        "grant": None, "policy_version": 0, "cycle": 5,
+    }}
+    state.write_json(P.CONTROL, control)
+    entry = pol.request_approval("dg1", "agent-1", "gh", "GET", "/repos")
+    print(f"{label}|{entry['cycle']}|{entry['expires_at'] == expires}")
+"#;
+    let out = run_python(script);
+    let mut lines = out.lines();
+    assert_eq!(lines.next().unwrap(), "huge_positive|5|True");
+    assert_eq!(lines.next().unwrap(), "huge_negative|6|False");
+
+    for (label, expires, want_cycle, want_same_expires) in [
+        ("huge_positive", format!("1{}", "0".repeat(400)), 5i64, true),
+        (
+            "huge_negative",
+            format!("-1{}", "0".repeat(400)),
+            6i64,
+            false,
+        ),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        policy.create_principal("agent-1", "default").unwrap();
+        policy.create_connection(rust_connection()).unwrap();
+        let mut control = state
+            .read_json(policy::CONTROL, serde_json::json!({}))
+            .unwrap();
+        let expires_value: serde_json::Value = serde_json::from_str(&expires).unwrap();
+        let mut approvals = serde_json::Map::new();
+        approvals.insert(
+            "dg1".into(),
+            serde_json::json!({
+                "caller": "agent-1", "connection": "gh", "method": "GET", "path": "/repos",
+                "status": "pending", "created_at": "", "expires_at": expires_value,
+                "grant": null, "policy_version": 0, "cycle": 5,
+            }),
+        );
+        control["approvals"] = serde_json::Value::Object(approvals);
+        state.write_json(policy::CONTROL, &control).unwrap();
+        let entry = policy
+            .request_approval("dg1", "agent-1", "gh", "GET", "/repos")
+            .unwrap();
+        assert_eq!(entry["cycle"].as_i64(), Some(want_cycle), "label={label}");
+        assert_eq!(
+            entry["expires_at"] == expires_value,
+            want_same_expires,
+            "label={label}"
+        );
     }
 }
 
@@ -3542,6 +3968,125 @@ for missing_key in ("expires_at", "max_uses"):
     }
 }
 
+// D-R5-2 (HIGH, regression from round 4's D-R4-7): Python's `Grant` applies
+// **no** `int()` to `policy_version`/`max_uses`/`uses`/`credential_version`,
+// so a stored numeric *string* keeps its `str` type: `_grant_state` compares
+// `grant.policy_version != connection.policy_version` (a `str` never equals
+// an `int` -> always `grant_stale`) and `grant.uses >= grant.max_uses` (two
+// stored strings compare *lexicographically*, not numerically). Round 4's
+// fix routed these fields through `python_int_coerce`, which parses a
+// numeric string and therefore flips both outcomes: it allowed where Python
+// denies (`policy_version: "1"` vs a connection at version 3; `uses: "2"`,
+// `max_uses: "10"` where `"2" >= "10"` lexicographically), and denied where
+// Python allows (`uses: "10"`, `max_uses: "9"` where `"10" >= "9"` is
+// `False` lexicographically). Round 5 stops treating a string as coercible
+// for these four fields while still authorizing correctly for the shapes
+// Python does accept (see the round-4 test just above this one).
+#[test]
+fn grant_numeric_string_fields_deny_and_allow_exactly_like_python_not_round4s_coercion() {
+    fn base_conn() -> serde_json::Value {
+        serde_json::json!({
+            "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+            "secret_id": "gh-token", "secret_version": null, "description": "demo",
+            "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+            "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+            "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+            "ssh_target": null, "cli": null, "policy_version": 3, "status": "active", "created_at": "", "updated_at": "",
+        })
+    }
+    fn base_grant() -> serde_json::Value {
+        serde_json::json!({
+            "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 3,
+            "expires_at": null, "max_uses": null, "uses": 0, "status": "active",
+            "created_at": "", "revoked_at": null, "credential_version": null,
+        })
+    }
+
+    // (grant field overrides, expected `check_grant`/`.reason`)
+    let cases: &[(&[(&str, &str)], &str)] = &[
+        (&[("policy_version", "\"1\"")], "grant_stale"),
+        (
+            &[("max_uses", "\"10\""), ("uses", "\"2\"")],
+            "grant_exhausted",
+        ),
+        (&[("max_uses", "\"9\""), ("uses", "\"10\"")], "allowed"),
+    ];
+
+    for (overrides, expected) in cases {
+        let py_overrides: String = overrides
+            .iter()
+            .map(|(k, v)| format!("grant[{k:?}] = {v}\n"))
+            .collect();
+        let script = format!(
+            r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.PRINCIPALS, {{"agent-1": {{"token_hash": P.hash_token("zpwc_abc"), "status": "active", "created_at": ""}}}})
+conn = {{
+    "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {{"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False}},
+    "http_auth": {{"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None}},
+    "http_scope": {{"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []}},
+    "ssh_target": None, "cli": None, "policy_version": 3, "status": "active", "created_at": "", "updated_at": "",
+}}
+state.write_json(P.CONNECTIONS, {{"gh": conn}})
+grant = {{
+    "id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 3,
+    "expires_at": None, "max_uses": None, "uses": 0, "status": "active",
+    "created_at": "", "revoked_at": None, "credential_version": None,
+}}
+{py_overrides}
+state.write_json(P.GRANTS, {{"g-1": grant}})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+d = pol.check_grant("agent-1", "gh", "g-1")
+print(d.reason)
+"#,
+        );
+        let out = run_python(&script);
+        assert_eq!(out.trim(), *expected, "python overrides={overrides:?}");
+
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let mut principals = serde_json::Map::new();
+        principals.insert(
+            "agent-1".into(),
+            serde_json::json!({"token_hash": policy::hash_token("zpwc_abc"), "status": "active", "created_at": ""}),
+        );
+        state
+            .write_json(policy::PRINCIPALS, &serde_json::Value::Object(principals))
+            .unwrap();
+        let mut connections = serde_json::Map::new();
+        connections.insert("gh".into(), base_conn());
+        state
+            .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+            .unwrap();
+        let mut grant = base_grant();
+        for (k, v) in overrides.iter() {
+            // Every override in `cases` above is a quoted string literal
+            // (`"1"`); strip the Python-literal quotes back to the plain
+            // Rust string value.
+            let s = v.trim_matches('"');
+            grant[*k] = serde_json::Value::String(s.to_string());
+        }
+        let mut grants = serde_json::Map::new();
+        grants.insert("g-1".into(), grant);
+        state
+            .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+            .unwrap();
+
+        let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        let decision = pol.check_grant("agent-1", "gh", "g-1").unwrap();
+        assert_eq!(decision.reason, *expected, "rust overrides={overrides:?}");
+    }
+}
+
 // D-R4-2: `_reevaluate_grants`'s `entry["connection"] != connection_id or
 // entry["status"] != "active"` raw-indexes every grant entry in the
 // document, regardless of whether it matches the connection being updated
@@ -3659,6 +4204,78 @@ except Exception as e:
         .unwrap_err()
         .is(zeropw::errors::ErrorClass::StateError)
     );
+}
+
+// D-R5-3: `_reevaluate_grants`'s `entry["connection"] != connection_id or
+// entry["status"] != "active"` short-circuits on the `or` -- for a grant of
+// a *different* connection, `entry["status"]` is never read at all, so a
+// malformed/missing `status` there must not abort `update_connection`
+// (which has already written `connections.json` by the time
+// `_reevaluate_grants` runs).
+#[test]
+fn reevaluate_grants_short_circuits_on_connection_mismatch_before_reading_status() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+conn = {
+    "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+    "secret_id": "gh-token", "secret_version": None, "description": "demo",
+    "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": None, "allow_private_network": False},
+    "http_auth": {"mode": "bearer", "header_name": None, "value_prefix": None, "basic_username": None},
+    "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+    "ssh_target": None, "cli": None, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+}
+state.write_json(P.CONNECTIONS, {"gh": conn})
+# `other` belongs to a different connection and has no `status` key at all.
+state.write_json(P.GRANTS, {"other": {"connection": "other-conn"}})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+after, widened = pol.update_connection("gh", description="new")
+print("OK", after.description, after.policy_version)
+"#;
+    let out = run_python(script);
+    assert_eq!(out.trim(), "OK new 2");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut connections = serde_json::Map::new();
+    connections.insert("gh".into(), conn_doc_for_reevaluate_grants());
+    state
+        .write_json(policy::CONNECTIONS, &serde_json::Value::Object(connections))
+        .unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert(
+        "other".into(),
+        serde_json::json!({"connection": "other-conn"}),
+    );
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    let (after, _) = pol
+        .update_connection(
+            "gh",
+            ConnectionChanges::new().description("new".to_string()),
+        )
+        .unwrap();
+    assert_eq!(after.description, "new");
+    assert_eq!(after.policy_version, 2);
+}
+
+fn conn_doc_for_reevaluate_grants() -> serde_json::Value {
+    serde_json::json!({
+        "id": "gh", "project": "demo", "environment": "dev", "service": "fake-github", "kind": "http",
+        "secret_id": "gh-token", "secret_version": null, "description": "demo",
+        "http_target": {"scheme": "http", "host": "127.0.0.1", "port": 8080, "ca_file": null, "allow_private_network": false},
+        "http_auth": {"mode": "bearer", "header_name": null, "value_prefix": null, "basic_username": null},
+        "http_scope": {"methods": ["GET", "POST"], "path_prefixes": ["/repos", "/me"], "confirm_methods": []},
+        "ssh_target": null, "cli": null, "policy_version": 1, "status": "active", "created_at": "", "updated_at": "",
+    })
 }
 
 // D-R4-3: `list_grants`'s principal filter raw-indexes `e["principal"]`
@@ -3821,6 +4438,65 @@ except Exception as e:
     );
 }
 
+// D-R5-10: `dict()` treats each element of its argument as any length-2
+// *iterable*, not just a two-element array/string -- iterating a `dict`
+// yields its keys (in insertion order), so a two-key object element is
+// exactly as valid as a two-element array (`dict([{"AA": 1, "x": 2}]) ==
+// {"AA": "x"}`); a 1- or 3-key object instead raises Python's own
+// `ValueError` ("... has length N; 2 is required"), the same as an array
+// of the wrong length.
+#[test]
+fn extra_env_two_key_object_pairs_like_a_two_element_array() {
+    let script = r#"
+from zeropw import policy as P
+
+extra_env = dict([{"AA": 1, "x": 2}])
+print("two_key", extra_env)
+c = P.CliProfile("git", "http", "ZEROPW_API_BASE_URL", extra_env)
+print("loads OK", c.extra_env)
+
+for bad in ([{"AA": 1}], [{"AA": 1, "x": 2, "y": 3}]):
+    try:
+        dict(bad)
+        print("bad OK")
+    except Exception as e:
+        print("bad", type(e).__name__)
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "two_key {'AA': 'x'}");
+    assert_eq!(lines[1], "loads OK {'AA': 'x'}");
+    assert_eq!(lines[2], "bad ValueError");
+    assert_eq!(lines[3], "bad ValueError");
+
+    let cli_conn = |extra_env: serde_json::Value| {
+        let mut d = rust_connection().to_value();
+        d["cli"] = serde_json::json!({
+            "program": "git", "kind": "http", "base_url_env": "ZEROPW_API_BASE_URL",
+            "extra_env": extra_env,
+        });
+        d
+    };
+
+    let d1 = cli_conn(serde_json::json!([{"AA": 1, "x": 2}]));
+    let profile = Connection::from_value(&d1).unwrap().cli.unwrap();
+    assert_eq!(profile.extra_env.len(), 1);
+    assert_eq!(profile.extra_env.get("AA"), Some(&"x".to_string()));
+
+    for bad in [
+        serde_json::json!([{"AA": 1}]),
+        serde_json::json!([{"AA": 1, "x": 2, "y": 3}]),
+    ] {
+        let d = cli_conn(bad.clone());
+        assert!(
+            Connection::from_value(&d)
+                .unwrap_err()
+                .is(zeropw::errors::ErrorClass::StateError),
+            "bad={bad:?}"
+        );
+    }
+}
+
 // D-R4-6: `approval_matches_grant` collapsed a missing/non-string
 // `principal`/`connection` on the revoked grant's raw stored entry to
 // `""`, so it never matched an approval whose own `caller`/`connection` was
@@ -3914,6 +4590,63 @@ print("approval_reason", approval.get("closed_reason"))
         after_control["approvals"]["ap-1"]["closed_reason"],
         serde_json::json!("grant_revoked")
     );
+}
+
+// D-R5-8: Python appends the ledger line (`append_revocation`) *before*
+// ever touching `entry` at all; only the following `entry["status"] =
+// "revoked"` can raise (an uncaught `TypeError` for a non-dict entry). So
+// the revocation survives on disk (the ledger sits outside the backup set
+// and is replayed by `collect_revocations`) even though the call itself
+// still fails. Shape-checking before `append_revocation` lost that
+// surviving ledger line.
+#[test]
+fn revoke_grant_ledger_line_survives_a_non_object_entry_shape_failure() {
+    let script = r#"
+import tempfile, os
+from zeropw.store import StateDir
+from zeropw import policy as P
+
+d = tempfile.mkdtemp()
+state = StateDir(os.path.join(d, "state"))
+state.create()
+state.write_json(P.GRANTS, {"g-1": "not-a-dict"})
+pol = P.Policy(state, clock=lambda: 1700000000.0)
+try:
+    pol.revoke_grant("g-1")
+    print("revoke OK")
+except Exception as e:
+    print("revoke", type(e).__name__)
+lines = state.read_lines(P.REVOCATIONS, None)
+print("ledger_lines", len(lines))
+print("ledger_has_id", any('"id":"g-1"' in l for l in lines))
+"#;
+    let out = run_python(script);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "revoke TypeError");
+    assert_eq!(lines[1], "ledger_lines 1");
+    assert_eq!(lines[2], "ledger_has_id True");
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let mut grants = serde_json::Map::new();
+    grants.insert("g-1".into(), serde_json::json!("not-a-dict"));
+    state
+        .write_json(policy::GRANTS, &serde_json::Value::Object(grants))
+        .unwrap();
+    let pol = Policy::new(&state, clock::fixed(1_700_000_000.0));
+    assert!(
+        pol.revoke_grant("g-1")
+            .unwrap_err()
+            .is(zeropw::errors::ErrorClass::StateError)
+    );
+    let ledger_lines = state.read_lines(policy::REVOCATIONS, None).unwrap();
+    assert_eq!(
+        ledger_lines.len(),
+        1,
+        "ledger line must survive the failure"
+    );
+    assert!(ledger_lines[0].contains(r#""id":"g-1""#));
 }
 
 // D-R4-8: `CliProfile.__post_init__` iterates `extra_env` in insertion

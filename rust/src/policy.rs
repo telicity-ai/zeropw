@@ -159,15 +159,50 @@ fn matches_host_re(s: &str) -> bool {
 /// stored control document is never generated with those shapes by this
 /// crate itself, but a hand-edited or foreign-written one must still be
 /// judged the way Python's `if` statement would.
+///
+/// The number arm decides truthiness from the JSON literal's own text
+/// rather than `Number::as_f64` (finding D-R5-1, third recurrence of this
+/// fail-open class): with `arbitrary_precision`, `as_f64` parses the
+/// literal via `f64::from_str`, which overflows to `+`/`-infinity` for a
+/// magnitude beyond `f64::MAX` and is then filtered back to `None` by
+/// `Number::as_f64` itself (it only returns finite values) -- so a huge
+/// integer (`10**400`, which `read_json` accepts in both languages) was
+/// read as *falsy* here, where CPython's `int` is always truthy for any
+/// non-zero value regardless of magnitude. `is_stopped()`/`resume()`/the
+/// `global_stop`/`restore_pending` gate in `decide` all route through this
+/// function, so that false reading was fail-open: a `stopped`/
+/// `restore_pending`/`incident_open` control document holding such a huge
+/// integer denied nothing and let `resume()` silently clear the stop.
 fn json_truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
+        Some(Value::Number(n)) => !number_literal_is_zero(n),
         Some(Value::String(s)) => !s.is_empty(),
         Some(Value::Array(a)) => !a.is_empty(),
         Some(Value::Object(o)) => !o.is_empty(),
     }
+}
+
+/// Whether a JSON number's literal source text denotes the value zero
+/// (`0`, `-0`, `0.0`, `0e5`, `-0.000`, ...): true iff every digit in the
+/// mantissa (the part before any `e`/`E` exponent -- an exponent can never
+/// turn a zero mantissa non-zero, or vice versa) is `0`. Used by
+/// [`json_truthy`] so a magnitude that overflows `f64` (any huge non-zero
+/// integer) is still correctly truthy instead of falling through a
+/// `None`-from-`as_f64` case.
+fn number_literal_is_zero(n: &serde_json::Number) -> bool {
+    let text = n.to_string();
+    let mantissa = text.split(['e', 'E']).next().unwrap_or(&text);
+    !mantissa.bytes().any(|b| b.is_ascii_digit() && b != b'0')
+}
+
+/// Whether a JSON number's literal source text is negative (`-` prefix),
+/// used by [`Policy::approval_expired`] to decide the sign of a magnitude
+/// too large for `f64` (see [`number_literal_is_zero`] for the same
+/// literal-text approach for a different question).
+fn number_literal_is_negative(n: &serde_json::Number) -> bool {
+    n.to_string().starts_with('-')
 }
 
 // ------------------------------------------------ stored-field JSON validation
@@ -381,6 +416,23 @@ fn python_dict_from_pairs(
                 let val = chars.next().expect("checked count == 2").to_string();
                 (Value::String(k), Value::String(val))
             }
+            // `dict([{"a": 1, "b": 2}]) == {"a": "b"}`: `dict()` treats
+            // each element as any length-2 *iterable*, not just a
+            // sequence, and iterating a `dict` yields its keys in
+            // insertion order -- a 1- or 3-key object instead raises
+            // Python's own `ValueError` ("... has length N; 2 is
+            // required"), reaching the `_ => Err(bad())` arm below the
+            // same way an array of the wrong length already does (finding
+            // D-R5-10). `serde_json::Map`'s `preserve_order` keeps
+            // iteration order equal to the source JSON text, matching
+            // Python's dict (itself built from the same source order by
+            // `json.loads`).
+            Value::Object(o) if o.len() == 2 => {
+                let mut keys = o.keys();
+                let k = keys.next().expect("checked len == 2").clone();
+                let val = keys.next().expect("checked len == 2").clone();
+                (Value::String(k), Value::String(val))
+            }
             _ => return Err(bad()),
         };
         match pairs.iter_mut().find(|(k, _)| *k == key) {
@@ -422,9 +474,24 @@ fn python_int_coerce(v: &Value) -> Option<i64> {
             } else if number_is_python_int(n) {
                 None // integer-shaped but outside i64 range
             } else {
+                // `int(float)` truncates toward zero. The previous filter
+                // (`f.abs() < 9.223_372_036_854_775e18`) used a *rounded*
+                // threshold with a strict `<`, so it rejected the real,
+                // representable boundary itself (finding D-R5-4c):
+                // `int(9.223372036854775e18) == 9223372036854774784` in
+                // Python (well within `i64`), but that literal's `f64`
+                // value equals the threshold exactly, failing `< `. Using
+                // the true `i64` range after truncation (`i64::MIN` is
+                // exactly representable as `f64`; `i64::MAX + 1 == 2**63`
+                // is the tight exclusive upper bound, since `i64::MAX`
+                // itself is not exactly representable) accepts every
+                // magnitude `as i64` can hold and none it can't.
                 n.as_f64()
-                    .filter(|f| f.is_finite() && f.abs() < 9.223_372_036_854_775e18)
-                    .map(|f| f.trunc() as i64)
+                    .map(f64::trunc)
+                    .filter(|f| {
+                        f.is_finite() && (I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(f)
+                    })
+                    .map(|f| f as i64)
             }
         }
         Value::String(s) => python_int_from_str(s),
@@ -432,12 +499,69 @@ fn python_int_coerce(v: &Value) -> Option<i64> {
     }
 }
 
+/// `i64::MIN` as `f64`: exact (a power of two), so this is an inclusive
+/// lower bound for "truncates to a representable `i64`".
+const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
+/// `2**63`, one past `i64::MAX` (`i64::MAX` itself, `2**63 - 1`, is not
+/// exactly representable as `f64`): an exclusive upper bound for
+/// "truncates to a representable `i64`".
+const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+
+/// The digit value (`0..=9`) of `c` under CPython 3.12 `int(str)`'s digit
+/// grammar: ASCII `0`-`9`, or any Unicode `Nd` code point. Generated the
+/// same way as `team/commit.rs`'s own copy (`rust/tools/gen_digit_table.py`,
+/// re-run directly against this environment's `python3.12` for finding
+/// D-R5-4a: `int("٣") == 3`, `int("１２３") == 123`, neither of which the
+/// previous ASCII-only `python_int_from_str` accepted, `state_corrupt`ing
+/// every handle/state field it touches for a Unicode-digit numeral). Kept
+/// as a private copy rather than a shared one: `team/commit.rs` is another
+/// engineer's file this round, and its own table returns `i128` digit
+/// positions for a `Hlc`/`Commit` grammar this module doesn't share.
+const UNICODE_DECIMAL_DIGIT_BLOCKS: &[u32] = &[
+    0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6,
+    0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50,
+    0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+    0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0,
+    0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950,
+    0x1FBF0,
+];
+
+fn unicode_digit_value(c: char) -> Option<u32> {
+    let cp = c as u32;
+    if c.is_ascii_digit() {
+        return Some(cp - '0' as u32);
+    }
+    for &start in UNICODE_DECIMAL_DIGIT_BLOCKS {
+        if cp >= start && cp <= start + 9 {
+            return Some(cp - start);
+        }
+    }
+    None
+}
+
+/// The whitespace CPython 3.12's `int(str)` actually strips from both
+/// ends before parsing -- **not** the same set as `str.isspace()`
+/// (`crate::pystr::is_space`, used by [`python_strip`] elsewhere in this
+/// module for `str.strip()` itself). Of `str.isspace()`'s 29 code points,
+/// `int()` accepts 25 and rejects exactly four -- U+001C..U+001F
+/// (INFORMATION SEPARATOR FOUR/THREE/TWO/ONE) -- e.g. `int("\x1c5")` raises
+/// `ValueError` even though `"\x1c".isspace()` is `True` (finding D-R5-4b;
+/// confirmed directly against `python3.12`, and already fixed the same way
+/// for `team/commit.rs`'s own `int()`-alike, finding H-R2-1).
+fn is_int_strip_space(c: char) -> bool {
+    crate::pystr::is_space(c) && !matches!(c as u32, 0x1C..=0x1F)
+}
+
 /// The numeric-literal grammar CPython's `int(str)` accepts: optional
-/// `str.isspace()` padding, an optional `+`/`-` sign, then one or more ASCII
-/// digits with single, non-leading/trailing underscores allowed between them
-/// (`"1_000"`, not `"_1"`/`"1_"`/`"1__0"`).
+/// [`is_int_strip_space`] padding (not full `str.isspace()`), an optional
+/// `+`/`-` sign, then one or more decimal digits -- ASCII or any Unicode
+/// `Nd` code point (see [`unicode_digit_value`]) -- with single,
+/// non-leading/trailing underscores allowed between them (`"1_000"`, not
+/// `"_1"`/`"1_"`/`"1__0"`). Bounded to `i64` (unlike `team/commit.rs`'s
+/// `python_int_parse_i128`, this module's fields never need more).
 fn python_int_from_str(s: &str) -> Option<i64> {
-    let trimmed = python_strip(s);
+    let trimmed = s.trim_matches(is_int_strip_space);
     let (negative, digits_part) = match trimmed.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
@@ -445,7 +569,7 @@ fn python_int_from_str(s: &str) -> Option<i64> {
     if digits_part.is_empty() || digits_part.starts_with('_') || digits_part.ends_with('_') {
         return None;
     }
-    let mut cleaned = String::with_capacity(digits_part.len());
+    let mut magnitude: i64 = 0;
     let mut prev_underscore = false;
     for c in digits_part.chars() {
         if c == '_' {
@@ -455,13 +579,10 @@ fn python_int_from_str(s: &str) -> Option<i64> {
             prev_underscore = true;
             continue;
         }
-        if !c.is_ascii_digit() {
-            return None;
-        }
+        let digit = unicode_digit_value(c)?;
         prev_underscore = false;
-        cleaned.push(c);
+        magnitude = magnitude.checked_mul(10)?.checked_add(digit as i64)?;
     }
-    let magnitude: i64 = cleaned.parse().ok()?;
     Some(if negative { -magnitude } else { magnitude })
 }
 
@@ -2043,6 +2164,171 @@ pub struct Principal {
     pub runtime: String,
 }
 
+/// Runtime shape of a `Grant` field Python's `Grant` dataclass applies
+/// **no** `int()`/`isinstance` conversion to at all (`policy_version`,
+/// `max_uses`, `uses`, `credential_version`) -- the dataclass keeps
+/// whatever JSON-shaped value `Grant(**entry)` was handed, and every use
+/// site compares it with CPython's plain `==`/`!=`/ordering/arithmetic
+/// operators, which resolve numerically across `int`/`float`/`bool` but
+/// raise an uncaught `TypeError` for a numeric-vs-`str` pair. Correcting
+/// round 4's D-R4-7 fix (finding D-R5-2), which routed these fields
+/// through [`python_int_coerce`] -- accepting a numeric *string* and
+/// silently parsing it to an `i64`. That flips real authorization
+/// outcomes both ways: a stored `policy_version: "1"` never equals an
+/// `int` connection version in Python (`str != int` is always `True`), so
+/// it is always `grant_stale`, where the coerced `i64` could match and
+/// allow; two stored strings for `max_uses`/`uses` compare
+/// *lexicographically* in Python (`"2" >= "10"` is `True`, `"10" >= "9"`
+/// is `False`), the opposite of their coerced-`i64` numeric comparison.
+/// See [`grant_num_ne_i64`]/[`grant_num_ge`]/[`grant_num_sub`]/
+/// [`grant_num_add_one`] for the specific operations these fields are put
+/// through, each reproducing Python's exact cross-type behaviour
+/// (including raising the closest handled error, `state_corrupt`, for a
+/// numeric-vs-`str` operand pair Python itself cannot compare).
+#[derive(Clone, Debug, PartialEq)]
+pub enum GrantNum {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    /// `null`, an array or an object: Python's `Grant` dataclass applies no
+    /// `isinstance` check at all, so these load exactly as successfully as
+    /// any other shape (differential-harness finding, round 5: an earlier
+    /// version of this enum had no variant for them, so `Grant::from_value`
+    /// aborted the *entire* grant load -- `state_corrupt` -- for a `null`/
+    /// array/object `uses`/`max_uses`/`policy_version`/`credential_version`
+    /// where Python succeeds unconditionally). Behaves exactly like
+    /// [`GrantNum::Str`] in every operation: never equal to an `int`, and
+    /// raises the closest handled error for ordering/arithmetic, matching
+    /// Python's own `TypeError` for e.g. `None >= 5` or `[] + 1`.
+    Other(Value),
+}
+
+impl GrantNum {
+    fn from_value(v: &Value) -> Self {
+        match v {
+            Value::Bool(b) => GrantNum::Bool(*b),
+            Value::String(s) => GrantNum::Str(s.clone()),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    GrantNum::Int(i)
+                } else if let Some(f) = n.as_f64() {
+                    GrantNum::Float(f)
+                } else {
+                    GrantNum::Other(v.clone())
+                }
+            }
+            other => GrantNum::Other(other.clone()),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        match self {
+            GrantNum::Int(i) => json!(i),
+            GrantNum::Float(f) => json!(f),
+            GrantNum::Bool(b) => json!(b),
+            GrantNum::Str(s) => json!(s),
+            GrantNum::Other(v) => v.clone(),
+        }
+    }
+
+    /// `None` for [`GrantNum::Str`]/[`GrantNum::Other`]; every numeric
+    /// variant converts.
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            GrantNum::Int(i) => Some(*i as f64),
+            GrantNum::Float(f) => Some(*f),
+            GrantNum::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            GrantNum::Str(_) | GrantNum::Other(_) => None,
+        }
+    }
+
+    /// Whether this is one of the two shapes ([`GrantNum::Str`],
+    /// [`GrantNum::Other`]) that never participates in a numeric
+    /// comparison/operation without raising.
+    fn is_non_numeric(&self) -> bool {
+        matches!(self, GrantNum::Str(_) | GrantNum::Other(_))
+    }
+}
+
+/// `f == i` compared exactly (no precision loss for `i` near the `i64`
+/// boundary): `f` must be an integer-valued `f64` within the exact `i64`
+/// range (see [`I64_MIN_AS_F64`]/[`I64_MAX_EXCLUSIVE_AS_F64`]) whose
+/// truncation equals `i`.
+fn float_eq_i64_exact(f: f64, i: i64) -> bool {
+    f.fract() == 0.0 && (I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&f) && (f as i64) == i
+}
+
+/// `grant.policy_version != connection.policy_version` (`_grant_state`):
+/// `connection.policy_version` is always a plain, already-`int()`-coerced
+/// `i64` (`Connection::from_value` routes it through `python_int_coerce`),
+/// so this only needs the other side's shape. A `str` never equals an
+/// `int` in Python (`!=` is `True` unconditionally, never raises); a bool
+/// compares via `int(bool)`; a float compares exactly, not by casting both
+/// sides to `f64` (see [`float_eq_i64_exact`]).
+fn grant_num_ne_i64(a: &GrantNum, b: i64) -> bool {
+    match a {
+        GrantNum::Str(_) | GrantNum::Other(_) => true,
+        GrantNum::Bool(x) => i64::from(*x) != b,
+        GrantNum::Int(x) => *x != b,
+        GrantNum::Float(f) => !float_eq_i64_exact(*f, b),
+    }
+}
+
+/// `grant.uses >= grant.max_uses` (`_grant_state`'s exhaustion check):
+/// numeric-vs-numeric resolves by value; two `str` values compare
+/// lexicographically (Python `str.__ge__`, which Rust's `&str: Ord` already
+/// matches -- both order by Unicode scalar value / UTF-8 byte order); a
+/// numeric-vs-`str` pair raises an uncaught `TypeError` in Python, which
+/// `_grant_state` does not catch -- `state_corrupt` is the closest error a
+/// caller of `_grant_state` (`evaluate`/`consume`/`check_grant`/
+/// `usable_connections`/`_approval_mismatch`) already handles (PORTING.md
+/// §3.5).
+fn grant_num_ge(a: &GrantNum, b: &GrantNum) -> Result<bool, Error> {
+    match (a, b) {
+        (GrantNum::Str(x), GrantNum::Str(y)) => Ok(x.as_str() >= y.as_str()),
+        _ if a.is_non_numeric() || b.is_non_numeric() => {
+            Err(Error::state("state_corrupt").with_detail("grant"))
+        }
+        _ => Ok(a.as_f64().expect("checked numeric above")
+            >= b.as_f64().expect("checked numeric above")),
+    }
+}
+
+/// `max_uses - uses` (`Grant.public_view`'s `remaining_uses`,
+/// `Policy.regrant`'s `remaining_uses`): numeric-vs-numeric subtracts
+/// (kept as an exact `i64` when both sides are int/bool-shaped, matching
+/// Python's own `int - int -> int`); a `str` operand on either side raises
+/// an uncaught `TypeError`, `state_corrupt` here (PORTING.md §3.5).
+fn grant_num_sub(a: &GrantNum, b: &GrantNum) -> Result<Value, Error> {
+    use GrantNum::*;
+    if a.is_non_numeric() || b.is_non_numeric() {
+        return Err(Error::state("state_corrupt").with_detail("grant"));
+    }
+    match (a, b) {
+        (Int(x), Int(y)) => Ok(json!(x - y)),
+        (Int(x), Bool(y)) => Ok(json!(x - i64::from(*y))),
+        (Bool(x), Int(y)) => Ok(json!(i64::from(*x) - y)),
+        (Bool(x), Bool(y)) => Ok(json!(i64::from(*x) - i64::from(*y))),
+        _ => Ok(json!(
+            a.as_f64().expect("checked numeric above") - b.as_f64().expect("checked numeric above")
+        )),
+    }
+}
+
+/// `grant.uses + 1` (`Policy::consume`'s use-counting): a `str` operand
+/// raises an uncaught `TypeError`, `state_corrupt` here (PORTING.md §3.5).
+fn grant_num_add_one(a: &GrantNum) -> Result<Value, Error> {
+    match a {
+        GrantNum::Str(_) | GrantNum::Other(_) => {
+            Err(Error::state("state_corrupt").with_detail("grant"))
+        }
+        GrantNum::Int(x) => Ok(json!(x + 1)),
+        GrantNum::Bool(x) => Ok(json!(i64::from(*x) + 1)),
+        GrantNum::Float(f) => Ok(json!(f + 1.0)),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Grant {
     pub id: String,
@@ -2058,11 +2344,40 @@ pub struct Grant {
     pub revoked_at: Option<String>,
     /// The vault version the connection resolved to when last evaluated.
     pub credential_version: Option<i64>,
+    // The four fields above stay plain `i64`/`Option<i64>` -- this
+    // struct's public shape is relied on outside this file (gateway,
+    // signer, vault/context, and their tests, none of which are this
+    // round's files to edit) -- but Python applies **no** conversion to
+    // them at all, so a stored non-numeric-shaped value (most notably a
+    // numeric *string*, finding D-R5-2) cannot be reproduced by an `i64`
+    // alone: the public fields above hold a best-effort numeric reading
+    // (via [`python_int_coerce`], unchanged from round 4, so every
+    // existing caller's behaviour for a normally-shaped grant -- the only
+    // shape any writer in this crate or `zeropw/policy.py` ever produces
+    // -- is byte-for-byte identical to before this fix) for display/
+    // embedding use (`to_value` round-tripping, `HandleIssuer::issue`,
+    // ...), while the raw fields below carry the *exact* JSON shape Python
+    // itself kept, used only by this module's own authorization decisions
+    // ([`Policy::grant_state`], `Grant::public_view`, `Policy::consume`'s
+    // use-counting, `Policy::regrant`'s remaining-uses calculation) so
+    // those match Python's real outcome for a corrupted/hand-edited grant
+    // exactly (`policy_version: "1"` is always `grant_stale`; two stored
+    // strings for `max_uses`/`uses` compare lexicographically, not
+    // numerically) instead of silently authorizing (or wrongly denying)
+    // through a lossy `i64` coercion.
+    raw_policy_version: GrantNum,
+    raw_max_uses: Option<GrantNum>,
+    raw_uses: GrantNum,
+    raw_credential_version: Option<GrantNum>,
 }
 
 impl Grant {
-    pub fn public_view(&self) -> Value {
-        json!({
+    pub fn public_view(&self) -> Result<Value, Error> {
+        let remaining_uses = match &self.raw_max_uses {
+            Some(m) => grant_num_sub(m, &self.raw_uses)?,
+            None => Value::Null,
+        };
+        Ok(json!({
             "id": self.id, "connection": self.connection, "status": self.status,
             // `iso(self.expires_at) if self.expires_at else None`: Python
             // truthiness treats `0.0` the same as `None` here.
@@ -2070,20 +2385,22 @@ impl Grant {
                 Some(v) if v != 0.0 => Value::String(iso(Some(v))),
                 _ => Value::Null,
             },
-            "remaining_uses": match self.max_uses {
-                Some(m) => Value::from(m - self.uses),
-                None => Value::Null,
-            },
-        })
+            "remaining_uses": remaining_uses,
+        }))
     }
 
+    /// Serializes the *raw* forms (finding D-R5-2), not the best-effort
+    /// public `i64` fields, so a grant that round-trips through this
+    /// (currently only fresh grants from `create_grant`, always plain
+    /// integers either way) keeps the exact JSON shape it was loaded with.
     fn to_value(&self) -> Value {
         json!({
             "id": self.id, "principal": self.principal, "connection": self.connection,
-            "policy_version": self.policy_version, "expires_at": self.expires_at,
-            "max_uses": self.max_uses, "uses": self.uses, "status": self.status,
+            "policy_version": self.raw_policy_version.to_value(), "expires_at": self.expires_at,
+            "max_uses": self.raw_max_uses.as_ref().map(GrantNum::to_value),
+            "uses": self.raw_uses.to_value(), "status": self.status,
             "created_at": self.created_at, "revoked_at": self.revoked_at,
-            "credential_version": self.credential_version,
+            "credential_version": self.raw_credential_version.as_ref().map(GrantNum::to_value),
         })
     }
 
@@ -2104,20 +2421,25 @@ impl Grant {
     /// null", silently loading an unlimited grant where Python fails
     /// closed).
     ///
-    /// `policy_version`/`max_uses`/`uses`/`credential_version` are read here
-    /// with no `int()`/`isinstance` conversion at all in Python -- the
-    /// dataclass keeps whatever JSON-shaped value was stored, and every use
-    /// site compares it with plain `==`/`!=`/ordering, which CPython permits
-    /// (and resolves numerically) across `int`/`float`/`bool`. A stored
-    /// integral float (`3.0`) is therefore not an error in Python: `3.0 ==
-    /// 3` is `True`, `"remaining_uses": 3.0` in `public_view()`. The
-    /// previous strict `Value::as_i64` rejected that shape outright
-    /// (`state_corrupt` for every policy operation touching the grant --
-    /// finding D-R4-7); [`python_int_coerce`] accepts it (and a bool) the
-    /// same way `int()` would, which is close enough for every comparison
-    /// these fields are ever put through (see `rust/DEVIATIONS.md` for the
-    /// residual gap: a numeric *string* here would coerce successfully in
-    /// Rust where an ordering comparison against it raises in Python).
+    /// `policy_version`/`max_uses`/`uses`/`credential_version` are read
+    /// here with no `int()`/`isinstance` conversion at all in Python -- see
+    /// [`GrantNum`]'s own doc comment (finding D-R5-2, correcting round 4's
+    /// D-R4-7 fix, which coerced a numeric string here to an `i64` and
+    /// flipped real authorization outcomes). Any other JSON shape (`null`,
+    /// an array, an object) is still not one of `int`/`float`/`bool`/`str`
+    /// -- Python would still hit an uncaught `TypeError`/`ValueError` at
+    /// whatever operation first touches it -- `state_corrupt` at load time,
+    /// PORTING.md §3.5.
+    ///
+    /// Each of these four fields is stored twice: once as a best-effort
+    /// `i64`/`Option<i64>` via [`python_int_coerce`] (the struct's public
+    /// fields, unchanged from round 4 for a normally-shaped grant -- every
+    /// existing caller outside this module, and every grant this crate or
+    /// `zeropw/policy.py` itself ever writes, sees the exact same value as
+    /// before), and once as the exact [`GrantNum`] shape Python kept (the
+    /// private `raw_*` fields), which is what this module's own
+    /// authorization decisions (`grant_state`, `public_view`, `consume`,
+    /// `regrant`) actually compare against.
     fn from_value(v: &Value) -> Result<Self, Error> {
         let bad = || Error::state("state_corrupt").with_detail("grant");
         let obj = v.as_object().ok_or_else(bad)?;
@@ -2143,23 +2465,47 @@ impl Grant {
                 .map(str::to_string)
                 .ok_or_else(bad)
         };
-        let int_field = |key: &str| -> Result<i64, Error> {
-            obj.get(key).and_then(python_int_coerce).ok_or_else(bad)
+        // The public `i64` field is a *best-effort* reading (see the
+        // struct's own doc comment): it must never be the reason the whole
+        // grant fails to load, since Python's dataclass never validates
+        // these four fields at all. Round 5's differential harness found
+        // the previous `.ok_or_else(bad)?` here defeated that intent for
+        // any value `python_int_coerce` doesn't accept (`null`, an array,
+        // an object, a non-numeric string, an out-of-`i64` integer/huge
+        // magnitude) -- exactly the shapes Python tolerates unconditionally
+        // -- aborting the entire `Grant::from_value` where Python succeeds.
+        // `0` is an arbitrary, safe placeholder; only `raw_field`'s
+        // [`GrantNum`] (which never fails to represent a JSON value, see
+        // `GrantNum::Other`) drives this module's own authorization
+        // decisions.
+        let int_field =
+            |key: &str| -> i64 { obj.get(key).and_then(python_int_coerce).unwrap_or(0) };
+        // Presence is still required for `policy_version`/`uses` (no
+        // dataclass default in Python -- a missing key is an uncaught
+        // `TypeError`); `GrantNum::from_value` itself never fails once the
+        // key is known present.
+        let raw_field = |key: &str| -> Result<GrantNum, Error> {
+            obj.get(key).map(GrantNum::from_value).ok_or_else(bad)
         };
         let expires_at = match obj.get("expires_at") {
             None => return Err(bad()),
             Some(Value::Null) => None,
             Some(v) => Some(v.as_f64().ok_or_else(bad)?),
         };
-        let max_uses = match obj.get("max_uses") {
+        let max_uses_value = match obj.get("max_uses") {
             None => return Err(bad()),
             Some(Value::Null) => None,
-            Some(v) => Some(python_int_coerce(v).ok_or_else(bad)?),
+            Some(v) => Some(v),
         };
-        let credential_version = match obj.get("credential_version") {
+        let max_uses = max_uses_value.map(|v| python_int_coerce(v).unwrap_or(0));
+        let raw_max_uses = max_uses_value.map(GrantNum::from_value);
+        let credential_version_value = match obj.get("credential_version") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(python_int_coerce(v).ok_or_else(bad)?),
+            Some(v) => Some(v),
         };
+        let credential_version =
+            credential_version_value.map(|v| python_int_coerce(v).unwrap_or(0));
+        let raw_credential_version = credential_version_value.map(GrantNum::from_value);
         let revoked_at = match obj.get("revoked_at") {
             None | Some(Value::Null) => None,
             Some(Value::String(s)) => Some(s.clone()),
@@ -2169,14 +2515,18 @@ impl Grant {
             id: str_field("id")?,
             principal: str_field("principal")?,
             connection: str_field("connection")?,
-            policy_version: int_field("policy_version")?,
+            policy_version: int_field("policy_version"),
             expires_at,
             max_uses,
-            uses: int_field("uses")?,
+            uses: int_field("uses"),
             status: str_field("status")?,
             created_at: str_field("created_at")?,
             revoked_at,
             credential_version,
+            raw_policy_version: raw_field("policy_version")?,
+            raw_max_uses,
+            raw_uses: raw_field("uses")?,
+            raw_credential_version,
         })
     }
 }
@@ -2425,11 +2775,32 @@ fn as_obj(v: &Value) -> Result<&Map<String, Value>, Error> {
 /// `policy_changed` for no real change (finding D-R3-9). Any non-numeric
 /// stored value (a string, array, object, `null`) never compares equal to
 /// an int in Python either.
+///
+/// The `n.as_i64() == Some(resolved) || n.as_f64() == Some(resolved as
+/// f64)` form previously used here compared *both* sides through the `||`,
+/// so even when the exact `as_i64` comparison already correctly found two
+/// distinct integers unequal, the `f64` fallback still ran and could
+/// report them equal anyway: two distinct `i64`s whose magnitude exceeds
+/// 2**53 (`9007199254740993` and `9007199254740992`, say) both round to
+/// the *same* `f64`, so the fallback alone would call them equal (finding
+/// D-R5-7) -- silently missing a real credential-version change (no policy
+/// version bump, so a handle for the old credential keeps working) or a
+/// real approval `policy_version` change (an approval that should have
+/// been invalidated stays open). Fixed by using the `f64` path only for a
+/// stored value that is *genuinely* float-shaped in the JSON source
+/// (`number_is_python_int` false, i.e. it has a `.`/`e`/`E`); an
+/// integer-shaped literal is compared exactly via `as_i64`, and one
+/// outside `i64` range (`as_i64` is `None`) is correctly unequal to any
+/// representable `resolved`.
 fn python_numeric_eq(stored: Option<&Value>, resolved: i64) -> bool {
     match stored {
         Some(Value::Bool(b)) => i64::from(*b) == resolved,
         Some(Value::Number(n)) => {
-            n.as_i64() == Some(resolved) || n.as_f64() == Some(resolved as f64)
+            if number_is_python_int(n) {
+                n.as_i64() == Some(resolved)
+            } else {
+                n.as_f64() == Some(resolved as f64)
+            }
         }
         _ => false,
     }
@@ -2714,13 +3085,26 @@ impl<'a> Policy<'a> {
             else {
                 continue;
             };
-            // `[g for g in grants.values() if g.get("connection") == ...
-            // and g.get("status") == "active" and "credential_version" in
-            // g]`: every `.get()`/`in` call here is a dict method/operator,
-            // so a grant entry that isn't an object at all raises an
-            // uncaught `AttributeError`/`TypeError`, aborting the whole
-            // call -- not a silent skip.
-            let mut any_active_recorded_mismatch = false;
+            // `recorded = [g for g in grants.values() if g.get("connection")
+            // == ... and g.get("status") == "active" and
+            // "credential_version" in g]`: a full list comprehension --
+            // every `.get()`/`in` call here is a dict method/operator, so a
+            // grant entry that isn't an object at all raises an uncaught
+            // `AttributeError`/`TypeError` while *building* `recorded`,
+            // aborting the whole call, regardless of where that malformed
+            // entry sits relative to any entry that would already satisfy
+            // `any(...)`. `any(...)` only runs once the full list exists.
+            //
+            // Iterating `grants.values()` and `break`-ing on the first
+            // mismatch (finding D-R5-9) stopped validating the shape of
+            // every entry *after* that point, so a malformed later entry
+            // was never noticed and the whole operation succeeded --
+            // bumping the policy version, re-evaluating grants and
+            // invalidating approvals -- where Python raises before any of
+            // that happens. Materialising `recorded` first (validating
+            // every entry's shape unconditionally) and only then testing
+            // `any(...)` reproduces that ordering.
+            let mut recorded: Vec<Option<&Value>> = Vec::new();
             for g in grants.values() {
                 let g_obj = as_obj(g)?;
                 if g_obj.get("connection").and_then(Value::as_str) != Some(connection_id.as_str()) {
@@ -2732,17 +3116,15 @@ impl<'a> Policy<'a> {
                 if !g_obj.contains_key("credential_version") {
                     continue;
                 }
-                // `g.get("credential_version") != resolved`: Python
-                // compares the *raw* stored value against the resolved
-                // `int` using ordinary numeric equality across types (a
-                // stored float or bool can compare equal to an
-                // equal-valued int) -- see [`python_numeric_eq`]
-                // (finding D-R3-9).
-                if !python_numeric_eq(g_obj.get("credential_version"), resolved) {
-                    any_active_recorded_mismatch = true;
-                    break;
-                }
+                recorded.push(g_obj.get("credential_version"));
             }
+            // `g.get("credential_version") != resolved`: Python compares
+            // the *raw* stored value against the resolved `int` using
+            // ordinary numeric equality across types (a stored float or
+            // bool can compare equal to an equal-valued int) -- see
+            // [`python_numeric_eq`] (finding D-R3-9).
+            let any_active_recorded_mismatch =
+                recorded.iter().any(|cv| !python_numeric_eq(*cv, resolved));
             if !any_active_recorded_mismatch {
                 continue;
             }
@@ -2892,6 +3274,21 @@ impl<'a> Policy<'a> {
                 .get("token_hash")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("principal"))?;
+            // `secrets.compare_digest(str, str)` raises an uncaught
+            // `TypeError` ("comparing strings with non-ASCII characters is
+            // not supported") the moment either argument has a non-ASCII
+            // character; `digest` (a hex sha256) always is ASCII, so only
+            // a non-ASCII *stored* `token_hash` can trigger it. Python's
+            // `TypeError` aborts the whole scan right there, so no later
+            // (even well-formed) principal can authenticate while such an
+            // entry exists. Comparing raw bytes here never raises -- it
+            // just fails to match and the loop moves on to the next
+            // principal -- which let every other principal keep
+            // authenticating where Python would refuse all of them
+            // (finding D-R5-6).
+            if !stored_hash.is_ascii() {
+                return Err(Error::state("state_corrupt").with_detail("principal"));
+            }
             if constant_time_eq(stored_hash.as_bytes(), digest.as_bytes()) {
                 let principal = principal_from_entry(id, entry)?;
                 if principal.status != "active" {
@@ -3166,17 +3563,25 @@ impl<'a> Policy<'a> {
             let obj = entry
                 .as_object_mut()
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+            // `entry["connection"] != connection_id or entry["status"] !=
+            // "active"`: Python's `or` short-circuits, so `entry["status"]`
+            // is never read at all for a grant of another connection --
+            // only fetching `status` unconditionally (finding D-R5-3) made
+            // an unrelated entry with no `status` key `state_corrupt` the
+            // whole call, after `connections.json` had already been
+            // written by the caller (`update_connection`/
+            // `credential_versions_changed`).
             let connection_val = obj
                 .get("connection")
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
-                .clone();
-            let status_val = obj
-                .get("status")
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
                 .clone();
             if connection_val.as_str() != Some(connection_id) {
                 continue;
             }
+            let status_val = obj
+                .get("status")
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
+                .clone();
             if status_val.as_str() != Some("active") {
                 continue;
             }
@@ -3243,6 +3648,7 @@ impl<'a> Policy<'a> {
             return Err(Error::invalid_input("connection_disabled"));
         }
         let now = self.now();
+        let credential_version = self.resolved_credential_version(&connection, None)?;
         let grant = Grant {
             id: format!("g-{}", &uuid::Uuid::new_v4().simple().to_string()[..16]),
             principal: principal_id.to_string(),
@@ -3254,7 +3660,11 @@ impl<'a> Policy<'a> {
             status: "active".to_string(),
             created_at: iso(Some(now)),
             revoked_at: None,
-            credential_version: self.resolved_credential_version(&connection, None)?,
+            credential_version,
+            raw_policy_version: GrantNum::Int(connection.policy_version),
+            raw_max_uses: max_uses.map(GrantNum::Int),
+            raw_uses: GrantNum::Int(0),
+            raw_credential_version: credential_version.map(GrantNum::Int),
         };
         let mut doc = self.grants()?;
         doc.insert(grant.id.clone(), grant.to_value());
@@ -3353,24 +3763,40 @@ impl<'a> Policy<'a> {
         {
             let _lock = self.state.lock()?;
             let mut doc = self.grants()?;
-            let entry_obj = doc
-                .get(grant_id)
-                .ok_or_else(|| Error::not_found("grant_not_found"))
-                .and_then(|v| as_obj(v).cloned())?;
+            if !doc.contains_key(grant_id) {
+                return Err(Error::not_found("grant_not_found"));
+            }
+            // Python's `entry = doc.get(grant_id)` (just an existence
+            // check -- `None` means not found) is followed immediately by
+            // `append_revocation(...)`, and only *then* does `entry["status"]
+            // = "revoked"` attempt to mutate `entry`, raising an uncaught
+            // `TypeError` there if it isn't a dict. So the ledger line is
+            // written before Python ever learns the entry is malformed:
+            // the revocation survives on disk (the ledger sits outside the
+            // backup set and is replayed by `collect_revocations`) even
+            // though the call itself still fails. Shape-checking before
+            // `append_revocation` (finding D-R5-8) lost that surviving
+            // ledger line for a malformed grant entry.
             let mut fields = Map::new();
             fields.insert("id".into(), json!(grant_id));
             append_revocation(self.state, "grant", fields);
             let entry = doc
                 .get_mut(grant_id)
                 .and_then(Value::as_object_mut)
-                .expect("checked above");
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
             entry.insert("status".into(), json!("revoked"));
             entry.insert("revoked_at".into(), json!(iso(Some(self.now()))));
+            let principal = entry
+                .get("principal")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let connection = entry
+                .get("connection")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             self.state.write_json(GRANTS, &Value::Object(doc))?;
-            let principal = entry_obj.get("principal").and_then(Value::as_str);
-            let connection = entry_obj.get("connection").and_then(Value::as_str);
             self.invalidate_approvals(
-                Self::approval_matches_grant(principal, connection, grant_id),
+                Self::approval_matches_grant(principal.as_deref(), connection.as_deref(), grant_id),
                 "grant_revoked",
             )?;
             grant = self.get_grant(grant_id)?;
@@ -3402,12 +3828,21 @@ impl<'a> Policy<'a> {
                 let obj = entry
                     .as_object_mut()
                     .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+                // `entry["status"] in ("active", "stale")`: a raw index
+                // (missing key -> uncaught `KeyError`, `state_corrupt`),
+                // but the membership test itself never raises for a
+                // present *non-string* value -- it simply never matches,
+                // same as any other value not in the tuple, and that grant
+                // is skipped while every other one is still revoked.
+                // Treating "present but not a string" the same as
+                // "missing" (finding D-R5-5) made this recovery operation
+                // refuse to revoke *anything* the moment one grant had a
+                // non-string `status`.
                 let status = obj
                     .get("status")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?
-                    .to_string();
-                if status == "active" || status == "stale" {
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
+                let revocable = matches!(status, Value::String(s) if s == "active" || s == "stale");
+                if revocable {
                     let mut fields = Map::new();
                     fields.insert("id".into(), json!(grant_id));
                     append_revocation(self.state, "grant", fields);
@@ -3494,8 +3929,19 @@ impl<'a> Policy<'a> {
             }
             None => None,
         };
-        let remaining_uses = match old.max_uses {
-            Some(max) => Some((max - old.uses).max(0)),
+        // `max(old.max_uses - old.uses, 0)`: the subtraction can raise the
+        // same uncaught `TypeError` `grant_num_sub` already models for a
+        // `str`-typed field (PORTING.md §3.5, propagated via `?`); the
+        // result is rounded to the nearest representable `i64` for
+        // `create_grant`'s plain `i64` parameter, which only matters for
+        // the practically-unreachable case of a float-shaped `max_uses`/
+        // `uses` (never written by this crate or by `zeropw/policy.py`
+        // itself).
+        let remaining_uses = match &old.raw_max_uses {
+            Some(max) => {
+                let diff = grant_num_sub(max, &old.raw_uses)?.as_f64().unwrap_or(0.0);
+                Some(diff.max(0.0) as i64)
+            }
             None => None,
         };
         if remaining_uses == Some(0) {
@@ -3732,11 +4178,21 @@ impl<'a> Policy<'a> {
             // (including a JSON bool, which `as_f64` never returns a value
             // for) means "entries without an expiry (older state) are never
             // usable".
-            Some(v) => match v.as_f64() {
+            Some(Value::Number(n)) => match n.as_f64() {
                 Some(f) => now >= f,
-                None => true,
+                // `as_f64` is `None` for a literal whose magnitude
+                // overflows `f64` (finding D-R5-1's other call site):
+                // CPython's `isinstance(expires, (int, float))` still
+                // accepts an out-of-`f64`-range `int` and compares it by
+                // real value. `now` is always a small, finite timestamp,
+                // so it can never reach a magnitude this large either way
+                // -- a positive overflow (`expires` is enormous) is never
+                // expired, a negative overflow (`expires` is enormously
+                // negative) always is. The sign of the literal alone
+                // (without parsing the magnitude) decides which.
+                None => number_literal_is_negative(n),
             },
-            None => true,
+            _ => true,
         }
     }
 
@@ -4085,7 +4541,7 @@ impl<'a> Policy<'a> {
                 if grant.principal != caller || grant.connection != connection_id {
                     return Ok(Some("grant_changed"));
                 }
-                if let Some(state) = self.grant_state(&grant, &connection) {
+                if let Some(state) = self.grant_state(&grant, &connection)? {
                     return Ok(Some(state));
                 }
             }
@@ -4208,27 +4664,33 @@ impl<'a> Policy<'a> {
     }
 
     // ----------------------------------------------------------- evaluation
-    fn grant_state(&self, grant: &Grant, connection: &Connection) -> Option<&'static str> {
+    fn grant_state(
+        &self,
+        grant: &Grant,
+        connection: &Connection,
+    ) -> Result<Option<&'static str>, Error> {
         if grant.status == "revoked" {
-            return Some("grant_revoked");
+            return Ok(Some("grant_revoked"));
         }
-        if grant.status == "stale" || grant.policy_version != connection.policy_version {
-            return Some("grant_stale");
+        if grant.status == "stale"
+            || grant_num_ne_i64(&grant.raw_policy_version, connection.policy_version)
+        {
+            return Ok(Some("grant_stale"));
         }
         if grant.status != "active" {
-            return Some("grant_inactive");
+            return Ok(Some("grant_inactive"));
         }
         if let Some(exp) = grant.expires_at
             && self.now() >= exp
         {
-            return Some("grant_expired");
+            return Ok(Some("grant_expired"));
         }
-        if let Some(max) = grant.max_uses
-            && grant.uses >= max
+        if let Some(max) = &grant.raw_max_uses
+            && grant_num_ge(&grant.raw_uses, max)?
         {
-            return Some("grant_exhausted");
+            return Ok(Some("grant_exhausted"));
         }
-        None
+        Ok(None)
     }
 
     /// Full decision for one operation (lock-free read).
@@ -4376,7 +4838,7 @@ impl<'a> Policy<'a> {
         let mut failure: &'static str = "no_grant";
         let mut chosen: Option<Grant> = None;
         for grant in candidates {
-            match self.grant_state(&grant, &connection) {
+            match self.grant_state(&grant, &connection)? {
                 None => {
                     chosen = Some(grant);
                     break;
@@ -4471,7 +4933,7 @@ impl<'a> Policy<'a> {
             .get_mut(grant_id)
             .and_then(Value::as_object_mut)
             .expect("checked above");
-        obj.insert("uses".into(), json!(grant.uses + 1));
+        obj.insert("uses".into(), grant_num_add_one(&grant.raw_uses)?);
         let updated_entry = Value::Object(obj.clone());
         self.state.write_json(GRANTS, &Value::Object(doc))?;
         Grant::from_value(&updated_entry)
@@ -4491,7 +4953,7 @@ impl<'a> Policy<'a> {
                 Err(e) if e.is(ErrorClass::NotFound) => continue,
                 Err(e) => return Err(e),
             };
-            if connection.status != "active" || self.grant_state(&grant, &connection).is_some() {
+            if connection.status != "active" || self.grant_state(&grant, &connection)?.is_some() {
                 continue;
             }
             result.push((connection, grant));
