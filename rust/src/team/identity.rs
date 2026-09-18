@@ -127,14 +127,32 @@ impl DeviceRecord {
     }
 
     /// `DeviceRecord.from_dict`: `KeyError | TypeError | ValueError` (a
-    /// missing field, a non-string field, or invalid base64/wrong-length
-    /// bytes) all become `InvalidInput("device_record_malformed")`.
+    /// missing field, or invalid base64/wrong-length bytes after coercion)
+    /// all become `InvalidInput("device_record_malformed")`.
+    ///
+    /// Finding H-R4-1: Python's `_b64d(str(data["sign_pub"]))` (and
+    /// likewise for `agree_pub`/`sig`) applies `str(...)` to whatever JSON
+    /// value is present -- not just an already-string one -- before the
+    /// lenient `base64.b64decode`. A peer-supplied `sign_pub` shaped as a
+    /// one-element array of the base64 text, `["<b64>"]`, therefore still
+    /// decodes to the correct bytes in Python: `str(["<b64>"])` yields
+    /// `"['<b64>']"`, and the lenient decoder discards the brackets/quotes
+    /// as non-alphabet characters. Requiring `data[key]` to already be a
+    /// JSON string (as this used to) rejects that op outright and then
+    /// rejects every later commit from the same author as a permanent
+    /// `team_seq_gap`, a real accept/reject divergence from a peer this
+    /// node's own key never authenticated (§3.7 does not apply to commit
+    /// fields -- coordinator ruling). [`python_str_coerce`] is the crate's
+    /// one canonical `str(...)` coercion (PORTING.md §3b; shared with
+    /// `commit.rs`'s `Commit::from_dict`), reused here rather than
+    /// re-implemented.
     pub fn from_dict(data: &Value) -> Result<Self> {
         let bad = || Error::invalid_input("device_record_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
         let field = |key: &str| -> Result<Vec<u8>> {
-            let s = obj.get(key).and_then(Value::as_str).ok_or_else(bad)?;
-            b64d(s).map_err(|_| bad())
+            let v = obj.get(key).ok_or_else(bad)?;
+            let s = super::commit::python_str_coerce(v);
+            b64d(&s).map_err(|_| bad())
         };
         let sign_pub = field("sign_pub")?;
         let agree_pub = field("agree_pub")?;

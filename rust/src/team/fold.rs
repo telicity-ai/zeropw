@@ -126,14 +126,32 @@ pub fn new_document(env_id: &str) -> Map<String, Value> {
 /// PANICKED at `op_secret_put_version`'s
 /// `entry.as_object_mut().expect("secret entry is always an object")`
 /// (fold.rs, this module), where Python's `entry["kind"]`/`entry["versions"]`
-/// raises an uncaught `TypeError` on the same input. This now also walks one
-/// level into every category an op handler indexes into without its own
-/// `isinstance`-equivalent check: every `members`/`connections` entry must
-/// itself be an object; every `secrets` entry must be an object whose
-/// `versions` field, if present, is also an object; every `dek.generations`
-/// entry must be an object whose `wraps` field, if present, is also an
-/// object. A brand-new entry a handler *creates* during the fold (a fresh
-/// `json!({...})` literal, e.g. `op_secret_put_version`'s
+/// raises an uncaught `TypeError` on the same input.
+///
+/// Finding H-R4-6: round 3's version above still stopped one field short in
+/// several places -- it walked one level into every nested entry's SHAPE
+/// (object vs. not) but not into which FIELDS an op handler indexes on that
+/// entry unconditionally (a Python dict/attribute subscript, not a `.get`),
+/// so seven further shapes still passed this check and then let the fold
+/// complete SUCCESSFULLY with a different document than Python's own
+/// uncaught `KeyError`/`TypeError` produces (a real fail-open, not merely a
+/// panic-vs-error difference): a connection missing `status` or
+/// `created_at` (`_op_connection_disable`'s `current["status"]`,
+/// `_op_connection_update`'s `current["created_at"]`); a TRUTHY `members`
+/// entry missing `status` (`_is_active_member`'s `bool(member) and
+/// member["status"] == "active"` short-circuits on an EMPTY entry without
+/// ever touching `"status"`, but does not for a non-empty one); a `secrets`
+/// entry missing `kind` or `active_version` (`_op_secret_put_version`'s
+/// `entry["kind"]`, `_set_secret_status`'s `entry["active_version"]`); a
+/// `versions` entry whose RECORD (not the `versions` container itself) is
+/// not an object (`_set_secret_status`'s `version["status"] = status`); and
+/// a `dek.generations` entry missing `wraps` entirely, not just malformed
+/// WHEN PRESENT (`_op_member_add`'s `generation["wraps"][fp] = wrap`, run
+/// unconditionally once `generation is not None` -- unlike `secrets`/
+/// `versions` above, there is no missing-key tolerance to mirror here at
+/// all). This now also walks into every one of those unconditionally-
+/// indexed fields. A brand-new entry a handler *creates* during the fold (a
+/// fresh `json!({...})` literal, e.g. `op_secret_put_version`'s
 /// `secrets.entry(...).or_insert_with(...)`) is always well-shaped by
 /// construction regardless of this check -- only a shape carried over
 /// unchanged from `base_document` can violate it.
@@ -159,7 +177,11 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
     for entry in members.values() {
-        if !matches!(entry, Value::Object(_)) {
+        let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+        // `bool(member) and member["status"] == "active"`: an EMPTY entry
+        // (`{}`, falsy) never even evaluates the subscript, so only a
+        // TRUTHY (non-empty) entry needs `"status"` here.
+        if !entry_obj.is_empty() && !entry_obj.contains_key("status") {
             return Err(corrupt());
         }
     }
@@ -168,7 +190,10 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
     for entry in connections.values() {
-        if !matches!(entry, Value::Object(_)) {
+        let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+        // `current["status"]`/`current["created_at"]`: both unconditional
+        // subscripts, in `_op_connection_disable`/`_op_connection_update`.
+        if !entry_obj.contains_key("status") || !entry_obj.contains_key("created_at") {
             return Err(corrupt());
         }
     }
@@ -178,10 +203,24 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .ok_or_else(corrupt)?;
     for entry in secrets.values() {
         let entry_obj = entry.as_object().ok_or_else(corrupt)?;
-        if let Some(versions) = entry_obj.get("versions")
-            && !matches!(versions, Value::Object(_))
-        {
+        // `entry["kind"]` (`_op_secret_put_version`), `entry["active_version"]`
+        // (`_set_secret_status`): both unconditional subscripts on a
+        // pre-existing entry.
+        if !entry_obj.contains_key("kind") || !entry_obj.contains_key("active_version") {
             return Err(corrupt());
+        }
+        // `entry["versions"]`, used unconditionally by both handlers above;
+        // every value in it is later itself subscripted
+        // (`version["status"] = status`), so it must already be an object,
+        // not merely present.
+        let versions = entry_obj
+            .get("versions")
+            .and_then(Value::as_object)
+            .ok_or_else(corrupt)?;
+        for version in versions.values() {
+            if !matches!(version, Value::Object(_)) {
+                return Err(corrupt());
+            }
         }
     }
     if !matches!(obj.get("settings"), Some(Value::Object(_))) {
@@ -200,9 +239,11 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .ok_or_else(corrupt)?;
     for generation in generations.values() {
         let generation_obj = generation.as_object().ok_or_else(corrupt)?;
-        if let Some(wraps) = generation_obj.get("wraps")
-            && !matches!(wraps, Value::Object(_))
-        {
+        // `generation["wraps"][fp] = wrap` (`_op_member_add`): unconditional,
+        // not "if present" -- every generation entry needs an object
+        // `wraps`, always, not just a well-shaped one when it happens to be
+        // there.
+        if !matches!(generation_obj.get("wraps"), Some(Value::Object(_))) {
             return Err(corrupt());
         }
     }
@@ -1265,6 +1306,33 @@ fn reapply_facts(doc: &mut Map<String, Value>, facts: &Facts) {
     }
 }
 
+/// Python's `{k: list(v) for k, v in stray.items()}` for a `_version_order`
+/// key found already sitting INSIDE a `base_document` (finding H-R4-5,
+/// [`fold`]'s own doc comment): every real writer of this key
+/// (`op_secret_put_version`'s `.setdefault(...).setdefault(secret_id,
+/// []).append(version_id)`, the only place across both languages that ever
+/// touches it) only ever produces a JSON object of arrays of strings, so
+/// this requires exactly that shape -- `state_corrupt` (the same fail-closed
+/// posture [`validate_document_shape`]'s neighbouring checks use, PORTING.md
+/// §3.5) for a non-object `stray`, a non-array value, or a non-string
+/// element, rather than reproducing Python's own `TypeError` on
+/// `list(<non-iterable>)`/a hypothetical non-string entry at whatever
+/// specific later point it would surface.
+fn parse_stray_version_order(value: &Value) -> Result<BTreeMap<String, Vec<String>>> {
+    let corrupt = || Error::state("state_corrupt").with_detail("team_document");
+    let obj = value.as_object().ok_or_else(corrupt)?;
+    let mut out = BTreeMap::new();
+    for (k, v) in obj {
+        let arr = v.as_array().ok_or_else(corrupt)?;
+        let mut list = Vec::with_capacity(arr.len());
+        for item in arr {
+            list.push(item.as_str().ok_or_else(corrupt)?.to_string());
+        }
+        out.insert(k.clone(), list);
+    }
+    Ok(out)
+}
+
 /// `zeropw.team.fold.fold`: fold `commits` (any arrival order) into the
 /// environment document (section 7.2).
 ///
@@ -1275,6 +1343,27 @@ fn reapply_facts(doc: &mut Map<String, Value>, facts: &Facts) {
 /// ([`save_snapshot`]/loaded via [`load_latest_snapshot`]) seed the fold
 /// instead of starting from an empty environment; the caller is responsible
 /// for only passing commits that are not already reflected in the snapshot.
+///
+/// Finding H-R4-5: Python keeps `_version_order` INSIDE `doc` for the
+/// duration of the fold (`doc.setdefault("_version_order", {k: list(v) for
+/// k, v in (base_version_order or {}).items()})`, appended to by
+/// `_op_secret_put_version`), then `doc.pop("_version_order")`s it back out
+/// before returning `FoldResult`. `setdefault` only installs its default
+/// when the key is ABSENT -- so if `base_document` itself ALREADY carries a
+/// `_version_order` key (only reachable via a hand-edited or bit-rotted
+/// snapshot: `save_snapshot` never writes one, since `fold()` always pops it
+/// first), THAT value wins over the separate `base_version_order` argument
+/// entirely, and the `.pop()` at the end means the returned document never
+/// contains the key either way. This crate's `version_order` has always
+/// lived in its own variable alongside `doc` rather than embedded in it,
+/// which already reproduces the common case (`base_document` never carries
+/// the key, since it is always this crate's own prior, already-popped
+/// `FoldResult::document`) correctly -- but silently ignored a stray key,
+/// leaving it to ride along unmodified into the returned document (a bogus
+/// extra field Python's `.pop()` never leaves behind) while still using
+/// `base_version_order` instead of it (an accept-with-different-vector
+/// divergence, not just a cosmetic extra key: `derive_local`'s
+/// `version_index` is keyed off exactly this map).
 pub fn fold(
     env_id: &str,
     commits: Vec<Commit>,
@@ -1283,11 +1372,21 @@ pub fn fold(
     base_version_order: Option<BTreeMap<String, Vec<String>>>,
     audit: Option<&Audit>,
 ) -> Result<FoldResult> {
+    // Finding H-R4-7: Python's `copy.deepcopy(base_document) if
+    // base_document is not None else new_document(env_id)` is an identity
+    // check against Python's `None`, which JSON `null` decodes to -- so a
+    // `base_document` of `Value::Null` (e.g. `fold_with_snapshot` passing
+    // through a snapshot's `{"document": null, ...}`) must fold from a
+    // FRESH document, exactly like an absent `base_document`, not fail
+    // `validate_document_shape`'s `.as_object()` check as `state_corrupt`.
     let mut doc = match base_document {
+        Some(Value::Null) | None => new_document(env_id),
         Some(v) => validate_document_shape(&v)?,
-        None => new_document(env_id),
     };
-    let mut version_order = base_version_order.unwrap_or_default();
+    let mut version_order = match doc.remove("_version_order") {
+        Some(stray) => parse_stray_version_order(&stray)?,
+        None => base_version_order.unwrap_or_default(),
+    };
     let mut working_facts = facts.cloned().unwrap_or_default();
     let mut skipped: Vec<(String, usize, String)> = Vec::new();
     let relevant: Vec<Commit> = commits.into_iter().filter(|c| c.env_id == env_id).collect();
@@ -1435,6 +1534,80 @@ pub fn load_latest_snapshot(state: &StateDir, env_id: &str) -> Result<Option<Val
     Ok(Some(data))
 }
 
+/// Python's `commit.author_seq > base_vector.get(commit.author, 0)`
+/// (finding H-R4-7): the right operand defaults to the plain `int` `0` for
+/// an absent author, but otherwise is whatever raw JSON value a snapshot's
+/// `vector` entry holds. Python's `>` between an `int` and another value
+/// compares NUMERICALLY (not merely checks JSON type) for a JSON number --
+/// integer or float, `3 > 3.0` by real value -- or a JSON bool (`bool` is a
+/// Python `int` subclass: `True == 1`, `False == 0`); every other shape --
+/// string, null, array, object -- is an uncaught `TypeError`, `state_corrupt`
+/// here (PORTING.md §3.5) rather than silently substituting `0` and
+/// refolding history the snapshot already covered (a hand-crafted/bit-rotted
+/// snapshot's numeric-STRING floor used to do exactly that; a float or bool
+/// floor used to silently become `0` too, rather than the `3`/`1` real
+/// Python arithmetic gives them).
+fn author_seq_is_later(author_seq: i128, floor: Option<&Value>) -> Result<bool> {
+    let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
+    match floor {
+        None => Ok(true), // `author_seq` is always >= 1; the implicit floor is 0.
+        Some(Value::Bool(b)) => Ok(author_seq > i128::from(*b)),
+        Some(Value::Number(n)) => {
+            if let Some(i) = n.as_i128() {
+                Ok(author_seq > i)
+            } else if let Some(f) = n.as_f64() {
+                Ok((author_seq as f64) > f)
+            } else {
+                Err(corrupt())
+            }
+        }
+        Some(_) => Err(corrupt()),
+    }
+}
+
+/// `{k: list(v) for k, v in (base_version_order or {}).items()}`, as
+/// `fold_with_snapshot` hands `snapshot.get("version_order")` to `fold()`'s
+/// `base_version_order` parameter (finding H-R4-7). `fold()`'s own Rust
+/// signature requires an already-typed `BTreeMap<String, Vec<String>>` --
+/// there is no raw-`Value` overload for it to defer this check to, unlike
+/// Python's untyped parameter -- so the conversion, and its failure modes,
+/// must live here instead:
+///
+/// - A FALSY `version_order` (absent, `null`, `0`, `""`, `[]`, `{}`) becomes
+///   `{}`, matching Python's `(x or {})` short-circuit -- no error.
+/// - A TRUTHY value that is not a JSON object has no Python `.items()`
+///   equivalent: an uncaught `AttributeError`, `state_corrupt` here.
+/// - Each entry's value must be a JSON array whose every element is a
+///   string: Python's `list(v)` copies whatever `v` already held VERBATIM
+///   -- a non-iterable value (a number, bool, `null`) is `TypeError`, but a
+///   string or object value is a perfectly ordinary (if unlikely) success
+///   in Python, which this crate's `Vec<String>` simply cannot represent
+///   either way -- fails closed instead of silently DROPPING non-string
+///   elements the way this used to, which shifted every later element's
+///   1-based position and so corrupted `derive_vault`'s node-local version
+///   integers silently rather than visibly.
+fn parse_snapshot_version_order(
+    value: Option<&Value>,
+) -> Result<Option<BTreeMap<String, Vec<String>>>> {
+    let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
+    let value = match value {
+        None => return Ok(None),
+        Some(v) if json_falsy(v) => return Ok(Some(BTreeMap::new())),
+        Some(v) => v,
+    };
+    let obj = value.as_object().ok_or_else(corrupt)?;
+    let mut out = BTreeMap::new();
+    for (k, v) in obj {
+        let arr = v.as_array().ok_or_else(corrupt)?;
+        let mut list = Vec::with_capacity(arr.len());
+        for item in arr {
+            list.push(item.as_str().ok_or_else(corrupt)?.to_string());
+        }
+        out.insert(k.clone(), list);
+    }
+    Ok(Some(out))
+}
+
 /// `zeropw.team.fold.fold_with_snapshot`: fold using the latest snapshot as
 /// a base, applying only later commits.
 ///
@@ -1443,6 +1616,21 @@ pub fn load_latest_snapshot(state: &StateDir, env_id: &str) -> Result<Option<Val
 /// (later stage, out of scope here) is responsible for guaranteeing before
 /// it ever deletes history. A caller that suspects a late-arriving commit
 /// should call [`fold`] directly instead.
+///
+/// Finding H-R4-7: this used to only widen the vector-floor comparison to
+/// `i128` (finding H-R2-6) and otherwise silently tolerate every malformed
+/// snapshot shape by falling back to an empty/default value -- a
+/// fail-open divergence from Python's own uncaught exceptions for several
+/// of those same shapes. Now: a snapshot whose content is literal JSON
+/// `null` (Python's `state.read_json(path, None)` maps this to the exact
+/// same `None` a MISSING snapshot file gets) folds every commit fresh with
+/// no vector filtering at all, matching `fold_with_snapshot`'s own `if
+/// snapshot is None:` branch; any OTHER non-object snapshot (Python's
+/// `snapshot.get(...)` on a non-`None`, non-`dict` value -- an array,
+/// string, number or bool -- is an uncaught `AttributeError`) fails closed
+/// instead of silently ignoring the whole snapshot; each vector entry and
+/// each `version_order` entry is validated per [`author_seq_is_later`] /
+/// [`parse_snapshot_version_order`] above.
 pub fn fold_with_snapshot(
     env_id: &str,
     all_commits: Vec<Commit>,
@@ -1452,52 +1640,33 @@ pub fn fold_with_snapshot(
 ) -> Result<FoldResult> {
     let snapshot = load_latest_snapshot(state, env_id)?;
     let snapshot = match snapshot {
+        None | Some(Value::Null) => return fold(env_id, all_commits, facts, None, None, audit),
         Some(s) => s,
-        None => return fold(env_id, all_commits, facts, None, None, audit),
     };
-    let base_vector: Map<String, Value> = snapshot
-        .get("vector")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    // Finding H-R2-6: `base_vector.get(c.author, 0)` in Python keeps
-    // whatever `int` magnitude the snapshot recorded, arbitrary precision.
-    // This used to read each entry with `Value::as_i64`, silently treating
-    // an out-of-`i64` floor (e.g. `10**30`, from a hand-crafted/bit-rotted
-    // snapshot) as `0` -- so a commit the snapshot had already folded
-    // (`author_seq` far below the real floor) looked "later" again and got
-    // refolded/re-accepted. Widened to `i128`, matching `Commit::author_seq`
-    // and [`FoldResult::vector`].
-    let later: Vec<Commit> = all_commits
-        .into_iter()
-        .filter(|c| {
-            let base = base_vector
-                .get(&c.author)
-                .and_then(|v| match v {
-                    Value::Number(n) => n.as_i128(),
-                    _ => None,
-                })
-                .unwrap_or(0);
-            c.author_seq > base
-        })
-        .collect();
-    let base_document = snapshot.get("document").cloned();
-    let base_version_order = snapshot
-        .get("version_order")
-        .and_then(Value::as_object)
-        .map(|obj| {
-            let mut m = BTreeMap::new();
-            for (k, v) in obj {
-                if let Some(arr) = v.as_array() {
-                    let list: Vec<String> = arr
-                        .iter()
-                        .filter_map(|x| x.as_str().map(str::to_string))
-                        .collect();
-                    m.insert(k.clone(), list);
-                }
-            }
-            m
-        });
+    let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
+    let snapshot_obj = snapshot.as_object().ok_or_else(corrupt)?;
+    // `base_vector = snapshot.get("vector") or {}`: a FALSY "vector" field
+    // (absent, `null`, `0`, `""`, `[]`, `{}`) is `{}`, no error; a TRUTHY
+    // one that isn't a JSON object has no Python `.get` equivalent
+    // (`AttributeError`) -- but Python's list comprehension only ever
+    // evaluates `base_vector.get(...)` once there is at least one commit to
+    // check, so this mirrors that laziness rather than erroring up front
+    // for an `all_commits` that happens to be empty.
+    let vector_field = snapshot_obj.get("vector");
+    let mut later: Vec<Commit> = Vec::with_capacity(all_commits.len());
+    for c in all_commits {
+        let floor = match vector_field {
+            None => None,
+            Some(v) if json_falsy(v) => None,
+            Some(Value::Object(m)) => m.get(&c.author),
+            Some(_) => return Err(corrupt()),
+        };
+        if author_seq_is_later(c.author_seq, floor)? {
+            later.push(c);
+        }
+    }
+    let base_document = snapshot_obj.get("document").cloned();
+    let base_version_order = parse_snapshot_version_order(snapshot_obj.get("version_order"))?;
     fold(
         env_id,
         later,
@@ -1762,9 +1931,24 @@ fn derive_vault(
         .filter(|p| !p.is_empty())
         .unwrap_or(&default_project);
     let environment = environment.filter(|e| !e.is_empty()).unwrap_or("shared");
+    // Finding H-R4-8: Python's `secrets_doc = doc.setdefault("secrets", {})`
+    // only installs the `{}` default when the key is ABSENT -- a PRESENT
+    // but non-dict value (a corrupt `vault/secrets.json`'s "secrets" field:
+    // a string, number, bool, array or null) is returned AS-IS, and the
+    // very next line's `secrets_doc.get(secret_id)` then raises an
+    // uncaught `AttributeError` (only a dict has `.get`) BEFORE this
+    // function ever reaches its `state.write_json` call at the end -- the
+    // local vault file is left completely untouched. This used to
+    // silently substitute an empty `Map` for ANY non-object value
+    // (present-and-wrong-typed included, not just genuinely absent), so
+    // `doc.insert("secrets", ...)` at the end OVERWROTE the corrupt field
+    // with a fresh object built from only THIS environment's secrets --
+    // destroying whatever the field held instead of leaving it alone the
+    // way Python's uncaught exception does.
     let mut secrets_doc: Map<String, Value> = match doc.get("secrets") {
+        None => Map::new(),
         Some(Value::Object(m)) => m.clone(),
-        _ => Map::new(),
+        Some(_) => return Err(Error::state("state_corrupt").with_detail("vault_secrets")),
     };
     let secrets = document
         .get("secrets")
@@ -2329,6 +2513,307 @@ except Exception as e:
             .expect_err("a non-object secrets.s1.versions must fail closed, not panic");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
+    }
+
+    /// Finding H-R4-6: round 3's `validate_document_shape` fix above still
+    /// missed seven further shapes that an op handler indexes
+    /// UNCONDITIONALLY (a Python dict subscript, not `.get`), so each of
+    /// these seven still passed validation and then let `fold()` complete
+    /// SUCCESSFULLY with a wrong document, where Python raises an uncaught
+    /// exception from the equivalent handler. For each case: (1) confirm
+    /// real `python3.12`'s own handler, called directly against the exact
+    /// same document (round-tripped through JSON so both languages parse
+    /// byte-identical input), really does raise the claimed exception --
+    /// not merely assumed from reading the source; (2) confirm `fold()` now
+    /// returns `state_corrupt` up front (zero commits needed: the malformed
+    /// shape is caught before any op is ever applied, same posture as the
+    /// `malformed_secret_entry_shapes_fail_closed_instead_of_panicking` test
+    /// above).
+    #[test]
+    fn seven_more_unconditionally_indexed_fields_fail_closed_instead_of_fail_open() {
+        fn base_doc() -> Map<String, Value> {
+            let mut doc = new_document("env");
+            doc.insert("owner".into(), json!("owner-fp"));
+            doc.insert(
+                "members".into(),
+                json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
+            );
+            doc.insert(
+                "dek".into(),
+                json!({"current": "g0", "generations": {"g0": {"wraps": {}}}}),
+            );
+            doc
+        }
+
+        let new_member_record = DeviceKey::generate().record().unwrap().to_dict();
+
+        struct Case {
+            label: &'static str,
+            doc: Value,
+            handler: &'static str,
+            author: &'static str,
+            op: Value,
+            expected_python_exception: &'static str,
+        }
+        let cases: Vec<Case> = vec![
+            {
+                let mut doc = base_doc();
+                doc.insert("connections".into(), json!({"c1": {}}));
+                Case {
+                    label: "connections.c1={} + connection.disable",
+                    doc: Value::Object(doc),
+                    handler: "_op_connection_disable",
+                    author: "owner-fp",
+                    op: json!({"op": "connection.disable", "id": "c1"}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert("connections".into(), json!({"c1": {"status": "active"}}));
+                Case {
+                    label: "connection without created_at + connection.update",
+                    doc: Value::Object(doc),
+                    handler: "_op_connection_update",
+                    author: "owner-fp",
+                    op: json!({"op": "connection.update", "id": "c1"}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert(
+                    "members".into(),
+                    json!({
+                        "owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}},
+                        "m2": {"name": "x"},
+                    }),
+                );
+                Case {
+                    label: "truthy members entry without status + settings.update",
+                    doc: Value::Object(doc),
+                    handler: "_op_settings_update",
+                    author: "m2",
+                    op: json!({"op": "settings.update", "sync_interval_seconds": 5}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert("secrets".into(), json!({"s1": {"versions": {}}}));
+                Case {
+                    label: "secrets.s1={\"versions\":{}} + secret.put_version",
+                    doc: Value::Object(doc),
+                    handler: "_op_secret_put_version",
+                    author: "owner-fp",
+                    op: json!({"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
+                               "generation_id": "g0", "kind": "api_key",
+                               "ciphertext": {"nonce": "n", "ciphertext": "c"}}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert(
+                    "secrets".into(),
+                    json!({"s1": {"kind": "api_key", "active_version": null, "versions": {"v1": 5}}}),
+                );
+                Case {
+                    label: "secrets.s1.versions.v=5 + secret.activate",
+                    doc: Value::Object(doc),
+                    handler: "_op_secret_activate",
+                    author: "owner-fp",
+                    op: json!({"op": "secret.activate", "secret_id": "s1", "version_id": "v1"}),
+                    expected_python_exception: "TypeError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert(
+                    "secrets".into(),
+                    json!({"s1": {"kind": "api_key", "versions": {"v1": {"status": "staged"}}}}),
+                );
+                Case {
+                    label: "secret without active_version + secret.activate",
+                    doc: Value::Object(doc),
+                    handler: "_op_secret_activate",
+                    author: "owner-fp",
+                    op: json!({"op": "secret.activate", "secret_id": "s1", "version_id": "v1"}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+            {
+                let mut doc = base_doc();
+                doc.insert(
+                    "dek".into(),
+                    json!({"current": "g0", "generations": {"g0": {}}}),
+                );
+                Case {
+                    label: "dek.generations.g={} + member.add with wraps",
+                    doc: Value::Object(doc),
+                    handler: "_op_member_add",
+                    author: "owner-fp",
+                    op: json!({"op": "member.add", "device": new_member_record.clone(),
+                               "name": "bob", "role": "user",
+                               "wraps": {"g0": {"eph_pub": "a", "nonce": "b", "ciphertext": "c"}}}),
+                    expected_python_exception: "KeyError",
+                }
+            },
+        ];
+
+        for case in &cases {
+            let doc_text = pyjson::dumps(&case.doc, pyjson::DumpOptions::compact_sorted()).unwrap();
+            let op_text = pyjson::dumps(&case.op, pyjson::DumpOptions::compact_sorted()).unwrap();
+            let script = format!(
+                r#"
+import json
+from types import SimpleNamespace
+from zeropw.team import fold as F
+
+doc = json.loads({doc_text:?})
+commit = SimpleNamespace(author={author:?}, hlc="1000-0000")
+facts = F.Facts()
+op = json.loads({op_text:?})
+try:
+    F.{handler}(doc, commit, facts, op)
+    print("OK")
+except Exception as e:
+    print(f"ERR {{type(e).__name__}}")
+"#,
+                doc_text = doc_text,
+                author = case.author,
+                op_text = op_text,
+                handler = case.handler,
+            );
+            let out = crate::oracle::python(&script);
+            assert_eq!(
+                out.trim(),
+                format!("ERR {}", case.expected_python_exception),
+                "real python3.12's {} must raise an uncaught {} for case {:?}",
+                case.handler,
+                case.expected_python_exception,
+                case.label,
+            );
+
+            let err = fold("env", vec![], None, Some(case.doc.clone()), None, None).expect_err(
+                &format!("case {:?} must fail closed, not fold open", case.label),
+            );
+            assert!(
+                err.is(crate::errors::ErrorClass::StateError),
+                "case {:?}: expected StateError, got {:?}",
+                case.label,
+                err
+            );
+            assert_eq!(
+                err.reason, "state_corrupt",
+                "case {:?}: expected state_corrupt",
+                case.label
+            );
+        }
+    }
+
+    /// Finding H-R4-5: Python's `fold()` keeps `_version_order` INSIDE `doc`
+    /// while folding (`doc.setdefault("_version_order", {k: list(v) for k,
+    /// v in (base_version_order or {}).items()})`), so if `base_document`
+    /// ITSELF already carries a `_version_order` key (only reachable via a
+    /// hand-edited or bit-rotted snapshot -- `save_snapshot` never writes
+    /// one, since `fold()` always pops it first), `setdefault` sees the key
+    /// already present and uses THAT value INSTEAD of the separate
+    /// `base_version_order` argument entirely -- then `.pop()`s it back out
+    /// before returning, so the returned document never contains it either
+    /// way. This builds a `base_document` whose own stray `_version_order`
+    /// deliberately DISAGREES with a separately-passed `base_version_order`
+    /// argument, folds a `secret.put_version` commit that appends to it, and
+    /// confirms against real `python3.12`'s own `fold()` on the identical
+    /// input that (a) the DOCUMENT's value -- not the argument's -- is what
+    /// gets appended to, and (b) `_version_order` never appears in either
+    /// language's returned document.
+    #[test]
+    fn base_documents_own_version_order_wins_over_the_argument_and_is_popped_from_the_result() {
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let base = fold(&env_id, vec![c1], None, None, None, None).unwrap();
+        let mut doc = base.document.as_object().unwrap().clone();
+        doc.insert(
+            "secrets".into(),
+            json!({"gh-token": {"kind": "api_key", "active_version": null,
+                                "versions": {"v0": {"status": "staged", "generation": GEN0,
+                                                     "nonce": "n0", "ciphertext": "c0", "public": {}}}}}),
+        );
+        doc.insert("_version_order".into(), json!({"gh-token": ["stray-v0"]}));
+        let base_document = Value::Object(doc);
+
+        let op = json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+                        "generation_id": GEN0, "version_id": "2222222222222222",
+                        "ciphertext": {"nonce": "n2", "ciphertext": "c2"}, "public": {}});
+        let c2 =
+            commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op]).unwrap();
+
+        let base_version_order_arg: BTreeMap<String, Vec<String>> =
+            [("gh-token".to_string(), vec!["arg-v0".to_string()])]
+                .into_iter()
+                .collect();
+
+        let result = fold(
+            &env_id,
+            vec![c2.clone()],
+            None,
+            Some(base_document.clone()),
+            Some(base_version_order_arg),
+            None,
+        )
+        .expect("must fold successfully, using the document's own _version_order");
+
+        // The document's OWN `_version_order` must win over the separate
+        // argument: appended-to `["stray-v0", "2222222222222222"]`, not
+        // `["arg-v0", "2222222222222222"]`.
+        assert_eq!(
+            result.version_order.get("gh-token"),
+            Some(&vec![
+                "stray-v0".to_string(),
+                "2222222222222222".to_string()
+            ])
+        );
+        // The returned document must never contain `_version_order`.
+        assert!(
+            result
+                .document
+                .as_object()
+                .unwrap()
+                .get("_version_order")
+                .is_none()
+        );
+
+        let base_text =
+            pyjson::dumps(&base_document, pyjson::DumpOptions::compact_sorted()).unwrap();
+        let c2_text = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap();
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+base_document = json.loads({base_text:?})
+c2 = C.Commit.from_dict(json.loads({c2_text:?}))
+result = F.fold({env_id:?}, [c2], base_document=base_document,
+                base_version_order={{"gh-token": ["arg-v0"]}})
+print(json.dumps({{
+    "version_order": result.version_order,
+    "has_stray_key": "_version_order" in result.document,
+}}, sort_keys=True))
+"#,
+        );
+        let out = crate::oracle::python(&script);
+        let py: Value = pyjson::loads(out.trim()).unwrap();
+        assert_eq!(
+            py["has_stray_key"],
+            json!(false),
+            "python3.12's own returned document must not contain _version_order either"
+        );
+        assert_eq!(
+            py["version_order"]["gh-token"],
+            json!(["stray-v0", "2222222222222222"]),
+            "python3.12 itself must prefer the document's own _version_order over the separate argument"
+        );
     }
 
     // A-R5-3: probes real `python3.12`'s `zeropw.team.fold._commit_time`
@@ -3063,5 +3548,378 @@ for w in values:
             .unwrap()
         );
         assert_eq!(full.version_order, from_snapshot.version_order);
+    }
+
+    /// Writes a hand-crafted `{directory}/1.json` snapshot file directly
+    /// (bypassing [`save_snapshot`], which always writes a well-formed
+    /// snapshot) so a test can control every field's shape independently.
+    fn write_raw_snapshot(state: &StateDir, env_id: &str, content: &Value) {
+        state
+            .write_json(&format!("{}/1.json", snapshot_dir(env_id)), content)
+            .unwrap();
+    }
+
+    fn new_state() -> (TempDir, StateDir) {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        (tmp, state)
+    }
+
+    /// Finding H-R4-7 (`document: null`): a snapshot object of the form
+    /// `{"document": null, "vector": {...}, "version_order": {...}}` must
+    /// fold from a FRESH document (`Value::Null` is Python's `None`, and
+    /// `fold()`'s own `if base_document is not None` treats that exactly
+    /// like an absent `base_document`) -- not fail `validate_document_
+    /// shape`'s `.as_object()` check as `state_corrupt`. The snapshot's
+    /// `vector` still applies (so `c1`, already reflected there, is
+    /// filtered out of `later`): the result must equal folding ONLY `c2`
+    /// from scratch, confirmed both directly and against real `python3.12`.
+    #[test]
+    fn snapshot_document_null_folds_from_a_fresh_document() {
+        let (_tmp, state) = new_state();
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let owner_fp = owner.fingerprint().unwrap();
+        let snapshot = json!({"document": null, "vector": {owner_fp: 1}, "version_order": {}});
+        write_raw_snapshot(&state, &env_id, &snapshot);
+
+        let op = json!({"op": "settings.update", "sync_interval_seconds": 7});
+        let c2 =
+            commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op]).unwrap();
+
+        let from_snapshot =
+            fold_with_snapshot(&env_id, vec![c1.clone(), c2.clone()], &state, None, None).unwrap();
+        // Starting fresh, `c2` alone (no `env.init`) has no admin to apply
+        // `settings.update` as, so it is silently skipped and the document
+        // is the untouched default -- exactly what folding `[c2]` fresh
+        // (no snapshot at all) produces too.
+        let expected = fold(&env_id, vec![c2.clone()], None, None, None, None).unwrap();
+        let from_snapshot_text = pyjson::dumps(
+            &from_snapshot.document,
+            pyjson::DumpOptions::compact_sorted(),
+        )
+        .unwrap();
+        assert_eq!(
+            pyjson::dumps(&expected.document, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            from_snapshot_text,
+        );
+
+        let script = format!(
+            r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
+    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
+    c2 = C.Commit.from_dict(json.loads({c2_text:?}))
+    result = F.fold_with_snapshot({env_id:?}, [c1, c2], state)
+    print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
+"#,
+            env_id = env_id,
+            snapshot_text =
+                pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+            c2_text = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+        );
+        let py_document_text = crate::oracle::python(&script);
+        assert_eq!(py_document_text.trim(), from_snapshot_text);
+    }
+
+    /// Finding H-R4-7 (non-object snapshot): Python's `snapshot.get(...)`
+    /// raises `AttributeError` for a snapshot whose top-level content is
+    /// not a dict -- confirmed here for an array -- and is NOT `None`
+    /// (`fold_with_snapshot`'s own `if snapshot is None:` only intercepts
+    /// the exact JSON `null` case). `fold()` used to silently ignore the
+    /// whole snapshot (every field defaulted) and fold successfully with a
+    /// wrong document; now it fails closed with `state_corrupt`.
+    #[test]
+    fn snapshot_non_object_fails_closed_matching_pythons_attributeerror() {
+        let (_tmp, state) = new_state();
+        let (_owner, env_id, _dek, c1) = new_env(None);
+        write_raw_snapshot(&state, &env_id, &json!([1, 2, 3]));
+
+        let err = fold_with_snapshot(&env_id, vec![c1.clone()], &state, None, None)
+            .expect_err("a non-object snapshot must fail closed, not silently fold");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+
+        let script = format!(
+            r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("team/{env_id}/snapshots/1.json", [1, 2, 3])
+    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
+    try:
+        F.fold_with_snapshot({env_id:?}, [c1], state)
+        print("OK")
+    except Exception as e:
+        print(f"ERR {{type(e).__name__}}")
+"#,
+            env_id = env_id,
+            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+        );
+        let out = crate::oracle::python(&script);
+        assert_eq!(
+            out.trim(),
+            "ERR AttributeError",
+            "real python3.12 must raise an uncaught AttributeError for a non-dict snapshot"
+        );
+    }
+
+    /// Finding H-R4-7 (`version_order[sid]` shapes): a non-array entry
+    /// value (Python's `list(v)` on a non-iterable, e.g. a plain number,
+    /// raises `TypeError`) and a non-object `version_order` field entirely
+    /// (Python's `.items()` on a non-dict raises `AttributeError`) both
+    /// used to be silently dropped/ignored; now both fail closed.
+    #[test]
+    fn snapshot_version_order_bad_shapes_fail_closed() {
+        let (_tmp, state) = new_state();
+        let (_owner, env_id, _dek, c1) = new_env(None);
+
+        // `version_order["sid"]` is a plain number, not an array.
+        let snapshot = json!({"document": null, "vector": {}, "version_order": {"sid": 5}});
+        write_raw_snapshot(&state, &env_id, &snapshot);
+        let err = fold_with_snapshot(&env_id, vec![c1.clone()], &state, None, None)
+            .expect_err("a non-array version_order entry must fail closed");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+        let script = format!(
+            r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
+    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
+    try:
+        F.fold_with_snapshot({env_id:?}, [c1], state)
+        print("OK")
+    except Exception as e:
+        print(f"ERR {{type(e).__name__}}")
+"#,
+            env_id = env_id,
+            snapshot_text =
+                pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+        );
+        let out = crate::oracle::python(&script);
+        assert_eq!(
+            out.trim(),
+            "ERR TypeError",
+            "real python3.12 must raise an uncaught TypeError for list(5)"
+        );
+
+        // `version_order` itself is a truthy non-object (an array).
+        let snapshot2 = json!({"document": null, "vector": {}, "version_order": [1, 2]});
+        write_raw_snapshot(&state, &env_id, &snapshot2);
+        let err = fold_with_snapshot(&env_id, vec![c1.clone()], &state, None, None)
+            .expect_err("a non-object version_order must fail closed");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+        let script2 = format!(
+            r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
+    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
+    try:
+        F.fold_with_snapshot({env_id:?}, [c1], state)
+        print("OK")
+    except Exception as e:
+        print(f"ERR {{type(e).__name__}}")
+"#,
+            env_id = env_id,
+            snapshot_text =
+                pyjson::dumps(&snapshot2, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+        );
+        let out2 = crate::oracle::python(&script2);
+        assert_eq!(
+            out2.trim(),
+            "ERR AttributeError",
+            "real python3.12 must raise an uncaught AttributeError for a non-dict version_order"
+        );
+    }
+
+    /// Finding H-R4-7 (vector entry types): Python's `commit.author_seq >
+    /// base_vector.get(commit.author, 0)` compares NUMERICALLY against a
+    /// bool (`True == 1`) or a float (`1.5`, real value), and raises an
+    /// uncaught `TypeError` for a numeric-STRING entry. All three used to
+    /// silently become a floor of `0`, letting a replayed/duplicate commit
+    /// through as if the snapshot had never covered it.
+    #[test]
+    fn snapshot_vector_entry_types_match_pythons_numeric_comparison() {
+        let (_tmp, state) = new_state();
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let base = fold(&env_id, vec![c1.clone()], None, None, None, None).unwrap();
+        let base_document = base.document.clone();
+        let owner_fp = owner.fingerprint().unwrap();
+        let op = |n: i64| json!({"op": "settings.update", "sync_interval_seconds": n});
+        let c2 = commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op(2)])
+            .unwrap();
+        let c3 = commit::sign_commit(&owner, &env_id, 3, "3000-0000", &Map2::new(), vec![op(3)])
+            .unwrap();
+
+        // A bool floor of `true` (== 1): only `c2`/`c3` (seq 2, 3) are
+        // later (`1 > True` is `1 > 1`, false); a floor of `false` (== 0)
+        // lets `c1` back in too, but `c1` carries no `settings.update` op
+        // so the observable last-applied value is unaffected either way.
+        for (floor, expect_last) in [(json!(true), 3), (json!(false), 3)] {
+            let snapshot = json!({"document": base_document, "vector": {owner_fp.clone(): floor},
+                                  "version_order": {}});
+            write_raw_snapshot(&state, &env_id, &snapshot);
+            let result = fold_with_snapshot(
+                &env_id,
+                vec![c1.clone(), c2.clone(), c3.clone()],
+                &state,
+                None,
+                None,
+            )
+            .expect("a bool vector floor must fold, not fail closed");
+            let settings = result.document["settings"]["sync_interval_seconds"]
+                .as_i64()
+                .unwrap();
+            assert_eq!(
+                settings, expect_last,
+                "bool floor {floor:?} must still apply the settings.update ops"
+            );
+        }
+
+        // A float floor of `2.5`: `c2` (seq 2) is NOT later (`2 > 2.5` is
+        // false), only `c3` (seq 3) is -- the settings value must be `3`
+        // even though `c2`'s own op (value `2`) is excluded from this
+        // fold, not merely overwritten by `c3`'s.
+        let snapshot = json!({"document": base_document, "vector": {owner_fp.clone(): 2.5},
+                              "version_order": {}});
+        write_raw_snapshot(&state, &env_id, &snapshot);
+        let result = fold_with_snapshot(
+            &env_id,
+            vec![c1.clone(), c2.clone(), c3.clone()],
+            &state,
+            None,
+            None,
+        )
+        .expect("a float vector floor must fold, not fail closed");
+        assert_eq!(
+            result.document["settings"]["sync_interval_seconds"]
+                .as_i64()
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            result.skipped.len(),
+            0,
+            "c2 must be excluded by the floor, not included-then-skipped"
+        );
+
+        // A numeric-STRING floor: Python's `int > str` raises uncaught
+        // `TypeError`, so this must fail closed instead of silently
+        // treating it as `0`.
+        let snapshot = json!({"document": base_document, "vector": {owner_fp.clone(): "1"},
+                              "version_order": {}});
+        write_raw_snapshot(&state, &env_id, &snapshot);
+        let err = fold_with_snapshot(&env_id, vec![c1.clone()], &state, None, None)
+            .expect_err("a numeric-string vector floor must fail closed");
+        assert!(err.is(crate::errors::ErrorClass::StateError));
+        assert_eq!(err.reason, "state_corrupt");
+
+        // Cross-check all four (true/false/2.5/"1") against real
+        // python3.12 in one subprocess.
+        let cases = [
+            ("true", json!(true)),
+            ("false", json!(false)),
+            ("2.5", json!(2.5)),
+            ("\"1\"", json!("1")),
+        ];
+        for (label, floor) in cases {
+            let snapshot = json!({"document": base_document, "vector": {owner_fp.clone(): floor},
+                                  "version_order": {}});
+            let script = format!(
+                r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
+    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
+    c2 = C.Commit.from_dict(json.loads({c2_text:?}))
+    c3 = C.Commit.from_dict(json.loads({c3_text:?}))
+    try:
+        result = F.fold_with_snapshot({env_id:?}, [c1, c2, c3], state)
+        print("OK " + str(result.document["settings"]["sync_interval_seconds"]))
+    except Exception as e:
+        print(f"ERR {{type(e).__name__}}")
+"#,
+                env_id = env_id,
+                snapshot_text =
+                    pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
+                c1_text =
+                    pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+                c2_text =
+                    pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+                c3_text =
+                    pyjson::dumps(&c3.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+            );
+            let out = crate::oracle::python(&script);
+            let py_result = out.trim().to_string();
+            write_raw_snapshot(&state, &env_id, &snapshot);
+            let rust_result = match fold_with_snapshot(
+                &env_id,
+                vec![c1.clone(), c2.clone(), c3.clone()],
+                &state,
+                None,
+                None,
+            ) {
+                Ok(r) => format!(
+                    "OK {}",
+                    r.document["settings"]["sync_interval_seconds"]
+                        .as_i64()
+                        .unwrap()
+                ),
+                Err(_) => "ERR StateError".to_string(),
+            };
+            match label {
+                "\"1\"" => {
+                    assert_eq!(py_result, "ERR TypeError", "python for floor {label}");
+                    assert_eq!(rust_result, "ERR StateError", "rust for floor {label}");
+                }
+                _ => {
+                    assert_eq!(
+                        py_result, rust_result,
+                        "rust/python must agree for vector floor {label}"
+                    );
+                }
+            }
+        }
     }
 }

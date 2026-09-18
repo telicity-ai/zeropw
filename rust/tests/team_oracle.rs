@@ -1540,6 +1540,165 @@ except InvalidInput as e:
     );
 }
 
+/// Finding H-R4-3 (`build_cli_profile` vs `zeropw/team/commit.py`
+/// `_build_cli_profile`): a 2,925-case sweep found 1,507 cases where the
+/// round-3 version of this function picked a different `InvalidInput`
+/// reason than Python for the same malformed `cli` shape, because it
+/// checked fields in a different order than Python's two phases (phase 1:
+/// `KeyError`/`dict(extra_env)` `TypeError`, pre-empting everything; phase
+/// 2, `CliProfile.__post_init__`: kind -> program -> base_url_env ->
+/// entries). Every op's JSON text here is hand-built (like the test above),
+/// NOT round-tripped through `pyjson::dumps(..., DumpOptions::
+/// compact_sorted())`, which would key-sort `extra_env` *object* shapes and
+/// hide any order-dependent bug the same way the test above's own doc
+/// comment explains -- irrelevant for most cases below (`extra_env` as an
+/// ARRAY of pairs keeps its element order under key-sorting regardless,
+/// since only object *keys* get reordered) but kept consistent throughout
+/// for a single, uniformly trustworthy harness. Every reason below is
+/// independently confirmed against real `python3.12` in the same loop that
+/// checks Rust, not asserted from memory.
+#[test]
+fn build_cli_profile_check_order_matches_python_over_a_sweep() {
+    fn cli_op(cli_json: &str) -> String {
+        format!(
+            r#"{{"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+            "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+            "description": "", "http_target": {{"scheme": "https", "host": "api.github.com", "port": 443}},
+            "http_auth": {{"mode": "bearer"}}, "http_scope": {{"methods": ["GET"]}},
+            "cli": {cli_json}}}"#
+        )
+    }
+
+    let cases: &[(&str, &str)] = &[
+        // Kind is checked BEFORE program (finding H-R4-3's first example):
+        // an empty `program` would independently be `invalid_cli_program`,
+        // but `kind="ftp"` is checked first and wins.
+        (r#"{"program":"","kind":"ftp"}"#, "invalid_cli_kind"),
+        // Kind is checked BEFORE the extra_env entries loop even when that
+        // loop would otherwise fail on a non-string key (finding H-R4-3's
+        // second example): `dict([[1,"x"]])` succeeds in phase 1 (1 is a
+        // valid dict key), so `__post_init__` runs and fails at `kind`
+        // before the entries loop is ever reached.
+        (
+            r#"{"program":"prog","kind":"ftp","extra_env":[[1,"x"]]}"#,
+            "invalid_cli_kind",
+        ),
+        // Same shape, but kind now valid: phase 1 still succeeds (`dict()`
+        // doesn't care about key types), `__post_init__` passes kind,
+        // program and base_url_env, and only then reaches the entries
+        // loop's own non-string-key `TypeError`.
+        (
+            r#"{"program":"prog","kind":"http","extra_env":[[1,"x"],["A","y"]]}"#,
+            "invalid_cli_profile",
+        ),
+        // A valid entry before the non-string-key one must still let
+        // Python (and this fix) reach and check it first, in order.
+        (
+            r#"{"program":"prog","kind":"http","extra_env":[["A","x"],[1,"y"]]}"#,
+            "invalid_cli_profile",
+        ),
+        // ... but a valid-shaped, invalid-VALUE entry before the
+        // non-string key must win instead, since Python stops at the
+        // first failing entry regardless of why the later one would also
+        // fail.
+        (
+            r#"{"program":"prog","kind":"http","extra_env":[["zz","x"],[1,"y"]]}"#,
+            "invalid_env_name",
+        ),
+        // Missing "program"/"kind" keys: phase 1's `KeyError`, pre-empting
+        // phase 2 entirely (so a valid `kind`/`program` present on one but
+        // not the other still can't paper over the missing one).
+        (r#"{"kind":"http"}"#, "invalid_cli_profile"),
+        (r#"{"program":"p"}"#, "invalid_cli_profile"),
+        // A non-string `kind` fails the plain membership check with the
+        // same reason a wrong-but-string `kind` gets -- no `TypeError`
+        // risk at all, unlike `program`/`base_url_env` below.
+        (r#"{"program":"p","kind":5}"#, "invalid_cli_kind"),
+        // A TRUTHY non-string `program` reaches `"\x00" in self.program`,
+        // Python's own uncaught `TypeError` -- but only once `kind` (here
+        // valid) has already passed.
+        (r#"{"program":5,"kind":"http"}"#, "invalid_cli_profile"),
+        (r#"{"program":true,"kind":"http"}"#, "invalid_cli_profile"),
+        // A FALSY non-string `program` short-circuits to the documented
+        // reason instead, without ever risking that `TypeError`.
+        (r#"{"program":0,"kind":"http"}"#, "invalid_cli_program"),
+        // `base_url_env` has no falsy/truthy distinction at all -- ANY
+        // non-string value is Python's uncaught `TypeError` (from
+        // `re.match`), unconditionally, reached only once kind/program
+        // (both valid here) already passed.
+        (
+            r#"{"program":"p","kind":"http","base_url_env":null}"#,
+            "invalid_cli_profile",
+        ),
+        (
+            r#"{"program":"p","kind":"http","base_url_env":5}"#,
+            "invalid_cli_profile",
+        ),
+        (
+            r#"{"program":"p","kind":"http","base_url_env":"bad-name"}"#,
+            "invalid_env_name",
+        ),
+        // Phase 1's `dict(extra_env)` conversion succeeding or failing is
+        // independent of kind/program: a truthy non-pairable `extra_env`
+        // pre-empts a bad `kind` just the same as a good one.
+        (
+            r#"{"program":"p","kind":"http","extra_env":5}"#,
+            "invalid_cli_profile",
+        ),
+        (
+            r#"{"program":"p","kind":"ftp","extra_env":5}"#,
+            "invalid_cli_profile",
+        ),
+        (
+            r#"{"program":"p","kind":"http","extra_env":null}"#,
+            "accepted",
+        ),
+        (r#"{"program":"p","kind":"http","extra_env":0}"#, "accepted"),
+        // Sanity: the already-fixed key-before-value-in-order behaviour
+        // (finding H-R3-5) must still hold after this round's rewrite.
+        (
+            r#"{"program":"p","kind":"http","extra_env":{"b":"x","A":5}}"#,
+            "invalid_env_name",
+        ),
+        (
+            r#"{"program":"p","kind":"http","extra_env":{"SSH_AUTH_SOCK":"x"}}"#,
+            "invalid_env_name",
+        ),
+    ];
+
+    for (cli_json, expected) in cases {
+        let raw = cli_op(cli_json);
+        let op: Value = serde_json::from_str(&raw).expect("parse raw json");
+        let rust_result = match C::validate_op(&op) {
+            Ok(()) => "accepted".to_string(),
+            Err(e) => e.reason.to_string(),
+        };
+        assert_eq!(&rust_result, expected, "rust reason for cli={cli_json:?}");
+
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+op = json.loads({raw})
+try:
+    C.validate_op(op)
+    print("accepted")
+except InvalidInput as e:
+    print(e.reason)
+"#,
+            raw = py_str_literal(&raw),
+        );
+        let py_result = run_python(&script);
+        let py_result = py_result.trim();
+        assert_eq!(py_result, *expected, "python reason for cli={cli_json:?}");
+        assert_eq!(
+            rust_result, py_result,
+            "rust/python must agree for cli={cli_json:?}"
+        );
+    }
+}
+
 /// Finding H-6 (the two `Commit::from_dict` DEVIATIONS.md rows, the second
 /// covering `str(data["format"])`/`str(data["env_id"])`/`str(data["author"])`/
 /// `str(data["hlc"])`/`str(data["sig"])`): Python's `str(x)` coerces *any*
@@ -1576,6 +1735,125 @@ print(json.dumps(c.to_dict(), sort_keys=True, separators=(",", ":")))
     );
     let py_text = run_python(&script);
     assert_eq!(rust_text, py_text.trim());
+}
+
+/// Finding H-R4-1 (`DeviceRecord::from_dict` vs `zeropw/team/identity.py`
+/// `DeviceRecord.from_dict`): Python applies `str(...)` to `sign_pub`/
+/// `agree_pub`/`sig` before its lenient `base64.b64decode`, so a peer op
+/// whose `device.sign_pub` is a ONE-ELEMENT ARRAY holding the base64 text
+/// (`["<b64>"]`) still decodes to the correct 32 bytes: `str(["<b64>"])`
+/// yields `"['<b64>']"`, and the lenient decoder discards the brackets and
+/// quotes as non-alphabet characters. Before this fix, Rust required
+/// `sign_pub` to already be a JSON string and rejected the whole
+/// `member.add` commit as `team_op_format_invalid_device_record`, which then
+/// made every LATER commit from the same author fail as `team_seq_gap`
+/// forever (a rejected commit is never stored, so the author's sequence
+/// never advances) -- a permanent, peer-reachable divergence: Python
+/// accepts all three commits below and the member joins; Rust rejected two
+/// of three and the member never joined.
+#[test]
+fn member_add_device_record_with_array_wrapped_field_matches_python_receive_commit() {
+    let owner = fixed_device(0x71, 0x72);
+    let new_device = fixed_device(0x73, 0x74);
+    let owner_record = owner.record().unwrap();
+    let new_record = new_device.record().unwrap();
+    let env_id = C::new_env_id(&owner_record.fingerprint()).unwrap();
+    let gen0 = "0".repeat(16);
+
+    let c1 = C::sign_commit(
+        &owner,
+        &env_id,
+        1,
+        "1000-0000",
+        &BTreeMap::new(),
+        vec![env_init_op(&owner_record, "alice", &gen0)],
+    )
+    .unwrap();
+
+    // Reshape `device.sign_pub` as a one-element array of the base64 text --
+    // exactly the peer-op shape from the finding.
+    let mut malformed_device = new_record.to_dict();
+    let sign_pub_b64 = malformed_device
+        .as_object()
+        .unwrap()
+        .get("sign_pub")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    malformed_device
+        .as_object_mut()
+        .unwrap()
+        .insert("sign_pub".to_string(), json!([sign_pub_b64]));
+
+    let c2 = C::sign_commit(
+        &owner,
+        &env_id,
+        2,
+        "2000-0000",
+        &BTreeMap::new(),
+        vec![
+            json!({"op": "member.add", "device": malformed_device, "name": "bob", "role": "user"}),
+        ],
+    )
+    .unwrap();
+    let c3 = C::sign_commit(
+        &owner,
+        &env_id,
+        3,
+        "3000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "settings.update", "sync_interval_seconds": 42})],
+    )
+    .unwrap();
+
+    let (_tmp, state) = fresh_state();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    let rust_results: Vec<&str> = [&c1, &c2, &c3]
+        .iter()
+        .map(|c| C::receive_commit(&store, c, 1_000_000, None).unwrap())
+        .collect();
+    assert_eq!(
+        rust_results,
+        vec!["accepted", "accepted", "accepted"],
+        "rust receive_commit outcomes"
+    );
+
+    let commits_json: Vec<Value> = [&c1, &c2, &c3].iter().map(|c| c.to_dict()).collect();
+    let temp = write_json_temp(&json!(commits_json));
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+with open({path}) as f:
+    raw = json.load(f)
+commits = [C.Commit.from_dict(c) for c in raw]
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    store = C.CommitStore(state, {env_id})
+    for c in commits:
+        print(C.receive_commit(store, c, 1_000_000))
+"#,
+        path = py_str_literal(temp.path().to_str().unwrap()),
+        env_id = py_str_literal(&env_id),
+    );
+    let out = run_python(&script);
+    let py_results: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        py_results,
+        vec!["accepted", "accepted", "accepted"],
+        "python receive_commit outcomes"
+    );
+    assert_eq!(rust_results, py_results);
+
+    // The commit store, folded, must show both members joined, like Python.
+    let all_commits = store.all_commits().unwrap();
+    let rust_fold = F::fold(&env_id, all_commits, None, None, None, None).unwrap();
+    let members = rust_fold.document["members"].as_object().unwrap();
+    assert_eq!(members.len(), 2, "owner + new member must both be present");
 }
 
 /// Finding H-R2-5 (`Commit::from_dict`'s `ops` arm vs `zeropw/team/commit.py`

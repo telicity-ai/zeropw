@@ -620,8 +620,19 @@ fn python_int_coerce(value: &Value) -> Option<i128> {
 /// (there is no writer that could produce one merely by mis-shaping
 /// `seen`), so it falls back to `pyjson`'s compact JSON form rather than
 /// CPython's `repr`-style container text -- a difference only observable
-/// for that unreachable shape.
-fn python_str_coerce(value: &Value) -> String {
+/// for that unreachable shape (e.g. a Python `str` container containing a
+/// quote or backslash would `repr()` differently than `pyjson` renders it;
+/// the base64-alphabet-preserving case `identity.rs`'s `DeviceRecord::
+/// from_dict` needs, finding H-R4-1, is unaffected either way since every
+/// non-base64-alphabet character -- quotes, brackets, whichever style --
+/// is discarded identically by the lenient decoder).
+///
+/// Exposed crate-wide (not just within this module) because
+/// `identity.rs`'s `DeviceRecord::from_dict` needs the identical `str(...)`
+/// coercion Python applies to `sign_pub`/`agree_pub`/`sig` before its own
+/// lenient base64 decode (finding H-R4-1); per PORTING.md §3b this is the
+/// one canonical place for that coercion, reused rather than copied.
+pub(crate) fn python_str_coerce(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
         Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
@@ -1089,141 +1100,153 @@ fn build_ssh_target(value: Option<&Value>) -> Result<Option<policy::SshTarget>> 
 }
 
 /// `zeropw.team.commit._build_cli_profile`.
+///
+/// Finding H-R4-3: Python's `_build_cli_profile` has two phases, and a
+/// 2,925-case sweep found 1,507 cases where the ROUND-3 version of this
+/// function picked a different `InvalidInput` reason than Python for the
+/// exact same malformed op, because it checked fields in a different order:
+///
+/// 1. Constructor-argument evaluation (`value["program"]`, `value["kind"]`,
+///    `value.get("base_url_env", ...)`, `dict(value.get("extra_env") or
+///    {})`), left to right: a missing `"program"`/`"kind"` key, or a truthy
+///    `extra_env` `dict(...)` cannot turn into pairs, all raise
+///    `invalid_cli_profile` -- pre-empting EVERYTHING below, including an
+///    otherwise-invalid `kind`/`program`, because Python evaluates every
+///    argument before `CliProfile.__post_init__` (phase 2) ever runs
+///    (confirmed against real `python3.12`: `kind="ftp", extra_env=5` is
+///    `invalid_cli_profile` from `dict(5)`, not `invalid_cli_kind`).
+/// 2. `__post_init__`, only once phase 1 fully succeeds, in this exact
+///    order: `kind` membership, then `program` (falsy-or-NUL), then
+///    `base_url_env` (`re.match`, an uncaught `TypeError` -- no
+///    `isinstance` guard at all -- for ANY non-string value, unlike
+///    `kind`/`program`, which tolerate a non-string via plain
+///    membership/falsiness checks that never raise), then `extra_env`'s
+///    per-entry key-then-value checks in document order (finding H-R3-5),
+///    where a non-string KEY is `re.match`'s same uncaught `TypeError` --
+///    but only once every entry before it has already passed, since
+///    `dict()` itself accepts a non-string key just fine (finding H-6):
+///    confirmed `kind="ftp", extra_env=[[1,"x"]]` is `invalid_cli_kind`
+///    (kind fails before the entries loop is ever reached), but
+///    `kind="http", extra_env=[[1,"x"],["A","y"]]` is `invalid_cli_profile`
+///    (kind/program/base_url_env all pass, so `__post_init__` reaches the
+///    entries loop and its first entry's non-string key raises there).
+///
+/// This mirrors [`policy::CliProfile::from_value`]'s already-reviewed fix
+/// for the same two phases on the stored-document loading path (findings
+/// D-R3-5/D-R3-6) as closely as this path's types allow, ending with the
+/// same [`policy::CliProfile::new_ordered`] call as the single source of
+/// truth for the entries loop's own key-format/value-NUL checks -- a
+/// non-string key can't be handed to it directly (its `Vec<(String,
+/// String)>` has no non-string-key case), so that one case is resolved by
+/// first confirming the *prefix* of already-string-shaped entries before it
+/// passes `new_ordered` on its own (one extra call, only taken on that
+/// path), then reporting the non-string key itself as `invalid_cli_profile`
+/// -- exactly the point in Python's order where its `TypeError` fires.
 fn build_cli_profile(value: Option<&Value>) -> Result<Option<policy::CliProfile>> {
     let value = match value {
         None | Some(Value::Null) => return Ok(None),
         Some(v) => v,
     };
-    let obj = value
-        .as_object()
-        .ok_or_else(|| Error::invalid_input("invalid_cli_profile"))?;
-    if !(obj.contains_key("program") && obj.contains_key("kind")) {
-        return Err(Error::invalid_input("invalid_cli_profile"));
-    }
-    // `if not self.program or "\x00" in self.program: raise
-    // InvalidInput("invalid_cli_program")` (finding H-R2-8): Python's `or`
-    // short-circuits on a FALSY `program` (`""`, `0`, `False`, `None`, `[]`,
-    // `{}`) straight to the documented `invalid_cli_program`, without ever
-    // evaluating `"\x00" in self.program` -- but for a TRUTHY *non-string*
-    // `program` (an `int`/`float`/`bool`), `not self.program` is `False`, so
-    // Python falls through to `"\x00" in self.program`, which raises an
-    // uncaught `TypeError` for a non-iterable value; `_build_cli_profile`'s
-    // `except (KeyError, TypeError)` catches that and re-raises
-    // `invalid_cli_profile` instead -- a different reason from the falsy
-    // case, confirmed against real `python3.12`. The round-1 fix mapped
-    // every non-string `program` (falsy or truthy) to `invalid_cli_program`,
-    // merging the two Python outcomes into one Rust reason.
-    let program = match obj.get("program") {
-        Some(v) if json_falsy(v) => return Err(Error::invalid_input("invalid_cli_program")),
-        Some(Value::String(s)) => s.clone(),
-        Some(_) | None => return Err(Error::invalid_input("invalid_cli_profile")),
-    };
-    let kind = obj
-        .get("kind")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| Error::invalid_input("invalid_cli_kind"))?;
-    // `base_url_env=value.get("base_url_env", "ZEROPW_API_BASE_URL")`: the
-    // default only applies when the key is *absent*; an explicit `null` (or
-    // any other non-string) is passed straight to `CliProfile(...)`, whose
-    // `__post_init__` calls `re.match(pattern, self.base_url_env)` --
-    // `re.match` raises `TypeError` for a non-`str`/`bytes` argument, which
-    // is *not* one of `CliProfile.__post_init__`'s own `InvalidInput`s, so
-    // it's caught by `_build_cli_profile`'s own `except (KeyError,
-    // TypeError)` and re-raised as `invalid_cli_profile` -- not
-    // `invalid_env_name` (finding H-5, which is what a wrong-but-*string*
-    // `base_url_env` gets, from the regex actually failing to match).
-    let base_url_env = match obj.get("base_url_env") {
-        None => None,
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(Error::invalid_input("invalid_cli_profile")),
-    };
-    // `extra_env=dict(value.get("extra_env") or {})` (finding H-R2-4):
-    // Python's `or` first collapses *any* falsy value -- absent (`.get`
-    // returns `None`), explicit `null`, `0`, `False`, `""`, `[]`, `{}` -- to
-    // `{}` before `dict()` ever runs, so those are all equivalent to an
-    // empty map, not `invalid_cli_profile`. The round-1 fix only granted
-    // that to `None`/`Value::Null`, rejecting the other falsy JSON shapes
-    // outright as `invalid_cli_profile`.
-    //
-    // Finding H-R3-5: `CliProfile.__post_init__`'s `for key, value in self.
-    // extra_env.items(): ...` validates each entry's KEY (`ENV_NAME_RE`,
-    // `SSH_AUTH_SOCK`/`base_url_env` collision) before its VALUE
-    // (`isinstance(value, str)`, then the NUL check), one entry at a time,
-    // in the dict's insertion/document order -- so which reason a malformed
-    // `extra_env` gets depends on the FIRST entry (in that order) that
-    // fails either check: `{"b": "x", "A": 5}` raises `invalid_env_name`
-    // (`"b"` -- lowercase, fails the name pattern -- is checked first, its
-    // otherwise-fine string value never inspected), not `invalid_env_value`
-    // from `"A"`'s non-string value. This used to check every entry's VALUE
-    // is a string while first building the map here -- entirely before
-    // `policy::CliProfile::new`'s separate, later loop ever checked any
-    // KEY -- so an early-in-document-order key-format failure lost the race
-    // to a later entry's bad value. Building `(String, String)` pairs in
-    // document order and handing them to
-    // [`policy::CliProfile::new_ordered`] (finding D-R2-5's fix for the
-    // exact same key-before-value, in-order requirement) lets that
-    // function's own already-correct loop decide -- without duplicating its
-    // private `env_name_matches` regex here -- by substituting the sentinel
-    // `"\0"` for a non-string value: `new_ordered` only ever inspects a
-    // value (for its own NUL check) once that entry's key has already
-    // passed, at which point Python's `isinstance` failure and this
-    // sentinel's embedded NUL both resolve to the identical
-    // `invalid_env_value` reason.
-    let extra_env_ordered: Vec<(String, String)> = match obj.get("extra_env") {
+    let bad = || Error::invalid_input("invalid_cli_profile");
+    let obj = value.as_object().ok_or_else(bad)?;
+
+    // Phase 1.
+    let program_raw = obj.get("program").cloned().ok_or_else(bad)?;
+    let kind_raw = obj.get("kind").cloned().ok_or_else(bad)?;
+    let base_url_env_raw = obj.get("base_url_env").cloned();
+    let pairs: Vec<(Value, Value)> = match obj.get("extra_env") {
         None => Vec::new(),
         Some(v) if json_falsy(v) => Vec::new(),
+        // `dict(x)` for a truthy `extra_env`: a JSON object is used
+        // directly; any other shape goes through [`python_dict_pairs`]
+        // (finding H-R2-9(c) for why a shape it can't turn into pairs at
+        // all -- including a truthy plain string, Python's own uncaught
+        // `ValueError` there -- folds into this same `invalid_cli_profile`
+        // reason, per PORTING.md §3.5).
         Some(Value::Object(m)) => m
             .iter()
-            .map(|(k, v)| (k.clone(), env_value_or_nul_sentinel(v)))
+            .map(|(k, v)| (Value::String(k.clone()), v.clone()))
             .collect(),
-        Some(v) => {
-            // `dict(x)` for a truthy non-object `extra_env`: Python's
-            // `dict()` accepts any iterable of two-element pairs, e.g. a
-            // wire `extra_env` of `[["A", "b"]]` -- reuse
-            // [`python_dict_pairs`] (the same helper `Commit::from_dict`'s
-            // `seen` arm uses) rather than only accepting a JSON object.
-            // A pair's key must land as a JSON string: Python's `dict()`
-            // accepts any hashable key (e.g. an `int` from `[[1, "b"]]`),
-            // but `CliProfile.__post_init__`'s `re.match(pattern, key)`
-            // then raises an uncaught `TypeError` for a non-`str` key,
-            // caught by `_build_cli_profile`'s `except (KeyError,
-            // TypeError)` and re-raised as `invalid_cli_profile` --
-            // confirmed against real `python3.12`. A shape
-            // `python_dict_pairs` can't turn into pairs at all (a
-            // non-iterable truthy scalar, or -- finding H-R2-9(c) -- a
-            // plain truthy *string* like `"ab"`, which Python's
-            // `dict("ab")` raises an uncaught `ValueError` for, since each
-            // character is length 1, not a length-2 pair) both return
-            // `None` here and fold into the same `invalid_cli_profile`
-            // reason (the closest handled error, PORTING.md §3.5; see
-            // `rust/DEVIATIONS.md`).
-            let pairs =
-                python_dict_pairs(v).ok_or_else(|| Error::invalid_input("invalid_cli_profile"))?;
-            // `dict(pairs)` itself never raises for a bad key/value type --
-            // it just does last-write-wins per key (JSON equality); only
-            // `CliProfile.__post_init__`'s later loop over the FINAL dict's
-            // entries checks types, so an earlier pair's bad key/value that
-            // a later pair with the same key overwrites is never actually
-            // seen by Python and must not be rejected here either.
-            let mut built: Vec<(Value, Value)> = Vec::new();
-            for (k, v) in pairs {
-                match built.iter_mut().find(|(ek, _)| *ek == k) {
-                    Some(existing) => existing.1 = v,
-                    None => built.push((k, v)),
-                }
-            }
-            let mut out = Vec::new();
-            for (k, v) in built {
-                let key = match k {
-                    Value::String(s) => s,
-                    _ => return Err(Error::invalid_input("invalid_cli_profile")),
-                };
-                out.push((key, env_value_or_nul_sentinel(&v)));
-            }
-            out
+        Some(v) => python_dict_pairs(v).ok_or_else(bad)?,
+    };
+    // `dict(pairs)` itself never raises for a bad key/value type -- it just
+    // does last-write-wins per key (JSON equality, matching Python's own
+    // hashable-key equality for the shapes reachable here); only
+    // `__post_init__`'s later loop over the FINAL dict's entries checks
+    // types, so an earlier pair's bad key/value that a later pair with the
+    // same key overwrites is never actually seen by Python and must not be
+    // rejected here either.
+    let mut merged: Vec<(Value, Value)> = Vec::new();
+    for (k, v) in pairs {
+        match merged.iter_mut().find(|(ek, _)| *ek == k) {
+            Some(existing) => existing.1 = v,
+            None => merged.push((k, v)),
+        }
+    }
+
+    // Phase 2, in Python's exact order: kind -> program -> base_url_env ->
+    // entries.
+    //
+    // `self.kind not in CONNECTION_KINDS`: a plain membership check, no
+    // `isinstance` guard, so a non-string `kind` (the `""` placeholder)
+    // simply never matches and gets the same documented reason a
+    // wrong-but-string `kind` would.
+    let kind = kind_raw.as_str().unwrap_or("").to_string();
+    if !policy::CONNECTION_KINDS.contains(&kind.as_str()) {
+        return Err(Error::invalid_input("invalid_cli_kind"));
+    }
+    // `if not self.program or "\x00" in self.program`: Python's `or`
+    // short-circuits on a FALSY `program` (`""`, `0`, `False`, `None`,
+    // `[]`, `{}`) straight to `invalid_cli_program` without ever evaluating
+    // `"\x00" in self.program`; only a TRUTHY non-string `program` reaches
+    // that `in` check, an uncaught `TypeError` for a non-iterable value
+    // that resolves to `invalid_cli_profile` -- reached here only now that
+    // `kind` is already confirmed valid, matching Python's order (finding
+    // H-R2-8's reason merge is corrected: the two Python outcomes are
+    // different reasons, not one).
+    let program = if json_falsy(&program_raw) {
+        String::new() // placeholder; the emptiness check below raises the documented reason
+    } else {
+        match program_raw.as_str() {
+            Some(s) => s.to_string(),
+            None => return Err(bad()),
         }
     };
+    // `re.match(pattern, self.base_url_env)` has no `isinstance` guard at
+    // all: ANY non-string value, falsy or truthy, is the same uncaught
+    // `TypeError` -- unlike `kind`/`program` above, there is no tolerant
+    // membership/falsiness check to fall back on first (finding H-5 is what
+    // a wrong-but-*string* `base_url_env` gets, from the regex actually
+    // failing to match).
+    let base_url_env = match base_url_env_raw {
+        None => None,
+        Some(Value::String(s)) => Some(s),
+        Some(_) => return Err(bad()),
+    };
+    // Entries loop, in document order (finding H-R3-5), extended to a
+    // non-string KEY (finding H-R4-3): `new_ordered` has no way to express
+    // "fail via `invalid_cli_profile`" for an entry it can only accept as
+    // `(String, String)`, so the *prefix* of already-string-shaped entries
+    // strictly before the first non-string key is checked on its own first
+    // -- if Python would already have stopped at one of THOSE entries
+    // (`invalid_env_name`/`invalid_env_value`), that is reported instead,
+    // exactly matching Python's "first failing entry, in order" rule.
+    let mut extra_env_ordered: Vec<(String, String)> = Vec::with_capacity(merged.len());
+    for (k, v) in merged {
+        let key = match k {
+            Value::String(s) => s,
+            _ => {
+                policy::CliProfile::new_ordered(
+                    program.clone(),
+                    kind.clone(),
+                    base_url_env.clone(),
+                    extra_env_ordered.clone(),
+                )?;
+                return Err(bad());
+            }
+        };
+        extra_env_ordered.push((key, env_value_or_nul_sentinel(&v)));
+    }
     Ok(Some(policy::CliProfile::new_ordered(
         program,
         kind,

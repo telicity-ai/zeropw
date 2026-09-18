@@ -17,9 +17,55 @@ use serde_json::{Map, Value, json};
 use crate::pyjson;
 use crate::pystr;
 
-/// `zeropw.team.humanview._YAML_NEEDS_QUOTING`.
+/// The character class fragment (e.g. `[\u{9}-\u{d}\u{1c}-\u{20}...]`,
+/// bracket-free -- callers wrap it in `[...]` themselves where needed)
+/// matching exactly the code points `crate::pystr::is_space` (CPython
+/// `str.isspace()`) accepts, built from `crate::pystr::SPACE_RANGES` at
+/// startup rather than as a second, hand-copied literal (PORTING.md §3b: an
+/// independent copy of a `pystr` semantics table is a review finding on its
+/// own, quite apart from whichever specific code points it does or doesn't
+/// include).
+///
+/// Finding H-R4-4 (fourth recurrence of this exact class of bug --
+/// `rust/DEVIATIONS.md`'s policy/handles/commit rows for `int(str)`'s
+/// narrower whitespace set are the first three): the `regex` crate's `\s`
+/// is `\p{White_Space}`, which excludes U+001C-U+001F (INFORMATION
+/// SEPARATOR FOUR/THREE/TWO/ONE) -- but Python's `re` module matches `\s`
+/// for a `str` pattern via `Py_UNICODE_ISSPACE`, the exact same underlying
+/// predicate as `str.isspace()`, which DOES include them. A peer-supplied
+/// scalar leading/trailing/adjacent-to `:`/`#` with one of those four code
+/// points therefore needed quoting in Python (`_YAML_NEEDS_QUOTING.search`
+/// matches) but not in this crate's old `\s`-based pattern -- emitted RAW
+/// and UNQUOTED, defeating the exact quoting this regex exists to apply
+/// (`note: \x1cleading-sep` instead of `note: "\x1cleading-sep"`), a
+/// byte-for-byte difference in `to_yaml`'s output between the two
+/// languages for a value neither side rejects. `crate::pystr::is_space` is
+/// already the crate's one canonical `str.isspace()` predicate (used by
+/// `commit.rs`'s `is_int_strip_space`, itself narrower on purpose); this
+/// builds the `regex` crate's character-class syntax directly from its
+/// backing table instead of re-encoding the same 29 code points as a third
+/// (or, counting the `handles.rs`/`policy.rs` rows, fifth) hand-written
+/// literal.
+fn python_space_char_class() -> String {
+    let mut out = String::from("[");
+    for &(start, end) in pystr::SPACE_RANGES {
+        if start == end {
+            out.push_str(&format!(r"\u{{{start:x}}}"));
+        } else {
+            out.push_str(&format!(r"\u{{{start:x}}}-\u{{{end:x}}}"));
+        }
+    }
+    out.push(']');
+    out
+}
+
+/// `zeropw.team.humanview._YAML_NEEDS_QUOTING`, with every `\s` substituted
+/// for [`python_space_char_class`]'s exact-match character class (finding
+/// H-R4-4).
 static YAML_NEEDS_QUOTING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^\s|\s$|^$|^[-?:,\[\]{}#&*!|>'"%@`]|[:#]\s|[\n\t]"#).expect("valid regex")
+    let space = python_space_char_class();
+    let pattern = format!(r#"^{space}|{space}$|^$|^[-?:,\[\]{{}}#&*!|>'"%@`]|[:#]{space}|[\n\t]"#);
+    Regex::new(&pattern).expect("valid regex")
 });
 
 /// `zeropw.team.humanview._YAML_RESERVED`.
@@ -502,6 +548,89 @@ mod tests {
         // Leading/trailing whitespace and empty strings need quoting.
         assert_eq!(to_yaml(&json!(" x"), &fresh), "\" x\"\n");
         assert_eq!(to_yaml(&json!(""), &fresh), "\"\"\n");
+    }
+
+    /// Finding H-R4-4: full-enumeration oracle proof that
+    /// [`YAML_NEEDS_QUOTING`]'s `\s` positions now match Python's `re`
+    /// module (`Py_UNICODE_ISSPACE`, the same predicate `str.isspace()`
+    /// uses) exactly, over all 29 code points `crate::pystr::is_space`
+    /// accepts, at each of the pattern's four `\s`-driven match positions:
+    /// leading, trailing, immediately after `:`, and immediately after
+    /// `#`. Before this fix, the four code points U+001C-U+001F were
+    /// silently excluded by the `regex` crate's `\s` (`\p{White_Space}`) at
+    /// every one of these positions, so this test would have failed for
+    /// those four without ever needing to guess which ones in advance --
+    /// exactly the point of enumerating all 29 rather than hand-picking a
+    /// probe.
+    #[test]
+    fn yaml_needs_quoting_matches_python_over_every_isspace_codepoint_and_position() {
+        let isspace_codepoints: Vec<u32> = (0..=0x10FFFFu32)
+            .filter(|&cp| char::from_u32(cp).map(pystr::is_space).unwrap_or(false))
+            .collect();
+        assert_eq!(
+            isspace_codepoints.len(),
+            29,
+            "str.isspace() should have exactly 29 code points"
+        );
+
+        // Four texts per code point: leading, trailing, after ':', after
+        // '#'. `x`/`a`/`b` pad every text so it's never ALSO empty (which
+        // would trivially need quoting via `^$`, masking the position this
+        // probe actually targets).
+        let mut probes: Vec<String> = Vec::new();
+        for &cp in &isspace_codepoints {
+            let c = char::from_u32(cp).unwrap();
+            probes.push(format!("{c}x"));
+            probes.push(format!("x{c}"));
+            probes.push(format!("a:{c}b"));
+            probes.push(format!("a#{c}b"));
+        }
+
+        // One python3.12 subprocess for the whole table: each text is sent
+        // through as a Python `\uNNNN` escape (every `crate::pystr::
+        // SPACE_RANGES` code point fits in 4 hex digits, the max being
+        // U+3000), never as raw bytes a control character could break the
+        // script's own tokenizer on.
+        let mut script = String::from(
+            "import json\nfrom zeropw.team.humanview import _YAML_NEEDS_QUOTING\nresults = []\n",
+        );
+        for text in &probes {
+            let escaped: String = text
+                .chars()
+                .map(|c| format!("\\u{:04x}", c as u32))
+                .collect();
+            script.push_str(&format!(
+                "results.append(_YAML_NEEDS_QUOTING.search(\"{escaped}\") is not None)\n"
+            ));
+        }
+        script.push_str("print(json.dumps(results))\n");
+        let out = crate::oracle::python(&script);
+        let py_results: Vec<bool> = pyjson::loads(out.trim())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_bool().unwrap())
+            .collect();
+
+        assert_eq!(py_results.len(), probes.len());
+        for (text, py_needs_quoting) in probes.iter().zip(py_results.iter()) {
+            let rust_needs_quoting = YAML_NEEDS_QUOTING.is_match(text);
+            assert_eq!(
+                rust_needs_quoting,
+                *py_needs_quoting,
+                "rust vs python3.12 YAML_NEEDS_QUOTING mismatch for {text:?} (code points: {:?})",
+                text.chars().map(|c| c as u32).collect::<Vec<_>>()
+            );
+            // Every one of these probes contains a real space character in
+            // a position the pattern targets, so both languages must agree
+            // it needs quoting -- not just agree with each other on some
+            // other (possibly both-wrong) answer.
+            assert!(
+                py_needs_quoting,
+                "python3.12 itself must consider {text:?} in need of quoting"
+            );
+        }
     }
 
     #[test]

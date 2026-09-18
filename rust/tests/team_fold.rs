@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::process::Command;
 
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -21,7 +22,35 @@ use zeropw::team::commit::{self as C, Commit};
 use zeropw::team::envelope;
 use zeropw::team::fold::{self as F};
 use zeropw::team::identity::DeviceKey;
+use zeropw::vault::VAULT_DOC;
 use zeropw::{clock, pyjson};
+
+/// Runs `script` with `python3.12` (override with `ZEROPW_PYTHON`) and the
+/// repository root on `PYTHONPATH`. Mirrors `team_oracle.rs`'s own helper --
+/// this is a separate standalone test binary, so `crate::oracle` (this
+/// crate's own `#[cfg(test)]` helper) is not reachable from here either.
+fn run_python(script: &str) -> String {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .to_path_buf();
+    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+    let output = Command::new(&interpreter)
+        .arg("-c")
+        .arg(script)
+        .env("PYTHONPATH", &repo_root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
+    if !output.status.success() {
+        panic!(
+            "python oracle failed ({}):\n--- script ---\n{script}\n--- stderr ---\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    String::from_utf8(output.stdout).expect("oracle stdout is UTF-8")
+}
 
 const ADMIN: &str = "admin-pass-1";
 const RECOVERY: &str = "recovery-pass-1";
@@ -949,5 +978,91 @@ fn derive_local_saturates_instead_of_panicking_at_the_real_i128_max_boundary() {
         applies[0]["count"],
         json!(i128::MAX),
         "count must saturate at i128::MAX rather than panic or wrap"
+    );
+}
+
+// -------------------------------------------------------- DeriveVaultCorrupt
+/// Finding H-R4-8: `_derive_vault`'s `secrets_doc = doc.setdefault("secrets",
+/// {})` only installs `{}` when the key is ABSENT -- a PRESENT but non-dict
+/// `vault/secrets.json["secrets"]` (a corrupt local vault) is returned
+/// AS-IS, and the very next line's `secrets_doc.get(secret_id)` then raises
+/// an uncaught `AttributeError`, confirmed here directly against real
+/// `python3.12`, BEFORE `_derive_vault` ever reaches its own
+/// `state.write_json(VAULT_DOC, doc)` call at the end -- the corrupt vault
+/// file is left completely untouched. This used to silently substitute an
+/// empty `Map` for the non-dict "secrets" field and then OVERWRITE it with a
+/// fresh object built from only this fold's own secrets, destroying
+/// whatever the field held. Confirms both that `derive_local` (the public
+/// entry point `_derive_vault` is reached through) now fails closed with
+/// `state_corrupt`, and that the on-disk vault file is byte-for-byte
+/// unchanged afterwards.
+#[test]
+fn derive_vault_non_object_secrets_field_fails_closed_without_overwriting() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let result = F::fold(&env_id, vec![c1], None, None, None, None).unwrap();
+
+    let corrupt_vault = json!({"secrets": "not-an-object"});
+    ctx.state.write_json(VAULT_DOC, &corrupt_vault).unwrap();
+
+    let err = F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .expect_err("a non-object vault secrets field must fail closed, not overwrite it");
+    assert!(err.is(ErrorClass::StateError));
+    assert_eq!(err.reason, "state_corrupt");
+
+    let after = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(
+        after, corrupt_vault,
+        "the corrupt vault file must be left byte-for-byte unchanged, not overwritten"
+    );
+
+    // Cross-check directly against real python3.12's own `_derive_vault`:
+    // same corrupt vault file, same document shape (one secret with at
+    // least one version, so the loop that crashes actually runs), same
+    // "left untouched" assertion.
+    let document_text =
+        pyjson::dumps(&result.document, pyjson::DumpOptions::compact_sorted()).unwrap();
+    let corrupt_vault_text =
+        pyjson::dumps(&corrupt_vault, pyjson::DumpOptions::compact_sorted()).unwrap();
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import fold as F
+
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json("vault/secrets.json", json.loads({corrupt_vault_text:?}))
+    document = json.loads({document_text:?})
+    try:
+        F._derive_vault(document, state, {env_id:?}, {{}}, None, project=None, environment=None)
+        print("OK")
+    except Exception as e:
+        print(f"ERR {{type(e).__name__}}")
+    print(json.dumps(state.read_json("vault/secrets.json", None), sort_keys=True))
+"#,
+    );
+    let out = run_python(&script);
+    let mut lines = out.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "ERR AttributeError",
+        "real python3.12 must raise an uncaught AttributeError"
+    );
+    let py_vault_after: Value = pyjson::loads(lines.next().unwrap()).unwrap();
+    assert_eq!(
+        py_vault_after, corrupt_vault,
+        "python3.12's own vault file must also be left untouched"
     );
 }
