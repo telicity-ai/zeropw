@@ -2198,6 +2198,26 @@ fn issue_ledger(t: &GatewayTest, request_id: &str, title: &str) -> RelayResult {
     )
 }
 
+/// Overwrites the stored `response` object of an already-`"completed"`
+/// ledger entry (as left behind by `issue_ledger`) with an arbitrary,
+/// possibly-corrupted value, for `RequestLedger::replay` differential
+/// probes (findings F-R4-3, F-R4-4, F-R4-5). The entry's `digest` is left
+/// untouched, so replaying the exact same `(method, target, body,
+/// request_id)` still matches and takes the replay path.
+fn set_ledger_response(
+    t: &GatewayTest,
+    caller: &str,
+    request_id: &str,
+    response: serde_json::Value,
+) {
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    let raw = std::fs::read_to_string(&ledger_path).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    doc[caller][request_id]["response"] = response;
+    doc[caller][request_id]["state"] = serde_json::json!("completed");
+    std::fs::write(&ledger_path, serde_json::to_vec(&doc).unwrap()).unwrap();
+}
+
 #[test]
 fn completed_request_is_replayed_without_upstream_contact() {
     let t = GatewayTest::new();
@@ -2238,6 +2258,230 @@ fn completed_request_is_replayed_without_upstream_contact() {
         issue_ledger(&t, "req-1", "same").reason.as_deref(),
         Some("grant_revoked")
     );
+}
+
+#[test]
+fn replay_decodes_body_b64_leniently_like_python_b64decode() {
+    // Finding F-R4-3: CPython's `base64.b64decode` is lenient, discarding
+    // non-alphabet bytes rather than rejecting them -- confirmed directly
+    // against live `python3.12`: `base64.b64decode("YWJj\n") == b"abc"`.
+    // The previous Rust `replay` used the `base64` crate's *strict*
+    // `STANDARD` engine and silently emptied the body on any decode
+    // failure instead of using the canonical `crate::pybase64::b64decode`
+    // (PORTING.md §3b) or failing closed.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-b64-lenient", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-b64-lenient",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": null,
+            "body_b64": "YWJj\n", "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-b64-lenient", "same");
+    assert_eq!(
+        (
+            replayed.status,
+            replayed.body.clone(),
+            replayed.reason.clone()
+        ),
+        (200, b"abc".to_vec(), None),
+        "a newline inside the base64 body must be discarded, not rejected, matching \
+         Python's lenient b64decode"
+    );
+}
+
+#[test]
+fn replay_fails_closed_for_genuinely_undecodable_body_b64() {
+    // Finding F-R4-3: `base64.b64decode("A")` raises `binascii.Error`
+    // (confirmed against live `python3.12`) -- a single leftover base64
+    // character can never complete a quad even leniently. The previous
+    // Rust `replay` relayed a `200` with a silently emptied body instead
+    // of failing closed.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-b64-bad", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-b64-bad",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": null,
+            "body_b64": "A", "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-b64-bad", "same");
+    assert_eq!(
+        (replayed.status, replayed.reason.as_deref()),
+        (503, Some("state_corrupt"))
+    );
+}
+
+#[test]
+fn replay_fails_closed_for_non_string_body_b64() {
+    // Finding F-R4-3/F-R4-4: `base64.b64decode(5)` raises `TypeError`
+    // (confirmed against live `python3.12`) since `response.get("body_b64")
+    // or ""` only substitutes an empty default for a *falsy* stored value,
+    // not for a truthy wrongly-typed one.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-b64-nonstr", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-b64-nonstr",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": null,
+            "body_b64": 5, "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-b64-nonstr", "same");
+    assert_eq!(
+        (replayed.status, replayed.reason.as_deref()),
+        (503, Some("state_corrupt"))
+    );
+}
+
+#[test]
+fn replay_treats_a_truthy_non_bool_body_stored_as_stored() {
+    // Finding F-R4-4(a): `if not response.get("body_stored")` is Python
+    // truthiness, not `== True` -- confirmed against live `python3.12`:
+    // `not "yes"` is `False`, so a truthy non-bool `body_stored` still
+    // takes the real-body path. The previous Rust `replay` used
+    // `.and_then(Value::as_bool) != Some(true)`, which treated any
+    // non-`true` JSON value (including a truthy string) as "not stored"
+    // and withheld the real body via `replay_body_unavailable`.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-stored-truthy", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-stored-truthy",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": null,
+            "body_b64": "YWJj", "body_stored": "yes",
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-stored-truthy", "same");
+    assert_eq!(
+        (
+            replayed.status,
+            replayed.body.clone(),
+            replayed.reason.clone()
+        ),
+        (200, b"abc".to_vec(), None),
+        "a truthy non-bool body_stored must still replay the real stored body"
+    );
+}
+
+#[test]
+fn replay_unpacks_a_two_character_string_header_element() {
+    // Finding F-R4-4(c): `for k, v in [ "ab" ]` unpacks the two-character
+    // string element into `k="a", v="b"` -- confirmed against live
+    // `python3.12`. The previous Rust `python_headers_from_json` required
+    // every element to be a 2-element JSON *array* and refused this shape
+    // with `state_corrupt`/503, and its own doc comment wrongly claimed
+    // "Python's unpacking itself raises" for it.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-headers-str", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-headers-str",
+        serde_json::json!({
+            "status": 200, "headers": ["ab"], "reason": null,
+            "body_b64": "", "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-headers-str", "same");
+    assert_eq!(replayed.status, 200);
+    assert_eq!(replayed.reason, None);
+    assert!(
+        replayed.headers.iter().any(|(k, v)| k == "a" && v == "b"),
+        "a two-character string header element must unpack to (\"a\", \"b\"): {:?}",
+        replayed.headers
+    );
+}
+
+#[test]
+fn replay_keeps_a_non_string_reason_and_reports_it_as_blocked() {
+    // Finding F-R4-4(b): `reason = response.get("reason")` keeps whatever
+    // is stored, unconverted -- `RelayResult.relayed` is `self.reason is
+    // None`, so a truthy non-string like `5` still makes `relayed` `False`
+    // (confirmed against live `python3.12`). The previous Rust `replay`
+    // used `.and_then(Value::as_str)`, turning a non-string `reason` into
+    // `None` -- `relayed()` became `true` and the caller's audit outcome
+    // was `"ok"` instead of `"blocked"`.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-reason-int", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-reason-int",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": 5,
+            "body_b64": "YWJj", "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-reason-int", "same");
+    assert_eq!(replayed.status, 200);
+    assert_eq!(replayed.reason.as_deref(), Some("5"));
+    assert!(
+        !replayed.relayed(),
+        "a present (even wrongly-typed) reason must not be `relayed`"
+    );
+}
+
+#[test]
+fn replay_renders_a_stored_float_reason_via_cpython_repr() {
+    // Finding F-R4-5: `python_str_of` must render a float the way CPython
+    // `str(float)` does, via the canonical `pyjson::python_float_repr`
+    // (PORTING.md §3b) -- confirmed against live `python3.12`:
+    // `str(1e-07) == "1e-07"`. The previous version used
+    // `serde_json::Number::to_string()`, which preserves the JSON source
+    // literal's own spelling (`"1e-7"`) instead.
+    let t = GatewayTest::new();
+    assert_eq!(issue_ledger(&t, "req-reason-float", "same").status, 201);
+    set_ledger_response(
+        &t,
+        "agent-1",
+        "req-reason-float",
+        serde_json::json!({
+            "status": 200, "headers": [], "reason": 1e-7,
+            "body_b64": "YWJj", "body_stored": true,
+        }),
+    );
+    let replayed = issue_ledger(&t, "req-reason-float", "same");
+    assert_eq!(replayed.reason.as_deref(), Some("1e-07"));
+}
+
+#[test]
+fn replay_fails_closed_for_a_truthy_non_mapping_response() {
+    // Finding F-R4-4(d): `response = entry.get("response") or {}` only
+    // substitutes `{}` for a *falsy* stored value; a truthy non-mapping
+    // (`"oops"`, `[1, 2]`, `7`) makes the very next `response.get(...)`
+    // raise `AttributeError`, uncaught (confirmed against live
+    // `python3.12`). The previous Rust `replay` used
+    // `unwrap_or(json!({}))`, silently treating any non-object `response`
+    // as empty and returning `502 replay_body_unavailable` instead of
+    // refusing outright.
+    let t = GatewayTest::new();
+    for (label, bad_response) in [
+        ("string", serde_json::json!("oops")),
+        ("array", serde_json::json!([1, 2])),
+        ("number", serde_json::json!(7)),
+    ] {
+        let request_id = format!("req-response-{label}");
+        assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
+        set_ledger_response(&t, "agent-1", &request_id, bad_response);
+        let replayed = issue_ledger(&t, &request_id, "same");
+        assert_eq!(
+            (replayed.status, replayed.reason.as_deref()),
+            (503, Some("state_corrupt")),
+            "a truthy non-mapping response ({label}) must fail closed, not relay a \
+             502 replay_body_unavailable"
+        );
+    }
 }
 
 #[test]
@@ -5059,6 +5303,67 @@ fn self_referential_target_treats_public_url_port_zero_as_unspecified() {
 }
 
 #[test]
+fn self_referential_target_via_bracketed_public_url_with_empty_port() {
+    // Finding F-R4-1: `urlsplit("//[::1]:")._hostinfo` gives `port = ""`,
+    // which becomes `None`, so `parts.port or (443 if https else 80)`
+    // supplies the scheme default and the comparison runs normally --
+    // confirmed directly against live `python3.12` (`urlsplit("//[::1]:")
+    // .hostname == "::1"`, `.port is None`). The previous `parse_authority`
+    // instead returned `None` for this shape (an empty port after `]:`),
+    // so `self_referential_target`'s `if let Some(...)` short-circuited and
+    // the public-URL comparison was never made -- the guard failed OPEN.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("//[::1]:".to_string()),
+    );
+    let _handle = named_connection_port(&t, "public-self-v6-empty-port", "::1", 80, false);
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "public-self-v6-empty-port",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (501, Some("self_referential_target")),
+        "a bracketed host with a colon but an empty port must still use the scheme default \
+         port and run the self-reference comparison, matching real urlsplit"
+    );
+}
+
+#[test]
+fn invalid_bracketed_public_url_does_not_false_positive_self_referential() {
+    // Finding F-R4-1: `urlsplit("//[::1]junk")` itself raises `ValueError`
+    // ("Invalid IPv6 URL") -- confirmed directly against live
+    // `python3.12` -- which `_self_referential_target`'s `except
+    // ValueError: pass` swallows, skipping the public-URL comparison
+    // entirely regardless of what `target.host`/`.port` are. The previous
+    // `parse_authority` instead parsed this malformed authority as
+    // `Some(("::1", 80))` (falling through to the "no colon before the
+    // port" default-port arm), so a target literally at `::1:80` was
+    // wrongly refused as self-referential -- a false positive Python
+    // itself does not produce.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("//[::1]junk".to_string()),
+    );
+    let handle = named_connection_port(&t, "public-self-v6-invalid", "::1", 80, false);
+    let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_unreachable")),
+        "must not be refused as self_referential_target (that would be the pre-fix, \
+         Python-diverging false positive)"
+    );
+}
+
+#[test]
 fn ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream() {
     // Finding F-R3-5 (shape 1): `{"agent-1": "oops"}` -- Python's
     // `doc.get(caller, {}).get(request_id)` raises `AttributeError` calling
@@ -5123,6 +5428,69 @@ fn ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream() {
         t.fake.requests().len(),
         0,
         "a corrupt ledger updated_at must refuse before reaching the upstream"
+    );
+}
+
+#[test]
+fn ledger_save_fails_closed_for_a_corrupted_entry_of_a_different_request_id() {
+    // Finding F-R4-2: Python's `RequestLedger._save` evaluates
+    // `float(entries[rid].get("updated_at", 0))` for *every* entry of
+    // *every* caller on *every* write, not just the one being claimed --
+    // so a corrupted `rid-1` entry refuses the whole save (uncaught
+    // `ValueError` out of `claim`) even while claiming an unrelated
+    // `rid-2`. The previous Rust `save` read `updated_at` with a plain
+    // `.as_f64().unwrap_or(0.0)`, silently treating the corrupted `rid-1`
+    // as already-expired (`now - 0.0 > LEDGER_TTL_SECONDS`), deleting its
+    // live `in_flight` claim, and then relaying `rid-2` with a `200` where
+    // Python refuses before ever contacting the upstream.
+    let t = GatewayTest::new();
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &ledger_path,
+        br#"{"agent-1": {"rid-1": {"digest": "x", "state": "in_flight", "connection": "gh", "created_at": 1, "updated_at": "soon", "response": null}}}"#,
+    )
+    .unwrap();
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-2"));
+    assert_eq!(result.status, 503);
+    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "a corrupted unrelated ledger entry must refuse the whole save before reaching the upstream"
+    );
+    let raw = std::fs::read_to_string(&ledger_path).unwrap();
+    assert!(
+        raw.contains("\"rid-1\"") && raw.contains("\"soon\"") && !raw.contains("rid-2"),
+        "the ledger must be left byte-for-byte untouched on a failed save: {raw}"
+    );
+}
+
+#[test]
+fn ledger_save_fails_closed_for_a_corrupted_unrelated_caller() {
+    // Finding F-R4-2: `_save`'s `for caller in list(doc)` walks *every*
+    // caller in the document, not just the one being claimed -- a
+    // wrong-typed caller value (`"agent-2": "oops"`) refuses the save even
+    // while claiming a request for a completely different caller
+    // (`agent-1`). The previous Rust `save` silently `continue`d past a
+    // non-object caller value instead of failing closed.
+    let t = GatewayTest::new();
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(&ledger_path, br#"{"agent-2": "oops"}"#).unwrap();
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-agent1"));
+    assert_eq!(result.status, 503);
+    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "a corrupted unrelated caller must refuse the whole save before reaching the upstream"
+    );
+    let raw = std::fs::read_to_string(&ledger_path).unwrap();
+    assert_eq!(
+        raw, r#"{"agent-2": "oops"}"#,
+        "the ledger must be left byte-for-byte untouched on a failed save"
     );
 }
 

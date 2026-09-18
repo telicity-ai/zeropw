@@ -836,11 +836,35 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
     } else if is_get_or_head && path == "/huge" {
         responder.send_streamed(HUGE_BODY_SIZE);
     } else if is_get_or_head && path == "/slow" {
+        // `seconds = min(float(query.get("seconds", ["1"])[0]), 30.0)`;
+        // `time.sleep(max(seconds, 0.0))`; the response echoes the
+        // `min`-only value, NOT the `max`-floored one (finding F-R4-6,
+        // confirmed against live `python3.12`: `?seconds=-5` sleeps 0 but
+        // echoes `{"slept": -5.0}`) -- the previous version applied
+        // `.clamp(0.0, 30.0)` before both the sleep *and* the echo, so a
+        // negative `seconds` wrongly echoed `0.0`.
         let seconds: f64 = query_get(&query, "seconds")
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.0);
-        let seconds = seconds.clamp(0.0, 30.0);
-        std::thread::sleep(Duration::from_secs_f64(seconds));
+        // Rust's `f64::min`/`max` ignore a NaN operand and return the
+        // *other* one (`f64::NAN.min(30.0) == 30.0`), unlike Python's
+        // comparison-based `min`/`max`, which propagate NaN (confirmed
+        // against live `python3.12`: `min(float("nan"), 30.0)` is `nan`,
+        // not `30.0`) -- so NaN must be handled before any clamping, not
+        // silently normalized away by it.
+        if seconds.is_nan() {
+            // `time.sleep(nan)` raises `ValueError("Invalid value NaN (not
+            // a number)")` inside the handler, uncaught: the connection
+            // drops with no response written, and the gateway relay sees
+            // `502 upstream_protocol_error`. `Duration::from_secs_f64(NaN)`
+            // would instead PANIC -- a panic on agent-supplied relayed
+            // input, which PORTING.md §4 forbids. Returning here without
+            // writing a response reproduces the same "handler died before
+            // responding" outcome without panicking.
+            return;
+        }
+        let seconds = seconds.min(30.0);
+        std::thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
         responder.send_json(200, &json!({"slept": seconds}), &[]);
     } else {
         responder.send_json(404, &json!({"error": "not_found"}), &[]);

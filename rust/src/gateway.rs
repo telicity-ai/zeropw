@@ -706,14 +706,26 @@ fn reaches_listener(address: IpAddr, port: u16, local: Option<IpAddr>) -> bool {
 /// `"" == "https"` is false) -- finding F-R3-6: the previous version
 /// required a literal `"://"`, so a scheme-relative `public_url` skipped
 /// the self-reference comparison in [`self_referential_target`] entirely,
-/// failing that guard OPEN. `urlsplit` itself does not raise for either
-/// shape (verified against a live `python3.12`); `None` here is reserved
-/// for input that genuinely has neither a scheme-relative nor a
-/// `scheme://` authority, or a syntactically-bad port. The returned host is
-/// lower-cased (and, for a bracketed literal, bracket-stripped), matching
-/// `SplitResult.hostname`'s own documented lower-casing (finding F-4: a
-/// mixed-case `public_url` must still trigger the self-referential-target
-/// check).
+/// failing that guard OPEN.
+///
+/// `None` is returned exactly where real `urlsplit(url)` raises `ValueError`
+/// (swallowed by [`self_referential_target`]'s own `except ValueError: pass`
+/// equivalent, which then skips the public-URL comparison) -- finding
+/// F-R4-1 corrected the doc comment here, which previously and wrongly
+/// claimed `None` was reserved for "no authority at all, or a syntactically
+/// bad port": a *bracketed* host with a colon but an empty port after it
+/// (`[::1]:`) is NOT an error (`urlsplit` treats the empty port as
+/// "unspecified", exactly like the unbracketed branch below already does)
+/// and must fall back to `default_port` so the comparison still runs; an
+/// invalid bracketed authority (data before `[`, data between `]` and the
+/// port delimiter, or a bracketed host that isn't a valid IPv6/IPvFuture
+/// literal) genuinely does raise `ValueError` in `urlsplit` itself -- via
+/// `_check_bracketed_netloc`/`_check_bracketed_host`, which run eagerly
+/// during `urlsplit()`, before `.hostname`/`.port` are ever touched -- and
+/// must return `None` here. The returned host is lower-cased (and, for a
+/// bracketed literal, bracket-stripped), matching `SplitResult.hostname`'s
+/// own documented lower-casing (finding F-4: a mixed-case `public_url` must
+/// still trigger the self-referential-target check).
 fn parse_authority(url: &str) -> Option<(String, i64)> {
     let (scheme, rest) = match url.strip_prefix("//") {
         Some(rest) => ("", rest),
@@ -729,16 +741,73 @@ fn parse_authority(url: &str) -> Option<(String, i64)> {
     // (finding F-R3-6) -- applied to whichever branch below produces a
     // parsed, in-range port.
     let use_default_if_zero = |port: i64| if port == 0 { default_port } else { port };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let hostport = authority.rsplit('@').next().unwrap_or(authority);
-    if let Some(rest) = hostport.strip_prefix('[') {
-        let (host, after) = rest.split_once(']')?;
-        let port = match after.strip_prefix(':') {
-            Some(p) if !p.is_empty() => p.parse().ok()?,
-            Some(_) => return None,
-            None => default_port,
+    let netloc = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+
+    // `urlsplit`'s own eager bracket-balance check, over the *whole*
+    // netloc (i.e. including any `user@` prefix): `('[' in netloc) !=
+    // (']' in netloc)` raises "Invalid IPv6 URL" immediately, before any
+    // further splitting.
+    let has_open = netloc.contains('[');
+    let has_close = netloc.contains(']');
+    if has_open != has_close {
+        return None;
+    }
+
+    let hostport = netloc.rsplit('@').next().unwrap_or(netloc);
+
+    if has_open {
+        // `_check_bracketed_netloc(netloc)`, mirrored here on `hostport`
+        // (`hostname_and_port = netloc.rpartition('@')[2]` in Python, the
+        // same value as `hostport`): the bracket must be the very first
+        // character (no data before it), and whatever follows the first
+        // `]` must be empty or start with `:` (no data between the bracket
+        // and the port delimiter).
+        let (before_bracket, after_open) = hostport.split_once('[')?;
+        if !before_bracket.is_empty() {
+            return None;
+        }
+        let (host, after_close) = after_open.split_once(']')?;
+        if !after_close.is_empty() && !after_close.starts_with(':') {
+            return None;
+        }
+        // `_check_bracketed_host(hostname)`: an IPvFuture literal
+        // (`v[hex]+\.[anything]+`), or a real IPv6 address -- an IPv4
+        // address in brackets is explicitly rejected.
+        if let Some(vfuture) = host.strip_prefix('v') {
+            let hex_len = vfuture
+                .bytes()
+                .take_while(|b| b.is_ascii_hexdigit())
+                .count();
+            let valid =
+                hex_len > 0 && vfuture[hex_len..].starts_with('.') && vfuture.len() > hex_len + 1;
+            if !valid {
+                return None;
+            }
+        } else {
+            let ip: IpAddr = host.parse().ok()?;
+            if ip.is_ipv4() {
+                return None;
+            }
+        }
+        // `_hostinfo`'s bracketed branch: `port = bracketed.partition(']')`
+        // gives the text after `]`, then `port.partition(':')` keeps only
+        // what follows a leading `:` (empty otherwise); an empty result
+        // means "unspecified", falling back to `default_port` exactly like
+        // the unbracketed branch below (finding F-R4-1: the previous
+        // version treated this case as a hard error instead).
+        let port_str = after_close.strip_prefix(':').unwrap_or("");
+        return if port_str.is_empty() {
+            Some((host.to_lowercase(), default_port))
+        } else if port_str.bytes().all(|b| b.is_ascii_digit()) {
+            let port: i64 = port_str.parse().ok()?;
+            if (0..=65535).contains(&port) {
+                Some((host.to_lowercase(), use_default_if_zero(port)))
+            } else {
+                None
+            }
+        } else {
+            None
         };
-        return Some((host.to_lowercase(), use_default_if_zero(port)));
     }
     // `_hostinfo`'s unbracketed branch: `hostname, _, port =
     // hostinfo.partition(':')` -- `str.partition` splits on the *first*
@@ -820,18 +889,23 @@ fn peer_is_local_listener(stream: &TcpStream) -> bool {
 // ------------------------------------------------------------------- ledger
 
 /// `float(v)` as applied to a value already parsed out of the ledger's JSON
-/// document (finding F-R3-5): a JSON number converts directly; a JSON
-/// string is parsed the way `float()` parses one (approximated here with
+/// document (finding F-R3-5, extended by F-R4-2): a JSON number converts
+/// directly; a JSON bool converts the way `float(True) == 1.0` /
+/// `float(False) == 0.0` does (confirmed against live `python3.12` --
+/// Python `bool` is an `int` subclass, so `float()` never raises for one,
+/// unlike the earlier version of this doc comment claimed); a JSON string
+/// is parsed the way `float()` parses one (approximated here with
 /// `str::parse`, which agrees with Python for every plain decimal/exponent
 /// form a legitimately-written `updated_at` could ever contain -- this
 /// crate's own writer only ever stores a plain `f64` timestamp, so a string
 /// here only occurs under deliberate ledger corruption); anything else
-/// (`null`, a bool, an array, an object) has no non-panicking `float()`
-/// equivalent worth chasing and is treated as unconvertible. Returns `None`
-/// exactly where Python's `float(v)` would raise `TypeError`/`ValueError`.
+/// (`null`, an array, an object) has no non-panicking `float()` equivalent
+/// and is treated as unconvertible. Returns `None` exactly where Python's
+/// `float(v)` would raise `TypeError`/`ValueError`.
 fn python_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
+        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
         Value::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
     }
@@ -856,15 +930,39 @@ fn python_int_status(v: &Value) -> Option<i64> {
 }
 
 /// `str(x)` for a JSON value already known to be a header name/value
-/// element, matching the handful of forms Python's `str()` never raises
-/// for. This crate's own writer always stores plain strings; the other arms
-/// only matter for a deliberately-corrupted ledger.
+/// element (or, since finding F-R4-4, a stored `reason`), matching the
+/// handful of forms Python's `str()` never raises for. This crate's own
+/// writer always stores plain strings; the other arms only matter for a
+/// deliberately-corrupted ledger.
+///
+/// Finding F-R4-5: a `Value::Number` that was written to the ledger's JSON
+/// as a *float* literal (`n.is_i64()`/`n.is_u64()` both false -- i.e. it had
+/// a `.`/exponent in its source spelling, the same test `policy.rs`'s
+/// `number_is_python_int` uses to tell a Python `int` from a Python
+/// `float`) is rendered through the canonical
+/// [`crate::pyjson::python_float_repr`] (PORTING.md §3b), matching CPython
+/// `repr(float)`/`str(float)` exactly (`str(1e-07) == "1e-07"`,
+/// `str(1.2345678901234568e+29) == "1.2345678901234568e+29"`) -- not
+/// `serde_json::Number`'s own `Display`, which preserves the source
+/// literal's spelling verbatim (`1e-7` stays `"1e-7"`, not `"1e-07"`) and
+/// never renders an overflowing decimal in scientific notation at all. An
+/// integer-valued `Number` (no `.`/exponent in its source spelling, e.g. a
+/// stored `status` echoed back through this helper) still renders as a
+/// plain decimal integer, matching `str(5) == "5"` (not `"5.0"`).
 fn python_str_of(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "None".to_string(),
         Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
-        Value::Number(n) => n.to_string(),
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                n.to_string()
+            } else if let Some(f) = n.as_f64() {
+                pyjson::python_float_repr(f)
+            } else {
+                n.to_string()
+            }
+        }
         other => other.to_string(),
     }
 }
@@ -885,14 +983,24 @@ fn is_json_falsy(v: &Value) -> bool {
 }
 
 /// `[(str(k), str(v)) for k, v in response.get("headers") or []]` (finding
-/// F-R3-5, `RequestLedger.replay`): a missing key or any JSON-falsy stored
-/// value ([`is_json_falsy`]) short-circuits to no headers, exactly like
-/// Python's `or []`; a non-empty JSON array must be an array of 2-element
-/// arrays (`[k, v]`, unpacked the way a `for k, v in ...` loop would) or
-/// Python's unpacking itself raises -- fail-closed with `state_corrupt`
-/// (PORTING.md §3.5) for anything else, rather than the previous
-/// `filter_map`, which silently DROPPED any malformed pair instead of
-/// refusing the whole replay.
+/// F-R3-5, `RequestLedger.replay`, corrected by F-R4-4(c)): a missing key
+/// or any JSON-falsy stored value ([`is_json_falsy`]) short-circuits to no
+/// headers, exactly like Python's `or []`. Each *element* of a non-empty
+/// array is then unpacked the way a `for k, v in ...` loop unpacks any
+/// 2-item sequence -- not only a 2-element JSON array (`["a", "b"]`), but
+/// also a JSON string of exactly two Unicode characters (`"ab"` unpacks to
+/// `k="a", v="b"`, confirmed directly against live `python3.12`: `for k, v
+/// in ["ab"]` succeeds). A wrong-length array/string, or an element of any
+/// other JSON type, is exactly where Python's own unpacking raises
+/// (`ValueError`/`TypeError`) -- fail-closed with `state_corrupt`
+/// (PORTING.md §3.5) for those, rather than the previous version's
+/// `Value::Array` requirement (whose doc comment wrongly claimed "Python's
+/// unpacking itself raises" for a 2-character string element -- disproved
+/// by the probe above). A dict element with exactly two keys also unpacks
+/// successfully in real Python (iterating a dict yields its keys); that
+/// shape is not reproduced here (it is not part of any finding's evidence
+/// and is exotic enough not to be worth another special case) and remains
+/// a narrow, fail-closed-instead-of-matching gap.
 fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
     let bad_shape = || Error::state("state_corrupt").with_detail("request_ledger_headers");
     match v {
@@ -901,13 +1009,21 @@ fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
         Some(Value::Array(arr)) => {
             let mut out = Headers::new();
             for item in arr {
-                let Value::Array(pair) = item else {
-                    return Err(bad_shape());
-                };
-                if pair.len() != 2 {
-                    return Err(bad_shape());
+                match item {
+                    Value::Array(pair) if pair.len() == 2 => {
+                        out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
+                    }
+                    Value::String(s) => {
+                        let mut chars = s.chars();
+                        match (chars.next(), chars.next(), chars.next()) {
+                            (Some(a), Some(b), None) => {
+                                out.push((a.to_string(), b.to_string()));
+                            }
+                            _ => return Err(bad_shape()),
+                        }
+                    }
+                    _ => return Err(bad_shape()),
                 }
-                out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
             }
             Ok(out)
         }
@@ -939,20 +1055,46 @@ impl<'a> RequestLedger<'a> {
     }
 
     /// `RequestLedger._save` (finding F-1: see `load` above).
+    ///
+    /// Finding F-R4-2: Python's `float(entries[request_id].get("updated_at",
+    /// 0))` runs for *every* entry of *every* caller on *every* write (and
+    /// again in the `LEDGER_MAX_ENTRIES` eviction sort below); a
+    /// wrong-typed `updated_at` anywhere in the document raises an uncaught
+    /// `ValueError`/`TypeError` out of `_save` -- out of `claim`/`_update`/
+    /// `release` -- refusing the request before the upstream is ever
+    /// contacted (PORTING.md §3.5, and, for a *parsable* string like
+    /// `"1700000000"` which Python's `float()` happily converts, this is a
+    /// case where Python *returns a value*, outside §3.5's own carve-out --
+    /// so the correct behaviour is "parse it like `claim` already does via
+    /// [`python_float`]", not "treat it as corrupt"). The previous version
+    /// read `updated_at` with a plain `.as_f64()` and silently substituted
+    /// `0.0` for anything else (including a parsable string), which made
+    /// `now - 0.0 > LEDGER_TTL_SECONDS` true and deleted a live entry
+    /// belonging to a *different* request id than the one being saved.
+    /// Likewise, Python's `for request_id in list(entries)` /
+    /// `entries[request_id]` raises `TypeError`/`AttributeError` for a
+    /// non-dict caller value; the previous version silently `continue`d
+    /// past it instead of failing closed.
     fn save(&self, mut doc: Map<String, Value>) -> Result<(), Error> {
+        let corrupt = |detail: &str| Error::state("state_corrupt").with_detail(detail);
         let now = (self.ctx.clock)();
         let callers: Vec<String> = doc.keys().cloned().collect();
         for caller in callers {
-            let Some(Value::Object(entries)) = doc.get_mut(&caller) else {
+            let Some(entries_value) = doc.get_mut(&caller) else {
                 continue;
+            };
+            let Value::Object(entries) = entries_value else {
+                return Err(corrupt("request_ledger_caller"));
             };
             let ids: Vec<String> = entries.keys().cloned().collect();
             for id in ids {
-                let updated_at = entries
+                let raw = entries
                     .get(&id)
                     .and_then(|e| e.get("updated_at"))
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0);
+                    .cloned()
+                    .unwrap_or(json!(0));
+                let updated_at =
+                    python_float(&raw).ok_or_else(|| corrupt("request_ledger_updated_at"))?;
                 if now - updated_at > LEDGER_TTL_SECONDS {
                     entries.remove(&id);
                 }
@@ -970,19 +1112,29 @@ impl<'a> RequestLedger<'a> {
             let mut completed: Vec<(f64, String, String)> = Vec::new();
             for (caller, entries) in doc.iter() {
                 let Some(entries) = entries.as_object() else {
-                    continue;
+                    return Err(corrupt("request_ledger_caller"));
                 };
                 for (rid, entry) in entries {
                     if entry.get("state").and_then(Value::as_str) == Some("completed") {
-                        let updated_at = entry
-                            .get("updated_at")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0);
+                        let raw = entry.get("updated_at").cloned().unwrap_or(json!(0));
+                        let updated_at = python_float(&raw)
+                            .ok_or_else(|| corrupt("request_ledger_updated_at"))?;
                         completed.push((updated_at, caller.clone(), rid.clone()));
                     }
                 }
             }
-            completed.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            // `sorted()` on `(float, str, str)` tuples never raises in
+            // Python even when a `float("nan")`-derived value is present
+            // (comparisons against NaN are simply always `False`, not an
+            // error); mirror that here with a NaN-safe tuple comparator
+            // instead of `partial_cmp(..).unwrap()`, which would panic on
+            // agent-reachable corrupted input (PORTING.md §4).
+            completed.sort_by(|a, b| {
+                a.0.partial_cmp(&b.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.1.cmp(&b.1))
+                    .then_with(|| a.2.cmp(&b.2))
+            });
             for (_, caller, rid) in completed.into_iter().take(total - LEDGER_MAX_ENTRIES) {
                 if let Some(Value::Object(entries)) = doc.get_mut(&caller) {
                     entries.remove(&rid);
@@ -1169,25 +1321,70 @@ impl<'a> RequestLedger<'a> {
         })
     }
 
-    /// `RequestLedger.replay`: `status = int(response.get("status", 502))`
-    /// and `headers = [(str(k), str(v)) for k, v in response.get("headers")
-    /// or []]` both raise uncaught built-in exceptions for a wrong-typed
+    /// `RequestLedger.replay`.
+    ///
+    /// `status = int(response.get("status", 502))` and
+    /// `headers = [(str(k), str(v)) for k, v in response.get("headers") or
+    /// []]` both raise uncaught built-in exceptions for a wrong-typed
     /// stored `status`/`headers` (finding F-R3-5) -- fail-closed with the
     /// same `state_corrupt` `StateError` [`RequestLedger::claim`] uses for
-    /// its own wrong-typed shapes, per PORTING.md §3.5, rather than the
-    /// previous silent `unwrap_or(502)`/`unwrap_or_default()` fallbacks
-    /// (which would have relayed a fabricated 502 instead of refusing).
+    /// its own wrong-typed shapes, per PORTING.md §3.5.
+    ///
+    /// Finding F-R4-4 fixed four further truthiness/coercion divergences,
+    /// none of which fall under §3.5's carve-out (Python *returns a value*
+    /// in each): **(a)** `response = entry.get("response") or {}` uses
+    /// Python truthiness, and a truthy *non-mapping* (`"oops"`, `[1, 2]`,
+    /// `7`) makes the very next `response.get(...)` raise `AttributeError`
+    /// -- fail closed for that shape, rather than the previous
+    /// `unwrap_or(json!({}))`, which treated it as empty and produced a
+    /// `502 replay_body_unavailable` instead of refusing outright.
+    /// **(b)** `if not response.get("body_stored")` is Python truthiness,
+    /// not an `== true` check -- any JSON-falsy value ([`is_json_falsy`])
+    /// takes the stored-body-unavailable path, and any truthy value
+    /// (including a non-bool like `"yes"`) takes the real-body path,
+    /// exactly like the previous `.and_then(Value::as_bool) != Some(true)`
+    /// did NOT (it treated every non-`true` JSON value, including a truthy
+    /// string, as "not stored"). **(c)** `reason = response.get("reason")`
+    /// keeps whatever is stored, coerced through [`python_str_of`] the way
+    /// this crate's `Option<String>` field requires (Python's own field is
+    /// duck-typed `Any`) -- `None`/missing stays [`Option::None`]
+    /// (`RelayResult.relayed`'s `self.reason is None` check), any other
+    /// JSON value becomes `Some(python_str_of(value))`, matching Python's
+    /// identity-based `relayed` check exactly (confirmed against live
+    /// `python3.12`: `reason=5` is present-but-non-`None`, so `relayed` is
+    /// `False` and the caller's outcome is `"blocked"`, same as
+    /// `Some("5")` here). **(d)** `body_b64` goes through the same
+    /// truthiness (`response.get("body_b64") or ""`) before decoding.
+    ///
+    /// Finding F-R4-3: the stored body is decoded with the canonical
+    /// [`crate::pybase64::b64decode`] (PORTING.md §3b) -- CPython's
+    /// `base64.b64decode` is *lenient*, silently discarding any
+    /// non-alphabet byte before decoding (`"YWJj\n"` -> `b"abc"`), not the
+    /// `base64` crate's strict `STANDARD` engine this used before; a
+    /// genuinely undecodable value now fails closed with `state_corrupt`
+    /// instead of silently relaying a `200` with an emptied body.
     pub fn replay(entry: &Value) -> Result<RelayResult, Error> {
-        use base64::Engine as _;
-        let response = entry.get("response").cloned().unwrap_or(json!({}));
+        let corrupt = |detail: &str| Error::state("state_corrupt").with_detail(detail);
+        let response: Map<String, Value> = match entry.get("response") {
+            None => Map::new(),
+            Some(value) if is_json_falsy(value) => Map::new(),
+            Some(Value::Object(m)) => m.clone(),
+            Some(_) => return Err(corrupt("request_ledger_response")),
+        };
         let status = match response.get("status") {
             None => 502i64,
-            Some(v) => python_int_status(v).ok_or_else(|| {
-                Error::state("state_corrupt").with_detail("request_ledger_status")
-            })?,
+            Some(v) => python_int_status(v).ok_or_else(|| corrupt("request_ledger_status"))?,
         } as u16;
         let mut headers: Headers = python_headers_from_json(response.get("headers"))?;
-        if response.get("body_stored").and_then(Value::as_bool) != Some(true) {
+        let reason = match response.get("reason") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(python_str_of(v)),
+        };
+        let body_stored = response
+            .get("body_stored")
+            .map(|v| !is_json_falsy(v))
+            .unwrap_or(false);
+        if !body_stored {
             headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
             let payload = pyjson::dumps(
                 &json!({"error": "ReplayBodyUnavailable", "reason": "replay_body_unavailable"}),
@@ -1204,20 +1401,20 @@ impl<'a> RequestLedger<'a> {
                 reason: Some("replay_body_unavailable".to_string()),
             });
         }
-        let body = response
-            .get("body_b64")
-            .and_then(Value::as_str)
-            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-            .unwrap_or_default();
+        let body = match response.get("body_b64") {
+            None => Vec::new(),
+            Some(value) if is_json_falsy(value) => Vec::new(),
+            Some(Value::String(s)) => {
+                crate::pybase64::b64decode(s).map_err(|_| corrupt("request_ledger_body_b64"))?
+            }
+            Some(_) => return Err(corrupt("request_ledger_body_b64")),
+        };
         headers.push(("X-ZeroPW-Replay".to_string(), "true".to_string()));
         Ok(RelayResult {
             status,
             headers,
             body,
-            reason: response
-                .get("reason")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            reason,
         })
     }
 }

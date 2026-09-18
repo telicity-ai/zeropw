@@ -728,6 +728,83 @@ fn stream_large_and_slow() {
 }
 
 #[test]
+fn slow_endpoint_echoes_the_unclamped_min_only_seconds_value() {
+    // Finding F-R4-6: Python computes `seconds = min(float(...), 30.0)`
+    // and sleeps `max(seconds, 0.0)`, but echoes the *unclamped* `seconds`
+    // -- confirmed against live `python3.12`: `?seconds=-5` sleeps 0 but
+    // responds `{"slept": -5.0}`. The previous Rust version applied
+    // `.clamp(0.0, 30.0)` before both the sleep and the echo, so a
+    // negative value wrongly echoed `0.0`.
+    let fake = FakeUpstream::new(SECRET).start();
+    let (name, value) = auth_header(SECRET);
+    let resp = request(
+        fake.host(),
+        fake.port(),
+        "GET",
+        "/slow?seconds=-5",
+        &[(name, &value)],
+        None,
+    );
+    assert_eq!(
+        (resp.status, json(&resp.body)),
+        (200, serde_json::json!({"slept": -5.0}))
+    );
+}
+
+#[test]
+fn slow_endpoint_does_not_panic_on_nan_seconds() {
+    // Finding F-R4-6: `?seconds=nan` reaches `time.sleep(float("nan"))` in
+    // Python, which raises `ValueError("Invalid value NaN (not a
+    // number)")` inside the handler, uncaught -- the connection closes
+    // with no response written, and the gateway relay reports `502
+    // upstream_protocol_error` (both confirmed against a live end-to-end
+    // probe). The previous Rust version let NaN survive `.clamp(0.0,
+    // 30.0)` (a NaN input to `f64::clamp` returns `self`, i.e. NaN
+    // unchanged, matching neither bound) and then called
+    // `Duration::from_secs_f64(NaN)`, which PANICS in the fixture's
+    // per-connection handler thread -- a panic on ordinary relayed input,
+    // which PORTING.md §4 forbids. A closed, empty-bodied connection is
+    // NOT enough to tell "panicked" apart from "returned early without
+    // responding" (a panicking thread unwinds and drops the socket too, so
+    // the client sees the exact same EOF either way) -- a temporary panic
+    // hook is installed to observe whether any thread actually panicked
+    // while this request was in flight.
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let panicked = Arc::new(AtomicBool::new(false));
+    let observed = panicked.clone();
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |_info| {
+        observed.store(true, Ordering::SeqCst);
+    }));
+
+    let fake = FakeUpstream::new(SECRET).start();
+    let (name, value) = auth_header(SECRET);
+    let mut stream = send_request(
+        fake.host(),
+        fake.port(),
+        "GET",
+        "/slow?seconds=nan",
+        &[(name, &value)],
+        None,
+    );
+    let mut buf = [0u8; 64];
+    let n = stream.read(&mut buf).unwrap_or(0);
+
+    std::panic::set_hook(previous_hook);
+
+    assert_eq!(
+        n, 0,
+        "the connection must close with no response bytes (matching Python's uncaught \
+         ValueError), not hang"
+    );
+    assert!(
+        !panicked.load(Ordering::SeqCst),
+        "the /slow handler must not panic on NaN seconds (PORTING.md §4)"
+    );
+}
+
+#[test]
 fn huge_streams_more_than_eight_mib() {
     let fake = FakeUpstream::new(SECRET).start();
     let (name, value) = auth_header(SECRET);
