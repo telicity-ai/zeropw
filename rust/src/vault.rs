@@ -468,25 +468,22 @@ impl<'a> Vault<'a> {
         secret_id: &str,
         entry: &Map<String, Value>,
     ) -> Result<SecretBytes, Error> {
+        // Python: `env_id = str(entry["shared_env"]); generation_id = str(entry["generation"]);
+        // version_id = str(entry["version_id"])`, catching only `KeyError` (a missing key) as
+        // `secret_corrupt` -- a *present* field of any other JSON type (e.g. the number `5`) is
+        // coerced with `str(...)`, not rejected. `Value::as_str` required the field to already be
+        // a JSON string (finding E-R2-4), rejecting a well-typed-but-non-string field Python
+        // would happily stringify; `python_str_scalar` applies the same `str()` coercion.
         let corrupt = || Error::state("secret_corrupt").with_detail(secret_id);
-        let env_id = entry
-            .get("shared_env")
-            .and_then(Value::as_str)
-            .ok_or_else(corrupt)?;
-        let generation_id = entry
-            .get("generation")
-            .and_then(Value::as_str)
-            .ok_or_else(corrupt)?;
-        let version_id = entry
-            .get("version_id")
-            .and_then(Value::as_str)
-            .ok_or_else(corrupt)?;
-        let generation_key = self.generation_key(env_id, generation_id)?;
+        let env_id = python_str_scalar(entry.get("shared_env").ok_or_else(corrupt)?);
+        let generation_id = python_str_scalar(entry.get("generation").ok_or_else(corrupt)?);
+        let version_id = python_str_scalar(entry.get("version_id").ok_or_else(corrupt)?);
+        let generation_key = self.generation_key(&env_id, &generation_id)?;
         crate::team::envelope::decrypt_secret(
             generation_key.expose(),
-            env_id,
+            &env_id,
             secret_id,
-            version_id,
+            &version_id,
             entry,
         )
         .map(SecretBytes::new)
@@ -905,7 +902,16 @@ impl<'a> Vault<'a> {
     ) -> Result<SecretBytes, Error> {
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
-        if !secrets_obj.contains_key(secret_id) {
+        // Python: `entry = self._doc()["secrets"].get(secret_id); if entry is None: raise
+        // NotFound(...)`. `dict.get` returns `None` both when the key is absent *and* when it
+        // maps to a JSON `null`, so a `"secrets": {"ghost": null}` entry must be treated as
+        // absent here too -- `contains_key` alone (finding E-R2-4) is `true` for the null case,
+        // which used to fall through into the version-record lookups below and surface as
+        // `state_corrupt` instead of the documented `NotFound("secret_not_found")`.
+        let present = secrets_obj
+            .get(secret_id)
+            .is_some_and(|entry| !entry.is_null());
+        if !present {
             return Err(Error::not_found("secret_not_found"));
         }
         let resolved = self.resolve_version(secret_id, version)?;

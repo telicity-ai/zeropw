@@ -46,6 +46,7 @@
 //! is *renamed* aside, not deleted, on every recovery).
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -71,6 +72,28 @@ pub const KMS_FILE: &str = "kms/master.key";
 /// Leave them `None` to get fresh private temporary directories outside the
 /// state store; an explicit value inside the state directory is refused by
 /// `Context`.
+///
+/// Python's `Config` is a mutable `@dataclass` passed *by reference*, and
+/// `Context._apply_config_defaults` writes the freshly created
+/// `socket_dir`/`run_dir` back onto the caller's own `Config` object. Two
+/// `Context`s built from the *same* `Config` instance therefore end up
+/// sharing one `socket_dir` and one `run_dir` -- owned (i.e. removed on
+/// `close()`) only by whichever `Context` created them first -- which is
+/// exactly what `tests/test_team_sync.py`'s
+/// `RemoteWideningCancelsRunningExecTestCase.setUp` (lines 608-613) and
+/// `SessionRekeyTestCase.test_old_session_is_closed_and_replaced` (lines
+/// 917-920) rely on: both construct two simulated nodes from one shared
+/// `cfg` object. `Context::initialize`/`Context::open` here take `Config`
+/// by value (moved into the `Context`), so every `Context` always gets its
+/// own private temp dirs -- there is no way to reproduce the Python sharing
+/// from this crate's API without changing that signature to `&mut Config`,
+/// which would ripple into every call site in the crate, including
+/// `signer.rs` and several test files outside this work unit's editable
+/// files. Recorded in `DEVIATIONS.md` (finding E-R2-3) instead of changed,
+/// so a second-half port of `zeropw.team.sync`/`membership` (which is what
+/// actually exercises the two `test_team_sync.py` setups above) does not
+/// assume Rust's per-`Context` isolation matches Python's shared-`Config`
+/// node setup.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen_host: String,
@@ -459,23 +482,62 @@ fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
 /// `rust/tests/vault_context.rs`'s `inside_state_matches_python_*` tests,
 /// oracle-compared against `Path.resolve(strict=False)` for the exact cases
 /// that previously diverged.
+///
+/// This is *not* a byte-identical reimplementation of `pathlib`'s internals
+/// (see `resolve_components` for the one place that still differs: cycle
+/// handling), only an observable-behaviour match for how `Context` uses it.
+/// A genuine symlink loop is CPython's one case where `Path.resolve(strict=
+/// False)` still raises (`RuntimeError("Symlink loop from ...")`, via a
+/// `stat()` call *after* the lenient walk -- see the comment below); that
+/// escape is recorded in `DEVIATIONS.md` (finding E-R2-2a) since Rust has no
+/// exception to let propagate the same way.
 fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
-    resolve_components(&abs, 0)
+    let mut seen: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
+    let resolved = resolve_components(&abs, &mut seen)?;
+    // CPython's non-strict `os.path.realpath` (the engine `pathlib.Path.resolve(strict=False)`
+    // delegates to) never raises for a symlink loop by itself -- `resolve_components`'s `seen`
+    // map, just like `posixpath._joinrealpath`, leaves an unresolved cycle as a literal path
+    // instead of erroring. But `Path.resolve()` then calls `stat()` on that result and turns an
+    // `OSError(ELOOP)` from *that* call into `RuntimeError("Symlink loop from ...")`, which
+    // propagates out of `Context._inside_state`/`Context.open`/`Context.initialize` uncaught
+    // (finding E-R2-2a). Reproduce the same detection here so a genuine loop still surfaces as an
+    // `Err`, which `Context::inside_state` already treats as fail-closed ("not acceptable").
+    if let Err(e) = fs::metadata(&resolved)
+        && e.raw_os_error() == Some(libc::ELOOP)
+    {
+        return Err(e);
+    }
+    // Any other `stat()` failure (not found, permission denied, ...) is ignored here, just
+    // like Python's `except OSError as e: check_eloop(e)` only re-raises for `ELOOP`.
+    Ok(resolved)
 }
 
-/// One pass of the component walk described on [`resolve_lenient`]. `depth`
-/// bounds symlink-chain recursion (CPython's `realpath` gives up with
-/// `ELOOP` after 40 hops); not exercised by any test here, kept only so a
-/// pathological symlink loop cannot recurse unboundedly.
-fn resolve_components(path: &Path, depth: u32) -> std::io::Result<PathBuf> {
-    if depth > 40 {
-        return Err(std::io::Error::other("too many levels of symbolic links"));
-    }
+/// One pass of the component walk described on [`resolve_lenient`], mirroring CPython 3.12's
+/// `posixpath._joinrealpath` (the engine behind `os.path.realpath`, which `pathlib.Path.resolve`
+/// delegates to since Python 3.10): `seen` maps each symlink's own resolved-so-far path to `None`
+/// while it is in the middle of being resolved, and to `Some(resolved_target)` once resolved. A
+/// chain of any length resolves in full -- there is no hop-count limit, matching CPython's own
+/// `_joinrealpath` (`maxlinks = None`) -- and only a genuine cycle (a symlink reached again while
+/// its own entry is still `None`) is left unresolved, exactly like Python's non-strict `realpath`.
+///
+/// A previous version of this function bounded recursion at a fixed depth of 40 and refused any
+/// longer chain outright with an `Err` (finding E-R2-1): that was wrong on two counts. First, it
+/// rejected long but perfectly acyclic chains that Python resolves without complaint (CPython has
+/// no hop limit at all, so nothing here should either). Second, even for an actual cycle, erroring
+/// out of the component walk itself was the wrong place to fail -- Python's non-strict `realpath`
+/// does *not* raise there either; the loop only surfaces later, when `Path.resolve()` `stat()`s the
+/// (still-literal) result (see `resolve_lenient`'s post-check, finding E-R2-2a). See
+/// `DEVIATIONS.md` (findings E-R2-1, E-R2-2a) and `rust/tests/vault_context_oracle.rs`'s
+/// `inside_state_matches_python_for_51_hop_symlink_chain*` / `*_self_symlink_loop` tests.
+fn resolve_components(
+    path: &Path,
+    seen: &mut HashMap<PathBuf, Option<PathBuf>>,
+) -> std::io::Result<PathBuf> {
     let mut resolved = PathBuf::from("/");
     for comp in path.components() {
         match comp {
@@ -486,15 +548,36 @@ fn resolve_components(path: &Path, depth: u32) -> std::io::Result<PathBuf> {
             }
             std::path::Component::Normal(part) => {
                 let candidate = resolved.join(part);
+                match seen.get(&candidate) {
+                    Some(Some(cached)) => {
+                        // Already resolved earlier in this walk (e.g. the same symlink
+                        // reached twice via different, non-cyclic routes): reuse it without
+                        // re-touching the filesystem, exactly like Python's `path = seen[newpath]`.
+                        resolved = cached.clone();
+                        continue;
+                    }
+                    Some(None) => {
+                        // This symlink is an ancestor of itself in the current resolution --
+                        // a genuine cycle. Python's non-strict `_joinrealpath` does not raise
+                        // here; it leaves the symlink's own path unresolved and moves on. The
+                        // loop is only detected later (`resolve_lenient`'s `stat()` post-check).
+                        resolved = candidate;
+                        continue;
+                    }
+                    None => {}
+                }
                 match fs::symlink_metadata(&candidate) {
                     Ok(meta) if meta.file_type().is_symlink() => {
+                        seen.insert(candidate.clone(), None);
                         let target = fs::read_link(&candidate)?;
                         let joined = if target.is_absolute() {
                             target
                         } else {
                             resolved.join(&target)
                         };
-                        resolved = resolve_components(&joined, depth + 1)?;
+                        let resolved_target = resolve_components(&joined, seen)?;
+                        seen.insert(candidate.clone(), Some(resolved_target.clone()));
+                        resolved = resolved_target;
                     }
                     // Exists but is not a symlink, or does not exist at all
                     // (or is otherwise unreadable): keep it literally, the
@@ -516,6 +599,15 @@ mod tests {
     /// afterwards -- checked here by reading the mode back immediately after
     /// `mkdir_private_0700` returns, before `create_private_dir`'s own
     /// (redundant, defensive) follow-up `set_permissions` call would run.
+    ///
+    /// The mode asserted here is "no bits wider than 0700", not "exactly
+    /// 0700": like `mkdir(2)`, `DirBuilder::mode` still gets masked by the
+    /// process umask, so under a masking umask (e.g. `umask 0177` producing
+    /// 0500) the resulting mode is narrower than 0700, not equal to it.
+    /// Python's own equivalent (`mkdtemp`, which `Context._private_tempdir`
+    /// calls) is masked the exact same way -- asserting equality here would
+    /// therefore be a *stronger* claim than Python itself makes, and would
+    /// fail spuriously under such a umask (round-2 review note).
     #[test]
     fn mkdir_private_0700_sets_mode_atomically_with_no_wider_window() {
         let base = std::env::temp_dir();
@@ -531,8 +623,9 @@ mod tests {
         let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
         fs::remove_dir(&path).expect("cleanup");
         assert_eq!(
-            mode, 0o700,
-            "directory must already be 0700 right after mkdir, before any chmod"
+            mode & !0o700,
+            0,
+            "directory must not be wider than 0700 right after mkdir, before any chmod (got {mode:o})"
         );
     }
 

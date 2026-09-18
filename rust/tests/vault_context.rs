@@ -826,3 +826,76 @@ fn secret_value_limits() {
         .unwrap_err();
     assert!(err.is(ErrorClass::InvalidInput));
 }
+
+/// Finding E-R2-4a: `doc["secrets"].get(secret_id)` in Python returns `None`
+/// both when the key is absent *and* when it maps to a JSON `null` (`dict.get`
+/// doesn't distinguish the two), so `secret_for_trusted_use` must raise the
+/// documented `NotFound("secret_not_found")` for `"secrets": {"ghost": null}`,
+/// not fall through to the generic `state_corrupt` the version-record lookups
+/// use for a genuinely malformed (non-null, non-dict) entry.
+#[test]
+fn secret_for_trusted_use_treats_explicit_null_secret_entry_as_absent() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"]
+        .as_object_mut()
+        .unwrap()
+        .insert("ghost".to_string(), Value::Null);
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    // `secret_for_trusted_use`'s own up-front `doc["secrets"].get(secret_id)` check must treat
+    // the null entry as absent *before* `resolve_version`/`get_meta`/`list_secrets` ever run --
+    // those iterate every secret id and would themselves hit the null entry (`as_obj` failing on
+    // `Value::Null`), surfacing `state_corrupt` instead. This matches Python's own `list_secrets`,
+    // which raises an uncaught `TypeError` for the same null entry when asked about *any* secret
+    // id (DEVIATIONS.md row 51, unaffected by this fix) -- only the up-front existence check on
+    // `secret_id` itself is fixed here.
+    let err = ctx.vault.secret_for_trusted_use("ghost", None).unwrap_err();
+    assert!(err.is(ErrorClass::NotFound));
+    assert_eq!(err.reason.to_string(), "secret_not_found");
+}
+
+/// Finding E-R2-4b: `Vault._decrypt_shared`'s `env_id = str(entry["shared_env"])`,
+/// `generation_id = str(entry["generation"])`, `version_id = str(entry["version_id"])`
+/// coerce a *present* field of any JSON type with Python's `str(...)` -- only a
+/// missing key is `secret_corrupt`. A well-typed-but-non-string field (e.g. the
+/// JSON number `5`) must therefore still decrypt successfully, not be rejected.
+#[test]
+fn decrypt_shared_coerces_non_string_scalar_fields_like_pythons_str() {
+    let (_tmp, ctx) = setup();
+    let dek = [7u8; 32];
+    let wrapped = ctx.kms.wrap(&dek).unwrap();
+    ctx.state
+        .write_json("team/5/dek/7.json", &wrapped.to_dict())
+        .unwrap();
+
+    let mut version_record =
+        zeropw::team::envelope::encrypt_secret(&dek, "5", "gh-token", "3", SYNTHETIC).unwrap();
+    version_record.insert("status".into(), json!("active"));
+    version_record.insert("created_at".into(), json!("2024-01-01T00:00:00Z"));
+    version_record.insert("public".into(), json!({}));
+    // Numbers, not strings -- Python's `str(entry["shared_env"])` etc. still
+    // coerce these to "5"/"7"/"3", matching the path just written above.
+    version_record.insert("shared_env".into(), json!(5));
+    version_record.insert("generation".into(), json!(7));
+    version_record.insert("version_id".into(), json!(3));
+
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    doc["secrets"].as_object_mut().unwrap().insert(
+        "gh-token".to_string(),
+        json!({
+            "project": "demo",
+            "environment": "dev",
+            "kind": "env_var",
+            "active_version": 1,
+            "versions": {"1": version_record},
+        }),
+    );
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    let value = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
+    assert_eq!(value.expose(), SYNTHETIC);
+}

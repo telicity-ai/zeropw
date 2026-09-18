@@ -637,3 +637,258 @@ print("ok")
     let out = run_python(&script);
     assert_eq!(out.trim(), "ok");
 }
+
+// ------------------------------------ resolve_components long chains (finding E-R2-1)
+/// Builds a symlink chain `root/k0 -> k1 -> ... -> k{hops-1} -> real_dir` (`hops` links total)
+/// under `root`, returning the head (`root/k0`).
+fn build_symlink_chain(root: &Path, real_dir: &Path, hops: usize) -> PathBuf {
+    fs::create_dir_all(root).unwrap();
+    let mut target = real_dir.to_path_buf();
+    for i in (0..hops).rev() {
+        let link = root.join(format!("k{i}"));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        target = link;
+    }
+    target
+}
+
+/// Reviewer probe (finding E-R2-1): a 51-hop *acyclic* symlink chain resolving to a real
+/// directory outside the state dir. CPython's `posixpath._joinrealpath` has no hop-count limit
+/// (`maxlinks = None`) -- only an actual cycle is special-cased via its `seen` map -- so Python
+/// resolves the whole chain and accepts it as `socket_dir`. The previous Rust implementation
+/// bounded symlink-chain recursion at a fixed depth of 40 and turned *any* deeper chain into
+/// `StateError("socket_dir_inside_state_dir")`, fail-closed for a path that was never inside the
+/// state dir at all.
+#[test]
+fn inside_state_matches_python_for_51_hop_symlink_chain_to_existing_dir() {
+    let (rust, py) = probe_inside_state(|tmp, _state| {
+        let root = tmp.path().join("rl");
+        let real = tmp.path().join("realdir");
+        fs::create_dir_all(&real).unwrap();
+        build_symlink_chain(&root, &real, 51)
+    });
+    assert_eq!(rust, py);
+    assert!(
+        rust.0,
+        "a 51-hop acyclic symlink chain must resolve and be accepted, like Python: {rust:?}"
+    );
+}
+
+/// Same 51-hop chain, but with a trailing leaf appended after the chain's head that does not
+/// exist on disk (the common real-world shape: the chain's target directory exists, but the
+/// specific leaf under it does not yet) -- combines the E-R2-1 long-chain fix with the existing
+/// E-1 nonexistent-leaf handling.
+#[test]
+fn inside_state_matches_python_for_51_hop_symlink_chain_with_nonexistent_leaf() {
+    let (rust, py) = probe_inside_state(|tmp, _state| {
+        let root = tmp.path().join("rl2");
+        let real = tmp.path().join("realdir2");
+        fs::create_dir_all(&real).unwrap();
+        let head = build_symlink_chain(&root, &real, 51);
+        head.join("does-not-exist-leaf")
+    });
+    assert_eq!(rust, py);
+    assert!(
+        rust.0,
+        "a 51-hop chain with a nonexistent trailing leaf must still be accepted: {rust:?}"
+    );
+}
+
+// ------------------------------------ symlink loop escape (finding E-R2-2a)
+/// Reviewer case: a **self-referential** symlink as the candidate `socket_dir`. CPython's
+/// non-strict `os.path.realpath` does not raise for this by itself (it leaves the loop
+/// unresolved and returns a literal path), but `pathlib.Path.resolve(strict=False)` then
+/// `stat()`s that result and turns the resulting `OSError(ELOOP)` into an uncaught
+/// `RuntimeError("Symlink loop from ...")` -- `Context._inside_state`'s `except OSError` does not
+/// catch a `RuntimeError`, so it escapes `Context.open` entirely, not as a `StateError`. Rust has
+/// no exception to let escape the same way; `resolve_lenient` reproduces the same `stat()`-based
+/// loop detection and folds it into the fail-closed `StateError("socket_dir_inside_state_dir")`
+/// `Context::open` already uses for every other "not acceptable" candidate (DEVIATIONS.md,
+/// finding E-R2-2a; PORTING.md §3.5).
+#[test]
+fn inside_state_matches_python_for_self_symlink_loop() {
+    let tmp = TempDir::new().unwrap();
+    let state = tmp.path().join("state");
+    Context::initialize(
+        &state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    let root = tmp.path().join("loop-root");
+    fs::create_dir_all(&root).unwrap();
+    let loop_path = root.join("loop");
+    std::os::unix::fs::symlink(&loop_path, &loop_path).unwrap();
+
+    let rust_result = Context::open(
+        &state,
+        Config {
+            socket_dir: Some(loop_path.clone()),
+            ..Config::default()
+        },
+        clock::fixed(FIXED_NOW),
+    );
+    let rust_err = match rust_result {
+        Ok(_) => panic!("expected a self symlink loop to be refused"),
+        Err(e) => e,
+    };
+    assert_eq!(rust_err.reason.to_string(), "socket_dir_inside_state_dir");
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+from zeropw.errors import StateError
+try:
+    Context.open({state}, Config(socket_dir={candidate}), lambda: {now})
+    print("ok")
+except StateError as exc:
+    print(f"err:{{exc.reason}}")
+except RuntimeError as exc:
+    print(f"runtimeerror:{{exc}}")
+"#,
+        state = py_str(&state),
+        candidate = py_str(&loop_path),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("runtimeerror:"),
+        "python must raise an uncaught RuntimeError for a symlink loop, got: {out}"
+    );
+}
+
+// ------------------------------------ restore non-ASCII manifest sha256 (finding E-R2-2b)
+/// Reviewer case: `manifest["sha256"]` is a non-ASCII string. Python's `hmac.compare_digest`
+/// only accepts bytes-like objects or *ASCII-only* strings; comparing the (always-ASCII-hex)
+/// computed digest against a non-ASCII string raises an uncaught `TypeError`, escaping
+/// `Vault.restore` entirely (not a `StateError`). Rust's `constant_time_eq` is a plain
+/// constant-time byte comparison with no such restriction: the digests simply don't match, so
+/// `Vault::restore` returns the ordinary `StateError("backup_digest_mismatch")` (DEVIATIONS.md,
+/// finding E-R2-2b; PORTING.md §3.5).
+#[test]
+fn restore_rejects_non_ascii_manifest_sha256_python_raises_typeerror_rust_fails_closed() {
+    let tmp = TempDir::new().unwrap();
+    let archive_path = tmp.path().join("archive.json");
+    let archive = json!({
+        "manifest": {
+            "format": "zeropw-backup-v1",
+            "created_at": "2024-01-01T00:00:00Z",
+            "sha256": "abcé",
+            "kms_key_id": "irrelevant-for-this-probe",
+            "backup_id": "e-r2-2b-probe",
+        },
+        "documents": {},
+    });
+    fs::write(&archive_path, serde_json::to_string(&archive).unwrap()).unwrap();
+
+    let rust_state = tmp.path().join("state-rust");
+    let ctx = Context::initialize(
+        &rust_state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    let rust_err =
+        zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, Some(ctx.kms))
+            .unwrap_err();
+    assert_eq!(rust_err.reason.to_string(), "backup_digest_mismatch");
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.context import Context, Config
+from zeropw.vault import Vault
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+try:
+    Vault.restore(ctx.state, Path({archive}), ctx.audit, kms=ctx.kms)
+    print("ok")
+except TypeError as exc:
+    print(f"typeerror:{{exc}}")
+except Exception as exc:
+    print(f"othererror:{{type(exc).__name__}}:{{exc}}")
+"#,
+        state = py_str(&py_state),
+        archive = py_str(&archive_path),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    assert!(
+        out.trim().starts_with("typeerror:"),
+        "python must raise an uncaught TypeError comparing a non-ASCII sha256, got: {out}"
+    );
+}
+
+// ------------------------------------ Config sharing divergence (finding E-R2-3)
+/// Python's `Config` is a mutable dataclass passed by reference: `Context._apply_config_defaults`
+/// writes the fresh `socket_dir`/`run_dir` back onto the caller's own `Config` object, so two
+/// `Context`s built from the *same* `Config` instance end up sharing one `socket_dir` and one
+/// `run_dir`, owned (removed on `close()`) only by whichever built it first --
+/// `tests/test_team_sync.py`'s `RemoteWideningCancelsRunningExecTestCase.setUp` and
+/// `SessionRekeyTestCase.test_old_session_is_closed_and_replaced` both rely on exactly this to
+/// simulate two nodes. `Context::initialize`/`Context::open` here take `Config` by value, so this
+/// crate cannot reproduce that sharing (see `Config`'s doc comment in `context.rs` and
+/// `DEVIATIONS.md`, finding E-R2-3): two Rust `Context`s from independently-constructed `Config`s
+/// never share a temp dir, unlike Python's two `Context`s from one shared `cfg` object.
+#[test]
+fn two_contexts_from_separate_configs_never_share_temp_dirs_unlike_pythons_shared_config() {
+    let tmp = TempDir::new().unwrap();
+    let rust_state_a = tmp.path().join("rust-state-a");
+    let rust_state_b = tmp.path().join("rust-state-b");
+
+    let ctx_a = Context::initialize(
+        &rust_state_a,
+        "admin-passphrase-a",
+        "recovery-passphrase-a",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    let ctx_b = Context::initialize(
+        &rust_state_b,
+        "admin-passphrase-b",
+        "recovery-passphrase-b",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    assert_ne!(
+        ctx_a.config.socket_dir, ctx_b.config.socket_dir,
+        "Rust contexts must never share an owned temp dir"
+    );
+    assert_ne!(ctx_a.config.run_dir, ctx_b.config.run_dir);
+
+    let py_state_a = tmp.path().join("py-state-a");
+    let py_state_b = tmp.path().join("py-state-b");
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+cfg = Config()
+a = Context.initialize({state_a}, "admin-passphrase-a", "recovery-passphrase-a", cfg, lambda: {now})
+b = Context.initialize({state_b}, "admin-passphrase-b", "recovery-passphrase-b", cfg, lambda: {now})
+print(a.config.socket_dir == b.config.socket_dir)
+print(len(b._owned_dirs))
+a.close()
+b.close()
+"#,
+        state_a = py_str(&py_state_a),
+        state_b = py_str(&py_state_b),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    let mut lines = out.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "True",
+        "python's shared Config makes both contexts share one socket_dir"
+    );
+    assert_eq!(
+        lines.next().unwrap(),
+        "0",
+        "python's second context does not own (and will not remove) the shared dir"
+    );
+}
