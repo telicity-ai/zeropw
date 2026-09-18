@@ -97,6 +97,156 @@ pub fn repr_str(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// `int(str)` grammar (PORTING.md §3b coordinator ruling): the ONE canonical
+// home for CPython's `int(str)`/`int(str, base)` semantics. Three separate
+// work units each hand-rolled a local copy of this and got the same detail
+// wrong (`int()` strips only ASCII `" \t\n\v\f\r"`, not `str.isspace()`'s
+// much larger set, and it accepts every Unicode `Nd` digit, not just ASCII
+// `0-9`) -- a local variant of this logic anywhere else in the crate is a
+// review finding; extend the functions below instead.
+// ---------------------------------------------------------------------------
+
+/// True when `c` is one of the six ASCII whitespace characters CPython's
+/// `int(str)` grammar strips from both ends of its ASCII-transformed input
+/// (`Py_ISSPACE`, the C-locale `ctype` table `_PyLong_FromString` uses) --
+/// **not** [`is_space`]/`str.isspace()`'s much larger Unicode set, which
+/// also matches U+001C-U+001F, the ASCII "information separator" controls:
+/// `int("\x1c5")` raises `ValueError` in CPython even though
+/// `"\x1c5".isspace()` considers `"\x1c"` whitespace, because U+001C is
+/// itself ASCII and so is never touched by the Unicode-to-ASCII transform
+/// stage [`int_from_str_radix`] runs first (verified against a live
+/// `python3.12` in `gateway.rs`'s test suite via the `Content-Length`/chunk-
+/// size probes from equivalence-review finding F-R3-2).
+pub fn is_int_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+}
+
+/// The value (0-9) of a Unicode decimal digit (general category `Nd`), or
+/// `None` for anything else -- including ASCII `'0'..='9'`, which is itself
+/// the first of the 68 ten-codepoint blocks [`DIGIT_BLOCK_STARTS`] holds. In
+/// Unicode 15.0.0 (the UCD version CPython 3.12 bundles, matching
+/// [`is_space`]'s own table -- see the module doc comment) every `Nd`
+/// codepoint falls into one of these blocks, each exactly 10 consecutive
+/// codepoints with `unicodedata.decimal` values `0..=9` in that order
+/// (`rust/tools/gen_pystr_tables.py`'s `digit_block_starts()` asserts this
+/// shape while generating the table and would raise if a newer UCD version
+/// ever broke it), so a codepoint's value is simply its offset from the
+/// block it falls in. Pinned per-codepoint by
+/// `oracle_digit_value_matches_python_for_every_codepoint` below.
+fn unicode_decimal_digit(c: char) -> Option<u32> {
+    let cp = c as u32;
+    DIGIT_BLOCK_STARTS
+        .binary_search_by(|&start| {
+            if cp < start {
+                std::cmp::Ordering::Greater
+            } else if cp > start + 9 {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .ok()
+        .map(|idx| cp - DIGIT_BLOCK_STARTS[idx])
+}
+
+/// `int(s)` (base 10): shorthand for [`int_from_str_radix`] with `base =
+/// 10`.
+pub fn int_from_str(s: &str) -> Option<i128> {
+    int_from_str_radix(s, 10)
+}
+
+/// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
+/// callers need: `http.client`'s own `int(status)`, `int(length)`, and
+/// `int(chunk_size_text, 16)`), reproducing the exact two-stage grammar
+/// `PyLong_FromUnicodeObject` implements -- not just its ASCII fast path:
+///
+/// 1. `_PyUnicode_TransformDecimalAndSpaceToASCII`: an already-ASCII
+///    character passes through unchanged; a non-ASCII Unicode decimal digit
+///    ([`unicode_decimal_digit`]) becomes its ASCII digit; a non-ASCII
+///    `Py_UNICODE_ISSPACE` character (identical to [`is_space`] /
+///    `str.isspace()`) becomes an ASCII space; anything else non-ASCII is
+///    left as-is, which then fails the ASCII grammar below, exactly like
+///    Python. This transform runs regardless of `base` (`int("١٥", 16) ==
+///    0x15 == 21`, not merely `int("15", 16)` after transform coincidence --
+///    verified in the oracle fuzz test below).
+/// 2. `_PyLong_FromString` on that now-mostly-ASCII string: strip
+///    [`is_int_space`] from both ends (not [`is_space`] -- see its doc
+///    comment for why U+001C-U+001F survive this strip), an optional
+///    leading `+`/`-`, an optional case-insensitive `0x`/`0X` prefix when
+///    `base == 16` (after which one leading `_` is permitted, as if the
+///    prefix were itself a digit -- `int("0x_10", 16) == 16`), then one or
+///    more digits with single `_` separators permitted strictly between two
+///    digits (`"1_000"` ok; `"_1"`, `"1_"`, `"1__0"` are not).
+///
+/// Returns `None` for anything CPython's `int()` would raise `ValueError`
+/// for. A magnitude too large for `i128` saturates (with sign) rather than
+/// erroring, since every caller in this crate only ever compares the result
+/// against a small range or a `usize` byte count -- never round-trips it
+/// back to text.
+///
+/// See `oracle_digit_value_matches_python_for_every_codepoint` (pins
+/// [`unicode_decimal_digit`] against every codepoint) and
+/// `oracle_int_from_str_matches_python_fuzz` (a random/adversarial string
+/// fuzz against a live `python3.12`) below, plus the `Content-Length`/chunk-
+/// size/status oracle cases in `gateway.rs`'s test suite (finding F-R3-2).
+pub fn int_from_str_radix(s: &str, base: u32) -> Option<i128> {
+    debug_assert!(base == 10 || base == 16, "only base 10/16 are needed");
+    // Stage 1: `_PyUnicode_TransformDecimalAndSpaceToASCII`.
+    let mut ascii = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii() {
+            ascii.push(c);
+        } else if let Some(d) = unicode_decimal_digit(c) {
+            ascii.push(char::from_digit(d, 10).expect("0..=9 always converts"));
+        } else if is_space(c) {
+            ascii.push(' ');
+        } else {
+            ascii.push(c);
+        }
+    }
+    // Stage 2: `_PyLong_FromString`'s ASCII grammar.
+    let trimmed = ascii.trim_matches(is_int_space);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (neg, rest) = match trimmed.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+    };
+    let (rest, mut prev_was_digit) = if base == 16 {
+        match rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+            Some(r) => (r, true),
+            None => (rest, false),
+        }
+    } else {
+        (rest, false)
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = rest.chars().collect();
+    let mut digits = String::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '_' {
+            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_digit(base));
+            if !prev_was_digit || !next_is_digit {
+                return None;
+            }
+            prev_was_digit = false;
+            continue;
+        }
+        c.to_digit(base)?;
+        digits.push(c);
+        prev_was_digit = true;
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    let magnitude = i128::from_str_radix(&digits, base).unwrap_or(i128::MAX);
+    Some(if neg { -magnitude } else { magnitude })
+}
+
+// ---------------------------------------------------------------------------
 // Generated tables -- see rust/tools/gen_pystr_tables.py. Do not hand-edit.
 // ---------------------------------------------------------------------------
 
@@ -829,6 +979,18 @@ pub(crate) static SPACE_RANGES: &[(u32, u32)] = &[
     (0x3000, 0x3000),
 ];
 
+/// 68 blocks of 10 consecutive codepoints each, values `0..=9` in order --
+/// see [`unicode_decimal_digit`]'s doc comment.
+pub(crate) static DIGIT_BLOCK_STARTS: &[u32] = &[
+    0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66,
+    0xDE6, 0xE50, 0xED0, 0xF20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+    0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x11F50, 0x16A60, 0x16AC0,
+    0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140, 0x1E2F0, 0x1E4F0, 0x1E950,
+    0x1FBF0,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,6 +1101,177 @@ print(hs.hexdigest())
             let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
             let theirs = python(&script).trim().to_string();
             assert_eq!(ours, theirs, "input {s:?}");
+        }
+    }
+
+    // --------------------------------------------------------- int(str)
+
+    #[test]
+    fn is_int_space_is_the_narrow_ascii_set() {
+        for c in [' ', '\t', '\n', '\u{0b}', '\u{0c}', '\r'] {
+            assert!(is_int_space(c), "{c:?} must be int-whitespace");
+        }
+        // U+001C-U+001F are `str.isspace()` but NOT `int()`-whitespace: the
+        // whole reason this function exists separately from [`is_space`].
+        for c in [
+            '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', 'a', '\u{a0}', '\u{3000}',
+        ] {
+            assert!(!is_int_space(c), "{c:?} must not be int-whitespace");
+        }
+    }
+
+    #[test]
+    fn oracle_digit_value_matches_python_for_every_codepoint() {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        for cp in 0u32..=0x10FFFF {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let v = unicode_decimal_digit(c).map(|d| d as i32).unwrap_or(-1);
+            hasher.update([(v + 1) as u8]);
+        }
+        let ours = hex::encode(hasher.finalize());
+
+        let script = r#"
+import hashlib, unicodedata
+h = hashlib.sha256()
+for cp in range(0, 0x110000):
+    if 0xD800 <= cp <= 0xDFFF:
+        continue
+    d = unicodedata.decimal(chr(cp), -1)
+    h.update(bytes([(d + 1) & 0xFF]))
+print(h.hexdigest())
+"#;
+        let theirs = python(script).trim().to_string();
+        assert_eq!(ours, theirs, "unicode_decimal_digit digest mismatch");
+    }
+
+    #[test]
+    fn int_from_str_known_cases() {
+        // ASCII-only int() whitespace (finding F-R3-2): U+001C-U+001F are
+        // NOT stripped and are not digits, so they make the whole parse
+        // fail, unlike `str.strip()`/`is_space`.
+        assert_eq!(int_from_str("\u{1c}5"), None);
+        assert_eq!(int_from_str(" \u{1c}5"), None);
+        assert_eq!(int_from_str("\u{1d}\u{1e}\u{1f}5"), None);
+        assert_eq!(int_from_str(" 5 "), Some(5));
+        assert_eq!(int_from_str("\t5\n"), Some(5));
+        assert_eq!(int_from_str("\u{0b}5\u{0c}"), Some(5));
+        assert_eq!(int_from_str("\r5\r"), Some(5));
+        // Unicode decimal digits and Unicode whitespace ARE honoured by the
+        // transform stage.
+        assert_eq!(int_from_str("\u{665}"), Some(5)); // arabic-indic 5
+        assert_eq!(int_from_str(" \u{665} "), Some(5));
+        assert_eq!(int_from_str("\u{a0}\u{665}\u{a0}"), Some(5));
+        assert_eq!(int_from_str("\u{ff11}\u{ff15}"), Some(15)); // fullwidth "15"
+        assert_eq!(int_from_str("+\u{665}"), Some(5));
+        assert_eq!(int_from_str("-\u{665}"), Some(-5));
+        assert_eq!(int_from_str("\u{2460}"), None); // circled digit one: not Nd
+        // PEP 515 underscores.
+        assert_eq!(int_from_str("1_000"), Some(1000));
+        assert_eq!(int_from_str("_1"), None);
+        assert_eq!(int_from_str("1_"), None);
+        assert_eq!(int_from_str("1__0"), None);
+        // Base 16, including the Unicode-digit transform applying before
+        // the hex grammar (not after) and the underscore-after-prefix rule.
+        assert_eq!(int_from_str_radix("\u{661}\u{665}", 16), Some(0x15));
+        assert_eq!(int_from_str_radix("0x_10", 16), Some(0x10));
+        assert_eq!(int_from_str_radix("0X\u{661}\u{665}", 16), Some(0x15));
+        assert_eq!(int_from_str_radix("", 10), None);
+        assert_eq!(int_from_str_radix("   ", 10), None);
+    }
+
+    /// Random/adversarial fuzz against a live `python3.12`, weighted toward
+    /// the exact characters that distinguish `int()`-whitespace from
+    /// `str.isspace()`, PEP 515 underscores, the `0x`/`0X` prefix, and
+    /// Unicode decimal digits/whitespace -- the equivalence-review finding
+    /// F-R3-2 fuzz (7,751 cases, 1,114 divergences) found every one of these
+    /// dimensions mishandled by the old ad hoc `is_space`-based trim.
+    #[test]
+    fn oracle_int_from_str_matches_python_fuzz() {
+        let alphabet: &[char] = &[
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'A',
+            'B', 'C', 'D', 'E', 'F', 'x', 'X', '+', '-', '_', ' ', '\t', '\n', '\u{0b}', '\u{0c}',
+            '\r', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', '\u{a0}', '\u{3000}', '\u{665}',
+            '\u{ff15}', '\u{966}', '\u{2460}', 'z', '.',
+        ];
+        let mut state: u64 = 0xdead_beef_cafe_f00d;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut cases: Vec<(String, u32)> = Vec::new();
+        for _ in 0..1500 {
+            let len = (next() % 12) as usize;
+            let s: String = (0..len)
+                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                .collect();
+            let base = if next() % 2 == 0 { 10 } else { 16 };
+            cases.push((s, base));
+        }
+        for (s, base) in [
+            ("\u{1c}5", 10),
+            ("5\u{1c}", 10),
+            (" \u{1c}5", 10),
+            ("\u{1c} 5", 10),
+            ("\u{1d}\u{1e}\u{1f}5", 10),
+            ("0x_10", 16),
+            ("_1", 10),
+            ("1_", 10),
+            ("1__0", 10),
+            ("\u{661}\u{665}", 16),
+            ("\u{ff11}\u{ff15}", 10),
+            ("  \u{ff11}\u{ff15}  ", 10),
+            ("+\u{665}", 10),
+            ("-\u{665}", 10),
+            ("\u{966}", 10),
+            ("\u{e50}", 10),
+            ("\u{2460}", 10),
+            ("\u{a0}\u{665}\u{a0}", 10),
+            ("", 10),
+            ("   ", 10),
+            ("+", 10),
+            ("-", 10),
+            ("0x", 16),
+        ] {
+            cases.push((s.to_string(), base));
+        }
+
+        let mut script = String::from("cases = [\n");
+        for (s, base) in &cases {
+            script.push_str(&format!(
+                "    (bytes.fromhex({:?}).decode('utf-8'), {}),\n",
+                hex::encode(s.as_bytes()),
+                base
+            ));
+        }
+        script.push_str(
+            "]\nfor s, base in cases:\n    try:\n        print(int(s, base))\n    except Exception:\n        print('ERR')\n",
+        );
+        let out = python(&script);
+        let their_lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            their_lines.len(),
+            cases.len(),
+            "python printed a different number of lines than cases submitted"
+        );
+        for ((s, base), line) in cases.iter().zip(their_lines.iter()) {
+            let ours = int_from_str_radix(s, *base);
+            if *line == "ERR" {
+                assert_eq!(
+                    ours, None,
+                    "input {s:?} base {base}: rust returned {ours:?}, python raised"
+                );
+            } else {
+                let expected: i128 = line
+                    .parse()
+                    .unwrap_or_else(|_| panic!("python printed a non-integer: {line:?}"));
+                assert_eq!(ours, Some(expected), "input {s:?} base {base}");
+            }
         }
     }
 }

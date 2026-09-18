@@ -64,18 +64,58 @@ def format_ranges(name, ranges):
     return "\n".join(lines)
 
 
+def digit_block_starts():
+    """Compress every codepoint with a `unicodedata.decimal()` value into a
+    sorted list of block-start codepoints, each block being exactly 10
+    consecutive codepoints with values `0..=9` in order (`cp - start ==
+    value`) -- the shape every Unicode `Nd` digit range actually has in UCD
+    15.0.0 (verified below: 68 blocks, 680 codepoints, zero exceptions).
+    This lets `pystr::unicode_decimal_digit` do a single binary search
+    instead of storing all 680 codepoints individually. Raises if the
+    assumption ever breaks for a newer UCD version -- regenerate by hand in
+    that case."""
+    digit_cps = []
+    for cp in codepoints():
+        d = unicodedata.decimal(chr(cp), None)
+        if d is not None:
+            digit_cps.append((cp, d))
+    blocks = []
+    i = 0
+    while i < len(digit_cps):
+        cp0, v0 = digit_cps[i]
+        if v0 != 0:
+            raise AssertionError(f"digit block does not start at value 0: U+{cp0:04X}")
+        for k in range(10):
+            if i + k >= len(digit_cps):
+                raise AssertionError(f"incomplete digit block starting at U+{cp0:04X}")
+            cp, v = digit_cps[i + k]
+            if cp != cp0 + k or v != k:
+                raise AssertionError(f"non-contiguous digit block starting at U+{cp0:04X}")
+        blocks.append(cp0)
+        i += 10
+    return blocks
+
+
 def main():
     non_printable = ranges_where(lambda cp: not chr(cp).isprintable())
     space = ranges_where(lambda cp: chr(cp).isspace())
+    digit_blocks = digit_block_starts()
 
     print(f"# unicodedata.unidata_version = {unicodedata.unidata_version!r}", file=sys.stderr)
     print(f"# python version = {sys.version!r}", file=sys.stderr)
     print(f"# non_printable: {len(non_printable)} ranges", file=sys.stderr)
     print(f"# space: {len(space)} ranges", file=sys.stderr)
+    print(f"# digit blocks: {len(digit_blocks)} blocks ({len(digit_blocks) * 10} codepoints)", file=sys.stderr)
 
     print(format_ranges("NON_PRINTABLE_RANGES", non_printable))
     print()
     print(format_ranges("SPACE_RANGES", space))
+    print()
+    lines = ["pub(crate) static DIGIT_BLOCK_STARTS: &[u32] = &["]
+    for start in digit_blocks:
+        lines.append(f"    0x{start:X},")
+    lines.append("];")
+    print("\n".join(lines))
 
 
 if __name__ == "__main__":

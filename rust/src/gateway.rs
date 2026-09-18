@@ -700,20 +700,35 @@ fn reaches_listener(address: IpAddr, port: u16, local: Option<IpAddr>) -> bool {
 
 /// A minimal `urllib.parse.urlsplit(url)`-equivalent extracting just
 /// `(hostname, port)`, with the same scheme-default port (`443` for
-/// `https`, else `80`). Returns `None` for anything that does not parse as
-/// `scheme://[user@]host[:port][/...]`, matching Python's `except
-/// ValueError: pass` around `urlsplit`. The returned host is lower-cased
-/// (and, for a bracketed literal, bracket-stripped), matching
+/// `https`, else `80`). Accepts both `scheme://[user@]host[:port][/...]`
+/// and a scheme-relative `//[user@]host[:port][/...]` with no scheme at all
+/// (`parts.scheme == ""`, still a `443`/`80` default the same way, since
+/// `"" == "https"` is false) -- finding F-R3-6: the previous version
+/// required a literal `"://"`, so a scheme-relative `public_url` skipped
+/// the self-reference comparison in [`self_referential_target`] entirely,
+/// failing that guard OPEN. `urlsplit` itself does not raise for either
+/// shape (verified against a live `python3.12`); `None` here is reserved
+/// for input that genuinely has neither a scheme-relative nor a
+/// `scheme://` authority, or a syntactically-bad port. The returned host is
+/// lower-cased (and, for a bracketed literal, bracket-stripped), matching
 /// `SplitResult.hostname`'s own documented lower-casing (finding F-4: a
 /// mixed-case `public_url` must still trigger the self-referential-target
 /// check).
 fn parse_authority(url: &str) -> Option<(String, i64)> {
-    let (scheme, rest) = url.split_once("://")?;
+    let (scheme, rest) = match url.strip_prefix("//") {
+        Some(rest) => ("", rest),
+        None => url.split_once("://")?,
+    };
     let default_port: i64 = if scheme.eq_ignore_ascii_case("https") {
         443
     } else {
         80
     };
+    // `parts.port or default`: Python's `or` treats `0` as falsy, so an
+    // explicit `:0` in the URL is treated the same as no port at all
+    // (finding F-R3-6) -- applied to whichever branch below produces a
+    // parsed, in-range port.
+    let use_default_if_zero = |port: i64| if port == 0 { default_port } else { port };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let hostport = authority.rsplit('@').next().unwrap_or(authority);
     if let Some(rest) = hostport.strip_prefix('[') {
@@ -723,7 +738,7 @@ fn parse_authority(url: &str) -> Option<(String, i64)> {
             Some(_) => return None,
             None => default_port,
         };
-        return Some((host.to_lowercase(), port));
+        return Some((host.to_lowercase(), use_default_if_zero(port)));
     }
     // `_hostinfo`'s unbracketed branch: `hostname, _, port =
     // hostinfo.partition(':')` -- `str.partition` splits on the *first*
@@ -744,7 +759,7 @@ fn parse_authority(url: &str) -> Option<(String, i64)> {
             } else if port.bytes().all(|b| b.is_ascii_digit()) {
                 let port: i64 = port.parse().ok()?;
                 if (0..=65535).contains(&port) {
-                    Some((host.to_lowercase(), port))
+                    Some((host.to_lowercase(), use_default_if_zero(port)))
                 } else {
                     None
                 }
@@ -803,6 +818,102 @@ fn peer_is_local_listener(stream: &TcpStream) -> bool {
 }
 
 // ------------------------------------------------------------------- ledger
+
+/// `float(v)` as applied to a value already parsed out of the ledger's JSON
+/// document (finding F-R3-5): a JSON number converts directly; a JSON
+/// string is parsed the way `float()` parses one (approximated here with
+/// `str::parse`, which agrees with Python for every plain decimal/exponent
+/// form a legitimately-written `updated_at` could ever contain -- this
+/// crate's own writer only ever stores a plain `f64` timestamp, so a string
+/// here only occurs under deliberate ledger corruption); anything else
+/// (`null`, a bool, an array, an object) has no non-panicking `float()`
+/// equivalent worth chasing and is treated as unconvertible. Returns `None`
+/// exactly where Python's `float(v)` would raise `TypeError`/`ValueError`.
+fn python_float(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+/// `int(v)` as applied to a stored `response["status"]` value (finding
+/// F-R3-5, `RequestLedger.replay`): a JSON integer converts directly; a
+/// JSON float truncates towards zero (`int(200.9) == 200`, no error, unlike
+/// `float()`); a JSON bool is `0`/`1` (Python bools are an `int` subclass);
+/// a JSON string is parsed with the canonical [`crate::pystr::int_from_str`]
+/// (PORTING.md §3b) -- this crate's own writer always stores a plain
+/// integer, so a string here only occurs under deliberate corruption, but
+/// it is still exactly `int(str)` when it does. `null`/array/object have no
+/// non-panicking `int()` equivalent and are treated as unconvertible.
+fn python_int_status(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.trunc() as i64)),
+        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
+        Value::String(s) => crate::pystr::int_from_str(s).map(|n| n as i64),
+        _ => None,
+    }
+}
+
+/// `str(x)` for a JSON value already known to be a header name/value
+/// element, matching the handful of forms Python's `str()` never raises
+/// for. This crate's own writer always stores plain strings; the other arms
+/// only matter for a deliberately-corrupted ledger.
+fn python_str_of(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Null => "None".to_string(),
+        Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// True for exactly the JSON values Python's own truthiness treats as
+/// falsy (`None`, `False`, a numeric `0`, `""`, and an empty array/object) --
+/// used only to reproduce `response.get("headers") or []`'s short-circuit
+/// (finding F-R3-5).
+fn is_json_falsy(v: &Value) -> bool {
+    match v {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
+}
+
+/// `[(str(k), str(v)) for k, v in response.get("headers") or []]` (finding
+/// F-R3-5, `RequestLedger.replay`): a missing key or any JSON-falsy stored
+/// value ([`is_json_falsy`]) short-circuits to no headers, exactly like
+/// Python's `or []`; a non-empty JSON array must be an array of 2-element
+/// arrays (`[k, v]`, unpacked the way a `for k, v in ...` loop would) or
+/// Python's unpacking itself raises -- fail-closed with `state_corrupt`
+/// (PORTING.md §3.5) for anything else, rather than the previous
+/// `filter_map`, which silently DROPPED any malformed pair instead of
+/// refusing the whole replay.
+fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
+    let bad_shape = || Error::state("state_corrupt").with_detail("request_ledger_headers");
+    match v {
+        None => Ok(Headers::new()),
+        Some(value) if is_json_falsy(value) => Ok(Headers::new()),
+        Some(Value::Array(arr)) => {
+            let mut out = Headers::new();
+            for item in arr {
+                let Value::Array(pair) = item else {
+                    return Err(bad_shape());
+                };
+                if pair.len() != 2 {
+                    return Err(bad_shape());
+                }
+                out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
+            }
+            Ok(out)
+        }
+        Some(_) => Err(bad_shape()),
+    }
+}
 
 /// Port of `gateway.RequestLedger`.
 pub struct RequestLedger<'a> {
@@ -910,21 +1021,46 @@ impl<'a> RequestLedger<'a> {
         let _lock = self.ctx.state.lock()?;
         let mut doc = self.load()?;
         let now = (self.ctx.clock)();
-        let entry = doc
-            .get(caller)
-            .and_then(Value::as_object)
-            .and_then(|m| m.get(request_id))
-            .cloned();
+        // `doc.get(caller, {}).get(request_id)`: Python's `dict.get`
+        // default only substitutes for a MISSING key, not a wrong-typed
+        // *value* -- so a caller entry that exists but isn't itself a dict
+        // (e.g. a corrupt ledger's `{"agent-1": "oops"}`) makes that
+        // `.get(request_id)` call raise `AttributeError` (`str` has no
+        // `.get`), an uncaught built-in exception, fail-closed per
+        // PORTING.md §3.5 (finding F-R3-5). The previous version silently
+        // treated this as "no entry", which not only masked the corruption
+        // but -- because `doc.entry(caller).or_insert_with(..)` below finds
+        // the caller key already occupied by that non-object value and
+        // therefore never replaces it -- went on to relay the request AND
+        // silently drop the claim, permanently disabling idempotency for
+        // that caller while reporting success.
+        let entry = match doc.get(caller) {
+            None => None,
+            Some(Value::Object(m)) => m.get(request_id).cloned(),
+            Some(_) => {
+                return Err(Error::state("state_corrupt").with_detail("request_ledger_caller"));
+            }
+        };
         if let Some(entry) = &entry {
-            let updated_at = entry
-                .get("updated_at")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
+            // Likewise, `entry.get("updated_at", 0)` raises `AttributeError`
+            // for a wrong-typed *entry* (`{"agent-1": {"rid-1": "oops"}}`,
+            // finding F-R3-5) -- and `float(entry.get("updated_at", 0))`
+            // raises `ValueError`/`TypeError` for an `updated_at` that isn't
+            // float-convertible (`updated_at: "soon"`, same finding).
+            let Value::Object(entry_obj) = entry else {
+                return Err(Error::state("state_corrupt").with_detail("request_ledger_entry"));
+            };
+            let updated_at = match entry_obj.get("updated_at") {
+                None => 0.0,
+                Some(v) => python_float(v).ok_or_else(|| {
+                    Error::state("state_corrupt").with_detail("request_ledger_updated_at")
+                })?,
+            };
             if now - updated_at <= LEDGER_TTL_SECONDS {
-                if entry.get("digest").and_then(Value::as_str) != Some(digest) {
+                if entry_obj.get("digest").and_then(Value::as_str) != Some(digest) {
                     return Ok(("reused", None));
                 }
-                return match entry.get("state").and_then(Value::as_str) {
+                return match entry_obj.get("state").and_then(Value::as_str) {
                     Some("completed") => Ok(("replay", Some(entry.clone()))),
                     Some("uncertain") => Ok(("uncertain", None)),
                     _ => Ok(("in_flight", None)),
@@ -934,15 +1070,19 @@ impl<'a> RequestLedger<'a> {
         let caller_entries = doc
             .entry(caller.to_string())
             .or_insert_with(|| Value::Object(Map::new()));
-        if let Value::Object(m) = caller_entries {
-            m.insert(
-                request_id.to_string(),
-                json!({
-                    "digest": digest, "state": "in_flight", "connection": connection_id,
-                    "created_at": now, "updated_at": now, "response": Value::Null,
-                }),
-            );
-        }
+        let Value::Object(m) = caller_entries else {
+            // Unreachable: a non-object caller value already returned
+            // `state_corrupt` above. Kept fail-closed rather than
+            // `unreachable!()` in case that invariant ever drifts.
+            return Err(Error::state("state_corrupt").with_detail("request_ledger_caller"));
+        };
+        m.insert(
+            request_id.to_string(),
+            json!({
+                "digest": digest, "state": "in_flight", "connection": connection_id,
+                "created_at": now, "updated_at": now, "response": Value::Null,
+            }),
+        );
         self.save(doc)?;
         Ok(("new", None))
     }
@@ -1029,29 +1169,24 @@ impl<'a> RequestLedger<'a> {
         })
     }
 
-    /// `RequestLedger.replay`.
-    pub fn replay(entry: &Value) -> RelayResult {
+    /// `RequestLedger.replay`: `status = int(response.get("status", 502))`
+    /// and `headers = [(str(k), str(v)) for k, v in response.get("headers")
+    /// or []]` both raise uncaught built-in exceptions for a wrong-typed
+    /// stored `status`/`headers` (finding F-R3-5) -- fail-closed with the
+    /// same `state_corrupt` `StateError` [`RequestLedger::claim`] uses for
+    /// its own wrong-typed shapes, per PORTING.md §3.5, rather than the
+    /// previous silent `unwrap_or(502)`/`unwrap_or_default()` fallbacks
+    /// (which would have relayed a fabricated 502 instead of refusing).
+    pub fn replay(entry: &Value) -> Result<RelayResult, Error> {
         use base64::Engine as _;
         let response = entry.get("response").cloned().unwrap_or(json!({}));
-        let status = response
-            .get("status")
-            .and_then(Value::as_i64)
-            .unwrap_or(502) as u16;
-        let mut headers: Headers = response
-            .get("headers")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|item| {
-                        let pair = item.as_array()?;
-                        Some((
-                            pair.first()?.as_str()?.to_string(),
-                            pair.get(1)?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let status = match response.get("status") {
+            None => 502i64,
+            Some(v) => python_int_status(v).ok_or_else(|| {
+                Error::state("state_corrupt").with_detail("request_ledger_status")
+            })?,
+        } as u16;
+        let mut headers: Headers = python_headers_from_json(response.get("headers"))?;
         if response.get("body_stored").and_then(Value::as_bool) != Some(true) {
             headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-type"));
             let payload = pyjson::dumps(
@@ -1062,12 +1197,12 @@ impl<'a> RequestLedger<'a> {
             .into_bytes();
             headers.push(("Content-Type".to_string(), "application/json".to_string()));
             headers.push(("X-ZeroPW-Replay".to_string(), "true".to_string()));
-            return RelayResult {
+            return Ok(RelayResult {
                 status,
                 headers,
                 body: payload,
                 reason: Some("replay_body_unavailable".to_string()),
-            };
+            });
         }
         let body = response
             .get("body_b64")
@@ -1075,7 +1210,7 @@ impl<'a> RequestLedger<'a> {
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
             .unwrap_or_default();
         headers.push(("X-ZeroPW-Replay".to_string(), "true".to_string()));
-        RelayResult {
+        Ok(RelayResult {
             status,
             headers,
             body,
@@ -1083,7 +1218,7 @@ impl<'a> RequestLedger<'a> {
                 .get("reason")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-        }
+        })
     }
 }
 
@@ -1360,25 +1495,64 @@ fn header_line_is_illegal(name: &str, value: &str) -> bool {
     name.contains('\n') || value.contains('\n')
 }
 
+/// `HTTPConnection._validate_method`'s
+/// `_contains_disallowed_method_pchar_re = re.compile('[\x00-\x1f]')`: a
+/// control character anywhere in the method raises a plain `ValueError` in
+/// Python (finding F-R3-1), confirmed against a live `python3.12`. That
+/// `ValueError` is caught by `_Relay._exchange`'s `except (OSError,
+/// ValueError): upstream_connection_lost` clause -- the SAME outcome as
+/// [`header_line_is_illegal`]'s `putheader` guard just below, NOT
+/// `upstream_protocol_error` (unlike [`path_contains_disallowed_pchar`],
+/// whose exception type differs even though both guards run inside the
+/// same `putrequest` call).
+fn method_contains_disallowed_pchar(method: &str) -> bool {
+    method.chars().any(|c| (c as u32) <= 0x1F)
+}
+
+/// `HTTPConnection._validate_path`'s `_contains_disallowed_url_pchar_re =
+/// re.compile('[\x00-\x20\x7f]')`: a control character, space, or DEL
+/// anywhere in the request target raises `InvalidURL`, an
+/// `http.client.HTTPException` (finding F-R3-1) -- caught by
+/// `_exchange`'s `except http.client.HTTPException:
+/// upstream_protocol_error` clause. Runs on the target *after*
+/// `normalize_path`'s own leniency (one trailing `"\n"` allowed, finding
+/// F-R2-8): `normalize_path` (`gateway.py`) and `_validate_path`
+/// (`http.client`) are two independent gates in Python, and a target the
+/// former accepts -- like `"/x?y\n"`, whose trailing `\n` is exactly what
+/// the latter rejects -- can still fail here, refusing the request instead
+/// of writing an injected request line to the upstream (the reviewer's
+/// probe for this finding: `"GET /repos?x\n HTTP/1.1\r\n..."` reaching the
+/// upstream with the credential attached).
+fn path_contains_disallowed_pchar(path: &str) -> bool {
+    path.chars().any(|c| (c as u32) <= 0x20 || c as u32 == 0x7F)
+}
+
 fn write_request(
     stream: &mut dyn Write,
     method: &str,
     target: &str,
     headers: &Headers,
     body: &[u8],
-) -> std::io::Result<()> {
+) -> Result<(), UpstreamFailure> {
+    // `HTTPConnection.putrequest` validates the method and the target
+    // BEFORE writing a single byte (finding F-R3-1): `write_request` used
+    // to skip both guards entirely, so a target `normalize_path` accepts
+    // (e.g. one trailing `"\n"`, finding F-R2-8) went straight onto the
+    // wire as part of the request line.
+    if method_contains_disallowed_pchar(method) {
+        return Err(UpstreamFailure::error("upstream_connection_lost"));
+    }
+    if path_contains_disallowed_pchar(target) {
+        return Err(UpstreamFailure::error("upstream_protocol_error"));
+    }
     // `conn.request(...)` -> `putheader` raises `ValueError` for such a
     // header, *after* `self.transmitted = True` has already been set by the
-    // caller (finding F-R2-8): map it to a plain I/O error so the caller's
-    // existing `classify_read_write_error` turns it into
-    // `upstream_connection_lost`, exactly like Python's `except (OSError,
-    // ValueError)` clause around `conn.request(...)` does.
+    // caller (finding F-R2-8): `upstream_connection_lost`, exactly like
+    // Python's `except (OSError, ValueError)` clause around
+    // `conn.request(...)` does.
     for (name, value) in headers {
         if header_line_is_illegal(name, value) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "illegal header name or value",
-            ));
+            return Err(UpstreamFailure::error("upstream_connection_lost"));
         }
     }
     let mut out = Vec::new();
@@ -1393,8 +1567,10 @@ fn write_request(
     if !body.is_empty() {
         out.extend_from_slice(body);
     }
-    stream.write_all(&out)?;
-    stream.flush()
+    stream
+        .write_all(&out)
+        .and_then(|_| stream.flush())
+        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))
 }
 
 struct StatusAndHeaders {
@@ -1418,25 +1594,49 @@ const HTTP_MAX_HEADERS: usize = 100;
 /// `fp.readline(_MAXLINE + 1)` plus the `len(line) > _MAXLINE` check shared
 /// by every line-oriented read in `http.client` (finding F-R2-2): reads at
 /// most `HTTP_MAX_LINE + 1` bytes looking for `\n` (never more, so a
-/// pathological line cannot force an unbounded allocation), strips a
-/// trailing `\r`/`\n`, and returns `Ok(None)` only on true EOF (zero bytes
-/// read) -- callers that treat EOF as a protocol error do so themselves;
-/// several (finding F-R2-3) instead treat it exactly like a blank line.
-fn read_line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, UpstreamFailure> {
+/// pathological line cannot force an unbounded allocation). Returns the
+/// bytes exactly as read -- including whatever terminator (or lack of one,
+/// at EOF) they end with -- matching Python's own `readline`, which never
+/// strips anything itself; an empty result means true EOF (`b''`). Used
+/// directly wherever Python compares the raw line against `(b'\r\n', b'\n',
+/// b'')` or feeds it, terminator and all, into further processing (the
+/// header block, finding F-R3-4/F-R3-7); [`read_line`] below is the
+/// single-strip convenience wrapper for the simpler call sites.
+fn read_raw_line(reader: &mut impl BufRead) -> Result<Vec<u8>, UpstreamFailure> {
     let mut line = Vec::new();
-    {
-        let mut limited = reader.by_ref().take(HTTP_MAX_LINE as u64 + 1);
-        limited
-            .read_until(b'\n', &mut line)
-            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
-    }
-    if line.is_empty() {
-        return Ok(None);
-    }
+    let mut limited = reader.by_ref().take(HTTP_MAX_LINE as u64 + 1);
+    limited
+        .read_until(b'\n', &mut line)
+        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
     if line.len() > HTTP_MAX_LINE {
         return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
-    while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
+    Ok(line)
+}
+
+/// [`read_raw_line`], additionally stripping AT MOST one trailing `"\r\n"`
+/// or lone `"\n"` (never more), and returning `Ok(None)` only on true EOF
+/// (zero bytes read) -- callers that treat EOF as a protocol error do so
+/// themselves; several (finding F-R2-3) instead treat it exactly like a
+/// blank line.
+///
+/// Finding F-R3-3: this used to pop *every* trailing `\r`/`\n` in a loop, so
+/// a line like `b"\r\r\n"` collapsed all the way to empty, which several
+/// callers use as their "blank separator line" signal -- wrongly ending a
+/// header or trailer block one line early and reading the real next header
+/// as body. Stripping only one terminator makes "the stripped result is
+/// empty" exactly equivalent to Python's own raw-bytes check `line in
+/// (b'\r\n', b'\n', b'')` (`b"\r\r\n"` strips to `b"\r"`, non-empty, correctly
+/// *not* recognised as the blank line -- matching Python, since `b"\r\r\n"`
+/// is none of those three exact values).
+fn read_line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, UpstreamFailure> {
+    let mut line = read_raw_line(reader)?;
+    if line.is_empty() {
+        return Ok(None);
+    }
+    if line.ends_with(b"\r\n") {
+        line.truncate(line.len() - 2);
+    } else if line.ends_with(b"\n") {
         line.pop();
     }
     Ok(Some(line))
@@ -1444,60 +1644,26 @@ fn read_line(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, UpstreamFailu
 
 /// CPython `int(text)` / `int(text, base)` semantics for `base` 10 or 16, as
 /// used by `http.client`'s own `int(status)`, `int(length)` and
-/// `int(chunk_size_text, 16)` parses (finding F-R2-5): optional surrounding
-/// whitespace (`str.strip()`'s predicate, [`crate::pystr::is_space`]), an
-/// optional leading `+`/`-` sign, an optional case-insensitive `0x`/`0X`
-/// prefix when `base == 16` (after which exactly one leading `_` is
-/// permitted, as if the prefix itself were a digit -- `int("0x_10", 16) ==
-/// 16`), and single underscores permitted strictly between two digits
-/// (`"1_000"` ok; `"_1"`, `"1_"`, `"1__0"` are not). Returns `None` for
-/// anything CPython's `int()` would raise `ValueError` for. A magnitude too
-/// large for `i128` saturates (with sign) rather than erroring, since every
-/// caller here only ever compares the result against a small range or a
-/// `usize` byte count -- never round-trips it back to text.
+/// `int(chunk_size_text, 16)` parses (finding F-R2-5). Delegates entirely to
+/// the canonical [`crate::pystr::int_from_str_radix`] (PORTING.md §3b): a
+/// local reimplementation of this grammar here was itself finding F-R3-2 --
+/// the previous local copy trimmed with [`crate::pystr::is_space`]
+/// (`str.isspace()`'s predicate), which wrongly includes U+001C-U+001F
+/// (`int()` does not strip these -- they are ASCII, so CPython's
+/// Unicode-to-ASCII transform never touches them, and plain `Py_ISSPACE`
+/// does not count them as whitespace either) and wrongly rejected every
+/// non-ASCII Unicode decimal digit CPython's `int()` accepts. See
+/// [`crate::pystr::int_from_str_radix`]'s doc comment for the full grammar
+/// and its oracle/fuzz tests; see `rust/tests/gateway.rs`'s
+/// `content_length_with_information_separator_control_char_is_not_a_valid_int`/
+/// `chunk_size_of_only_information_separator_control_chars_is_a_protocol_error`/
+/// `status_line_split_and_int_semantics_for_control_chars_match_python_oracle`
+/// for the end-to-end `Content-Length`/chunk-size/status probes from
+/// finding F-R3-2, and the `http_framing_fuzz` module below (its own
+/// U+001C-prefixed `Content-Length`/chunk-size mutations) for a fuzzed
+/// version of the same three call sites.
 fn python_int(text: &str, base: u32) -> Option<i128> {
-    let trimmed = text.trim_matches(crate::pystr::is_space);
-    if trimmed.is_empty() {
-        return None;
-    }
-    let (neg, rest) = match trimmed.strip_prefix('-') {
-        Some(r) => (true, r),
-        None => (false, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-    };
-    let (rest, mut prev_was_digit) = if base == 16 {
-        match rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
-            Some(r) => (r, true),
-            None => (rest, false),
-        }
-    } else {
-        (rest, false)
-    };
-    if rest.is_empty() {
-        return None;
-    }
-    let chars: Vec<char> = rest.chars().collect();
-    let mut digits = String::with_capacity(chars.len());
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' {
-            let next_is_digit = chars.get(i + 1).is_some_and(|c| c.is_digit(base));
-            if !prev_was_digit || !next_is_digit {
-                return None;
-            }
-            prev_was_digit = false;
-            continue;
-        }
-        c.to_digit(base)?;
-        digits.push(c);
-        prev_was_digit = true;
-    }
-    if digits.is_empty() {
-        return None;
-    }
-    // Too many digits for `i128`: treat the magnitude as "very large" (every
-    // caller only ever compares the result against a small range or uses it
-    // as a byte count, never round-trips it back to text).
-    let magnitude = i128::from_str_radix(&digits, base).unwrap_or(i128::MAX);
-    Some(if neg { -magnitude } else { magnitude })
+    crate::pystr::int_from_str_radix(text, base)
 }
 
 /// Saturating `i128` -> `usize` conversion for a parsed `Content-Length` (or
@@ -1635,63 +1801,186 @@ fn read_status_and_headers(reader: &mut impl BufRead) -> Result<StatusAndHeaders
     if version != "HTTP/0.9" && !version.starts_with("HTTP/1.") {
         return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
-    // Port of `email.feedparser`'s header leniency as exercised through
-    // `http.client.parse_headers` (finding F-9): a continuation line (starts
-    // with a space or tab) folds into the previous header's value; a line
-    // with no colon that is not a continuation ends the *recognised* header
-    // block without error (`_parsegen`'s `headerRE` mismatch just stops its
-    // for-loop, no exception) -- but every line up to the blank line (or
-    // EOF, finding F-R2-3a) is still physically read off the wire
-    // (`_read_headers`' own, separate, colon-agnostic boundary), so
-    // `recognizing` only gates what gets added to `headers`, never how many
-    // lines we read. Every physical line, including the terminator, counts
-    // against `HTTP_MAX_HEADERS` (finding F-R2-2).
-    let mut headers = Headers::new();
-    let mut recognizing = true;
-    let mut count = 0usize;
-    loop {
-        let line = read_line(reader)?;
-        count += 1;
-        if count > HTTP_MAX_HEADERS {
-            return Err(UpstreamFailure::error("upstream_protocol_error"));
+    let headers = read_headers_block(reader)?;
+    Ok(StatusAndHeaders { status, headers })
+}
+
+/// Splits `blob` on `\r\n`, a lone `\r`, or a lone `\n`, keeping each
+/// terminator attached to the text that precedes it (a final, unterminated
+/// remainder becomes its own last element). Port of
+/// `email.feedparser.BufferedSubFile.push`, which re-cracks its whole input
+/// via `StringIO(newline='').readlines()` -- the universal-newlines split,
+/// equivalent to `NLCRE_crack = re.compile(r'(\r\n|\r|\n)')` -- regardless
+/// of how the caller's own physical lines were originally delimited
+/// (finding F-R3-4: a bare `\r` embedded *inside* one physical line, e.g.
+/// `"X-A: a\rContent-Type: foo\r\n"`, becomes TWO logical lines here,
+/// `"X-A: a\r"` and `"Content-Type: foo\r\n"`, each then re-examined by
+/// [`header_re_matches`] as if it were its own header line).
+fn split_keep_terminators(blob: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut chars = blob.chars().peekable();
+    while let Some(c) = chars.next() {
+        current.push(c);
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                current.push(chars.next().expect("peeked"));
+            }
+            lines.push(std::mem::take(&mut current));
+        } else if c == '\n' {
+            lines.push(std::mem::take(&mut current));
         }
-        let line = match line {
-            None => break,
-            Some(l) if l.is_empty() => break,
-            Some(l) => l,
-        };
-        if !recognizing {
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// `email.feedparser.headerRE = re.compile(r'^(From |[\041-\071\073-\176]*:|[\t ])')`:
+/// true when `line` starts with the literal `"From "`, or with a tab/space
+/// (a continuation line), or with zero-or-more RFC 2822 `ftext` characters
+/// (ASCII `0x21-0x39` or `0x3B-0x7E` -- every printable ASCII byte except
+/// space and `:`) immediately followed by `:`. Since none of those `ftext`
+/// characters is itself `:`, the greedy `*` has only one place it can ever
+/// succeed: right where it stops (the first non-`ftext` character, or
+/// end-of-string) -- so a single forward scan suffices, no backtracking.
+fn header_re_matches(line: &str) -> bool {
+    if line.starts_with("From ") {
+        return true;
+    }
+    match line.chars().next() {
+        Some(' ') | Some('\t') => return true,
+        _ => {}
+    }
+    for c in line.chars() {
+        if c == ':' {
+            return true;
+        }
+        let cp = c as u32;
+        let is_ftext = (0x21..=0x39).contains(&cp) || (0x3B..=0x7E).contains(&cp);
+        if !is_ftext {
+            return false;
+        }
+    }
+    false
+}
+
+/// `email._policybase.Compat32.header_source_parse`: the header's name is
+/// `sourcelines[0]` up to its own first `':'`, kept byte-for-byte verbatim
+/// (no stripping at all -- header NAMES are never lower-cased or trimmed
+/// here, unlike [`normalize_headers`]'s handling of the *client's own*
+/// request headers). The value is every source line from the first
+/// (starting just after that `':'`) through the last, concatenated WITH
+/// each line's own original terminator still attached (finding F-R3-7: a
+/// folded continuation therefore keeps whatever the wire actually sent --
+/// `"\r\n"`, a lone `"\r"`, or a lone `"\n"` -- not a synthetic `"\n"`), then
+/// only a LEADING run of `' '`/`'\t'`/`'\r'`/`'\n'` and a TRAILING run of
+/// `'\r'`/`'\n'` are stripped (`.lstrip(' \t\r\n')` then `.rstrip('\r\n')`
+/// -- two fixed literal-character-class strips, never
+/// [`crate::pystr::is_space`] or any other Unicode-aware predicate).
+fn header_source_parse(name: &str, first_line: &str, continuations: &[String]) -> (String, String) {
+    let colon = first_line
+        .find(':')
+        .expect("group's first line has a colon");
+    let mut value = String::new();
+    value.push_str(&first_line[colon + 1..]);
+    for line in continuations {
+        value.push_str(line);
+    }
+    let value = value.trim_start_matches([' ', '\t', '\r', '\n']);
+    let value = value.trim_end_matches(['\r', '\n']);
+    (name.to_string(), value.to_string())
+}
+
+/// `email.feedparser.FeedParser._parse_headers`, run over the lines
+/// `_parsegen`'s own loop already filtered through [`header_re_matches`]
+/// (finding F-R3-4): folds continuation lines (ignoring one that appears
+/// before any header has started -- `FirstHeaderLineIsContinuationDefect`),
+/// treats a `"From "`-prefixed line as an envelope/misplaced-envelope line
+/// that never becomes a header (every branch of Python's own handling for
+/// it -- `lineno == 0`'s unixfrom, the last-line pushback, and the
+/// middle-of-block defect -- ends up producing no header entry either way,
+/// so they collapse to one case here), and drops a line whose colon sits at
+/// index 0 (`InvalidHeaderDefect("Missing header name.")`) instead of
+/// recording an empty header name.
+fn parse_recognized_header_lines(lines: &[String]) -> Headers {
+    let mut headers = Headers::new();
+    let mut pending: Option<(String, String, Vec<String>)> = None; // (name, first_line, continuations)
+    let n = lines.len();
+    for (idx, line) in lines.iter().enumerate() {
+        let starts_ws = matches!(line.chars().next(), Some(' ') | Some('\t'));
+        if starts_ws {
+            if let Some((_, _, continuations)) = pending.as_mut() {
+                continuations.push(line.clone());
+            }
             continue;
         }
-        let line = latin1_decode(&line);
-        if line.starts_with(' ') || line.starts_with('\t') {
-            // Continuation: fold into the previous header (or ignore it, as
-            // Python's `FirstHeaderLineIsContinuationDefect` does, if there
-            // is no previous header to fold into yet).
-            if let Some((_, value)) = headers.last_mut() {
-                value.push('\n');
-                value.push_str(&line);
+        if let Some((name, first_line, continuations)) = pending.take() {
+            headers.push(header_source_parse(&name, &first_line, &continuations));
+        }
+        if line.starts_with("From ") {
+            if idx == n - 1 {
+                break;
             }
             continue;
         }
         let Some(colon) = line.find(':') else {
-            recognizing = false;
+            // Cannot happen: every line that reaches `recognized` matched
+            // `headerRE`, and the only alternative that isn't "From " or a
+            // continuation requires a literal `:`.
             continue;
         };
-        // `header_source_parse` (`email/_policybase.py`): the name is kept
-        // verbatim (`line[:i]`, no stripping at all); the value has only
-        // *leading* whitespace stripped (`.lstrip(' \t\r\n')`) -- trailing
-        // whitespace survives (only a trailing `\r`/`\n`, already removed by
-        // `read_line`, is stripped) (finding F-8's root cause: a trimmed
-        // value here is what let `"chunked "` compare equal to `"chunked"`
-        // downstream).
-        let name = line[..colon].to_string();
-        let value = line[colon + 1..]
-            .trim_start_matches([' ', '\t'])
-            .to_string();
-        headers.push((name, value));
+        if colon == 0 {
+            continue;
+        }
+        pending = Some((line[..colon].to_string(), line.clone(), Vec::new()));
     }
-    Ok(StatusAndHeaders { status, headers })
+    if let Some((name, first_line, continuations)) = pending {
+        headers.push(header_source_parse(&name, &first_line, &continuations));
+    }
+    headers
+}
+
+/// Port of `http.client._read_headers` (the physical byte-level read) piped
+/// straight into `email.parser.Parser().parsestr(...)` (`_parse_header_lines`
+/// -> `FeedParser._parsegen`/`_parse_headers`), exactly as
+/// `http.client.parse_headers` wires them together (finding F-R3-4):
+///
+/// 1. Physical read: raw lines (terminator untouched), stopping at -- and
+///    including -- the first line that is exactly `b"\r\n"`, `b"\n"`, or
+///    `b""` (EOF). Every physical line, including that terminator line,
+///    counts against `HTTP_MAX_HEADERS` (finding F-R2-2).
+/// 2. The physical lines are concatenated (terminators intact) and
+///    RE-SPLIT on `\r\n|\r|\n` ([`split_keep_terminators`]) -- this can
+///    produce MORE logical lines than physical ones when a physical line
+///    contains a bare `\r` before its own trailing `\r\n`/`\n`.
+/// 3. [`header_re_matches`] gates which logical lines are ever considered
+///    headers at all (`_parsegen`'s loop: append while it matches, stop --
+///    with no error -- at the first line that doesn't).
+/// 4. [`parse_recognized_header_lines`] turns the recognised lines into
+///    `(name, value)` pairs.
+fn read_headers_block(reader: &mut impl BufRead) -> Result<Headers, UpstreamFailure> {
+    let mut blob = String::new();
+    let mut count = 0usize;
+    loop {
+        let raw = read_raw_line(reader)?;
+        count += 1;
+        if count > HTTP_MAX_HEADERS {
+            return Err(UpstreamFailure::error("upstream_protocol_error"));
+        }
+        let is_terminator = raw.is_empty() || raw == b"\r\n" || raw == b"\n";
+        blob.push_str(&latin1_decode(&raw));
+        if is_terminator {
+            break;
+        }
+    }
+    let logical_lines = split_keep_terminators(&blob);
+    let recognized: Vec<String> = logical_lines
+        .into_iter()
+        .take_while(|line| header_re_matches(line))
+        .collect();
+    Ok(parse_recognized_header_lines(&recognized))
 }
 
 enum BodyMode {
@@ -2197,8 +2486,7 @@ impl<'a> Relay<'a> {
             &self.target,
             upstream_headers,
             &self.body,
-        )
-        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
+        )?;
         let mut reader = BufReader::new(stream);
         let head = read_status_and_headers(&mut reader)?;
         if REDIRECT_STATUSES.contains(&head.status) {
@@ -2215,10 +2503,15 @@ impl<'a> Relay<'a> {
         // F-3). `Transfer-Encoding`/`Content-Length` below still use
         // first-value semantics (`headers_get`), matching how
         // `http.client`'s own framing logic reads them via `Message.get`.
-        let encoding = headers_get_all_joined(&head.headers, "content-encoding")
-            .unwrap_or_else(|| "identity".to_string())
-            .trim()
-            .to_lowercase();
+        // `.strip().lower()`: `str.strip()`'s predicate is
+        // `crate::pystr::is_space`/`str.isspace()`, which (unlike Rust's
+        // `str::trim()`) also strips U+001C-U+001F -- finding F-R3-8:
+        // `Content-Encoding: \x1cidentity` must still be accepted, matching
+        // the same `python_strip` helper `normalize_method`/
+        // `normalize_headers` already use above.
+        let encoding_raw = headers_get_all_joined(&head.headers, "content-encoding")
+            .unwrap_or_else(|| "identity".to_string());
+        let encoding = python_strip(&encoding_raw).to_lowercase();
         if !encoding.is_empty() && encoding != "identity" {
             return Err(UpstreamFailure::blocked(
                 "response_encoding_unsupported",
@@ -2396,7 +2689,7 @@ impl<'a> Relay<'a> {
             match state {
                 "replay" => {
                     let replayed =
-                        RequestLedger::replay(entry.as_ref().expect("replay carries entry"));
+                        RequestLedger::replay(entry.as_ref().expect("replay carries entry"))?;
                     let result_kind = if replayed.reason.is_some() {
                         "blocked"
                     } else {
@@ -2890,6 +3183,111 @@ mod annotate_approval_tests {
     }
 }
 
+/// `read_headers_block` (and the `header_source_parse`/`header_re_matches`/
+/// `split_keep_terminators`/`parse_recognized_header_lines` helpers it
+/// composes) is private to this module, so these direct-call regression
+/// tests for equivalence-review round-3 findings F-R3-4/F-R3-7 live here.
+/// The end-to-end `rust/tests/gateway.rs` integration tests for the same
+/// findings can only observe a header's *value* when that value survives
+/// `Relay::filter_response`'s `HEADER_VALUE_RE` allowlist gate (which
+/// rejects any embedded raw `\r`/`\n`, by design, before a value ever
+/// reaches a `RelayResult`) -- so the one case that specifically needs an
+/// embedded terminator to *survive* assembly (F-R3-7) can only be pinned at
+/// this layer.
+#[cfg(test)]
+mod header_parsing_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn headers_from(raw: &[u8]) -> Headers {
+        let mut reader = Cursor::new(raw);
+        match read_headers_block(&mut reader) {
+            Ok(h) => h,
+            Err(e) => panic!("read_headers_block failed: {}", e.reason),
+        }
+    }
+
+    #[test]
+    fn folded_continuation_keeps_the_original_wire_terminator() {
+        // Finding F-R3-7: `Compat32.header_source_parse` concatenates the
+        // continuation line VERBATIM, terminator and all, then strips only
+        // a leading `' '`/`'\t'`/`'\r'`/`'\n'` run and a trailing
+        // `'\r'`/`'\n'` run -- an embedded fold therefore keeps the wire's
+        // own `"\r\n"` in the middle of the assembled value, never a
+        // synthetic `"\n"` (the old code folded with `value.push('\n')`).
+        let headers = headers_from(b"ETag: AAAA\r\n\tBBBB\r\n\r\n");
+        assert_eq!(
+            headers,
+            vec![("ETag".to_string(), "AAAA\r\n\tBBBB".to_string())]
+        );
+    }
+
+    #[test]
+    fn folded_continuation_with_lf_only_terminators_keeps_lf_not_crlf() {
+        // Same finding: the fold must reproduce whatever terminator the
+        // wire actually used, not always `"\r\n"` either.
+        let headers = headers_from(b"ETag: AAAA\n\tBBBB\n\n");
+        assert_eq!(
+            headers,
+            vec![("ETag".to_string(), "AAAA\n\tBBBB".to_string())]
+        );
+    }
+
+    #[test]
+    fn bad_header_name_drops_every_later_header() {
+        // Finding F-R3-4: a space in the field name fails `headerRE`
+        // entirely, ending recognition (not just dropping that one line).
+        let headers = headers_from(b"X-Before: keep\r\nBad Name: x\r\nX-After: drop\r\n\r\n");
+        assert_eq!(headers, vec![("X-Before".to_string(), "keep".to_string())]);
+    }
+
+    #[test]
+    fn leading_colon_is_dropped_without_ending_recognition() {
+        // Finding F-R3-4: `": value"` matches `headerRE` (an empty
+        // field-name run is still zero-or-more), so recognition continues,
+        // but the line itself is dropped rather than becoming an
+        // empty-named header.
+        let headers = headers_from(b": stray\r\nX-After: keep\r\n\r\n");
+        assert_eq!(headers, vec![("X-After".to_string(), "keep".to_string())]);
+    }
+
+    #[test]
+    fn from_envelope_line_is_skipped_without_ending_recognition() {
+        // Finding F-R3-4: a `"From "`-prefixed line is always consumed
+        // (never a header), but never ends recognition either.
+        let headers = headers_from(b"From nobody\r\nX-After: keep\r\n\r\n");
+        assert_eq!(headers, vec![("X-After".to_string(), "keep".to_string())]);
+    }
+
+    #[test]
+    fn embedded_bare_cr_splits_one_physical_line_into_two_headers() {
+        // Finding F-R3-4/F-R3-7: `_read_headers` reads by `\n` only, so
+        // `"X-A: a\rX-B: b\r\n"` is ONE physical line -- but the header
+        // block is re-split on `\r\n|\r|\n` before `headerRE` ever runs, so
+        // the embedded bare `\r` produces two logical lines and therefore
+        // two separate headers.
+        let headers = headers_from(b"X-A: a\rX-B: b\r\n\r\n");
+        assert_eq!(
+            headers,
+            vec![
+                ("X-A".to_string(), "a".to_string()),
+                ("X-B".to_string(), "b".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn doubled_trailing_cr_does_not_end_the_header_block_early() {
+        // Finding F-R3-3: `"\r\r\n"` is not `_read_headers`'s exact
+        // blank-line value (`b"\r\n"`/`b"\n"`/`b""`), so it must not end
+        // the header block; it re-splits into two headerRE-failing logical
+        // lines instead, ending *recognition* (finding F-R3-4) without
+        // losing any bytes to the body.
+        let headers = headers_from(b"X-Before: keep\r\n\r\r\nX-After: drop\r\n\r\n");
+        assert_eq!(headers, vec![("X-Before".to_string(), "keep".to_string())]);
+    }
+}
+
 // ------------------------------------------------------- differential fuzzing
 //
 // Equivalence-review round 2, "Also:" item: fuzz `read_status_and_headers`/
@@ -3168,6 +3566,11 @@ sys.stdout.write(json.dumps(out))
             }
             s
         };
+        // finding F-R3-2: U+001C-U+001F are `str.isspace()` but NOT
+        // `int()`-whitespace -- a value like `"\x1c5"` must be a parse
+        // failure (`self.length = None` -> `UntilClose` framing), not "5".
+        let info_separator_prefixed = format!("\u{1c}{actual_body_len}");
+        let info_separator_only = "\u{1d}\u{1e}\u{1f}".to_string();
         let candidates = [
             actual_body_len.to_string(),
             format!("{}", actual_body_len + 1 + rng.below(50)), // bigger than sent (F-R2-3c)
@@ -3175,6 +3578,8 @@ sys.stdout.write(json.dumps(out))
             "-1".to_string(),
             "not-a-number".to_string(),
             "".to_string(),
+            info_separator_prefixed,
+            info_separator_only,
         ];
         pick_owned(rng, &candidates)
     }
@@ -3188,7 +3593,15 @@ sys.stdout.write(json.dumps(out))
             }
             s
         };
-        let mut candidates = vec![hex.clone(), "zz".to_string(), format!("{hex};ext=1")];
+        // finding F-R3-2: a chunk-size line consisting only of ASCII
+        // "information separator" control characters (U+001C-U+001F) must
+        // be a protocol error, not a valid `int(..., 16)` parse.
+        let mut candidates = vec![
+            hex.clone(),
+            "zz".to_string(),
+            format!("{hex};ext=1"),
+            "\u{1c}5".to_string(),
+        ];
         if actual > 0 {
             candidates.push(underscored);
             candidates.push(format!("0x{hex}"));
@@ -3200,6 +3613,27 @@ sys.stdout.write(json.dumps(out))
     fn random_body_bytes(rng: &mut Lcg) -> Vec<u8> {
         let n = rng.below(64);
         (0..n).map(|_| (rng.next_u64() % 256) as u8).collect()
+    }
+
+    /// Occasionally replaces a well-formed `"{name}: {value}\r\n"` header
+    /// line with an adversarial raw line exercising the `email.feedparser`
+    /// leniency findings F-R3-4/F-R3-7 (a `headerRE`-violating name, a
+    /// `"From "` envelope line, a leading colon, or a bare `\r` embedded
+    /// inside one physical line that the `\r\n|\r|\n` re-split then turns
+    /// into two logical header lines).
+    fn maybe_corrupt_header_line(rng: &mut Lcg, name: &str, value: &str) -> Vec<u8> {
+        if !rng.one_in(8) {
+            return format!("{name}: {value}\r\n").into_bytes();
+        }
+        match rng.below(7) {
+            0 => format!("Bad Name: {value}\r\n").into_bytes(),
+            1 => format!("X\u{7f}A: {value}\r\n").into_bytes(),
+            2 => format!(": {value}\r\n").into_bytes(),
+            3 => b"From nobody\r\n".to_vec(),
+            4 => format!("{name}: a\rContent-Type: c\r\n").into_bytes(),
+            5 => format!(" {value}\r\n").into_bytes(), // stray leading continuation
+            _ => format!("{name}: {value}\r\r\n").into_bytes(),
+        }
     }
 
     /// Builds one full raw response: a status line, a random header block
@@ -3224,20 +3658,34 @@ sys.stdout.write(json.dumps(out))
         let mut wrote_framing_header = false;
         for _ in 0..header_count {
             let name = random_header_name(rng);
+            let is_framing_header;
             let value = if name == "Content-Length" && !use_chunked && !wrote_framing_header {
                 wrote_framing_header = true;
+                is_framing_header = true;
                 random_content_length_value(rng, body.len())
             } else if name == "Transfer-Encoding" && use_chunked && !wrote_framing_header {
                 wrote_framing_header = true;
+                is_framing_header = true;
                 if rng.one_in(10) {
                     "chunked ".to_string() // trailing space: must NOT be treated as chunked
                 } else {
                     "chunked".to_string()
                 }
             } else {
+                is_framing_header = false;
                 random_header_value(rng)
             };
-            out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+            if is_framing_header {
+                // Keep the framing header's own line well-formed (`"name:
+                // value\r\n"`) so the adversarial *value* mutations added
+                // to `random_content_length_value` above (U+001C-U+001F,
+                // finding F-R3-2) are actually exercised as a
+                // `Content-Length`/`Transfer-Encoding` value, rather than
+                // sometimes being swallowed into an unrelated corrupt line.
+                out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+            } else {
+                out.extend_from_slice(&maybe_corrupt_header_line(rng, &name, &value));
+            }
         }
         if !wrote_framing_header && use_chunked {
             out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
@@ -3245,7 +3693,14 @@ sys.stdout.write(json.dumps(out))
             out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
         }
 
-        let header_terminator: &[u8] = if rng.one_in(15) { b"" } else { b"\r\n" };
+        // finding F-R3-3: `"\r\r\n"` is neither of `_read_headers`'s exact
+        // terminator values (`b"\r\n"`/`b"\n"`/`b""`), so it must NOT end
+        // the header block -- it is just another (odd) header-block byte.
+        let header_terminator: &[u8] = match rng.below(15) {
+            0 => b"",
+            1 => b"\r\r\n",
+            _ => b"\r\n",
+        };
         out.extend_from_slice(header_terminator);
 
         if use_chunked && (wrote_framing_header || header_terminator == b"\r\n") {

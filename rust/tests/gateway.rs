@@ -4656,6 +4656,476 @@ sys.stdout.write(json.dumps(out))
     );
 }
 
+// ---------------------------------------------- equivalence review round 3
+
+/// Spawns a background thread that accepts exactly one connection and
+/// records every byte the client sends into `captured`, without writing any
+/// response at all (used to prove a rejected request never reaches the
+/// wire, finding F-R3-1). Returns the bound port.
+fn capturing_port() -> (u16, Arc<Mutex<Vec<u8>>>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let captured_clone = captured.clone();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(300)))
+                .ok();
+            let mut buf = [0u8; 8192];
+            if let Ok(n) = stream.read(&mut buf) {
+                captured_clone.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        }
+    });
+    (port, captured)
+}
+
+#[test]
+fn write_request_rejects_agent_controlled_request_line_injection() {
+    // Finding F-R3-1 (HIGH): `normalize_path` correctly allows a target
+    // ending in exactly one trailing "\n" (finding F-R2-8), but
+    // `write_request` used to write that target straight onto the wire
+    // with no further check -- the reviewer's probe: an agent-controlled
+    // target of `"/x?y\n"` let a second, injected line reach the upstream
+    // with the credential attached, and Rust relayed 200. CPython's
+    // `HTTPConnection.putrequest` runs `_validate_path`
+    // (`_contains_disallowed_url_pchar_re = re.compile('[\x00-\x20\x7f]')`)
+    // BEFORE writing a single byte, raising `InvalidURL` (an
+    // `http.client.HTTPException`) -- `_exchange`'s `except
+    // http.client.HTTPException` clause turns that into
+    // `upstream_protocol_error`, marks the ledger `"uncertain"` (the
+    // request may or may not have reached the upstream from Python's own
+    // point of view, even though here it provably did not), and the
+    // upstream receives zero bytes.
+    let t = GatewayTest::new();
+    let (port, captured) = capturing_port();
+    let handle = raw_port_connection(&t, "inject", "gh-token", HttpAuth::bearer(), port);
+    let result = gateway::relay(
+        &t.ctx,
+        &handle,
+        "GET",
+        "/x?y\n",
+        &no_headers(),
+        b"",
+        Some("inject-1"),
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+    assert!(
+        captured.lock().unwrap().is_empty(),
+        "the upstream must receive zero bytes when the request line itself is rejected"
+    );
+    let doc = t
+        .ctx
+        .state
+        .read_json(gateway::LEDGER_DOC, serde_json::json!({}))
+        .unwrap();
+    assert_eq!(doc["agent-1"]["inject-1"]["state"], "uncertain");
+}
+
+#[test]
+fn validate_method_and_validate_path_raise_different_exception_types_in_python() {
+    // Finding F-R3-1: both guards live in the same `putrequest` call, but
+    // they raise DIFFERENT exception types in CPython, which
+    // `_Relay._exchange`'s except clauses classify differently --
+    // `_validate_method` is a plain `ValueError` (caught by `except
+    // (OSError, ValueError): upstream_connection_lost`, the same outcome as
+    // an illegal header value), while `_validate_path` is `InvalidURL`, an
+    // `http.client.HTTPException` (caught by `except
+    // http.client.HTTPException: upstream_protocol_error`). Verified
+    // directly against a live `python3.12`.
+    let out = run_python_oracle(
+        r#"
+import http.client
+conn = http.client.HTTPConnection("127.0.0.1", 1)
+try:
+    conn.putrequest("GE\x01T", "/ok")
+    print("no-error")
+except http.client.HTTPException:
+    print("http-exception")
+except ValueError:
+    print("value-error")
+conn2 = http.client.HTTPConnection("127.0.0.1", 1)
+try:
+    conn2.putrequest("GET", "/x?y\n")
+    print("no-error")
+except http.client.HTTPException:
+    print("http-exception")
+except ValueError:
+    print("value-error")
+"#,
+    );
+    assert_eq!(out.trim(), "value-error\nhttp-exception");
+}
+
+#[test]
+fn content_length_with_information_separator_control_char_is_not_a_valid_int() {
+    // Finding F-R3-2 (HIGH): the old `python_int` trimmed with
+    // `pystr::is_space` (`str.isspace()`'s predicate), which wrongly
+    // includes U+001C-U+001F; CPython's `int()` does not strip them (they
+    // are ASCII, so the Unicode-to-ASCII transform stage never touches
+    // them, and the final `Py_ISSPACE`-based strip does not count them as
+    // whitespace either), so `int("\x1c5")` raises `ValueError`, and
+    // `HTTPResponse.begin` falls back to `self.length = None` (`UntilClose`
+    // framing): all 10 body bytes are relayed, not just 5. Probe from the
+    // finding.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: \x1c5\r\n\r\n1234567890".to_vec();
+    let result = relay_via_raw_response(&t, "content-length-info-sep", response);
+    assert_eq!((result.status, result.body), (200, b"1234567890".to_vec()));
+}
+
+#[test]
+fn chunk_size_of_only_information_separator_control_chars_is_a_protocol_error() {
+    // Finding F-R3-2 (HIGH): a chunk-size line of `"\x1c5"` must fail
+    // `int(text, 16)` in Python (same reasoning as above), raising
+    // `IncompleteRead` -> `upstream_protocol_error`; the old Rust code
+    // instead parsed it as `5` and relayed `200 "hello"`.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\x1c5\r\nhello\r\n0\r\n\r\n"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "chunk-size-info-sep", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn status_line_split_and_int_semantics_for_control_chars_match_python_oracle() {
+    // Finding F-R3-2: U+001C-U+001F count as whitespace for
+    // `line.split(None, 2)` (`str.isspace()`'s predicate, the same one
+    // `_read_status`'s tokenizing uses) -- so a status token can never
+    // actually *contain* one internally; splitting `"HTTP/1.1
+    // 2\x1c00 OK\r\n"` therefore yields `status_text = "2"`, which is a
+    // valid `int()` parse (`2`) but fails the `100 <= status <= 999` range
+    // check, landing on the same `upstream_protocol_error` outcome via a
+    // different route than the `Content-Length`/chunk-size cases above.
+    // Confirmed directly against python3.12 below, then pinned end-to-end.
+    let out = run_python_oracle(
+        r#"
+line = "HTTP/1.1 2\x1c00 OK\r\n"
+print(line.split(None, 2))
+print(int("2"))
+"#,
+    );
+    assert_eq!(out.trim(), "['HTTP/1.1', '2', '00 OK\\r\\n']\n2");
+
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 2\x1c00 OK\r\n\r\n".to_vec();
+    let result = relay_via_raw_response(&t, "status-info-sep", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn doubled_trailing_cr_in_header_block_does_not_leak_a_header_into_the_body() {
+    // Finding F-R3-3: `read_line` used to pop EVERY trailing CR/LF, so the
+    // line `b"\r\r\n"` collapsed to empty and was wrongly treated as the
+    // header block's blank separator one line early; every header after it
+    // was then read as part of the BODY instead. After the fix, `"\r\r\n"`
+    // is not `_read_headers`'s exact blank-line value, so the physical byte
+    // consumption (and therefore body framing) is unaffected -- but
+    // re-splitting the header block on `\r\n|\r|\n` (finding F-R3-4) means
+    // the bare `\r` this line contains still ends *recognition*, so
+    // `Content-Type` (sharing this response's header block after the
+    // doubled CR) is correctly dropped rather than becoming a header OR
+    // leaking into the body. Pinned end-to-end against python3.12 by the
+    // `http_framing_fuzz` differential fuzzer's `"\r\r\n"`
+    // header-terminator mutation in `gateway.rs`.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nETag: keep-going\r\n\r\r\nContent-Type: text/plain\r\n\r\nbody"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "doubled-cr-header-block", response);
+    assert_eq!(result.status, 200);
+    assert_eq!(result.body, b"body".to_vec());
+    assert!(header_names(&result).contains("etag"));
+    assert!(
+        !header_names(&result).contains("content-type"),
+        "a header after the malformed doubled-CR line must not be recognised"
+    );
+}
+
+#[test]
+fn header_name_with_a_space_ends_recognition_and_drops_every_later_header() {
+    // Finding F-R3-4: `headerRE` requires the field-name run (ASCII
+    // `0x21-0x39`/`0x3B-0x7E`) to be followed immediately by `:` -- a space
+    // in the name (`"Bad Name: x"`) never matches, ending recognition
+    // entirely (not merely dropping that one line): every later header,
+    // even a well-formed one, is lost too. The old Rust code only checked
+    // for the *presence* of a colon, so it kept "Bad Name" as a header name
+    // and kept parsing every header after it.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nETag: before\r\nBad Name: x\r\nContent-Type: text/plain\r\n\r\nhi"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "bad-header-name-space", response);
+    assert_eq!(result.status, 200);
+    assert!(
+        !header_names(&result).contains("content-type"),
+        "a header after the malformed name must not be recognised"
+    );
+}
+
+#[test]
+fn header_name_with_a_del_character_ends_recognition() {
+    // Finding F-R3-4: DEL (0x7F) is likewise outside `headerRE`'s allowed
+    // field-name range (`0x21-0x39`/`0x3B-0x7E`).
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nETag: before\r\nX\x7fA: x\r\nContent-Type: text/plain\r\n\r\nhi"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "bad-header-name-del", response);
+    assert_eq!(result.status, 200);
+    assert!(
+        !header_names(&result).contains("content-type"),
+        "a header after the malformed name must not be recognised"
+    );
+}
+
+#[test]
+fn header_line_with_leading_colon_is_dropped_without_ending_recognition() {
+    // Finding F-R3-4: `": value"` DOES match `headerRE` (the field-name run
+    // may be empty), so recognition continues past it -- but
+    // `_parse_headers` drops it (`InvalidHeaderDefect("Missing header
+    // name.")`) instead of recording an empty-named header, unlike the
+    // "Bad Name"/DEL cases above, which fail `headerRE` itself and stop
+    // recognition outright.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\n: stray-value\r\nContent-Type: text/plain\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "leading-colon-header", response);
+    assert_eq!(result.status, 200);
+    assert!(
+        header_names(&result).contains("content-type"),
+        "a well-formed header after a dropped leading-colon line must still be recognised"
+    );
+    assert!(
+        !result.headers.iter().any(|(k, _)| k.is_empty()),
+        "the leading-colon line must not produce an empty-named header"
+    );
+}
+
+#[test]
+fn from_envelope_line_is_skipped_without_ending_recognition() {
+    // Finding F-R3-4: a `"From "`-prefixed line matches `headerRE` (its own
+    // dedicated alternative) and is always consumed as an envelope/
+    // misplaced-envelope line -- never a header, but also never an end to
+    // recognition. The old Rust code treated it like any other colon-less
+    // line and stopped recognising headers at that point.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1 200 OK\r\nFrom nobody\r\nContent-Type: text/plain\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "from-envelope-line", response);
+    assert_eq!(result.status, 200);
+    assert!(
+        header_names(&result).contains("content-type"),
+        "a header after a \"From \" envelope line must still be recognised"
+    );
+}
+
+#[test]
+fn embedded_bare_cr_inside_one_physical_line_splits_into_two_headers() {
+    // Finding F-R3-4/F-R3-7: `_read_headers` reads by `\n` only, so
+    // `"X-A: a\rETag: xyz\r\n"` is ONE physical line -- but
+    // `email.feedparser` re-splits the whole header block on `\r\n|\r|\n`
+    // before ever applying `headerRE`, so the embedded bare `\r` produces
+    // TWO logical lines, `"X-A: a\r"` and `"ETag: xyz\r\n"`, each parsed as
+    // its own header. The old Rust code read physical lines only (never
+    // re-splitting), so it saw one line with a colon in the *name* position
+    // colliding with nothing -- actually kept it as a single header whose
+    // value contains the literal text `"a\rETag: xyz"`, never surfacing
+    // `ETag` as a header of its own.
+    let t = GatewayTest::new();
+    let mut response = b"HTTP/1.1 200 OK\r\n".to_vec();
+    response.extend_from_slice(b"X-A: a\rETag: xyz\r\n");
+    response.extend_from_slice(b"\r\nhi");
+    let result = relay_via_raw_response(&t, "embedded-bare-cr", response);
+    assert_eq!(result.status, 200);
+    let etag = result
+        .headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("etag"));
+    assert_eq!(
+        etag.map(|(_, v)| v.as_str()),
+        Some("xyz"),
+        "the embedded bare CR must split the physical line into two logical headers"
+    );
+}
+
+#[test]
+fn folded_continuation_response_with_a_real_crlf_fold_is_relayed_normally() {
+    // Finding F-R3-7 (integration-level half): the exact value
+    // `header_source_parse` assembles for a folded continuation is pinned
+    // directly, at the unit level, by
+    // `gateway::header_parsing_tests::folded_continuation_keeps_the_original_wire_terminator`
+    // (`read_headers_block` is private to `gateway.rs`, so that test lives
+    // there) -- a header value containing an embedded raw `\r`/`\n` is
+    // filtered out of the *exposed* response by `HEADER_VALUE_RE` before it
+    // would ever reach a `RelayResult` here regardless of whether the fold
+    // preserved `\r\n` or collapsed it to `\n`, so this end-to-end probe
+    // only confirms the response as a whole still parses and relays
+    // normally (status/body), not the filtered-out header's own value.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nETag: AAAA\r\n\tBBBB\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "folded-terminator", response);
+    assert_eq!(result.status, 200);
+    assert_eq!(result.body, b"hi".to_vec());
+    assert!(
+        !result
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("etag")),
+        "a header value containing an embedded raw CR/LF must not be exposed to the caller"
+    );
+}
+
+#[test]
+fn content_encoding_with_information_separator_prefix_is_still_accepted() {
+    // Finding F-R3-8: `str::trim()` does not strip U+001C-U+001F, which
+    // `str.strip()` (and this crate's own `python_strip`, already used for
+    // methods and header names) does -- `Content-Encoding: \x1cidentity`
+    // must still be treated as plain `identity`, not rejected as
+    // unsupported.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: \x1cidentity\r\nContent-Length: 2\r\n\r\nhi"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "content-encoding-info-sep", response);
+    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+}
+
+#[test]
+fn self_referential_target_via_scheme_relative_public_url() {
+    // Finding F-R3-6: `parse_authority` used to require a literal `"://"`,
+    // so a scheme-relative `public_url` (`//host:port`, a shape
+    // `urlsplit` accepts with `scheme == ""`) skipped the self-reference
+    // comparison entirely -- failing the guard OPEN.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("//zeropw.invalid:8443".to_string()),
+    );
+    let _handle = named_connection_port(&t, "public-self-relative", "zeropw.invalid", 8443, false);
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "public-self-relative",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (501, Some("self_referential_target"))
+    );
+}
+
+#[test]
+fn self_referential_target_treats_public_url_port_zero_as_unspecified() {
+    // Finding F-R3-6: `urlsplit(...).port` returns `0` for an explicit
+    // `:0`, but Python's call site is `parts.port or (443 if https else
+    // 80)` -- `0` is falsy, so it falls back to the scheme default (`80`
+    // for `http`) rather than being compared as port `0` itself.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("http://zeropw.invalid:0".to_string()),
+    );
+    let _handle = named_connection_port(&t, "public-self-port0", "zeropw.invalid", 80, false);
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "public-self-port0",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (501, Some("self_referential_target"))
+    );
+}
+
+#[test]
+fn ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream() {
+    // Finding F-R3-5 (shape 1): `{"agent-1": "oops"}` -- Python's
+    // `doc.get(caller, {}).get(request_id)` raises `AttributeError` calling
+    // `.get` on a `str`, uncaught, fail-closed per PORTING.md §3.5. The
+    // pre-fix Rust silently treated the caller entry as absent, relayed
+    // anyway (spending the credential), and never actually recorded the
+    // claim -- permanently disabling idempotency for this caller while
+    // reporting success.
+    let t = GatewayTest::new();
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(&ledger_path, br#"{"agent-1": "oops"}"#).unwrap();
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-1"));
+    assert_eq!(result.status, 503);
+    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "a corrupt ledger caller entry must refuse before reaching the upstream"
+    );
+}
+
+#[test]
+fn ledger_wrong_typed_request_entry_fails_closed_before_reaching_upstream() {
+    // Finding F-R3-5 (shape 2): `{"agent-1": {"rid-1": "oops"}}` --
+    // Python's `entry.get("updated_at", 0)` raises `AttributeError` on the
+    // `str` entry, uncaught. The pre-fix Rust silently overwrote the entry
+    // with a fresh well-typed one and relayed anyway.
+    let t = GatewayTest::new();
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(&ledger_path, br#"{"agent-1": {"r-shape-2": "oops"}}"#).unwrap();
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-2"));
+    assert_eq!(result.status, 503);
+    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "a corrupt ledger request entry must refuse before reaching the upstream"
+    );
+}
+
+#[test]
+fn ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream() {
+    // Finding F-R3-5 (shape 3): `updated_at: "soon"` -- Python's
+    // `float(entry.get("updated_at", 0))` raises `ValueError`, uncaught.
+    let t = GatewayTest::new();
+    let ledger_path = t.ctx.state.path.join(gateway::LEDGER_DOC);
+    std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &ledger_path,
+        br#"{"agent-1": {"r-shape-3": {"digest": "x", "state": "in_flight", "connection": "gh", "created_at": 1, "updated_at": "soon", "response": null}}}"#,
+    )
+    .unwrap();
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-3"));
+    assert_eq!(result.status, 503);
+    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.json()["error"], "StateError");
+    assert_eq!(
+        t.fake.requests().len(),
+        0,
+        "a corrupt ledger updated_at must refuse before reaching the upstream"
+    );
+}
+
 /// Like `run_python_oracle`, but pipes `stdin_data` to the script's stdin
 /// (for a batch of test cases too large to embed as a `-c` argument) and
 /// sets `PYTHONPATH` to the repository root so `import zeropw...` works,
