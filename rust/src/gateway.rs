@@ -135,6 +135,23 @@ fn headers_get<'a>(headers: &'a Headers, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// `HTTPResponse.getheader(name)`: every occurrence of `name` (case
+/// insensitive), joined with `", "` (`email.message.Message.get_all`), or
+/// `None` if `name` is absent -- unlike [`headers_get`] (`Message.get`,
+/// first value only).
+fn headers_get_all_joined(headers: &Headers, name: &str) -> Option<String> {
+    let values: Vec<&str> = headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.join(", "))
+    }
+}
+
 /// Dict-assignment semantics (`d[key] = value`): update in place if `key`
 /// already exists (case-sensitively, like a Python `dict`), else append.
 fn dict_set(pairs: &mut Headers, key: impl Into<String>, value: impl Into<String>) {
@@ -218,11 +235,32 @@ pub fn normalize_path(raw: &str) -> Result<(String, String), &'static str> {
     normalize_path_inner(raw).map_err(|e| e.0)
 }
 
+/// `_TARGET_CHARS.match(raw)`: a `^...$` pattern with no other use of `$`,
+/// no `re.MULTILINE`, and a body that cannot itself match `"\n"`, matched
+/// with `.match()` in Python with no preceding `.strip()`. CPython's `$` in
+/// that mode also matches immediately before a single trailing `"\n"`; the
+/// `regex` crate's anchored `is_match` only accepts the true end of the
+/// haystack, so it alone rejects a trailing-newline path Python would
+/// accept (finding F-12; same technique as `policy.rs`'s
+/// `matches_with_trailing_newline`).
+fn matches_with_trailing_newline(re: &Regex, s: &str) -> bool {
+    if re.is_match(s) {
+        return true;
+    }
+    match s.strip_suffix('\n') {
+        Some(rest) => re.is_match(rest),
+        None => false,
+    }
+}
+
 fn normalize_path_inner(raw: &str) -> Result<(String, String), Invalid> {
     if !raw.starts_with('/') {
         return Err(Invalid("invalid_path"));
     }
-    if raw.chars().count() > MAX_PATH_LENGTH || !TARGET_CHARS.is_match(raw) || raw.contains('#') {
+    if raw.chars().count() > MAX_PATH_LENGTH
+        || !matches_with_trailing_newline(&TARGET_CHARS, raw)
+        || raw.contains('#')
+    {
         return Err(Invalid("invalid_path"));
     }
     let path = raw.split('?').next().unwrap_or("").to_string();
@@ -274,8 +312,16 @@ fn percent_decode_lossy(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `str.strip()` with CPython's exact `str.isspace()` predicate (which also
+/// covers U+001C-U+001F, the "information separator" control characters --
+/// Rust's `str::trim()` does not treat these as whitespace at all), matching
+/// `policy.rs`'s own `python_strip` (finding F-11).
+fn python_strip(s: &str) -> &str {
+    s.trim_matches(crate::pystr::is_space)
+}
+
 fn normalize_method(method: &str) -> Result<String, Invalid> {
-    let upper = method.trim().to_uppercase();
+    let upper = python_strip(method).to_uppercase();
     if !METHOD_RE.is_match(&upper) {
         return Err(Invalid("invalid_method"));
     }
@@ -305,7 +351,7 @@ fn normalize_request_id(
 fn normalize_headers(headers: &Headers) -> Headers {
     let mut out: Headers = Vec::new();
     for (name, value) in headers {
-        dict_set(&mut out, name.trim().to_lowercase(), value.clone());
+        dict_set(&mut out, python_strip(name).to_lowercase(), value.clone());
     }
     out
 }
@@ -631,7 +677,11 @@ fn reaches_listener(address: IpAddr, port: u16, local: Option<IpAddr>) -> bool {
 /// `(hostname, port)`, with the same scheme-default port (`443` for
 /// `https`, else `80`). Returns `None` for anything that does not parse as
 /// `scheme://[user@]host[:port][/...]`, matching Python's `except
-/// ValueError: pass` around `urlsplit`.
+/// ValueError: pass` around `urlsplit`. The returned host is lower-cased
+/// (and, for a bracketed literal, bracket-stripped), matching
+/// `SplitResult.hostname`'s own documented lower-casing (finding F-4: a
+/// mixed-case `public_url` must still trigger the self-referential-target
+/// check).
 fn parse_authority(url: &str) -> Option<(String, i64)> {
     let (scheme, rest) = url.split_once("://")?;
     let default_port: i64 = if scheme.eq_ignore_ascii_case("https") {
@@ -648,14 +698,14 @@ fn parse_authority(url: &str) -> Option<(String, i64)> {
             Some(_) => return None,
             None => default_port,
         };
-        return Some((host.to_string(), port));
+        return Some((host.to_lowercase(), port));
     }
     match hostport.rsplit_once(':') {
         Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
-            Some((host.to_string(), port.parse().ok()?))
+            Some((host.to_lowercase(), port.parse().ok()?))
         }
         Some(_) => None,
-        None => Some((hostport.to_string(), default_port)),
+        None => Some((hostport.to_lowercase(), default_port)),
     }
 }
 
@@ -717,14 +767,21 @@ impl<'a> RequestLedger<'a> {
         RequestLedger { ctx }
     }
 
-    fn load(&self) -> Map<String, Value> {
-        match self.ctx.state.read_json(LEDGER_DOC, json!({})) {
-            Ok(Value::Object(m)) => m,
+    /// `RequestLedger._load`: any `state.read_json` failure (a `StateError`
+    /// in Python) propagates uncaught out of every method that calls
+    /// `_load`/`_save`, all the way out of `_Relay.run`/`relay`, refusing the
+    /// request *before* the upstream is ever contacted. `Ok`-wrapped so
+    /// callers can `?`-propagate the same way (finding F-1).
+    fn load(&self) -> Result<Map<String, Value>, Error> {
+        let doc = self.ctx.state.read_json(LEDGER_DOC, json!({}))?;
+        Ok(match doc {
+            Value::Object(m) => m,
             _ => Map::new(),
-        }
+        })
     }
 
-    fn save(&self, mut doc: Map<String, Value>) {
+    /// `RequestLedger._save` (finding F-1: see `load` above).
+    fn save(&self, mut doc: Map<String, Value>) -> Result<(), Error> {
         let now = (self.ctx.clock)();
         let callers: Vec<String> = doc.keys().cloned().collect();
         for caller in callers {
@@ -777,7 +834,7 @@ impl<'a> RequestLedger<'a> {
                 }
             }
         }
-        let _ = self.ctx.state.write_json(LEDGER_DOC, &Value::Object(doc));
+        self.ctx.state.write_json(LEDGER_DOC, &Value::Object(doc))
     }
 
     /// `RequestLedger.digest`.
@@ -804,7 +861,7 @@ impl<'a> RequestLedger<'a> {
         connection_id: &str,
     ) -> Result<(&'static str, Option<Value>), Error> {
         let _lock = self.ctx.state.lock()?;
-        let mut doc = self.load();
+        let mut doc = self.load()?;
         let now = (self.ctx.clock)();
         let entry = doc
             .get(caller)
@@ -839,50 +896,61 @@ impl<'a> RequestLedger<'a> {
                 }),
             );
         }
-        self.save(doc);
+        self.save(doc)?;
         Ok(("new", None))
     }
 
-    fn update(&self, caller: &str, request_id: &str, apply: impl FnOnce(&mut Map<String, Value>)) {
-        let Ok(_lock) = self.ctx.state.lock() else {
-            return;
-        };
-        let mut doc = self.load();
+    /// `RequestLedger._update`: like `_load`/`_save`, `state.lock()` and the
+    /// two calls above are unguarded in Python, so any failure (a
+    /// `StateError`) propagates uncaught out of `mark_uncertain`/`complete`
+    /// (finding F-1).
+    fn update(
+        &self,
+        caller: &str,
+        request_id: &str,
+        apply: impl FnOnce(&mut Map<String, Value>),
+    ) -> Result<(), Error> {
+        let _lock = self.ctx.state.lock()?;
+        let mut doc = self.load()?;
         let now = (self.ctx.clock)();
         let Some(Value::Object(entries)) = doc.get_mut(caller) else {
-            return;
+            return Ok(());
         };
         let Some(Value::Object(entry)) = entries.get_mut(request_id) else {
-            return;
+            return Ok(());
         };
         apply(entry);
         entry.insert("updated_at".into(), json!(now));
-        self.save(doc);
+        self.save(doc)
     }
 
-    /// `RequestLedger.release`.
-    pub fn release(&self, caller: &str, request_id: &str) {
-        let Ok(_lock) = self.ctx.state.lock() else {
-            return;
-        };
-        let mut doc = self.load();
+    /// `RequestLedger.release` (finding F-1).
+    pub fn release(&self, caller: &str, request_id: &str) -> Result<(), Error> {
+        let _lock = self.ctx.state.lock()?;
+        let mut doc = self.load()?;
         if let Some(Value::Object(entries)) = doc.get_mut(caller)
             && entries.remove(request_id).is_some()
         {
             if entries.is_empty() {
                 doc.remove(caller);
             }
-            self.save(doc);
+            self.save(doc)?;
         }
+        Ok(())
     }
 
-    pub fn mark_uncertain(&self, caller: &str, request_id: &str) {
+    pub fn mark_uncertain(&self, caller: &str, request_id: &str) -> Result<(), Error> {
         self.update(caller, request_id, |entry| {
             entry.insert("state".into(), json!("uncertain"));
-        });
+        })
     }
 
-    pub fn complete(&self, caller: &str, request_id: &str, result: &RelayResult) {
+    pub fn complete(
+        &self,
+        caller: &str,
+        request_id: &str,
+        result: &RelayResult,
+    ) -> Result<(), Error> {
         use base64::Engine as _;
         let mut stored = Map::new();
         stored.insert("status".into(), json!(result.status));
@@ -911,7 +979,7 @@ impl<'a> RequestLedger<'a> {
         self.update(caller, request_id, |entry| {
             entry.insert("state".into(), json!("completed"));
             entry.insert("response".into(), Value::Object(stored));
-        });
+        })
     }
 
     /// `RequestLedger.replay`.
@@ -1129,6 +1197,21 @@ fn classify_connect_error(e: &std::io::Error) -> &'static str {
     }
 }
 
+/// Port of `_Relay._exchange`'s exception mapping for everything from
+/// `conn.request(...)` (writing the request) through `resp.read(...)`:
+/// `except (socket.timeout, TimeoutError): upstream_timeout`, `except
+/// (OSError, ValueError): upstream_connection_lost` -- distinct from
+/// [`classify_connect_error`]'s `connect()`-only mapping (`OSError` ->
+/// `upstream_unreachable`, never reached once the socket is connected;
+/// finding F-5).
+fn classify_read_write_error(e: &std::io::Error) -> &'static str {
+    if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock {
+        "upstream_timeout"
+    } else {
+        "upstream_connection_lost"
+    }
+}
+
 fn build_tls_config(ca_file: Option<&str>) -> Result<Arc<rustls::ClientConfig>, UpstreamFailure> {
     ensure_crypto_provider();
     let mut roots = rustls::RootCertStore::empty();
@@ -1250,33 +1333,153 @@ fn latin1_decode(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| b as char).collect()
 }
 
-fn read_status_and_headers(reader: &mut impl BufRead) -> Result<StatusAndHeaders, UpstreamFailure> {
-    let status_line = read_line(reader)
-        .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?
+/// `s.encode("latin-1", "replace")`: each `char` that fits a single Latin-1
+/// byte (U+0000-U+00FF) round-trips to that byte; anything else becomes `?`
+/// (0x3F), Python's `errors="replace"` substitution character.
+fn latin1_encode_replace(s: &str) -> Vec<u8> {
+    s.chars()
+        .map(|c| if (c as u32) <= 0xFF { c as u8 } else { b'?' })
+        .collect()
+}
+
+/// `line.split(None, 2)`: CPython's whitespace split with no separator
+/// argument splits on runs of `str.isspace()` characters ([`pystr::is_space`]
+/// is the exact per-codepoint predicate), discarding leading whitespace.
+/// With `maxsplit=2` at most 3 elements come back; only the first two
+/// (`version`, `status`) matter to `_read_status` (finding F-9: a
+/// tab-separated status line must split the same way a space-separated one
+/// does).
+fn python_split_none_2(line: &str) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut parts = Vec::new();
+    while parts.len() < 2 {
+        while i < n && crate::pystr::is_space(chars[i]) {
+            i += 1;
+        }
+        if i >= n {
+            return parts;
+        }
+        let start = i;
+        while i < n && !crate::pystr::is_space(chars[i]) {
+            i += 1;
+        }
+        parts.push(chars[start..i].iter().collect());
+    }
+    while i < n && crate::pystr::is_space(chars[i]) {
+        i += 1;
+    }
+    if i < n {
+        parts.push(chars[i..].iter().collect());
+    }
+    parts
+}
+
+/// One `_read_status()` call: the status line only, no headers. `version`
+/// is only used for the `HTTP/` prefix check ported here; callers that need
+/// the HTTP version do not exist in this crate.
+fn read_one_status_line(reader: &mut impl BufRead) -> Result<u16, UpstreamFailure> {
+    let raw = read_line(reader)
+        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
         .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
-    let status_line = latin1_decode(&status_line);
-    let mut parts = status_line.splitn(3, ' ');
-    let version = parts.next().unwrap_or("");
-    let status_text = parts.next().unwrap_or("");
+    let line = latin1_decode(&raw);
+    let parts = python_split_none_2(&line);
+    let version = parts.first().map(String::as_str).unwrap_or("");
+    let status_text = parts.get(1).map(String::as_str).unwrap_or("");
     if !version.starts_with("HTTP/") {
         return Err(UpstreamFailure::error("upstream_protocol_error"));
     }
+    // CPython's `int(status)` (arbitrary precision) followed by a
+    // `100 <= status <= 999` range check; a `u16` parse failure (including
+    // magnitudes that don't fit) is folded into the same `BadStatusLine` ->
+    // `upstream_protocol_error` outcome as an out-of-range in-range-for-u16
+    // value (finding F-6).
     let status: u16 = status_text
         .parse()
         .map_err(|_| UpstreamFailure::error("upstream_protocol_error"))?;
-    let mut headers = Headers::new();
+    if !(100..=999).contains(&status) {
+        return Err(UpstreamFailure::error("upstream_protocol_error"));
+    }
+    Ok(status)
+}
+
+/// Port of `http.client._read_headers`' physical byte consumption with no
+/// header recognition at all: reads and discards lines up to (and
+/// including) the blank separator line. Used to skip a `100 Continue`
+/// interim response's headers (`HTTPResponse.begin`'s `skipped_headers =
+/// _read_headers(self.fp)`, finding F-7).
+fn skip_header_block(reader: &mut impl BufRead) -> Result<(), UpstreamFailure> {
     loop {
         let line = read_line(reader)
-            .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?
+            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
+            .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
+        if line.is_empty() {
+            return Ok(());
+        }
+    }
+}
+
+fn read_status_and_headers(reader: &mut impl BufRead) -> Result<StatusAndHeaders, UpstreamFailure> {
+    // `HTTPResponse.begin`: "read until we get a non-100 response", skipping
+    // each `100 Continue`'s own header block and relaying whatever response
+    // finally follows (finding F-7).
+    let status = loop {
+        let status = read_one_status_line(reader)?;
+        if status == 100 {
+            skip_header_block(reader)?;
+            continue;
+        }
+        break status;
+    };
+    // Port of `email.feedparser`'s header leniency as exercised through
+    // `http.client.parse_headers` (finding F-9): a continuation line (starts
+    // with a space or tab) folds into the previous header's value; a line
+    // with no colon that is not a continuation ends the *recognised* header
+    // block without error (`_parsegen`'s `headerRE` mismatch just stops its
+    // for-loop, no exception) -- but every line up to the blank line is
+    // still physically read off the wire (`_read_headers`' own, separate,
+    // colon-agnostic boundary), so `recognizing` only gates what gets added
+    // to `headers`, never how many lines we read.
+    let mut headers = Headers::new();
+    let mut recognizing = true;
+    loop {
+        let line = read_line(reader)
+            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
             .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
         if line.is_empty() {
             break;
         }
+        if !recognizing {
+            continue;
+        }
         let line = latin1_decode(&line);
-        let Some((name, value)) = line.split_once(':') else {
-            return Err(UpstreamFailure::error("upstream_protocol_error"));
+        if line.starts_with(' ') || line.starts_with('\t') {
+            // Continuation: fold into the previous header (or ignore it, as
+            // Python's `FirstHeaderLineIsContinuationDefect` does, if there
+            // is no previous header to fold into yet).
+            if let Some((_, value)) = headers.last_mut() {
+                value.push('\n');
+                value.push_str(&line);
+            }
+            continue;
+        }
+        let Some(colon) = line.find(':') else {
+            recognizing = false;
+            continue;
         };
-        headers.push((name.trim().to_string(), value.trim().to_string()));
+        // `header_source_parse` (`email/_policybase.py`): the name is kept
+        // verbatim (`line[:i]`, no stripping at all); the value has only
+        // *leading* whitespace stripped (`.lstrip(' \t\r\n')`) -- trailing
+        // whitespace survives (only a trailing `\r`/`\n`, already removed by
+        // `read_line`, is stripped) (finding F-8's root cause: a trimmed
+        // value here is what let `"chunked "` compare equal to `"chunked"`
+        // downstream).
+        let name = line[..colon].to_string();
+        let value = line[colon + 1..]
+            .trim_start_matches([' ', '\t'])
+            .to_string();
+        headers.push((name, value));
     }
     Ok(StatusAndHeaders { status, headers })
 }
@@ -1292,8 +1495,11 @@ fn body_mode(method: &str, status: u16, headers: &Headers) -> BodyMode {
     if method == "HEAD" || status == 204 || status == 304 || (100..200).contains(&status) {
         return BodyMode::Empty;
     }
+    // `tr_enc.lower() == "chunked"`, no stripping: a trailing space (now
+    // preserved by `read_status_and_headers`) makes this comparison fail,
+    // matching Python (finding F-8).
     if let Some(te) = headers_get(headers, "transfer-encoding")
-        && te.trim().eq_ignore_ascii_case("chunked")
+        && te.eq_ignore_ascii_case("chunked")
     {
         return BodyMode::Chunked;
     }
@@ -1323,7 +1529,7 @@ fn read_body(
                 let mut buf = vec![0u8; want];
                 let n = reader
                     .read(&mut buf)
-                    .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?;
+                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
                 if n == 0 {
                     return Err(UpstreamFailure::error("upstream_protocol_error"));
                 }
@@ -1340,17 +1546,23 @@ fn read_body(
             let mut total = 0usize;
             loop {
                 let line = read_line(reader)
-                    .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?
+                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
                     .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
                 let line = latin1_decode(&line);
                 let size_text = line.split(';').next().unwrap_or("").trim();
+                // `_read_next_chunk_size`'s `int(line, 16)` `ValueError` is
+                // caught by `_get_chunk_left` and re-raised as
+                // `IncompleteRead(b"")` (an `http.client.HTTPException`),
+                // not left as a bare `ValueError` -- so it maps to
+                // `upstream_protocol_error`, not `upstream_connection_lost`
+                // (finding F-9).
                 let mut size = usize::from_str_radix(size_text, 16)
-                    .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?;
+                    .map_err(|_| UpstreamFailure::error("upstream_protocol_error"))?;
                 if size == 0 {
                     // Trailers, until the blank line.
                     loop {
                         let trailer = read_line(reader)
-                            .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?
+                            .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
                             .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
                         if trailer.is_empty() {
                             break;
@@ -1363,7 +1575,7 @@ fn read_body(
                     let mut buf = vec![0u8; want];
                     let n = reader
                         .read(&mut buf)
-                        .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?;
+                        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
                     if n == 0 {
                         return Err(UpstreamFailure::error("upstream_protocol_error"));
                     }
@@ -1375,7 +1587,7 @@ fn read_body(
                     }
                 }
                 let trailer = read_line(reader)
-                    .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?
+                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?
                     .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
                 if !trailer.is_empty() {
                     return Err(UpstreamFailure::error("upstream_protocol_error"));
@@ -1390,7 +1602,7 @@ fn read_body(
                 let mut buf = vec![0u8; want];
                 let n = reader
                     .read(&mut buf)
-                    .map_err(|_| UpstreamFailure::error("upstream_connection_lost"))?;
+                    .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
                 if n == 0 {
                     break;
                 }
@@ -1526,14 +1738,14 @@ impl<'a> Relay<'a> {
         extra_body: Option<Map<String, Value>>,
         audit_extra: Vec<(&str, Value)>,
         do_audit: bool,
-    ) -> RelayResult {
+    ) -> Result<RelayResult, Error> {
         if self.claimed
             && let Some(request_id) = self.request_id.clone()
         {
             if self.transmitted {
-                self.ledger.mark_uncertain(&self.caller, &request_id);
+                self.ledger.mark_uncertain(&self.caller, &request_id)?;
             } else {
-                self.ledger.release(&self.caller, &request_id);
+                self.ledger.release(&self.caller, &request_id)?;
             }
             self.claimed = false;
         }
@@ -1541,9 +1753,14 @@ impl<'a> Relay<'a> {
             && let Err(e) = self.audit(result, Some(reason), None, audit_extra)
             && e.is(ErrorClass::AuditUnavailable)
         {
-            return error_result(503, "audit_unavailable", Some("AuditUnavailable"), None);
+            return Ok(error_result(
+                503,
+                "audit_unavailable",
+                Some("AuditUnavailable"),
+                None,
+            ));
         }
-        error_result(status, reason, error, extra_body)
+        Ok(error_result(status, reason, error, extra_body))
     }
 
     fn approval_subject(&self, content_type: Option<&str>) -> String {
@@ -1635,7 +1852,7 @@ impl<'a> Relay<'a> {
         }
     }
 
-    fn refuse_failure(&mut self, failure: UpstreamFailure) -> RelayResult {
+    fn refuse_failure(&mut self, failure: UpstreamFailure) -> Result<RelayResult, Error> {
         if failure.reason == "self_referential_target" {
             return self.refuse(
                 501,
@@ -1677,11 +1894,11 @@ impl<'a> Relay<'a> {
         outcome: &str,
         reason: Option<&str>,
         upstream_status: Option<u16>,
-    ) {
+    ) -> Result<(), Error> {
         if self.claimed
             && let Some(request_id) = self.request_id.clone()
         {
-            self.ledger.complete(&self.caller, &request_id, result);
+            self.ledger.complete(&self.caller, &request_id, result)?;
             self.claimed = false;
         }
         let status = upstream_status.or(Some(result.status));
@@ -1698,6 +1915,7 @@ impl<'a> Relay<'a> {
             .into_bytes();
             result.reason = Some("audit_unavailable".to_string());
         }
+        Ok(())
     }
 
     fn exchange(
@@ -1721,7 +1939,7 @@ impl<'a> Relay<'a> {
             upstream_headers,
             &self.body,
         )
-        .map_err(|e| UpstreamFailure::error(classify_connect_error(&e)))?;
+        .map_err(|e| UpstreamFailure::error(classify_read_write_error(&e)))?;
         let mut reader = BufReader::new(stream);
         let head = read_status_and_headers(&mut reader)?;
         if REDIRECT_STATUSES.contains(&head.status) {
@@ -1730,8 +1948,16 @@ impl<'a> Relay<'a> {
                 head.status,
             ));
         }
-        let encoding = headers_get(&head.headers, "content-encoding")
-            .unwrap_or("identity")
+        // `HTTPResponse.getheader("Content-Encoding")` joins *every*
+        // occurrence with `", "` (`Message.get_all`), unlike a plain
+        // `Message.get` (first value only) -- so a duplicate
+        // `Content-Encoding: identity` + `gzip` is seen as `"identity, gzip"`
+        // and rejected, not silently treated as just `identity` (finding
+        // F-3). `Transfer-Encoding`/`Content-Length` below still use
+        // first-value semantics (`headers_get`), matching how
+        // `http.client`'s own framing logic reads them via `Message.get`.
+        let encoding = headers_get_all_joined(&head.headers, "content-encoding")
+            .unwrap_or_else(|| "identity".to_string())
             .trim()
             .to_lowercase();
         if !encoding.is_empty() && encoding != "identity" {
@@ -1758,13 +1984,19 @@ impl<'a> Relay<'a> {
     }
 
     fn filter_response(response: UpstreamResponse, patterns: &[Vec<u8>]) -> RelayResult {
-        let header_blob: Vec<u8> = response
-            .headers
-            .iter()
-            .map(|(k, v)| format!("{k}: {v}"))
-            .collect::<Vec<_>>()
-            .join("\r\n")
-            .into_bytes();
+        // `f"{name}: {value}".encode("latin-1", "replace")` joined with
+        // `b"\r\n"` (gateway.py:1032-1034): the *exact upstream bytes*, not
+        // a UTF-8 re-encoding, so a credential byte >= 0x80 reflected in a
+        // header is still caught (finding F-2). `response.headers` values
+        // are already latin-1-decoded byte-for-byte by `latin1_decode` in
+        // `read_status_and_headers`, so this round-trips exactly.
+        let mut header_blob: Vec<u8> = Vec::new();
+        for (index, (k, v)) in response.headers.iter().enumerate() {
+            if index > 0 {
+                header_blob.extend_from_slice(b"\r\n");
+            }
+            header_blob.extend(latin1_encode_replace(&format!("{k}: {v}")));
+        }
         if contains_credential(&header_blob, patterns)
             || contains_credential(&response.body, patterns)
         {
@@ -1830,7 +2062,7 @@ impl<'a> Relay<'a> {
             if self.path.is_empty() {
                 self.path = self.raw_path.clone();
             }
-            return Ok(self.refuse(
+            return self.refuse(
                 400,
                 reason,
                 "denied",
@@ -1838,7 +2070,7 @@ impl<'a> Relay<'a> {
                 None,
                 Vec::new(),
                 true,
-            ));
+            );
         }
 
         let action = Action::http(self.method.clone(), self.path.clone());
@@ -1858,7 +2090,7 @@ impl<'a> Relay<'a> {
             self.origin = Some(target.origin());
         }
         if !decision.allowed {
-            return Ok(self.refuse(403, decision.reason, "denied", None, None, Vec::new(), true));
+            return self.refuse(403, decision.reason, "denied", None, None, Vec::new(), true);
         }
         let connection = self
             .connection
@@ -1869,7 +2101,7 @@ impl<'a> Relay<'a> {
             || connection.http_target.is_none()
             || connection.http_scope.is_none()
         {
-            return Ok(self.refuse(
+            return self.refuse(
                 403,
                 "action_kind_mismatch",
                 "denied",
@@ -1877,15 +2109,15 @@ impl<'a> Relay<'a> {
                 None,
                 Vec::new(),
                 true,
-            ));
+            );
         }
         if let Some(handle_pv) = self.handle_policy_version
             && handle_pv != connection.policy_version
         {
-            return Ok(self.refuse(403, "grant_stale", "denied", None, None, Vec::new(), true));
+            return self.refuse(403, "grant_stale", "denied", None, None, Vec::new(), true);
         }
         if self_referential_target(self.ctx, &connection) {
-            return Ok(self.refuse(
+            return self.refuse(
                 501,
                 "self_referential_target",
                 "denied",
@@ -1893,7 +2125,7 @@ impl<'a> Relay<'a> {
                 None,
                 Vec::new(),
                 true,
-            ));
+            );
         }
 
         if let Some(request_id) = self.request_id.clone() {
@@ -1928,7 +2160,7 @@ impl<'a> Relay<'a> {
                     return Ok(replayed);
                 }
                 "in_flight" => {
-                    return Ok(self.refuse(
+                    return self.refuse(
                         409,
                         "request_in_flight",
                         "denied",
@@ -1936,10 +2168,10 @@ impl<'a> Relay<'a> {
                         None,
                         Vec::new(),
                         true,
-                    ));
+                    );
                 }
                 "uncertain" => {
-                    return Ok(self.refuse(
+                    return self.refuse(
                         409,
                         "outcome_uncertain",
                         "denied",
@@ -1947,10 +2179,10 @@ impl<'a> Relay<'a> {
                         None,
                         Vec::new(),
                         true,
-                    ));
+                    );
                 }
                 "reused" => {
-                    return Ok(self.refuse(
+                    return self.refuse(
                         409,
                         "request_id_reused",
                         "denied",
@@ -1958,7 +2190,7 @@ impl<'a> Relay<'a> {
                         None,
                         Vec::new(),
                         true,
-                    ));
+                    );
                 }
                 _ => {
                     self.claimed = true;
@@ -1968,7 +2200,7 @@ impl<'a> Relay<'a> {
 
         let pinned_address = match resolve_pinned_address(&connection, &self.resolver) {
             Ok(addr) => addr,
-            Err(failure) => return Ok(self.refuse_failure(failure)),
+            Err(failure) => return self.refuse_failure(failure),
         };
 
         let scope = connection.http_scope.as_ref().expect("http connection");
@@ -2002,7 +2234,7 @@ impl<'a> Relay<'a> {
                 }
                 let mut extra_body = Map::new();
                 extra_body.insert("approval_digest".into(), json!(digest));
-                return Ok(self.refuse(
+                return self.refuse(
                     428,
                     "approval_required",
                     "denied",
@@ -2010,13 +2242,13 @@ impl<'a> Relay<'a> {
                     Some(extra_body),
                     vec![("digest", json!(digest))],
                     true,
-                ));
+                );
             }
         }
 
         if let Err(e) = self.audit("attempt", None, None, Vec::new()) {
             if e.is(ErrorClass::AuditUnavailable) {
-                return Ok(self.refuse(
+                return self.refuse(
                     503,
                     "audit_unavailable",
                     "denied",
@@ -2024,7 +2256,7 @@ impl<'a> Relay<'a> {
                     None,
                     Vec::new(),
                     false,
-                ));
+                );
             }
             return Err(e);
         }
@@ -2033,7 +2265,7 @@ impl<'a> Relay<'a> {
         match self.ctx.policy.consume(&grant_id, None, None, None, None) {
             Ok(g) => self.grant = Some(g),
             Err(e) if e.is(ErrorClass::PolicyDenied) => {
-                return Ok(self.refuse(403, &e.reason, "denied", None, None, Vec::new(), true));
+                return self.refuse(403, &e.reason, "denied", None, None, Vec::new(), true);
             }
             Err(e) => return Err(e),
         }
@@ -2049,7 +2281,7 @@ impl<'a> Relay<'a> {
                     || e.is(ErrorClass::StateError)
                     || e.is(ErrorClass::InvalidInput) =>
             {
-                return Ok(self.refuse(
+                return self.refuse(
                     503,
                     "credential_unavailable",
                     "error",
@@ -2057,14 +2289,14 @@ impl<'a> Relay<'a> {
                     None,
                     Vec::new(),
                     true,
-                ));
+                );
             }
             Err(e) => return Err(e),
         };
         let (auth_name, auth_value) = match auth_header(&connection, secret.expose()) {
             Ok(pair) => pair,
             Err(Invalid(reason)) => {
-                return Ok(self.refuse(
+                return self.refuse(
                     501,
                     reason,
                     "denied",
@@ -2072,7 +2304,7 @@ impl<'a> Relay<'a> {
                     None,
                     Vec::new(),
                     true,
-                ));
+                );
             }
         };
         let basic_username = connection
@@ -2098,10 +2330,10 @@ impl<'a> Relay<'a> {
                     let outcome = failure.result;
                     let reason = failure.reason;
                     let upstream_status = failure.upstream_status;
-                    self.finish(&mut result, outcome, Some(reason), upstream_status);
+                    self.finish(&mut result, outcome, Some(reason), upstream_status)?;
                     return Ok(result);
                 }
-                return Ok(self.refuse_failure(failure));
+                return self.refuse_failure(failure);
             }
         };
 
@@ -2122,7 +2354,7 @@ impl<'a> Relay<'a> {
             outcome,
             reason.as_deref(),
             Some(response_status),
-        );
+        )?;
         Ok(result)
     }
 }
@@ -2154,10 +2386,18 @@ fn refuse_unauthenticated(
     path: &str,
     request_id: Option<&str>,
 ) -> RelayResult {
-    let action = normalize_method(method).ok();
-    let safe_path = normalize_path(path)
-        .ok()
-        .map(|(_, target)| strip_query(&target));
+    // `_refuse_unauthenticated`: `action = method.upper() if
+    // isinstance(method, str) and _METHOD_RE.match(method.upper()) else
+    // None` -- matched against the *untrimmed* upper-cased method (unlike
+    // `_normalize_method`'s own `.strip()`), and `safe_path =
+    // strip_query(path) if isinstance(path, str) else None`, computed for
+    // *any* string path with no `normalize_path` validation at all (finding
+    // F-10): both `method`/`path` are always `str` here (a concrete `&str`
+    // parameter, not Python's duck-typed `Any`), so the `isinstance` checks
+    // always pass.
+    let upper_method = method.to_uppercase();
+    let action = METHOD_RE.is_match(&upper_method).then_some(upper_method);
+    let safe_path = strip_query(path);
     let safe_request_id = request_id
         .filter(|r| REQUEST_ID_RE.is_match(r))
         .map(str::to_string);
@@ -2171,7 +2411,7 @@ fn refuse_unauthenticated(
             result: Some("denied"),
             reason: Some(reason),
             request_id: safe_request_id.as_deref(),
-            extra: vec![("path", safe_path.map(Value::String).unwrap_or(Value::Null))],
+            extra: vec![("path", Value::String(safe_path))],
             ..Default::default()
         },
     );

@@ -517,7 +517,27 @@ struct Responder<'a> {
     method: String,
 }
 
+/// `BaseHTTPRequestHandler.send_response(status)`: emitted first, before any
+/// handler-chosen header, on every response (`_Handler.server_version =
+/// "fake-upstream"`; `send_response` always adds `Server`/`Date`). A fixed
+/// `Date` is fine here -- this is a test fixture (module doc: "Security
+/// scope: none") -- but the headers must actually be present so the
+/// response-header-allowlist assertion in `rust/tests/gateway.rs` proves
+/// `gateway.rs`'s `RESPONSE_HEADER_ALLOWLIST` really does drop them, instead
+/// of vacuously passing because this fixture never emitted them in the first
+/// place (finding F-20).
+const FAKE_SERVER_HEADER: &str = "fake-upstream";
+const FAKE_DATE_HEADER: &str = "Wed, 01 Jan 2025 00:00:00 GMT";
+
 impl Responder<'_> {
+    fn write_status_and_boilerplate(&self, out: &mut Vec<u8>, status: u16) {
+        out.extend_from_slice(
+            format!("HTTP/1.1 {status} {}\r\n", status_reason(status)).as_bytes(),
+        );
+        out.extend_from_slice(format!("Server: {FAKE_SERVER_HEADER}\r\n").as_bytes());
+        out.extend_from_slice(format!("Date: {FAKE_DATE_HEADER}\r\n").as_bytes());
+    }
+
     /// `_Handler._send`.
     fn send(
         &mut self,
@@ -527,9 +547,7 @@ impl Responder<'_> {
         extra_headers: &[(&str, String)],
     ) {
         let mut out = Vec::new();
-        out.extend_from_slice(
-            format!("HTTP/1.1 {status} {}\r\n", status_reason(status)).as_bytes(),
-        );
+        self.write_status_and_boilerplate(&mut out, status);
         if !body.is_empty() || !matches!(status, 204 | 304) {
             out.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
         }
@@ -555,7 +573,7 @@ impl Responder<'_> {
     /// `_Handler._send_chunked`.
     fn send_chunked(&mut self, parts: &[&[u8]]) {
         let mut out = Vec::new();
-        out.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+        self.write_status_and_boilerplate(&mut out, 200);
         out.extend_from_slice(b"Content-Type: text/plain\r\n");
         out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
         out.extend_from_slice(b"Connection: close\r\n\r\n");
@@ -574,7 +592,7 @@ impl Responder<'_> {
     /// `_Handler._send_streamed`.
     fn send_streamed(&mut self, total: usize) {
         let mut head = Vec::new();
-        head.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+        self.write_status_and_boilerplate(&mut head, 200);
         head.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
         head.extend_from_slice(format!("Content-Length: {total}\r\n").as_bytes());
         head.extend_from_slice(b"Connection: close\r\n\r\n");

@@ -230,6 +230,61 @@ fn url_and_recording() {
 }
 
 #[test]
+fn every_response_carries_server_and_date_headers() {
+    // `_Handler.send_response` (called by `_send`/`_send_chunked`/
+    // `_send_streamed`) always emits `Server`/`Date` before any other
+    // header; a previous version of this fixture emitted neither, which
+    // made the corresponding assertion in `rust/tests/gateway.rs`'s
+    // `response_header_filter_and_upstream_401` (that a relayed response
+    // never carries `server`/`date`) vacuously true instead of actually
+    // proving `gateway::RESPONSE_HEADER_ALLOWLIST` drops them (finding
+    // F-20). Covers all three response paths: a plain JSON response
+    // (`_send`), a chunked stream (`_send_chunked`), and a streamed body
+    // (`_send_streamed`).
+    let fake = FakeUpstream::new(SECRET).start();
+    let (name, value) = auth_header(SECRET);
+
+    let plain = request(
+        fake.host(),
+        fake.port(),
+        "GET",
+        "/me",
+        &[(name, &value)],
+        None,
+    );
+    assert_eq!(plain.status, 200);
+    assert!(plain.headers.contains_key("server"));
+    assert!(plain.headers.contains_key("date"));
+
+    let chunked = request(
+        fake.host(),
+        fake.port(),
+        "GET",
+        "/stream",
+        &[(name, &value)],
+        None,
+    );
+    assert_eq!(chunked.status, 200);
+    assert!(chunked.headers.contains_key("server"));
+    assert!(chunked.headers.contains_key("date"));
+
+    // `/huge` is the one route that goes through `_send_streamed`; only the
+    // headers matter here, so read just those (its body is multiple MiB).
+    let mut streamed_conn = send_request(
+        fake.host(),
+        fake.port(),
+        "GET",
+        "/huge",
+        &[(name, &value)],
+        None,
+    );
+    let (status, streamed_headers, _leftover) = read_head(&mut streamed_conn);
+    assert_eq!(status, 200);
+    assert!(streamed_headers.contains_key("server"));
+    assert!(streamed_headers.contains_key("date"));
+}
+
+#[test]
 fn business_endpoints() {
     let fake = FakeUpstream::new(SECRET).start();
     let (name, value) = auth_header(SECRET);

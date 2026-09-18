@@ -9,14 +9,21 @@
 //! is still exercised directly, using a raw `TcpListener` in place of
 //! `ZeroPWServer`, in `self_reference` below.
 //!
-//! `TlsTests` used `openssl` via `subprocess`; this port uses `rcgen`
-//! (dev-dependency) instead, per `rust/PORTING.md`'s "TLS via `rustls`
-//! ... test CAs via `rcgen`" instruction.
+//! `TlsTests` used `openssl` via `subprocess` to generate test certificates;
+//! this port uses `rcgen` (dev-dependency) instead, a test-infrastructure
+//! substitute for the same reason the production TLS stack itself is
+//! substituted (Python's `ssl`/OpenSSL -> `rustls` + `rustls-native-certs` +
+//! `webpki`) -- see the "gateway (TLS stack)" row in `DEVIATIONS.md` for the
+//! observable differences that substitution carries (finding F-19). There is
+//! no `PORTING.md` instruction naming either substitution; a previous
+//! version of this comment incorrectly claimed one.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::net::{IpAddr, TcpListener};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -1580,21 +1587,33 @@ fn large_ok_and_huge_rejected() {
 
 #[test]
 fn upstream_down_and_timeout() {
-    let t = GatewayTest::new();
-    let mut cfg = t.ctx.config.clone();
-    cfg.upstream_timeout = 0.3;
-    // Config isn't behind a lock in the Rust port's test helper; rebuild via
-    // direct field mutation is not exposed, so drive it through a second
-    // relay call using a context whose config already reflects a short
-    // timeout instead. Simplify: this crate's `Context::config` is a plain
-    // field the caller owns, so mutate it through a `&mut` reference is not
-    // available on `&Context` here -- exercise timeout by hitting `/slow`
-    // with the default 3s timeout instead (still exercises the same code
-    // path, just with a longer wait).
+    // `Context::config` is a plain field the test owns, so it can be
+    // mutated directly through a `mut` binding (finding F-5: a slow
+    // upstream must classify as `upstream_timeout`, not
+    // `upstream_connection_lost`, matching `tests/test_gateway.py:561`'s
+    // `test_upstream_down_and_timeout`).
+    let mut t = GatewayTest::new();
+    t.ctx.config.upstream_timeout = 0.3;
     let slow = t.relay("GET", "/slow?seconds=1");
-    assert_eq!(slow.status, 200);
-    let _ = cfg;
-    t.fake.requests();
+    assert_eq!(
+        (slow.status, slow.reason.as_deref()),
+        (502, Some("upstream_timeout"))
+    );
+    t.assert_result_credential_free(&slow);
+    assert_eq!(t.audit_records().last().unwrap()["result"], "error");
+
+    t.fake.stop();
+    let down = t.relay("GET", "/repos");
+    assert_eq!(
+        (down.status, down.reason.as_deref()),
+        (502, Some("upstream_unreachable"))
+    );
+    t.assert_result_credential_free(&down);
+    assert_eq!(
+        t.audit_records().last().unwrap()["reason"],
+        "upstream_unreachable"
+    );
+    std::thread::sleep(Duration::from_millis(800)); // let the sleeping fake handler thread finish
 }
 
 #[test]
@@ -2121,6 +2140,83 @@ fn resolver_answering(addresses: Vec<IpAddr>) -> gateway::Resolver {
     Arc::new(move |_host, _port| Ok(addresses.clone()))
 }
 
+/// A connection pointed at a raw `127.0.0.1` port, with a caller-chosen
+/// secret/auth mode -- for the equivalence-review round-1 fixes below (F-1
+/// through F-12), which need hand-written raw HTTP responses a real
+/// `FakeUpstream` fixture can't produce (a malformed status line, a `100
+/// Continue` interim response, duplicate headers, ...). This is the same
+/// "drive a scratch listener with hand-written bytes" pattern the review
+/// itself used to find these findings.
+fn raw_port_connection(
+    t: &GatewayTest,
+    cid: &str,
+    secret_id: &str,
+    auth: HttpAuth,
+    port: u16,
+) -> String {
+    t.ctx
+        .policy
+        .create_connection(
+            Connection::new(
+                cid,
+                "demo",
+                "dev",
+                "raw",
+                "http",
+                secret_id,
+                None,
+                "",
+                Some(HttpTarget::new("http", "127.0.0.1", port as i64, None, false).unwrap()),
+                Some(auth),
+                Some(HttpScope::new(None, None, vec![]).unwrap()),
+                None,
+                None,
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", cid, Some(3600), None)
+        .unwrap();
+    t.issue_handle_for("agent-1", cid, &grant.id, None, 300)
+}
+
+/// Spawns a background thread that accepts exactly one connection, discards
+/// whatever the client sends, and writes `response` back verbatim before
+/// closing (signalling EOF once the whole response has been sent, which is
+/// what makes an `UntilClose`-framed body terminate). Returns the bound
+/// port.
+fn raw_response_port(response: Vec<u8>) -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .ok();
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// Relays a `GET /me` through `gh`'s bearer credential to a scratch listener
+/// that answers with the given raw response bytes.
+fn relay_via_raw_response(t: &GatewayTest, cid: &str, response: Vec<u8>) -> RelayResult {
+    let port = raw_response_port(response);
+    let handle = raw_port_connection(t, cid, "gh-token", HttpAuth::bearer(), port);
+    gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None)
+}
+
 #[test]
 fn hostname_resolving_to_loopback_is_refused_without_opt_in() {
     let t = GatewayTest::new();
@@ -2471,6 +2567,65 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     );
 }
 
+/// Confirms the CN-fallback difference recorded in `DEVIATIONS.md`'s
+/// "gateway (TLS stack)" row (finding F-19): OpenSSL (Python's `ssl` module,
+/// what `zeropw/gateway.py` actually runs on) accepts a certificate whose
+/// Common Name matches the requested hostname even when the certificate
+/// carries no Subject Alternative Name at all (a legacy fallback OpenSSL
+/// still honours); `rustls`/`webpki` is SAN-only per RFC 6125 and always
+/// rejects such a certificate, even though the CN is exactly right.
+#[test]
+fn tls_cert_with_matching_cn_but_no_san_is_rejected() {
+    let t = GatewayTest::new();
+    t.ctx
+        .vault
+        .put_secret(
+            "tls-token",
+            "api_key",
+            SECRET_B.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+
+    let key = rcgen::KeyPair::generate().expect("keypair");
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("no SANs");
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "127.0.0.1");
+    let cert = params.self_signed(&key).expect("self sign");
+    let cert_pem = cert.pem();
+
+    let good = FakeUpstream::new(SECRET_B)
+        .tls(tls_server_config(&cert, &key))
+        .start();
+    let cert_path = write_pem(&t._tmp, "cn-only.pem", &cert_pem);
+
+    let conn = http_connection_ca(
+        "tls-cn-only",
+        &good,
+        "tls-token",
+        HttpAuth::bearer(),
+        HttpScope::new(None, None, vec![]).unwrap(),
+        Some(cert_path),
+    );
+    t.ctx.policy.create_connection(conn).unwrap();
+    let grant = t
+        .ctx
+        .policy
+        .create_grant("agent-1", "tls-cn-only", Some(3600), None)
+        .unwrap();
+    let handle = t.issue_handle_for("agent-1", "tls-cn-only", &grant.id, None, 300);
+    let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_tls_failed"))
+    );
+    assert_eq!(good.requests().len(), 0);
+}
+
 #[test]
 fn tls_is_verified_against_the_configured_name_not_the_pinned_address() {
     let t = GatewayTest::new();
@@ -2591,6 +2746,363 @@ fn tls_is_verified_against_the_configured_name_not_the_pinned_address() {
         (502, Some("upstream_tls_failed"))
     );
     assert_eq!(fake.requests().len(), 1);
+}
+
+// ----------------------------------- equivalence review round-1 (behaviour)
+
+#[test]
+fn ledger_corruption_fails_closed_before_reaching_upstream() {
+    // Finding F-1: `RequestLedger::load`/`save` used to swallow a
+    // `state.read_json`/`write_json` failure (mapping it to an empty
+    // ledger, or discarding a write error with `let _ = ...`); Python's
+    // `_load`/`_save` let a `StateError` propagate out of `_Relay.run`
+    // uncaught, refusing the request *before* the upstream is ever
+    // contacted. Probe from the finding: after a successful `request_id =
+    // "r-1"` relay, corrupt the ledger file and replay the same request id
+    // -- Python raises `StateError("state_corrupt")` with the upstream
+    // still only having been contacted once; the pre-fix Rust returned 200
+    // and re-executed the request upstream a second time.
+    let t = GatewayTest::new();
+    let first = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-1"));
+    assert_eq!(first.status, 200);
+    assert_eq!(t.fake.requests().len(), 1);
+
+    std::fs::write(t.ctx.state.path.join(gateway::LEDGER_DOC), b"{not json").unwrap();
+
+    let second = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-1"));
+    assert_eq!(second.status, 503);
+    assert_eq!(second.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(second.json()["error"], "StateError");
+    assert_eq!(
+        t.fake.requests().len(),
+        1,
+        "a corrupt ledger must refuse the request, not re-execute it upstream"
+    );
+}
+
+#[test]
+fn credential_reflection_is_caught_via_latin1_bytes_not_utf8() {
+    // Finding F-2: `filter_response`'s scanned header blob used to be built
+    // with `format!(...).into_bytes()` (UTF-8), but Python scans
+    // `f"{name}: {value}".encode("latin-1", "replace")` -- the exact
+    // upstream bytes. A credential byte >= 0x80 reflected in a response
+    // header (here in `ETag`, via HTTP/1.1's basic-auth password path) was
+    // therefore missed: the byte 0xE9 UTF-8-encodes to two bytes (0xC3
+    // 0xA9), which never matches the raw single-byte secret pattern.
+    let t = GatewayTest::new();
+    let mut secret = b"p".to_vec();
+    secret.push(0xE9);
+    secret.extend_from_slice(b"ssword-synthetic-0123456789");
+    t.ctx
+        .vault
+        .put_secret(
+            "basic-pw-nonascii",
+            "password",
+            &secret,
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    let auth = HttpAuth::new("basic", None, None, Some("synthetic-user".to_string())).unwrap();
+
+    let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nETag: ".to_vec();
+    response.extend_from_slice(&secret);
+    response.extend_from_slice(b"\r\n\r\n");
+    let port = raw_response_port(response);
+    let handle = raw_port_connection(&t, "basic-nonascii", "basic-pw-nonascii", auth, port);
+    let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("credential_reflection_blocked"))
+    );
+}
+
+#[test]
+fn duplicate_content_encoding_headers_are_joined_before_checking() {
+    // Finding F-3: `HTTPResponse.getheader("Content-Encoding")` joins ALL
+    // occurrences with `", "` (`Message.get_all`); reading only the first
+    // occurrence let a duplicate `Content-Encoding: identity` + `gzip`
+    // through as if the response were uncompressed.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nhello"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "dup-content-encoding", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("response_encoding_unsupported"))
+    );
+}
+
+#[test]
+fn self_referential_target_via_public_url_is_case_insensitive() {
+    // Finding F-4: Python compares against `urlsplit(public_url).hostname`,
+    // which is always lower-cased; a mixed-case `public_url` (as an
+    // operator might configure, e.g. from a mixed-case DNS name) must still
+    // trigger the self-referential-target refusal. Oracle-checked directly
+    // against `urllib.parse.urlsplit` below.
+    let mut t = GatewayTest::new();
+    t.ctx.config.extra.insert(
+        "public_url".to_string(),
+        serde_json::Value::String("http://ZEROPW.invalid:8443".to_string()),
+    );
+    let _handle = named_connection_port(&t, "public-self", "zeropw.invalid", 8443, false);
+    let result = gateway::relay_for_caller(
+        &t.ctx,
+        "agent-1",
+        "public-self",
+        "GET",
+        "/me",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (501, Some("self_referential_target"))
+    );
+}
+
+#[test]
+fn urlsplit_hostname_matches_python_lower_casing() {
+    let out = run_python_oracle(
+        r#"
+import urllib.parse
+print(urllib.parse.urlsplit("http://ZEROPW.invalid:8443").hostname)
+"#,
+    );
+    assert_eq!(out.trim(), "zeropw.invalid");
+}
+
+#[test]
+fn slow_upstream_read_is_a_timeout_not_connection_lost() {
+    // Finding F-5: every read (and the request write) error used to become
+    // `upstream_connection_lost`, but Python classifies `socket.timeout`/
+    // `TimeoutError` as `upstream_timeout` -- see the fixed
+    // `upstream_down_and_timeout` test above (`tests/test_gateway.py:561`)
+    // for the primary regression test; this one pins the same
+    // classification via a raw scratch listener that never answers at all
+    // (so the very first status-line read times out, rather than a slow
+    // `FakeUpstream` response).
+    let mut t = GatewayTest::new();
+    t.ctx.config.upstream_timeout = 0.2;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // Accept and then just hold the connection open without writing
+        // anything, so the client's status-line read times out.
+        if let Ok((stream, _)) = listener.accept() {
+            std::thread::sleep(Duration::from_secs(2));
+            drop(stream);
+        }
+    });
+    let handle = raw_port_connection(&t, "never-answers", "gh-token", HttpAuth::bearer(), port);
+    let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_timeout"))
+    );
+}
+
+#[test]
+fn status_code_outside_100_999_is_a_protocol_error() {
+    // Finding F-6: CPython's `_read_status` rejects a status outside
+    // `100..=999` as `BadStatusLine` -> `upstream_protocol_error`; probe
+    // from the finding.
+    let t = GatewayTest::new();
+    let too_small =
+        relay_via_raw_response(&t, "status-too-small", b"HTTP/1.1 12 Nope\r\n\r\n".to_vec());
+    assert_eq!(
+        (too_small.status, too_small.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+    let too_large = relay_via_raw_response(
+        &t,
+        "status-too-large",
+        b"HTTP/1.1 1000 Nope\r\n\r\n".to_vec(),
+    );
+    assert_eq!(
+        (too_large.status, too_large.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn continue_interim_response_is_skipped_and_the_real_response_relayed() {
+    // Finding F-7: a `100 Continue` interim response must be consumed (its
+    // own header block skipped) and the response that follows relayed;
+    // probe from the finding.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "continue-then-ok", response);
+    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+}
+
+#[test]
+fn transfer_encoding_value_is_compared_without_trimming() {
+    // Finding F-8: CPython compares `tr_enc.lower() == "chunked"` with no
+    // stripping; `"chunked "` (trailing space) is therefore NOT chunked, so
+    // the raw chunk-framing bytes are relayed verbatim as an unframed
+    // (`UntilClose`) body. Probe from the finding.
+    let t = GatewayTest::new();
+    let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked \r\n\r\n".to_vec();
+    response.extend_from_slice(b"5\r\nhello\r\n0\r\n\r\n");
+    let result = relay_via_raw_response(&t, "te-trailing-space", response);
+    assert_eq!(result.status, 200);
+    assert_eq!(result.body, b"5\r\nhello\r\n0\r\n\r\n".to_vec());
+}
+
+#[test]
+fn tab_separated_status_line_is_accepted() {
+    // Finding F-9a: `line.split(None, 2)` splits on any whitespace run, not
+    // just a literal space.
+    let t = GatewayTest::new();
+    let response = b"HTTP/1.1\t200\tOK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
+    let result = relay_via_raw_response(&t, "tab-status-line", response);
+    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+}
+
+#[test]
+fn folded_header_continuation_line_does_not_error() {
+    // Finding F-9b: a header continuation line (starting with a space or
+    // tab) folds into the previous header instead of being rejected.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nX-Custom: first\r\n second-part\r\nContent-Length: 2\r\n\r\nhi"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "folded-continuation", response);
+    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+}
+
+#[test]
+fn header_line_without_colon_ends_recognised_headers_without_erroring() {
+    // Finding F-9c: `email.feedparser` stops recognising further headers at
+    // a line with no colon (and no leading whitespace) instead of raising;
+    // subsequent lines (even otherwise-valid-looking headers) are simply
+    // never parsed, but bytes up to the blank line are still consumed. Here
+    // `Content-Length` is set *before* the bad line, so the body still
+    // frames correctly.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nBadHeaderNoColon\r\nX-After: ignored\r\n\r\nhi"
+            .to_vec();
+    let result = relay_via_raw_response(&t, "no-colon-header", response);
+    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+}
+
+#[test]
+fn malformed_chunk_size_is_a_protocol_error_not_connection_lost() {
+    // Finding F-9d: `_read_next_chunk_size`'s `int(line, 16)` `ValueError`
+    // is caught by `_get_chunk_left` and re-raised as `IncompleteRead` (an
+    // `http.client.HTTPException`), so it maps to `upstream_protocol_error`,
+    // not `upstream_connection_lost`.
+    let t = GatewayTest::new();
+    let response =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZZ\r\nhello\r\n0\r\n\r\n".to_vec();
+    let result = relay_via_raw_response(&t, "malformed-chunk-size", response);
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (502, Some("upstream_protocol_error"))
+    );
+}
+
+#[test]
+fn refuse_unauthenticated_audits_stripped_path_unconditionally_and_untrimmed_method() {
+    // Finding F-10: Python audits `strip_query(path)` for *any* `str` path
+    // (no `normalize_path` validation at all), and sets `action` only when
+    // `_METHOD_RE` matches the *unstripped* upper-cased method -- so a
+    // padded method like `" get "` normalises to `" GET "`, which does not
+    // match `^[A-Z]{1,16}$`, giving `action: null`.
+    let t = GatewayTest::new();
+    let result = gateway::relay(
+        &t.ctx,
+        "not-a-real-handle-token",
+        " get ",
+        "/a/../b?token=secret",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(result.status, 401);
+    let record = t.audit_records().last().unwrap().clone();
+    assert_eq!(record["path"], "/a/../b");
+    assert_eq!(record["action"], serde_json::Value::Null);
+}
+
+#[test]
+fn method_and_header_name_strip_information_separator_control_chars() {
+    // Finding F-11: `str.strip()` also strips U+001C-U+001F; Rust's
+    // `str::trim()` does not, so a method/header name padded with one of
+    // these was rejected/dropped instead of normalising like Python.
+    let t = GatewayTest::new();
+    let result = t.relay_h(
+        "GET\u{1c}",
+        "/me",
+        &headers(&[("accept\u{1c}", "application/json")]),
+    );
+    assert_eq!(result.status, 200);
+    assert_eq!(
+        t.fake
+            .requests()
+            .last()
+            .unwrap()
+            .headers
+            .get("accept")
+            .unwrap(),
+        "application/json"
+    );
+}
+
+#[test]
+fn normalize_path_accepts_a_single_trailing_newline_like_python() {
+    // Finding F-12: Python's `re` `$` also matches immediately before a
+    // single trailing `"\n"`, so `_TARGET_CHARS.match("/a?b\n")` succeeds in
+    // Python (returning `("/a", "/a?b\n")`), where the `regex` crate's own
+    // `$`/`is_match` only accepts the true end of the haystack. Oracle
+    // checked against real `python3.12` below.
+    assert_eq!(
+        gateway::normalize_path("/a?b\n").unwrap(),
+        ("/a".to_string(), "/a?b\n".to_string())
+    );
+    // An embedded newline elsewhere, or more than one trailing newline,
+    // must still be refused (only exactly one *trailing* newline is
+    // special-cased by Python's `$`).
+    assert!(gateway::normalize_path("/a\nb").is_err());
+    assert!(gateway::normalize_path("/a?b\n\n").is_err());
+}
+
+#[test]
+fn normalize_path_trailing_newline_matches_python_target_chars_regex() {
+    let out = run_python_oracle(
+        r#"
+import re
+pat = re.compile(r"^[\x21-\x7e]*$")
+tests = ["/a?b\n", "/a\nb", "/a?b\n\n", "/a?b"]
+print([bool(pat.match(t)) for t in tests])
+"#,
+    );
+    assert_eq!(out.trim(), "[True, False, False, True]");
+}
+
+/// Minimal Python runner for the oracle checks above -- same technique as
+/// `rust/tests/gateway_oracle.rs`'s `run_python` (not reused directly since
+/// that helper lives in a separate integration-test binary and isn't
+/// exported).
+fn run_python_oracle(script: &str) -> String {
+    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+    let output = std::process::Command::new(interpreter)
+        .arg("-c")
+        .arg(script)
+        .output()
+        .expect("run python3.12");
+    assert!(
+        output.status.success(),
+        "python stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
 // ------------------------------------------------------------- HashMap import
