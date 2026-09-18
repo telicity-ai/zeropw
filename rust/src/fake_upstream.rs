@@ -624,74 +624,28 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`) as
-/// CPython actually implements it: `+` becomes a space, then `unquote`
-/// splits the string into maximal runs of ASCII (U+0000-U+007F) and
-/// non-ASCII characters (`urllib.parse._asciire = re.compile(
-/// "([\x00-\x7f]+)")`) *before* doing any `%XX` decoding. A `%XX` escape is
-/// decoded only inside an ASCII run -- collected as raw bytes, then the
-/// whole run is lossily UTF-8-decoded in one `bytes.decode("utf-8",
-/// "replace")` call, so adjacent escapes can combine into one multi-byte
-/// character exactly as CPython's single `decode` call does (`%E4%B8%AD`
-/// -> `中`). A non-ASCII run is copied through unchanged, character for
-/// character, and is NEVER merged with a `%`-decoded byte sequence, even
-/// from an adjacent run (measured against live `python3.12`:
-/// `parse_qs("auth=%E4\x80")` is `{"auth": ["�\x80"]}` -- one
-/// replacement character for the dangling `%E4`, then the raw `\x80`
-/// untouched -- not the single differently-decoded character a byte-level
-/// merge across the run boundary would produce).
+/// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`): `+`
+/// becomes a space, then [`crate::pystr::unquote`] (PORTING.md §3b's one
+/// canonical home for CPython's `urllib.parse.unquote` run-splitting
+/// algorithm -- see that function's doc comment for the full behaviour and
+/// the ASCII/non-ASCII run-boundary semantics).
 ///
 /// Every string this module passes here went through [`latin1`], so each
 /// Rust `char` is exactly one Python code point / one original wire byte
-/// (never part of a multi-byte UTF-8 encoding). Operating char-by-char
-/// rather than on raw UTF-8 byte offsets is what makes that true here too:
-/// finding X-7, a bug already fixed once in the sibling `gateway.rs`
+/// (never part of a multi-byte UTF-8 encoding) -- `pystr::unquote` (and its
+/// `unquote_ascii_run` helper) is written to that same char-by-char
+/// contract, never raw UTF-8 byte offsets, which is what finding X-7 fixed
+/// here: this module used to keep its own copy of the whole algorithm,
+/// indexing `&s[i+1..i+3]` on the `str` itself, which panicked whenever a
+/// multi-byte-encoded character (e.g. U+0080, encoded as two UTF-8 bytes)
+/// put a slice boundary out of alignment with the raw byte offsets `i` was
+/// counting -- a bug already fixed once in the sibling `gateway.rs`
 /// (`percent_decode_lossy`, finding F-R2-1) and reintroduced here as a
-/// byte-identical copy. The old code indexed `&s[i+1..i+3]` on the `str`
-/// itself, which panicked whenever a multi-byte-encoded character (e.g.
-/// U+0080, encoded as two UTF-8 bytes) put a slice boundary out of
-/// alignment with the raw byte offsets `i` was counting.
+/// byte-identical copy, the exact §3b duplication class this promotion
+/// closes (equivalence review round 8).
 fn unquote_plus(s: &str) -> String {
-    let chars: Vec<char> = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
-    let mut out = String::with_capacity(chars.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if (chars[i] as u32) > 0x7F {
-            out.push(chars[i]);
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < chars.len() && (chars[i] as u32) <= 0x7F {
-            i += 1;
-        }
-        out.push_str(&unquote_ascii_run(&chars[start..i]));
-    }
-    out
-}
-
-/// Decodes `%XX` triplets within a pure-ASCII run of characters
-/// (`urllib.parse._unquote_impl` followed by one `bytes.decode("utf-8",
-/// "replace")` over the whole run) -- see [`unquote_plus`]. Every character
-/// here is ASCII, so casting it to `u8` is exactly its one raw byte; no
-/// slicing of a `str` by byte offset is ever needed.
-fn unquote_ascii_run(run: &[char]) -> String {
-    let mut decoded: Vec<u8> = Vec::with_capacity(run.len());
-    let mut i = 0;
-    while i < run.len() {
-        if run[i] == '%' && i + 2 < run.len() {
-            let hi = run[i + 1].to_digit(16);
-            let lo = run[i + 2].to_digit(16);
-            if let (Some(hi), Some(lo)) = (hi, lo) {
-                decoded.push(((hi << 4) | lo) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        decoded.push(run[i] as u8);
-        i += 1;
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
+    let spaces_for_plus: String = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
+    crate::pystr::unquote(&spaces_for_plus)
 }
 
 fn query_get<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {

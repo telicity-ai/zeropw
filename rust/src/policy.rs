@@ -555,33 +555,15 @@ fn python_str_for_error(value: &Value) -> String {
             .as_f64()
             .map(crate::pyjson::python_float_repr)
             .unwrap_or_else(|| n.to_string()),
-        Value::Array(_) | Value::Object(_) => python_repr_for_error(value),
-    }
-}
-
-/// `repr()` half of [`python_str_for_error`]: a string is quoted, everything
-/// else falls back to the same rules `str()` uses.
-fn python_repr_for_error(value: &Value) -> String {
-    match value {
-        Value::String(s) => crate::pystr::repr_str(s),
-        Value::Array(items) => {
-            let parts: Vec<String> = items.iter().map(python_repr_for_error).collect();
-            format!("[{}]", parts.join(", "))
-        }
-        Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .map(|(k, v)| {
-                    format!(
-                        "{}: {}",
-                        crate::pystr::repr_str(k),
-                        python_repr_for_error(v)
-                    )
-                })
-                .collect();
-            format!("{{{}}}", parts.join(", "))
-        }
-        other => python_str_for_error(other),
+        // X-10 (equivalence review, round 8): this used to recurse through
+        // a local `python_repr_for_error`, byte-identical in shape to
+        // `crate::pystr::repr_value` (PORTING.md §3b's one canonical
+        // container-`repr` implementation) -- deleted in favour of it. This
+        // also corrects nested-scalar overflow handling for a `Number`
+        // inside the array/object (`repr_value`'s own `Number` arm renders
+        // an overflowing literal as `inf`/`-inf`, matching CPython; the
+        // top-level bare-`Number` arms above this one are unchanged).
+        Value::Array(_) | Value::Object(_) => crate::pystr::repr_value(value),
     }
 }
 

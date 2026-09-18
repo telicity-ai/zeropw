@@ -299,38 +299,120 @@ fn normalize_path_inner(raw: &str) -> Result<(String, String), Invalid> {
     Ok((path, raw.to_string()))
 }
 
-/// `urllib.parse.unquote(s)` with the default (`errors="replace"`) UTF-8
-/// decoding of percent-triplets: a byte sequence that fails to decode as
-/// UTF-8 is replaced with U+FFFD per invalid byte/sequence, matching
-/// CPython's `bytes.decode("utf-8", "replace")` used internally by
-/// `unquote`. Only `%XX` triplets are decoded; other bytes pass through.
+/// `urllib.parse.unquote(s)`, via [`crate::pystr::unquote`] (PORTING.md
+/// §3b's one canonical home for CPython's `unquote` run-splitting
+/// algorithm -- see that function's doc comment for the full behaviour,
+/// including why this module's OLD implementation here -- a simpler
+/// whole-string byte-buffer merge, finding F-R2-1 -- stayed byte-identical
+/// to it across `normalize_path_inner`'s own two-pass call site specifically,
+/// even though the two algorithms are not generally equivalent).
+///
+/// Promoted to the canonical helper (equivalence review round 8, the X-7
+/// fixer's handover): `fake_upstream.rs`'s `unquote_plus` had reintroduced
+/// this exact algorithm as a byte-identical local copy (finding X-7) after
+/// this function's own finding F-R2-1 fix, the recurring §3b duplication
+/// class. No behaviour change at this call site: confirmed both by the
+/// existing 6,000-case `python3.12`-oracle fuzz test
+/// `normalize_path_percent_decoding_never_panics_and_matches_python`
+/// (`rust/tests/gateway.rs`), which specifically includes double-percent-
+/// encoded sequences chaining across both decode passes, and by the
+/// dedicated old-vs-new differential test
+/// `percent_decode_lossy_old_implementation_matches_canonical_unquote_over_the_double_decode_pass_corpus`
+/// below, which keeps the prior whole-buffer implementation around
+/// test-only for a direct byte-for-byte comparison.
 fn percent_decode_lossy(s: &str) -> String {
-    // finding F-R2-1: this used to index `&s[i+1..i+3]` on the *str*, which
-    // panics whenever that slice boundary lands inside a multi-byte UTF-8
-    // character -- reachable on the second decode pass (e.g. `/%25%E4%B8%AD`
-    // first decodes to bytes `2f 25 e4 b8 ad`, and byte offset 4 is inside
-    // `中`). Decode over the raw bytes throughout, reading the two hex
-    // digits as bytes (never as a `str` slice), and only build the final
-    // `String` once, lossily, at the end -- exactly mirroring
-    // `bytes.decode("utf-8", "replace")`, which never panics on untrusted
-    // input.
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = (bytes[i + 1] as char).to_digit(16);
-            let lo = (bytes[i + 2] as char).to_digit(16);
-            if let (Some(hi), Some(lo)) = (hi, lo) {
-                out.push(((hi << 4) | lo) as u8);
-                i += 3;
-                continue;
+    crate::pystr::unquote(s)
+}
+
+#[cfg(test)]
+mod percent_decode_lossy_canonicalization_tests {
+    /// Test-only copy of `percent_decode_lossy`'s PRE-promotion implementation
+    /// (equivalence review round 8, finding X-10's sibling consolidation): a
+    /// simpler whole-string byte-buffer merge, decoding `%XX` over the raw
+    /// UTF-8 bytes of `s` in one pass and lossily UTF-8-decoding the result
+    /// once at the end -- kept here, deliberately not deleted, purely so this
+    /// module's differential test below has something concrete to compare
+    /// the new canonical `crate::pystr::unquote` against, rather than relying
+    /// on the promotion's own reasoning alone.
+    fn old_percent_decode_lossy(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push(((hi << 4) | lo) as u8);
+                    i += 3;
+                    continue;
+                }
             }
+            out.push(bytes[i]);
+            i += 1;
         }
-        out.push(bytes[i]);
-        i += 1;
+        String::from_utf8_lossy(&out).into_owned()
     }
-    String::from_utf8_lossy(&out).into_owned()
+
+    /// `normalize_path_inner`'s own two-pass decode loop, run with a given
+    /// single-pass decoder, mirroring exactly how `normalize_path_inner`
+    /// itself calls `percent_decode_lossy` twice in `for _ in 0..2 { decoded
+    /// = percent_decode_lossy(&decoded); }`.
+    fn two_pass(s: &str, decode_once: impl Fn(&str) -> String) -> [String; 2] {
+        let pass1 = decode_once(s);
+        let pass2 = decode_once(&pass1);
+        [pass1, pass2]
+    }
+
+    /// The specific risk the promotion's own doc comment reasons through but
+    /// does not merely assert: a non-ASCII character PRODUCED by the first
+    /// decode pass sitting immediately next to a `%XX` escape that only gets
+    /// decoded on the SECOND pass (the classic double-encoding-evasion
+    /// shape `normalize_path`'s two-pass loop exists to catch). The old
+    /// whole-buffer merge and the new canonical run-splitting algorithm
+    /// implement genuinely different algorithms -- this test is the actual
+    /// proof they agree at this call site, not a restatement of the
+    /// reasoning.
+    #[test]
+    fn percent_decode_lossy_old_implementation_matches_canonical_unquote_over_the_double_decode_pass_corpus()
+     {
+        let cases = [
+            // Non-ASCII char (from a single-pass escape) immediately
+            // followed by a fresh escape that only resolves on pass 2.
+            "%E4%B8%AD%2541",
+            "%2541%E4%B8%AD",
+            // A dangling/incomplete multi-byte escape (produces U+FFFD on
+            // pass 1) immediately next to a pass-2-only escape.
+            "%E4%2541",
+            "%2541%E4",
+            "%E4%80%2541",
+            "%2541%E4%80",
+            // Two adjacent multi-byte codepoints, one resolved each pass.
+            "%E4%B8%AD%25E4%25B8%25AD",
+            // A 4-byte codepoint (U+1F600) split across the pass boundary.
+            "%F0%9F%98%80%2541",
+            "%2541%F0%9F%98%80",
+            // Malformed triplets adjacent to real multi-byte escapes.
+            "%zz%E4%B8%AD%2541",
+            "%E4%B8%AD%25zz",
+            // Plain ASCII and the empty string, as a sanity baseline.
+            "hello%2Bworld",
+            "",
+            // Literal '%' characters (from a decoded %2525) next to a
+            // multi-byte escape on either side.
+            "%2525%E4%B8%AD",
+            "%E4%B8%AD%2525",
+        ];
+        for case in cases {
+            let old = two_pass(case, old_percent_decode_lossy);
+            let new = two_pass(case, crate::pystr::unquote);
+            assert_eq!(
+                old, new,
+                "old vs. new percent-decode diverged for {case:?} (pass1={:?}, pass2 old={:?} new={:?})",
+                old[0], old[1], new[1]
+            );
+        }
+    }
 }
 
 /// `str.strip()` with CPython's exact `str.isspace()` predicate (which also

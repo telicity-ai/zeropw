@@ -1118,6 +1118,85 @@ fn set_version_status_retiring_clears_active_version_stored_as_integral_float() 
     assert!(doc_after["secrets"]["gh-token"]["active_version"].is_null());
 }
 
+/// X-16 (equivalence review, round 8): `active_version_values_equal` used
+/// to compare both sides as `f64`, and `9007199254740992` (`2**53`) and
+/// `9007199254740993` (`2**53 + 1`) are numerically distinct `i64`s that
+/// collide once both are cast to `f64` (`9007199254740993.0f64 ==
+/// 9007199254740992.0f64`). CPython's `int.__eq__` never routes through
+/// `float` at all, so `entry["active_version"] == version` is measured
+/// `False` here (`python3.12`: `9007199254740993 == 9007199254740992` is
+/// `False`) and the retire step must leave `active_version` untouched --
+/// before the fix, this cleared it to `null` instead.
+#[test]
+fn set_version_status_retire_does_not_clear_active_version_on_f64_collision() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    {
+        let entry = &mut doc["secrets"]["gh-token"];
+        entry["active_version"] = json!(9007199254740993i64);
+        entry["versions"]["9007199254740992"] = json!({"status": "retired_candidate"});
+    }
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+
+    ctx.vault
+        .set_version_status("gh-token", 9007199254740992, "retired")
+        .unwrap();
+
+    let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(
+        doc_after["secrets"]["gh-token"]["active_version"],
+        json!(9007199254740993i64),
+        "a version that only collides with the active one in f64 must not clear it"
+    );
+}
+
+/// X-16, the other direction: before the fix, re-activating
+/// `9007199254740992` while `9007199254740993` (the colliding `f64`
+/// neighbour) was active wrongly read as "no change" via the same `f64`
+/// equality bug and *silently skipped* retiring the previous version,
+/// leaving both versions marked `"active"` -- a fail-open. CPython's own
+/// `previous != version` is measured `True` here
+/// (`9007199254740993 != 9007199254740992`), takes the retire branch, and
+/// then raises an uncaught `KeyError` indexing
+/// `entry["versions"][str(previous)]` (no such key in this reproduction --
+/// see PORTING.md §3.5), mapped to this crate's `StateError("state_corrupt")`,
+/// committing nothing at all.
+#[test]
+fn set_version_status_activate_does_not_silently_skip_retire_on_f64_collision() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    {
+        let entry = &mut doc["secrets"]["gh-token"];
+        entry["active_version"] = json!(9007199254740993i64);
+        entry["versions"]["9007199254740992"] = json!({"status": "retired"});
+        // Deliberately no "9007199254740993" versions entry: reproduces
+        // the shape X-16 measured -- an `active_version` that collides
+        // with a *different* real version in `f64` but has no version
+        // record of its own.
+    }
+    ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
+    let before = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+
+    let err = ctx
+        .vault
+        .set_version_status("gh-token", 9007199254740992, "active")
+        .expect_err("Python raises KeyError here, mapped to state_corrupt");
+    assert!(err.is(ErrorClass::StateError), "{err:?}");
+    assert_eq!(err.reason.to_string(), "state_corrupt");
+
+    let after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(
+        before, after,
+        "a failed set_version_status must commit nothing, matching Python's uncaught KeyError"
+    );
+}
+
 /// Same finding, `reapply_revocations`'s own `entry.get("active_version") ==
 /// version` comparison: a stored `active_version` of the bool `true` must
 /// still be cleared for the matching revoked version 1, not left dangling

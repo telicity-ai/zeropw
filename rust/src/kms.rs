@@ -20,7 +20,6 @@ use serde_json::{Map, Number, Value};
 use crate::crypto::chacha20poly1305 as aead;
 use crate::errors::{Error, ErrorClass, Result};
 use crate::pybase64;
-use crate::pyjson::python_float_repr;
 use crate::secret::SecretBytes;
 
 /// `zeropw.kms.MASTER_KEY_SIZE`.
@@ -100,9 +99,13 @@ impl WrappedKey {
 /// integer/float split, including overflow); `true`/`false` as
 /// `"True"`/`"False"`; `null` as `"None"`.
 ///
-/// Arrays and objects fall back to [`python_repr`] (Python's `str()` of a
-/// container is its `repr()`). See that function's doc comment for the
-/// (now narrowed) known deviation recorded in `DEVIATIONS.md` (finding B-2).
+/// Arrays and objects fall back to [`crate::pystr::repr_value`] (Python's
+/// `str()` of a container is its `repr()`); that is this crate's one
+/// canonical container-`repr` implementation (PORTING.md §3b) -- this
+/// module used to keep its own byte-identical copy (`python_repr`), deleted
+/// as part of closing finding X-10's duplication class (equivalence review,
+/// round 8). See [`python_number_str`]'s doc comment for the (now
+/// narrowed) known deviation recorded in `DEVIATIONS.md` (finding B-2).
 fn python_str(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -110,96 +113,27 @@ fn python_str(value: &Value) -> String {
         Value::Bool(false) => "False".to_string(),
         Value::Null => "None".to_string(),
         Value::Number(n) => python_number_str(n),
-        Value::Array(_) | Value::Object(_) => python_repr(value),
+        Value::Array(_) | Value::Object(_) => crate::pystr::repr_value(value),
     }
 }
 
 /// Python `str()`/`repr()` of a single JSON number token (`str()` and
 /// `repr()` agree for both `int` and `float` in Python). Used by
-/// [`python_str`] directly, and -- through that function's scalar fallback
-/// -- by [`python_repr`] for a number nested inside an array/object.
+/// [`python_str`] directly, and -- through [`crate::pystr::repr_value`]'s
+/// own `Number` arm -- for a number nested inside an array/object.
 ///
-/// Classified by the raw literal text, exactly like
-/// `pyjson::reject_non_finite_numbers`/`write_number` do: a token
-/// containing `.`, `e` or `E` is Python `float` syntax, anything else is
-/// Python `int` syntax. This deliberately does *not* branch on
-/// `Number::is_f64()`: under `arbitrary_precision`, `is_f64()` parses the
-/// token and checks `f64::is_finite()` itself, so it is already `false` for
-/// an overflowing float literal like `"1E400"` -- branching on it would
-/// send that token down the integer arm and echo the raw literal text back
-/// unchanged (`"1E400"`) instead of Python's `"inf"`.
-///
-/// This also does not assume the value came through [`crate::pyjson::loads`]
-/// (which, since work unit A's fix, now rejects an overflowing float
-/// literal and a lone-surrogate string escape outright): a
-/// `serde_json::Value` can still hold an overflowing `Number` if built
-/// another way (a hand-crafted `Value` in a test, or a JSON document
-/// written by something other than this crate), and `WrappedKey::from_dict`
-/// must coerce it exactly like Python's `str(value["key_id"])` would --
-/// CPython's `float()` silently overflows to `inf`/`-inf` rather than
-/// raising, for both `json.loads` (which calls `float()` as its
-/// `parse_float`) and a plain float literal in source.
-///
-/// - No `.`/`e`/`E`: a JSON integer token, already Python's canonical `int`
-///   decimal string (any size, thanks to `arbitrary_precision`).
-/// - Otherwise a float token, parsed as `f64`: finite -> [`python_float_repr`]
-///   (this also covers *underflow* to `0.0`/`-0.0` -- still finite, and
-///   exactly what Python's `float("1e-400")`/`float("-1e-400")` produce);
-///   non-finite -> `"inf"`/`"-inf"` by sign, matching
-///   `str(float("1E400"))` == `"inf"` / `str(float("-1E400"))` == `"-inf"`.
+/// X-10 (equivalence review, round 8): this module used to keep its own
+/// copy of the integer/float split and the overflow-to-`inf` rendering.
+/// Both are now the single canonical implementation in
+/// [`crate::pystr::repr_number`] (PORTING.md §3b) -- delegated to here
+/// rather than duplicated, closing both this module's local
+/// `is_float_literal` copy (finding X-11) and this function's own
+/// duplication of the classify-then-render logic. See that function's doc
+/// comment for the classification rule (raw literal text via
+/// [`crate::pyjson::is_float_literal`], deliberately not
+/// `Number::is_f64()`) and the overflow-to-`inf`/`-inf`-by-sign behaviour.
 fn python_number_str(n: &Number) -> String {
-    let raw = n.as_str();
-    if !is_float_literal(raw) {
-        return raw.to_string();
-    }
-    match raw.parse::<f64>() {
-        Ok(f) if f.is_finite() => python_float_repr(f),
-        Ok(f) if f.is_sign_negative() => "-inf".to_string(),
-        Ok(_) => "inf".to_string(),
-        // Unreachable for any token that actually matches the JSON number
-        // grammar (the only kind of input this is ever called with, per
-        // `pyjson`'s parser and every constructor `serde_json::Number`
-        // exposes); a plain fallback instead of `.expect(...)` so a
-        // hypothetical malformed token degrades to inert text rather than
-        // panicking.
-        Err(_) => raw.to_string(),
-    }
-}
-
-/// Whether a JSON number's raw literal text is Python `float` syntax
-/// (contains `.`, `e` or `E`) rather than plain `int` syntax. Mirrors
-/// `pyjson::is_float_literal`, which is private to that module and so is
-/// reimplemented here (the check itself is one line).
-fn is_float_literal(raw: &str) -> bool {
-    raw.contains(['.', 'e', 'E'])
-}
-
-/// Python's `repr()` of a parsed JSON value, used by [`python_str`] for
-/// arrays/objects (`str(list)`/`str(dict)` delegate to `repr`, and `repr` of
-/// each element/value in turn).
-///
-/// Object keys are emitted in insertion order (`serde_json::Map`'s
-/// `preserve_order` feature), matching Python `dict.__repr__`'s insertion
-/// order exactly -- this closes the "object key order" half of finding B-2
-/// (`DEVIATIONS.md`), the same feature flag that already closed the
-/// equivalent gap in `pyjson.rs`. String escaping uses
-/// [`crate::pystr::repr_str`], CPython 3.12's exact `repr(str)`.
-fn python_repr(value: &Value) -> String {
-    match value {
-        Value::String(s) => crate::pystr::repr_str(s),
-        Value::Array(items) => {
-            let parts: Vec<String> = items.iter().map(python_repr).collect();
-            format!("[{}]", parts.join(", "))
-        }
-        Value::Object(map) => {
-            let parts: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("{}: {}", crate::pystr::repr_str(k), python_repr(v)))
-                .collect();
-            format!("{{{}}}", parts.join(", "))
-        }
-        other => python_str(other),
-    }
+    crate::pystr::repr_number(n)
 }
 
 /// Port of `zeropw.kms.Kms` (a Python `Protocol`, i.e. structural interface).
@@ -700,7 +634,8 @@ mod tests {
         }
     }
 
-    /// Oracle differential for the array/object branch of [`python_repr`]
+    /// Oracle differential for the array/object branch of [`python_str`]
+    /// (delegated to [`crate::pystr::repr_value`] since finding X-10) --
     /// (finding B-2's other half, and PO follow-up B-R2-1): nested
     /// lists/dicts whose string elements exercise `repr`'s quote-choice
     /// switching, backslash escaping, C0 control bytes, and non-ASCII text,

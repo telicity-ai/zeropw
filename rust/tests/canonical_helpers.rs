@@ -198,6 +198,30 @@ const NUMBER_TO_STRING_ALLOWLIST: &[Allow] = &[
     },
 ];
 
+/// Allowlist for the `repr`/`str`-number-rendering `is_f64()` check
+/// ([`no_number_is_f64_repr_bypass_outside_pystr`]). Every entry here is a
+/// KNOWN, recorded instance of the exact bug shape finding X-10 fixed
+/// (equivalence review round 8) -- `Number::is_f64()` used to decide a
+/// JSON number's int/float classification immediately before rendering it
+/// through `python_float_repr` -- that this round's fixer chose not to
+/// touch because it is outside this round's assigned files, not because it
+/// is safe.
+const NUMBER_IS_F64_REPR_ALLOWLIST: &[Allow] = &[Allow {
+    file: "audit.rs",
+    marker: "pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))",
+    reason: "python_scalar_str's Number arm (used by Audit::maybe_alert's f-string \
+                 formatting) shares the exact X-10 bug: `Number::is_f64()` is `false` for a \
+                 literal that overflows to a non-finite `f64` under `arbitrary_precision`, so \
+                 an overflowing literal falls into the integer arm and echoes its raw text back \
+                 instead of `python_float_repr`'s `inf`/`-inf`. Discovered by this round's \
+                 canonical-helper consolidation (X-10) while auditing every `is_f64()` call site \
+                 in the crate, but NOT itself a named finding for this round and outside its \
+                 assigned file list (`audit.rs` is not one of X-10/X-11/X-15/X-16/X-17's files) \
+                 -- recorded here as real, known debt rather than silently left uncaught by this \
+                 guard, flagged separately for a follow-up fix (same shape as this round's \
+                 `vault.rs`/`kms.rs`/`policy.rs` fixes: route through `crate::pystr::repr_number`).",
+}];
+
 /// Recursively collects every `*.rs` file under `dir`.
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -498,6 +522,105 @@ fn no_int_from_str_reimplementation_outside_pystr() {
          independent, subtly-wrong local re-implementations of this grammar (round-6 \
          finding E-R6-1) -- delegate to the canonical crate::pystr helper (PORTING.md §3b) \
          instead of writing another one:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// `Number::is_f64()` used, outside `pystr.rs`, to decide whether a JSON
+/// number is Python `int`- or `float`-shaped immediately before rendering
+/// it through `python_float_repr` -- the exact bug shape finding X-10
+/// (equivalence review round 8) fixed in `crate::pystr::repr_value`'s own
+/// `Number` arm (promoted from two byte-identical local copies, but the
+/// promotion itself adopted the LESS correct of the two candidate
+/// implementations). PORTING.md §3b names `crate::pystr::repr_number` the
+/// one canonical home for this render; `Number::is_f64()` is the wrong
+/// classification test for it specifically because, under this crate's
+/// `arbitrary_precision` feature, `is_f64()` parses the literal and checks
+/// `f64::is_finite()` itself, so it is already `false` for a literal that
+/// overflows to a non-finite `f64` (`"1E400"`) -- branching on it sends
+/// that token down the *integer* arm and echoes the raw literal text back
+/// unchanged instead of CPython's `"inf"`/`"-inf"`. The correct test is the
+/// raw literal's own TEXT (`crate::pyjson::is_float_literal`), independent
+/// of whether the value turns out finite -- see `kms.rs`'s own
+/// `python_number_str` (now `crate::pystr::repr_number` itself) doc history
+/// for the worked explanation.
+///
+/// Detected as `.is_f64()` on a line, within a small forward window (the
+/// flagged line plus up to 3 lines after it) of a `python_float_repr` call
+/// -- narrow by design, same reasoning as this file's other checks: it
+/// deliberately does NOT flag every `is_f64()` call in the crate (several
+/// are legitimate for a DIFFERENT purpose than rendering, e.g. `audit.rs`'s
+/// `clean` deciding whether to apply banker's rounding, or `handles.rs`'s
+/// `python_int_coerce`/`v_matches_1` deciding a numeric-coercion branch --
+/// none of those call `python_float_repr` at all), only the specific
+/// "classify-then-render" idiom this finding is about.
+///
+/// Verified to catch a reintroduction: temporarily reverting `vault.rs`'s
+/// `python_str_scalar` Number arm from `crate::pystr::repr_number(n)` back
+/// to its pre-fix body (`if n.is_f64() { pyjson::python_float_repr(n.as_f64()
+/// .unwrap_or(0.0)) } else { n.as_str().to_string() }`) and re-running this
+/// test fails it, naming `vault.rs`'s `python_str_scalar`; reverting the
+/// revert restores a pass. (Re-run this yourself with a scratch edit if you
+/// doubt it -- do not trust this comment alone.)
+#[test]
+fn no_number_is_f64_repr_bypass_outside_pystr() {
+    let is_f64_call = Regex::new(r"\.is_f64\(\)").unwrap();
+    const WINDOW: usize = 3;
+    let base = src_dir();
+    let mut files = Vec::new();
+    collect_rs_files(&base, &mut files);
+    let mut violations = Vec::new();
+    let mut used = vec![false; NUMBER_IS_F64_REPR_ALLOWLIST.len()];
+
+    for path in &files {
+        let rel = relative_slash(path, &base);
+        if rel == "pystr.rs" {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !is_f64_call.is_match(line) {
+                continue;
+            }
+            let window_end = (i + WINDOW).min(lines.len().saturating_sub(1));
+            let window = lines[i..=window_end].join("\n");
+            if !window.contains("python_float_repr") {
+                continue;
+            }
+            if let Some(idx) = NUMBER_IS_F64_REPR_ALLOWLIST
+                .iter()
+                .position(|a| rel.ends_with(a.file) && window.contains(a.marker))
+            {
+                used[idx] = true;
+                continue;
+            }
+            violations.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+        }
+    }
+
+    for (allow, was_used) in NUMBER_IS_F64_REPR_ALLOWLIST.iter().zip(used.iter()) {
+        assert!(
+            *was_used,
+            "canonical_helpers.rs's NUMBER_IS_F64_REPR_ALLOWLIST entry for {} ({:?}, reason: \
+             {}) no longer matches anything in the source -- remove it or update its marker",
+            allow.file, allow.marker, allow.reason
+        );
+    }
+
+    assert!(
+        violations.is_empty(),
+        "found Number::is_f64() used to classify a JSON number immediately before rendering \
+         it through python_float_repr, outside pystr.rs. Under this crate's arbitrary_precision \
+         feature, is_f64() is FALSE for a literal that overflows to a non-finite f64, so this \
+         sends an overflowing literal down the wrong (integer) branch instead of rendering \
+         CPython's inf/-inf (finding X-10, PORTING.md §3b). Route through the canonical \
+         crate::pystr::repr_number instead, or add a one-line reason to \
+         NUMBER_IS_F64_REPR_ALLOWLIST in this file if is_f64() here genuinely serves a \
+         different purpose than classify-then-render (e.g. deciding whether to round, or a \
+         numeric-coercion branch that never calls python_float_repr):\n{}",
         violations.join("\n")
     );
 }

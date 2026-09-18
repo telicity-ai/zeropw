@@ -122,13 +122,7 @@ pub fn repr_value(value: &serde_json::Value) -> String {
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::String(s) => repr_str(s),
-        Value::Number(n) => {
-            if n.is_f64() {
-                crate::pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
+        Value::Number(n) => repr_number(n),
         Value::Array(items) => {
             let parts: Vec<String> = items.iter().map(repr_value).collect();
             format!("[{}]", parts.join(", "))
@@ -140,6 +134,57 @@ pub fn repr_value(value: &serde_json::Value) -> String {
                 .collect();
             format!("{{{}}}", parts.join(", "))
         }
+    }
+}
+
+/// `str()`/`repr()` of a single JSON number token -- CPython's `str()` and
+/// `repr()` agree for both `int` and `float`, so this one function serves
+/// both [`repr_value`]'s `Number` arm and any caller coercing a bare
+/// `serde_json::Number` with Python `str()` semantics (e.g. `kms.rs`'s
+/// `WrappedKey::from_dict` key_id coercion, `vault.rs`'s best-effort scalar
+/// stringification).
+///
+/// X-10 (equivalence review, round 8): this used to be duplicated, and the
+/// copy promoted into [`repr_value`] itself got the classification test
+/// backwards. Classify by the raw literal text via
+/// [`crate::pyjson::is_float_literal`] (has a `.`/`e`/`E`?), **not**
+/// `Number::is_f64()`: under this crate's `arbitrary_precision` feature,
+/// `is_f64()` parses the token and checks `f64::is_finite()` itself, so it
+/// is already `false` for a literal that overflows to a non-finite `f64`
+/// (`"1E400"`) -- branching on it sends that token down the *integer* arm
+/// and echoes the raw literal text back unchanged (`"1e+400"`) instead of
+/// what CPython actually prints. Measured against a live `python3.12`:
+/// `repr(json.loads("1E400")) == "inf"`, `repr(json.loads("-1E400")) ==
+/// "-inf"` (`oracle_repr_number_matches_python_for_overflowing_literal`,
+/// below).
+///
+/// - No `.`/`e`/`E`: a JSON integer token, already Python's canonical `int`
+///   decimal string (any size, thanks to `arbitrary_precision`).
+/// - Otherwise a float token, parsed as `f64`: finite -> [`crate::pyjson::python_float_repr`]
+///   (this also covers *underflow* to `0.0`/`-0.0`, still finite); non-finite
+///   -> `"inf"`/`"-inf"` by sign, matching `str(float("1E400")) == "inf"` /
+///   `str(float("-1E400")) == "-inf"`.
+///
+/// This crate's own [`crate::pyjson::loads`] rejects an overflowing float
+/// literal outright (so the non-finite branch is unreachable for JSON this
+/// crate itself decoded), but a `serde_json::Value` can still hold one if
+/// built another way (a hand-crafted `Value` in a test, or a JSON document
+/// written by something other than this crate) -- reachability doesn't
+/// change what the *function* must return.
+pub(crate) fn repr_number(n: &serde_json::Number) -> String {
+    let raw = n.as_str();
+    if !crate::pyjson::is_float_literal(raw) {
+        return raw.to_string();
+    }
+    match raw.parse::<f64>() {
+        Ok(f) if f.is_finite() => crate::pyjson::python_float_repr(f),
+        Ok(f) if f.is_sign_negative() => "-inf".to_string(),
+        Ok(_) => "inf".to_string(),
+        // Unreachable for any token that actually matches the JSON number
+        // grammar (the only kind of input a `serde_json::Number` can hold);
+        // a plain fallback instead of `.expect(...)` so a hypothetical
+        // malformed token degrades to inert text rather than panicking.
+        Err(_) => raw.to_string(),
     }
 }
 
@@ -1099,6 +1144,104 @@ pub(crate) static DIGIT_BLOCK_STARTS: &[u32] = &[
     0x1FBF0,
 ];
 
+// ---------------------------------------------------------------------------
+// `urllib.parse.unquote` (PORTING.md §3b): the ONE canonical home for
+// CPython's percent-decoding algorithm.
+// ---------------------------------------------------------------------------
+
+/// Port of `urllib.parse.unquote(s)` with the default (`errors="replace"`)
+/// UTF-8 decoding of percent-triplets, exactly as CPython actually
+/// implements it (`_unquote_impl`): `s` is split into maximal runs of ASCII
+/// (U+0000-U+007F) and non-ASCII characters (`urllib.parse._asciire =
+/// re.compile("[\x00-\x7f]+")`) *before* any `%XX` decoding happens. A `%XX`
+/// escape is decoded only inside an ASCII run -- collected as raw bytes,
+/// then the whole run is lossily UTF-8-decoded in one `bytes.decode(
+/// "utf-8", "replace")` call, so adjacent escapes within the SAME run can
+/// combine into one multi-byte character exactly as CPython's single
+/// `decode` call does (`%E4%B8%AD` -> `中`). A non-ASCII run is copied
+/// through unchanged, character for character, and is NEVER merged with a
+/// `%`-decoded byte sequence from an adjacent run, even one immediately
+/// next to it -- measured against live `python3.12`: `unquote("%E4\x80")`
+/// is `"�\x80"` (one U+FFFD replacement character for the dangling
+/// `%E4`, then the raw `\x80` untouched), not the single, differently-
+/// decoded character a byte-level merge across the run boundary would
+/// produce.
+///
+/// Callers whose input may hold an arbitrary wire byte per `char` (e.g. a
+/// `latin1`-decoded HTTP header, one Rust `char` per original byte, never
+/// part of a multi-byte UTF-8 encoding already) must operate char-by-char
+/// rather than on raw UTF-8 byte offsets -- see [`unquote_ascii_run`]'s doc
+/// comment.
+///
+/// Promoted here from two near-identical copies (PORTING.md §3b, finding
+/// X-7 fixer's handover, equivalence review round 8): `fake_upstream.rs`'s
+/// `unquote_plus` (`+` -> space, then this algorithm -- CPython's
+/// `parse_qsl`/`urllib.parse.unquote_plus`) and `gateway.rs`'s
+/// `percent_decode_lossy`, which implemented a simpler whole-string
+/// byte-buffer merge instead of this run-splitting algorithm. That
+/// simplification is NOT generally equivalent (a non-ASCII character
+/// produced by one decode pass can, in principle, sit next to a
+/// freshly-`%`-decoded byte from a *later* pass), but for `gateway.rs`'s
+/// specific two-pass call site it produces byte-identical output to this
+/// function regardless, because UTF-8 is self-synchronizing: every pass
+/// already runs its own `String::from_utf8_lossy` before the next pass
+/// starts, so by the time a later pass sees a non-ASCII character, that
+/// character's bytes are already a COMPLETE, valid encoding (a leading byte
+/// is never a continuation byte, and a complete sequence never needs
+/// continuation from outside itself) -- there is no partial byte sequence
+/// left dangling for a later pass's freshly-decoded escape byte to
+/// (mis)complete. Confirmed by a differential test over representative
+/// double-decode-pass inputs, `gateway.rs`'s
+/// `normalize_path_percent_decode_matches_canonical_unquote_over_the_double_decode_pass_corpus`,
+/// comparing this function against the prior whole-buffer implementation
+/// byte-for-byte -- not merely asserted from this reasoning alone.
+pub fn unquote(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if (chars[i] as u32) > 0x7F {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && (chars[i] as u32) <= 0x7F {
+            i += 1;
+        }
+        out.push_str(&unquote_ascii_run(&chars[start..i]));
+    }
+    out
+}
+
+/// Decodes `%XX` triplets within a pure-ASCII run of characters
+/// (`urllib.parse._unquote_impl` followed by one `bytes.decode("utf-8",
+/// "replace")` over the whole run) -- see [`unquote`]. Every character here
+/// is ASCII, so casting it to `u8` is exactly its one raw byte; no slicing
+/// of a `str` by byte offset is ever needed (the bug this function's
+/// promotion fixed a second copy of, finding X-7: indexing `&s[i+1..i+3]`
+/// on the `str` itself panics whenever a multi-byte-encoded character puts
+/// a slice boundary out of alignment with the raw byte offsets a naive
+/// `i` would be counting).
+fn unquote_ascii_run(run: &[char]) -> String {
+    let mut decoded: Vec<u8> = Vec::with_capacity(run.len());
+    let mut i = 0;
+    while i < run.len() {
+        if run[i] == '%' && i + 2 < run.len() {
+            let hi = run[i + 1].to_digit(16);
+            let lo = run[i + 2].to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                decoded.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(run[i] as u8);
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1273,6 +1416,41 @@ print(hs.hexdigest())
             let theirs = python(&script).trim().to_string();
             assert_eq!(ours, theirs, "input {value:?}");
         }
+    }
+
+    /// X-10 (equivalence review, round 8) pinning test: before the fix,
+    /// `repr_value`'s `Number` arm branched on `Number::is_f64()`, which is
+    /// `false` for a literal that overflows to a non-finite `f64` under
+    /// `arbitrary_precision`, so this fell into the *integer* arm and
+    /// returned the raw literal text (`"1e+400"`) unchanged instead of
+    /// Python's `"inf"`. Built via `serde_json::from_str` directly (not the
+    /// `json!` macro, and not round-tripped through
+    /// [`crate::pyjson::dumps`], which rejects a non-finite literal
+    /// outright per its own contract) -- exactly `kms.rs`'s
+    /// `number_literal` test helper, since this crate's own parser can
+    /// never hand `repr_value` one, but a hand-crafted or foreign-written
+    /// JSON document still can. The Python side is measured directly
+    /// against a live `python3.12`, not assumed from this test's own doc
+    /// comment.
+    #[test]
+    fn oracle_repr_number_matches_python_for_overflowing_literal() {
+        fn number_literal(raw: &str) -> serde_json::Value {
+            serde_json::Value::Number(serde_json::from_str(raw).expect("valid JSON number literal"))
+        }
+
+        for raw in ["1E400", "-1E400", "1E-400", "-1E-400"] {
+            let ours = repr_value(&number_literal(raw));
+            let theirs = python(&format!("import json\nprint(repr(json.loads({raw:?})))"))
+                .trim()
+                .to_string();
+            assert_eq!(ours, theirs, "input {raw}");
+        }
+
+        // Also nested inside a container, exercising the Array/Object
+        // recursion path through the same fixed Number arm.
+        let nested = serde_json::json!([number_literal("1E400"), number_literal("-1E400")]);
+        let ours = repr_value(&nested);
+        assert_eq!(ours, "[inf, -inf]");
     }
 
     // --------------------------------------------------------- int(str)

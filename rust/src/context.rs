@@ -326,17 +326,35 @@ impl Context {
     /// user-supplied ones). Idempotent (like Python's
     /// `shutil.rmtree(path, ignore_errors=True)`); also run on `Drop` so a
     /// dropped `Context` never leaves an owned temp dir behind even if the
-    /// caller never calls this explicitly. This is *not* a strict
-    /// improvement over Python's `atexit.register(shutil.rmtree, ...)`: it
-    /// cleans up earlier for a `Context` that is dropped normally mid-process
-    /// (Python waits for interpreter shutdown), but -- unlike `atexit` --
-    /// never runs at all for a `Context` lost to `std::process::exit`/abort
-    /// (Rust skips destructors there, the direct equivalent of Python's
-    /// `sys.exit()`) or one that is leaked/kept alive for the process's
-    /// whole life. See `DEVIATIONS.md` (finding E-5): a real process-exit
-    /// hook would need `libc::atexit`, an `unsafe` FFI call outside the one
-    /// this crate permits (`store.rs`'s `flock`), so this gap is recorded
-    /// rather than closed with `unsafe`.
+    /// caller never calls this explicitly.
+    ///
+    /// X-17 (equivalence review, round 8): this doc comment used to claim
+    /// this was "not a strict improvement" over Python's
+    /// `atexit.register(shutil.rmtree, ...)`, since it would "never run at
+    /// all for a `Context` lost to `std::process::exit`/abort", and that
+    /// closing that gap "would need `libc::atexit`, an `unsafe` FFI call ...
+    /// so this gap is recorded rather than closed with `unsafe`" --
+    /// `DEVIATIONS.md` finding E-5. Round 7 (finding E-R7-1) measured both
+    /// claims false and closed the gap in safe Rust: there are zero
+    /// `std::process::exit`/`std::process::abort` call sites anywhere in
+    /// this crate's `src/`/`tests/` (verify with `grep -rn
+    /// 'process::exit\|process::abort' rust/src rust/tests`), so the
+    /// "lost to `process::exit`" case this comment warned about was never
+    /// actually reachable through this crate's own code; the real gap was
+    /// `signer::install`'s old `&'static Context` parameter, satisfiable in
+    /// safe Rust only via `Box::leak` -- fixed by taking an owned
+    /// `Arc<Context>` instead, so a `Context` dropped at the end of scope
+    /// (an `Arc` clone going out of scope on every exit path, including the
+    /// signer's) removes both owned dirs through ordinary `Drop`, no
+    /// `unsafe` involved. See `DEVIATIONS.md` row 68 (the corrected E-5
+    /// row) for the full measurement and the one remaining, structurally
+    /// matched gap (`std::process::exit`/abort skipping Rust destructors,
+    /// the direct equivalent of Python's own `atexit` gap, `os._exit`) --
+    /// this doc comment and that row must not drift apart again: a reader
+    /// of this function alone should not be told the gap is unclosable in
+    /// safe Rust when it already is closed, the exact invitation to
+    /// reintroduce `Box::leak`/`&'static Context` that row exists to
+    /// prevent.
     pub fn close(&mut self) {
         for dir in self.owned_dirs.drain(..) {
             let _ = fs::remove_dir_all(&dir);

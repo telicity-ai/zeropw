@@ -140,6 +140,40 @@ fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> 
     }
 }
 
+/// `entry["active_version"]` (or the `version: i64` it's compared against)
+/// reduced to Python's own numeric identity: `Int` for anything CPython
+/// treats as an exact integer (a `bool`, or an integer-*shaped* JSON
+/// literal -- no `.`/`e`/`E`, per [`crate::pyjson::is_float_literal`],
+/// PORTING.md §3b), `Float` for a genuinely float-shaped literal.
+///
+/// X-16 (equivalence review, round 8): [`active_version_numeric`] used to
+/// return `Option<f64>` unconditionally (`bool` as `0.0`/`1.0`, a JSON
+/// number via `Number::as_f64()`), and [`active_version_values_equal`]
+/// compared both sides as `f64`. CPython's `int.__eq__`/`__eq__` between an
+/// `int` and another `int` (or a `bool`, itself an `int` subclass) is
+/// *exact* -- it never routes through `float` at all -- so two distinct
+/// integers that happen to collide once rounded to the nearest `f64` (the
+/// classic case: `9007199254740993 == 9007199254740992` is `False` in
+/// CPython, `True` once both are cast to `f64`) took the wrong branch here.
+/// Measured directly on a doctored `vault/secrets.json`:
+/// `set_version_status(2**53, "retired")` **cleared** `active_version` from
+/// `9007199254740993` to `null` (Python leaves it: `entry["active_version"]
+/// == version` is `False`, so the retire-match branch is never taken); and
+/// `set_version_status(2**53, "active")` returned `Ok` while **skipping**
+/// the retire step for the previously-active version, leaving it wrongly
+/// still `"active"` (Python's `previous != version` reads as `True`, takes
+/// the branch, and then raises `KeyError` on the version-status lookup,
+/// committing nothing at all -- a fail-open in the exact opposite direction
+/// this code silently produced). This collision is not confined to `2**53`:
+/// `2**63` vs. `i64::MAX` collide the same way in `f64`, and `i64::MAX` is
+/// exactly the `active_version` this crate's own `put_secret` writes when
+/// the largest existing key is `i64::MAX` (a real, reachable value, not a
+/// hypothetical one).
+enum ActiveVersionNumeric {
+    Int(i128),
+    Float(f64),
+}
+
 /// Python `==` between two JSON-decoded values, restricted to the shapes
 /// `entry["active_version"]` can hold (`null`, a `bool`, a number, or --
 /// after finding E-R6-3's fix below -- any other JSON shape too): `null` is
@@ -153,12 +187,45 @@ fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> 
 /// `active_version` against a version number (`active_version_matches`) or
 /// against each other (the `entry["active_version"] != before_active` rebind
 /// trigger).
-fn active_version_numeric(v: &Value) -> Option<f64> {
+fn active_version_numeric(v: &Value) -> Option<ActiveVersionNumeric> {
     match v {
-        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::Number(n) => n.as_f64(),
+        Value::Bool(b) => Some(ActiveVersionNumeric::Int(i128::from(*b))),
+        Value::Number(n) => {
+            let raw = n.as_str();
+            if crate::pyjson::is_float_literal(raw) {
+                n.as_f64().map(ActiveVersionNumeric::Float)
+            } else {
+                // Canonical JSON integer literal text (`arbitrary_precision`
+                // preserves it verbatim), so a plain decimal `str::parse`
+                // suffices -- same idiom `policy.rs`'s `GrantNum::from_value`
+                // BigInt arm already uses for an integer-shaped literal
+                // this size. `None` here (magnitude beyond `i128`, far past
+                // any real version number or `i64::MAX`) falls back to
+                // structural equality below, same as any other
+                // non-numerically-comparable shape.
+                raw.parse::<i128>().ok().map(ActiveVersionNumeric::Int)
+            }
+        }
         _ => None,
     }
+}
+
+/// Exact `int == float` (or `float == int`) the way CPython actually
+/// computes it for the magnitudes this module ever compares: `f` numerically
+/// equals `i` only if `f` is finite, has no fractional part, and converting
+/// it to `i128` and back to `f64` round-trips exactly (i.e. the conversion
+/// itself lost no precision) -- only then is `i128`-exact comparison valid.
+/// A non-integral `f` (`1.5`), a non-finite `f` (`inf`), or an `f` whose
+/// magnitude doesn't round-trip through `i128` cleanly all compare unequal,
+/// matching CPython (which never routes an `int`/`float` comparison through
+/// a lossy `float`-only path either -- see [`ActiveVersionNumeric`]'s doc
+/// comment, finding X-16).
+fn int_equals_float(i: i128, f: f64) -> bool {
+    if !f.is_finite() || f.fract() != 0.0 {
+        return false;
+    }
+    let as_i128 = f as i128; // saturating cast (defined behaviour, no UB)
+    (as_i128 as f64) == f && as_i128 == i
 }
 
 /// See [`active_version_numeric`]'s doc comment. When *neither* side is
@@ -177,7 +244,12 @@ fn active_version_values_equal(a: &Value, b: &Value) -> bool {
         (Value::Null, Value::Null) => true,
         (Value::Null, _) | (_, Value::Null) => false,
         _ => match (active_version_numeric(a), active_version_numeric(b)) {
-            (Some(x), Some(y)) => x == y,
+            (Some(ActiveVersionNumeric::Int(x)), Some(ActiveVersionNumeric::Int(y))) => x == y,
+            (Some(ActiveVersionNumeric::Float(x)), Some(ActiveVersionNumeric::Float(y))) => x == y,
+            (Some(ActiveVersionNumeric::Int(i)), Some(ActiveVersionNumeric::Float(f)))
+            | (Some(ActiveVersionNumeric::Float(f)), Some(ActiveVersionNumeric::Int(i))) => {
+                int_equals_float(i, f)
+            }
             _ => a == b,
         },
     }
@@ -263,19 +335,31 @@ fn python_list_over_value(v: &Value) -> Result<Vec<Value>, Error> {
 /// compact JSON rendering (finding E-R3-3; the previous version used
 /// `Value::to_string()` here, e.g. `{"a":1}`, which is not what Python's
 /// `str()` produces).
+///
+/// X-10 (equivalence review, round 8): the `Number` arm used to keep its
+/// own copy of the integer/float split, and got it wrong the same way the
+/// (since-fixed) `repr_value` promotion did -- branching on
+/// `Number::is_f64()`, which is `false` for a literal that overflows to a
+/// non-finite `f64` under `arbitrary_precision`, silently echoing the raw
+/// literal text back instead of CPython's `"inf"`/`"-inf"`. This function
+/// itself is kept (not deleted wholesale in favour of `repr_value`, despite
+/// what that finding's fix text suggests): `repr_value` is Python's
+/// `repr()`, which quotes a `str`, while this function is Python's
+/// `str()`, which does not (`str("x") == "x"`, not `"'x'"`) -- every call
+/// site here stringifies a field that is ordinarily a plain string (an env
+/// id, a generation id, a status, ...), so substituting `repr_value`
+/// wholesale would wrongly quote it. Only the `Number` arm duplicated
+/// `repr_value`'s bug and is real dead weight; it now delegates to
+/// [`crate::pystr::repr_number`], the single canonical implementation
+/// (str() and repr() agree for numbers in Python, so the same function
+/// serves both).
 fn python_str_scalar(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
         Value::Bool(true) => "True".to_string(),
         Value::Bool(false) => "False".to_string(),
         Value::String(s) => s.clone(),
-        Value::Number(n) => {
-            if n.is_f64() {
-                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
+        Value::Number(n) => crate::pystr::repr_number(n),
         Value::Array(_) | Value::Object(_) => crate::pystr::repr_value(v),
     }
 }
@@ -1805,5 +1889,80 @@ mod tests {
         // not spuriously read as "changed".
         assert!(!active_version_matches(&json!("abc"), 1));
         assert!(active_version_values_equal(&json!("abc"), &json!("abc")));
+    }
+
+    /// X-10 (equivalence review, round 8) pinning test: `python_str_scalar`'s
+    /// `Number` arm used to branch on `Number::is_f64()`, which is `false`
+    /// for a literal that overflows to a non-finite `f64` under
+    /// `arbitrary_precision`, so an overflowing literal fell into the
+    /// integer arm and echoed its raw text back (`"1e+400"`) instead of
+    /// CPython's `"inf"`. Built directly via `serde_json::from_str`
+    /// (bypassing `pyjson::loads`, which rejects an overflowing literal
+    /// outright) since a hand-crafted or foreign-written `manifest.json`
+    /// inside an otherwise digest-valid backup archive can still hold one
+    /// (see this function's own doc comment on why `restore` must handle
+    /// it).
+    #[test]
+    fn python_str_scalar_overflowing_number_matches_python_inf() {
+        let overflow: Value = serde_json::from_str("1E400").unwrap();
+        let neg_overflow: Value = serde_json::from_str("-1E400").unwrap();
+        assert_eq!(python_str_scalar(&overflow), "inf");
+        assert_eq!(python_str_scalar(&neg_overflow), "-inf");
+        // A plain string field (the common case for every real call site)
+        // must stay unquoted -- str(), not repr() -- confirming this fix
+        // did not accidentally widen the function into `repr_value`.
+        assert_eq!(python_str_scalar(&json!("prod")), "prod");
+    }
+
+    /// X-16 pinning test, unit level: exact `i64`-pair collisions in `f64`,
+    /// both measured against `python3.12`'s exact `int.__eq__`
+    /// (`9007199254740993 == 9007199254740992` is `False`;
+    /// `9223372036854775808 == 9223372036854775807` is `False`) that a
+    /// naive `as f64` comparison would say `True` for --
+    /// `9007199254740993.0f64 == 9007199254740992.0f64` and
+    /// `(i64::MAX as f64) == 2f64.powi(63)` both hold in IEEE 754 double
+    /// precision. `i64::MAX` vs. `2**63` matters beyond being a round
+    /// number: `2**63` is exactly the `active_version` this crate's own
+    /// `put_secret` writes when the largest existing key is `i64::MAX`
+    /// (row 54's own probe, `DEVIATIONS.md`).
+    #[test]
+    fn active_version_values_equal_uses_exact_integer_comparison_not_f64() {
+        let a = json!(9007199254740993i64); // 2**53 + 1
+        let b = json!(9007199254740992i64); // 2**53
+        assert_ne!(a, b);
+        assert!(
+            (a.as_i64().unwrap() as f64) == (b.as_i64().unwrap() as f64),
+            "sanity: these two i64s really do collide once cast to f64"
+        );
+        assert!(!active_version_values_equal(&a, &b));
+        assert!(!active_version_matches(&a, 9007199254740992));
+
+        let i64_max = json!(i64::MAX);
+        let two_pow_63 = Value::Number(serde_json::from_str("9223372036854775808").unwrap());
+        assert!(
+            (i64::MAX as f64) == 9223372036854775808.0f64,
+            "sanity: i64::MAX and 2**63 also collide once cast to f64"
+        );
+        assert!(!active_version_values_equal(&i64_max, &two_pow_63));
+    }
+
+    /// Companion to the above: an *equal* integer pair (including a `bool`,
+    /// itself an `int` subclass in Python) must still compare equal, and an
+    /// integral `float` must still numerically equal the same-valued
+    /// integer -- the fix must not overcorrect into rejecting genuine
+    /// equality, only the false-positive collision case.
+    #[test]
+    fn active_version_values_equal_still_treats_true_equality_as_equal() {
+        assert!(active_version_values_equal(
+            &json!(9007199254740993i64),
+            &json!(9007199254740993i64)
+        ));
+        assert!(active_version_values_equal(&json!(true), &json!(1)));
+        assert!(active_version_values_equal(&json!(1.0), &json!(1)));
+        assert!(active_version_values_equal(
+            &json!(9007199254740992i64),
+            &json!(9007199254740992.0)
+        ));
+        assert!(!active_version_values_equal(&json!(1.5), &json!(1)));
     }
 }

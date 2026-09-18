@@ -2209,11 +2209,34 @@ fn derive_vault(
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_else(|| crate::store::iso(None));
+        // X-15 (equivalence review, round 8): Python's `secrets_doc[secret_id] = {..., "kind":
+        // entry["kind"], ...}` is direct indexing -- a `document["secrets"]` entry with no `kind`
+        // key raises an uncaught `KeyError` from INSIDE this same `for secret_id, entry in
+        // document["secrets"].items():` loop, which is the whole function's own body: nothing
+        // after the loop ever runs, so `state.write_json(VAULT_DOC, doc)` (the very last
+        // statement) never fires and the local `vault/secrets.json` is left completely untouched
+        // -- not merely this one secret. A previous version substituted `Value::Null` here
+        // instead of failing, which `Vault::list_secrets`'s `require_str_field(entry, "kind")`
+        // then turned into `state_corrupt` for the WHOLE `list_secrets` call, making every OTHER
+        // secret on the node unreadable too (a `?`-through-`get_meta`/`resolve_version`/
+        // `secret_for_trusted_use`/`values_for_trusted_scan` blast radius, not just the one
+        // malformed entry) -- the same "representational failure widens the blast radius" mistake
+        // PORTING.md §3d exists to name, just discovered on the WRITE side instead of a read-side
+        // per-item loop. Propagating the error here, before any `secrets_doc.insert` for this
+        // entry and before the function's own trailing `state.write_json`, reproduces Python's
+        // exact scope: the whole derive aborts and commits nothing, matching a real `KeyError`.
+        // Reachable only through a corrupted `team/<env>/snapshots/N.json` (a state file, untrusted
+        // per PORTING.md §4) -- NOT through a signed peer op, since `_validate_secret_put_version`
+        // (`team/commit.py`) pins `op["kind"]` to `SECRET_KINDS` before any commit can carry one.
+        let kind = entry
+            .get("kind")
+            .cloned()
+            .ok_or_else(|| Error::state("state_corrupt").with_detail("team_derive_vault_kind"))?;
         secrets_doc.insert(
             secret_id.clone(),
             json!({
                 "project": project, "environment": environment,
-                "kind": entry.get("kind").cloned().unwrap_or(Value::Null),
+                "kind": kind,
                 "created_at": created_at,
                 "active_version": active_number,
                 "versions": local_versions,
@@ -3188,6 +3211,86 @@ print(json.dumps(state.written, sort_keys=True))
             py_value,
             json!({"other": "keepme", "secrets": 5}),
             "python's own local vault must also be left unchanged"
+        );
+    }
+
+    /// X-15 (equivalence review, round 8): `_derive_vault`'s `"kind":
+    /// entry["kind"]` is direct indexing, so a team document `secrets`
+    /// entry with no `kind` key raises an uncaught `KeyError` from INSIDE
+    /// the `for secret_id, entry in document["secrets"].items():` loop --
+    /// which is the whole function's body, so nothing after it (including
+    /// the trailing `state.write_json`) ever runs. A document with TWO
+    /// entries (one well-formed, one missing `kind`) confirms the scope is
+    /// the WHOLE derive, not just the malformed entry: even the
+    /// well-formed sibling must not be written, matching Python raising
+    /// before `state.write_json` ever fires for either.
+    #[test]
+    fn derive_vault_missing_kind_aborts_the_whole_derive_like_pythons_keyerror() {
+        use crate::audit::Audit;
+
+        let (_tmp, state) = new_state();
+        let before = json!({"secrets": {}, "other": "keepme"});
+        state.write_json(vault::VAULT_DOC, &before).unwrap();
+
+        let document: Map<String, Value> = json!({
+            "secrets": {
+                "good-secret": {"kind": "api_key", "versions": {}},
+                "bad-secret": {"versions": {}},
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let version_index: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+        let audit: Option<&Audit> = None;
+        let result = derive_vault(&document, &state, "env", &version_index, audit, None, None);
+        assert!(
+            result.is_err(),
+            "a secrets entry with no \"kind\" must abort the whole derive, not substitute null"
+        );
+
+        let after: Value = state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
+        assert_eq!(
+            after, before,
+            "the local vault file must be left completely untouched -- not even the \
+             well-formed \"good-secret\" entry should have been written"
+        );
+
+        // Confirm the same against real python3.12's own `_derive_vault`: it raises KeyError,
+        // and `state.write_json` (which would set `.written`) is never reached.
+        let script = r#"
+from zeropw.team import fold as F
+
+class FakeState:
+    def __init__(self, doc):
+        self._doc = doc
+        self.written = None
+    def read_json(self, path, default):
+        return self._doc
+    def write_json(self, path, value):
+        self.written = value
+
+doc = {"secrets": {}, "other": "keepme"}
+state = FakeState(doc)
+document = {"secrets": {
+    "good-secret": {"kind": "api_key", "versions": {}},
+    "bad-secret": {"versions": {}},
+}}
+try:
+    F._derive_vault(document, state, "env", {}, None, project=None, environment=None)
+    print("NO_EXCEPTION")
+except KeyError as e:
+    print(f"KeyError:{e}")
+print(f"written_is_none:{state.written is None}")
+"#;
+        let py_out = crate::oracle::python(script);
+        assert!(
+            py_out.contains("KeyError:'kind'"),
+            "python3.12 must raise KeyError('kind'): {py_out}"
+        );
+        assert!(
+            py_out.contains("written_is_none:True"),
+            "python's own write_json must never be called either: {py_out}"
         );
     }
 
