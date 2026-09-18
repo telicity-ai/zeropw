@@ -501,7 +501,18 @@ pub fn now() -> f64 {
 /// against CPython, not just assumed -- see
 /// `rust/tests/store_oracle.rs`'s `iso_matches_python_time_gmtime_over_a_timestamp_table`,
 /// which covers the epoch, negative and fractional timestamps, 2000-02-29,
-/// years 1 and 9999/10000, the `i32` boundaries, and 200 randomized values).
+/// years 0, -1, 1 and 9999/10000, an 8-digit year, the `i32` boundaries, and
+/// 200 randomized values).
+///
+/// A-R4-2: unlike Python's `time.gmtime`, this never raises -- an
+/// out-of-range or non-finite `ts` (e.g. `1e18`, `NaN`, `f64::INFINITY`)
+/// makes CPython raise `OSError`/`OverflowError`/`ValueError` uncaught, where
+/// this silently returns some computed (and, at that point, physically
+/// meaningless) date string instead, because this function's `-> String`
+/// signature is depended on unconditionally by callers across the crate,
+/// including modules outside this work unit. See `rust/DEVIATIONS.md`'s
+/// `iso` row and `rust/tests/store_oracle.rs`'s
+/// `iso_matches_python_for_out_of_range_and_non_finite_timestamps_is_a_documented_divergence`.
 pub fn iso(ts: Option<f64>) -> String {
     let ts = ts.unwrap_or_else(now);
     let secs = ts.floor() as i64;
@@ -1235,5 +1246,54 @@ print(oct(os.stat(sub).st_mode & 0o777))
         assert_eq!(iso(Some(2.0)), "1970-01-01T00:00:02Z");
         assert_eq!(iso(Some(-0.5)), "1969-12-31T23:59:59Z");
         assert_eq!(iso(Some(0.0)), "1970-01-01T00:00:00Z");
+    }
+
+    // A-R4-1 (HIGH, regression fix): the finding's real-world repro --
+    // `write_json` a document nested at exactly `pyjson::MAX_JSON_DEPTH`,
+    // then `read_json` it back -- driven entirely from a deliberately small
+    // (2 MiB) stack thread, matching a real trusted-process thread (not a
+    // dedicated large-stack one). Before this fix, `write_json`'s call into
+    // `pyjson::dumps` (store.rs:222) had no depth guard of its own at all
+    // and could abort the whole process (killing every other thread with
+    // it) on exactly this path, even though `read_json`/`pyjson::loads`
+    // already accepted the same depth safely since A-R3-1.
+    #[test]
+    fn write_json_then_read_json_round_trips_at_max_json_depth() {
+        let (_tmp, state) = new_state();
+        let state = Arc::new(state);
+        let state2 = state.clone();
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || {
+                let mut doc = json!(1);
+                for _ in 0..pyjson::MAX_JSON_DEPTH {
+                    doc = Value::Array(vec![doc]);
+                }
+                state2
+                    .write_json("deep.json", &doc)
+                    .expect("write_json at MAX_JSON_DEPTH should succeed");
+                let read_back = state2
+                    .read_json("deep.json", json!(null))
+                    .expect("read_json at MAX_JSON_DEPTH should succeed");
+                assert_eq!(read_back, doc);
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    // A-R4-1: one level past `pyjson::MAX_JSON_DEPTH`, `write_json` must
+    // return a clean `StateError`, not abort the process -- `pyjson::dumps`
+    // now rejects the over-deep document before `write_json`'s own
+    // `map_err` ever sees anything but a normal error value.
+    #[test]
+    fn write_json_one_level_past_max_json_depth_is_state_write_failed() {
+        let (_tmp, state) = new_state();
+        let mut doc = json!(1);
+        for _ in 0..(pyjson::MAX_JSON_DEPTH + 1) {
+            doc = Value::Array(vec![doc]);
+        }
+        let err = state.write_json("too_deep.json", &doc).unwrap_err();
+        assert!(err.is(ErrorClass::StateError));
+        assert_eq!(err.reason, "state_write_failed");
     }
 }

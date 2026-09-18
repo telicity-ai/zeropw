@@ -84,6 +84,11 @@ fn iso_matches_python_time_gmtime_over_a_timestamp_table() {
         2_147_483_648.0,   // one past it
         -2_147_483_648.0,  // i32::MIN
         -2_147_483_649.0,  // one past it
+        // A-R4-2: additional cases CPython's `gmtime` handles without
+        // raising, previously uncovered by this table.
+        -62_167_219_200.0, // 0000-01-01T00:00:00Z (year 0)
+        -62_167_219_201.0, // -001-12-31T23:59:59Z (year -1, one second earlier)
+        1e15,              // 31690708-07-05T01:46:40Z (an 8-digit year)
     ];
     let mut rng = Xorshift64(0xD1B54A32D192ED03);
     for _ in 0..200 {
@@ -101,4 +106,60 @@ fn iso_matches_python_time_gmtime_over_a_timestamp_table() {
         let got = iso(Some(*ts));
         assert_eq!(&got, want, "iso({ts}) mismatch");
     }
+}
+
+// A-R4-2: `store.iso`'s doc comment (and `rust/DEVIATIONS.md`'s `iso` row)
+// claim Python's `time.gmtime` raises an uncaught exception for an
+// out-of-range or non-finite timestamp, where this port's `iso` -- whose
+// `fn iso(ts: Option<f64>) -> String` signature every caller across the
+// crate (including modules outside this work unit) depends on unconditionally
+// -- silently returns a computed string instead. Pin both halves of that
+// claim: that `python3.12` really does raise for each of these inputs, with
+// the exact exception type this file's own module doc/DEVIATIONS.md row
+// cites, and the exact string this port's `iso` returns instead of raising.
+#[test]
+fn iso_matches_python_for_out_of_range_and_non_finite_timestamps_is_a_documented_divergence() {
+    let script = r#"
+import time
+
+def probe(ts):
+    try:
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        print("NO ERROR")
+    except Exception as e:
+        print(type(e).__name__)
+
+probe(1e18)
+probe(-1e18)
+probe(6.7768e16)
+probe(float("nan"))
+probe(float("inf"))
+probe(float("-inf"))
+"#;
+    let output = run_python(script);
+    let py_errors: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        py_errors,
+        vec![
+            "OSError",
+            "OSError",
+            "OverflowError",
+            "ValueError",
+            "OverflowError",
+            "OverflowError",
+        ],
+        "python3.12 should raise for every one of these inputs"
+    );
+
+    // This port's `iso` never raises for any of them; pin the exact
+    // (silently divergent) strings it returns instead.
+    assert_eq!(iso(Some(1e18)), "31688740476-10-23T01:46:40Z");
+    assert_eq!(iso(Some(-1e18)), "-31688736537-03-10T22:13:20Z");
+    assert_eq!(iso(Some(6.7768e16)), "2147484401-02-16T20:26:40Z");
+    assert_eq!(iso(Some(f64::NAN)), "1970-01-01T00:00:00Z");
+    assert_eq!(iso(Some(f64::INFINITY)), "292277026596-12-04T15:30:07Z");
+    assert_eq!(
+        iso(Some(f64::NEG_INFINITY)),
+        "-292277022657-01-27T08:29:52Z"
+    );
 }

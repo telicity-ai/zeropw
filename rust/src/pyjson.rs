@@ -66,52 +66,81 @@
 //! CPython's `json` module does not share: probing `python3.12` directly
 //! shows `json.loads` happily parsing depths of 128, 129, 200, 500 and 900
 //! (this port's specific reviewer-probed depths -- pinned by
-//! `oracle_tests::loads_matches_python_for_probed_nesting_depths`), and
-//! considerably deeper still before it exhausts the interpreter's own
-//! recursion accounting. A document Python parses without complaint was,
-//! before A-R3-1, silently turned into `state_corrupt`
-//! (`StateDir::read_json`, `Audit::tail`/`alerts`), a silent skip
-//! (`Audit::iter_records`), or a malformed-input error (handle payloads,
-//! peer/agent JSON bodies) in this port -- for anything past a mere 128
-//! levels.
+//! `oracle_tests::loads_matches_python_for_probed_nesting_depths`). A
+//! document Python parses without complaint was, before A-R3-1, silently
+//! turned into `state_corrupt` (`StateDir::read_json`, `Audit::tail`/
+//! `alerts`), a silent skip (`Audit::iter_records`), or a malformed-input
+//! error (handle payloads, peer/agent JSON bodies) in this port -- for
+//! anything past a mere 128 levels.
 //!
 //! Simply disabling `serde_json`'s limit and picking one higher fixed bound
-//! is not enough, because *two* separate operations recurse over a `Value`
-//! tree's native stack frames, not just one:
+//! is not enough, because a `Value` tree is walked by native call-stack
+//! recursion on *several* separate operations, not just the parse
+//! (`serde_json`'s recursive-descent deserializer for
+//! **building** it), and every one of them can run on an
+//! arbitrary, possibly small-stack thread the caller chose, not one this
+//! module controls:
 //!
-//! - **Building** it: `serde_json`'s recursive-descent parser, which (an ad
-//!   hoc development-time probe found) overflows a 2 MiB stack somewhere
-//!   between 800 and 900 levels of nesting in an unoptimized/debug build --
-//!   uncomfortably close to this port's own required 900-level probe.
-//! - **Dropping** it: once parsed, the returned `Value` crosses back to
-//!   whatever thread [`loads`]'s caller runs on (this crate has no control
-//!   over that, or over how long the caller holds onto it before it goes out
-//!   of scope) and its ordinary recursive `Drop` glue then walks the same
-//!   depth again, on *that* thread. Cheaper per level than parsing, but not
-//!   free: the same kind of probe found a 2 MiB stack overflowing somewhere
-//!   between 8,000 and 9,000 levels here.
+//! - **Building**/parsing it (`serde_json`'s deserializer): an ad hoc
+//!   development-time probe found this overflowing a 2 MiB stack somewhere
+//!   between 800 and 900 levels of nesting in an unoptimized/debug build.
+//! - **Serializing** it back out ([`dumps`]/[`write_value`]'s own
+//!   recursion, this crate's code, exercised on the real state-write path
+//!   through `StateDir::write_json` -- finding A-R4-1): overflows a 2 MiB
+//!   stack between roughly 1,100 and 1,150 levels (reviewer measurement;
+//!   1,133-1,134 exactly on this port's own dev-profile probe).
+//! - **Cloning** it (`Value`'s derived, recursively-generated `Clone`):
+//!   overflows a 2 MiB stack around 1,800-1,805 levels (probed).
+//! - **Comparing** it (`Value`'s derived `PartialEq`, `==`): overflows a 2
+//!   MiB stack around 4,876-4,877 levels (probed).
+//! - **Dropping** it (`Value`'s derived `Drop` glue, once the caller lets it
+//!   go out of scope on whatever thread that happens to be, at a time this
+//!   module cannot control): overflows a 2 MiB stack around 8,780-8,781
+//!   levels (probed; A-R3-1's original ad hoc measurement put this at
+//!   8,000-9,000, consistent).
 //!
-//! [`loads`] therefore uses a two-tier strategy for parsing (so a rare deep
-//! document doesn't risk overflowing whatever stack a caller happens to be
-//! on, while the overwhelming majority of calls -- a handful of levels deep
-//! at most -- pay no extra cost), *and* keeps [`MAX_JSON_DEPTH`] itself
-//! comfortably under the lower (drop) danger zone above, since that hazard
-//! isn't something a dedicated parsing thread can fix:
+//! Only the *first* of these (building) can be steered onto a dedicated
+//! large-stack thread from inside this module, because it is the one
+//! operation [`loads`] fully owns start to finish. `dumps`/`clone`/`==`/drop
+//! are not: `dumps` is also called directly on values this crate builds
+//! itself (audit records, handle payloads, ...) that never went through
+//! `loads`, and clone/compare/drop happen wherever and whenever a caller
+//! elsewhere in the crate (or a future one) touches a `Value` it already
+//! has in hand -- there is no seam here to intercept that and hand it a
+//! bigger stack. The only lever this module has over *those* four is
+//! [`MAX_JSON_DEPTH`] itself: capping every `Value` this crate ever
+//! constructs (via [`loads`]) or accepts for output (via [`dumps`]'s own
+//! explicit check, see below) at a depth safely under the *tightest* of the
+//! four ambient hazards above -- serializing, at ~1,100 -- makes clone/`==`/
+//! drop (with far larger margins still) safe by construction too, on any
+//! thread, without needing a dedicated stack for them at all.
+//!
+//! [`MAX_JSON_DEPTH`] is **1,000**: at or above the 900-level probe this
+//! port's own tests require (see above), comfortably under every one of the
+//! measured 2 MiB-stack hazards (serializing ~1,100-1,150, cloning
+//! ~1,800-1,805, comparing ~4,876-4,877, dropping ~8,780-8,781) with the
+//! most margin on the tightest one, and close to (a shade more conservative
+//! than) CPython's own tightest real ceiling for the exact write path this
+//! product's persistence relies on: probing `python3.12` directly,
+//! `json.loads`/compact `json.dumps` both raise `RecursionError` at 9,997
+//! levels, but `json.dump(doc, stream, sort_keys=True, indent=2)` -- exactly
+//! `StateDir.write_json`'s call -- raises it already at 994. A document this
+//! deep is not something any writer in this crate, or the matching Python
+//! prototype, ever produces (state/audit/policy/handle documents are a
+//! handful of levels deep at most); rejecting it past 1,000 is an
+//! intentional, narrower divergence from CPython's own (considerably
+//! higher for `loads`/compact `dumps`, but far lower for the pretty-printed
+//! form this port's own state files actually use) practical ceiling,
+//! recorded in `rust/DEVIATIONS.md`.
+//!
+//! Given that bound, [`loads`] uses a two-tier strategy for *parsing* (so a
+//! rare deep document doesn't risk overflowing whatever stack a caller
+//! happens to be on, while the overwhelming majority of calls -- a handful
+//! of levels deep at most -- pay no extra cost):
 //!
 //! 1. [`scan_nesting_depth`] pre-scans the raw text (no parsing yet) for its
 //!    maximum `{`/`[` nesting depth, rejecting outright anything past
-//!    [`MAX_JSON_DEPTH`] (4,096) -- comfortably past every depth this
-//!    product ever writes (state/audit/policy/handle documents are a
-//!    handful of levels deep at most), past every depth this port's probes
-//!    require (900), and still roughly 2x under the empirical 8,000-9,000
-//!    level *drop* danger zone above, leaving real margin for a build or
-//!    platform with tighter stack frames than the one this was measured on.
-//!    A document this deep is not something any writer in this crate, or
-//!    the matching Python prototype, ever produces; rejecting it is a
-//!    residual, intentional divergence from CPython's own (considerably
-//!    higher, and itself uncaught-`RecursionError`-bounded rather than a
-//!    documented contract) practical ceiling, recorded in
-//!    `rust/DEVIATIONS.md`.
+//!    [`MAX_JSON_DEPTH`].
 //! 2. A document at or below [`SAFE_INLINE_DEPTH`] (200) parses directly on
 //!    the calling thread: `serde_json`'s built-in limit is disabled
 //!    (`Deserializer::disable_recursion_limit`, which additionally requires
@@ -124,13 +153,32 @@
 //! 3. A deeper document (up to [`MAX_JSON_DEPTH`]) is instead *built* on a
 //!    dedicated thread with an explicit large stack
 //!    (`LARGE_PARSE_STACK_BYTES`, 64 MiB) via [`parse_on_dedicated_stack`].
-//!    The *drop* danger zone (8,000-9,000) is still comfortably above
-//!    `MAX_JSON_DEPTH` itself, so the caller receiving the parsed `Value`
-//!    back and eventually dropping it on its own (possibly small-stack)
-//!    thread remains safe too --
-//!    `tests::dedicated_stack_result_is_safe_to_drop_on_a_small_stack` pins
-//!    exactly that end-to-end path (build on the dedicated thread, hand the
-//!    deepest-allowed result back, drop it on a small one).
+//!
+//! [`dumps`] instead uses a single explicit, iterative (no native recursion,
+//! so this check itself cannot overflow regardless of how deep a
+//! caller-constructed `Value` might be) depth scan, [`value_depth_within`],
+//! run *before* any recursive rendering: a document deeper than
+//! [`MAX_JSON_DEPTH`] is rejected with a clean [`Error`] (finding A-R4-1;
+//! previously this recursed straight into [`write_value`] with no bound at
+//! all, and could abort the process on an ordinary 2 MiB stack well before
+//! reaching even the old, unchecked `MAX_JSON_DEPTH` of 4,096). A document
+//! at or below the cap is always safe to render inline (no dedicated-stack
+//! thread needed here, unlike parsing) because [`MAX_JSON_DEPTH`] was
+//! chosen specifically to stay under the serializer's own ~1,100-1,150
+//! hazard zone above.
+//!
+//! Tests: `tests::inline_path_is_safe_on_a_small_stack_thread`,
+//! `tests::dedicated_stack_path_parses_up_to_max_json_depth`,
+//! `tests::depth_past_max_json_depth_is_rejected`, and
+//! `tests::dedicated_stack_result_is_safe_to_drop_on_a_small_stack` pin the
+//! parsing side; `tests::max_depth_document_is_safe_to_dump_clone_compare_and_drop_on_a_small_stack`
+//! and `tests::dumps_rejects_one_level_past_max_json_depth_without_aborting`
+//! pin the writer/clone/compare/drop side added by A-R4-1;
+//! `oracle_tests::loads_matches_python_for_probed_nesting_depths` pins the
+//! required probe depths against real `python3.12`; and
+//! `crate::store::tests::write_json_then_read_json_round_trips_at_max_json_depth`
+//! (`rust/src/store.rs`) pins the real `StateDir::read_json`/`write_json`
+//! round trip this finding's real-world repro used.
 //!
 //! ## Lone surrogates
 //!
@@ -149,10 +197,15 @@ use serde_json::{Number, Value};
 
 use crate::errors::{Error, Result};
 
-/// Maximum array/object nesting depth [`loads`] accepts at all. See the
-/// module doc's "Recursion / nesting depth" section for why this value (and
-/// not `serde_json`'s built-in 128-level default) was chosen.
-pub const MAX_JSON_DEPTH: usize = 4096;
+/// Maximum array/object nesting depth [`loads`] accepts, and [`dumps`]
+/// will render, at all. See the module doc's "Recursion / nesting depth"
+/// section for the full reasoning (finding A-R4-1): this bound is shared by
+/// both directions specifically so that every `Value` this crate ever
+/// builds or accepts stays safely under the tightest ambient recursion
+/// hazard (serializing it back out, on an ordinary small-stack thread) —
+/// not just `serde_json`'s own built-in 128-level default, which this value
+/// also replaces.
+pub const MAX_JSON_DEPTH: usize = 1000;
 
 /// Maximum nesting depth [`loads`] will parse directly on the calling
 /// thread; anything deeper (up to [`MAX_JSON_DEPTH`]) is instead parsed on a
@@ -244,7 +297,18 @@ impl DumpOptions {
 }
 
 /// `json.dumps(value, **opts)`.
+///
+/// A-R4-1: rejects a `value` nested deeper than [`MAX_JSON_DEPTH`] with a
+/// clean error *before* recursing into [`write_value`] to render it — see
+/// the module doc's "Recursion / nesting depth" section. Unlike [`loads`],
+/// this has no separate dedicated-stack tier: [`MAX_JSON_DEPTH`] was chosen
+/// to stay under `write_value`'s own measured 2 MiB-stack hazard zone
+/// (~1,100-1,150 levels), so any accepted depth is already safe to render
+/// on the calling thread directly.
 pub fn dumps(value: &Value, opts: DumpOptions) -> Result<String> {
+    if value_depth_within(value, MAX_JSON_DEPTH).is_none() {
+        return Err(Error::invalid_input("pyjson_max_depth_exceeded").with_detail("dumps"));
+    }
     let mut out = String::new();
     write_value(value, &opts, 0, &mut out)?;
     Ok(out)
@@ -501,6 +565,43 @@ fn is_float_literal(raw: &str) -> bool {
     raw.contains(['.', 'e', 'E'])
 }
 
+/// A-R4-1: [`dumps`]'s own depth guard, over an already-*parsed* `Value`
+/// tree rather than raw text (contrast [`scan_nesting_depth`], which scans
+/// text for [`loads`]). Deliberately walks the tree with an explicit
+/// heap-allocated stack (`Vec`), never native call-stack recursion, so this
+/// check itself cannot overflow no matter how deep a caller-constructed
+/// `Value` might be — including one built without ever going through
+/// `loads` (this crate's own audit records, handle payloads, ...), which is
+/// exactly the case `loads`'s own pre-scan cannot cover. Returns `None` as
+/// soon as any branch would exceed `max_depth` (bailing out before walking
+/// the rest of that branch, and without needing to visit sibling branches
+/// first), `Some(deepest)` otherwise.
+fn value_depth_within(value: &Value, max_depth: usize) -> Option<usize> {
+    let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
+    let mut deepest = 0usize;
+    while let Some((v, depth)) = stack.pop() {
+        let child_depth = depth + 1;
+        match v {
+            Value::Array(items) => {
+                if child_depth > max_depth {
+                    return None;
+                }
+                deepest = deepest.max(child_depth);
+                stack.extend(items.iter().map(|item| (item, child_depth)));
+            }
+            Value::Object(map) => {
+                if child_depth > max_depth {
+                    return None;
+                }
+                deepest = deepest.max(child_depth);
+                stack.extend(map.values().map(|item| (item, child_depth)));
+            }
+            _ => {}
+        }
+    }
+    Some(deepest)
+}
+
 fn write_value(value: &Value, opts: &DumpOptions, depth: usize, out: &mut String) -> Result<()> {
     match value {
         Value::Null => out.push_str("null"),
@@ -743,7 +844,11 @@ mod tests {
     // dedicated-stack path.
     #[test]
     fn dedicated_stack_path_parses_up_to_max_json_depth() {
-        for n in [SAFE_INLINE_DEPTH + 1, 1000, MAX_JSON_DEPTH] {
+        for n in [
+            SAFE_INLINE_DEPTH + 1,
+            (SAFE_INLINE_DEPTH + MAX_JSON_DEPTH) / 2,
+            MAX_JSON_DEPTH,
+        ] {
             let doc = nested_array(n);
             assert!(loads(&doc).is_ok(), "depth {n} should parse");
         }
@@ -776,6 +881,72 @@ mod tests {
             })
             .unwrap();
         handle.join().unwrap();
+    }
+
+    // A-R4-1 (HIGH, regression fix): round 3 only proved *parsing* and
+    // *dropping* a `MAX_JSON_DEPTH` document safe on a small stack --
+    // `dumps`, `clone` and `==` were left unbounded and could abort the
+    // whole process (see the module doc's "Recursion / nesting depth"
+    // section for the measured hazard zones). Confirm every one of these
+    // operations succeeds, together, at the maximum accepted depth, driven
+    // entirely from a deliberately small (2 MiB) stack thread -- matching
+    // the real shape of the finding's repro (a trusted-process thread, not
+    // a dedicated large-stack one, ends up holding a deep `Value`).
+    #[test]
+    fn max_depth_document_is_safe_to_dump_clone_compare_and_drop_on_a_small_stack() {
+        let doc = nested_array(MAX_JSON_DEPTH);
+        let handle = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || -> Result<()> {
+                // Parsing itself always safe here regardless of thread size:
+                // `loads` already routes anything past `SAFE_INLINE_DEPTH`
+                // through its own dedicated large-stack thread.
+                let value = loads(&doc).expect("MAX_JSON_DEPTH should parse");
+
+                // Serializing: the writer side this finding is actually
+                // about (reached for real via `StateDir::write_json`).
+                let rendered = dumps(&value, DumpOptions::pretty_sorted())?;
+                assert!(!rendered.is_empty());
+
+                // Cloning: `serde_json::Value`'s derived recursive `Clone`.
+                let cloned = value.clone();
+
+                // Comparing: `serde_json::Value`'s derived recursive `PartialEq`.
+                assert_eq!(value, cloned);
+
+                // Dropping: both values go out of scope at the end of this
+                // closure, on this same small stack.
+                Ok(())
+            })
+            .unwrap();
+        handle
+            .join()
+            .unwrap()
+            .expect("all ops should succeed at MAX_JSON_DEPTH");
+    }
+
+    // A-R4-1: `dumps` must reject a document one level past `MAX_JSON_DEPTH`
+    // with a clean error -- not a panic or an abort -- even though nothing
+    // about *parsing* is involved here (the `Value` is built directly,
+    // bypassing `loads`'s own pre-scan entirely, the same way this crate's
+    // own audit/handle/policy code builds values that never went through
+    // `loads`).
+    #[test]
+    fn dumps_rejects_one_level_past_max_json_depth_without_aborting() {
+        let mut value = json!(1);
+        for _ in 0..(MAX_JSON_DEPTH + 1) {
+            value = Value::Array(vec![value]);
+        }
+        let err = dumps(&value, DumpOptions::compact_sorted())
+            .expect_err("one level past MAX_JSON_DEPTH must be a clean error");
+        assert!(err.is(crate::errors::ErrorClass::InvalidInput));
+
+        // A document at exactly the limit must still succeed.
+        let mut at_limit = json!(1);
+        for _ in 0..MAX_JSON_DEPTH {
+            at_limit = Value::Array(vec![at_limit]);
+        }
+        assert!(dumps(&at_limit, DumpOptions::compact_sorted()).is_ok());
     }
 
     #[test]
