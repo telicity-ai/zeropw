@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 use zeropw::context::{Config, Context};
 use zeropw::errors::ErrorClass;
-use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
+use zeropw::policy::{CONNECTIONS, Connection, HttpAuth, HttpScope, HttpTarget};
 use zeropw::projects;
 use zeropw::team::commit::{self as C, Commit};
 use zeropw::team::envelope;
@@ -1065,4 +1065,158 @@ with tempfile.TemporaryDirectory() as tmp:
         py_vault_after, corrupt_vault,
         "python3.12's own vault file must also be left untouched"
     );
+}
+
+// ----------------------------------------------------------- H-R6-1 ca_file
+/// H-R6-1 (peer-reachable denial of sync): `HttpTarget.ca_file` has no
+/// `__post_init__` check in Python at all -- confirmed directly against
+/// real `python3.12` below, for a number, bool, list, dict and (as a
+/// control) a string and `null`: `fold()` and `derive_local()` BOTH always
+/// succeed, for every shape, and keep the value byte-identical in both the
+/// folded environment document and the locally derived
+/// `policy/connections.json`.
+///
+/// A real peer's signed `connection.create` op can therefore put a
+/// non-string `ca_file` into a synced document (`team/commit.rs`'s
+/// `raw_ca_file` passthrough already keeps the FOLDED document
+/// byte-identical to Python's, asserted below). `HttpTarget::from_value`
+/// cannot represent that value in its typed `Option<String>` field
+/// (PORTING.md §3b/§4's representational-gap limit) and fails closed with
+/// `state_corrupt`. Before this fix that error propagated out of
+/// `derive_connections`'s whole loop via `?`, so
+/// `state.write_json(CONNECTIONS, ...)` at the end of the function never
+/// ran -- ONE peer op with a non-string `ca_file` silently discarded the
+/// local derivation of EVERY connection in the fold, not just the
+/// unrepresentable one. The fix narrows the failure to the one connection
+/// that cannot be represented: `derive_local` now succeeds, a sibling
+/// well-formed connection created in the SAME fold still derives
+/// correctly, and the unrepresentable connection is (documented residual,
+/// `DEVIATIONS.md`) simply absent from the local derive rather than taking
+/// every other connection down with it.
+#[test]
+fn derive_connections_skips_unrepresentable_ca_file_and_still_derives_other_connections() {
+    let shapes: [(&str, Value, bool); 6] = [
+        ("number", json!(5), true),
+        ("bool", json!(true), true),
+        ("list", json!(["not", "a", "path"]), true),
+        ("dict", json!({"nested": "object"}), true),
+        ("string", json!("/etc/ssl/certs/ca.pem"), false),
+        ("null", Value::Null, false),
+    ];
+    for (label, ca_file, expect_rust_skip) in shapes {
+        let (_tmp, ctx) = setup();
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let bad_op = json!({"op": "connection.create", "id": "bad", "project": "demo", "environment": "dev",
+                            "service": "api", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+                            "description": "", "http_target": {"scheme": "https", "host": "api.example.com",
+                                                                "port": 443, "ca_file": ca_file},
+                            "http_auth": {"mode": "bearer"},
+                            "http_scope": {"methods": ["GET"], "path_prefixes": ["/x"]}});
+        let c2 = C::sign_commit(
+            &owner,
+            &env_id,
+            2,
+            "2000-0000",
+            &BTreeMap::new(),
+            vec![bad_op],
+        )
+        .unwrap();
+        let c3 = simple_connection_create(&env_id, &owner, 3, "3000-0000", "good");
+        let commits = vec![c1.clone(), c2.clone(), c3.clone()];
+
+        let result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+        assert_eq!(
+            result.skipped,
+            Vec::<(String, usize, String)>::new(),
+            "{label}: fold() must not skip either op -- Python never rejects any ca_file shape"
+        );
+        assert_eq!(
+            result.document["connections"]["bad"]["http_target"]["ca_file"], ca_file,
+            "{label}: folded document must keep ca_file byte-identical (team/commit.rs's raw_ca_file passthrough)"
+        );
+
+        let derive_result = F::derive_local(
+            &result,
+            ctx.state,
+            &ctx.policy,
+            Some(ctx.audit),
+            Some(&owner),
+            Some(ctx.kms),
+            None,
+            None,
+        );
+        assert!(
+            derive_result.is_ok(),
+            "{label}: derive_local must succeed for every ca_file shape, matching Python -- got {derive_result:?}"
+        );
+
+        let local = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+        assert!(
+            local["good"].is_object(),
+            "{label}: the sibling well-formed connection must still derive locally"
+        );
+        if expect_rust_skip {
+            assert!(
+                local.get("bad").is_none(),
+                "{label}: the unrepresentable connection is documented absent from the local derive (DEVIATIONS.md residual)"
+            );
+        } else {
+            assert_eq!(
+                local["bad"]["http_target"]["ca_file"], ca_file,
+                "{label}: a representable ca_file must derive locally byte-identical"
+            );
+        }
+
+        // Cross-check fold()+derive_local() against real python3.12: both
+        // must succeed and keep ca_file byte-identical for EVERY shape,
+        // including the ones Rust's typed field cannot represent locally.
+        let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
+        let commits_text =
+            pyjson::dumps(&json!(commits_json), pyjson::DumpOptions::compact_sorted()).unwrap();
+        let script = format!(
+            r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.context import Config, Context
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+
+raw = json.loads({commits_text:?})
+commits = [C.Commit.from_dict(c) for c in raw]
+env_id = {env_id:?}
+result = F.fold(env_id, commits)
+assert result.skipped == [], result.skipped
+with tempfile.TemporaryDirectory() as tmp:
+    ctx = Context.initialize(Path(tmp) / "state", "admin-pass-1", "recovery-pass-1", Config())
+    ctx.projects.create("demo")
+    F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit)
+    connections = ctx.state.read_json("policy/connections.json")
+print(json.dumps({{
+    "document_ca_file": result.document["connections"]["bad"]["http_target"]["ca_file"],
+    "local_bad_ca_file": connections.get("bad", {{}}).get("http_target", {{}}).get("ca_file", "__ABSENT__"),
+    "local_good_present": "good" in connections,
+}}, sort_keys=True))
+"#,
+        );
+        let out = run_python(&script);
+        let py: Value = pyjson::loads(out.trim()).unwrap();
+        assert_eq!(
+            py["document_ca_file"], ca_file,
+            "{label}: python's own folded document must keep ca_file byte-identical too"
+        );
+        assert_eq!(
+            py["local_good_present"],
+            json!(true),
+            "{label}: python's derive_local must also derive the sibling connection"
+        );
+        // Python NEVER fails on ca_file (no `__post_init__` check at all):
+        // it always keeps the value byte-identical locally too, even for
+        // shapes Rust's typed field cannot represent -- this asymmetry is
+        // the documented residual (DEVIATIONS.md), not a bug this test
+        // should paper over.
+        assert_eq!(
+            py["local_bad_ca_file"], ca_file,
+            "{label}: python must derive the connection locally with ca_file byte-identical, even where rust cannot"
+        );
+    }
 }
