@@ -90,6 +90,8 @@ ONE place and are reused, never copied:
 | `str.isspace`, `str.isprintable`, `repr(str)` | `crate::pystr` |
 | `repr()` of a `json.loads`-decoded value (also what `str()` falls back to for a `list`/`dict`) | `crate::pystr::repr_value` |
 | `int(str)` grammar (its own whitespace set, `_` separators, sign, Unicode `Nd` digits) | `crate::pystr` |
+| `repr()`/`str()` of a single JSON number token (int/float split, overflow to `inf`/`-inf`) | `crate::pystr::repr_number` |
+| `urllib.parse.unquote` (ASCII/non-ASCII run splitting, then `%XX` decode within a run) | `crate::pystr::unquote` |
 | `base64` (lenient `b64decode`, urlsafe, encode) | `crate::pybase64` |
 | `json.dump`/`load` byte compatibility | `crate::pyjson` |
 
@@ -113,6 +115,15 @@ outside the canonical home. Rules for it:
   and must name the finding id that owns it.
 - The guard is only worth its cost if it actually fires. Whoever changes it re-verifies that reverting a
   real fix is still caught.
+- **Promoting a helper is itself a change that must be measured.** Finding X-10: when two private `repr`
+  copies were promoted to `pystr::repr_value`, the promotion picked one without checking which was right.
+  The chosen implementation branched on `serde_json::Number::is_f64()`, which is `false` for an
+  overflowing literal under `arbitrary_precision`, so `1E400` rendered as `"1e+400"` where CPython gives
+  `'inf'` — while two OTHER copies (`kms.rs`, `policy.rs`) branched on the literal text and were correct.
+  Consolidation made the codebase uniformly wrong at the place it was meant to make it uniformly right.
+  So: before deleting copies, probe every one against CPython and promote the one that matches; and
+  deleting a copy is only correct when the canonical helper's semantics are the same — `vault.rs`'s
+  `python_str_scalar` was left in place because its `String` arm is `str()` (unquoted), not `repr()`.
 
 ## 3c. A justification is a claim about CPython, and claims get measured (coordinator ruling, 2026-09-18)
 
