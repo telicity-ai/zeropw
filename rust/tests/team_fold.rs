@@ -561,7 +561,7 @@ fn count_is_commits_folded_not_ops_skipped() {
     .unwrap();
     let result = F::fold(&env_id, vec![c1, c2, bad], None, None, None, None).unwrap();
     assert_eq!(result.skipped.len(), 2);
-    let total: i64 = result.vector.values().sum();
+    let total: i128 = result.vector.values().sum();
     assert_eq!(total, 3);
     F::derive_local(
         &result,
@@ -843,4 +843,60 @@ fn seq_gap_rejected_through_receive_commit() {
     assert_eq!(rejections.len(), 1);
     assert_eq!(rejections[0]["reason"], json!("team_seq_gap"));
     assert_eq!(rejections[0]["result"], json!("denied"));
+}
+
+// ------------------------------------------------------------------ H-R2-6
+/// Finding H-R2-6: `derive_local`'s `count: i64 =
+/// fold_result.vector.values().sum()` PANICKED (`attempt to add with
+/// overflow`) once `FoldResult::vector` (widened to `i128` for
+/// `commit.author_seq`) held two authors whose combined `author_seq` total
+/// exceeded `i64::MAX` -- a panic on file-supplied data (`author_seq` is
+/// read straight off a stored commit file by `all_commits()`), which
+/// `rust/PORTING.md` forbids regardless of how it's reached. `count` is now
+/// `i128`; this test doesn't need a Python oracle (Python's `sum()` never
+/// overflows in the first place) -- it just proves the summation itself
+/// can no longer panic for a case that would have overflowed `i64`.
+#[test]
+fn derive_local_does_not_panic_with_two_large_author_seq_totals() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let mut result = F::fold(&env_id, vec![c1], None, None, None, None).unwrap();
+    // Two authors, each holding an `author_seq` that alone fits `i64` but
+    // whose SUM does not -- exactly the shape that panicked before this fix.
+    result
+        .vector
+        .insert("author-a".to_string(), i64::MAX as i128);
+    result
+        .vector
+        .insert("author-b".to_string(), i64::MAX as i128);
+    // Must not panic (the actual assertion): a plain `.unwrap()` propagates
+    // any real error as a normal test failure, but a panic inside
+    // `derive_local` would abort the test process instead.
+    F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .unwrap();
+    let applies: Vec<Value> = ctx
+        .audit
+        .tail(50)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.get("event").and_then(Value::as_str) == Some("team_commit_apply"))
+        .collect();
+    assert_eq!(applies.len(), 1);
+    // `result.vector` already carries the real owner's entry from folding
+    // `c1` (`author_seq == 1`) alongside the two synthetic huge entries.
+    let expected: i128 = 1 + 2 * (i64::MAX as i128);
+    assert_eq!(
+        applies[0]["count"],
+        json!(expected),
+        "count must carry the full i128 sum, not a clamped/overflowed i64"
+    );
 }

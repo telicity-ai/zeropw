@@ -55,7 +55,7 @@
 //! make goes straight through `state.read_json`/`write_json`, never through
 //! any other `Vault` method.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -66,7 +66,7 @@ use crate::policy;
 use crate::store::StateDir;
 use crate::vault;
 
-use super::commit::{self, Commit, Hlc, env_owner_fingerprint, sort_total_order};
+use super::commit::{self, Commit, Hlc, env_owner_fingerprint, json_int128, sort_total_order};
 use super::envelope;
 use super::identity::{DeviceKey, DeviceRecord};
 use super::json_falsy;
@@ -163,11 +163,38 @@ pub struct FoldResult {
     /// One entry per skipped op: `(commit_hash, op_index, reason)`.
     pub skipped: Vec<(String, usize, String)>,
     pub version_order: BTreeMap<String, Vec<String>>,
-    pub vector: BTreeMap<String, i64>,
+    /// Widened to `i128` (finding H-R2-6): `commit.author_seq` is `i128`
+    /// (see `commit.rs`'s `Commit` and `rust/DEVIATIONS.md`), and Python's
+    /// own `vector[commit.author] = max(vector.get(commit.author, 0),
+    /// commit.author_seq)` is arbitrary-precision `int` arithmetic that
+    /// never clamps. The previous `i64` field, filled via
+    /// `i64::try_from(commit.author_seq).unwrap_or(i64::MAX)`, silently
+    /// clamped an out-of-`i64` `author_seq` to `i64::MAX` instead of
+    /// keeping its real value.
+    pub vector: BTreeMap<String, i128>,
     /// Section 7.2's "same target, later wins" transitions this fold
     /// observed, each a `{"author","author_seq","hash","target_kind",
     /// "target_id","by_author","by_seq","by_hash"}` object.
     pub overridden: Vec<Value>,
+    /// Connection ids for which `connection.create`/`connection.update`
+    /// executed successfully during THIS `fold()` call (finding H-R2-7).
+    ///
+    /// Not part of Python's `FoldResult` -- a pure Rust bookkeeping seam
+    /// needed because `serde_json::Value` conflates Python's `tuple` and
+    /// `list`. Python's `build_connection_fields` returns
+    /// `dataclasses.asdict(Connection(...))`, which keeps
+    /// `HttpScope.methods`/`path_prefixes`/`confirm_methods` and
+    /// `SshTarget.host_keys` as real `tuple`s; a connection freshly built by
+    /// an op THIS fold call therefore renders via `to_yaml`'s `str(tuple)`
+    /// path. A connection carried over untouched from `base_document` (a
+    /// `fold_with_snapshot` seed, round-tripped through `json.dump`/
+    /// `json.load`) is a plain `list` in that same field and renders as a
+    /// normal multi-line YAML sequence instead -- the SAME document key can
+    /// legitimately need either rendering depending on fold history, which
+    /// no per-key-name rule can capture. `humanview::to_yaml` takes this set
+    /// so it can reproduce the distinction explicitly instead of guessing
+    /// from the key name (the round-1 fix's bug).
+    pub fresh_connections: BTreeSet<String>,
 }
 
 /// Largest whole-second Unix timestamp this port has directly confirmed
@@ -1121,9 +1148,10 @@ pub fn fold(
     let mut skipped: Vec<(String, usize, String)> = Vec::new();
     let relevant: Vec<Commit> = commits.into_iter().filter(|c| c.env_id == env_id).collect();
     let ordered = sort_total_order(relevant)?;
-    let mut last_target_author: HashMap<(TargetKind, String), (String, i64, String)> =
+    let mut last_target_author: HashMap<(TargetKind, String), (String, i128, String)> =
         HashMap::new();
     let mut overridden: Vec<Value> = Vec::new();
+    let mut fresh_connections: BTreeSet<String> = BTreeSet::new();
     for commit in &ordered {
         for (index, op) in commit.ops.iter().enumerate() {
             let op_obj = match op.as_object() {
@@ -1165,6 +1193,25 @@ pub fn fold(
                 }
                 continue;
             }
+            // Finding H-R2-7: `connection.create`/`connection.update` both
+            // route through `connection_entry`/`build_connection_fields`,
+            // which always rebuilds `http_scope`/`ssh_target` as fresh
+            // Python tuples (`policy::HttpScope::new`/`SshTarget::new` via
+            // `tuple(...)`, mirrored here) -- regardless of whether the
+            // fields being merged in came from a snapshot-seeded (list) or
+            // freshly-built (tuple) prior value. Record every connection id
+            // an op *successfully* creates/updates this fold call so
+            // `humanview::to_yaml` can render exactly those as tuples and
+            // everything else (carried over untouched from `base_document`)
+            // as plain YAML lists.
+            let op_name = op_obj.get("op").and_then(Value::as_str);
+            if matches!(
+                op_name,
+                Some("connection.create") | Some("connection.update")
+            ) && let Some(id) = op_obj.get("id").and_then(Value::as_str)
+            {
+                fresh_connections.insert(id.to_string());
+            }
             let target = match override_target(op_obj) {
                 Some(t) => t,
                 None => continue,
@@ -1179,25 +1226,14 @@ pub fn fold(
                     "by_author": commit.author, "by_seq": commit.author_seq, "by_hash": hash,
                 }));
             }
-            // `commit.author_seq` is `i128` (finding H-2/H-6's `Commit`
-            // widening in `commit.rs`); `fold()` only ever processes
-            // commits already accepted by `CommitStore`/`receive_commit`,
-            // whose contiguous-sequence invariant keeps `author_seq` inside
-            // `i64` in every reachable case, so this saturating downcast
-            // (kept for tracking/audit bookkeeping only, never for
-            // signature-covered bytes) never actually clamps in practice.
-            let author_seq_i64 = i64::try_from(commit.author_seq).unwrap_or(i64::MAX);
-            last_target_author.insert(target, (commit.author.clone(), author_seq_i64, hash));
+            last_target_author.insert(target, (commit.author.clone(), commit.author_seq, hash));
         }
     }
     reapply_facts(&mut doc, &working_facts);
-    let mut vector: BTreeMap<String, i64> = BTreeMap::new();
+    let mut vector: BTreeMap<String, i128> = BTreeMap::new();
     for commit in &ordered {
         let entry = vector.entry(commit.author.clone()).or_insert(0);
-        // See the `author_seq_i64` comment above: bounded to `i64` in every
-        // commit `fold()` can actually be reached with.
-        let author_seq_i64 = i64::try_from(commit.author_seq).unwrap_or(i64::MAX);
-        *entry = (*entry).max(author_seq_i64);
+        *entry = (*entry).max(commit.author_seq);
     }
     Ok(FoldResult {
         document: Value::Object(doc),
@@ -1205,6 +1241,7 @@ pub fn fold(
         version_order,
         vector,
         overridden,
+        fresh_connections,
     })
 }
 
@@ -1228,7 +1265,7 @@ pub fn save_snapshot(
     let vector: Map<String, Value> = result
         .vector
         .iter()
-        .map(|(k, v)| (k.clone(), json!(v)))
+        .map(|(k, v)| (k.clone(), json_int128(*v)))
         .collect();
     let doc = json!({"document": result.document, "version_order": Value::Object(version_order),
                      "vector": Value::Object(vector)});
@@ -1279,14 +1316,25 @@ pub fn fold_with_snapshot(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    // Finding H-R2-6: `base_vector.get(c.author, 0)` in Python keeps
+    // whatever `int` magnitude the snapshot recorded, arbitrary precision.
+    // This used to read each entry with `Value::as_i64`, silently treating
+    // an out-of-`i64` floor (e.g. `10**30`, from a hand-crafted/bit-rotted
+    // snapshot) as `0` -- so a commit the snapshot had already folded
+    // (`author_seq` far below the real floor) looked "later" again and got
+    // refolded/re-accepted. Widened to `i128`, matching `Commit::author_seq`
+    // and [`FoldResult::vector`].
     let later: Vec<Commit> = all_commits
         .into_iter()
         .filter(|c| {
             let base = base_vector
                 .get(&c.author)
-                .and_then(Value::as_i64)
+                .and_then(|v| match v {
+                    Value::Number(n) => n.as_i128(),
+                    _ => None,
+                })
                 .unwrap_or(0);
-            c.author_seq > i128::from(base)
+            c.author_seq > base
         })
         .collect();
     let base_document = snapshot.get("document").cloned();
@@ -1780,13 +1828,22 @@ pub fn derive_local(
     }
     if let Some(audit) = audit {
         // F6: count commits folded, not ops skipped (which get their own
-        // `team_op_skipped` records).
-        let count: i64 = fold_result.vector.values().sum();
+        // `team_op_skipped` records). Finding H-R2-6: Python's
+        // `sum(fold_result.vector.values())` is arbitrary-precision and
+        // never overflows; summing `FoldResult::vector`'s now-`i128`
+        // entries into an `i64` PANICKED (`attempt to add with overflow`)
+        // for as few as two authors each holding a large `author_seq` --
+        // a panic on file-supplied data (an `all_commits()`-read
+        // `author_seq`, or a snapshot `vector` entry), which PORTING.md
+        // forbids. `count` is `i128` instead, matching `vector`'s value
+        // type, so the sum cannot overflow for any input this crate's own
+        // `i128`-bounded `author_seq` can produce.
+        let count: i128 = fold_result.vector.values().sum();
         audit.record(
             "team_commit_apply",
             RecordArgs {
                 result: Some("ok"),
-                extra: vec![("env_id", json!(env_id)), ("count", json!(count))],
+                extra: vec![("env_id", json!(env_id)), ("count", json_int128(count))],
                 ..Default::default()
             },
         )?;

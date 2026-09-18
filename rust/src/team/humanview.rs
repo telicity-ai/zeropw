@@ -8,6 +8,7 @@
 //! (docs/team-sync.md section 11), so this never needs to parse anything
 //! back.
 
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -195,6 +196,19 @@ fn yaml_scalar(value: &Value) -> String {
 /// `repr(str)`) is exact; a non-string element (unreachable through this
 /// port's own validated builders) falls back to [`yaml_scalar`] rather than
 /// panicking.
+///
+/// Whether a *given* connection's `http_scope`/`ssh_target` fields are
+/// really Python tuples at this point is NOT determined by the key name
+/// alone (finding H-R2-7, correcting the round-1 fix's assumption): a
+/// connection `connection.create`/`connection.update` (re)built during THIS
+/// fold call always gets fresh tuples via `build_connection_fields`, but a
+/// connection carried over untouched from a `fold_with_snapshot` seed
+/// (round-tripped through `json.dump`/`json.load`) holds plain `list`s in
+/// those same fields and renders as an ordinary multi-line YAML sequence
+/// instead. Callers pass `fold::FoldResult::fresh_connections` (the set of
+/// connection ids actually (re)built this fold call) through to
+/// [`to_yaml`], which only applies this tuple rendering for ids in that
+/// set.
 fn python_tuple_repr(items: &[Value]) -> String {
     let reprs: Vec<String> = items
         .iter()
@@ -213,11 +227,16 @@ fn python_tuple_repr(items: &[Value]) -> String {
 /// Render a `http_scope`/`ssh_target` dict's own fields, treating
 /// `tuple_fields` (an array value, even empty) as a Python tuple -- see
 /// [`python_tuple_repr`] -- and every other field generically, matching
-/// `_yaml_lines`'s per-key dispatch (finding H-1).
+/// `_yaml_lines`'s per-key dispatch (finding H-1). Only called for a
+/// connection [`yaml_lines_connection`] has determined is "fresh" this fold
+/// (finding H-R2-7) -- callers elsewhere fall through to plain [`yaml_lines`]
+/// instead, which renders these same array fields as ordinary YAML
+/// sequences.
 fn yaml_lines_tuple_dict(
     map: &Map<String, Value>,
     indent: usize,
     tuple_fields: &[&str],
+    fresh_connections: &BTreeSet<String>,
 ) -> Vec<String> {
     let pad = "  ".repeat(indent);
     let mut lines = Vec::new();
@@ -233,11 +252,11 @@ fn yaml_lines_tuple_dict(
         match item {
             Value::Object(m) if !m.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent + 1));
+                lines.extend(yaml_lines(item, indent + 1, fresh_connections));
             }
             Value::Array(a) if !a.is_empty() => {
                 lines.push(format!("{pad}{key_text}:"));
-                lines.extend(yaml_lines(item, indent));
+                lines.extend(yaml_lines(item, indent, fresh_connections));
             }
             _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
         }
@@ -253,7 +272,70 @@ fn yaml_scalar_or_empty(item: &Value) -> String {
     }
 }
 
-fn yaml_lines(value: &Value, indent: usize) -> Vec<String> {
+/// Render one connection's own fields: `http_scope`/`ssh_target` go through
+/// [`yaml_lines_tuple_dict`] (Python-tuple rendering) only when `is_fresh`
+/// is `true` -- i.e. this connection id is in
+/// `fold::FoldResult::fresh_connections`, meaning `connection.create`/
+/// `connection.update` (re)built it during the fold call that produced this
+/// document (finding H-R2-7). Otherwise every field, including
+/// `http_scope`/`ssh_target`, renders through the ordinary generic path
+/// (plain YAML lists for their array sub-fields), matching Python holding
+/// those as `list`s when they were carried over untouched from a
+/// snapshot-seeded `base_document`.
+fn yaml_lines_connection(
+    map: &Map<String, Value>,
+    indent: usize,
+    is_fresh: bool,
+    fresh_connections: &BTreeSet<String>,
+) -> Vec<String> {
+    let pad = "  ".repeat(indent);
+    let mut lines = Vec::new();
+    for (key, item) in map {
+        let key_text = yaml_scalar(&Value::String(key.clone()));
+        if is_fresh
+            && key == "http_scope"
+            && let Value::Object(m) = item
+            && !m.is_empty()
+        {
+            lines.push(format!("{pad}{key_text}:"));
+            lines.extend(yaml_lines_tuple_dict(
+                m,
+                indent + 1,
+                &["methods", "path_prefixes", "confirm_methods"],
+                fresh_connections,
+            ));
+            continue;
+        }
+        if is_fresh
+            && key == "ssh_target"
+            && let Value::Object(m) = item
+            && !m.is_empty()
+        {
+            lines.push(format!("{pad}{key_text}:"));
+            lines.extend(yaml_lines_tuple_dict(
+                m,
+                indent + 1,
+                &["host_keys"],
+                fresh_connections,
+            ));
+            continue;
+        }
+        match item {
+            Value::Object(m) if !m.is_empty() => {
+                lines.push(format!("{pad}{key_text}:"));
+                lines.extend(yaml_lines(item, indent + 1, fresh_connections));
+            }
+            Value::Array(a) if !a.is_empty() => {
+                lines.push(format!("{pad}{key_text}:"));
+                lines.extend(yaml_lines(item, indent, fresh_connections));
+            }
+            _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
+        }
+    }
+    lines
+}
+
+fn yaml_lines(value: &Value, indent: usize, fresh_connections: &BTreeSet<String>) -> Vec<String> {
     let pad = "  ".repeat(indent);
     let mut lines = Vec::new();
     match value {
@@ -263,26 +345,50 @@ fn yaml_lines(value: &Value, indent: usize) -> Vec<String> {
             }
             for (key, item) in map {
                 let key_text = yaml_scalar(&Value::String(key.clone()));
+                // `connections` is a dict keyed by connection id (finding
+                // H-R2-7): each entry's own tuple-vs-list rendering depends
+                // on THAT connection's freshness, not on the "connections"
+                // key itself, so it gets its own per-id dispatch here
+                // rather than falling into the generic `Value::Object`
+                // branch below (which has no notion of "current connection
+                // id").
+                if key == "connections"
+                    && let Value::Object(conns) = item
+                {
+                    if conns.is_empty() {
+                        lines.push(format!("{pad}{key_text}: {{}}"));
+                        continue;
+                    }
+                    lines.push(format!("{pad}{key_text}:"));
+                    let conn_pad = "  ".repeat(indent + 1);
+                    for (conn_id, conn_value) in conns {
+                        let conn_key_text = yaml_scalar(&Value::String(conn_id.clone()));
+                        match conn_value {
+                            Value::Object(cm) if !cm.is_empty() => {
+                                lines.push(format!("{conn_pad}{conn_key_text}:"));
+                                lines.extend(yaml_lines_connection(
+                                    cm,
+                                    indent + 2,
+                                    fresh_connections.contains(conn_id),
+                                    fresh_connections,
+                                ));
+                            }
+                            _ => lines.push(format!(
+                                "{conn_pad}{conn_key_text}: {}",
+                                yaml_scalar_or_empty(conn_value)
+                            )),
+                        }
+                    }
+                    continue;
+                }
                 match item {
-                    Value::Object(m) if !m.is_empty() && key == "http_scope" => {
-                        lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines_tuple_dict(
-                            m,
-                            indent + 1,
-                            &["methods", "path_prefixes", "confirm_methods"],
-                        ));
-                    }
-                    Value::Object(m) if !m.is_empty() && key == "ssh_target" => {
-                        lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines_tuple_dict(m, indent + 1, &["host_keys"]));
-                    }
                     Value::Object(m) if !m.is_empty() => {
                         lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines(item, indent + 1));
+                        lines.extend(yaml_lines(item, indent + 1, fresh_connections));
                     }
                     Value::Array(a) if !a.is_empty() => {
                         lines.push(format!("{pad}{key_text}:"));
-                        lines.extend(yaml_lines(item, indent));
+                        lines.extend(yaml_lines(item, indent, fresh_connections));
                     }
                     _ => lines.push(format!("{pad}{key_text}: {}", yaml_scalar_or_empty(item))),
                 }
@@ -299,7 +405,7 @@ fn yaml_lines(value: &Value, indent: usize) -> Vec<String> {
                     _ => false,
                 };
                 if nonempty_container {
-                    let sub = yaml_lines(item, indent + 1);
+                    let sub = yaml_lines(item, indent + 1, fresh_connections);
                     lines.push(format!("{pad}-"));
                     lines.extend(sub);
                 } else {
@@ -313,8 +419,15 @@ fn yaml_lines(value: &Value, indent: usize) -> Vec<String> {
 }
 
 /// `zeropw.team.humanview.to_yaml`.
-pub fn to_yaml(value: &Value) -> String {
-    let lines = yaml_lines(value, 0);
+///
+/// `fresh_connections` (finding H-R2-7) is `fold::FoldResult::fresh_connections`
+/// -- the set of connection ids `connection.create`/`connection.update`
+/// (re)built during the fold call that produced `value`'s document. Pass
+/// `&BTreeSet::new()` for a document (or fragment) with no connections, or
+/// one where every connection came from a snapshot seed untouched this
+/// fold.
+pub fn to_yaml(value: &Value, fresh_connections: &BTreeSet<String>) -> String {
+    let lines = yaml_lines(value, 0, fresh_connections);
     format!("{}\n", lines.join("\n"))
 }
 
@@ -346,27 +459,55 @@ mod tests {
         assert!(version.get("ciphertext").is_none());
     }
 
+    fn no_fresh_connections() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
     #[test]
     fn to_yaml_scalars_and_quoting() {
-        assert_eq!(to_yaml(&json!(null)), "null\n");
-        assert_eq!(to_yaml(&json!(true)), "true\n");
-        assert_eq!(to_yaml(&json!(5)), "5\n");
-        assert_eq!(to_yaml(&json!("plain")), "plain\n");
+        let fresh = no_fresh_connections();
+        assert_eq!(to_yaml(&json!(null), &fresh), "null\n");
+        assert_eq!(to_yaml(&json!(true), &fresh), "true\n");
+        assert_eq!(to_yaml(&json!(5), &fresh), "5\n");
+        assert_eq!(to_yaml(&json!("plain"), &fresh), "plain\n");
         // A value equal (case-insensitively) to a YAML reserved word must be quoted.
-        assert_eq!(to_yaml(&json!("true")), "\"true\"\n");
-        assert_eq!(to_yaml(&json!("Yes")), "\"Yes\"\n");
+        assert_eq!(to_yaml(&json!("true"), &fresh), "\"true\"\n");
+        assert_eq!(to_yaml(&json!("Yes"), &fresh), "\"Yes\"\n");
         // Leading/trailing whitespace and empty strings need quoting.
-        assert_eq!(to_yaml(&json!(" x")), "\" x\"\n");
-        assert_eq!(to_yaml(&json!("")), "\"\"\n");
+        assert_eq!(to_yaml(&json!(" x"), &fresh), "\" x\"\n");
+        assert_eq!(to_yaml(&json!(""), &fresh), "\"\"\n");
     }
 
     #[test]
     fn to_yaml_nested_structures() {
         let value = json!({"a": {"b": 1}, "c": [], "d": {}, "e": [1, 2], "f": [{"g": 1}]});
-        let out = to_yaml(&value);
+        let out = to_yaml(&value, &no_fresh_connections());
         assert_eq!(
             out,
             "a:\n  b: 1\nc: []\nd: {}\ne:\n- 1\n- 2\nf:\n-\n  g: 1\n"
         );
+    }
+
+    /// Finding H-R2-7: a connection's `http_scope` must render as a Python
+    /// tuple only when its id is in `fresh_connections`; otherwise its
+    /// array fields render as plain YAML lists, even though the document
+    /// shape is identical either way.
+    #[test]
+    fn to_yaml_connection_tuple_rendering_depends_on_freshness() {
+        let doc = json!({"connections": {"gh": {"http_scope": {"methods": ["GET"]}}}});
+        let mut fresh = BTreeSet::new();
+        fresh.insert("gh".to_string());
+        let fresh_out = to_yaml(&doc, &fresh);
+        assert!(
+            fresh_out.contains("methods: ('GET',)"),
+            "fresh connection must render http_scope.methods as a tuple repr:\n{fresh_out}"
+        );
+
+        let stale_out = to_yaml(&doc, &BTreeSet::new());
+        assert!(
+            stale_out.contains("- GET") && !stale_out.contains("methods: ("),
+            "non-fresh connection must render http_scope.methods as a YAML list, not a tuple repr:\n{stale_out}"
+        );
+        assert_ne!(fresh_out, stale_out);
     }
 }

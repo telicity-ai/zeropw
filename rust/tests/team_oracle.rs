@@ -441,7 +441,10 @@ fn humanview_matches_python_for_the_folded_history() {
     let (env_id, commits, _owner_record, _second_record) = build_history();
     let rust_result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
     let stripped = humanview::strip_document(&rust_result.document);
-    let rust_yaml = humanview::to_yaml(&stripped);
+    // Every connection in `build_history()` is created within this single
+    // `fold()` call, so all of them are "fresh" (finding H-R2-7) -- matches
+    // the tuple-repr assertions below.
+    let rust_yaml = humanview::to_yaml(&stripped, &rust_result.fresh_connections);
     let rust_stripped_json = pyjson::dumps(&stripped, DumpOptions::compact_sorted()).unwrap();
 
     let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
@@ -495,6 +498,259 @@ print(H.to_yaml(stripped), end="")
     assert!(
         rust_yaml.contains("confirm_methods: ()"),
         "http_scope.confirm_methods must render as an empty Python tuple repr:\n{rust_yaml}"
+    );
+}
+
+/// Finding H-R2-7: a connection's `http_scope`/`ssh_target` tuple-vs-list
+/// rendering depends on whether THAT connection was (re)built by the fold
+/// call that produced the document, not on the key name. Builds the same
+/// small history as above, folds it once and saves a snapshot (so "gh" and
+/// "gitlab" both start out fresh-built, matching the test above), then
+/// folds AGAIN from that snapshot with one more commit that only updates
+/// "gitlab" -- `fold_with_snapshot`'s second-stage document must render
+/// "gitlab" as a tuple (rebuilt this fold) and "gh" as a plain YAML list
+/// (carried over untouched from the snapshot), byte-identical to Python
+/// performing the exact same two-stage `fold`/`save_snapshot`/
+/// `fold_with_snapshot` pipeline.
+#[test]
+fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
+    let (env_id, commits, owner_record, _second_record) = build_history();
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+
+    let result1 = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    F::save_snapshot(&state, &env_id, 1, &result1).unwrap();
+
+    let owner = fixed_device(0x10, 0x20); // same fixed seed `build_history()` uses for owner
+    let c8 = C::sign_commit(
+        &owner,
+        &env_id,
+        6,
+        "6000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "connection.update", "id": "gitlab", "description": "updated"})],
+    )
+    .unwrap();
+    let mut all_commits = commits.clone();
+    all_commits.push(c8.clone());
+
+    let result2 = F::fold_with_snapshot(&env_id, all_commits.clone(), &state, None, None).unwrap();
+    assert_eq!(
+        result2.fresh_connections,
+        std::collections::BTreeSet::from(["gitlab".to_string()]),
+        "only the connection touched by the new commit is fresh this fold"
+    );
+    let stripped2 = humanview::strip_document(&result2.document);
+    let rust_yaml2 = humanview::to_yaml(&stripped2, &result2.fresh_connections);
+
+    assert_eq!(
+        rust_yaml2.matches("methods: ('GET',)").count(),
+        1,
+        "exactly the rebuilt connection (gitlab) renders http_scope.methods as a tuple:\n{rust_yaml2}"
+    );
+    assert_eq!(
+        rust_yaml2.matches("path_prefixes: ('/repos',)").count(),
+        1,
+        "exactly the rebuilt connection (gitlab) renders http_scope.path_prefixes as a tuple:\n{rust_yaml2}"
+    );
+    assert!(
+        rust_yaml2.contains("methods:\n      - GET"),
+        "the untouched connection (gh) must render http_scope.methods as a YAML list, not a tuple:\n{rust_yaml2}"
+    );
+
+    let commits_json: Vec<Value> = all_commits.iter().map(Commit::to_dict).collect();
+    let temp = write_json_temp(&json!(commits_json));
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+from zeropw.team import humanview as H
+with open({path}) as f:
+    raw = json.load(f)
+commits = [C.Commit.from_dict(c) for c in raw]
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    result1 = F.fold({env_id}, commits[:7])
+    F.save_snapshot(state, {env_id}, 1, result1)
+    result2 = F.fold_with_snapshot({env_id}, commits, state)
+    stripped2 = H.strip_document(result2.document)
+    print(H.to_yaml(stripped2), end="")
+"#,
+        path = py_str_literal(temp.path().to_str().unwrap()),
+        env_id = py_str_literal(&env_id),
+    );
+    let py_yaml2 = run_python(&script);
+    assert_eq!(
+        rust_yaml2, py_yaml2,
+        "to_yaml() after a snapshot-seeded second fold must match byte-for-byte"
+    );
+    let _ = owner_record; // only used to keep build_history()'s destructure symmetric with the sibling test
+}
+
+// ------------------------------------------------------------------ H-R2-6
+/// Finding H-R2-6 (probe 1, "the 10^30 commit body"): `FoldResult::vector`
+/// used to be filled with `i64::try_from(commit.author_seq).unwrap_or(i64::MAX)`,
+/// silently clamping a real, huge `author_seq` (read straight off a commit
+/// file by `all_commits()`, not merely a snapshot artifact) to `i64::MAX`
+/// instead of keeping the true value the way Python's arbitrary-precision
+/// `vector[commit.author] = max(..., commit.author_seq)` does.
+#[test]
+fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
+    let owner = fixed_device(0x71, 0x72);
+    let record = owner.record().unwrap();
+    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let gen0 = "0".repeat(16);
+    let huge: i128 = 1_000_000_000_000_000_000_000_000_000_000; // 10**30, far outside i64
+    let c1 = C::sign_commit(
+        &owner,
+        &env_id,
+        1,
+        "1000-0000",
+        &BTreeMap::new(),
+        vec![env_init_op(&record, "alice", &gen0)],
+    )
+    .unwrap();
+    let c2 = C::sign_commit(
+        &owner,
+        &env_id,
+        huge,
+        "2000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "settings.update", "sync_interval_seconds": 1})],
+    )
+    .unwrap();
+    let rust_result = F::fold(
+        &env_id,
+        vec![c1.clone(), c2.clone()],
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(rust_result.vector.get(&record.fingerprint()), Some(&huge));
+    assert_ne!(
+        rust_result.vector.get(&record.fingerprint()),
+        Some(&(i64::MAX as i128)),
+        "must not be clamped to i64::MAX"
+    );
+
+    let commits_json = vec![c1.to_dict(), c2.to_dict()];
+    let temp = write_json_temp(&json!(commits_json));
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+with open({path}) as f:
+    raw = json.load(f)
+commits = [C.Commit.from_dict(c) for c in raw]
+result = F.fold({env_id}, commits)
+print(result.vector[commits[0].author])
+"#,
+        path = py_str_literal(temp.path().to_str().unwrap()),
+        env_id = py_str_literal(&env_id),
+    );
+    let out = run_python(&script);
+    assert_eq!(out.trim(), huge.to_string());
+}
+
+/// Finding H-R2-6 (probe 2, "the 10^30 snapshot vector"): `snapshot_floor`
+/// used to parse each snapshot `vector` entry with `Number::as_i64`,
+/// silently DROPPING (not clamping) any entry outside `i64` -- so a
+/// hand-crafted/bit-rotted snapshot claiming `vector = {fp: 10**30}` was
+/// read back as if that author had never committed anything
+/// (`last_seq == 0`), letting a REPLAYED `author_seq=1` commit from that
+/// author be accepted again by `CommitStore::append` (`team_seq_duplicate`
+/// should fire instead). Probed directly at the `CommitStore::append`
+/// level (not through `receive_commit`, which also calls `all_commits()` --
+/// looping `1..=last` for a `10**30` floor is as impractical in Python as
+/// in Rust and is not what this finding is about).
+#[test]
+fn snapshot_floor_beyond_i64_still_refuses_a_replayed_commit() {
+    let owner = fixed_device(0x73, 0x74);
+    let record = owner.record().unwrap();
+    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let huge: i128 = 1_000_000_000_000_000_000_000_000_000_000; // 10**30
+    let replayed = C::sign_commit(
+        &owner,
+        &env_id,
+        1,
+        "1000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "settings.update", "sync_interval_seconds": 1})],
+    )
+    .unwrap();
+
+    // --- Rust side: hand-write a snapshot claiming a 10**30 floor, then
+    // try to append the replayed seq=1 commit through CommitStore.
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let snapshot_doc = json!({
+        "document": {"env_id": env_id, "format": "zeropw-team-env-v1", "owner": record.fingerprint(),
+                     "members": {}, "connections": {}, "secrets": {}, "settings": {},
+                     "dek": {"current": null, "generations": {}}},
+        "version_order": {},
+        "vector": {record.fingerprint(): huge},
+    });
+    state
+        .write_json(&format!("team/{env_id}/snapshots/1.json"), &snapshot_doc)
+        .unwrap();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    assert_eq!(
+        store.last_seq(&record.fingerprint()).unwrap(),
+        huge,
+        "the floor must be retained, not dropped"
+    );
+    let rust_err = store.append(&replayed).unwrap_err();
+    assert_eq!(rust_err.reason, "team_seq_duplicate");
+
+    // --- Python side: the exact same snapshot bytes (via a temp file, to
+    // avoid hand-templating a JSON literal into the generated script), and
+    // the same replayed commit.
+    let snapshot_temp = write_json_temp(&snapshot_doc);
+    let replayed_text = pyjson::dumps(&replayed.to_dict(), DumpOptions::compact_sorted()).unwrap();
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+from zeropw.errors import InvalidInput
+with open({snapshot_path}) as f:
+    snapshot = json.load(f)
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    state.write_json({snapshot_rel_path}, snapshot)
+    store = C.CommitStore(state, {env_id})
+    print(store.last_seq({owner}))
+    replayed = C.Commit.from_dict(json.loads({replayed}))
+    try:
+        store.append(replayed)
+        print("accepted")
+    except InvalidInput as exc:
+        print(exc.reason)
+"#,
+        snapshot_path = py_str_literal(snapshot_temp.path().to_str().unwrap()),
+        snapshot_rel_path = py_str_literal(&format!("team/{env_id}/snapshots/1.json")),
+        env_id = py_str_literal(&env_id),
+        owner = py_str_literal(&record.fingerprint()),
+        replayed = py_str_literal(&replayed_text),
+    );
+    let out = run_python(&script);
+    let mut lines = out.lines();
+    assert_eq!(lines.next().unwrap(), huge.to_string());
+    assert_eq!(
+        lines.next().unwrap(),
+        "team_seq_duplicate",
+        "python must also refuse the replayed commit"
     );
 }
 
@@ -787,6 +1043,29 @@ fn op_validation_reason_sweep_matches_python() {
         "invalid_allow_private_network",
     ));
 
+    // H-R2-3: `value.get("allow_private_network", False)` only defaults an
+    // *absent* key; a *present* `null` reaches `HttpTarget.__post_init__`'s
+    // `isinstance(..., bool)` check and is rejected -- not silently treated
+    // as `false` the way the round-1 fix did.
+    let mut op = http_base();
+    op["http_target"]["allow_private_network"] = Value::Null;
+    cases.push((
+        "explicit null allow_private_network",
+        op,
+        "invalid_allow_private_network",
+    ));
+
+    let mut op = http_base();
+    op["http_target"]
+        .as_object_mut()
+        .unwrap()
+        .remove("allow_private_network");
+    cases.push((
+        "absent allow_private_network still defaults to false",
+        op,
+        "accepted",
+    ));
+
     let mut op = http_base();
     op["http_target"]["host"] = json!("not a host!!");
     cases.push(("bad host (sanity, unaffected)", op, "invalid_host"));
@@ -903,6 +1182,79 @@ fn op_validation_reason_sweep_matches_python() {
         "invalid_env_name",
     ));
 
+    // H-R2-4: `extra_env=dict(value.get("extra_env") or {})` -- any falsy
+    // JSON shape (not just `null`) is equivalent to an absent `extra_env`,
+    // and a truthy array of two-element pairs is accepted just like a JSON
+    // object would be.
+    for falsy in [json!(0), json!(false), json!(""), json!([]), json!({})] {
+        let mut op = cli_base();
+        op["cli"]["extra_env"] = falsy.clone();
+        cases.push((
+            "cli.extra_env falsy non-null (sanity, no error)",
+            op,
+            "accepted",
+        ));
+    }
+    let mut op = cli_base();
+    op["cli"]["extra_env"] = json!([["A_B", "value"]]);
+    cases.push(("cli.extra_env as an array of pairs", op, "accepted"));
+
+    let mut op = cli_base();
+    op["cli"]["extra_env"] = json!([[1, "value"]]);
+    cases.push((
+        "cli.extra_env pair with a non-string key",
+        op,
+        "invalid_cli_profile",
+    ));
+
+    let mut op = cli_base();
+    op["cli"]["extra_env"] = json!(5);
+    cases.push((
+        "cli.extra_env a truthy non-iterable number",
+        op,
+        "invalid_cli_profile",
+    ));
+
+    let mut op = cli_base();
+    op["cli"]["extra_env"] = json!(true);
+    cases.push((
+        "cli.extra_env a truthy non-iterable bool",
+        op,
+        "invalid_cli_profile",
+    ));
+
+    // H-R2-9(c) (a truthy plain *string* `extra_env`, Python's uncaught
+    // `dict("ab")` ValueError) is NOT included in this sweep -- Python's own
+    // `validate_op` lets that exception escape uncaught rather than
+    // returning a reason string, so it cannot go through this loop's
+    // "both sides print a reason" harness. See
+    // `extra_env_truthy_string_is_pythons_uncaught_valueerror` below.
+
+    // H-R2-8: `if not self.program or "\x00" in self.program: raise
+    // invalid_cli_program` -- a FALSY non-string `program` (0, false, "",
+    // [], {}) hits the documented reason, but a TRUTHY non-string reaches
+    // an uncaught `TypeError` from the `in` test, wrapped as
+    // `invalid_cli_profile` instead.
+    for falsy in [json!(0), json!(false), json!(""), json!([]), json!({})] {
+        let mut op = cli_base();
+        op["cli"]["program"] = falsy.clone();
+        cases.push(("cli.program falsy non-string", op, "invalid_cli_program"));
+    }
+    let mut op = cli_base();
+    op["cli"]["program"] = json!(5);
+    cases.push((
+        "cli.program truthy non-string number",
+        op,
+        "invalid_cli_profile",
+    ));
+    let mut op = cli_base();
+    op["cli"]["program"] = json!(true);
+    cases.push((
+        "cli.program truthy non-string bool",
+        op,
+        "invalid_cli_profile",
+    ));
+
     for (label, op, expected) in &cases {
         let rust_result = match C::validate_op(op) {
             Ok(()) => "accepted".to_string(),
@@ -971,6 +1323,96 @@ print(json.dumps(c.to_dict(), sort_keys=True, separators=(",", ":")))
     );
     let py_text = run_python(&script);
     assert_eq!(rust_text, py_text.trim());
+}
+
+/// Finding H-R2-5 (`Commit::from_dict`'s `ops` arm vs `zeropw/team/commit.py`
+/// `Commit.from_dict`): Python's `tuple(dict(op) for op in data["ops"])`
+/// normalises each op element through `dict()`, which accepts a mapping OR
+/// an iterable of two-element pairs -- not just a JSON object. An on-disk
+/// commit whose `ops[0]` is reshaped as `[["op", "settings.update"],
+/// ["sync_interval_seconds", 7]]` must still parse and process exactly like
+/// the equivalent JSON object would (the signature was computed over the
+/// *reconstructed* dict either way, so a lenient parser sees no difference).
+/// Before this fix, `Commit::from_dict` required every `ops` element to
+/// already be a JSON object, so this single reshaped op made the entire
+/// commit -- and therefore `CommitStore::all_commits()`'s whole fold input,
+/// since it calls `Commit::from_dict` for every stored file -- fail to load.
+#[test]
+fn commit_ops_element_accepts_pair_list_like_python_dict_op() {
+    let owner = fixed_device(0x61, 0x62);
+    let record = owner.record().unwrap();
+    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let gen0 = "0".repeat(16);
+    let c1 = C::sign_commit(
+        &owner,
+        &env_id,
+        1,
+        "1000-0000",
+        &BTreeMap::new(),
+        vec![env_init_op(&record, "alice", &gen0)],
+    )
+    .unwrap();
+    let c1_text = pyjson::dumps(&c1.to_dict(), DumpOptions::compact_sorted()).unwrap();
+    let c2 = C::sign_commit(
+        &owner,
+        &env_id,
+        2,
+        "2000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "settings.update", "sync_interval_seconds": 7})],
+    )
+    .unwrap();
+    let mut c2_reshaped = c2.to_dict();
+    let op_obj = c2_reshaped["ops"][0].as_object().unwrap().clone();
+    let pairs: Vec<Value> = op_obj.into_iter().map(|(k, v)| json!([k, v])).collect();
+    c2_reshaped["ops"][0] = json!(pairs);
+    let c2_text = pyjson::dumps(&c2_reshaped, DumpOptions::compact_sorted()).unwrap();
+
+    let (_tmp, state) = fresh_state();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    assert_eq!(
+        C::receive_commit(&store, &c1, 1_000_000, None).unwrap(),
+        "accepted"
+    );
+    let rust_c2 = Commit::from_dict(&c2_reshaped).expect("pair-list op must parse");
+    assert_eq!(rust_c2.ops[0].get("sync_interval_seconds"), Some(&json!(7)));
+    let rust_result = C::receive_commit(&store, &rust_c2, 1_000_000, None).unwrap();
+    assert_eq!(rust_result, "accepted");
+    // `all_commits()` reads every stored commit file back through
+    // `Commit::from_dict` -- must not fail now that c2 was actually
+    // appended with a pair-list op.
+    let all = store.all_commits().unwrap();
+    assert_eq!(all.len(), 2);
+
+    let script = format!(
+        r#"
+import json, tempfile
+from pathlib import Path
+from zeropw.store import StateDir
+from zeropw.team import commit as C
+with tempfile.TemporaryDirectory() as tmp:
+    state = StateDir(Path(tmp) / "state")
+    state.create()
+    store = C.CommitStore(state, {env_id})
+    c1 = C.Commit.from_dict(json.loads({c1}))
+    c2 = C.Commit.from_dict(json.loads({c2}))
+    print(C.receive_commit(store, c1, 1_000_000))
+    print(C.receive_commit(store, c2, 1_000_000))
+    print(len(store.all_commits()))
+"#,
+        env_id = py_str_literal(&env_id),
+        c1 = py_str_literal(&c1_text),
+        c2 = py_str_literal(&c2_text),
+    );
+    let out = run_python(&script);
+    let mut lines = out.lines();
+    assert_eq!(lines.next().unwrap(), "accepted");
+    assert_eq!(
+        lines.next().unwrap(),
+        "accepted",
+        "python must also accept a pair-list op"
+    );
+    assert_eq!(lines.next().unwrap(), "2");
 }
 
 /// Finding H-6 (`Commit::from_dict`'s `seen` arm vs `zeropw/team/commit.py`
@@ -1112,4 +1554,244 @@ with tempfile.TemporaryDirectory() as tmp:
             "python must also reject the huge-seq commit"
         );
     }
+}
+
+// ------------------------------------------------------------------ H-R2-9
+// Round-2 equivalence-review finding H-R2-9: several §3.5-shaped mappings
+// (Rust substitutes a documented reason for something Python does NOT
+// handle the same way) were real but unrecorded in `rust/DEVIATIONS.md`.
+// Each test below pins BOTH sides: Python's real, concrete behaviour for
+// the case, and Rust's substituted reason -- see `rust/DEVIATIONS.md`'s
+// new rows for the write-up.
+
+/// Finding H-R2-9(a): `_build_http_scope`'s `path_prefixes` loop calls
+/// `prefix.startswith("/")` with no `isinstance` guard, so a non-string
+/// element is a genuinely uncaught `AttributeError` -- not even caught by
+/// `_build_http_scope`'s own `except (KeyError, TypeError)`, since
+/// `AttributeError` isn't in that tuple. `json_strings_lossy`'s sentinel
+/// (a value no real path prefix can equal) makes Rust reach the documented
+/// `invalid_path_prefix` instead.
+#[test]
+fn path_prefixes_non_string_element_is_pythons_uncaught_attributeerror() {
+    for elem in [json!(5), json!(true)] {
+        let op = json!({"path_prefixes": [elem]});
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+try:
+    C._build_http_scope(json.loads({op}))
+    print("ok")
+except Exception as exc:
+    print(f"{{type(exc).__name__}}:{{exc}}")
+"#,
+            op = py_str_literal(&pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap()),
+        );
+        let out = run_python(&script);
+        assert!(
+            out.starts_with("AttributeError:"),
+            "python must raise an uncaught AttributeError for {elem}, got: {out}"
+        );
+        assert!(out.contains("startswith"));
+    }
+
+    // Rust: reached via the public `validate_op` (`_build_http_scope`'s
+    // Rust port is private), same connection.create baseline as the H-5
+    // reason sweep.
+    let http_base = || {
+        json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+              "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+              "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+              "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}})
+    };
+    let err = C::validate_op(&http_base()).unwrap_err();
+    assert_eq!(err.reason, "invalid_path_prefix");
+}
+
+/// Finding H-R2-9(b): `HttpAuth.__post_init__`'s `HEADER_NAME_RE.match(self.header_name)`
+/// (mode `"header"`) and `":" in self.basic_username` (mode `"basic"`) have
+/// no `isinstance` guard either; a TRUTHY non-string value there is an
+/// uncaught `TypeError` that `_build_http_auth`'s own `except KeyError`
+/// (KeyError only, not TypeError) does not catch. `opt_string` collapses
+/// any non-string value (truthy or falsy) to `None`, so Rust instead
+/// reaches the documented `invalid_header_name`/`invalid_basic_username` a
+/// FALSY value would also get.
+#[test]
+fn header_name_and_basic_username_truthy_non_string_is_pythons_uncaught_typeerror() {
+    let cases = [
+        (json!({"mode": "header", "header_name": 5}), "header_name"),
+        (
+            json!({"mode": "header", "header_name": true}),
+            "header_name",
+        ),
+        (
+            json!({"mode": "basic", "basic_username": 5}),
+            "basic_username",
+        ),
+        (
+            json!({"mode": "basic", "basic_username": true}),
+            "basic_username",
+        ),
+    ];
+    for (value, field) in cases {
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+try:
+    C._build_http_auth(json.loads({value}))
+    print("ok")
+except Exception as exc:
+    print(f"{{type(exc).__name__}}:{{exc}}")
+"#,
+            value = py_str_literal(&pyjson::dumps(&value, DumpOptions::compact_sorted()).unwrap()),
+        );
+        let out = run_python(&script);
+        assert!(
+            out.starts_with("TypeError:"),
+            "python must raise an uncaught TypeError for {field}={value}, got: {out}"
+        );
+    }
+
+    let http_auth_base = |auth: Value| {
+        json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+              "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+              "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+              "http_auth": auth, "http_scope": {"methods": ["GET"]}})
+    };
+    let err =
+        C::validate_op(&http_auth_base(json!({"mode": "header", "header_name": 5}))).unwrap_err();
+    assert_eq!(err.reason, "invalid_header_name");
+    let err = C::validate_op(&http_auth_base(
+        json!({"mode": "basic", "basic_username": 5}),
+    ))
+    .unwrap_err();
+    assert_eq!(err.reason, "invalid_basic_username");
+}
+
+/// Finding H-R2-9(c): a truthy plain *string* `extra_env` (e.g. `"ab"`) is
+/// Python's uncaught `dict("ab")` `ValueError` (each character has length
+/// 1, not the length-2 pair `dict()` needs) -- `_build_cli_profile`'s
+/// `except (KeyError, TypeError)` does not catch `ValueError` either.
+/// `python_dict_pairs` returns `None` for a top-level JSON string (the same
+/// as any other shape it can't turn into pairs), which
+/// `build_cli_profile`'s caller folds into `invalid_cli_profile`.
+#[test]
+fn extra_env_truthy_string_is_pythons_uncaught_valueerror() {
+    let op = json!({"program": "gh", "kind": "http", "extra_env": "ab"});
+    let script = format!(
+        r#"
+import json
+from zeropw.team import commit as C
+try:
+    C._build_cli_profile(json.loads({op}))
+    print("ok")
+except Exception as exc:
+    print(f"{{type(exc).__name__}}:{{exc}}")
+"#,
+        op = py_str_literal(&pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap()),
+    );
+    let out = run_python(&script);
+    assert!(
+        out.starts_with("ValueError:"),
+        "python must raise an uncaught ValueError, got: {out}"
+    );
+    assert!(out.contains("length 1"));
+
+    let full_op = json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+          "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
+          "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+          "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"]},
+          "cli": {"program": "gh", "kind": "http", "extra_env": "ab"}});
+    let err = C::validate_op(&full_op).unwrap_err();
+    assert_eq!(err.reason, "invalid_cli_profile");
+}
+
+/// Finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
+/// `eph_pub`/`nonce`/`ciphertext` with `str(wrap[key])`, so a *present*
+/// `null` becomes the text `"None"` -- 4 base64-alphabet characters -- which
+/// decodes cleanly to 3 bytes and reaches the real AEAD call, failing
+/// there with the SAME documented reason a genuinely-wrong-but-well-formed
+/// wrap would get (`dek_wrap_malformed` only if the resulting byte length
+/// is wrong, e.g. `eph_pub`; `dek_unwrap_failed`/`secret_ciphertext_invalid`
+/// for `nonce`/`ciphertext`, which reach `aead.decrypt` at any length and
+/// fail authentication there instead). `envelope.rs`'s exact-`Value::String`
+/// requirement instead rejects a `null` value up front as
+/// `dek_wrap_malformed`/`secret_ciphertext_malformed` for ALL THREE fields --
+/// happens to already match Python for `eph_pub` (both give
+/// `dek_wrap_malformed`, since either path ultimately hits the same length
+/// check) but diverges for `nonce`/`ciphertext`, where Python's outcome is
+/// `dek_unwrap_failed`/`secret_ciphertext_invalid`, not `..._malformed`.
+/// Not literally a §3.5 "uncaught builtin exception" case like (a)/(b)/(c)
+/// above -- Python handles this cleanly via `InvalidInput` on both sides --
+/// but the same "closest handled error substituted for Python's real
+/// behaviour" shape, so recorded the same way.
+#[test]
+fn envelope_null_field_matches_python_reason_only_for_eph_pub() {
+    let owner = DeviceKey::generate();
+    let record = owner.record().unwrap();
+    let dek: Vec<u8> = (0..32u8).collect();
+    let env_id = "0123456789abcdef0123456789abcdef";
+    let generation_id = "deadbeefcafef00d";
+    let wrap = envelope::wrap_dek(&dek, env_id, generation_id, &record).unwrap();
+    let wrap_text = pyjson::dumps(&wrap, DumpOptions::compact_sorted()).unwrap();
+
+    for field in ["eph_pub", "nonce", "ciphertext"] {
+        let mut w = wrap.clone();
+        w[field] = Value::Null;
+        let rust_reason = envelope::unwrap_dek(&w, env_id, generation_id, &owner)
+            .unwrap_err()
+            .reason
+            .to_string();
+
+        let script = format!(
+            r#"
+import json
+from zeropw.team import envelope
+from zeropw.team.identity import DeviceKey
+from zeropw.errors import InvalidInput
+device = DeviceKey({sign_seed}, {agree_private})
+wrap = json.loads({wrap})
+wrap[{field}] = None
+try:
+    envelope.unwrap_dek(wrap, {env_id}, {generation_id}, device)
+    print("ok")
+except InvalidInput as exc:
+    print(exc.reason)
+"#,
+            sign_seed = py_bytes_literal(owner.sign_seed.expose()),
+            agree_private = py_bytes_literal(owner.agree_private.expose()),
+            wrap = py_str_literal(&wrap_text),
+            field = py_str_literal(field),
+            env_id = py_str_literal(env_id),
+            generation_id = py_str_literal(generation_id),
+        );
+        let py_reason = run_python(&script).trim().to_string();
+
+        if field == "eph_pub" {
+            assert_eq!(rust_reason, "dek_wrap_malformed");
+            assert_eq!(
+                py_reason, "dek_wrap_malformed",
+                "eph_pub=null happens to already match Python"
+            );
+        } else {
+            assert_eq!(rust_reason, "dek_wrap_malformed");
+            assert_eq!(
+                py_reason, "dek_unwrap_failed",
+                "python reaches the real AEAD call for a null {field} and fails there instead"
+            );
+            assert_ne!(
+                rust_reason, py_reason,
+                "documented divergence for {field}=null (rust/DEVIATIONS.md)"
+            );
+        }
+    }
+}
+
+/// A valid Python `bytes(...)` literal for `b`, as a comma-separated
+/// decimal-byte list -- used to reconstruct a `DeviceKey` from its raw
+/// secret bytes inside a generated script.
+fn py_bytes_literal(b: &[u8]) -> String {
+    let items: Vec<String> = b.iter().map(|byte| byte.to_string()).collect();
+    format!("bytes([{}])", items.join(","))
 }
