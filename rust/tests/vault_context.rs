@@ -141,7 +141,10 @@ fn put_and_trusted_use_never_persists_plaintext() {
         .unwrap();
     assert_eq!(version, 1);
     assert_eq!(
-        ctx.vault.secret_for_trusted_use("gh-token", None).unwrap(),
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
     assert!(
@@ -152,6 +155,39 @@ fn put_and_trusted_use_never_persists_plaintext() {
     assert_eq!(meta.active_version, Some(1));
     assert_eq!(meta.versions[0].status, "active");
     assert_eq!(meta.versions[0].public, json!({}));
+}
+
+/// Finding E-3: `secret_for_trusted_use`/`reveal`/`values_for_trusted_scan`
+/// must return `SecretBytes` (zeroised on drop, redacted `Debug`, no
+/// `Serialize`), not a bare `Vec<u8>` -- the highest-value secret material in
+/// the system should never be printable or JSON-serializable by accident.
+#[test]
+fn secret_for_trusted_use_and_reveal_return_redacted_secret_bytes() {
+    let (_tmp, ctx) = setup();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
+        .unwrap();
+    let secret = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
+    let debug = format!("{secret:?}");
+    let plaintext = std::str::from_utf8(SYNTHETIC).unwrap();
+    assert!(
+        !debug.contains(plaintext),
+        "Debug output must not contain the plaintext secret: {debug}"
+    );
+    assert!(debug.contains("redacted"), "Debug output was: {debug}");
+    assert_eq!(secret.expose(), SYNTHETIC);
+
+    let auth = ctx.admin.verify(ADMIN, Some((ctx.clock)())).unwrap();
+    let revealed = ctx
+        .vault
+        .reveal("gh-token", None, &auth, Some((ctx.clock)()))
+        .unwrap();
+    assert!(!format!("{revealed:?}").contains(plaintext));
+
+    let scanned = ctx.vault.values_for_trusted_scan().unwrap();
+    assert_eq!(scanned.len(), 1);
+    assert!(!format!("{:?}", scanned[0]).contains(plaintext));
+    assert_eq!(scanned[0].expose(), SYNTHETIC);
 }
 
 #[test]
@@ -240,13 +276,17 @@ fn versioning_and_status_transitions() {
         vec!["active", "staged"]
     );
     assert_eq!(
-        ctx.vault.secret_for_trusted_use("gh-token", None).unwrap(),
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
         b"v1-synthetic"
     );
     assert_eq!(
         ctx.vault
             .secret_for_trusted_use("gh-token", Some(2))
-            .unwrap(),
+            .unwrap()
+            .expose(),
         b"v2-synthetic"
     );
     ctx.vault
@@ -298,7 +338,8 @@ fn reveal_requires_fresh_reauth_and_is_audited() {
     assert_eq!(
         ctx.vault
             .reveal("gh-token", None, &auth, Some((ctx.clock)()))
-            .unwrap(),
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
     let events: Vec<String> = ctx
@@ -458,7 +499,8 @@ fn backup_restore_blocks_until_ack_and_recovery_rewraps() {
         reopened
             .vault
             .secret_for_trusted_use("gh-token", None)
-            .unwrap(),
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
     assert_eq!(manifest["format"], json!("zeropw-backup-v1"));
@@ -486,14 +528,20 @@ fn recover_rotates_kms_revokes_grants_and_handles() {
     let err = ctx.recover("wrong-recovery-passphrase").unwrap_err();
     assert!(err.is(ErrorClass::AuthFailed));
     assert_eq!(
-        ctx.vault.secret_for_trusted_use("gh-token", None).unwrap(),
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
     let revoked = ctx.recover(RECOVERY).unwrap();
     assert_eq!(revoked, 1);
     assert_ne!(ctx.kms.key_id(), old_key_id);
     assert_eq!(
-        ctx.vault.secret_for_trusted_use("gh-token", None).unwrap(),
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
     assert_eq!(ctx.policy.get_grant(&grant.id).unwrap().status, "revoked");
@@ -512,7 +560,8 @@ fn recover_rotates_kms_revokes_grants_and_handles() {
         reopened
             .vault
             .secret_for_trusted_use("gh-token", None)
-            .unwrap(),
+            .unwrap()
+            .expose(),
         SYNTHETIC
     );
 }

@@ -2061,7 +2061,7 @@ impl<'a> Relay<'a> {
             }
             Err(e) => return Err(e),
         };
-        let (auth_name, auth_value) = match auth_header(&connection, &secret) {
+        let (auth_name, auth_value) = match auth_header(&connection, secret.expose()) {
             Ok(pair) => pair,
             Err(Invalid(reason)) => {
                 return Ok(self.refuse(
@@ -2080,7 +2080,7 @@ impl<'a> Relay<'a> {
             .as_ref()
             .filter(|a| a.mode == "basic")
             .and_then(|a| a.basic_username.clone());
-        let patterns = credential_patterns(&secret, basic_username.as_deref());
+        let patterns = credential_patterns(secret.expose(), basic_username.as_deref());
         drop(secret);
 
         let mut upstream_headers = forwarded.clone();

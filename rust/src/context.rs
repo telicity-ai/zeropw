@@ -47,7 +47,7 @@
 
 use std::any::Any;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -294,42 +294,26 @@ impl Context {
 
     fn private_tempdir(&mut self, prefix: &str) -> Result<PathBuf, Error> {
         let base = std::env::temp_dir();
-        for _ in 0..64 {
-            let mut suffix = [0u8; 8];
-            {
-                use rand::RngCore;
-                rand::rngs::OsRng.fill_bytes(&mut suffix);
-            }
-            let path = base.join(format!("{prefix}{}", hex::encode(suffix)));
-            match fs::create_dir(&path) {
-                Ok(()) => {
-                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(
-                        |_| {
-                            Error::state("state_write_failed")
-                                .with_detail(path.display().to_string())
-                        },
-                    )?;
-                    self.owned_dirs.push(path.clone());
-                    return Ok(path);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(_) => {
-                    return Err(
-                        Error::state("state_write_failed").with_detail(path.display().to_string())
-                    );
-                }
-            }
-        }
-        Err(Error::state("state_write_failed").with_detail("tempdir"))
+        let path = create_private_dir(&base, prefix)?;
+        self.owned_dirs.push(path.clone());
+        Ok(path)
     }
 
     /// Remove the temporary directories this context created (never
     /// user-supplied ones). Idempotent (like Python's
     /// `shutil.rmtree(path, ignore_errors=True)`); also run on `Drop` so a
     /// dropped `Context` never leaves an owned temp dir behind even if the
-    /// caller never calls this explicitly (stronger than Python, which
-    /// relies on `atexit` -- an addition, not a documented behaviour
-    /// change).
+    /// caller never calls this explicitly. This is *not* a strict
+    /// improvement over Python's `atexit.register(shutil.rmtree, ...)`: it
+    /// cleans up earlier for a `Context` that is dropped normally mid-process
+    /// (Python waits for interpreter shutdown), but -- unlike `atexit` --
+    /// never runs at all for a `Context` lost to `std::process::exit`/abort
+    /// (Rust skips destructors there, the direct equivalent of Python's
+    /// `sys.exit()`) or one that is leaked/kept alive for the process's
+    /// whole life. See `DEVIATIONS.md` (finding E-5): a real process-exit
+    /// hook would need `libc::atexit`, an `unsafe` FFI call outside the one
+    /// this crate permits (`store.rs`'s `flock`), so this gap is recorded
+    /// rather than closed with `unsafe`.
     pub fn close(&mut self) {
         for dir in self.owned_dirs.drain(..) {
             let _ = fs::remove_dir_all(&dir);
@@ -407,34 +391,157 @@ pub fn default_clock() -> Clock {
     clock::system()
 }
 
-/// Approximates `Path.resolve(strict=False)`: normalizes `.`/`..`
-/// components and makes the path absolute without requiring every component
-/// to exist, falling back from `fs::canonicalize` (which requires the whole
-/// path to exist and also resolves symlinks). Unlike Python's `resolve`,
-/// this does not resolve symlinks in a partially-existing prefix when the
-/// full path does not exist -- a gap only reachable for a caller-supplied
-/// `socket_dir`/`run_dir` that does not exist yet (every path this crate's
-/// own code ever checks here -- the default private tempdirs -- always
-/// exists, so this fallback is untested by `tests/test_core_vault.py`; see
-/// `DEVIATIONS.md`).
-fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
-    if let Ok(p) = fs::canonicalize(path) {
-        return Ok(p);
+/// Create a fresh, randomly-named 0700 directory under `base` with `prefix`.
+/// Port of `tempfile.mkdtemp`'s mode guarantee (`_private_tempdir` in
+/// `context.py` calls `os.chmod(path, 0o700)` right after `mkdtemp`, but
+/// `mkdtemp` itself already creates the directory at mode 0700 via a single
+/// `os.mkdir(path, 0o700)` call -- there is no window where it exists at a
+/// wider mode). `fs::create_dir` (this crate's previous implementation) has
+/// no mode argument -- it always creates at the process default (`0o777`
+/// masked by umask, typically `0o755`) and relied on a *separate*
+/// `fs::set_permissions` call afterwards to narrow it to 0700, leaving that
+/// window open to any other local user for the time between the two calls
+/// (finding E-2). `mkdir_private_0700` uses `DirBuilder::mode` so the `mkdir`
+/// syscall itself is issued with mode 0700, matching Python's atomicity; the
+/// redundant `set_permissions` call is kept anyway as a defensive backstop
+/// against a masking umask.
+fn mkdir_private_0700(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path)
+}
+
+fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
+    for _ in 0..64 {
+        let mut suffix = [0u8; 8];
+        {
+            use rand::RngCore;
+            rand::rngs::OsRng.fill_bytes(&mut suffix);
+        }
+        let path = base.join(format!("{prefix}{}", hex::encode(suffix)));
+        match mkdir_private_0700(&path) {
+            Ok(()) => {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(|_| {
+                    Error::state("state_write_failed").with_detail(path.display().to_string())
+                })?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err(
+                    Error::state("state_write_failed").with_detail(path.display().to_string())
+                );
+            }
+        }
     }
+    Err(Error::state("state_write_failed").with_detail("tempdir"))
+}
+
+/// Port of `pathlib.Path.resolve(strict=False)`: walks the path component by
+/// component from the root, resolving `.`/`..` and any symlink encountered
+/// along the way, but tolerating components that do not exist (they are
+/// appended literally, exactly like CPython's `posixpath.realpath` catching
+/// `OSError` from a failed `lstat` and treating the remainder as literal).
+///
+/// This must match Python closely because `Context::inside_state` (finding
+/// E-1) uses it to decide whether a caller-supplied `socket_dir`/`run_dir`
+/// escapes the trusted state directory -- a resolver that resolves fewer
+/// symlinks than Python's is a fail-*open* gap (a path Python would refuse
+/// as "inside the state dir" could be accepted by Rust). A previous version
+/// of this function tried `fs::canonicalize` (which requires the *entire*
+/// path to exist) and, only on failure, fell back to a purely lexical
+/// `.`/`..` normalization with **no** symlink resolution at all -- so a
+/// `socket_dir` that does not exist yet (the common case: every default
+/// private tempdir exists, but any caller-supplied path typically does not)
+/// skipped symlink resolution entirely, including for already-existing
+/// ancestor directories (e.g. a `/tmp` that is itself a symlink to
+/// `/private/tmp` on macOS). See `DEVIATIONS.md` for the fixed row and
+/// `rust/tests/vault_context.rs`'s `inside_state_matches_python_*` tests,
+/// oracle-compared against `Path.resolve(strict=False)` for the exact cases
+/// that previously diverged.
+fn resolve_lenient(path: &Path) -> std::io::Result<PathBuf> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
-    let mut out = PathBuf::new();
-    for comp in abs.components() {
+    resolve_components(&abs, 0)
+}
+
+/// One pass of the component walk described on [`resolve_lenient`]. `depth`
+/// bounds symlink-chain recursion (CPython's `realpath` gives up with
+/// `ELOOP` after 40 hops); not exercised by any test here, kept only so a
+/// pathological symlink loop cannot recurse unboundedly.
+fn resolve_components(path: &Path, depth: u32) -> std::io::Result<PathBuf> {
+    if depth > 40 {
+        return Err(std::io::Error::other("too many levels of symbolic links"));
+    }
+    let mut resolved = PathBuf::from("/");
+    for comp in path.components() {
         match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
             std::path::Component::CurDir => {}
-            other => out.push(other.as_os_str()),
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::Normal(part) => {
+                let candidate = resolved.join(part);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        let target = fs::read_link(&candidate)?;
+                        let joined = if target.is_absolute() {
+                            target
+                        } else {
+                            resolved.join(&target)
+                        };
+                        resolved = resolve_components(&joined, depth + 1)?;
+                    }
+                    // Exists but is not a symlink, or does not exist at all
+                    // (or is otherwise unreadable): keep it literally, the
+                    // same way Python's `OSError`-swallowing `lstat` does.
+                    _ => resolved = candidate,
+                }
+            }
         }
     }
-    Ok(out)
+    Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding E-2: `mkdir_private_0700` must set mode 0700 in the `mkdir`
+    /// syscall itself (`DirBuilder::mode`), not via a separate `chmod`
+    /// afterwards -- checked here by reading the mode back immediately after
+    /// `mkdir_private_0700` returns, before `create_private_dir`'s own
+    /// (redundant, defensive) follow-up `set_permissions` call would run.
+    #[test]
+    fn mkdir_private_0700_sets_mode_atomically_with_no_wider_window() {
+        let base = std::env::temp_dir();
+        let path = base.join(format!(
+            "zeropw-test-atomic-mkdir-{}-{}",
+            std::process::id(),
+            {
+                use rand::RngCore;
+                rand::rngs::OsRng.next_u64()
+            }
+        ));
+        mkdir_private_0700(&path).expect("mkdir_private_0700");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        fs::remove_dir(&path).expect("cleanup");
+        assert_eq!(
+            mode, 0o700,
+            "directory must already be 0700 right after mkdir, before any chmod"
+        );
+    }
+
+    #[test]
+    fn create_private_dir_result_is_0700() {
+        let base = std::env::temp_dir();
+        let path = create_private_dir(&base, "zeropw-test-create-private-dir-").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        fs::remove_dir(&path).unwrap();
+        assert_eq!(mode, 0o700);
+    }
 }

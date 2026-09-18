@@ -67,7 +67,6 @@ use crate::context::Context;
 use crate::crypto::ed25519;
 use crate::errors::{Error, ErrorClass};
 use crate::policy::Action;
-use crate::secret::SecretBytes;
 use crate::sshwire;
 
 /// Conservative: macOS `sun_path` is 104 bytes including the NUL.
@@ -839,7 +838,7 @@ impl BindingServer {
             }
             Err(e) => return Err(e),
         }
-        let pem_bytes = match self
+        let pem = match self
             .ctx
             .vault
             .secret_for_trusted_use(&conn.secret_id, conn.secret_version)
@@ -850,8 +849,7 @@ impl BindingServer {
                 return Ok(sshwire::build_failure().to_vec());
             }
         };
-        // Seed only held as `SecretBytes` for the duration of signing.
-        let pem = SecretBytes::from(pem_bytes);
+        // Already `SecretBytes` (zeroised on drop) straight from the vault.
         let private = match sshwire::parse_openssh_private_key(pem.expose()) {
             Ok(p) => p,
             Err(_) => {

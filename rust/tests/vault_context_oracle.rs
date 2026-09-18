@@ -22,9 +22,11 @@
 //!   Rust's `HandleIssuer::verify` on the same state directory (matching
 //!   caller/connection/grant/policy_version), and vice versa.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
@@ -32,6 +34,7 @@ use zeropw::clock;
 use zeropw::context::{Config, Context};
 use zeropw::errors::ErrorClass;
 use zeropw::projects;
+use zeropw::pyjson::{self, DumpOptions};
 
 const FIXED_NOW: f64 = 1_700_000_000.0;
 
@@ -100,7 +103,7 @@ print("ok")
 
     let ctx = Context::open(&state, Config::default(), clock::fixed(FIXED_NOW)).unwrap();
     let got = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
-    assert_eq!(sha256_hex(&got), sha256_hex(value));
+    assert_eq!(sha256_hex(got.expose()), sha256_hex(value));
 }
 
 #[test]
@@ -167,7 +170,7 @@ print("ok")
     let ctx = Context::open(&state, Config::default(), clock::fixed(FIXED_NOW)).unwrap();
     zeropw::vault::Vault::restore(ctx.state, &backup, ctx.audit, Some(ctx.kms)).unwrap();
     let got = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
-    assert_eq!(sha256_hex(&got), sha256_hex(value));
+    assert_eq!(sha256_hex(got.expose()), sha256_hex(value));
 }
 
 #[test]
@@ -211,6 +214,238 @@ print(hashlib.sha256(value).hexdigest())
     );
     let out = run_python(&script);
     assert_eq!(out.trim(), sha256_hex(value));
+}
+
+// -------------------------------------------------- inside_state (finding E-1)
+/// Builds one on-disk state directory (via a throwaway `Context::initialize`
+/// with default config, so `socket_dir`/`run_dir` land outside `tmp`
+/// entirely and cannot interfere with the probe), then asks Python's
+/// `Context.open` and Rust's `Context::open` -- on that *same* state
+/// directory and candidate path -- whether each accepts or refuses the
+/// candidate as `socket_dir`, returning `(accepted, reason_if_refused)` for
+/// each language so the caller can assert both the cross-language agreement
+/// and the expected outcome.
+fn probe_inside_state(
+    build_candidate: impl FnOnce(&TempDir, &Path) -> PathBuf,
+) -> ((bool, String), (bool, String)) {
+    let tmp = TempDir::new().unwrap();
+    let state = tmp.path().join("state");
+    Context::initialize(
+        &state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        Config::default(),
+        clock::fixed(FIXED_NOW),
+    )
+    .unwrap();
+    let candidate = build_candidate(&tmp, &state);
+
+    let rust_outcome = match Context::open(
+        &state,
+        Config {
+            socket_dir: Some(candidate.clone()),
+            ..Config::default()
+        },
+        clock::fixed(FIXED_NOW),
+    ) {
+        Ok(_) => (true, String::new()),
+        Err(e) => (false, e.reason.to_string()),
+    };
+
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+from zeropw.errors import StateError
+try:
+    Context.open({state}, Config(socket_dir={candidate}), lambda: {now})
+    print("ok")
+except StateError as exc:
+    print(f"err:{{exc.reason}}")
+"#,
+        state = py_str(&state),
+        candidate = py_str(&candidate),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    let trimmed = out.trim();
+    let py_outcome = if trimmed == "ok" {
+        (true, String::new())
+    } else {
+        (
+            false,
+            trimmed.strip_prefix("err:").unwrap_or(trimmed).to_string(),
+        )
+    };
+    (rust_outcome, py_outcome)
+}
+
+/// Reviewer probe 1: a non-existent leaf directly under the state dir.
+#[test]
+fn inside_state_matches_python_for_nonexistent_leaf() {
+    let (rust, py) = probe_inside_state(|_tmp, state| state.join("sockets"));
+    assert_eq!(rust, py);
+    assert!(!rust.0, "must be refused: {rust:?}");
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
+}
+
+/// Reviewer probe 2: an *existing* leaf directly under the state dir.
+#[test]
+fn inside_state_matches_python_for_existing_leaf() {
+    let (rust, py) = probe_inside_state(|_tmp, state| {
+        let candidate = state.join("sockets2");
+        fs::create_dir_all(&candidate).unwrap();
+        candidate
+    });
+    assert_eq!(rust, py);
+    assert!(!rust.0, "must be refused: {rust:?}");
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
+}
+
+/// Reviewer probe 3: a non-existent leaf reached through a lexical `..` that
+/// cancels back into the state dir (`state/vault/../runs`; `state/vault`
+/// already exists -- `Context::initialize` creates it).
+#[test]
+fn inside_state_matches_python_for_dotdot_back_into_state() {
+    let (rust, py) = probe_inside_state(|_tmp, state| state.join("vault").join("..").join("runs"));
+    assert_eq!(rust, py);
+    assert!(!rust.0, "must be refused: {rust:?}");
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
+}
+
+/// Reviewer probe 4: a non-existent leaf reached through a symlink whose
+/// target is the state dir (`root/link/runs`, `root/link -> state`).
+#[test]
+fn inside_state_matches_python_for_symlink_to_state() {
+    let (rust, py) = probe_inside_state(|tmp, state| {
+        let root = tmp.path().join("root");
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(state, root.join("link")).unwrap();
+        root.join("link").join("runs")
+    });
+    assert_eq!(rust, py);
+    assert!(!rust.0, "must be refused: {rust:?}");
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
+}
+
+/// Reviewer probe 5: the state dir itself.
+#[test]
+fn inside_state_matches_python_for_state_dir_itself() {
+    let (rust, py) = probe_inside_state(|_tmp, state| state.to_path_buf());
+    assert_eq!(rust, py);
+    assert!(!rust.0, "must be refused: {rust:?}");
+    assert_eq!(rust.1, "socket_dir_inside_state_dir");
+}
+
+// ------------------------------------------ restore null vault_doc (finding E-4)
+/// Builds a minimal backup archive whose `documents` map is exactly
+/// `{"vault/secrets.json": vault_doc}` (or, when `vault_doc` is `None`, an
+/// empty `documents` map -- the key is entirely absent), with a correct
+/// `sha256`/`format` in the manifest so only the `vault_doc` handling itself
+/// is under test.
+fn minimal_backup_archive(vault_doc: Option<Value>) -> Value {
+    let mut documents = serde_json::Map::new();
+    if let Some(v) = vault_doc {
+        documents.insert("vault/secrets.json".to_string(), v);
+    }
+    let documents = Value::Object(documents);
+    let payload = pyjson::dumps(&documents, DumpOptions::compact_sorted()).unwrap();
+    let digest = hex::encode(Sha256::digest(payload.as_bytes()));
+    json!({
+        "manifest": {
+            "format": "zeropw-backup-v1",
+            "created_at": "2024-01-01T00:00:00Z",
+            "sha256": digest,
+            "kms_key_id": "irrelevant-for-this-probe",
+            "backup_id": "e4-probe",
+        },
+        "documents": documents,
+    })
+}
+
+/// Runs `Vault::restore(kms=Some(...))` (Rust) and `Vault.restore(kms=...)`
+/// (Python) against the given archive, each on its own freshly initialized
+/// state directory (restore's `vault_doc` handling here never touches
+/// crypto -- the KMS pre-check is skipped entirely whenever `vault_doc` is
+/// absent/`null` -- so two independently-initialized states are equivalent
+/// probes). Returns `(rust_outcome, python_outcome)` as `Ok(())` or
+/// `Err(reason)`.
+fn probe_restore_vault_doc(archive: &Value) -> (Result<(), String>, Result<(), String>) {
+    let tmp = TempDir::new().unwrap();
+    let archive_path = tmp.path().join("archive.json");
+    fs::write(&archive_path, serde_json::to_string(archive).unwrap()).unwrap();
+
+    let rust_state = tmp.path().join("state-rust");
+    let rust_outcome = {
+        let ctx = Context::initialize(
+            &rust_state,
+            "admin-passphrase-1",
+            "recovery-passphrase-1",
+            Config::default(),
+            clock::fixed(FIXED_NOW),
+        )
+        .unwrap();
+        match zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, Some(ctx.kms)) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.reason.to_string()),
+        }
+    };
+
+    let py_state = tmp.path().join("state-py");
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.context import Context, Config
+from zeropw.vault import Vault
+from zeropw.errors import StateError
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+try:
+    Vault.restore(ctx.state, Path({archive}), ctx.audit, kms=ctx.kms)
+    print("ok")
+except StateError as exc:
+    print(f"err:{{exc.reason}}")
+"#,
+        state = py_str(&py_state),
+        archive = py_str(&archive_path),
+        now = FIXED_NOW,
+    );
+    let out = run_python(&script);
+    let trimmed = out.trim();
+    let py_outcome = if trimmed == "ok" {
+        Ok(())
+    } else {
+        Err(trimmed.strip_prefix("err:").unwrap_or(trimmed).to_string())
+    };
+    (rust_outcome, py_outcome)
+}
+
+/// Reviewer case: `"vault/secrets.json": null` -- Python's `documents.get(...)`
+/// treats a JSON `null` the same as a missing key, so the KMS pre-check is
+/// skipped and the restore succeeds.
+#[test]
+fn restore_treats_explicit_null_vault_doc_as_absent_like_python() {
+    let archive = minimal_backup_archive(Some(Value::Null));
+    let (rust, py) = probe_restore_vault_doc(&archive);
+    assert!(rust.is_ok(), "rust: {rust:?}");
+    assert!(py.is_ok(), "python: {py:?}");
+}
+
+/// Reviewer case: the `vault/secrets.json` key is absent entirely.
+#[test]
+fn restore_treats_missing_vault_doc_key_as_absent_like_python() {
+    let archive = minimal_backup_archive(None);
+    let (rust, py) = probe_restore_vault_doc(&archive);
+    assert!(rust.is_ok(), "rust: {rust:?}");
+    assert!(py.is_ok(), "python: {py:?}");
+}
+
+/// Reviewer case: `vault_doc` present with a non-dict `dek` -- must still be
+/// `backup_malformed` in both languages (unaffected by the E-4 fix).
+#[test]
+fn restore_rejects_vault_doc_with_non_dict_dek_in_both_languages() {
+    let archive = minimal_backup_archive(Some(json!({"dek": "not-a-dict"})));
+    let (rust, py) = probe_restore_vault_doc(&archive);
+    assert_eq!(rust, Err("backup_malformed".to_string()));
+    assert_eq!(py, Err("backup_malformed".to_string()));
 }
 
 // ----------------------------------------------------- admin passphrase auth

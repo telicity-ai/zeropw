@@ -383,7 +383,11 @@ fn unwrappable_generation_excluded_and_does_not_break_scan_or_exec() {
     assert!(doc["secrets"]["gh-token"]["active_version"].is_null());
 
     let values = ctx.vault.values_for_trusted_scan().unwrap();
-    assert!(values.iter().any(|v| v == b"synthetic-local-value"));
+    assert!(
+        values
+            .iter()
+            .any(|v| v.expose() == b"synthetic-local-value")
+    );
 
     let err = ctx
         .vault
@@ -488,7 +492,7 @@ fn local_secret_survives_colliding_shared_secret_id() {
     let meta = ctx.vault.get_meta("gh-token").unwrap();
     assert_eq!(meta.project, "demo");
     let value = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
-    assert_eq!(value, b"synthetic-local-value");
+    assert_eq!(value.expose(), b"synthetic-local-value");
 }
 
 // ------------------------------------------------------- DerivedDocOverwrite
@@ -648,7 +652,7 @@ fn generation_key_decrypts_local_dek_does_not() {
     )
     .unwrap();
     let value = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
-    assert_eq!(value, SYNTHETIC_SECRET);
+    assert_eq!(value.expose(), SYNTHETIC_SECRET);
 }
 
 #[test]
@@ -690,7 +694,7 @@ fn values_for_trusted_scan_includes_shared_secret() {
     )
     .unwrap();
     let values = ctx.vault.values_for_trusted_scan().unwrap();
-    assert!(values.iter().any(|v| v == SYNTHETIC_SECRET));
+    assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
 }
 
 // --------------------------------------------------------------- NoLeakage

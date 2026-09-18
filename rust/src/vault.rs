@@ -417,7 +417,7 @@ impl<'a> Vault<'a> {
         secret_id: &str,
         version: i64,
         entry: &Map<String, Value>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<SecretBytes, Error> {
         if entry.get("shared_env").is_some_and(|v| !json_falsy(v)) {
             return self.decrypt_shared(secret_id, entry);
         }
@@ -438,6 +438,7 @@ impl<'a> Vault<'a> {
             &ciphertext,
             &Self::aad(secret_id, version),
         )
+        .map(SecretBytes::new)
         .map_err(|_| corrupt())
     }
 
@@ -466,7 +467,7 @@ impl<'a> Vault<'a> {
         &self,
         secret_id: &str,
         entry: &Map<String, Value>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<SecretBytes, Error> {
         let corrupt = || Error::state("secret_corrupt").with_detail(secret_id);
         let env_id = entry
             .get("shared_env")
@@ -488,6 +489,7 @@ impl<'a> Vault<'a> {
             version_id,
             entry,
         )
+        .map(SecretBytes::new)
         .map_err(|_| corrupt())
     }
 
@@ -900,7 +902,7 @@ impl<'a> Vault<'a> {
         &self,
         secret_id: &str,
         version: Option<i64>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<SecretBytes, Error> {
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
         if !secrets_obj.contains_key(secret_id) {
@@ -927,7 +929,7 @@ impl<'a> Vault<'a> {
     /// Plaintext of every version of every secret (any status), for
     /// in-process leak comparisons only. Never returned to a caller outside
     /// the trusted process.
-    pub fn values_for_trusted_scan(&self) -> Result<Vec<Vec<u8>>, Error> {
+    pub fn values_for_trusted_scan(&self) -> Result<Vec<SecretBytes>, Error> {
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
         let mut ids: Vec<String> = secrets_obj.keys().cloned().collect();
@@ -960,7 +962,7 @@ impl<'a> Vault<'a> {
         version: Option<i64>,
         admin: &AdminAuth,
         now: Option<f64>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<SecretBytes, Error> {
         if !admin.fresh(now) {
             self.audit.record(
                 "secret_reveal_denied",
@@ -1179,7 +1181,11 @@ impl<'a> Vault<'a> {
             "backup_id",
         ));
         let documents_obj = documents.as_object().expect("checked is_object");
-        let vault_doc = documents_obj.get(VAULT_DOC);
+        // Python's `documents.get(VAULT_DOC)` treats an explicit JSON `null`
+        // the same as a missing key (`json.loads` maps both to `None`), so
+        // an archive with `"vault/secrets.json": null` skips the KMS
+        // pre-check just like one that omits the key entirely (finding E-4).
+        let vault_doc = documents_obj.get(VAULT_DOC).filter(|v| !v.is_null());
         if let (Some(kms), Some(vault_doc)) = (kms, vault_doc) {
             let dek_val = vault_doc.as_object().and_then(|o| o.get("dek"));
             let wrapped = match dek_val {
