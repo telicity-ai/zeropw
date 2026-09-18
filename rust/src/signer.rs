@@ -70,8 +70,16 @@
 //!   re-measurement against the real Python signer showed was both slower
 //!   per accept and far more idle-CPU-hungry than Python -- see
 //!   `DEVIATIONS.md` for the measured numbers).
+//! * That same `mio::Poll`/[`mio::Waker`] pair costs 2 extra fds per binding
+//!   beyond the listening socket itself (its own kqueue/epoll fd, plus a
+//!   second kqueue-based fd `Waker::new` allocates on this platform) --
+//!   3 fds/binding where Python's `_BindingServer.__init__` opens exactly 1
+//!   (`self._sock`). Per-*client* cost matches Python exactly (1 fd, not 2:
+//!   finding G-R6-1 fixed a `try_clone()`-based duplicate). See
+//!   `DEVIATIONS.md` for the measured ratios and the `RLIMIT_NOFILE` sweep.
 
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -211,7 +219,17 @@ impl ClientState {
 /// entry already gone when it looks, and `handle_accepted` then drops the
 /// handle it can no longer place instead of leaking it into a stale slot).
 struct ClientSlot {
-    stream: UnixStream,
+    /// Shared with the serving thread's own [`SharedStream`] clone (finding
+    /// G-R6-1): this used to be a *second*, independently `try_clone()`d
+    /// `UnixStream` kept only so `close()` could `shutdown()` it while the
+    /// worker thread read/wrote through its own separate fd, costing 2 fds
+    /// per admitted client where Python's `self._clients[thread] = client`
+    /// keeps exactly 1 (`self._sock.accept()`'s own return value, the same
+    /// object both `close()` and the serving thread use). `Arc<UnixStream>`
+    /// lets both sides share the one accepted fd instead: `shutdown()` here
+    /// and `Read`/`Write` in the worker both go through `&UnixStream`, which
+    /// `std` already implements for concurrent use from multiple owners.
+    stream: Arc<UnixStream>,
     handle: Option<JoinHandle<()>>,
     /// Signalled (by `serve_client` sending, right before it returns) once
     /// this client's thread has finished; `close()` waits on this with a
@@ -222,6 +240,32 @@ struct ClientSlot {
     /// (finding G-R2-5). `Option` so `close()` can take it out alongside
     /// `handle` without disturbing the rest of the slot.
     done: Option<Receiver<()>>,
+}
+
+/// `Read`/`Write` wrapper around a client socket shared (via `Arc`) between
+/// `ClientSlot` (which only ever needs to `shutdown()` it from `close()`)
+/// and the serving thread's `AgentConnection` (finding G-R6-1). `&UnixStream`
+/// already implements `Read`/`Write` in `std` -- a `UnixStream` supports
+/// concurrent use through a shared reference, the same guarantee a
+/// `try_clone()`-ed second fd relied on -- so this just forwards to that impl
+/// instead of needing a second, independently `try_clone()`-ed file
+/// descriptor the way the previous version of this module did.
+struct SharedStream(Arc<UnixStream>);
+
+impl Read for SharedStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl Write for SharedStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        (&*self.0).flush()
+    }
 }
 
 /// Port of `signer._BindingServer`.
@@ -544,39 +588,44 @@ impl BindingServer {
         }
         let id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
         let max = self.max_agent_clients.load(Ordering::SeqCst);
+        // Wrap in `Arc` once, up front: one accepted fd shared by the
+        // `ClientSlot` (which only ever `shutdown()`s it from `close()`) and
+        // the serving thread's `AgentConnection` (via `SharedStream`), matching
+        // Python's single `self._sock.accept()` return value used by both
+        // `close()`'s `shutdown()` and the serving thread -- instead of a
+        // second `try_clone()`-ed fd that used to exist solely for `close()`
+        // to reach (finding G-R6-1). `Arc::new` cannot fail, so (unlike the
+        // old `try_clone()`) there is no fallible step here that could ever
+        // misreport a refusal as `too_many_agent_clients` when the real cause
+        // was something else.
+        let shared = Arc::new(stream);
         let (admitted, done_tx) = {
             let mut clients = self.clients.lock().expect("clients mutex poisoned");
             if self.closed.load(Ordering::SeqCst) || clients.len() >= max {
                 (false, None)
             } else {
-                match stream.try_clone() {
-                    Ok(dup) => {
-                        // Register *before* the client can possibly be
-                        // observed finishing: the `handle`/`done` slots are
-                        // filled in below, but the entry itself -- and thus
-                        // `close()`'s and `serve_client`'s own tail's view of
-                        // which ids exist -- is created here, under the same
-                        // lock that decided admission, strictly before
-                        // `spawn` below can start the thread (finding
-                        // G-R2-2; mirrors Python's `self._clients[thread] =
-                        // client` before `thread.start()`).
-                        let (done_tx, done_rx) = std::sync::mpsc::channel();
-                        clients.insert(
-                            id,
-                            ClientSlot {
-                                stream: dup,
-                                handle: None,
-                                done: Some(done_rx),
-                            },
-                        );
-                        (true, Some(done_tx))
-                    }
-                    Err(_) => (false, None),
-                }
+                // Register *before* the client can possibly be observed
+                // finishing: the `handle`/`done` slots are filled in below,
+                // but the entry itself -- and thus `close()`'s and
+                // `serve_client`'s own tail's view of which ids exist -- is
+                // created here, under the same lock that decided admission,
+                // strictly before `spawn` below can start the thread
+                // (finding G-R2-2; mirrors Python's `self._clients[thread] =
+                // client` before `thread.start()`).
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                clients.insert(
+                    id,
+                    ClientSlot {
+                        stream: Arc::clone(&shared),
+                        handle: None,
+                        done: Some(done_rx),
+                    },
+                );
+                (true, Some(done_tx))
             }
         };
         if !admitted {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
+            let _ = shared.shutdown(std::net::Shutdown::Both);
             if !self.closed.load(Ordering::SeqCst) {
                 // Never let auditing kill the accept loop.
                 let _ = self.safe_audit(
@@ -593,7 +642,7 @@ impl BindingServer {
         let worker = Arc::clone(self);
         match thread::Builder::new()
             .name(format!("zeropw-signer-client-{id}"))
-            .spawn(move || worker.serve_client(id, stream, done_tx))
+            .spawn(move || worker.serve_client(id, shared, done_tx))
         {
             Ok(handle) => {
                 // Late-bind the handle into the slot created above. If the
@@ -620,10 +669,10 @@ impl BindingServer {
     }
 
     // ------------------------------------------------------------ serving
-    fn serve_client(self: Arc<Self>, id: u64, client: UnixStream, done_tx: Sender<()>) {
+    fn serve_client(self: Arc<Self>, id: u64, client: Arc<UnixStream>, done_tx: Sender<()>) {
         let _ = client.set_read_timeout(Some(CLIENT_IO_TIMEOUT));
         let _ = client.set_write_timeout(Some(CLIENT_IO_TIMEOUT));
-        let mut conn = sshwire::AgentConnection::new(client);
+        let mut conn = sshwire::AgentConnection::new(SharedStream(client));
         let mut state = ClientState::new();
         loop {
             if self.closed.load(Ordering::SeqCst) {
@@ -1310,6 +1359,13 @@ impl SignerManager {
         )?;
         decision.require()?;
         let name = format!("a{}.sock", short_hex_id());
+        // `self.socket_dir` is already `choose_socket_dir`'s normalized
+        // result (finding G-R6-2), and `name` has no `/`/`.` components of
+        // its own, so this join cannot reintroduce anything a caller-supplied
+        // `socket_dir` might have had normalized away -- this length check
+        // and the `ServerRegistry` key below (`path.to_string_lossy()`) both
+        // already operate on the normalized string with no further work
+        // needed here.
         let path = self.socket_dir.join(&name);
         // Measure *characters*, matching Python's `len(str(path))`: Python
         // `str` length counts Unicode code points, not encoded bytes.
@@ -1455,6 +1511,68 @@ pub fn socket_mode_ok(path: &Path) -> bool {
 // Socket plumbing helpers
 // ---------------------------------------------------------------------------
 
+/// Normalizes a path string the way CPython's `pathlib` does the instant a
+/// `Path` is constructed from one (finding G-R6-2): collapses every run of
+/// repeated `/` separators, drops every `.` component, and leaves `..`
+/// components unresolved, exactly like `Path(s)`/`str(Path(s))`. Also
+/// reproduces pathlib's POSIX "root" special case: a leading run of
+/// *exactly* two slashes is preserved as-is (`"//foo"` stays `"//foo"`),
+/// while a run of one or three-or-more collapses to a single leading `/`
+/// (`"/foo"` stays `"/foo"`; `"///foo"` becomes `"/foo"`) -- measured
+/// directly against `python3.12`:
+/// `str(Path("//foo"))` == `"//foo"`, `str(Path("///foo"))` == `"/foo"`,
+/// `str(Path("/tmp/zpw//aaa"))` == `"/tmp/zpw/aaa"` (12 chars, not 13),
+/// `str(Path("/tmp/zpw/./aaa"))` == `"/tmp/zpw/aaa"`,
+/// `str(Path("/tmp/zpw/aaa/"))` == `"/tmp/zpw/aaa"`, and
+/// `str(Path("/tmp/zpw/b/../aaa"))` == `"/tmp/zpw/b/../aaa"` (`..` kept
+/// literally, not resolved). `str(Path(""))` == `"."`, reproduced here too
+/// for completeness even though `choose_socket_dir` never calls this with an
+/// empty string.
+///
+/// `store.rs`'s `normalize_join_name` performs the same component-dropping
+/// for the *relative* `name` half of `Path(base) / name`, but deliberately
+/// returns an absolute `name` **unchanged** -- correct for its own caller,
+/// since `Path::join`'s "an absolute joined path replaces the base" rule
+/// means the join itself needs no further normalization of that half (the
+/// leading-slash-run rule above never had to be implemented there). This
+/// function normalizes `_choose_socket_dir`'s `preferred` candidate itself --
+/// the base, not a name being joined onto one -- exactly mirroring Python's
+/// own `candidate = Path(preferred)` (`signer.py`), which normalizes before
+/// `candidate`'s length is ever measured or any directory is created.
+/// Reusing `normalize_join_name` as-is would therefore return the candidate
+/// untouched and reproduce the exact gap this fixes, so this is a separate,
+/// small function rather than a copy of that one (`rust/PORTING.md` §3b).
+fn normalize_pathlib_string(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_string();
+    }
+    let leading_slashes = path.chars().take_while(|&c| c == '/').count();
+    let root = match leading_slashes {
+        0 => "",
+        2 => "//",
+        _ => "/",
+    };
+    // All leading-slash chars are single-byte ASCII, so the byte offset
+    // equals the char count counted above; slicing here is exact.
+    let rest = &path[leading_slashes..];
+    let components: Vec<&str> = rest
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect();
+    match (root.is_empty(), components.is_empty()) {
+        (true, true) => ".".to_string(),
+        (true, false) => components.join("/"),
+        (false, true) => root.to_string(),
+        (false, false) => format!("{root}{}", components.join("/")),
+    }
+}
+
+/// [`normalize_pathlib_string`] applied to a [`Path`], round-tripped through
+/// `PathBuf`.
+fn normalize_pathlib_path(path: &Path) -> PathBuf {
+    PathBuf::from(normalize_pathlib_string(&path.to_string_lossy()))
+}
+
 /// Port of `SignerManager._choose_socket_dir`. Both branches create their
 /// leaf directory at mode 0700 atomically in the `mkdir` syscall itself (via
 /// `DirBuilder::mode`, the same technique `context.rs`'s
@@ -1466,8 +1584,17 @@ pub fn socket_mode_ok(path: &Path) -> bool {
 /// mode first, matching `Path.mkdir(parents=True)`'s own documented
 /// behaviour of leaving intermediate parents at their default mode and only
 /// applying the given `mode` to the final component.
+///
+/// The `preferred` candidate is normalized first ([`normalize_pathlib_path`],
+/// finding G-R6-2), exactly mirroring Python's own `candidate = Path(preferred)`
+/// -- both the boundary length check below and the directory actually
+/// created/returned use the normalized form, so a candidate containing
+/// `//`/`/./` counts (and is created) the same, shorter length in Rust that
+/// it already did in Python, instead of counting longer and silently falling
+/// back to a fresh private temp directory below the true boundary.
 fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     if let Some(candidate) = preferred {
+        let candidate = normalize_pathlib_path(&candidate);
         let probe = candidate.join("s".repeat(24));
         // Characters, not UTF-8 bytes -- matches Python's `len(str(path))`
         // (finding G-R2-3; see `SignerManager::bind`'s identical fix).
@@ -1963,6 +2090,104 @@ mod tests {
         let rust_suffix_len = name.len() - "zpws-".len();
         assert_eq!(rust_suffix_len, python_suffix_len);
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    // Regression test for finding G-R6-2: `normalize_pathlib_string` must
+    // reproduce CPython's `pathlib` string normalization exactly --
+    // collapsing repeated `/` separators and dropping `.` components (but
+    // never resolving `..`), including pathlib's own leading-slash-run
+    // special case (exactly two slashes preserved, one or three-or-more
+    // collapsed to one). Compares directly against real `python3.12`'s
+    // `str(pathlib.Path(x))` for the shapes the equivalence review named:
+    // `//`, `/./`, a trailing slash, and `..`.
+    #[test]
+    fn normalize_pathlib_string_matches_python_pathlib_str() {
+        let cases = [
+            "/tmp/zpw//aaa",
+            "/tmp/zpw/./aaa",
+            "/tmp/zpw/aaa/",
+            "/tmp/zpw/b/../aaa",
+            "/tmp/zpw//",
+            "/tmp/zpw///.",
+            "//tmp/zpw",
+            "///tmp/zpw",
+            "////tmp/zpw",
+            "/",
+            "//",
+            "///",
+            "a//b",
+            "a/./b",
+            "./a/b",
+            "../a/b",
+            "",
+        ];
+        let script = format!(
+            "from pathlib import Path\n\
+             import json\n\
+             cases = {cases:?}\n\
+             print(json.dumps([str(Path(c)) for c in cases]))",
+        );
+        let python_json = crate::oracle::python(&script);
+        let python_results: Vec<String> =
+            serde_json::from_str(python_json.trim()).expect("python prints a JSON string array");
+        assert_eq!(python_results.len(), cases.len());
+        for (case, expected) in cases.iter().zip(python_results.iter()) {
+            assert_eq!(&normalize_pathlib_string(case), expected, "input: {case:?}");
+        }
+    }
+
+    // Regression test for finding G-R6-2: `choose_socket_dir` used to pass a
+    // caller-supplied `preferred` candidate through unnormalized, so a
+    // candidate containing a doubled separator (or `./`, or a trailing
+    // slash) counted *longer* in Rust than Python's own `len(str(Path(...)))`
+    // -- Python normalizes at `Path()` construction, before ever measuring or
+    // creating anything. At exactly the `MAX_UNIX_PATH` boundary this shifted
+    // where the length check trips: Python still used the operator's
+    // configured directory while Rust silently fell back to a fresh private
+    // temp directory instead. Picks a padding length so the *normalized*
+    // probe sits exactly at the boundary while the *raw*, doubled-separator
+    // probe is one character past it -- the exact shape the review measured.
+    #[test]
+    fn choose_socket_dir_normalizes_like_python_pathlib_at_the_boundary() {
+        let base = format!("/tmp/g-r6-2-{}", short_hex_id());
+        // probe = normalized_candidate + "/" + "s" * 24; want the
+        // *normalized* probe length to land exactly at MAX_UNIX_PATH.
+        let suffix_len = 24 + 1; // "/" + 24 "s" characters
+        let clean_len = MAX_UNIX_PATH - suffix_len; // length of base + "/" + padding
+        let padding_len = clean_len - base.chars().count() - 1;
+        let padding = "d".repeat(padding_len);
+        let normalized = format!("{base}/{padding}");
+
+        for raw in [
+            format!("{base}//{padding}"),   // doubled separator
+            format!("{base}/./{padding}"),  // "." component
+            format!("{base}/{padding}///"), // trailing separators
+        ] {
+            let script = format!(
+                "import shutil\n\
+                 from zeropw.signer import SignerManager\n\
+                 d = SignerManager._choose_socket_dir({raw:?})\n\
+                 print(str(d))\n\
+                 shutil.rmtree(str(d), ignore_errors=True)\n",
+            );
+            let python_dir = crate::oracle::python(&script).trim().to_string();
+            assert_eq!(
+                python_dir, normalized,
+                "python3.12 should normalize {raw:?} to the configured directory, \
+                 not fall back to a temp dir"
+            );
+
+            let dir = choose_socket_dir(Some(PathBuf::from(&raw))).unwrap();
+            assert_eq!(
+                dir,
+                PathBuf::from(&normalized),
+                "rust should normalize {raw:?} to the configured directory, not \
+                 fall back to a temp dir, matching python3.12 above"
+            );
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            std::fs::remove_dir_all(&normalized).unwrap();
+        }
     }
 
     // Port of test_identities_lists_only_the_bound_key_without_touching_plaintext
@@ -2890,6 +3115,220 @@ mod tests {
             .is_err()
         );
         assert_eq!(f.ctx.policy.get_grant(&f.grant.id).unwrap().uses, 0);
+    }
+
+    // Regression test for finding G-R6-1: `handle_accepted` used to
+    // `try_clone()` a *second*, independent fd per admitted client purely so
+    // `close()` could `shutdown()` it while the serving thread read/wrote
+    // through its own separate fd -- 2 fds per client where Python's
+    // `self._clients[thread] = client` keeps exactly 1 (`self._sock.accept()`'s
+    // own return value, shared by both `close()` and the serving thread).
+    // The reviewer's `RLIMIT_NOFILE` sweep showed this doubling roughly
+    // halves how many clients a binding can serve before `accept()` starts
+    // failing, and (worse) an accept-time `EMFILE` after that point kills the
+    // accept loop for good with no audit record -- exactly matching Python's
+    // own `except OSError: break` shape, just triggered twice as early.
+    // `ClientSlot`/`SharedStream` now share one `Arc<UnixStream>` instead --
+    // asserted directly here via `Arc::strong_count` rather than an fd count
+    // (deterministic and immune to unrelated tests' own fd churn in the same
+    // process, unlike the process-wide `/dev/fd` measurements below, which
+    // are `#[ignore]`d for exactly that reason).
+    #[test]
+    fn client_slot_shares_the_accepted_stream_with_its_worker_thread() {
+        let f = fixture();
+        let server = f.server();
+        let mut conn = f.connect();
+        assert_eq!(
+            conn.request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                .unwrap()[0],
+            sshwire::SSH_AGENT_IDENTITIES_ANSWER
+        );
+        let clients = server.clients.lock().unwrap();
+        let slot = clients.values().next().expect("one live client");
+        // 2 = one clone in `ClientSlot::stream`, one in the serving
+        // thread's `SharedStream` (still alive, blocked reading the next
+        // message). Before the fix there was no `Arc` at all: `handle_accepted`
+        // `try_clone()`d a wholly separate fd instead, so this assertion
+        // could not even be expressed against the old code.
+        assert_eq!(
+            Arc::strong_count(&slot.stream),
+            2,
+            "ClientSlot and the serving thread must share one Arc<UnixStream> \
+             (one accepted fd), not hold two independently opened streams"
+        );
+    }
+
+    /// Counts this process's open file descriptors via `/dev/fd`, the same
+    /// technique the equivalence review used `lsof` for (finding G-R6-1).
+    /// Used by both `#[ignore]`d fd-ratio measurement tests below.
+    fn open_fd_count() -> usize {
+        std::fs::read_dir("/dev/fd").map(|d| d.count()).unwrap_or(0)
+    }
+
+    /// Serializes the two `#[ignore]`d fd-ratio measurement tests below
+    /// against each other (both do process-wide before/after `/dev/fd`
+    /// snapshots, so running them concurrently would have each one's fd
+    /// churn pollute the other's count) when run together, e.g. `cargo test
+    /// --offline -- --ignored fd_cost`. Does not, and cannot, protect against
+    /// unrelated tests' own fd churn if run alongside the rest of the suite
+    /// -- hence `#[ignore]`, matching `idle_cpu_with_one_and_nine_live_bindings`'s
+    /// own convention for a process-wide measurement that only means
+    /// anything with nothing else contending for the same process's fd table.
+    static FD_MEASUREMENT_LOCK: StdMutex<()> = StdMutex::new(());
+
+    // Measurement, not a correctness gate (see `FD_MEASUREMENT_LOCK`; the
+    // real regression pin for this fix is
+    // `client_slot_shares_the_accepted_stream_with_its_worker_thread` above).
+    // Re-derives the fd-per-client ratio the reviewer measured with `lsof`
+    // (1.00 for Python, 2.00 for the pre-fix Rust) directly against this
+    // fix. Run explicitly: `cargo test --offline -- --ignored --nocapture
+    // per_client_fd_cost`.
+    #[test]
+    #[ignore]
+    fn per_client_fd_cost_matches_python_ratio_of_one() {
+        let _guard = FD_MEASUREMENT_LOCK.lock().unwrap();
+        let f = fixture();
+        const N: usize = 30;
+        let before = open_fd_count();
+        let mut conns = Vec::with_capacity(N);
+        for i in 0..N {
+            // Admit one at a time (waiting for each to register before the
+            // next `connect()`) rather than firing `N` connects back to
+            // back: this binding's listener has Python's own backlog of 16
+            // (`SIGNER_LISTEN_BACKLOG`, finding G-R5-1), and a tight connect
+            // loop can outrun the accept loop's per-connection admission
+            // work (lock, `accept()`, thread spawn) faster than that
+            // backlog drains -- exactly what
+            // `burst_above_backlog_is_refused_like_python` deliberately
+            // exercises. This test cares about steady-state fd cost per
+            // admitted client, not backlog behaviour, so it avoids that
+            // failure mode instead of racing it.
+            conns.push(f.connect());
+            assert!(f.wait_until(
+                || f.server().clients.lock().unwrap().len() == i + 1,
+                Duration::from_secs(5)
+            ));
+        }
+        let after = open_fd_count();
+        let delta = after.saturating_sub(before);
+        let server_side_ratio = (delta as f64 / N as f64) - 1.0; // minus the 1 client-side fd/conn this test itself opens
+        eprintln!(
+            "[G-R6-1] {N} concurrent clients on one binding: {delta} new fds \
+             total ({:.2} fds/client server-side; Python measured 1.00, the \
+             pre-fix Rust measured 2.00)",
+            server_side_ratio
+        );
+        drop(conns);
+    }
+
+    // Measurement, not a correctness gate (see `FD_MEASUREMENT_LOCK` and the
+    // note on the test above). Documents the accepted per-binding fd-cost
+    // deviation recorded in `DEVIATIONS.md` (finding G-R6-1): Python's
+    // `_BindingServer.__init__` opens exactly 1 fd per binding (`self._sock`),
+    // while this port's event-driven accept wait (finding G-R4-1) needs
+    // `mio::Poll` (its own kqueue/epoll fd) plus a `mio::Waker` (a second
+    // kqueue-based fd on this platform) in addition to the listening socket
+    // itself -- 3 fds/binding. Run explicitly: `cargo test --offline --
+    // --ignored --nocapture per_binding_fd_cost`.
+    #[test]
+    #[ignore]
+    fn per_binding_fd_cost_matches_documented_ratio_of_three() {
+        let _guard = FD_MEASUREMENT_LOCK.lock().unwrap();
+        let f = fixture(); // already has 1 live binding
+        const N: usize = 10;
+        let before = open_fd_count();
+        let mut _extra = Vec::with_capacity(N);
+        for _ in 0..N {
+            let grant = f
+                .ctx
+                .policy
+                .create_grant("agent-1", "box", Some(3600), None)
+                .unwrap();
+            _extra.push(f.manager.bind("agent-1", "box", &grant.id).unwrap());
+        }
+        let after = open_fd_count();
+        let delta = after.saturating_sub(before);
+        eprintln!(
+            "[G-R6-1] {N} new bindings (no clients): {delta} new fds ({:.2} \
+             fds/binding; Python's own `_BindingServer.__init__` costs \
+             exactly 1 fd/binding -- `self._sock`)",
+            delta as f64 / N as f64
+        );
+    }
+
+    // Reproduces the equivalence reviewer's `RLIMIT_NOFILE` sweep for this
+    // process's *current* fd limit (report-only; cannot itself lower
+    // `RLIMIT_NOFILE`, since that needs an `unsafe` `libc::setrlimit` call
+    // this crate's engineering rules forbid outside `store.rs`). Driven
+    // externally across several limits with `sh -c 'ulimit -n N && exec
+    // cargo test ...'`, mirroring how the review varied the limit against
+    // the real Python signer. `#[ignore]`d for the same reason as the fd-
+    // ratio measurements above: a real fd-table probe, not a fast
+    // deterministic unit test.
+    #[test]
+    #[ignore]
+    fn rlimit_probe_served_clients_and_accept_loop_survival() {
+        let f = fixture();
+        f.manager.set_max_agent_clients(DEFAULT_MAX_AGENT_CLIENTS); // Python's own default cap
+        let mut conns = Vec::new();
+        for _ in 0..DEFAULT_MAX_AGENT_CLIENTS + 8 {
+            match UnixStream::connect(&f.binding.socket_path) {
+                Ok(s) => conns.push(s),
+                Err(_) => break, // this process's own fd budget is exhausted too
+            }
+            // Give the accept loop a brief window to admit or refuse this
+            // connection before firing the next one: this binding's listener
+            // has Python's own backlog of 16 (`SIGNER_LISTEN_BACKLOG`), and
+            // this probe is about the fd-limit boundary, not the separate,
+            // already-covered backlog boundary (`burst_above_backlog_is_
+            // refused_like_python`) -- an unpaced burst would conflate the two.
+            thread::sleep(Duration::from_millis(15));
+        }
+        thread::sleep(Duration::from_millis(300));
+        let served = f.server().clients.lock().unwrap().len();
+        let too_many_recorded = f.has_reason("too_many_agent_clients");
+        conns.clear();
+        // Wait for every admitted client's fd to actually be released
+        // (server-side thread exit, not just this process's own closed
+        // client-side handles) before judging whether the accept loop
+        // survived -- a fixed sleep risks a false "dead" reading from this
+        // probe's own reconnect attempt racing fd reclamation, not from the
+        // accept loop itself.
+        let _ = f.wait_until(
+            || f.server().clients.lock().unwrap().is_empty(),
+            Duration::from_secs(5),
+        );
+        let accept_loop_alive_after = match UnixStream::connect(&f.binding.socket_path) {
+            Ok(sock) => {
+                let _ = sock.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = sock.set_write_timeout(Some(Duration::from_secs(2)));
+                let mut conn = sshwire::AgentConnection::new(sock);
+                conn.request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                    .is_ok_and(|r| r[0] == sshwire::SSH_AGENT_IDENTITIES_ANSWER)
+            }
+            Err(_) => false,
+        };
+        eprintln!(
+            "[G-R6-1 rlimit probe] RLIMIT_NOFILE={:?} served={served} \
+             too_many_agent_clients_recorded={too_many_recorded} \
+             accept_loop_alive_after={accept_loop_alive_after}",
+            rlimit_nofile_soft_for_reporting()
+        );
+    }
+
+    /// Best-effort, report-only: reads this process's own soft `RLIMIT_NOFILE`
+    /// via `/proc`-free `getrlimit(2)` is unavailable without `unsafe` FFI
+    /// (barred outside `store.rs`), so this shells out to `ulimit -n`
+    /// instead -- purely to label the eprintln above, never used for any
+    /// control-flow decision.
+    fn rlimit_nofile_soft_for_reporting() -> String {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -n")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|| "?".to_string())
     }
 
     // Regression test for finding G-R2-5: the client-join loop used to check
