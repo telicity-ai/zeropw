@@ -495,6 +495,185 @@ print(reply.hex())
     f.manager.shutdown();
 }
 
+// ------------------------------------------------ non-ASCII socket_dir (G-R2-3)
+
+/// Regression test for finding G-R2-3: `SignerManager::bind`/`choose_socket_dir`
+/// used to measure UTF-8 *bytes* (`.to_string_lossy().len()`) where Python
+/// measures Unicode *characters* (`len(str(path))`). A `socket_dir` built
+/// from multi-byte characters diverges at exactly the characters that make
+/// the two counts differ: this candidate is 75 characters (comfortably under
+/// `MAX_UNIX_PATH` = 100) but 145 UTF-8 bytes (over it), so the old
+/// byte-counting code silently replaced it with a private fallback temp dir
+/// and then refused to bind inside it at all (`socket_path_too_long`), while
+/// Python (and this crate, after the fix) use the configured directory
+/// directly. Cross-checked against a real `python3.12`
+/// `SignerManager._choose_socket_dir` and its `bind`-time length check.
+#[test]
+fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // A short, literal `/tmp`-rooted base (unlike `tempfile::TempDir`, whose
+    // own directory can itself already be a long per-process path, e.g. on
+    // macOS -- see `signer.rs`'s `choose_socket_dir_sets_leaf_mode_0700_...`
+    // test for the same concern), so the character budget below is spent on
+    // the non-ASCII component being tested, not consumed by the platform's
+    // own temp-dir naming.
+    let base = PathBuf::from("/tmp").join(format!("zpws-oracle-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let base_chars = base.to_string_lossy().chars().count();
+    // `choose_socket_dir` probes with a 24-character placeholder name (see
+    // `signer.rs`), a wider margin than the real ~18-character socket
+    // filename `bind` uses -- budget against the probe's 24 so the
+    // directory is actually accepted as configured (not silently replaced
+    // by a fallback temp dir). Fill the remainder with 2-byte-per-character
+    // "é"s, so the total is comfortably within the character limit but well
+    // over it in UTF-8 bytes -- exactly the gap finding G-R2-3 closed.
+    // `choose_socket_dir`'s own probe is
+    // `candidate.join("s" * 24)`, i.e. `base_chars + 1 (sep) + non_ascii_chars
+    // + 1 (sep) + 24` characters, which must stay at or under 100.
+    let non_ascii_chars = 100usize.saturating_sub(base_chars + 26).min(70);
+    assert!(
+        non_ascii_chars >= 20,
+        "base path {base:?} ({base_chars} chars) leaves too little budget for this test"
+    );
+    let candidate = base.join("é".repeat(non_ascii_chars));
+    let total_chars = candidate.to_string_lossy().chars().count();
+    let total_bytes = candidate.to_string_lossy().len();
+    assert!(
+        total_chars <= 100,
+        "candidate must fit MAX_UNIX_PATH in characters: {total_chars}"
+    );
+    assert!(
+        total_bytes > 100,
+        "candidate must exceed MAX_UNIX_PATH in bytes for this test to be meaningful: {total_bytes}"
+    );
+
+    let ctx: &'static Context = Box::leak(Box::new(
+        Context::initialize(
+            tmp.path().join("state"),
+            "admin-passphrase-1",
+            "recovery-passphrase-1",
+            Config::default(),
+            clock::fixed(1_700_000_000.0),
+        )
+        .unwrap(),
+    ));
+    ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
+    let user_key = sshwire::generate_ed25519_private_key("agent-key");
+    let host_key = sshwire::generate_ed25519_private_key("host");
+    ctx.vault
+        .put_secret(
+            "box-key",
+            "ssh_private_key",
+            user_key.to_openssh_private_key().as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    ctx.policy.create_principal("agent-1", "default").unwrap();
+    ctx.policy
+        .create_connection(
+            P::Connection::new(
+                "box",
+                "demo",
+                "dev",
+                "ssh-box",
+                "ssh",
+                "box-key",
+                None,
+                "",
+                None,
+                None,
+                None,
+                Some(
+                    P::SshTarget::new(
+                        "127.0.0.1",
+                        2222,
+                        "deploy",
+                        vec![host_key.public.to_authorized_key("host").unwrap()],
+                    )
+                    .unwrap(),
+                ),
+                None,
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grant = ctx
+        .policy
+        .create_grant("agent-1", "box", Some(3600), Some(5))
+        .unwrap();
+
+    // Rust: the configured directory must be used as-is (no silent fallback
+    // to a private temp dir) -- `choose_socket_dir`'s `mkdir` has no socket
+    // byte-length limit at all, so this is a clean, platform-independent
+    // check of the character-vs-byte counting fix.
+    let manager = signer::install(ctx, Some(candidate.clone())).unwrap();
+    assert_eq!(
+        manager.socket_dir(),
+        candidate.as_path(),
+        "Rust must use the configured non-ASCII socket_dir directly, not fall back"
+    );
+    // `bind`'s own pre-`socket()` length check must accept this path (it
+    // fits `MAX_UNIX_PATH + 3` *characters*), i.e. must never fail with
+    // `Unsupported("socket_path_too_long")` here. Whether the *subsequent*
+    // real `bind(2)` syscall itself then succeeds is a separate question:
+    // this candidate's full socket path is long enough in UTF-8 *bytes*
+    // (each "é" is 2 bytes) that it can independently exceed the kernel's
+    // own `sockaddr_un` byte limit (~104 bytes on macOS) -- a real
+    // both-languages-shared limitation this crate's `MAX_UNIX_PATH`
+    // constant is deliberately calibrated close to, and not what finding
+    // G-R2-3 is about.
+    match manager.bind("agent-1", "box", &grant.id) {
+        Ok(binding) => assert!(binding.socket_path.exists()),
+        Err(e) => {
+            assert!(
+                !(e.is(zeropw::errors::ErrorClass::Unsupported)
+                    && e.reason == "socket_path_too_long"),
+                "bind() rejected a path that fits MAX_UNIX_PATH + 3 *characters* as \
+                 too long -- it must be measuring UTF-8 bytes instead (finding \
+                 G-R2-3): {e:?}"
+            );
+        }
+    }
+
+    // Python oracle: the same directory, measured the same way Python's own
+    // `SignerManager` does.
+    let script = format!(
+        r#"
+from pathlib import Path
+from zeropw.signer import SignerManager, MAX_UNIX_PATH
+
+candidate = Path({candidate:?})
+chosen = SignerManager._choose_socket_dir(candidate)
+print(str(chosen) == str(candidate))
+full = chosen / ("a" + "0" * 12 + ".sock")
+print(len(str(full)) <= MAX_UNIX_PATH + 3)
+"#,
+        candidate = candidate.to_str().expect("utf8 path"),
+    );
+    let output = run_python(&script);
+    let mut lines = output.lines();
+    assert_eq!(
+        lines.next(),
+        Some("True"),
+        "python must also use the configured directory directly"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("True"),
+        "python's own bind-time length check must accept this path too"
+    );
+
+    manager.shutdown();
+    let _ = std::fs::remove_dir_all(&base);
+    let _ = tmp; // kept alive until here
+}
+
 // ---------------------------------------------- Python signer, Rust client
 
 /// PORTING.md asks for "a Python signer with Rust helpers if practical".

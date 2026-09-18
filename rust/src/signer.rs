@@ -56,6 +56,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt}
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -80,12 +81,14 @@ const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on waiting for the accept thread to notice `closed` and return, the
 /// same 2s Python gives `self._accept_thread.join(timeout=2)`.
 const ACCEPT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-/// How many times `close()` retries connecting to its own socket to wake a
-/// blocked `accept()` call, in case the very first attempt races the kernel
+/// How many times `close()` retries connecting to its own wakeup path to wake
+/// a blocked `accept()` call, in case the very first attempt races the kernel
 /// still finishing the `bind`/`listen` setup. Each retry is cheap (a local
 /// Unix socket connect attempt); this is not a polling interval on the
 /// accept path itself (see `accept_loop`, which blocks in `accept()` with no
-/// sleep), just a small, bounded retry budget for the wakeup nudge.
+/// sleep), just a small, bounded retry budget for the wakeup nudge. See
+/// [`create_wakeup_link`] (finding G-R2-1) for why this connect target is not
+/// simply `binding.socket_path`.
 const CLOSE_WAKEUP_ATTEMPTS: u32 = 5;
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[sshwire::SESSION_BIND_EXTENSION];
@@ -161,19 +164,49 @@ impl ClientState {
 // BindingServer: one Unix socket, one accept loop, many client threads
 // ---------------------------------------------------------------------------
 
+/// One admitted client connection's bookkeeping. Inserted under the same
+/// `clients` lock that decides admission, *before* the serving thread is
+/// spawned, and removed exactly once (by the serving thread itself, from
+/// `serve_client`'s tail) -- so `clients` can never contain an entry nothing
+/// will ever remove, and never has a handle inserted after the entry it
+/// belongs to is already gone (finding G-R2-2). `handle`/`done` start empty
+/// and are filled in by `handle_accepted` immediately after `spawn` returns
+/// (a client that finishes before that late-bind runs simply finds its own
+/// entry already gone when it looks, and `handle_accepted` then drops the
+/// handle it can no longer place instead of leaking it into a stale slot).
+struct ClientSlot {
+    stream: UnixStream,
+    handle: Option<JoinHandle<()>>,
+    /// Signalled (by `serve_client` sending, right before it returns) once
+    /// this client's thread has finished; `close()` waits on this with a
+    /// bound shared across every live client instead of an untimed
+    /// `JoinHandle::join()` (`std` has no timed join), so one client thread
+    /// wedged inside `handle_message` (e.g. blocked taking the state
+    /// `flock`) cannot itself block `close()` past the shared deadline
+    /// (finding G-R2-5). `Option` so `close()` can take it out alongside
+    /// `handle` without disturbing the rest of the slot.
+    done: Option<Receiver<()>>,
+}
+
 /// Port of `signer._BindingServer`.
 struct BindingServer {
     ctx: &'static Context,
     binding: SignerBinding,
     listener: UnixListener,
+    /// A private hard link to `binding.socket_path`, created by
+    /// [`create_wakeup_link`] and used by `close()` to wake a thread parked
+    /// in `accept()` (finding G-R2-1). `None` only if the link itself could
+    /// not be created (e.g. `control_dir` is on a different filesystem than
+    /// `socket_path`), in which case `close()` falls back to connecting to
+    /// `binding.socket_path` directly, same as before this fix.
+    wakeup_path: Option<PathBuf>,
     closed: AtomicBool,
-    /// Live client sockets, keyed by a monotonic per-connection id (not by
-    /// `ThreadId`, so a client is registered — and admission is decided —
+    /// Live client connections, keyed by a monotonic per-connection id (not
+    /// by `ThreadId`, so a client is registered — and admission is decided —
     /// atomically with respect to `MAX_AGENT_CLIENTS`, exactly like Python's
     /// `self._clients[thread] = client` under `self._clients_lock` before
     /// `thread.start()`).
-    clients: Mutex<HashMap<u64, UnixStream>>,
-    handles: Mutex<HashMap<u64, JoinHandle<()>>>,
+    clients: Mutex<HashMap<u64, ClientSlot>>,
     next_client_id: AtomicU64,
     accept_handle: Mutex<Option<JoinHandle<()>>>,
     /// Signalled (by `accept_loop` sending, right before it returns) once the
@@ -181,7 +214,7 @@ struct BindingServer {
     /// instead of an untimed `JoinHandle::join()` (`std` has no timed join),
     /// so a wedged accept thread cannot block `close()` forever (finding
     /// G-4).
-    accept_done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    accept_done: Mutex<Option<Receiver<()>>>,
     max_agent_clients: Arc<AtomicUsize>,
 }
 
@@ -189,16 +222,18 @@ impl BindingServer {
     fn start(
         ctx: &'static Context,
         binding: SignerBinding,
+        control_dir: &Path,
         max_agent_clients: Arc<AtomicUsize>,
     ) -> Result<Arc<Self>, Error> {
         let listener = bind_and_listen(&binding.socket_path)?;
+        let wakeup_path = create_wakeup_link(control_dir, &binding.socket_path);
         let server = Arc::new(BindingServer {
             ctx,
             binding,
             listener,
+            wakeup_path,
             closed: AtomicBool::new(false),
             clients: Mutex::new(HashMap::new()),
-            handles: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(0),
             accept_handle: Mutex::new(None),
             accept_done: Mutex::new(None),
@@ -229,15 +264,28 @@ impl BindingServer {
         self.closed.store(true, Ordering::SeqCst);
         // The listener is blocking (see `accept_loop`/`bind_and_listen`), so
         // a thread parked in `accept()` needs an explicit nudge: connecting
-        // to our own socket makes the kernel hand that connection to the
-        // blocked `accept()` call, which then observes `closed` (via
-        // `handle_accepted`) and returns at once -- Python's equivalent is
-        // closing the listening socket out from under a 0.2s-timeout
-        // `accept()`. `std` has no safe way to force-close the listener's fd
-        // out from under another thread without an `unsafe` FFI call (barred
-        // everywhere but `store.rs`), so this is the safe-Rust substitute.
+        // wakes it up by handing the kernel a new pending connection, which
+        // `handle_accepted` immediately refuses once it observes `closed`.
+        // Connect via `wakeup_path` (a private hard link to this exact
+        // listening socket, created at bind time by `create_wakeup_link` and
+        // owned by this binding alone) rather than `binding.socket_path`
+        // itself: `binding.socket_path` lives in a directory this crate does
+        // not control the removal timing of (e.g. `Context::close`/`Drop`
+        // can `rmtree` its owned `socket_dir` before calling
+        // `SignerManager::shutdown`), so it can already be gone by the time
+        // `close()` runs. `wakeup_path` names the *same* underlying socket
+        // (a hard link, not a copy) from a directory only this crate ever
+        // removes from, and only right here -- so this connect target stays
+        // valid for as long as any thread could still be parked in
+        // `accept()` (finding G-R2-1). Falls back to `binding.socket_path`
+        // only if the link itself could not be created (e.g. a
+        // cross-filesystem `control_dir`).
+        let wakeup_target = self
+            .wakeup_path
+            .as_deref()
+            .unwrap_or(&self.binding.socket_path);
         for _ in 0..CLOSE_WAKEUP_ATTEMPTS {
-            if UnixStream::connect(&self.binding.socket_path).is_ok() {
+            if UnixStream::connect(wakeup_target).is_ok() {
                 break;
             }
         }
@@ -245,7 +293,10 @@ impl BindingServer {
         // does: `JoinHandle::join` has no timeout, so wait on a completion
         // signal sent right before `accept_loop` returns, and give up
         // (detaching the handle) past the deadline instead of blocking
-        // `close()` forever on a wedged accept thread.
+        // `close()` forever on a wedged accept thread. With the guaranteed
+        // wakeup path above this should now always fire promptly; the bound
+        // stays as defence in depth (e.g. every `CLOSE_WAKEUP_ATTEMPTS`
+        // connect attempts failing for an unrelated transient reason).
         let done = self
             .accept_done
             .lock()
@@ -267,38 +318,76 @@ impl BindingServer {
             drop(handle);
         }
         let _ = std::fs::remove_file(&self.binding.socket_path);
+        if let Some(wakeup_path) = &self.wakeup_path {
+            let _ = std::fs::remove_file(wakeup_path);
+        }
         // Shut down every live client connection so a blocking read in a
         // serving thread returns at once; snapshot the ids under the same
         // lock, mirroring Python's `live = list(self._clients)`.
         let live_ids: Vec<u64> = {
             let clients = self.clients.lock().expect("clients mutex poisoned");
-            for stream in clients.values() {
-                let _ = stream.shutdown(std::net::Shutdown::Both);
+            for slot in clients.values() {
+                let _ = slot.stream.shutdown(std::net::Shutdown::Both);
             }
             clients.keys().copied().collect()
         };
         let deadline = Instant::now() + CLIENT_JOIN_TIMEOUT; // one bound for all clients together
         let current = thread::current().id();
         for id in live_ids {
-            // Take the lock only long enough to remove this one entry: a
-            // serving thread's own cleanup (`serve_client`'s tail) also
-            // locks `handles` to detach itself, and would deadlock against
-            // a `close()` that held the lock across a blocking `join()`.
-            let handle = {
-                let mut handles = self.handles.lock().expect("handles mutex poisoned");
-                handles.remove(&id)
+            // Take the lock only long enough to pull this one entry's handle
+            // and completion receiver out of the slot (leaving the slot
+            // itself for `serve_client`'s own tail to remove): a serving
+            // thread's cleanup also locks `clients` to detach itself, and
+            // would deadlock against a `close()` that held the lock across a
+            // blocking `join`/`recv`.
+            let taken = {
+                let mut clients = self.clients.lock().expect("clients mutex poisoned");
+                clients
+                    .get_mut(&id)
+                    .map(|slot| (slot.handle.take(), slot.done.take()))
+            };
+            let Some((handle, done)) = taken else {
+                continue; // slot already fully removed by `serve_client`'s own tail
             };
             let Some(handle) = handle else {
-                continue;
+                continue; // admitted but not yet late-bound; nothing to join here
             };
             if handle.thread().id() == current {
                 continue; // registered but this *is* that thread (defensive, mirrors Python)
             }
-            if Instant::now() >= deadline {
+            // Bound *this* client's wait against the one shared deadline,
+            // exactly like Python's `thread.join(timeout=max(0.0, deadline -
+            // now))`: unlike an untimed `JoinHandle::join()` (`std` has no
+            // timed join), waiting on a completion signal first lets
+            // `close()` move on to the next client at the deadline even if
+            // this one is wedged inside `handle_message` rather than blocked
+            // on socket I/O (finding G-R2-5) -- e.g. stuck in
+            // `policy.consume` waiting on the state `flock` another thread
+            // or process holds.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 drop(handle); // detaches; give up waiting on the shared deadline
                 continue;
             }
-            let _ = handle.join();
+            let Some(done) = done else {
+                // No completion channel (should not normally happen): there
+                // is no bounded way to wait on a plain `JoinHandle`, so
+                // detach rather than risk blocking past the deadline.
+                drop(handle);
+                continue;
+            };
+            match done.recv_timeout(remaining) {
+                Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+                    // The thread has sent its completion signal (or dropped
+                    // the sender without sending, e.g. a panic) and is
+                    // finished or finishing; joining now should return
+                    // essentially immediately.
+                    let _ = handle.join();
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    drop(handle); // detaches; give up waiting on the shared deadline
+                }
+            }
         }
     }
 
@@ -307,11 +396,13 @@ impl BindingServer {
         // served the instant it arrives, exactly like Python's blocking
         // `accept()` with a 0.2s `settimeout` (that timeout only bounds
         // `close()`, never ordinary accept latency -- see finding G-1).
-        // `close()` wakes a parked `accept()` call by connecting to this
-        // same socket once `closed` is set; `handle_accepted` immediately
-        // refuses that connection (and any genuine client that raced with
-        // `close()`) once it observes the flag, so no fixed sleep is ever on
-        // this path.
+        // `close()` wakes a parked `accept()` call by connecting to
+        // `wakeup_path` (a private hard link to this same listening socket,
+        // guaranteed to remain connectable for as long as this thread could
+        // still be parked here -- finding G-R2-1) once `closed` is set;
+        // `handle_accepted` immediately refuses that connection (and any
+        // genuine client that raced with `close()`) once it observes the
+        // flag, so no fixed sleep is ever on this path.
         loop {
             match self.listener.accept() {
                 Ok((stream, _addr)) => self.handle_accepted(stream),
@@ -330,17 +421,34 @@ impl BindingServer {
         }
         let id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
         let max = self.max_agent_clients.load(Ordering::SeqCst);
-        let admitted = {
+        let (admitted, done_tx) = {
             let mut clients = self.clients.lock().expect("clients mutex poisoned");
             if self.closed.load(Ordering::SeqCst) || clients.len() >= max {
-                false
+                (false, None)
             } else {
                 match stream.try_clone() {
                     Ok(dup) => {
-                        clients.insert(id, dup);
-                        true
+                        // Register *before* the client can possibly be
+                        // observed finishing: the `handle`/`done` slots are
+                        // filled in below, but the entry itself -- and thus
+                        // `close()`'s and `serve_client`'s own tail's view of
+                        // which ids exist -- is created here, under the same
+                        // lock that decided admission, strictly before
+                        // `spawn` below can start the thread (finding
+                        // G-R2-2; mirrors Python's `self._clients[thread] =
+                        // client` before `thread.start()`).
+                        let (done_tx, done_rx) = std::sync::mpsc::channel();
+                        clients.insert(
+                            id,
+                            ClientSlot {
+                                stream: dup,
+                                handle: None,
+                                done: Some(done_rx),
+                            },
+                        );
+                        (true, Some(done_tx))
                     }
-                    Err(_) => false,
+                    Err(_) => (false, None),
                 }
             }
         };
@@ -358,16 +466,26 @@ impl BindingServer {
             }
             return;
         }
+        let done_tx = done_tx.expect("done_tx set whenever admitted is true");
         let worker = Arc::clone(self);
         match thread::Builder::new()
             .name(format!("zeropw-signer-client-{id}"))
-            .spawn(move || worker.serve_client(id, stream))
+            .spawn(move || worker.serve_client(id, stream, done_tx))
         {
             Ok(handle) => {
-                self.handles
-                    .lock()
-                    .expect("handles mutex poisoned")
-                    .insert(id, handle);
+                // Late-bind the handle into the slot created above. If the
+                // client already finished and removed its own entry (a
+                // connect-then-disconnect can easily outrace this thread
+                // getting the lock back), there is nothing left to bind it
+                // into: just drop it rather than resurrect a stale entry
+                // nothing will ever prune (finding G-R2-2) -- `JoinHandle`'s
+                // `Drop` detaches, it does not block.
+                let mut clients = self.clients.lock().expect("clients mutex poisoned");
+                if let Some(slot) = clients.get_mut(&id) {
+                    slot.handle = Some(handle);
+                } else {
+                    drop(handle);
+                }
             }
             Err(_) => {
                 self.clients
@@ -379,7 +497,7 @@ impl BindingServer {
     }
 
     // ------------------------------------------------------------ serving
-    fn serve_client(self: Arc<Self>, id: u64, client: UnixStream) {
+    fn serve_client(self: Arc<Self>, id: u64, client: UnixStream, done_tx: Sender<()>) {
         let _ = client.set_read_timeout(Some(CLIENT_IO_TIMEOUT));
         let _ = client.set_write_timeout(Some(CLIENT_IO_TIMEOUT));
         let mut conn = sshwire::AgentConnection::new(client);
@@ -414,16 +532,20 @@ impl BindingServer {
                 break;
             }
         }
+        // Remove this client's whole slot (stream, handle-if-already-bound,
+        // completion receiver) in one place: the single point that ever
+        // removes a `clients` entry, so an id inserted at admission time
+        // (finding G-R2-2) is always cleaned up exactly once, regardless of
+        // whether `handle_accepted` had already late-bound the handle when
+        // this runs.
         self.clients
             .lock()
             .expect("clients mutex poisoned")
             .remove(&id);
-        // Detach our own join handle: safe from within the thread it names,
-        // and keeps `handles` bounded across many short-lived connections.
-        self.handles
-            .lock()
-            .expect("handles mutex poisoned")
-            .remove(&id);
+        // Signal completion *after* removing our own slot, right before
+        // returning -- mirrors `accept_loop`'s `done_tx.send` -- so `close()`
+        // never observes "done" for a slot that is not actually gone yet.
+        let _ = done_tx.send(());
     }
 
     fn handle_message(&self, state: &mut ClientState, message: &[u8]) -> Result<Vec<u8>, Error> {
@@ -929,12 +1051,81 @@ impl BindingServer {
 // SignerManager
 // ---------------------------------------------------------------------------
 
+/// Insertion-ordered registry of live [`BindingServer`]s, keyed by socket
+/// path. A plain `HashMap` iterates in an arbitrary (and, per Rust's
+/// `RandomState`, per-process-random) order; Python's `dict` -- what
+/// `SignerManager._servers` actually is -- preserves insertion order, and
+/// `active_bindings`/`release_for_grant` both rely on iterating
+/// `self._servers.values()` in that order (finding G-R2-4). `order` is the
+/// source of truth for iteration order; `map` is the source of truth for
+/// membership and lookup.
+struct ServerRegistry {
+    order: Vec<String>,
+    map: HashMap<String, Arc<BindingServer>>,
+}
+
+impl ServerRegistry {
+    fn new() -> Self {
+        ServerRegistry {
+            order: Vec::new(),
+            map: HashMap::new(),
+        }
+    }
+
+    /// Insert or replace. A replace (same key already present) does not move
+    /// its position, matching Python `dict[key] = value`.
+    fn insert(&mut self, key: String, server: Arc<BindingServer>) {
+        if !self.map.contains_key(&key) {
+            self.order.push(key.clone());
+        }
+        self.map.insert(key, server);
+    }
+
+    fn remove(&mut self, key: &str) -> Option<Arc<BindingServer>> {
+        let removed = self.map.remove(key);
+        if removed.is_some() {
+            self.order.retain(|k| k != key);
+        }
+        removed
+    }
+
+    #[cfg(test)]
+    fn get(&self, key: &str) -> Option<&Arc<BindingServer>> {
+        self.map.get(key)
+    }
+
+    /// Servers in insertion order, matching Python's `dict.values()`.
+    fn values_in_order(&self) -> impl Iterator<Item = &Arc<BindingServer>> {
+        self.order.iter().filter_map(move |k| self.map.get(k))
+    }
+
+    /// Keys, in insertion order, whose server matches `grant_id` (`None`
+    /// matches every key) -- the set `release_for_grant` closes, in the same
+    /// order Python's `[s for s in self._servers.values() if ...]` would
+    /// visit them.
+    fn matching_keys(&self, grant_id: Option<&str>) -> Vec<String> {
+        self.order
+            .iter()
+            .filter(|k| {
+                self.map
+                    .get(k.as_str())
+                    .is_some_and(|s| grant_id.is_none_or(|g| s.binding.grant_id == g))
+            })
+            .cloned()
+            .collect()
+    }
+}
+
 /// Creates one dedicated agent socket per (caller, connection, grant)
 /// binding. Port of `signer.SignerManager`.
 pub struct SignerManager {
     ctx: &'static Context,
     socket_dir: PathBuf,
-    servers: Mutex<HashMap<String, Arc<BindingServer>>>,
+    /// Private (0700) directory, sibling to `socket_dir`, holding each
+    /// binding's [`create_wakeup_link`] hard link. See that function and
+    /// `BindingServer::close` (finding G-R2-1).
+    control_dir: PathBuf,
+    servers: Mutex<ServerRegistry>,
     max_agent_clients: Arc<AtomicUsize>,
 }
 
@@ -942,10 +1133,12 @@ impl SignerManager {
     fn new(ctx: &'static Context, socket_dir: Option<PathBuf>) -> Result<Self, Error> {
         let preferred = socket_dir.or_else(|| ctx.config.socket_dir.clone());
         let socket_dir = choose_socket_dir(preferred)?;
+        let control_dir = choose_control_dir(&socket_dir)?;
         Ok(SignerManager {
             ctx,
             socket_dir,
-            servers: Mutex::new(HashMap::new()),
+            control_dir,
+            servers: Mutex::new(ServerRegistry::new()),
             max_agent_clients: Arc::new(AtomicUsize::new(DEFAULT_MAX_AGENT_CLIENTS)),
         })
     }
@@ -989,7 +1182,13 @@ impl SignerManager {
         decision.require()?;
         let name = format!("a{}.sock", short_hex_id());
         let path = self.socket_dir.join(&name);
-        if path.to_string_lossy().len() > MAX_UNIX_PATH + 3 {
+        // Measure *characters*, matching Python's `len(str(path))`: Python
+        // `str` length counts Unicode code points, not encoded bytes.
+        // `.to_string_lossy().len()` counts UTF-8 bytes instead, so a
+        // non-ASCII `socket_dir` diverges from Python at exactly the
+        // multi-byte characters that make the two counts differ (finding
+        // G-R2-3).
+        if path.to_string_lossy().chars().count() > MAX_UNIX_PATH + 3 {
             return Err(Error::unsupported("socket_path_too_long"));
         }
         let binding = SignerBinding {
@@ -1002,6 +1201,7 @@ impl SignerManager {
         let server = BindingServer::start(
             self.ctx,
             binding.clone(),
+            &self.control_dir,
             Arc::clone(&self.max_agent_clients),
         )?;
         self.servers
@@ -1016,7 +1216,7 @@ impl SignerManager {
             .servers
             .lock()
             .expect("servers mutex poisoned")
-            .remove(&binding.socket_path.to_string_lossy().into_owned());
+            .remove(&binding.socket_path.to_string_lossy());
         if let Some(server) = server {
             server.close();
         }
@@ -1026,21 +1226,19 @@ impl SignerManager {
         self.servers
             .lock()
             .expect("servers mutex poisoned")
-            .values()
+            .values_in_order()
             .map(|s| s.binding.clone())
             .collect()
     }
 
     /// Close sockets for a revoked grant (or every socket when `grant_id` is
-    /// `None`). Returns the number of sockets closed.
+    /// `None`). Returns the number of sockets closed. Closes in the same
+    /// (insertion) order the sockets were bound in, matching Python's `dict`
+    /// iteration order (finding G-R2-4).
     pub fn release_for_grant(&self, grant_id: Option<&str>) -> usize {
         let victims: Vec<Arc<BindingServer>> = {
             let mut servers = self.servers.lock().expect("servers mutex poisoned");
-            let keys: Vec<String> = servers
-                .iter()
-                .filter(|(_, s)| grant_id.is_none_or(|g| s.binding.grant_id == g))
-                .map(|(k, _)| k.clone())
-                .collect();
+            let keys = servers.matching_keys(grant_id);
             keys.iter().filter_map(|k| servers.remove(k)).collect()
         };
         for server in &victims {
@@ -1051,6 +1249,18 @@ impl SignerManager {
 
     pub fn shutdown(&self) {
         self.release_for_grant(None);
+    }
+}
+
+impl Drop for SignerManager {
+    /// `control_dir` (finding G-R2-1) is a Rust-only implementation detail
+    /// with no Python equivalent and no caller-visible effect; best-effort
+    /// clean it up once the manager itself goes away so it does not
+    /// outlive every binding that ever used it. Every per-binding wakeup
+    /// link is already removed by `BindingServer::close`, so this is
+    /// normally just removing an empty directory.
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.control_dir);
     }
 }
 
@@ -1096,7 +1306,9 @@ pub fn socket_mode_ok(path: &Path) -> bool {
 fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     if let Some(candidate) = preferred {
         let probe = candidate.join("s".repeat(24));
-        if probe.to_string_lossy().len() <= MAX_UNIX_PATH {
+        // Characters, not UTF-8 bytes -- matches Python's `len(str(path))`
+        // (finding G-R2-3; see `SignerManager::bind`'s identical fix).
+        if probe.to_string_lossy().chars().count() <= MAX_UNIX_PATH {
             if let Some(parent) = candidate.parent().filter(|p| !p.as_os_str().is_empty()) {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     Error::state("signer_socket_dir_failed").with_detail(e.to_string())
@@ -1117,6 +1329,49 @@ fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
     std::fs::set_permissions(&short, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
     Ok(short)
+}
+
+/// A private (0700) directory, *sibling* to `socket_dir` (not inside it),
+/// that holds every binding's [`create_wakeup_link`] hard link (finding
+/// G-R2-1). Being a sibling rather than a subdirectory keeps it on the same
+/// filesystem as `socket_dir` -- a hard link cannot cross filesystems -- while
+/// surviving a `remove_dir_all(socket_dir)` run by code outside this module
+/// (e.g. `Context::close`/`Drop` removing its own owned `socket_dir` before
+/// calling `SignerManager::shutdown`): that call only ever touches
+/// `socket_dir` itself, never its parent's other children.
+fn choose_control_dir(socket_dir: &Path) -> Result<PathBuf, Error> {
+    let candidate = match socket_dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => parent.join(format!("zpws-ctl-{}", short_hex_id())),
+        // No usable parent (e.g. `socket_dir` is a bare relative name):
+        // fall back to a subdirectory. This gives up the "survives
+        // `remove_dir_all(socket_dir)`" property in this narrow case, same
+        // as `choose_socket_dir`'s own fallback narrows other guarantees
+        // when the caller hands it something unusual.
+        None => socket_dir.join(format!("zpws-ctl-{}", short_hex_id())),
+    };
+    mkdir_leaf_private_0700(&candidate)
+        .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+    std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+    Ok(candidate)
+}
+
+/// Create a private hard link to `socket_path` inside `control_dir`, giving
+/// `BindingServer::close` a connect target that always resolves to this
+/// exact listening socket even after `socket_path` (and the directory
+/// holding it) has already been removed by the time `close()` runs (finding
+/// G-R2-1). Hard-linking an `AF_UNIX` socket file names the *same*
+/// underlying listening socket under a second, independently-owned path;
+/// connecting via either name delivers a new pending connection to the one
+/// accept queue, waking a thread blocked in `accept()` on it. Returns `None`
+/// if the link could not be created (e.g. `control_dir` ends up on a
+/// different filesystem than `socket_path`, which `EXDEV`s a hard link, or
+/// the filesystem does not support hard-linking socket files) -- `close()`
+/// falls back to connecting to `socket_path` itself in that case, exactly
+/// like this crate did before this fix.
+fn create_wakeup_link(control_dir: &Path, socket_path: &Path) -> Option<PathBuf> {
+    let link = control_dir.join(format!("w{}.sock", short_hex_id()));
+    std::fs::hard_link(socket_path, &link).ok().map(|()| link)
 }
 
 /// Create `path` at mode 0700 atomically (`DirBuilder::mode`), treating an
@@ -1337,7 +1592,7 @@ mod tests {
                 .servers
                 .lock()
                 .unwrap()
-                .get(&self.binding.socket_path.to_string_lossy().into_owned())
+                .get(&self.binding.socket_path.to_string_lossy())
                 .cloned()
                 .expect("server for current binding")
         }
@@ -2012,6 +2267,107 @@ mod tests {
         assert!(f.manager.active_bindings().is_empty());
     }
 
+    // Regression test for finding G-R2-4: `SignerManager.servers` used to be
+    // a plain `HashMap`, which iterates in an arbitrary (per-process-random)
+    // order; Python's `dict` -- what `_servers` actually is -- preserves
+    // insertion order, and `active_bindings`/`release_for_grant` both rely on
+    // that order. Six bindings is the same scale the reviewer's probe used to
+    // observe a random permutation.
+    #[test]
+    fn active_bindings_and_release_for_grant_preserve_insertion_order() {
+        let f = fixture();
+        let mut expected = vec![f.binding.socket_path.clone()];
+        for _ in 0..5 {
+            let b = f.manager.bind("agent-1", "box", &f.grant.id).unwrap();
+            expected.push(b.socket_path.clone());
+        }
+        let active: Vec<PathBuf> = f
+            .manager
+            .active_bindings()
+            .into_iter()
+            .map(|b| b.socket_path)
+            .collect();
+        assert_eq!(
+            active, expected,
+            "active_bindings must return bindings in insertion (bind) order"
+        );
+
+        // `release_for_grant` filters and closes in that same insertion
+        // order (matching Python's `[s for s in self._servers.values() if
+        // ...]`, iterated over a `dict` -- see `ServerRegistry::matching_keys`);
+        // closing every one of them and checking the count plus that every
+        // socket is actually gone is the observable half of that guarantee.
+        let closed = f.manager.release_for_grant(Some(&f.grant.id));
+        assert_eq!(closed, expected.len());
+        assert!(f.manager.active_bindings().is_empty());
+        for path in &expected {
+            assert!(!path.exists(), "{path:?} should have been removed");
+        }
+    }
+
+    // Regression test for finding G-R2-1: `close()` used to wake a thread
+    // parked in `accept()` solely by connecting to `binding.socket_path`
+    // itself. If that path is already gone (e.g. something outside this
+    // module removed the directory holding it, such as `Context::close`
+    // running before `SignerManager::shutdown`), every wakeup attempt failed,
+    // `close()` burned the full `ACCEPT_JOIN_TIMEOUT` (2s), and then detached
+    // the accept thread, which stayed parked in `accept()` forever holding
+    // this `Arc<BindingServer>` and the listener fd. `close()` now wakes the
+    // accept thread via a private hard link (`wakeup_path`) that stays valid
+    // regardless of what happens to `socket_path`, so this returns promptly
+    // and the accept thread actually exits (its own `Arc<BindingServer>`
+    // clone is dropped, so `strong_count` drops back to just this test's).
+    #[test]
+    fn close_after_socket_file_removed_returns_promptly_and_accept_thread_exits() {
+        let f = fixture();
+        let server = f.server();
+        std::fs::remove_file(&f.binding.socket_path).unwrap();
+        let started = Instant::now();
+        f.manager.release(&f.binding);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "close() took {elapsed:?} after its socket file was removed, expected well under \
+             the old ~2s ACCEPT_JOIN_TIMEOUT-bound leak"
+        );
+        assert!(
+            f.wait_until(|| Arc::strong_count(&server) == 1, Duration::from_secs(1)),
+            "accept thread still holds a reference: strong_count={}",
+            Arc::strong_count(&server)
+        );
+    }
+
+    // Regression test for finding G-R2-1: releasing many bindings whose
+    // socket files were all removed out from under them used to cost
+    // roughly `2 * ACCEPT_JOIN_TIMEOUT` seconds *per binding* (each one
+    // burning the full accept-thread join timeout before detaching), so
+    // `release_for_grant(None)` over N bindings (e.g. `SignerManager::shutdown`)
+    // cost ~2N seconds and leaked N threads + N fds. With a guaranteed
+    // wakeup path this must complete promptly regardless of N.
+    #[test]
+    fn release_for_grant_bulk_after_socket_files_removed_completes_promptly() {
+        let f = fixture();
+        let n = 20;
+        let mut sockets = vec![f.binding.socket_path.clone()];
+        for _ in 0..n - 1 {
+            let b = f.manager.bind("agent-1", "box", &f.grant.id).unwrap();
+            sockets.push(b.socket_path);
+        }
+        for path in &sockets {
+            std::fs::remove_file(path).unwrap();
+        }
+        let started = Instant::now();
+        let closed = f.manager.release_for_grant(None);
+        let elapsed = started.elapsed();
+        assert_eq!(closed, n);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "release_for_grant took {elapsed:?} for {n} bindings with their socket files \
+             already removed, expected well under the old ~{}s (2 x {n})",
+            2 * n
+        );
+    }
+
     // Regression test for finding G-1: the accept loop used to set the
     // listener non-blocking and sleep a fixed 200ms (`ACCEPT_POLL_INTERVAL`)
     // on every `WouldBlock`, so a *new* connection could wait out nearly the
@@ -2044,12 +2400,25 @@ mod tests {
 
     // ------------------------------------------------- client tracking (SSH-3)
 
-    // Port of test_finished_client_threads_are_pruned
+    // Port of test_finished_client_threads_are_pruned. Extended for finding
+    // G-R2-2: `handle_accepted` used to insert a client's id into `clients`
+    // (deciding admission) but only insert its `JoinHandle` into a *separate*
+    // `handles` map *after* `spawn` returned. A client thread that connected
+    // and disconnected fast enough to finish first (no message at all, like
+    // every connection this test makes) would then remove an id from
+    // `handles` that was not there yet, and the parent's later insert left a
+    // handle nothing would ever remove -- `handles` grew unboundedly across
+    // many short-lived connections even though `clients` stayed empty (the
+    // reviewer's probe: 3710 connections -> `clients=0`, `handles=528`).
+    // `clients`/`handles` are now one map (`ClientSlot`), inserted before
+    // `spawn` and removed exactly once by the client thread itself, so this
+    // is now structurally impossible; a few thousand iterations is what the
+    // reviewer needed to reliably hit the original race's timing window.
     #[test]
     fn finished_client_threads_are_pruned() {
         let f = fixture();
         let server = f.server();
-        for _ in 0..40 {
+        for _ in 0..4000 {
             let mut conn = f.connect();
             let reply = conn
                 .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
@@ -2058,9 +2427,14 @@ mod tests {
         }
         assert!(f.wait_until(
             || server.clients.lock().unwrap().is_empty(),
-            Duration::from_secs(5)
+            Duration::from_secs(10)
         ));
-        assert_eq!(server.clients.lock().unwrap().len(), 0);
+        assert_eq!(
+            server.clients.lock().unwrap().len(),
+            0,
+            "clients (which now also carries every client's JoinHandle) must not \
+             accumulate stale entries across many short-lived connections"
+        );
     }
 
     // Port of test_concurrent_clients_are_capped_and_refusal_audited
@@ -2135,6 +2509,67 @@ mod tests {
             .is_err()
         );
         assert_eq!(f.ctx.policy.get_grant(&f.grant.id).unwrap().uses, 0);
+    }
+
+    // Regression test for finding G-R2-5: the client-join loop used to check
+    // the shared deadline only *before* each `handle.join()`, then call it
+    // unbounded (`std::thread::JoinHandle` cannot join with a timeout), so a
+    // client thread wedged *inside* `handle_message` -- not blocked on socket
+    // I/O, which `shutdown()` already unblocks -- could block `close()`
+    // forever. Simulates a sign in progress stuck in `policy.consume` ->
+    // `state.lock()` by holding `ctx.state`'s (re-entrant, in-process) lock
+    // from an unrelated helper thread well past `CLIENT_JOIN_TIMEOUT`; since
+    // `close()` runs on the revoke fan-out (`install`'s `on_revoke` ->
+    // `release_for_grant` -> `close`), this same hang would otherwise reach
+    // `Policy::revoke_grant`/`stop_all`, security operations Python bounds at
+    // 2s (`thread.join(timeout=max(0.0, deadline - now))`).
+    #[test]
+    fn close_is_not_blocked_by_a_client_thread_wedged_on_the_state_lock() {
+        let f = fixture();
+        let mut conn = f.connect();
+        assert_eq!(
+            conn.request(&f.bind_message()).unwrap(),
+            sshwire::build_success()
+        );
+
+        // Hold the state lock from an unrelated thread for far longer than
+        // `CLIENT_JOIN_TIMEOUT`, simulating another thread (or, via the same
+        // lock's `flock`, another process) already holding it.
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let ctx = f.ctx;
+        let holder = thread::spawn(move || {
+            let _guard = ctx.state.lock().expect("state lock");
+            let _ = ready_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(10));
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("helper thread did not acquire the state lock in time");
+
+        // Send a sign request but don't wait for its reply: the serving
+        // thread will block inside `policy.consume` -> `state.lock()`, well
+        // past `close()`'s own deadline.
+        let data = f.userauth();
+        conn.write_message(&sshwire::build_sign_request(
+            &f.user_key.public.blob(),
+            &data,
+            0,
+        ))
+        .unwrap();
+        thread::sleep(Duration::from_millis(200)); // let the server start handling it
+
+        let started = Instant::now();
+        f.binding.close();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "close() took {elapsed:?}, expected to return within roughly \
+             CLIENT_JOIN_TIMEOUT even with a client thread wedged on the state lock"
+        );
+
+        let _ = release_tx.send(());
+        holder.join().unwrap();
     }
 
     // --------------------------------------------- audit policy version (F8)
