@@ -1091,6 +1091,15 @@ with tempfile.TemporaryDirectory() as d:
         let rust_sub = rust_state.subdir("audit").unwrap();
         let rust_subdir_mode = dir_mode(&rust_sub);
 
+        // Both modes are captured above, so the directories have served their
+        // purpose. Restore traversable modes before anything can return early:
+        // under the pathological `umask 700` case `create()`/`subdir()`
+        // legitimately produce mode `0`, and `TempDir`'s `Drop` cannot delete
+        // a directory it cannot open -- it ignores the failure, which is what
+        // left two `.tmp*` containers behind on every suite run.
+        let _ = fs::set_permissions(&rust_sub, fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(&rust_state.path, fs::Permissions::from_mode(0o700));
+
         let py_tmp = TempDir::new().unwrap();
         fs::set_permissions(py_tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let script = format!(
@@ -1111,6 +1120,11 @@ print(oct(os.stat(sub).st_mode & 0o777))
             u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
         let py_subdir_mode =
             u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
+
+        // Same for the directories Python created under the same umask.
+        let py_state = py_tmp.path().join("py-state");
+        let _ = fs::set_permissions(py_state.join("audit"), fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(&py_state, fs::Permissions::from_mode(0o700));
 
         assert_eq!(
             rust_create_mode, py_create_mode,
