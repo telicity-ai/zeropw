@@ -53,7 +53,7 @@
 //!   used for `mio` below -- calls its safe `Socket::listen(16)`, then
 //!   converts it into a `std::os::unix::net::UnixListener` before handing
 //!   it to the rest of this module exactly as `UnixListener::bind` used to.
-//!   Pinned by `burst_above_backlog_is_refused_like_python`.
+//!   Pinned by `idle_listener_backlog_caps_pending_connects_like_python`.
 //! * Python's accept loop blocks in `accept()` with a 0.2s `settimeout`
 //!   purely so `close()` can eventually notice `self._closed`; a genuine
 //!   connection is always served the instant it arrives. `std` has no
@@ -1695,19 +1695,18 @@ fn short_hex_id() -> String {
 /// Finding G-R5-1: Python calls `self._sock.listen(16)`, an explicit
 /// backlog, but `std::os::unix::net::UnixListener::bind` has no way to
 /// request a specific backlog -- only the OS default (128 on this crate's
-/// target platforms), well above Python's 16. Measured effect: a
-/// simultaneous burst of connections above 16 but below the per-binding
-/// client cap gets refused at `connect(2)` (`ECONNREFUSED`, a
-/// transport-level refusal with no application-level audit record) against
-/// Python once the backlog fills, but was accepted in full against the old
-/// default-backlog Rust listener. `socket2::Socket::listen` is a safe `fn`
+/// target platforms), well above Python's 16. Measured effect: an idle
+/// listener cannot queue a burst above 16; Darwin reports `ECONNREFUSED`
+/// and Linux reports `EAGAIN`/`WouldBlock` once the queue fills. The old
+/// default-backlog Rust listener accepted the same 40-connection probe in
+/// full. `socket2::Socket::listen` is a safe `fn`
 /// (unlike the raw `listen(2)` FFI call `std` would need), so this builds
 /// the socket explicitly with `socket2` -- the same "audited safe wrapper
 /// crate" precedent already used for `mio` in this module -- binds it to
 /// `path`, calls `listen(SIGNER_LISTEN_BACKLOG)`, and converts the result
 /// into a `std::os::unix::net::UnixListener` via `socket2`'s `From` impl so
 /// every caller of `bind_and_listen` sees the same std type as before.
-/// Pinned by `burst_above_backlog_is_refused_like_python`.
+/// Pinned by `idle_listener_backlog_caps_pending_connects_like_python`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
         .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
@@ -2874,11 +2873,7 @@ mod tests {
     }
 
     // Regression test for finding G-R5-1: Python's `_BindingServer.__init__`
-    // calls `self._sock.listen(16)`, an explicit backlog; once 16
-    // connections are queued waiting to be `accept()`ed, the kernel refuses
-    // any further `connect(2)` immediately with `ECONNREFUSED` -- a
-    // transport-level refusal that never reaches this process's accept
-    // loop, policy check or audit log at all. `bind_and_listen` used to
+    // calls `self._sock.listen(16)`, an explicit backlog. `bind_and_listen` used to
     // build the listener with `std::os::unix::net::UnixListener::bind`,
     // which has no way to request anything but the OS default backlog (128
     // on this crate's target platforms) -- comfortably above every burst
@@ -2887,66 +2882,41 @@ mod tests {
     // `socket2::Socket::listen(SIGNER_LISTEN_BACKLOG)` (16) instead, the
     // same audited-safe-wrapper-crate precedent already accepted for `mio`.
     //
-    // Reviewer's own measurement (real Python, backlog 16, client cap 24): a
-    // 24-connection simultaneous burst served 17-18 and refused 6-7 at
-    // `connect(2)`, with no `ssh_agent_refused` audit record for the
-    // refused connections. Kernel scheduling makes the exact split
-    // nondeterministic even on one machine (whether the accept loop drains
-    // a few pending connections before the burst finishes queuing depends
-    // on thread scheduling), so this test pins the *shape* Python has --
-    // some connections refused at `connect()`, and zero audit records for
-    // any of them -- rather than an exact count. The burst (40) is well
-    // above the backlog (16) but stays below the per-binding client cap
-    // (raised to 64 here) so an admission-cap refusal, which *does* reach
-    // the application layer and would confuse this probe, cannot occur.
+    // Do not involve the accept loop here: if it drains fast enough (as it
+    // did on Ubuntu CI), all 40 connects can succeed despite a backlog of
+    // 16, making a scheduler race look like a product failure. Instead keep
+    // the listener idle and issue non-blocking connects while retaining
+    // every queued socket. Darwin reports `ECONNREFUSED` once full; Linux
+    // reports `EAGAIN`/`WouldBlock`. Either is the same observable boundary:
+    // the queue cannot admit the full burst while nothing accepts from it.
     #[test]
-    fn burst_above_backlog_is_refused_like_python() {
-        let f = fixture();
-        f.manager.set_max_agent_clients(64);
-
+    fn idle_listener_backlog_caps_pending_connects_like_python() {
         const BURST: usize = 40;
-        let barrier = Arc::new(std::sync::Barrier::new(BURST));
-        let path = f.binding.socket_path.clone();
-        let handles: Vec<JoinHandle<bool>> = (0..BURST)
-            .map(|_| {
-                let barrier = Arc::clone(&barrier);
-                let path = path.clone();
-                thread::spawn(move || {
-                    barrier.wait();
-                    UnixStream::connect(&path).is_ok()
-                })
-            })
-            .collect();
-        let results: Vec<bool> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-        let refused = results.iter().filter(|ok| !**ok).count();
-        let served = results.len() - refused;
-        eprintln!(
-            "[G-R5-1] burst of {BURST} simultaneous connections against a backlog-16 \
-             listener: {served} served, {refused} refused at connect() (the reviewer's own \
-             real-Python measurement for a smaller, 24-connection burst against the same \
-             backlog: 17-18 served / 6-7 refused)"
-        );
-        assert!(
-            refused > 0,
-            "expected at least one connect() to be refused by a backlog-16 listener under a \
-             {BURST}-connection simultaneous burst, matching Python's `listen(16)`; got 0 \
-             refused out of {BURST} -- kernel backlog/scheduling variance can shift the exact \
-             split but should not eliminate refusals entirely at this burst size"
-        );
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("backlog.sock");
+        let _listener = bind_and_listen(&path).unwrap();
+        let addr = SockAddr::unix(&path).unwrap();
+        let mut clients = Vec::with_capacity(BURST);
+        let mut admitted = 0usize;
 
-        let refused_recorded = f
-            .ctx
-            .audit
-            .iter_records()
-            .unwrap()
-            .into_iter()
-            .filter(|r| r["event"].as_str() == Some("ssh_agent_refused"))
-            .count();
+        for _ in 0..BURST {
+            let socket = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+            socket.set_nonblocking(true).unwrap();
+            if socket.connect(&addr).is_ok() {
+                admitted += 1;
+            }
+            clients.push(socket);
+        }
+
+        assert!(
+            admitted < BURST,
+            "an idle backlog-{SIGNER_LISTEN_BACKLOG} listener admitted all {BURST} \
+             non-blocking connects"
+        );
         assert_eq!(
-            refused_recorded, 0,
-            "a connect()-level backlog refusal never reaches the accept loop, policy check or \
-             audit log, so it must produce no `ssh_agent_refused` record -- Python's own \
-             transport-level ECONNREFUSED produces none either"
+            clients.len(),
+            BURST,
+            "retain every client so the pending queue cannot shrink during the probe"
         );
     }
 
@@ -3207,7 +3177,7 @@ mod tests {
             // loop can outrun the accept loop's per-connection admission
             // work (lock, `accept()`, thread spawn) faster than that
             // backlog drains -- exactly what
-            // `burst_above_backlog_is_refused_like_python` deliberately
+            // `idle_listener_backlog_caps_pending_connects_like_python` deliberately
             // exercises. This test cares about steady-state fd cost per
             // admitted client, not backlog behaviour, so it avoids that
             // failure mode instead of racing it.
@@ -3288,8 +3258,8 @@ mod tests {
             // connection before firing the next one: this binding's listener
             // has Python's own backlog of 16 (`SIGNER_LISTEN_BACKLOG`), and
             // this probe is about the fd-limit boundary, not the separate,
-            // already-covered backlog boundary (`burst_above_backlog_is_
-            // refused_like_python`) -- an unpaced burst would conflate the two.
+            // already-covered backlog boundary (`idle_listener_backlog_caps_
+            // pending_connects_like_python`) -- an unpaced burst would conflate the two.
             thread::sleep(Duration::from_millis(15));
         }
         thread::sleep(Duration::from_millis(300));
