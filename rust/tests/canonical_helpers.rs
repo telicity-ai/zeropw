@@ -199,28 +199,9 @@ const NUMBER_TO_STRING_ALLOWLIST: &[Allow] = &[
 ];
 
 /// Allowlist for the `repr`/`str`-number-rendering `is_f64()` check
-/// ([`no_number_is_f64_repr_bypass_outside_pystr`]). Every entry here is a
-/// KNOWN, recorded instance of the exact bug shape finding X-10 fixed
-/// (equivalence review round 8) -- `Number::is_f64()` used to decide a
-/// JSON number's int/float classification immediately before rendering it
-/// through `python_float_repr` -- that this round's fixer chose not to
-/// touch because it is outside this round's assigned files, not because it
-/// is safe.
-const NUMBER_IS_F64_REPR_ALLOWLIST: &[Allow] = &[Allow {
-    file: "audit.rs",
-    marker: "pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))",
-    reason: "python_scalar_str's Number arm (used by Audit::maybe_alert's f-string \
-                 formatting) shares the exact X-10 bug: `Number::is_f64()` is `false` for a \
-                 literal that overflows to a non-finite `f64` under `arbitrary_precision`, so \
-                 an overflowing literal falls into the integer arm and echoes its raw text back \
-                 instead of `python_float_repr`'s `inf`/`-inf`. Discovered by this round's \
-                 canonical-helper consolidation (X-10) while auditing every `is_f64()` call site \
-                 in the crate, but NOT itself a named finding for this round and outside its \
-                 assigned file list (`audit.rs` is not one of X-10/X-11/X-15/X-16/X-17's files) \
-                 -- recorded here as real, known debt rather than silently left uncaught by this \
-                 guard, flagged separately for a follow-up fix (same shape as this round's \
-                 `vault.rs`/`kms.rs`/`policy.rs` fixes: route through `crate::pystr::repr_number`).",
-}];
+/// ([`no_number_is_f64_repr_bypass_outside_pystr`]). There are currently no
+/// legitimate exceptions: number rendering belongs in `pystr::repr_number`.
+const NUMBER_IS_F64_REPR_ALLOWLIST: &[Allow] = &[];
 
 /// Recursively collects every `*.rs` file under `dir`.
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {

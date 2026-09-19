@@ -41,6 +41,7 @@ use serde_json::{Map, Value, json};
 use crate::clock::Clock;
 use crate::errors::Error;
 use crate::pyjson::{self, DumpOptions};
+use crate::pystr;
 use crate::store::{StateDir, iso};
 
 pub const AUDIT_FILE: &str = "audit/audit.jsonl";
@@ -286,13 +287,7 @@ fn python_scalar_str(value: Option<&Value>) -> String {
         Some(Value::Bool(true)) => "True".to_string(),
         Some(Value::Bool(false)) => "False".to_string(),
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => {
-            if n.is_f64() {
-                pyjson::python_float_repr(n.as_f64().unwrap_or(0.0))
-            } else {
-                n.as_str().to_string()
-            }
-        }
+        Some(Value::Number(n)) => pystr::repr_number(n),
         // Unreachable in practice: `_clean` rejects arrays/objects before a
         // value can land in `record`.
         Some(other) => other.to_string(),
@@ -1465,6 +1460,15 @@ shutil.rmtree(tmp, ignore_errors=True)
         let rust_alerts =
             std::fs::read_to_string(tmp.path().join("state/audit/alerts.jsonl")).unwrap();
         assert_eq!(rust_alerts, py_alerts);
+    }
+
+    #[test]
+    fn python_scalar_str_matches_python_for_overflowing_float_literal() {
+        let positive: Value = serde_json::from_str("1E400").unwrap();
+        let negative: Value = serde_json::from_str("-1E400").unwrap();
+
+        assert_eq!(python_scalar_str(Some(&positive)), "inf");
+        assert_eq!(python_scalar_str(Some(&negative)), "-inf");
     }
 
     // A-R3-3: `round_half_even_3dp`'s doc comment claims CPython-oracle
