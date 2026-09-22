@@ -256,8 +256,7 @@ pub fn verify_fact(fact: &Fact, author: &DeviceRecord) -> bool {
     {
         return false;
     }
-    use base64::Engine;
-    let Ok(sig) = base64::engine::general_purpose::STANDARD.decode(&fact.sig) else {
+    let Ok(sig) = pybase64::b64decode_strict(&fact.sig) else {
         return false;
     };
     fact.canonical_json(false)

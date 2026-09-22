@@ -201,8 +201,8 @@ pub fn b64decode(s: &str) -> Result<Vec<u8>, Base64Error> {
 }
 
 /// Python `base64.b64decode(s, validate=True)`: rejects nonalphabet input
-/// and discontinuous padding but accepts noncanonical unused trailing bits.
-/// Complete quads may have excess trailing padding, as CPython permits.
+/// and discontinuous or excess padding but accepts noncanonical unused
+/// trailing bits (`"Zh=="` decodes to `b"f"`).
 pub fn b64decode_strict(s: &str) -> Result<Vec<u8>, Base64Error> {
     require_ascii(s)?;
     let data = s.as_bytes();
@@ -214,7 +214,7 @@ pub fn b64decode_strict(s: &str) -> Result<Vec<u8>, Base64Error> {
         return Err(Base64Error::new("Invalid base64 data"));
     }
     let valid_padding = match head % 4 {
-        0 => true,
+        0 => head == data.len(),
         2 => data.len() - head == 2,
         3 => data.len() - head == 1,
         _ => false,
@@ -556,6 +556,51 @@ mod tests {
                     "mismatch for {c:?} ({:?}): python={py_result:?} rust={rust_result:?}",
                     String::from_utf8_lossy(c)
                 ),
+            }
+        }
+    }
+
+    #[test]
+    fn strict_validate_true_matches_python_adversarial_and_fuzz() {
+        let mut cases: Vec<String> = [
+            "", "AAAA", "AAAA=", "AAAA==", "AAAA====", "AA==", "AA===", "AA==AA", "A===", "A",
+            "AA=", "AAA=", "Zh==", "Zg==", "=AAA", "A=AA", "AA=A", "AA=A=", "AA=AA", "AA==!!",
+            "AA=\n=", "AA==\n", "é", "AA A", "Zm9v",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!?\n";
+        let mut state = 0x4d59_5df4_d0f3_3173u64;
+        for _ in 0..500 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let length = (state % 12) as usize;
+            let mut case = String::new();
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                case.push(alphabet[(state % alphabet.len() as u64) as usize] as char);
+            }
+            cases.push(case);
+        }
+        let mut script = String::from("import base64\ncases=[\n");
+        for case in &cases {
+            script.push_str(&format!("    {:?},\n", case));
+        }
+        script.push_str("]\nfor case in cases:\n try: print('OK '+base64.b64decode(case,validate=True).hex())\n except Exception: print('ERR')\n");
+        let output = crate::oracle::python(&script);
+        let lines: Vec<_> = output.lines().collect();
+        assert_eq!(lines.len(), cases.len());
+        for (case, expected) in cases.iter().zip(lines) {
+            match (b64decode_strict(case), expected) {
+                (Err(_), "ERR") => {}
+                (Ok(value), line) if line.starts_with("OK ") => {
+                    assert_eq!(hex::encode(value), &line[3..], "{case:?}")
+                }
+                (got, line) => panic!("strict mismatch {case:?}: {got:?} vs {line:?}"),
             }
         }
     }

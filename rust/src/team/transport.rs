@@ -94,10 +94,7 @@ fn b64d(value: Option<&Value>) -> std::result::Result<Vec<u8>, HandshakeFailed> 
         .and_then(Value::as_str)
         .ok_or_else(|| HandshakeFailed::new("handshake_malformed"))?;
     // Handshake uses `validate=True`, unlike general lenient pybase64 decoding.
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s)
-        .map_err(|_| HandshakeFailed::new("handshake_malformed"))
+    pybase64::b64decode_strict(s).map_err(|_| HandshakeFailed::new("handshake_malformed"))
 }
 fn b64e(raw: &[u8]) -> String {
     pybase64::b64encode(raw)
