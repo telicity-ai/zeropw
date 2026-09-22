@@ -132,6 +132,9 @@ pub fn match_denial_rule(
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Detection settings. Integer fields are [`PyInt`] so accepted Python
+/// configuration values keep their full precision; Rust struct literals use
+/// integer `.into()` conversions for these public fields.
 pub struct DetectorConfig {
     pub window_seconds: f64,
     pub weak_threshold: PyInt,
