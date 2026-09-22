@@ -22,6 +22,12 @@ struct Reply {
     message: Vec<u8>,
 }
 fn io_error(e: std::io::Error) -> String {
+    if e.get_ref()
+        .and_then(|source| source.downcast_ref::<rustls::Error>())
+        .is_some_and(|source| matches!(source, rustls::Error::InvalidCertificate(_)))
+    {
+        return "SSLCertVerificationError".into();
+    }
     match e.kind() {
         std::io::ErrorKind::ConnectionRefused => "ConnectionRefusedError",
         std::io::ErrorKind::ConnectionReset => "ConnectionResetError",
@@ -168,7 +174,12 @@ fn transaction(
     if reply(wire)?.code != 250 {
         return Err(exception("SMTPDataError"));
     }
-    let _ = command(wire, b"QUIT\r\n");
+    match command(wire, b"QUIT\r\n") {
+        Ok(Reply { code: 221, .. }) => (),
+        Ok(_) => return Err(exception("SMTPResponseException")),
+        Err(e) if e == "OSError" || e == "ConnectionResetError" || e == "BrokenPipeError" => (),
+        Err(e) => return Err(e),
+    }
     Ok(())
 }
 fn mime_message(config: &NotifyConfig, subject: &str, body: &str) -> Vec<u8> {
@@ -186,7 +197,10 @@ fn mailbox(address: &str) -> String {
     {
         return address[start + 1..start + 1 + end].trim().into();
     }
-    address.trim().into()
+    // email.utils.parseaddr accepts a trailing RFC 5322 display comment.
+    // Keep the configured header text, but never send that comment in SMTP's
+    // envelope path.
+    address.split(" (").next().unwrap_or(address).trim().into()
 }
 fn has_cap(caps: &[String], name: &str) -> bool {
     caps.iter().any(|c| {
@@ -196,8 +210,10 @@ fn has_cap(caps: &[String], name: &str) -> bool {
 fn auth_methods(caps: &[String]) -> Vec<String> {
     caps.iter()
         .filter_map(|c| {
-            c.to_ascii_uppercase()
+            let upper = c.to_ascii_uppercase();
+            upper
                 .strip_prefix("AUTH ")
+                .or_else(|| upper.strip_prefix("AUTH="))
                 .map(str::to_owned)
         })
         .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
