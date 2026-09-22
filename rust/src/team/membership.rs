@@ -280,8 +280,10 @@ pub struct Invite {
 }
 pub fn parse_invite(text: &str) -> Result<Invite> {
     let bytes = b32d(text)?;
+    let source =
+        std::str::from_utf8(&bytes).map_err(|_| Error::invalid_input("invite_malformed"))?;
     let value: Value =
-        serde_json::from_slice(&bytes).map_err(|_| Error::invalid_input("invite_malformed"))?;
+        pyjson::loads(source).map_err(|_| Error::invalid_input("invite_malformed"))?;
     let bad = || Error::invalid_input("invite_malformed");
     if value["format"] != INVITE_FORMAT {
         return Err(bad());
@@ -780,4 +782,68 @@ pub fn share_environment(
         ],
     );
     Ok(json!({"env_id":env_id,"not_shared":not_shared}))
+}
+
+#[cfg(test)]
+mod invite_compat_tests {
+    use super::*;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn base32_padding_and_malformed_inputs_match_python() {
+        let mut corpus = Vec::new();
+        for stem in [
+            "MY", "MZ", "MZXQ", "MZXW6", "MZXW6YQ", "MZXW6YTB", "A", "AAA", "AAAAAA",
+        ] {
+            for pad in 0..=9 {
+                corpus.push(format!("{stem}{}", "=".repeat(pad)));
+            }
+        }
+        corpus.extend(
+            [
+                " my====== ",
+                "my=",
+                "MY=Q",
+                "MY====A=",
+                "M Y",
+                "é",
+                "\u{2003}MY\u{2003}",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        let mut child = Command::new("python3.12")
+            .args(["-c", "import sys,json,base64\nout=[]\nfor s in json.load(sys.stdin):\n try:\n  p=s.strip().upper();p+='='*(-len(p)%8);out.append(base64.b32decode(p).hex())\n except Exception: out.append(None)\nprint(json.dumps(out))"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(json!(corpus).to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let expected: Vec<Option<String>> = serde_json::from_slice(&output.stdout).unwrap();
+        for (input, expected) in corpus.iter().zip(expected) {
+            assert_eq!(b32d(input).ok().map(hex::encode), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn saved_invite_expiry_numeric_and_iso_utc_forms() {
+        assert_eq!(parse_expiry(&json!(0)), Some(0.0));
+        assert_eq!(parse_expiry(&json!("1970-01-01T00:00:00Z")), Some(0.0));
+        assert_eq!(
+            parse_expiry(&json!("2000-02-29T00:00:00Z")),
+            Some(951_782_400.0)
+        );
+        assert_eq!(
+            parse_expiry(&json!("2099-01-01T00:00:00Z")),
+            Some(4_070_908_800.0)
+        );
+        assert_eq!(parse_expiry(&json!(true)), None);
+        assert_eq!(parse_expiry(&json!("2100-02-29T00:00:00Z")), None);
+        assert_eq!(parse_expiry(&json!("invalid")), None);
+    }
 }

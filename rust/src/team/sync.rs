@@ -40,6 +40,104 @@ pub const MAX_INCIDENT_UNIT: i64 = 2_147_483_647;
 fn canon(value: &Value) -> Result<Vec<u8>> {
     Ok(pyjson::dumps(value, DumpOptions::compact_sorted())?.into_bytes())
 }
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::context::Config;
+    use crate::team::transport::{
+        HandshakeFailedHook, InviteCheck, InviteProof, MembershipCheck, OnSession, SessionClosed,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tempfile::TempDir;
+
+    struct StubSession {
+        peer: DeviceRecord,
+        closed: AtomicBool,
+        created: Instant,
+    }
+    impl Session for StubSession {
+        fn peer(&self) -> DeviceRecord {
+            self.peer.clone()
+        }
+        fn env_id(&self) -> &str {
+            "retry-env"
+        }
+        fn send(&self, _: &Value) -> Result<()> {
+            Ok(())
+        }
+        fn recv(&self, _: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+            Err(SessionClosed("peer_closed"))
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+        fn is_closed(&self) -> bool {
+            self.closed.load(Ordering::SeqCst)
+        }
+        fn created_at(&self) -> Instant {
+            self.created
+        }
+    }
+    struct StubTransport {
+        session: Arc<dyn Session>,
+    }
+    impl Transport for StubTransport {
+        fn set_membership(&self, _: MembershipCheck) {}
+        fn set_invite_check(&self, _: Option<InviteCheck>) {}
+        fn set_handshake_failed(&self, _: Option<HandshakeFailedHook>) {}
+        fn listen(&self, _: &str, _: OnSession) -> Result<()> {
+            Ok(())
+        }
+        fn dial(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<InviteProof>,
+        ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
+            Ok(self.session.clone())
+        }
+        fn close(&self) {}
+    }
+
+    #[test]
+    fn successful_retry_resets_backoff_before_next_disconnect() {
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("state"),
+                "admin-passphrase",
+                "recovery-passphrase",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let session: Arc<dyn Session> = Arc::new(StubSession {
+            peer,
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        let team = TeamSync::new(ctx, Arc::new(StubTransport { session }), mine);
+        let mut state = EnvState::new(Facts::default(), HashSet::new(), HashMap::new());
+        state
+            .candidate_addresses
+            .insert(fp.clone(), BTreeSet::from(["retry-address".to_owned()]));
+        state.backoff.insert(fp.clone(), Duration::from_secs(8));
+        state
+            .next_attempt
+            .insert(fp.clone(), Instant::now() + Duration::from_secs(8));
+        team.envs.lock().unwrap().insert("retry-env".into(), state);
+        team.dial_attempt("retry-env", &fp);
+        let guard = team.envs.lock().unwrap();
+        let state = guard.get("retry-env").unwrap();
+        assert!(!state.backoff.contains_key(&fp));
+        assert!(!state.next_attempt.contains_key(&fp));
+    }
+}
 fn valid_id(s: &str, limit: usize) -> bool {
     !s.is_empty()
         && s.chars().count() <= limit
@@ -334,7 +432,7 @@ pub fn load_facts(
         if line.is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str(&line) else {
+        let Ok(value) = pyjson::loads(&line) else {
             continue;
         };
         let Ok(fact) = Fact::from_dict(&value) else {
@@ -654,7 +752,7 @@ impl TeamSync {
             .state
             .read_lines(&format!("team/{env_id}/incident_outbox.jsonl"), None)?
         {
-            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            if let Ok(value) = pyjson::loads(&line) {
                 if let Ok(fact) = Fact::from_dict(&value) {
                     if fact.env_id == env_id && fact.kind == "incident" {
                         if let Ok(hash) = fact.hash() {
@@ -1951,7 +2049,7 @@ impl TeamSync {
             start
         };
         for line in lines.iter().skip(start) {
-            let Ok(value) = serde_json::from_str::<Value>(line) else {
+            let Ok(value) = pyjson::loads(line) else {
                 continue;
             };
             let Ok(fact) = Fact::from_dict(&value) else {
@@ -2008,6 +2106,15 @@ impl TeamSync {
             session.close();
             self.record_dial_failure(env_id, fp);
             return;
+        }
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.backoff.remove(fp);
+            env.next_attempt.remove(fp);
         }
         self.wire_dialed_session(env_id, fp, &address, session);
     }

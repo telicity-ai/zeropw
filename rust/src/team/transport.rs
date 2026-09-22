@@ -225,10 +225,13 @@ impl Session for EncryptedSession {
         *count = count
             .checked_add(1)
             .ok_or(SessionClosed("session_closed"))?;
-        let message: Value = serde_json::from_slice(&plaintext).map_err(|_| {
-            self.close();
-            SessionClosed("frame_malformed")
-        })?;
+        let message: Value = std::str::from_utf8(&plaintext)
+            .ok()
+            .and_then(|text| crate::pyjson::loads(text).ok())
+            .ok_or_else(|| {
+                self.close();
+                SessionClosed("frame_malformed")
+            })?;
         if !message.is_object() {
             self.close();
             return Err(SessionClosed("frame_malformed"));
@@ -337,6 +340,48 @@ impl SocketChannel {
         })
     }
 }
+
+#[derive(Debug, PartialEq, Eq)]
+enum SocketReadError {
+    Timeout,
+    PeerClosed,
+    Failed,
+}
+
+/// Enforce one absolute deadline for an entire frame segment. `read_exact`
+/// with SO_RCVTIMEO would restart the timeout after every slow-dripped byte.
+fn read_exact_until(
+    stream: &mut TcpStream,
+    mut target: &mut [u8],
+    deadline: Instant,
+) -> std::result::Result<(), SocketReadError> {
+    while !target.is_empty() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or(SocketReadError::Timeout)?;
+        stream
+            .set_read_timeout(Some(
+                remaining.min(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)),
+            ))
+            .map_err(|_| SocketReadError::Failed)?;
+        match stream.read(target) {
+            Ok(0) => return Err(SocketReadError::PeerClosed),
+            Ok(n) => target = &mut target[n..],
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err(SocketReadError::Timeout);
+            }
+            Err(_) => return Err(SocketReadError::Failed),
+        }
+    }
+    Ok(())
+}
 impl ByteChannel for SocketChannel {
     fn send(&self, bytes: &[u8]) -> std::result::Result<(), SessionClosed> {
         if bytes.len() > WIRE_FRAME_LIMIT {
@@ -361,44 +406,24 @@ impl ByteChannel for SocketChannel {
             return Err(SessionClosed("channel_closed"));
         }
         let mut stream = self.reader.lock().unwrap_or_else(|e| e.into_inner());
-        stream
-            .set_read_timeout(Some(timeout.max(Duration::from_millis(1))))
-            .map_err(|_| SessionClosed("recv_failed"))?;
+        let deadline = Instant::now() + timeout;
         let mut header = [0u8; 4];
-        match stream.read_exact(&mut header) {
+        match read_exact_until(&mut stream, &mut header, deadline) {
             Ok(()) => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Ok(None);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Err(SessionClosed("peer_closed"));
-            }
-            Err(_) => return Err(SessionClosed("recv_failed")),
+            Err(SocketReadError::Timeout) => return Ok(None),
+            Err(SocketReadError::PeerClosed) => return Err(SessionClosed("peer_closed")),
+            Err(SocketReadError::Failed) => return Err(SessionClosed("recv_failed")),
         }
         let length = u32::from_be_bytes(header) as usize;
         if length > WIRE_FRAME_LIMIT {
             return Err(SessionClosed("frame_too_large"));
         }
-        stream
-            .set_read_timeout(Some(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)))
-            .map_err(|_| SessionClosed("recv_failed"))?;
         let mut payload = vec![0; length];
-        stream.read_exact(&mut payload).map_err(|e| {
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-            ) {
-                SessionClosed("frame_incomplete")
-            } else if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                SessionClosed("peer_closed")
-            } else {
-                SessionClosed("recv_failed")
-            }
+        let payload_deadline = deadline + Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS);
+        read_exact_until(&mut stream, &mut payload, payload_deadline).map_err(|e| match e {
+            SocketReadError::Timeout => SessionClosed("frame_incomplete"),
+            SocketReadError::PeerClosed => SessionClosed("peer_closed"),
+            SocketReadError::Failed => SessionClosed("recv_failed"),
         })?;
         capture_wire("recv", &payload);
         Ok(Some(payload))
@@ -420,8 +445,10 @@ fn recv_plain(
         .recv(timeout)
         .map_err(|_| HandshakeFailed::new("handshake_channel_closed"))?
         .ok_or_else(|| HandshakeFailed::new("handshake_timeout"))?;
+    let source =
+        std::str::from_utf8(&raw).map_err(|_| HandshakeFailed::new("handshake_malformed"))?;
     let value: Value =
-        serde_json::from_slice(&raw).map_err(|_| HandshakeFailed::new("handshake_malformed"))?;
+        crate::pyjson::loads(source).map_err(|_| HandshakeFailed::new("handshake_malformed"))?;
     if !value.is_object() {
         return Err(HandshakeFailed::new("handshake_malformed"));
     }
@@ -993,5 +1020,37 @@ impl Transport for Arc<TcpTransport> {
     }
     fn close(&self) {
         self.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn slow_drip_cannot_extend_absolute_read_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            for _ in 0..10 {
+                if stream.write_all(&[7]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        });
+        let (mut reader, _) = listener.accept().unwrap();
+        let mut target = [0u8; 10];
+        let started = Instant::now();
+        let result = read_exact_until(
+            &mut reader,
+            &mut target,
+            started + Duration::from_millis(75),
+        );
+        assert_eq!(result, Err(SocketReadError::Timeout));
+        assert!(started.elapsed() < Duration::from_millis(200));
+        drop(reader);
+        writer.join().unwrap();
     }
 }

@@ -185,6 +185,55 @@ fn fact_sign_verify_and_sanitize() {
 }
 
 #[test]
+fn live_emergency_facts_each_record_one_apply_audit() {
+    let root = TempDir::new().unwrap();
+    let ctx = new_context(&root, "fact-audit");
+    ctx.projects.create("demo", &["dev"]).unwrap();
+    let shared =
+        membership::share_environment(&ctx, None, "demo", "dev", "alice", "admin-passphrase")
+            .unwrap();
+    let env = shared["env_id"].as_str().unwrap();
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let fp = device.fingerprint().unwrap();
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+    let team = sync::TeamSync::new(ctx.clone(), transport, device);
+    team.register_env(env).unwrap();
+    for (kind, target) in [
+        ("connection_disabled", json!({"connection_id":"synthetic"})),
+        (
+            "secret_version_revoked",
+            json!({"secret_id":"synthetic","version_id":"0123456789abcdef"}),
+        ),
+        (
+            "member_removed",
+            json!({"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+        ),
+    ] {
+        team.publish_fact(env, kind, target).unwrap();
+    }
+    let events = ctx
+        .state
+        .read_lines(zeropw::audit::AUDIT_FILE, None)
+        .unwrap();
+    let matching: Vec<_> = events
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["event"] == "team_fact_apply")
+        .collect();
+    assert_eq!(matching.len(), 3);
+    for (event, kind) in matching.iter().zip([
+        "connection_disabled",
+        "secret_version_revoked",
+        "member_removed",
+    ]) {
+        assert_eq!(event["kind"], kind);
+        assert_eq!(event["fingerprint"], fp);
+        assert_eq!(event["env_id"], env);
+    }
+}
+
+#[test]
 fn fact_canonical_bytes_and_hash_match_python() {
     let source = json!({"format":"zeropw-team-fact-v1","env_id":"owner-0123456789abcdef0123456789abcdef","kind":"connection_disabled","target":{"connection_id":"café-1"},"author":"aaaaaaaaaaaaaaaaaaaaaaaaaa","hlc":"123-0001","sig":"AA=="});
     let rust = sync::Fact::from_dict(&source).unwrap();
