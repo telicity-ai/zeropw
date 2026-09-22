@@ -39,6 +39,14 @@ There is no plaintext fallback or Python product backend. Python remains a
 test oracle/driver only. A module's existence or a representative smoke test
 does not satisfy the full behavioral and boundary-test obligations below.
 
+Native deployments that include `exec` must build and ship the trusted
+`zeropw_session` binary beside the server executable (`cargo build --bins`).
+`runs.rs` locates this sibling by the executable directory, never by an
+agent-controlled `PATH`; if the helper is absent, execution fails closed as
+`spawn_failed`. The helper uses safe `rustix::process::setsid` then `exec`,
+with a close-on-exec acknowledgement socket to preserve synchronous spawn
+failure semantics. This is a packaged Rust helper, not a Python backend.
+
 Shared contract already in place (do not rewrite): `errors.rs`, `secret.rs`, `clock.rs`, `oracle.rs`.
 
 ## 2. What "same behaviour" means

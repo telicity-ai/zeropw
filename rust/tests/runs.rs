@@ -134,7 +134,11 @@ fn output_encodings_block_both_streams() {
             2.0,
         );
         let done = r.wait(&run, Some(4.0));
-        assert_eq!(done.state, "blocked");
+        assert_eq!(
+            done.state, "blocked",
+            "reason={:?} exit={:?} stderr={:?}",
+            done.reason, done.exit_code, done.stderr
+        );
         assert_eq!(done.stdout, runs::BLOCKED_MARKER.as_bytes());
         assert_eq!(done.stdout, done.stderr);
     }
@@ -158,6 +162,90 @@ fn cancellation_escalates_and_preserves_reason() {
     assert_eq!(done.state, "cancelled");
     assert_eq!(done.reason.as_deref(), Some("test_cancel"));
     assert!(done.exit_code.is_some());
+}
+#[test]
+fn cancellation_targets_new_session_group_not_coordinator_group() {
+    let (temp, _, r) = setup(1024);
+    let marker = temp.path().join("child-ready");
+    let program = zeropw::tools::resolve_program("python3.12").expect("Python oracle");
+    let run = queued(&r);
+    let script = "import os,sys,time\np=os.getpid()\ntry:\n fd=os.open('/dev/tty', os.O_RDONLY); os.close(fd); tty=True\nexcept OSError: tty=False\nprint(os.getsid(0)==p, os.getpgrp()==p, tty, flush=True)\nopen(sys.argv[1], 'w').close()\ntime.sleep(30)";
+    r.start(
+        &run,
+        &[
+            program.to_string_lossy().into_owned(),
+            "-I".into(),
+            "-c".into(),
+            script.into(),
+            marker.to_string_lossy().into_owned(),
+        ],
+        &HashMap::new(),
+        temp.path(),
+        &[],
+        None,
+        Some(60.0),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !marker.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        marker.exists(),
+        "child must reach the session probe before cancellation"
+    );
+    let done = r.cancel(&run.id, "alice", "test_cancel").unwrap();
+    assert_eq!(done.state, "cancelled");
+    assert_eq!(
+        done.stdout, b"True True False\n",
+        "group-directed cancellation must target the child-led session without a controlling terminal"
+    );
+}
+#[test]
+fn cancellation_signals_descendants_in_the_new_process_group() {
+    let (temp, _, r) = setup(1024);
+    let ready = temp.path().join("descendant-ready");
+    let terminated = temp.path().join("descendant-terminated");
+    let program = zeropw::tools::resolve_program("python3.12").expect("Python oracle");
+    let run = queued(&r);
+    let script = r#"import subprocess,sys,time
+child = "import signal,sys,time; signal.signal(signal.SIGTERM, lambda s,f: (open(sys.argv[2], 'w').close(), sys.exit(0))); open(sys.argv[1], 'w').close(); time.sleep(30)"
+subprocess.Popen([sys.executable, '-I', '-c', child, sys.argv[1], sys.argv[2]])
+time.sleep(30)"#;
+    r.start(
+        &run,
+        &[
+            program.to_string_lossy().into_owned(),
+            "-I".into(),
+            "-c".into(),
+            script.into(),
+            ready.to_string_lossy().into_owned(),
+            terminated.to_string_lossy().into_owned(),
+        ],
+        &HashMap::new(),
+        temp.path(),
+        &[],
+        None,
+        Some(60.0),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready.exists());
+    assert_eq!(
+        r.cancel(&run.id, "alice", "test_cancel").unwrap().state,
+        "cancelled"
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !terminated.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        terminated.exists(),
+        "group cancellation must signal the CLI's descendant too"
+    );
 }
 #[test]
 fn timeout_and_spawn_failure_are_terminal() {
@@ -301,7 +389,72 @@ fn revocation_targets_grant_and_global_stop_cancels_rest() {
     );
     assert!(Arc::ptr_eq(&r, &runs::install(ctx.clone())));
     drop(r);
-    assert!(runs::registry(&ctx).is_none());
+    // Python `tools.install(ctx)` attaches strongly to `ctx.runs`; dropping
+    // the returned handle must not erase completed history or revocation state.
+    assert!(runs::registry(&ctx).is_some());
+}
+#[test]
+fn installed_registry_retains_history_without_return_owner_and_drops_without_cycle() {
+    let temp = TempDir::new().unwrap();
+    let ctx = Arc::new(
+        Context::initialize(
+            temp.path().join("state"),
+            "synthetic-admin-passphrase",
+            "synthetic-recovery-passphrase",
+            Config::default(),
+            Arc::new(zeropw::store::now),
+        )
+        .unwrap(),
+    );
+    let run_dir = ctx.config.run_dir.clone().unwrap();
+    let weak_ctx = Arc::downgrade(&ctx);
+    runs::install(ctx.clone());
+    let registry = runs::registry(&ctx).unwrap();
+    assert!(Arc::ptr_eq(&registry, &runs::install(ctx.clone())));
+    let run = registry.create(
+        "alice",
+        "conn",
+        "grant",
+        "http",
+        "true",
+        Some("request-id"),
+        "digest",
+        None,
+        None,
+    );
+    registry
+        .start(
+            &run,
+            &["/usr/bin/true".into()],
+            &HashMap::new(),
+            temp.path(),
+            &[],
+            None,
+            Some(2.0),
+        )
+        .unwrap();
+    assert_eq!(registry.wait(&run, Some(4.0)).state, "completed");
+    drop(registry);
+    let registry = runs::registry(&ctx).unwrap();
+    assert_eq!(
+        registry
+            .find_by_request("alice", "request-id", "digest")
+            .unwrap()
+            .unwrap()
+            .id,
+        run.id
+    );
+    registry.on_revoke("grant", Some("grant"));
+    drop(registry);
+    drop(ctx);
+    assert!(
+        weak_ctx.upgrade().is_none(),
+        "Context and installed registry must not form an Arc cycle"
+    );
+    assert!(
+        !run_dir.exists(),
+        "owned execution directory must be removed with Context"
+    );
 }
 #[test]
 fn audit_failure_at_start_prevents_child_and_finish_hides_output() {
@@ -344,7 +497,14 @@ fn audit_failure_at_start_prevents_child_and_finish_hides_output() {
     std::fs::create_dir(&file).unwrap();
     let done = r.wait(&run, Some(3.0));
     assert_eq!(done.state, "failed");
-    assert_eq!(done.reason.as_deref(), Some("audit_unavailable"));
+    assert_eq!(
+        done.reason.as_deref(),
+        Some("audit_unavailable"),
+        "state={} exit={:?} stderr={:?}",
+        done.state,
+        done.exit_code,
+        done.stderr
+    );
     assert!(done.stdout.is_empty() && done.stderr.is_empty());
 }
 #[test]

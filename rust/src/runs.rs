@@ -14,8 +14,9 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read};
 use std::os::fd::AsFd;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::Path;
+use std::os::unix::net::UnixListener;
+use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
@@ -35,6 +36,61 @@ pub const RUNNING: &str = "running";
 pub const COMPLETED: &str = "completed";
 pub const FAILED: &str = "failed";
 pub const CANCELLED: &str = "cancelled";
+
+// The helper is shipped alongside the trusted executable. During `cargo test`
+// integration binaries live under `target/{debug,release}/deps`, so check
+// their parent too. Never resolve it through the agent-controlled PATH.
+fn session_helper() -> std::io::Result<PathBuf> {
+    let executable = std::env::current_exe()?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no executable directory"))?;
+    let sibling = directory.join("zeropw_session");
+    if sibling.is_file() {
+        return Ok(sibling);
+    }
+    let parent = directory
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no parent directory"))?;
+    let nearby = parent.join("zeropw_session");
+    if nearby.is_file() {
+        return Ok(nearby);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "zeropw_session helper missing",
+    ))
+}
+
+fn wait_for_session_exec(listener: &UnixListener) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                if stream.set_nonblocking(false).is_err() {
+                    return false;
+                }
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut byte = [0];
+                // The helper confirms setsid before exec. CLOEXEC then closes
+                // the socket on exec; macOS may report a reset rather than EOF
+                // if the target exits before accept. An explicit F is failure.
+                if !matches!(stream.read(&mut byte), Ok(1)) || byte != *b"R" {
+                    return false;
+                }
+                return match stream.read(&mut byte) {
+                    Ok(0) => true,
+                    Err(e) if e.kind() == ErrorKind::ConnectionReset => true,
+                    _ => false,
+                };
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(2));
+            }
+            Err(_) => return false,
+        }
+    }
+}
 pub const BLOCKED: &str = "blocked";
 pub const STATES: &[&str] = &[QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED, BLOCKED];
 pub const ACTIVE_STATES: &[&str] = &[QUEUED, RUNNING];
@@ -171,7 +227,12 @@ struct RegistryState {
 }
 pub type Cleanup = Box<dyn FnOnce() + Send + 'static>;
 pub struct RunRegistry {
-    ctx: Arc<Context>,
+    // Context owns installed registries; a weak back-reference avoids a cycle.
+    ctx: Weak<Context>,
+    // A directly constructed registry owns its Context, matching Python's
+    // `RunRegistry(ctx)`. Only a Context-installed registry omits this owner.
+    _direct_context: Option<Arc<Context>>,
+    clock: crate::clock::Clock,
     pub capture_limit: usize,
     pub grace_seconds: f64,
     state: Mutex<RegistryState>,
@@ -182,20 +243,20 @@ pub fn registry(ctx: &Context) -> Option<Arc<RunRegistry>> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()?
-        .downcast_ref::<Weak<RunRegistry>>()?
-        .upgrade()
+        .downcast_ref::<Arc<RunRegistry>>()
+        .cloned()
 }
 pub fn install(ctx: Arc<Context>) -> Arc<RunRegistry> {
     let mut slot = ctx.runs.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(r) = slot
         .as_ref()
-        .and_then(|v| v.downcast_ref::<Weak<RunRegistry>>())
-        .and_then(Weak::upgrade)
+        .and_then(|v| v.downcast_ref::<Arc<RunRegistry>>())
+        .cloned()
     {
         return r;
     }
-    let r = RunRegistry::new(ctx.clone(), CAPTURE_LIMIT, TERMINATE_GRACE_SECONDS);
-    *slot = Some(Box::new(Arc::downgrade(&r)));
+    let r = RunRegistry::new_installed(ctx.clone(), CAPTURE_LIMIT, TERMINATE_GRACE_SECONDS);
+    *slot = Some(Box::new(r.clone()));
     let weak = Arc::downgrade(&r);
     ctx.policy.on_revoke(move |kind, grant| {
         if let Some(r) = weak.upgrade() {
@@ -206,8 +267,21 @@ pub fn install(ctx: Arc<Context>) -> Arc<RunRegistry> {
 }
 impl RunRegistry {
     pub fn new(ctx: Arc<Context>, capture_limit: usize, grace_seconds: f64) -> Arc<Self> {
+        Self::build(ctx, capture_limit, grace_seconds, true)
+    }
+    fn new_installed(ctx: Arc<Context>, capture_limit: usize, grace_seconds: f64) -> Arc<Self> {
+        Self::build(ctx, capture_limit, grace_seconds, false)
+    }
+    fn build(
+        ctx: Arc<Context>,
+        capture_limit: usize,
+        grace_seconds: f64,
+        direct: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
-            ctx,
+            clock: ctx.clock.clone(),
+            ctx: Arc::downgrade(&ctx),
+            _direct_context: direct.then_some(ctx),
             capture_limit,
             grace_seconds,
             state: Mutex::new(RegistryState::default()),
@@ -344,7 +418,7 @@ impl RunRegistry {
             program: program.into(),
             request_id: request_id.map(str::to_string),
             input_digest: input_digest.into(),
-            created_at: iso(Some((self.ctx.clock)())),
+            created_at: iso(Some((self.clock)())),
             target: target.map(str::to_string),
             policy_version,
             state: QUEUED.into(),
@@ -408,6 +482,8 @@ impl RunRegistry {
         extra: Vec<(&str, Value)>,
     ) -> Result<(), Error> {
         self.ctx
+            .upgrade()
+            .ok_or_else(|| Error::state("context_closed"))?
             .audit
             .record(
                 event,
@@ -465,36 +541,83 @@ impl RunRegistry {
             clean(cleanup);
             return Ok(out);
         }
-        let Some(program) = argv.first() else {
+        let Some(_) = argv.first() else {
             drop(current);
             self.finalize(&entry, Outcome::failed("spawn_failed"), true);
             clean(cleanup);
             return self.get(&run.id, &run.caller);
         };
-        let spawned = Command::new(program)
-            .args(&argv[1..])
-            .env_clear()
-            .envs(env)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn();
-        let mut child = match spawned {
-            Ok(c) => c,
+        let Some(ctx) = self.ctx.upgrade() else {
+            drop(current);
+            clean(cleanup);
+            return Err(Error::state("context_closed"));
+        };
+        let Some(socket_dir) = ctx.config.socket_dir.as_ref() else {
+            drop(current);
+            self.finalize(&entry, Outcome::failed("spawn_failed"), true);
+            clean(cleanup);
+            return self.get(&run.id, &run.caller);
+        };
+        let ack_path = socket_dir.join(format!("s-{:016x}", rand::random::<u64>()));
+        let setup = (|| -> std::io::Result<(PathBuf, UnixListener)> {
+            let helper = session_helper()?;
+            let listener = UnixListener::bind(&ack_path)?;
+            listener.set_nonblocking(true)?;
+            Ok((helper, listener))
+        })();
+        let (helper, listener) = match setup {
+            Ok(pair) => pair,
             Err(_) => {
+                let _ = std::fs::remove_file(&ack_path);
                 drop(current);
                 self.finalize(&entry, Outcome::failed("spawn_failed"), true);
                 clean(cleanup);
                 return self.get(&run.id, &run.caller);
             }
         };
+        let spawned = Command::new(helper)
+            .arg(&ack_path)
+            .args(argv)
+            .env_clear()
+            .envs(env)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let mut child = match spawned {
+            Ok(c) => c,
+            Err(_) => {
+                let _ = std::fs::remove_file(&ack_path);
+                drop(current);
+                self.finalize(&entry, Outcome::failed("spawn_failed"), true);
+                clean(cleanup);
+                return self.get(&run.id, &run.caller);
+            }
+        };
+        let acknowledged = wait_for_session_exec(&listener);
+        let _ = std::fs::remove_file(&ack_path);
+        if !acknowledged {
+            // If exec happened but acknowledgement was lost, descendants may
+            // already exist in the new group. Before setsid this group id
+            // cannot identify the coordinator's group, so fallback is safe.
+            if let Ok(raw) = i32::try_from(child.id())
+                && let Some(pid) = Pid::from_raw(raw)
+            {
+                let _ = kill_process_group(pid, Signal::KILL);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            drop(current);
+            self.finalize(&entry, Outcome::failed("spawn_failed"), true);
+            clean(cleanup);
+            return self.get(&run.id, &run.caller);
+        }
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         *entry.child.lock().unwrap() = Some(child);
         current.state = RUNNING.into();
-        current.started_at = Some(iso(Some((self.ctx.clock)())));
+        current.started_at = Some(iso(Some((self.clock)())));
         drop(current);
         let patterns: Vec<_> = sensitive
             .iter()
@@ -502,8 +625,9 @@ impl RunRegistry {
             .collect();
         let registry = self.clone();
         let entry_thread = entry.clone();
-        let timeout = timeout.unwrap_or(self.ctx.config.exec_timeout_seconds);
+        let timeout = timeout.unwrap_or(ctx.config.exec_timeout_seconds);
         thread::spawn(move || {
+            let _keep_context_alive = ctx;
             registry.supervise(entry_thread, stdout, stderr, timeout, patterns, cleanup)
         });
         self.get(&run.id, &run.caller)
@@ -591,7 +715,7 @@ impl RunRegistry {
             run.state = out.state.clone();
             run.reason = out.reason.clone();
             run.exit_code = out.exit_code;
-            run.finished_at = Some(iso(Some((self.ctx.clock)())));
+            run.finished_at = Some(iso(Some((self.clock)())));
             run.clone()
         };
         let result = match out.state.as_str() {

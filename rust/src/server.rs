@@ -53,12 +53,23 @@ struct Inner {
     thread: Mutex<Option<JoinHandle<()>>>,
     runs: Arc<crate::runs::RunRegistry>,
     signer: Arc<crate::signer::SignerManager>,
+    quiet: AtomicBool,
+    log_lines: Mutex<Vec<String>>,
 }
 pub struct ZeroPWServer {
     inner: Arc<Inner>,
 }
 impl ZeroPWServer {
     pub fn new(ctx: Arc<Context>, host: Option<&str>, port: Option<u16>) -> Result<Self, Error> {
+        Self::new_with_quiet(ctx, host, port, true)
+    }
+    /// Python `ZeroPWServer(..., quiet=False)` equivalent.
+    pub fn new_with_quiet(
+        ctx: Arc<Context>,
+        host: Option<&str>,
+        port: Option<u16>,
+        quiet: bool,
+    ) -> Result<Self, Error> {
         let host = host.unwrap_or(&ctx.config.listen_host);
         let port = match port {
             Some(p) => p,
@@ -95,11 +106,20 @@ impl ZeroPWServer {
                 thread: Mutex::new(None),
                 runs,
                 signer,
+                quiet: AtomicBool::new(quiet),
+                log_lines: Mutex::new(Vec::new()),
             }),
         })
     }
     pub fn url(&self) -> String {
         self.inner.url.clone()
+    }
+    pub fn log_lines(&self) -> Vec<String> {
+        self.inner
+            .log_lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     pub fn set_limits(&self, max_connections: usize, timeout: Duration, read_deadline: Duration) {
         self.inner
@@ -278,7 +298,10 @@ fn token(s: &[u8]) -> bool {
 fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|b| char::from(*b)).collect()
 }
-fn parse(reader: &mut BufReader<TcpStream>) -> Result<Request, ParseError> {
+fn parse(
+    reader: &mut BufReader<TcpStream>,
+    parsed_method: &mut Option<String>,
+) -> Result<Request, ParseError> {
     let raw = line(reader)?;
     if !raw.ends_with(b"\r\n") {
         return Err(ParseError::Framing("malformed_request_line"));
@@ -292,6 +315,7 @@ fn parse(reader: &mut BufReader<TcpStream>) -> Result<Request, ParseError> {
         return Err(ParseError::Framing("malformed_request_line"));
     }
     let method = latin1(parts[0]);
+    *parsed_method = Some(method.clone());
     let mut path = latin1(parts[1]);
     if path.starts_with("//") {
         path = format!("/{}", path.trim_start_matches('/'));
@@ -378,13 +402,14 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
         if !mark(inner, id, true) {
             break;
         }
-        let request = match parse(&mut reader) {
+        let mut parsed_method = None;
+        let request = match parse(&mut reader, &mut parsed_method) {
             Ok(r) => r,
             Err(ParseError::Gone) => break,
             Err(ParseError::Framing(reason)) => {
                 let _ = send_json(
                     reader.get_mut(),
-                    "GET",
+                    parsed_method.as_deref().unwrap_or("GET"),
                     400,
                     &json!({"error":"InvalidInput","reason":reason}),
                     true,
@@ -394,7 +419,7 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
             Err(ParseError::Status(status, reason)) => {
                 let _ = send_json(
                     reader.get_mut(),
-                    "GET",
+                    parsed_method.as_deref().unwrap_or("GET"),
                     status,
                     &json!({"error":if reason=="absolute_uri_unsupported"{"Unsupported"}else{"InvalidInput"},"reason":reason}),
                     true,
@@ -402,6 +427,7 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
                 break;
             }
         };
+        log_request(inner, &request);
         if request
             .header("Expect")
             .is_some_and(|v| v.eq_ignore_ascii_case("100-continue"))
@@ -454,6 +480,22 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
         }
     }
     let _ = reader.get_ref().shutdown(Shutdown::Both);
+}
+fn log_request(inner: &Inner, request: &Request) {
+    if inner.quiet.load(Ordering::Acquire) {
+        return;
+    }
+    let path = request.path.split('?').next().unwrap_or("");
+    let path = if path.starts_with("/h/") {
+        "/h/<handle>/..."
+    } else {
+        path
+    };
+    inner
+        .log_lines
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(format!("{} {}", request.method, path));
 }
 enum DispatchError {
     Gone,
