@@ -2192,9 +2192,19 @@ pub fn main(argv: &[String]) -> i32 {
                 );
             } else if error.reason == "state_corrupt"
                 && (!error.detail.ends_with(".json")
-                    || fs::read_to_string(Path::new(&args.state_dir).join(&error.detail))
-                        .ok()
-                        .is_some_and(|text| pyjson::loads(&text).is_ok()))
+                    || [
+                        "admin.json",
+                        "projects.json",
+                        "policy/grants.json",
+                        "policy/connections.json",
+                        "policy/principals.json",
+                        "policy/control.json",
+                        "vault/secrets.json",
+                    ]
+                    .contains(&error.detail.as_str())
+                        && fs::read_to_string(Path::new(&args.state_dir).join(&error.detail))
+                            .ok()
+                            .is_some_and(|text| pyjson::loads(&text).is_ok()))
             {
                 // Python's CLI reports only the built-in exception class for
                 // semantically broken JSON; internal model labels are not public.
