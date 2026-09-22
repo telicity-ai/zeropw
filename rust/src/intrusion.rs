@@ -8,6 +8,8 @@ use std::sync::{
 use crate::context::Context;
 use crate::errors::{Error, Result};
 use crate::incident;
+use crate::pyint::PyInt;
+use num_bigint::BigInt;
 use serde_json::{Map, Value};
 
 pub const STRONG_RULES: &[&str] = &[
@@ -25,7 +27,7 @@ pub const WEAK_RULES: &[&str] = &[
     "burst",
 ];
 pub const UNATTRIBUTED_RULE: &str = "handle_forgery_unattributed";
-fn strong_defaults() -> HashMap<String, i64> {
+fn strong_defaults() -> HashMap<String, PyInt> {
     [
         ("unknown_tool", 2),
         ("handle_forgery", 2),
@@ -33,10 +35,10 @@ fn strong_defaults() -> HashMap<String, i64> {
         ("output_exfiltration", 1),
     ]
     .into_iter()
-    .map(|(k, v)| (k.into(), v))
+    .map(|(k, v)| (k.into(), PyInt::from(v)))
     .collect()
 }
-fn weak_defaults() -> HashMap<String, i64> {
+fn weak_defaults() -> HashMap<String, PyInt> {
     [
         ("revoked_use", 3),
         ("scope_violation", 1),
@@ -46,7 +48,7 @@ fn weak_defaults() -> HashMap<String, i64> {
         ("burst", 2),
     ]
     .into_iter()
-    .map(|(k, v)| (k.into(), v))
+    .map(|(k, v)| (k.into(), PyInt::from(v)))
     .collect()
 }
 
@@ -132,21 +134,21 @@ pub fn match_denial_rule(
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetectorConfig {
     pub window_seconds: f64,
-    pub weak_threshold: i64,
-    pub enumeration_min: i64,
+    pub weak_threshold: PyInt,
+    pub enumeration_min: PyInt,
     pub enumeration_ratio: f64,
-    pub burst_count: i64,
-    pub weak_points: HashMap<String, i64>,
-    pub strong_thresholds: HashMap<String, i64>,
+    pub burst_count: PyInt,
+    pub weak_points: HashMap<String, PyInt>,
+    pub strong_thresholds: HashMap<String, PyInt>,
 }
 impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
             window_seconds: 120.0,
-            weak_threshold: 8,
-            enumeration_min: 4,
+            weak_threshold: 8.into(),
+            enumeration_min: 4.into(),
             enumeration_ratio: 0.5,
-            burst_count: 60,
+            burst_count: 60.into(),
             weak_points: weak_defaults(),
             strong_thresholds: strong_defaults(),
         }
@@ -155,9 +157,29 @@ impl Default for DetectorConfig {
 impl DetectorConfig {
     pub fn from_mapping(data: Option<&Value>) -> Result<Self> {
         let mut c = Self::default();
-        let Some(o) = data.and_then(Value::as_object) else {
+        // Python starts with `dict(data or {})`: every falsy JSON value
+        // selects the empty mapping before pair conversion.
+        let Some(data) = data.filter(|v| match v {
+            Value::Null | Value::Bool(false) => false,
+            Value::Number(n) => n.as_f64() != Some(0.0),
+            Value::String(s) => !s.is_empty(),
+            Value::Array(a) => !a.is_empty(),
+            Value::Object(o) => !o.is_empty(),
+            _ => true,
+        }) else {
             return Ok(c);
         };
+        let pairs = crate::team::commit::python_dict_pairs(data)
+            .ok_or_else(|| Error::invalid_input("intrusion_config_invalid"))?;
+        let mut o = Map::new();
+        for (key, value) in pairs {
+            if !crate::team::commit::dict_key_is_hashable(&key) {
+                return Err(Error::invalid_input("intrusion_config_invalid"));
+            }
+            if let Value::String(key) = key {
+                o.insert(key, value);
+            }
+        }
         for (key, out) in [
             ("window_seconds", &mut c.window_seconds),
             ("enumeration_ratio", &mut c.enumeration_ratio),
@@ -178,7 +200,7 @@ impl DetectorConfig {
             ("burst_count", &mut c.burst_count),
         ] {
             if let Some(v) = o.get(key) {
-                *out = v.as_i64().ok_or_else(|| {
+                *out = PyInt::from_json_integer(v).ok_or_else(|| {
                     Error::invalid_input(match key {
                         "weak_threshold" => "intrusion_weak_threshold_invalid",
                         "enumeration_min" => "intrusion_enumeration_min_invalid",
@@ -192,7 +214,7 @@ impl DetectorConfig {
                 if WEAK_RULES.contains(&k.as_str()) {
                     c.weak_points.insert(
                         k.clone(),
-                        v.as_i64()
+                        PyInt::from_json_integer(v)
                             .ok_or_else(|| Error::invalid_input("intrusion_weak_points_invalid"))?,
                     );
                 }
@@ -203,7 +225,7 @@ impl DetectorConfig {
                 if STRONG_RULES.contains(&k.as_str()) {
                     c.strong_thresholds.insert(
                         k.clone(),
-                        v.as_i64().ok_or_else(|| {
+                        PyInt::from_json_integer(v).ok_or_else(|| {
                             Error::invalid_input("intrusion_strong_threshold_invalid")
                         })?,
                     );
@@ -215,28 +237,36 @@ impl DetectorConfig {
     }
     pub fn validate(&self) -> Result<()> {
         for rule in STRONG_RULES {
-            if self.strong_thresholds.get(*rule).is_none_or(|v| *v < 1) {
+            if self
+                .strong_thresholds
+                .get(*rule)
+                .is_none_or(|v| v.0 < BigInt::from(1))
+            {
                 return Err(Error::invalid_input("intrusion_strong_threshold_invalid"));
             }
         }
         for rule in WEAK_RULES {
-            if self.weak_points.get(*rule).is_none_or(|v| *v < 0) {
+            if self
+                .weak_points
+                .get(*rule)
+                .is_none_or(|v| v.0 < BigInt::from(0))
+            {
                 return Err(Error::invalid_input("intrusion_weak_points_invalid"));
             }
         }
         if self.window_seconds <= 0.0 || self.window_seconds.is_nan() {
             return Err(Error::invalid_input("intrusion_window_invalid"));
         }
-        if self.weak_threshold < 1 {
+        if self.weak_threshold.0 < BigInt::from(1) {
             return Err(Error::invalid_input("intrusion_weak_threshold_invalid"));
         }
-        if self.enumeration_min < 1 {
+        if self.enumeration_min.0 < BigInt::from(1) {
             return Err(Error::invalid_input("intrusion_enumeration_min_invalid"));
         }
         if !(self.enumeration_ratio > 0.0 && self.enumeration_ratio <= 1.0) {
             return Err(Error::invalid_input("intrusion_enumeration_ratio_invalid"));
         }
-        if self.burst_count < 1 {
+        if self.burst_count.0 < BigInt::from(1) {
             return Err(Error::invalid_input("intrusion_burst_count_invalid"));
         }
         Ok(())
@@ -246,7 +276,7 @@ impl DetectorConfig {
 #[derive(Default)]
 struct CallerState {
     strong: HashMap<String, VecDeque<f64>>,
-    weak_events: VecDeque<(f64, String, i64)>,
+    weak_events: VecDeque<(f64, String, PyInt)>,
     first_used: HashMap<String, f64>,
     enumeration_disarmed: bool,
     all_records: VecDeque<f64>,
@@ -256,7 +286,7 @@ struct CallerState {
 #[derive(Default)]
 struct GlobalState {
     strong: HashMap<String, VecDeque<f64>>,
-    weak_events: VecDeque<(f64, String, i64)>,
+    weak_events: VecDeque<(f64, String, PyInt)>,
 }
 #[derive(Default)]
 struct State {
@@ -403,7 +433,7 @@ impl Detector {
             .map(|v| v.len())
             .unwrap_or(0);
         let over = usable > 0
-            && distinct >= self.config.enumeration_min as usize
+            && BigInt::from(distinct) >= self.config.enumeration_min.0
             && (distinct as f64) >= usable as f64 * self.config.enumeration_ratio;
         if !over {
             st.enumeration_disarmed = false;
@@ -419,7 +449,7 @@ impl Detector {
         let st = s.callers.entry(caller.into()).or_default();
         prune_ts(&mut st.all_records, now, self.config.window_seconds);
         st.all_records.push_back(now);
-        if st.all_records.len() <= self.config.burst_count as usize {
+        if BigInt::from(st.all_records.len()) <= self.config.burst_count.0 {
             st.burst_disarmed = false;
             return None;
         }
@@ -438,29 +468,41 @@ impl Detector {
         st.fired_rules.push_back((now, rule.into()));
         prune_tagged(&mut st.fired_rules, now, self.config.window_seconds);
         self.touch(s, caller, now);
-        if count < *self.config.strong_thresholds.get(rule).unwrap_or(&1) as usize {
+        if &BigInt::from(count)
+            < self
+                .config
+                .strong_thresholds
+                .get(rule)
+                .map(|v| &v.0)
+                .unwrap_or(&BigInt::from(1))
+        {
             return None;
         }
-        Some(self.build_trip(s, caller, rule, count, now))
+        Some(self.build_trip(s, caller, rule, count.to_string(), now))
     }
     fn add_caller_weak(&self, s: &mut State, caller: &str, rule: &str, now: f64) -> Option<Trip> {
         let st = s.callers.entry(caller.into()).or_default();
-        let points = *self.config.weak_points.get(rule).unwrap_or(&0);
+        let points = self
+            .config
+            .weak_points
+            .get(rule)
+            .cloned()
+            .unwrap_or_else(|| 0.into());
         st.weak_events.push_back((now, rule.into(), points));
         prune_weak(&mut st.weak_events, now, self.config.window_seconds);
         let total = st
             .weak_events
             .iter()
-            .fold(0_i64, |sum, e| sum.saturating_add(e.2));
+            .fold(BigInt::from(0), |sum, e| sum + &e.2.0);
         st.fired_rules.push_back((now, rule.into()));
         prune_tagged(&mut st.fired_rules, now, self.config.window_seconds);
         self.touch(s, caller, now);
-        if total < self.config.weak_threshold {
+        if total < self.config.weak_threshold.0 {
             return None;
         }
-        Some(self.build_trip(s, caller, rule, total as usize, now))
+        Some(self.build_trip(s, caller, rule, total.to_string(), now))
     }
-    fn build_trip(&self, s: &mut State, caller: &str, rule: &str, count: usize, now: f64) -> Trip {
+    fn build_trip(&self, s: &mut State, caller: &str, rule: &str, count: String, now: f64) -> Trip {
         let st = s.callers.entry(caller.into()).or_default();
         prune_tagged(&mut st.fired_rules, now, self.config.window_seconds);
         let fired: HashSet<&str> = st.fired_rules.iter().map(|(_, r)| r.as_str()).collect();
@@ -497,19 +539,31 @@ impl Detector {
         let dq = s.global.strong.entry(rule.into()).or_default();
         dq.push_back(now);
         prune_ts(dq, now, self.config.window_seconds);
-        if dq.len() < *self.config.strong_thresholds.get(rule).unwrap_or(&1) as usize {
+        if &BigInt::from(dq.len())
+            < self
+                .config
+                .strong_thresholds
+                .get(rule)
+                .map(|v| &v.0)
+                .unwrap_or(&BigInt::from(1))
+        {
             None
         } else {
             Some(Trip::global(rule, format!("signals={}", dq.len())))
         }
     }
     fn add_global_weak(&self, s: &mut State, rule: &str, now: f64) -> Option<Trip> {
-        let points = *self.config.weak_points.get(rule).unwrap_or(&0);
+        let points = self
+            .config
+            .weak_points
+            .get(rule)
+            .cloned()
+            .unwrap_or_else(|| 0.into());
         let dq = &mut s.global.weak_events;
         dq.push_back((now, rule.into(), points));
         prune_weak(dq, now, self.config.window_seconds);
-        let total = dq.iter().fold(0_i64, |sum, e| sum.saturating_add(e.2));
-        if total < self.config.weak_threshold {
+        let total = dq.iter().fold(BigInt::from(0), |sum, e| sum + &e.2.0);
+        if total < self.config.weak_threshold.0 {
             None
         } else {
             Some(Trip::global(rule, format!("points={total}")))
@@ -574,7 +628,7 @@ fn prune_tagged<T>(dq: &mut VecDeque<(f64, T)>, now: f64, window: f64) {
         dq.pop_front();
     }
 }
-fn prune_weak(dq: &mut VecDeque<(f64, String, i64)>, now: f64, window: f64) {
+fn prune_weak(dq: &mut VecDeque<(f64, String, PyInt)>, now: f64, window: f64) {
     while dq.front().is_some_and(|e| now - e.0 > window) {
         dq.pop_front();
     }

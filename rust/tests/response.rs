@@ -604,8 +604,8 @@ fn enumeration_counts_first_uses_and_burst_ignores_status_polling() {
             .unwrap();
     }
     let cfg = DetectorConfig {
-        weak_threshold: 4,
-        burst_count: 100,
+        weak_threshold: 4.into(),
+        burst_count: 100.into(),
         ..DetectorConfig::default()
     };
     let _detector = intrusion::install(Arc::clone(&ctx), Some(cfg)).unwrap();
@@ -662,8 +662,8 @@ fn burst_fires_once_when_crossing_limit_not_on_every_later_record() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
     let cfg = DetectorConfig {
-        weak_threshold: 2,
-        burst_count: 2,
+        weak_threshold: 2.into(),
+        burst_count: 2.into(),
         ..DetectorConfig::default()
     };
     let _detector = intrusion::install(ctx.clone(), Some(cfg)).unwrap();
@@ -700,7 +700,7 @@ fn two_callers_with_http_signals_escalate_to_runtime() {
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
     ctx.policy.create_principal("agent-2", "box-1").unwrap();
     let cfg = DetectorConfig {
-        weak_threshold: 3,
+        weak_threshold: 3.into(),
         ..DetectorConfig::default()
     };
     let _detector = intrusion::install(Arc::clone(&ctx), Some(cfg)).unwrap();
