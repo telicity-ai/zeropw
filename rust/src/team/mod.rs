@@ -13,6 +13,7 @@ pub mod envelope;
 pub mod fold;
 pub mod humanview;
 pub mod identity;
+pub mod transport;
 
 use serde_json::Value;
 
