@@ -14,16 +14,26 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 
 ## Full scope and acceptance evidence
 
+Current blocking addendum: Linux run `35706839572` failed at head `e8610ac`
+in the remote SSH fact test; its generic timeout did not identify the failing
+stage. The later policy step was skipped, not passed. Controlled TCP triage
+also exposed a separate required product defect: emergency facts published
+offline remain absent after authenticated reconnection in both Python and
+Rust, contrary to `docs/team-sync.md` §6.6. Astra PO requires this functionality;
+parity with the original defect is not acceptance. A bounded native catch-up
+fix and independent review are in progress. Earlier component closures below
+remain historical evidence, not closure of this new gate.
+
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
 | Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Full integrated snapshots 318386d and 019b92e pass; persisted-project A-R2-6(b) correction independently accepted |
 | Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Astra bounded runtime acceptance at 318386d; all eight runtime findings resolved, including creation-time directory modes |
 | Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Bounded runtime review and 25 tool/server tests pass; final-head platform acceptance pending |
 | Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Astra bounded response acceptance at 897c9a6: all 16 findings resolved, 72 selected test functions pass |
-| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Astra round-4 addendum accepts bounded coverage: 104 checks and original native process E2E pass; 62-method map and explicit native API distinctions retained |
+| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Prior bounded 104 checks and original native process E2E pass; new required offline emergency-fact catch-up finding remains open; 62-method map and explicit native API distinctions retained |
 | User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle contracts pass; AR-CLI-01–06 resolved, including handled SIGINT status and exact-owned-directory cleanup |
 | Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E pass; final overall decision must use exact PR-head checks and the handoff below |
-| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | All recorded current remediation findings have independent bounded closures; original reports remain immutable. Component PASS is not itself platform/deployment approval |
+| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Prior remediation findings have independent bounded closures; new offline-fact functionality gate remains open. Original reports remain immutable. Component PASS is not itself platform/deployment approval |
 
 Completion requires the full Python feature inventory, meaningful behavioral
 tests for each feature and failure boundary, Linux and macOS verification where
