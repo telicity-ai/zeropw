@@ -138,15 +138,35 @@ fn python_dict(v: Option<&Value>, default: Value) -> Result<Value> {
     };
     match v {
         Value::Object(_) => Ok(v.clone()),
-        Value::Array(a) => {
-            let mut out = Map::new();
-            for item in a {
-                let parts = python_list(Some(item))?;
-                if parts.len() != 2 {
+        Value::Array(_) => {
+            let pairs = crate::team::commit::python_dict_pairs(v)
+                .ok_or_else(|| Error::not_found("incident_corrupt"))?;
+            let mut merged: Vec<(Value, Value)> = Vec::new();
+            for (key, value) in pairs {
+                if !crate::team::commit::dict_key_is_hashable(&key) {
                     return Err(Error::not_found("incident_corrupt"));
                 }
-                let key = python_str(&parts[0]);
-                out.insert(key, parts[1].clone());
+                if let Some((_, existing)) = merged
+                    .iter_mut()
+                    .find(|(prior, _)| crate::team::commit::dict_keys_equal(prior, &key))
+                {
+                    *existing = value;
+                } else {
+                    merged.push((key, value));
+                }
+            }
+            let mut out = Map::new();
+            for (key, value) in merged {
+                let key = match key {
+                    Value::String(s) => s,
+                    Value::Bool(true) => "true".into(),
+                    Value::Bool(false) => "false".into(),
+                    Value::Null => "null".into(),
+                    Value::Number(_) => pyjson::dumps(&key, DumpOptions::plain())
+                        .map_err(|_| Error::not_found("incident_corrupt"))?,
+                    _ => return Err(Error::not_found("incident_corrupt")),
+                };
+                out.insert(key, value);
             }
             Ok(Value::Object(out))
         }
