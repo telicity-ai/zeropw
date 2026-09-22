@@ -374,3 +374,31 @@ signal-loss mechanism is established. Additional failure-only process-group,
 terminal and selected signal-state diagnostics are the next bounded step;
 the one Ctrl+C stimulus, original deadline and terminal-restoration assertion
 must remain. This is an open platform gate, not an approved workaround.
+
+The diagnostic instrumentation and its dependent-test assertion guard were
+independently reviewed in `astra-pty-timeout-diagnostic-review.md` and
+`astra-derived-pty-assertion-addendum.md`. A forced ISIG-off case still failed
+after 8.05 seconds; a separate successful-native-initialization negative
+control was rejected only when the restored nonzero-exit assertion was
+present. All three affected targets (five tests) and strict all-target
+Clippy/formatting passed freshly at `69e9bf9`. No product behavior changed.
+
+Subsequent Linux run `35718792047` at `17bce17` passed all 1099 original
+Python tests (369.908 seconds), the harness job, Rust formatting/Clippy and
+507 library tests (four ignored; 73.68 seconds). The previously failing PTY
+case, inheritance portability, and derived repeated-prompt case passed on
+that run. This is not proof of their historical timeout's mechanism.
+The Rust job exited 101 after 13 minutes 50 seconds: `runs` passed 16 of 17
+tests, failing the immediate post-drop Context-cycle assertion. Later
+targets and the long policy step were skipped, not passed; the overall CI
+time limit was not reached.
+
+Source inspection identified a legitimate temporary strong Context owner
+in the supervisor thread. Completion notification precedes that closure's
+return and release; waiting for terminal state is not joining the thread.
+Installed registries and revocation callbacks retain weak backreferences.
+The test correction observes both actual Context destruction and owned-
+directory removal within the original four-second completion budget, while
+a separate no-worker test retains immediate no-cycle proof. Independent
+controlled lifecycle testing and a new exact-head Linux run remain required;
+the original failed result is not waived or relabeled a product leak.
