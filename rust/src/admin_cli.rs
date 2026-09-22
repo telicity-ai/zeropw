@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -425,6 +425,8 @@ fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
 struct RestoreTerminalEcho {
     terminal: fs::File,
     original: rustix::termios::Termios,
+    signals: signal_hook::iterator::Handle,
+    watcher: Option<thread::JoinHandle<()>>,
 }
 impl Drop for RestoreTerminalEcho {
     fn drop(&mut self) {
@@ -433,24 +435,78 @@ impl Drop for RestoreTerminalEcho {
             rustix::termios::OptionalActions::Now,
             &self.original,
         );
+        self.signals.close();
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
     }
 }
 
 fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
-    let terminal = fs::OpenOptions::new()
+    let mut terminal = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/tty")?;
     let original = rustix::termios::tcgetattr(&terminal)?;
+    // Install the interrupt watcher before changing terminal modes. The
+    // default SIGINT action skips Drop, so the watcher restores the original
+    // flags before exiting on Ctrl-C (or SIGTERM).
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::signal::SIGINT,
+        signal_hook::consts::signal::SIGTERM,
+    ])?;
+    let handle = signals.handle();
+    let watcher_terminal = terminal.try_clone()?;
+    let restore_terminal = terminal.try_clone()?;
+    let watcher_original = original.clone();
+    let watcher = thread::Builder::new().spawn(move || {
+        if let Some(signal) = signals.forever().next() {
+            let _ = rustix::termios::tcsetattr(
+                &watcher_terminal,
+                rustix::termios::OptionalActions::Now,
+                &watcher_original,
+            );
+            // Preserve the CLI's ordinary signal-termination status after
+            // restoring the controlling terminal. This safe library API
+            // re-raises the default action; the exit is only a fallback.
+            let _ = signal_hook::low_level::emulate_default_handler(signal);
+            std::process::exit(128 + signal);
+        }
+    })?;
+    let restore = RestoreTerminalEcho {
+        terminal: restore_terminal,
+        original: original.clone(),
+        signals: handle,
+        watcher: Some(watcher),
+    };
     let mut hidden = original.clone();
     hidden
         .local_modes
         .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
     rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &hidden)?;
-    let _restore = RestoreTerminalEcho { terminal, original };
-    // rpassword prints its prompt before turning off echo. The outer guard
-    // closes that gap and restores the caller's exact flags on every return.
-    rpassword::prompt_password(prompt)
+    terminal.write_all(prompt.as_bytes())?;
+    terminal.flush()?;
+    // Canonical TTY input retains the usual backspace and line-kill editing.
+    // Avoid a second password reader that changes termios and can restore
+    // no-echo settings immediately before a signal terminates the process.
+    // Read one byte at a time so a pasted second line remains in the TTY for
+    // the recovery prompt instead of being prefetched into a dropped buffer.
+    let mut password = String::new();
+    if io::BufReader::with_capacity(1, &terminal).read_line(&mut password)? == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "terminal password input ended",
+        ));
+    }
+    terminal.write_all(b"\n")?;
+    if password.ends_with('\n') {
+        password.pop();
+    }
+    if password.ends_with('\r') {
+        password.pop();
+    }
+    drop(restore);
+    Ok(password)
 }
 
 fn passphrase(name: &str) -> Result<String, Error> {

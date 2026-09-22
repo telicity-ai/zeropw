@@ -524,6 +524,33 @@ fn audit_listener_can_cancel_before_spawn_without_deadlock() {
     assert!(!temp.path().join("forbidden").exists());
 }
 #[test]
+fn finish_listener_can_query_and_cancel_without_publishing_partial_result() {
+    let (temp, ctx, r) = setup(1024);
+    let weak = Arc::downgrade(&r);
+    let (tx, rx) = std::sync::mpsc::channel();
+    ctx.audit.subscribe(move |record| {
+        if record.get("event") == Some(&json!("run_finish"))
+            && let Some(r) = weak.upgrade()
+            && let Some(id) = record.get("run_id").and_then(Value::as_str)
+        {
+            let before = r.get(id, "alice").unwrap();
+            assert_eq!(r.cancel_all("listener_stop", None), 0);
+            let after = r.cancel(id, "alice", "listener_cancel").unwrap();
+            tx.send((before, after)).unwrap();
+        }
+    });
+    let run = queued(&r);
+    start(&r, &run, "printf business-output", &temp, &[], 2.0);
+    let (before, after) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(before.state, "running");
+    assert!(before.stdout.is_empty());
+    assert_eq!(after.state, "running");
+    assert!(!after.cancel_requested);
+    let done = r.wait(&run, Some(5.0));
+    assert_eq!(done.state, "completed");
+    assert_eq!(done.stdout, b"business-output");
+}
+#[test]
 fn patterns_match_python_oracle_for_binary_and_alignment_cases() {
     use std::io::Write;
     let samples = vec![

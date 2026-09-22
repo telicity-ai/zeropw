@@ -218,6 +218,10 @@ struct Entry {
     child: Mutex<Option<Child>>,
     done: Mutex<bool>,
     changed: Condvar,
+    // Finalization calls synchronous audit listeners. Keep the published run
+    // active until that call returns, but do not allow a listener to cancel
+    // and wait for the very finalization it is running inside.
+    finalizing: AtomicBool,
 }
 #[derive(Default)]
 struct RegistryState {
@@ -441,6 +445,7 @@ impl RunRegistry {
                 child: Mutex::new(None),
                 done: Mutex::new(false),
                 changed: Condvar::new(),
+                finalizing: AtomicBool::new(false),
             }),
         );
         state.order.push_back(id.clone());
@@ -708,15 +713,19 @@ impl RunRegistry {
     }
     fn finalize(&self, entry: &Entry, mut out: Outcome, record: bool) {
         let snapshot = {
-            let mut run = entry.run.lock().unwrap();
+            let run = entry.run.lock().unwrap();
             if TERMINAL_STATES.contains(&run.state.as_str()) {
                 return;
             }
-            run.state = out.state.clone();
-            run.reason = out.reason.clone();
-            run.exit_code = out.exit_code;
-            run.finished_at = Some(iso(Some((self.clock)())));
-            run.clone()
+            if entry.finalizing.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let mut staged = run.clone();
+            staged.state = out.state.clone();
+            staged.reason = out.reason.clone();
+            staged.exit_code = out.exit_code;
+            staged.finished_at = Some(iso(Some((self.clock)())));
+            staged
         };
         let result = match out.state.as_str() {
             COMPLETED => "ok",
@@ -741,14 +750,20 @@ impl RunRegistry {
                 .is_ok();
         {
             let mut run = entry.run.lock().unwrap();
+            run.state = if audit_ok { out.state } else { FAILED.into() };
+            run.reason = if audit_ok {
+                out.reason
+            } else {
+                Some("audit_unavailable".into())
+            };
+            run.exit_code = out.exit_code;
+            run.finished_at = snapshot.finished_at;
             if audit_ok {
                 run.stdout = std::mem::take(&mut out.stdout);
                 run.stderr = std::mem::take(&mut out.stderr);
                 run.stdout_truncated = out.out_trunc;
                 run.stderr_truncated = out.err_trunc;
             } else {
-                run.state = FAILED.into();
-                run.reason = Some("audit_unavailable".into());
                 out.stdout.zeroize();
                 out.stderr.zeroize();
             }
@@ -799,7 +814,8 @@ impl RunRegistry {
             .filter_map(|id| s.runs.get(id))
             .filter_map(|e| {
                 let r = e.run.lock().unwrap();
-                ACTIVE_STATES.contains(&r.state.as_str()).then(|| r.clone())
+                (ACTIVE_STATES.contains(&r.state.as_str()) && !e.finalizing.load(Ordering::Acquire))
+                    .then(|| r.clone())
             })
             .collect()
     }
@@ -834,7 +850,9 @@ impl RunRegistry {
             if let Ok(e) = self.entry(&r.id) {
                 let (run, fresh) = {
                     let mut run = e.run.lock().unwrap();
-                    if !ACTIVE_STATES.contains(&run.state.as_str()) {
+                    if !ACTIVE_STATES.contains(&run.state.as_str())
+                        || e.finalizing.load(Ordering::Acquire)
+                    {
                         continue;
                     }
                     let fresh = !run.cancel_requested;
