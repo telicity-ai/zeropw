@@ -16,6 +16,7 @@ use rand::RngCore;
 use rand::rngs::OsRng;
 use serde_json::{Value, json};
 use sha2::Sha256;
+use std::sync::RwLock;
 use subtle::ConstantTimeEq;
 
 use crate::errors::Error;
@@ -76,7 +77,7 @@ pub struct Handle {
 /// Port of `handles.HandleIssuer`.
 #[derive(Debug)]
 pub struct HandleIssuer {
-    key: SecretBytes,
+    key: RwLock<SecretBytes>,
 }
 
 impl HandleIssuer {
@@ -85,7 +86,7 @@ impl HandleIssuer {
             return Err(Error::invalid_input("handle_key_too_short"));
         }
         Ok(HandleIssuer {
-            key: SecretBytes::from_slice(key),
+            key: RwLock::new(SecretBytes::from_slice(key)),
         })
     }
 
@@ -96,9 +97,19 @@ impl HandleIssuer {
         SecretBytes::new(buf)
     }
 
+    /// Atomically invalidate old handles after incident containment or recovery.
+    pub fn replace_key(&self, key: &[u8]) -> Result<(), Error> {
+        if key.len() < HANDLE_KEY_SIZE {
+            return Err(Error::invalid_input("handle_key_too_short"));
+        }
+        *self.key.write().unwrap_or_else(|e| e.into_inner()) = SecretBytes::from_slice(key);
+        Ok(())
+    }
+
     fn sign(&self, body: &str) -> String {
+        let key = self.key.read().unwrap_or_else(|e| e.into_inner());
         let mut mac =
-            Hmac::<Sha256>::new_from_slice(self.key.expose()).expect("HMAC accepts any key length");
+            Hmac::<Sha256>::new_from_slice(key.expose()).expect("HMAC accepts any key length");
         mac.update(body.as_bytes());
         b64e(&mac.finalize().into_bytes())
     }
@@ -373,6 +384,23 @@ fn parse_payload(encoded: &str) -> Result<Handle, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_issuer_rotation_invalidates_existing_handles() {
+        let issuer = std::sync::Arc::new(HandleIssuer::new(&[1; 32]).unwrap());
+        let token = issuer.issue("p", "c", "g", 1, 60, Some(100.0)).unwrap();
+        let shared = issuer.clone();
+        std::thread::spawn(move || shared.replace_key(&[2; 32]).unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(
+            issuer.verify(&token, Some(101.0)).unwrap_err().reason,
+            "handle_signature"
+        );
+        let fresh = issuer.issue("p", "c", "g", 1, 60, Some(100.0)).unwrap();
+        assert!(issuer.replace_key(&[3; 4]).is_err());
+        assert!(issuer.verify(&fresh, Some(101.0)).is_ok());
+    }
     use crate::errors::ErrorClass;
     use std::collections::HashSet;
 

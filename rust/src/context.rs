@@ -362,11 +362,19 @@ impl Context {
     }
 
     /// Invalidate every outstanding handle (used by recovery).
-    pub fn rotate_handle_key(&mut self) -> Result<(), Error> {
+    pub fn rotate_handle_key(&self) -> Result<(), Error> {
+        let _lock = self.state.lock()?;
         self.state
             .write_bytes(HANDLE_KEY, HandleIssuer::generate_key().expose())?;
-        self.handles = HandleIssuer::new(&self.state.read_bytes(HANDLE_KEY)?)?;
+        self.reload_handle_key()?;
         Ok(())
+    }
+
+    /// Reload an administrator-rotated key without replacing the shared context.
+    pub fn reload_handle_key(&self) -> Result<(), Error> {
+        let _lock = self.state.lock()?;
+        self.handles
+            .replace_key(&self.state.read_bytes(HANDLE_KEY)?)
     }
 
     /// Disaster recovery: new KMS master key, re-wrapped DEK, all grants
