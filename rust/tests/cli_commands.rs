@@ -383,6 +383,47 @@ fn admin_terminal_prompts_without_echo() {
     );
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn admin_terminal_eof_fails_closed_without_echo_or_hang() {
+    if !std::path::Path::new("/usr/bin/script").exists() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let mut child = Command::new("/usr/bin/script")
+        .args([
+            "-q",
+            "/dev/null",
+            env!("CARGO_BIN_EXE_zeropw-admin"),
+            "--state-dir",
+            state.to_str().unwrap(),
+            "init",
+        ])
+        .env_remove("ZEROPW_ADMIN_PASSPHRASE")
+        .env_remove("ZEROPW_RECOVERY_PASSPHRASE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = child.stdout.take().unwrap();
+    let mut seen = Vec::new();
+    let prompt = b"Administrator passphrase: ";
+    let mut one = [0u8; 1];
+    while !seen.ends_with(prompt) {
+        output.read_exact(&mut one).unwrap();
+        seen.push(one[0]);
+        assert!(seen.len() < 32_768, "terminal prompt not seen");
+    }
+    thread::sleep(Duration::from_millis(50));
+    child.stdin.take().unwrap().write_all(&[4]).unwrap();
+    output.read_to_end(&mut seen).unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(1));
+    assert!(!state.exists());
+    let text = String::from_utf8_lossy(&seen);
+    assert!(text.contains("passphrase_missing"), "{text}");
+}
+
 #[test]
 fn native_democli_matches_whoami_issue_and_exposure_contract() {
     for (args, path, response, expected) in [
