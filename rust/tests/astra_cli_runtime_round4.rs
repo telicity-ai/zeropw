@@ -107,7 +107,7 @@ fn native_agent_help_is_a_successful_offline_operation() {
             .args(["-m", "zeropw.agent_cli"])
             .args(&arguments)
             .env_clear()
-            .env("PATH", "/Users/ys/.local/bin:/usr/bin:/bin")
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
             .output()
             .unwrap();
