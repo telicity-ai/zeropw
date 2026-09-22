@@ -60,3 +60,8 @@ fn original_admin_cli_black_box_contract_on_native_binary() {
 fn original_response_cli_black_box_contract_on_native_binary() {
     original_case("native_response_cli_contract");
 }
+
+#[test]
+fn response_polling_boundaries_in_native_processes() {
+    original_case("native_response_process.NativeResponseProcessTests");
+}

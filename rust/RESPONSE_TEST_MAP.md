@@ -23,12 +23,17 @@ round-2 acceptance:
   authentication refusal, show/list, resume/close, and notify-test behavior.
 - The original separate-process compromise E2E passes against native binaries,
   including automatic containment, SMTP delivery, recovery, and leak scans.
+- `native_response_process` passes three additional native-process scenarios:
+  serve retries a pending email after SMTP starts, widening resends with the new
+  runtime scope, a closed pending incident is never retried, and a separately
+  declared manual incident cancels a live native CLI run (41 admin/5 agent
+  launches). These translate the original mocked serve assertions to real
+  processes; they do not assert the internal signer binding object.
 
-Still not proven by those results: the original in-process mocked serve-poll
-case translated to a real native process; pending-notification retry driven by
-serve; exact pointer-only retry and widening-resend assertions; successful TLS
-SMTP interoperability; and the exposure-tier merge cases noted below. The three
-rendering fixtures do not stand in for every possible incident shape.
+Still not proven by those results: cross-process manual-incident release of an
+already-live signer binding; successful TLS SMTP interoperability; and the
+exposure-tier merge cases noted below. The three rendering fixtures do not stand
+in for every possible incident shape.
 
 ## Incident
 
