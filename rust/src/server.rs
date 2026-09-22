@@ -183,6 +183,11 @@ fn accept_loop(inner: Arc<Inner>, listener: Arc<TcpListener>) {
     while !inner.stop.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Accepted sockets inherit O_NONBLOCK on macOS, but not Linux.
+                // Request workers use blocking reads with bounded deadlines.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let id = inner.next.fetch_add(1, Ordering::Relaxed);
                 let timeout = *inner.timeout.lock().unwrap();
                 let _ = stream.set_read_timeout(Some(timeout));
@@ -207,13 +212,14 @@ fn accept_loop(inner: Arc<Inner>, listener: Arc<TcpListener>) {
                 };
                 if !admitted {
                     let _ = stream.set_nonblocking(true);
-                    let _ = send_json(
-                        &mut stream,
-                        "GET",
-                        503,
-                        &json!({"error":"StateError","reason":"too_many_connections"}),
-                        true,
-                    );
+                    // One write and a write-side shutdown match Python's
+                    // _refuse_busy: no worker, no request read, no blocked
+                    // admission loop, and the body accompanies its header.
+                    let body = br#"{"error": "StateError", "reason": "too_many_connections"}"#;
+                    let mut reply = format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                    reply.extend_from_slice(body);
+                    let _ = stream.write(&reply);
+                    let _ = stream.shutdown(Shutdown::Write);
                     continue;
                 }
                 let shared = inner.clone();
@@ -310,10 +316,7 @@ fn parse(reader: &mut BufReader<TcpStream>) -> Result<Request, ParseError> {
         if content.iter().any(|b| [0, b'\r', b'\n'].contains(b)) {
             return Err(ParseError::Framing("malformed_header"));
         }
-        if content
-            .first()
-            .is_some_and(|b| [*b] == [b' '] || [*b] == [b'\t'])
-        {
+        if content.first().is_some_and(|b| *b == b' ' || *b == b'\t') {
             return Err(ParseError::Framing("obsolete_line_folding"));
         }
         let at = content

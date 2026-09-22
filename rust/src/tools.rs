@@ -305,12 +305,14 @@ pub fn list_connections(ctx: &Context, caller: &str) -> Result<Value, Error> {
     for (c, g) in usable {
         let mut entry = c.public_view();
         entry["grant"] = g.public_view()?;
-        if raw
+        if let Some(env_id) = raw
             .get(&c.id)
             .and_then(|v| v.get("shared_env"))
-            .is_some_and(|v| !v.is_null() && v != &json!(""))
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
         {
-            entry["synced_at"] = Value::Null;
+            entry["synced_at"] =
+                json!(crate::team::sync::attached(ctx).and_then(|team| team.synced_at(env_id)));
         }
         entries.push(entry);
     }
@@ -634,7 +636,8 @@ pub fn exec(
     }
     let mut resources = Resources::default();
     let mut sensitive = Vec::new();
-    let setup = (|| -> Result<(Vec<String>, HashMap<String, String>, PathBuf), Error> {
+    type PreparedProcess = (Vec<String>, HashMap<String, String>, PathBuf);
+    let setup = (|| -> Result<PreparedProcess, Error> {
         ctx.audit.record(
             "tools_exec",
             RecordArgs {
