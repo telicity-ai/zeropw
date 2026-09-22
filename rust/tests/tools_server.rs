@@ -1010,7 +1010,17 @@ fn original_audit_failure_refuses_each_tool_before_side_effects() {
     std::fs::create_dir(&audit).unwrap();
     for error in [
         tools::list_connections(&f.ctx, "alice").unwrap_err(),
-        tools::request(&f.ctx, "alice", "service", "GET", "/me", &Vec::new(), b"", None).unwrap_err(),
+        tools::request(
+            &f.ctx,
+            "alice",
+            "service",
+            "GET",
+            "/me",
+            &Vec::new(),
+            b"",
+            None,
+        )
+        .unwrap_err(),
         tools::exec(&f.ctx, "alice", "service", &[], None).unwrap_err(),
     ] {
         assert_eq!(error.class, zeropw::errors::ErrorClass::AuditUnavailable);
@@ -1065,4 +1075,165 @@ fn original_public_url_and_expired_grant_contract() {
         "grant_expired"
     );
     assert_eq!(f.ctx.audit.tail(1).unwrap()[0]["reason"], "grant_expired");
+}
+
+#[test]
+fn original_request_normalization_binary_body_and_header_filter_contract() {
+    use std::net::TcpListener;
+    let f = Fixture::new();
+    let receiver = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = receiver.local_addr().unwrap().port();
+    f.ctx
+        .policy
+        .update_connection(
+            "service",
+            ConnectionChanges::new().http_target(Some(
+                HttpTarget::new("http", "127.0.0.1", i64::from(port), None, false).unwrap(),
+            )),
+        )
+        .unwrap();
+    f.ctx
+        .policy
+        .create_grant("alice", "service", Some(3600), None)
+        .unwrap();
+    let receiver = std::thread::spawn(move || {
+        let mut received = Vec::new();
+        for index in 0..2 {
+            let (mut stream, _) = receiver.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let headers = String::from_utf8(request).unwrap();
+            let size = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':')
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0; size];
+            stream.read_exact(&mut body).unwrap();
+            received.push((headers.lines().next().unwrap().to_string(), body));
+            let payload: &[u8] = if index == 0 {
+                b"business-json"
+            } else {
+                b"\xff\xfe\0binary"
+            };
+            write!(stream,"HTTP/1.1 201 Created\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nSet-Cookie: synthetic-session\r\nWWW-Authenticate: Bearer\r\nX-Request-Id: req-upstream\r\nConnection: close\r\n\r\n",payload.len()).unwrap();
+            stream.write_all(payload).unwrap();
+        }
+        received
+    });
+    let first = tools::dispatch(&f.ctx,"request","alice",&json!({"connection":"service","method":"post","path":"/repos?per_page=2","body":"{\"title\":\"x\"}","request_id":"req-1"})).unwrap();
+    assert_eq!(first["status"], 201);
+    assert_eq!(first["body"], "business-json");
+    assert!(first["body_base64"].is_null());
+    assert_eq!(first["headers"]["x-request-id"], "req-upstream");
+    for name in [
+        "set-cookie",
+        "www-authenticate",
+        "connection",
+        "authorization",
+    ] {
+        assert!(first["headers"].get(name).is_none());
+    }
+    let second = tools::dispatch(
+        &f.ctx,
+        "request",
+        "alice",
+        &json!({"connection":"service","method":"POST","path":"/repos","body_base64":"AAE="}),
+    )
+    .unwrap();
+    assert_eq!(second["status"], 201);
+    assert!(second["body"].is_null());
+    assert_eq!(
+        zeropw::pybase64::b64decode_strict(second["body_base64"].as_str().unwrap()).unwrap(),
+        b"\xff\xfe\0binary"
+    );
+    assert_eq!(
+        receiver.join().unwrap(),
+        vec![
+            (
+                "POST /repos?per_page=2 HTTP/1.1".into(),
+                b"{\"title\":\"x\"}".to_vec()
+            ),
+            ("POST /repos HTTP/1.1".into(), vec![0, 1])
+        ]
+    );
+    let events = f.ctx.audit.tail(100).unwrap();
+    let request = events
+        .iter()
+        .find(|v| v["event"] == "tools_request" && v["request_id"] == "req-1")
+        .unwrap();
+    assert_eq!(request["path"], "/repos");
+    assert_eq!(request["method"], "POST");
+    assert!(!request.to_string().contains("per_page"));
+}
+
+#[test]
+fn original_fixed_program_and_fresh_private_run_directories() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let mut connection = f.ctx.policy.get_connection("service").unwrap();
+    connection.id = "echo".into();
+    connection.cli = Some(CliProfile::new("/bin/echo", "http", None, BTreeMap::new()).unwrap());
+    f.ctx.policy.create_connection(connection).unwrap();
+    f.ctx
+        .policy
+        .create_grant("alice", "echo", Some(3600), None)
+        .unwrap();
+    let run = tools::exec(
+        &f.ctx,
+        "alice",
+        "echo",
+        &["/bin/sh".into(), "-c".into(), "id".into()],
+        None,
+    )
+    .unwrap();
+    let registry = zeropw::runs::registry(&f.ctx).unwrap();
+    let done = registry.wait(
+        &registry
+            .get(run["run_id"].as_str().unwrap(), "alice")
+            .unwrap(),
+        Some(5.0),
+    );
+    assert_eq!(done.stdout, b"/bin/sh -c id\n");
+    let mut paths = Vec::new();
+    for index in 0..2 {
+        let marker = f.temp.path().join(format!("cwd-{index}"));
+        let run = tools::exec(
+            &f.ctx,
+            "alice",
+            "service",
+            &[
+                "-c".into(),
+                "printf '%s' \"$HOME\" > \"$1\"; exec /bin/sleep 20".into(),
+                "sh".into(),
+                marker.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
+        .unwrap();
+        let end = Instant::now() + Duration::from_secs(5);
+        while std::fs::metadata(&marker).map_or(true, |m| m.len() == 0) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let path = std::path::PathBuf::from(std::fs::read_to_string(marker).unwrap());
+        assert!(!path.starts_with(&f.ctx.state.path));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        tools::cancel(&f.ctx, "alice", run["run_id"].as_str().unwrap()).unwrap();
+        assert!(!path.exists());
+        paths.push(path);
+    }
+    assert_ne!(paths[0], paths[1]);
 }
