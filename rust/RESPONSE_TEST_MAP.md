@@ -28,14 +28,21 @@ round-2 acceptance:
 - `native_response_process` passes three additional native-process scenarios:
   serve retries a pending email after SMTP starts, widening resends with the new
   runtime scope, a closed pending incident is never retried, and a separately
-  declared manual incident cancels a live native CLI run (41 admin/5 agent
-  launches). These translate the original mocked serve assertions to real
-  processes; they do not assert the internal signer binding object.
+  declared manual incident cancels live native HTTP and SSH CLI runs (44
+  admin/6 agent launches). The latter first observes and connects to the real
+  native signer Unix socket, then asserts that it disappears after the
+  separately launched incident command. These translate the original mocked
+  serve assertions to separate native processes; no internal object is mocked.
 
-Still not proven by those results: cross-process manual-incident release of an
-already-live signer binding and successful TLS SMTP interoperability. The three
-rendering fixtures do not stand in for every possible incident shape. The
-round-1 exposure-tier/merge gaps below are closed by the two new direct tests.
+The added live-socket assertion closes the previously recorded coordinator
+coverage gap, pending independent Astra verification. Astra round 2 separately
+verified successful STARTTLS/SMTPS with temporary trusted certificates and
+rejection of untrusted certificates. The three rendering fixtures do not stand
+in for every possible incident shape. Round 3 at `92abed0` still has four open
+functional IDs (ENVELOPE, ERRORS, SHAPE, COUNTER); its preserved report is not
+overridden by this coverage supplement. The round-1 exposure-tier/merge gaps
+below are closed by the two new direct tests. The matrix below remains a
+historical handoff inventory; this supplement records subsequent evidence.
 
 ## Incident
 
