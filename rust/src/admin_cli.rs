@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,15 +132,21 @@ fn spec(command: &str, action: &str) -> Option<(&'static str, &'static str, &'st
 fn parse(argv: &[String]) -> Result<Args, String> {
     let mut a = Args::default();
     let mut i = 0;
-    if argv.get(i).map(String::as_str) != Some("--state-dir") {
-        return Err("the following arguments are required: --state-dir".into());
+    match argv.get(i).map(String::as_str) {
+        Some("--state-dir") => {
+            i += 1;
+            a.state_dir = argv
+                .get(i)
+                .cloned()
+                .ok_or("argument --state-dir: expected one argument")?;
+            i += 1;
+        }
+        Some(value) if value.starts_with("--state-dir=") => {
+            a.state_dir = value["--state-dir=".len()..].to_owned();
+            i += 1;
+        }
+        _ => return Err("the following arguments are required: --state-dir".into()),
     }
-    i += 1;
-    a.state_dir = argv
-        .get(i)
-        .cloned()
-        .ok_or("argument --state-dir: expected one argument")?;
-    i += 1;
     a.command = argv
         .get(i)
         .cloned()
@@ -203,13 +209,25 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     let mut extras = Vec::new();
     while i < argv.len() {
         let token = &argv[i];
-        if let Some(key) = token.strip_prefix("--") {
+        if token == "--" {
+            a.positional.extend_from_slice(&argv[i + 1..]);
+            break;
+        }
+        if let Some(raw) = token.strip_prefix("--") {
+            let (key, inline) = raw
+                .split_once('=')
+                .map_or((raw, None), |(k, v)| (k, Some(v)));
             if !valid.contains(key) {
                 extras.push(token.clone());
                 i += 1;
                 continue;
             }
             if flags.split_whitespace().any(|f| f == key) {
+                if inline.is_some() {
+                    extras.push(token.clone());
+                    i += 1;
+                    continue;
+                }
                 a.options
                     .entry(key.to_owned())
                     .or_default()
@@ -217,22 +235,19 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 i += 1;
                 continue;
             }
-            i += 1;
-            let value = argv
-                .get(i)
-                .ok_or_else(|| format!("argument --{key}: expected one argument"))?;
-            if value.starts_with("--") {
-                return Err(format!("argument --{key}: expected one argument"));
-            }
-            if key != "host-key" && key != "cli-env" && key != "address" && a.has(key) {
-                return Err(format!(
-                    "argument --{key}: not allowed with previous argument"
-                ));
-            }
-            a.options
-                .entry(key.to_owned())
-                .or_default()
-                .push(value.clone());
+            let value = if let Some(inline) = inline {
+                inline.to_owned()
+            } else {
+                i += 1;
+                let value = argv
+                    .get(i)
+                    .ok_or_else(|| format!("argument --{key}: expected one argument"))?;
+                if value.starts_with("--") {
+                    return Err(format!("argument --{key}: expected one argument"));
+                }
+                value.clone()
+            };
+            a.options.entry(key.to_owned()).or_default().push(value);
         } else {
             a.positional.push(token.clone());
         }
@@ -324,6 +339,13 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     {
         return Err("argument --role: invalid choice".into());
     }
+    if a.command == "team"
+        && a.action == "show"
+        && a.get("format")
+            .is_some_and(|value| !["json", "yaml"].contains(&value))
+    {
+        return Err("argument --format: invalid choice".into());
+    }
     Ok(a)
 }
 
@@ -367,12 +389,22 @@ fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
 
 fn passphrase(name: &str) -> Result<String, Error> {
     let value = env::var(name).unwrap_or_default();
-    if value.is_empty() {
-        Err(Error::auth_failed("passphrase_missing")
-            .with_detail(format!("set {name} or run on a terminal")))
-    } else {
-        Ok(value)
+    if !value.is_empty() {
+        return Ok(value);
     }
+    if io::stdin().is_terminal() {
+        let prompt = if name == "ZEROPW_RECOVERY_PASSPHRASE" {
+            "Recovery passphrase: "
+        } else {
+            "Administrator passphrase: "
+        };
+        return rpassword::prompt_password(prompt).map_err(|_| {
+            Error::auth_failed("passphrase_missing")
+                .with_detail(format!("set {name} or run on a terminal"))
+        });
+    }
+    Err(Error::auth_failed("passphrase_missing")
+        .with_detail(format!("set {name} or run on a terminal")))
 }
 
 fn read_secret(a: &Args, kind: &str) -> Result<Vec<u8>, Error> {
@@ -461,9 +493,8 @@ fn confirmations(v: Option<&str>, default: Vec<String>) -> Vec<String> {
 }
 fn ttl(v: &str) -> Result<i64, Error> {
     let s = v.trim().to_ascii_lowercase();
-    let (digits, unit) = s
-        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
-        .split_at(s.trim_end_matches(|c: char| c.is_ascii_alphabetic()).len());
+    let digits_end = s.bytes().take_while(u8::is_ascii_digit).count();
+    let (digits, unit) = s.split_at(digits_end);
     if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Error::invalid_input("invalid_ttl"));
     }
@@ -2036,6 +2067,109 @@ pub fn main(argv: &[String]) -> i32 {
                 output(&error.to_dict(), true);
             }
             1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_accepts_equals_repeated_values_and_positional_terminator() {
+        let args = parse(
+            &[
+                "--state-dir=state",
+                "project",
+                "create",
+                "--environments=dev,prod",
+                "--",
+                "--literal-name",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(args.state_dir, "state");
+        assert_eq!(args.positional, ["--literal-name"]);
+        assert_eq!(args.get("environments"), Some("dev,prod"));
+
+        let args = parse(
+            &[
+                "--state-dir",
+                "state",
+                "team",
+                "invite",
+                "--env=demo/dev",
+                "--role=user",
+                "--name=peer",
+                "--address=127.0.0.1:1",
+                "--address=127.0.0.1:2",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(args.list("address"), ["127.0.0.1:1", "127.0.0.1:2"]);
+        assert!(
+            parse(
+                &[
+                    "--state-dir",
+                    "state",
+                    "team",
+                    "show",
+                    "--env=demo/dev",
+                    "--format=xml",
+                ]
+                .map(str::to_owned)
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &[
+                    "--state-dir",
+                    "state",
+                    "secret",
+                    "put",
+                    "--id=x",
+                    "--kind=api_key",
+                    "--project=p",
+                    "--environment=e",
+                    "--stdin=true",
+                ]
+                .map(str::to_owned)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ttl_matches_python_units_and_rejects_bad_or_overflowing_forms() {
+        for (text, expected) in [
+            ("30m", 1800),
+            ("1h", 3600),
+            ("3600s", 3600),
+            ("86400", 86400),
+            ("24h", 86400),
+            ("2d", 172800),
+            (" 3M ", 180),
+        ] {
+            assert_eq!(ttl(text).unwrap(), expected, "{text}");
+        }
+        for text in [
+            "",
+            "0",
+            "0h",
+            "-1h",
+            "+1h",
+            "1w",
+            "1hour",
+            "1.5h",
+            "٣h",
+            "²h",
+            "1é",
+            "999999999999999999999999999999d",
+        ] {
+            assert_eq!(ttl(text).unwrap_err().reason, "invalid_ttl", "{text}");
         }
     }
 }

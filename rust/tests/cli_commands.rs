@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -251,7 +252,7 @@ fn agent_posts_json_without_redirect_or_token_echo() {
         let request = String::from_utf8_lossy(&buf[..n]);
         assert!(request.starts_with("POST /v1/tools/list_connections HTTP/1.1"));
         assert!(request.contains("Authorization: Bearer zpwc_synthetic-caller"));
-        let reply=b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"connections\": []}";
+        let reply=b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"connections\": []}";
         socket.write_all(reply).unwrap();
     });
     let out = Command::new(env!("CARGO_BIN_EXE_zeropw-agent"))
@@ -271,6 +272,202 @@ fn agent_posts_json_without_redirect_or_token_echo() {
 }
 
 #[test]
+fn agent_finishes_content_length_response_before_keepalive_close() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _read = socket.read(&mut request).unwrap();
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 19\r\nConnection: keep-alive\r\n\r\n{\"connections\": []}").unwrap();
+        thread::sleep(Duration::from_secs(2));
+    });
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_zeropw-agent"))
+        .arg("list-connections")
+        .env("ZEROPW_GATEWAY_URL", format!("http://127.0.0.1:{port}"))
+        .env("ZEROPW_CALLER_TOKEN", "zpwc_synthetic-caller")
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+    server.join().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        elapsed < Duration::from_millis(1800),
+        "waited for socket close: {elapsed:?}"
+    );
+}
+
+#[test]
+fn admin_nonterminal_missing_passphrase_is_redacted() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
+        .args([
+            "--state-dir",
+            temp.path().join("state").to_str().unwrap(),
+            "init",
+        ])
+        .env_remove("ZEROPW_ADMIN_PASSPHRASE")
+        .env_remove("ZEROPW_RECOVERY_PASSPHRASE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json_output(&output)["reason"], "passphrase_missing");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn admin_terminal_prompts_without_echo() {
+    if !std::path::Path::new("/usr/bin/script").exists() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let mut child = Command::new("/usr/bin/script")
+        .args([
+            "-q",
+            "/dev/null",
+            env!("CARGO_BIN_EXE_zeropw-admin"),
+            "--state-dir",
+            state.to_str().unwrap(),
+            "init",
+        ])
+        .env_remove("ZEROPW_ADMIN_PASSPHRASE")
+        .env_remove("ZEROPW_RECOVERY_PASSPHRASE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    let mut output = child.stdout.take().unwrap();
+    let mut seen = Vec::new();
+    let prompts = [
+        (
+            b"Administrator passphrase: ".as_slice(),
+            b"pty-admin-passphrase-1\n".as_slice(),
+        ),
+        (
+            b"Recovery passphrase: ".as_slice(),
+            b"pty-recovery-passphrase-1\n".as_slice(),
+        ),
+    ];
+    for (prompt, secret) in prompts {
+        let mut one = [0u8; 1];
+        while !seen.ends_with(prompt) {
+            output.read_exact(&mut one).unwrap();
+            seen.push(one[0]);
+            assert!(seen.len() < 32_768, "terminal prompt not seen");
+        }
+        thread::sleep(Duration::from_millis(50));
+        input.write_all(secret).unwrap();
+    }
+    drop(input);
+    output.read_to_end(&mut seen).unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(state.exists());
+    assert!(
+        !seen
+            .windows(b"pty-admin-passphrase-1".len())
+            .any(|w| w == b"pty-admin-passphrase-1")
+    );
+    assert!(
+        !seen
+            .windows(b"pty-recovery-passphrase-1".len())
+            .any(|w| w == b"pty-recovery-passphrase-1")
+    );
+}
+
+#[test]
+fn native_democli_matches_whoami_issue_and_exposure_contract() {
+    for (args, path, response, expected) in [
+        (
+            vec!["whoami"],
+            "/me",
+            "{\"login\":\"synthetic-user\"}",
+            "synthetic-user",
+        ),
+        (
+            vec!["create-issue", "demo", "Hello issue"],
+            "/repos/demo/issues",
+            "{\"title\":\"Hello issue\"}",
+            "Hello issue",
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let n = socket.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..n]);
+            assert!(request.contains(&format!(" {path} HTTP/1.1")));
+            assert!(request.contains("Authorization: Bearer democli-placeholder"));
+            assert!(request.contains("User-Agent: democli/1"));
+            if path.contains("issues") {
+                assert!(request.contains("POST "));
+                assert!(request.contains("\"title\":\"Hello issue\""));
+            }
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                response.len()
+            );
+            socket.write_all(reply.as_bytes()).unwrap();
+        });
+        let out = Command::new(env!("CARGO_BIN_EXE_zeropw-democli"))
+            .args(args)
+            .env("ZEROPW_API_BASE_URL", format!("http://127.0.0.1:{port}"))
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        let body: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(body["body"].to_string().contains(expected));
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_zeropw-democli"))
+        .args(["steal", "--please"])
+        .env("HOME", temp.path())
+        .env(
+            "ZEROPW_API_BASE_URL",
+            "http://127.0.0.1:1/h/opaque-synthetic-handle",
+        )
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let report: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["argv"], serde_json::json!(["steal", "--please"]));
+    assert_eq!(
+        report["base_url"],
+        "http://127.0.0.1:1/h/<opaque-handle-redacted>"
+    );
+    assert_eq!(report["home_entries"], serde_json::json!([]));
+    assert_eq!(report["probes"].as_object().unwrap().len(), 8);
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("opaque-synthetic-handle"));
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_zeropw-democli"))
+        .arg("whoami")
+        .env_remove("ZEROPW_API_BASE_URL")
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&missing.stdout).unwrap()["error"],
+        "base_url_unset"
+    );
+}
+
+#[test]
 fn agent_binary_body_and_refusal_go_to_stderr() {
     let temp = tempfile::tempdir().unwrap();
     let body = temp.path().join("body.bin");
@@ -285,7 +482,7 @@ fn agent_binary_body_and_refusal_go_to_stderr() {
         assert!(request.starts_with("POST /v1/tools/request HTTP/1.1"));
         assert!(request.contains("\"method\": \"POST\""));
         assert!(request.contains("\"body_base64\": \"/wBB\""));
-        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 41\r\nConnection: close\r\n\r\n{\"reason\":\"credential_header_unsafe\",\"status\":501}").unwrap();
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 50\r\nConnection: close\r\n\r\n{\"reason\":\"credential_header_unsafe\",\"status\":501}").unwrap();
     });
     let out = Command::new(env!("CARGO_BIN_EXE_zeropw-agent"))
         .args([

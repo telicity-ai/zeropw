@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -12,6 +12,8 @@ use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+const MAX_CHUNK_LINE_BYTES: usize = 8192;
 
 #[derive(Default)]
 struct Args {
@@ -63,28 +65,28 @@ fn parse(argv: &[String]) -> Result<Args, String> {
             break;
         }
         let arg = &argv[i];
-        let Some(name) = arg.strip_prefix("--") else {
+        let Some(raw) = arg.strip_prefix("--") else {
             return Err(format!("unrecognized arguments: {arg}"));
         };
+        let (name, inline) = raw
+            .split_once('=')
+            .map_or((raw, None), |(k, v)| (k, Some(v)));
         if !allowed.contains(&name) {
             return Err(format!("unrecognized arguments: {arg}"));
         }
-        i += 1;
-        let value = argv
-            .get(i)
-            .ok_or_else(|| format!("argument {arg}: expected one argument"))?;
-        if value.starts_with("--") {
-            return Err(format!("argument {arg}: expected one argument"));
-        }
-        if name != "header" && out.options.contains_key(name) {
-            return Err(format!(
-                "argument {arg}: not allowed with previous argument"
-            ));
-        }
-        out.options
-            .entry(name.to_owned())
-            .or_default()
-            .push(value.clone());
+        let value = if let Some(inline) = inline {
+            inline.to_owned()
+        } else {
+            i += 1;
+            let value = argv
+                .get(i)
+                .ok_or_else(|| format!("argument {arg}: expected one argument"))?;
+            if value.starts_with("--") {
+                return Err(format!("argument {arg}: expected one argument"));
+            }
+            value.clone()
+        };
+        out.options.entry(name.to_owned()).or_default().push(value);
         i += 1;
     }
     match command.as_str() {
@@ -167,6 +169,9 @@ fn emit(v: &Value, stderr: bool) {
 }
 
 fn split_url(url: &str) -> Option<(bool, String, u16, String)> {
+    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
+        return None;
+    }
     let (scheme, rest) = url.split_once("://")?;
     let tls = match scheme {
         "http" => false,
@@ -220,6 +225,9 @@ fn gateway_unreachable(detail: &str) -> (u16, Value) {
 
 /// Port of `agent_cli.call_tool`; refuses redirects and caps the response body.
 pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u16, Value) {
+    if token.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        return gateway_unreachable("ValueError");
+    }
     let Some((tls, host, port, base_path)) = split_url(base_url.trim_end_matches('/')) else {
         return gateway_unreachable("ValueError");
     };
@@ -276,25 +284,143 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
     }
 }
 
-fn read_response(io: &mut impl Read) -> (u16, Value) {
-    let mut raw = Vec::new();
-    let _ = io
-        .take((MAX_RESPONSE_BYTES + 65536) as u64)
-        .read_to_end(&mut raw);
-    let Some(split) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
-        return gateway_unreachable("OSError");
-    };
-    let header = &raw[..split];
-    let status = std::str::from_utf8(header)
-        .ok()
-        .and_then(|s| s.lines().next())
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|n| n.parse::<u16>().ok())
-        .unwrap_or(0);
-    let mut body = raw[split + 4..].to_vec();
-    if body.len() > MAX_RESPONSE_BYTES {
-        body.truncate(MAX_RESPONSE_BYTES);
+fn read_line(io: &mut impl Read, limit: usize) -> io::Result<Vec<u8>> {
+    let mut line = Vec::new();
+    let mut one = [0u8; 1];
+    loop {
+        if line.len() >= limit {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "line too long"));
+        }
+        io.read_exact(&mut one)?;
+        line.push(one[0]);
+        if line.ends_with(b"\r\n") {
+            return Ok(line);
+        }
     }
+}
+
+fn response_bytes(io: &mut impl Read) -> io::Result<(u16, Vec<u8>)> {
+    let mut interim = 0;
+    loop {
+        let status_line = read_line(io, MAX_HEADER_BYTES)?;
+        let status_text = std::str::from_utf8(&status_line)
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        let mut fields = status_text.split_whitespace();
+        if !fields.next().is_some_and(|v| v.starts_with("HTTP/")) {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+        let status = fields
+            .next()
+            .and_then(|v| v.parse::<u16>().ok())
+            .filter(|v| (100..=599).contains(v))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+        let mut header_bytes = status_line.len();
+        let mut content_length = None;
+        let mut transfer_encoding = String::new();
+        loop {
+            let line = read_line(io, MAX_HEADER_BYTES - header_bytes)?;
+            header_bytes += line.len();
+            if line == b"\r\n" {
+                break;
+            }
+            let header = std::str::from_utf8(&line)
+                .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+            let (name, value) = header
+                .split_once(':')
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("content-length") {
+                let length = value
+                    .parse::<usize>()
+                    .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+                if content_length.is_some_and(|previous| previous != length) {
+                    return Err(io::Error::from(io::ErrorKind::InvalidData));
+                }
+                content_length = Some(length);
+            } else if name.eq_ignore_ascii_case("transfer-encoding") {
+                transfer_encoding.push_str(value);
+                transfer_encoding.push(',');
+            }
+        }
+        if status < 200 {
+            interim += 1;
+            if interim > 5 {
+                return Err(io::Error::from(io::ErrorKind::InvalidData));
+            }
+            continue;
+        }
+        if status == 204 || status == 304 {
+            return Ok((status, Vec::new()));
+        }
+        let chunked = transfer_encoding
+            .split(',')
+            .map(str::trim)
+            .any(|v| v.eq_ignore_ascii_case("chunked"));
+        let body = if chunked {
+            read_chunked(io)?
+        } else {
+            let limit = content_length
+                .unwrap_or(MAX_RESPONSE_BYTES)
+                .min(MAX_RESPONSE_BYTES);
+            let mut body = Vec::new();
+            io.take(limit as u64).read_to_end(&mut body)?;
+            if content_length
+                .is_some_and(|length| length <= MAX_RESPONSE_BYTES && body.len() != length)
+            {
+                return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+            }
+            body
+        };
+        return Ok((status, body));
+    }
+}
+
+fn read_chunked(io: &mut impl Read) -> io::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        let line = read_line(io, MAX_CHUNK_LINE_BYTES)?;
+        let text =
+            std::str::from_utf8(&line).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
+        let size = text
+            .trim()
+            .split(';')
+            .next()
+            .and_then(|s| usize::from_str_radix(s, 16).ok())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+        if size == 0 {
+            // The body is complete; trailers cannot affect the parsed JSON.
+            return Ok(body);
+        }
+        let remaining = MAX_RESPONSE_BYTES - body.len();
+        let copy = size.min(remaining);
+        let previous = body.len();
+        body.resize(previous + copy, 0);
+        io.read_exact(&mut body[previous..])?;
+        if copy < size || body.len() == MAX_RESPONSE_BYTES {
+            return Ok(body);
+        }
+        let mut ending = [0u8; 2];
+        io.read_exact(&mut ending)?;
+        if ending != *b"\r\n" {
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        }
+    }
+}
+
+fn read_response(io: &mut impl Read) -> (u16, Value) {
+    let (status, body) = match response_bytes(io) {
+        Ok(result) => result,
+        Err(error) => {
+            let detail = if error.kind() == io::ErrorKind::TimedOut
+                || error.kind() == io::ErrorKind::WouldBlock
+            {
+                "TimeoutError"
+            } else {
+                "OSError"
+            };
+            return gateway_unreachable(detail);
+        }
+    };
     let text = match String::from_utf8(body) {
         Ok(t) => t,
         Err(_) => {
@@ -383,6 +509,42 @@ pub fn main(argv: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    fn decoded(raw: &[u8]) -> (u16, Value) {
+        read_response(&mut Cursor::new(raw))
+    }
+
+    #[test]
+    fn response_framing_and_bounds() {
+        assert_eq!(
+            decoded(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}garbage").1["x"],
+            1
+        );
+        assert_eq!(decoded(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n{\"x\r\n4;test=yes\r\n\":1}\r\n0\r\n\r\n").1["x"], 1);
+        assert_eq!(decoded(b"HTTP/1.1 200 OK\r\n\r\n{\"x\":1}").1["x"], 1);
+        assert_eq!(decoded(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}").1["x"], 1);
+        assert_eq!(
+            decoded(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n{\"x\":1}").1["reason"],
+            "gateway_unreachable"
+        );
+        assert_eq!(
+            decoded(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n").1["reason"],
+            "gateway_unreachable"
+        );
+        assert_eq!(
+            decoded(b"HTTP/1.1 200 OK\r\n\r\nnot json").1["reason"],
+            "non_json_response"
+        );
+        let oversized_header = format!(
+            "HTTP/1.1 200 OK\r\nX: {}\r\n\r\n",
+            "a".repeat(MAX_HEADER_BYTES)
+        );
+        assert_eq!(
+            decoded(oversized_header.as_bytes()).1["reason"],
+            "gateway_unreachable"
+        );
+    }
     #[test]
     fn payloads_and_bad_args() {
         let req = parse(
@@ -406,5 +568,18 @@ mod tests {
         let ex = parse(&["exec", "--connection", "gh", "--", "--flag", "-x"].map(str::to_owned))
             .unwrap();
         assert_eq!(payload(&ex).unwrap()["argv"], json!(["--flag", "-x"]));
+        let equals = parse(
+            &[
+                "request",
+                "--connection=gh",
+                "--method=GET",
+                "--path=/x",
+                "--header=A: 1",
+                "--header=B: 2",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(payload(&equals).unwrap()["headers"]["B"], "2");
     }
 }
