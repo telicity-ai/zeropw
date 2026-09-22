@@ -5,10 +5,10 @@ use std::{
     collections::BTreeMap,
     fs,
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
     process::{Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -30,6 +30,12 @@ use zeropw::{
 };
 
 const SECRET: &[u8] = b"synthetic-team-share-secret-0123456789";
+type PeerTransportPair = (
+    Arc<dyn Transport>,
+    Arc<dyn Transport>,
+    Option<Arc<TcpTransport>>,
+    Option<Arc<TcpTransport>>,
+);
 
 fn context(root: &TempDir) -> Arc<Context> {
     Arc::new(
@@ -214,6 +220,118 @@ fn share_refuses_duplicate_and_wrong_admin_passphrase() {
     assert_eq!(duplicate.reason, "team_env_already_shared");
 }
 
+fn admin(state: &std::path::Path, args: &[&str], stdin: &[u8]) -> Value {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
+        .args(["--state-dir", state.to_str().unwrap()])
+        .args(args)
+        .env("ZEROPW_ADMIN_PASSPHRASE", "synthetic-admin-pass")
+        .env("ZEROPW_RECOVERY_PASSPHRASE", "synthetic-recovery-pass")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "native admin failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.stdout.windows(SECRET.len()).any(|v| v == SECRET));
+    assert!(!output.stderr.windows(SECRET.len()).any(|v| v == SECRET));
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn shared_admin_fact_commands_do_not_author_commits_or_emit_secret_fields() {
+    for case in ["connection", "secret"] {
+        let (_root, ctx, _) = setup();
+        let env = share(&ctx)["env_id"].as_str().unwrap().to_owned();
+        let before = CommitStore::new(ctx.state, &env)
+            .all_commits()
+            .unwrap()
+            .len();
+        let payload = if case == "connection" {
+            admin(
+                &ctx.state.path,
+                &["connection", "disable", "--id", "gh"],
+                b"",
+            )
+        } else {
+            admin(
+                &ctx.state.path,
+                &["secret", "revoke", "--id", "gh-token", "--version", "1"],
+                b"",
+            )
+        };
+        assert!(payload.get("fact").is_some());
+        assert!(payload.get("commit").is_none());
+        assert_eq!(
+            CommitStore::new(ctx.state, &env)
+                .all_commits()
+                .unwrap()
+                .len(),
+            before
+        );
+        for forbidden in ["nonce", "ciphertext", "sig", "wraps"] {
+            assert!(!payload.to_string().contains(forbidden));
+        }
+        if case == "connection" {
+            assert_eq!(payload["status"], "disabled");
+            assert_eq!(ctx.policy.get_connection("gh").unwrap().status, "disabled");
+        } else {
+            assert_eq!(
+                ctx.vault.get_meta("gh-token").unwrap().versions[0].status,
+                "revoked"
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_admin_secret_put_and_connection_update_author_commits() {
+    let (_root, ctx, _) = setup();
+    let env = share(&ctx)["env_id"].as_str().unwrap().to_owned();
+    let store = CommitStore::new(ctx.state, &env);
+    let before = store.all_commits().unwrap().len();
+    let put = admin(
+        &ctx.state.path,
+        &[
+            "secret",
+            "put",
+            "--id",
+            "gh-token",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ],
+        b"synthetic-team-facts-v2\n",
+    );
+    assert!(put["commit"]["author_seq"].as_i64().is_some());
+    assert!(put["commit"]["hlc"].as_str().is_some());
+    let middle = store.all_commits().unwrap().len();
+    assert!(middle > before);
+    let update = admin(
+        &ctx.state.path,
+        &[
+            "connection",
+            "update",
+            "--id",
+            "gh",
+            "--methods",
+            "GET,POST",
+        ],
+        b"",
+    );
+    assert!(update.get("commit").is_some());
+    assert!(store.all_commits().unwrap().len() > middle);
+}
+
 #[test]
 fn old_session_is_closed_then_replaced_by_a_new_authenticated_session() {
     let root = TempDir::new().unwrap();
@@ -291,6 +409,239 @@ fn old_session_is_closed_then_replaced_by_a_new_authenticated_session() {
             .any(|v| v == &fb),
         "no replacement session after expiration"
     );
+}
+
+fn connection_create(id: &str) -> Value {
+    json!({"op":"connection.create","id":id,"project":"demo","environment":"dev","service":"synthetic","kind":"http","secret_id":"key","secret_version":null,"description":"","http_target":{"scheme":"http","host":"127.0.0.1","port":8080},"http_auth":{"mode":"bearer"},"http_scope":{"methods":["GET"],"path_prefixes":["/repos"]}})
+}
+
+fn two_node_convergence(tcp: bool) {
+    let root = TempDir::new().unwrap();
+    let config = Config {
+        team_sync_interval_seconds: Some(0.1),
+        team_dial_backoff: (0.05, 0.2),
+        ..Config::default()
+    };
+    let create = |name: &str| {
+        Arc::new(
+            Context::initialize(
+                root.path().join(name),
+                "synthetic-admin",
+                "synthetic-recovery",
+                config.clone(),
+                clock::system(),
+            )
+            .unwrap(),
+        )
+    };
+    let a = create("a");
+    let b = create("b");
+    let ka = DeviceKey::load_or_create(a.state, a.kms).unwrap();
+    let kb = DeviceKey::load_or_create(b.state, b.kms).unwrap();
+    let fa = ka.fingerprint().unwrap();
+    let fb = kb.fingerprint().unwrap();
+    let env = commit::new_env_id(&fa).unwrap();
+    let generation = "0000000000000000";
+    let dek = [7u8; 32];
+    let wraps = json!({fa.clone():envelope::wrap_dek(&dek, &env, generation, &ka.record().unwrap()).unwrap(), fb.clone():envelope::wrap_dek(&dek, &env, generation, &kb.record().unwrap()).unwrap()});
+    let ct = envelope::encrypt_secret(&dek, &env, "key", "0011223344556677", SECRET).unwrap();
+    let c1 = commit::sign_commit(&ka, &env, 1, "1000-0000", &BTreeMap::new(), vec![json!({"op":"env.init","owner_device":ka.record().unwrap().to_dict(),"owner_name":"alice","generation_id":generation,"wraps":wraps}), json!({"op":"secret.put_version","secret_id":"key","kind":"api_key","generation_id":generation,"version_id":"0011223344556677","ciphertext":ct,"public":{}})]).unwrap();
+    let c2 = commit::sign_commit(&ka, &env, 2, "2000-0000", &BTreeMap::new(), vec![json!({"op":"member.add","device":kb.record().unwrap().to_dict(),"name":"bob","role":"admin"})]).unwrap();
+    for ctx in [&a, &b] {
+        let store = CommitStore::new(ctx.state, &env);
+        store.append(&c1).unwrap();
+        store.append(&c2).unwrap();
+    }
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let (transport_a, transport_b, tcp_a, tcp_b): PeerTransportPair = if tcp {
+        let ta = TcpTransport::new(ka.clone(), empty.clone(), 4);
+        let tb = TcpTransport::new(kb.clone(), empty, 4);
+        (
+            Arc::new(ta.clone()),
+            Arc::new(tb.clone()),
+            Some(ta),
+            Some(tb),
+        )
+    } else {
+        (
+            Arc::new(InProcessTransport::new(ka.clone(), empty.clone())),
+            Arc::new(InProcessTransport::new(kb.clone(), empty)),
+            None,
+            None,
+        )
+    };
+    let sa = TeamSync::new(a.clone(), transport_a, ka.clone());
+    let sb = TeamSync::new(b.clone(), transport_b, kb.clone());
+    let addr_a = if tcp {
+        "127.0.0.1:0"
+    } else {
+        "native-convergence-a"
+    };
+    let addr_b = if tcp {
+        "127.0.0.1:0"
+    } else {
+        "native-convergence-b"
+    };
+    sa.start(Some(addr_a)).unwrap();
+    sb.start(Some(addr_b)).unwrap();
+    struct Stop(Arc<TeamSync>, Arc<TeamSync>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.stop();
+            self.1.stop();
+        }
+    }
+    let _stop = Stop(sa.clone(), sb.clone());
+    let address_a = tcp_a
+        .as_ref()
+        .and_then(|v| v.bound_address())
+        .unwrap_or_else(|| addr_a.to_owned());
+    let address_b = tcp_b
+        .as_ref()
+        .and_then(|v| v.bound_address())
+        .unwrap_or_else(|| addr_b.to_owned());
+    sa.set_peer_address(&env, &fb, &address_b).unwrap();
+    sb.set_peer_address(&env, &fa, &address_a).unwrap();
+    let wait = |check: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if check() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("two-node convergence condition failed (tcp={tcp})");
+    };
+    wait(&|| {
+        sa.status(&env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &fb)
+    });
+    wait(&|| {
+        sb.status(&env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &fa)
+    });
+    let ca = commit::sign_commit(
+        &ka,
+        &env,
+        3,
+        "3000-0000",
+        &BTreeMap::new(),
+        vec![connection_create("gh-a")],
+    )
+    .unwrap();
+    let cb = commit::sign_commit(
+        &kb,
+        &env,
+        1,
+        "3500-0000",
+        &BTreeMap::new(),
+        vec![connection_create("gh-b")],
+    )
+    .unwrap();
+    assert_eq!(sa.submit_commit(&env, &ca).unwrap(), "accepted");
+    assert_eq!(sb.submit_commit(&env, &cb).unwrap(), "accepted");
+    wait(&|| CommitStore::new(a.state, &env).last_seq(&fb).unwrap() >= 1);
+    wait(&|| CommitStore::new(b.state, &env).last_seq(&fa).unwrap() >= 3);
+    wait(&|| {
+        ["gh-a", "gh-b"]
+            .iter()
+            .all(|id| sa.document(&env).unwrap()["connections"].get(id).is_some())
+    });
+    wait(&|| {
+        ["gh-a", "gh-b"]
+            .iter()
+            .all(|id| sb.document(&env).unwrap()["connections"].get(id).is_some())
+    });
+    let doc_a = sa.document(&env).unwrap();
+    let doc_b = sb.document(&env).unwrap();
+    assert_eq!(doc_a, doc_b);
+    for id in ["gh-a", "gh-b"] {
+        assert!(doc_a["connections"].get(id).is_some());
+    }
+    wait(&|| !sa.status(&env).unwrap()["synced_at"].is_null());
+    wait(&|| !sb.status(&env).unwrap()["synced_at"].is_null());
+}
+
+#[test]
+fn original_two_node_convergence_inprocess() {
+    two_node_convergence(false);
+}
+
+#[test]
+fn original_two_node_convergence_tcp() {
+    two_node_convergence(true);
+}
+
+#[test]
+fn explicit_empty_membership_refuses_inprocess_and_tcp_handshakes() {
+    // Rust requires an explicit MembershipCheck argument; unlike Python it
+    // exposes no zero-argument constructor/default callback. This closure is
+    // the measured fail-closed equivalent of Python's absent membership.
+    for tcp in [false, true] {
+        let a = DeviceKey::generate();
+        let b = DeviceKey::generate();
+        let fa = a.fingerprint().unwrap();
+        let env = commit::new_env_id(&fa).unwrap();
+        let empty: MembershipCheck = Arc::new(|_, _| None);
+        let accepted = Arc::new(AtomicBool::new(false));
+        let failures = Arc::new(Mutex::new(Vec::new()));
+        if tcp {
+            let ta = TcpTransport::new(a, empty.clone(), 4);
+            let tb = TcpTransport::new(b, empty, 4);
+            let accepted_cb = accepted.clone();
+            let failed_cb = failures.clone();
+            tb.set_handshake_failed(Some(Arc::new(move |reason, fp| {
+                failed_cb
+                    .lock()
+                    .unwrap()
+                    .push((reason.to_owned(), fp.map(str::to_owned)));
+            })));
+            tb.listen_arc(
+                "127.0.0.1:0",
+                Arc::new(move |_| accepted_cb.store(true, Ordering::Release)),
+            )
+            .unwrap();
+            assert!(
+                ta.dial_session(&tb.bound_address().unwrap(), &env, None)
+                    .is_err()
+            );
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while failures.lock().unwrap().is_empty() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            ta.shutdown();
+            tb.shutdown();
+        } else {
+            let ta = InProcessTransport::new(a, empty.clone());
+            let tb = InProcessTransport::new(b, empty);
+            let accepted_cb = accepted.clone();
+            let failed_cb = failures.clone();
+            tb.set_handshake_failed(Some(Arc::new(move |reason, fp| {
+                failed_cb
+                    .lock()
+                    .unwrap()
+                    .push((reason.to_owned(), fp.map(str::to_owned)));
+            })));
+            tb.listen(
+                "native-empty-membership",
+                Arc::new(move |_| accepted_cb.store(true, Ordering::Release)),
+            )
+            .unwrap();
+            assert!(ta.dial("native-empty-membership", &env, None).is_err());
+            tb.close();
+        }
+        assert!(!accepted.load(Ordering::Acquire));
+        assert_eq!(
+            failures.lock().unwrap().as_slice(),
+            &[("not_member".to_owned(), Some(fa))]
+        );
+    }
 }
 
 fn wire_case() {
@@ -403,6 +754,67 @@ fn actual_tcp_capture_contains_neither_secret_nor_unwrapped_dek() {
     }
 }
 
+#[test]
+fn full_team_sync_tcp_wire_uses_original_encoding_leak_scanner() {
+    // Capture at an independent TCP relay, not the transport's concurrent
+    // debug-file hook (whose writes can interleave under two sync threads).
+    let f = RemoteFixture::new_with_relay(connection_create("gh"), "api_key", SECRET, json!({}));
+    let next = commit::sign_commit(
+        &f.ka,
+        &f.env,
+        4,
+        "4000-0000",
+        &BTreeMap::new(),
+        vec![connection_create("gh-new")],
+    )
+    .unwrap();
+    assert_eq!(f.sa.submit_commit(&f.env, &next).unwrap(), "accepted");
+    f.wait(|| {
+        f.sb.document(&f.env).unwrap()["connections"]
+            .get("gh-new")
+            .is_some()
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let streams = f.relay.as_ref().unwrap().captured.lock().unwrap().clone();
+    assert!(
+        streams.iter().all(|stream| !stream.is_empty()),
+        "both real TCP directions must be captured"
+    );
+    assert!(
+        streams.iter().any(|stream| stream.len() > 500),
+        "capture must include more than an empty handshake"
+    );
+    let a = f._root.path().join("wire-a.bin");
+    let b = f._root.path().join("wire-b.bin");
+    fs::write(&a, &streams[0]).unwrap();
+    fs::write(&b, &streams[1]).unwrap();
+    let script = r#"
+import sys
+from pathlib import Path
+from tests.leakcheck import find_secret
+streams = [Path(name).read_bytes() for name in sys.argv[1:]]
+needles = [b'synthetic-team-share-secret-0123456789', bytes([7]) * 32]
+for stream in streams + [b''.join(streams)]:
+    hit = find_secret(stream, needles)
+    if hit is not None:
+        print(hit)
+        sys.exit(1)
+print('NONE')
+"#;
+    let scan = Command::new("python3.12")
+        .args(["-c", script])
+        .args([&a, &b])
+        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
+        .output()
+        .unwrap();
+    assert!(
+        scan.status.success(),
+        "original leak scanner found a captured encoding: {}",
+        String::from_utf8_lossy(&scan.stdout)
+    );
+    assert_eq!(scan.stdout, b"NONE\n");
+}
+
 fn reserve_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -506,14 +918,104 @@ struct RemoteFixture {
     sb: Arc<TeamSync>,
     ta: Arc<TcpTransport>,
     tb: Arc<TcpTransport>,
+    relay: Option<TcpRelay>,
+}
+
+struct TcpRelay {
+    address: String,
+    captured: Arc<Mutex<[Vec<u8>; 2]>>,
+    stop: Arc<AtomicBool>,
+    accept: Option<std::thread::JoinHandle<()>>,
+    forwarders: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+}
+
+impl TcpRelay {
+    fn new(target: String) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let captured = Arc::new(Mutex::new([Vec::new(), Vec::new()]));
+        let stop = Arc::new(AtomicBool::new(false));
+        let forwarders = Arc::new(Mutex::new(Vec::new()));
+        let (cap, signal, workers) = (captured.clone(), stop.clone(), forwarders.clone());
+        let accept = std::thread::spawn(move || {
+            while !signal.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((client, _)) => {
+                        client.set_nonblocking(false).unwrap();
+                        let server = TcpStream::connect(&target).unwrap();
+                        for (from, to, direction) in [
+                            (client.try_clone().unwrap(), server.try_clone().unwrap(), 0),
+                            (server, client, 1),
+                        ] {
+                            let capture = cap.clone();
+                            workers.lock().unwrap().push(std::thread::spawn(move || {
+                                let mut from = from;
+                                let mut to = to;
+                                let mut buffer = [0u8; 16384];
+                                while let Ok(n) = from.read(&mut buffer) {
+                                    if n == 0 {
+                                        break;
+                                    }
+                                    capture.lock().unwrap()[direction]
+                                        .extend_from_slice(&buffer[..n]);
+                                    if to.write_all(&buffer[..n]).is_err() {
+                                        break;
+                                    }
+                                }
+                                let _ = to.shutdown(Shutdown::Write);
+                            }));
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            address,
+            captured,
+            stop,
+            accept: Some(accept),
+            forwarders,
+        }
+    }
+}
+
+impl Drop for TcpRelay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.accept.take() {
+            handle.join().unwrap();
+        }
+        for handle in self.forwarders.lock().unwrap().drain(..) {
+            handle.join().unwrap();
+        }
+    }
 }
 
 impl RemoteFixture {
-    fn new(
+    fn new(connection_op: Value, secret_kind: &str, secret_value: &[u8], public: Value) -> Self {
+        Self::build(connection_op, secret_kind, secret_value, public, false)
+    }
+
+    fn new_with_relay(
+        connection_op: Value,
+        secret_kind: &str,
+        secret_value: &[u8],
+        public: Value,
+    ) -> Self {
+        Self::build(connection_op, secret_kind, secret_value, public, true)
+    }
+
+    fn build(
         mut connection_op: Value,
         secret_kind: &str,
         secret_value: &[u8],
         public: Value,
+        capture: bool,
     ) -> Self {
         let root = TempDir::new().unwrap();
         fs::create_dir(root.path().join("runs")).unwrap();
@@ -593,10 +1095,14 @@ impl RemoteFixture {
         let tb = TcpTransport::new(kb.clone(), empty, 4);
         let sa = TeamSync::new(a.clone(), Arc::new(ta.clone()), ka.clone());
         let sb = TeamSync::new(b.clone(), Arc::new(tb.clone()), kb);
-        sa.start(Some("127.0.0.1:0")).unwrap();
-        sb.start(Some("127.0.0.1:0")).unwrap();
-        sa.set_peer_address(&env, &fb, &tb.bound_address().unwrap())
+        sa.start(if capture { None } else { Some("127.0.0.1:0") })
             .unwrap();
+        sb.start(Some("127.0.0.1:0")).unwrap();
+        let relay = capture.then(|| TcpRelay::new(tb.bound_address().unwrap()));
+        let peer_address = relay
+            .as_ref()
+            .map_or_else(|| tb.bound_address().unwrap(), |r| r.address.clone());
+        sa.set_peer_address(&env, &fb, &peer_address).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if sa.status(&env).unwrap()["sessions"]
@@ -626,6 +1132,7 @@ impl RemoteFixture {
             sb,
             ta,
             tb,
+            relay,
         }
     }
 
@@ -647,7 +1154,205 @@ impl Drop for RemoteFixture {
         self.sb.stop();
         self.ta.shutdown();
         self.tb.shutdown();
+        self.relay.take();
     }
+}
+
+#[test]
+fn user_member_cannot_publish_connection_disabled_fact_to_live_team() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let c = Arc::new(
+        Context::initialize(
+            f._root.path().join("c"),
+            "synthetic-admin",
+            "synthetic-recovery",
+            Config {
+                team_sync_interval_seconds: Some(0.1),
+                team_dial_backoff: (0.05, 0.2),
+                ..Config::default()
+            },
+            clock::system(),
+        )
+        .unwrap(),
+    );
+    let kc = DeviceKey::load_or_create(c.state, c.kms).unwrap();
+    let fc = kc.fingerprint().unwrap();
+    let add = commit::sign_commit(&f.ka, &f.env, 4, "4000-0000", &BTreeMap::new(), vec![json!({"op":"member.add","device":kc.record().unwrap().to_dict(),"name":"eve","role":"user"})]).unwrap();
+    assert_eq!(f.sa.submit_commit(&f.env, &add).unwrap(), "accepted");
+    f.wait(|| {
+        CommitStore::new(f.b.state, &f.env)
+            .last_seq(&f.ka.fingerprint().unwrap())
+            .unwrap()
+            >= 4
+    });
+    for item in CommitStore::new(f.sa.ctx.state, &f.env)
+        .all_commits()
+        .unwrap()
+    {
+        CommitStore::new(c.state, &f.env).append(&item).unwrap();
+    }
+    let tc = TcpTransport::new(kc.clone(), Arc::new(|_, _| None), 4);
+    let sc = TeamSync::new(c, Arc::new(tc.clone()), kc);
+    sc.start(Some("127.0.0.1:0")).unwrap();
+    struct Stop(Arc<TeamSync>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+    let _stop = Stop(sc.clone());
+    sc.set_peer_address(
+        &f.env,
+        &f.ka.fingerprint().unwrap(),
+        &f.ta.bound_address().unwrap(),
+    )
+    .unwrap();
+    f.wait(|| {
+        sc.status(&f.env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &f.ka.fingerprint().unwrap())
+    });
+    let before =
+        f.sa.ctx
+            .state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap();
+    let err = sc
+        .publish_fact(&f.env, "connection_disabled", json!({"connection_id":"gh"}))
+        .unwrap_err();
+    assert_eq!(err.name, "PolicyDenied");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        f.sa.ctx
+            .state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap(),
+        before
+    );
+    assert!(
+        f.sa.document(&f.env).unwrap()["connections"]
+            .get("gh")
+            .is_some()
+    );
+    assert!(f.sa.is_active_member(&f.env, &fc));
+}
+
+#[test]
+fn removed_member_session_drains_then_fresh_tcp_dial_is_refused() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let fb = f.sb.device.fingerprint().unwrap();
+    f.sa.publish_fact(&f.env, "member_removed", json!({"fingerprint":fb}))
+        .unwrap();
+    f.wait(|| !f.sa.is_active_member(&f.env, &fb));
+    f.wait(|| {
+        !f.sa.status(&f.env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &fb)
+    });
+    let dial =
+        f.tb.dial_session(&f.ta.bound_address().unwrap(), &f.env, None);
+    match dial {
+        Err(_) => {}
+        Ok(session) => {
+            let received = session.recv(Duration::from_secs(2));
+            session.close();
+            assert!(
+                received.is_err(),
+                "removed member's fresh dial remained usable"
+            );
+        }
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !f.sa.status(&f.env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &fb)
+    );
+}
+
+#[test]
+fn removed_member_keeps_old_version_but_cannot_get_new_generation_version() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let fb = f.sb.device.fingerprint().unwrap();
+    let old_generation = f.sa.document(&f.env).unwrap()["dek"]["current"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let removal = membership::remove_member(&f.sa.ctx, Some(&f.sa), &f.env, &fb).unwrap();
+    assert_eq!(removal["dek_rotated"], true);
+    let new_generation = removal["new_generation"].as_str().unwrap();
+    assert_ne!(old_generation, new_generation);
+    f.wait(|| {
+        !f.sa.status(&f.env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &fb)
+    });
+    assert_eq!(
+        f.b.vault
+            .secret_for_trusted_use("key", None)
+            .unwrap()
+            .expose(),
+        SECRET
+    );
+    let wrapped_new =
+        f.sa.ctx
+            .state
+            .read_json(
+                &format!("team/{}/dek/{new_generation}.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+    let new_dek =
+        f.sa.ctx
+            .kms
+            .unwrap(&zeropw::kms::WrappedKey::from_dict(&wrapped_new).unwrap())
+            .unwrap();
+    let version_id = "deadbeefcafef00d";
+    let ciphertext = envelope::encrypt_secret(
+        new_dek.expose(),
+        &f.env,
+        "key",
+        version_id,
+        b"synthetic-new-version-after-removal",
+    )
+    .unwrap();
+    membership::author_commit(&f.sa.ctx, Some(&f.sa), &f.env, vec![json!({"op":"secret.put_version","secret_id":"key","kind":"api_key","generation_id":new_generation,"version_id":version_id,"ciphertext":ciphertext,"public":{}})]).unwrap();
+    let wrapped_old =
+        f.b.state
+            .read_json(
+                &format!("team/{}/dek/{old_generation}.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+    let old_dek =
+        f.b.kms
+            .unwrap(&zeropw::kms::WrappedKey::from_dict(&wrapped_old).unwrap())
+            .unwrap();
+    assert!(
+        envelope::decrypt_secret(old_dek.expose(), &f.env, "key", version_id, &ciphertext).is_err()
+    );
+    assert!(
+        !f.b.state
+            .exists(&format!("team/{}/dek/{new_generation}.json", f.env))
+    );
+    assert_eq!(
+        f.b.vault
+            .get_meta("key")
+            .unwrap()
+            .versions
+            .iter()
+            .map(|v| v.version)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
 }
 
 #[test]
