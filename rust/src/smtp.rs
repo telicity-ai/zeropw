@@ -192,13 +192,15 @@ fn mime_message(config: &NotifyConfig, subject: &str, body: &str) -> Vec<u8> {
     msg
 }
 fn mailbox(address: &str) -> String {
-    // `email.utils.parseaddr` ignores RFC 5322 comments wherever they occur
-    // outside a quoted string. Keep the configured header untouched; only
-    // remove comments while deriving the SMTP envelope mailbox.
+    // Keep the configured header untouched. A comment is CFWS, not an address
+    // character: in the envelope it must not split `local@domain` or either
+    // side of a dot. This is deliberately only the supported mailbox subset,
+    // not a general RFC 5322 address parser.
     let mut without_comments = String::with_capacity(address.len());
     let mut depth = 0usize;
     let mut quoted = false;
     let mut escaped = false;
+    let mut had_comment = false;
     for ch in address.chars() {
         if escaped {
             if depth == 0 {
@@ -218,9 +220,7 @@ fn mailbox(address: &str) -> String {
             quoted = !quoted;
             without_comments.push(ch);
         } else if ch == '(' && !quoted {
-            if depth == 0 {
-                without_comments.push(' ');
-            }
+            had_comment = true;
             depth += 1;
         } else if ch == ')' && depth > 0 && !quoted {
             depth -= 1;
@@ -228,12 +228,76 @@ fn mailbox(address: &str) -> String {
             without_comments.push(ch);
         }
     }
-    if let Some(start) = without_comments.rfind('<')
-        && let Some(end) = without_comments[start + 1..].find('>')
-    {
-        return without_comments[start + 1..start + 1 + end].trim().into();
+    // Only structural angle brackets delimit a display-name mailbox. An
+    // angle bracket inside a quoted display name or local part is literal.
+    let mut start = None;
+    quoted = false;
+    escaped = false;
+    for (index, ch) in without_comments.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            quoted = !quoted;
+        } else if !quoted && ch == '<' {
+            start = Some(index + ch.len_utf8());
+        } else if !quoted
+            && ch == '>'
+            && let Some(start) = start
+        {
+            return envelope_cfws(&without_comments[start..index], had_comment);
+        }
     }
-    without_comments.trim().into()
+    envelope_cfws(&without_comments, had_comment)
+}
+
+fn envelope_cfws(address: &str, had_comment: bool) -> String {
+    let address = address.trim();
+    if !had_comment {
+        return address.into();
+    }
+    // Python's address extraction joins CFWS around unquoted atom separators.
+    // Leave local-part word spaces alone (including quoted/escaped contents).
+    let chars: Vec<char> = address.chars().collect();
+    let mut result = String::with_capacity(address.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut in_domain = false;
+    for (index, &ch) in chars.iter().enumerate() {
+        if escaped {
+            result.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            result.push(ch);
+            escaped = true;
+        } else if ch == '"' {
+            result.push(ch);
+            quoted = !quoted;
+        } else if !quoted && ch == '@' {
+            while result.ends_with(char::is_whitespace) {
+                result.pop();
+            }
+            result.push(ch);
+            in_domain = true;
+        } else if !quoted && ch.is_whitespace() {
+            let next = chars[index + 1..].iter().find(|c| !c.is_whitespace());
+            if in_domain || result.ends_with(['.', '@']) || matches!(next, Some('@' | '.')) {
+                continue;
+            }
+            result.push(ch);
+        } else if !quoted && ch == '.' {
+            while result.ends_with(char::is_whitespace) {
+                result.pop();
+            }
+            result.push(ch);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 fn has_cap(caps: &[String], name: &str) -> bool {
     caps.iter().any(|c| {
@@ -410,4 +474,51 @@ fn tls(config: &NotifyConfig, mut tcp: TcpStream) -> Result<Wire, String> {
     // identity while later SMTP reply-read errors use getreply's wrapper.
     conn.complete_io(&mut tcp).map_err(io_error)?;
     Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
+}
+
+#[cfg(test)]
+mod mailbox_tests {
+    use super::mailbox;
+
+    #[test]
+    fn supported_comment_forms_match_python_envelope_oracle() {
+        // Expected mailboxes measured with Python 3.12 EmailMessage +
+        // smtplib.send_message/quoteaddr. The configured header is not edited.
+        for (input, expected) in [
+            ("sender(Internal)@example.com", "sender@example.com"),
+            ("sender@(Internal)example.com", "sender@example.com"),
+            ("recipient(Internal)@example.com", "recipient@example.com"),
+            ("recipient@(Internal)example.com", "recipient@example.com"),
+            (
+                "(outer(inner)) sender@(one(two))example.com (tail)",
+                "sender@example.com",
+            ),
+            (
+                "Display (a(b)) <sender(x)@(y)example.com>",
+                "sender@example.com",
+            ),
+            ("sender (x) @example.com", "sender@example.com"),
+            ("sender@ (x) example.com", "sender@example.com"),
+            ("sender (x) .foo@example.com", "sender.foo@example.com"),
+            ("sender@exa(comment)mple.com", "sender@example.com"),
+            (
+                "\"loc(al)\"@(ignored)example.com",
+                "\"loc(al)\"@example.com",
+            ),
+            (
+                "\"lo\\\"c(a)\"@(ignored)example.com",
+                "\"lo\\\"c(a)\"@example.com",
+            ),
+            (
+                "\"Display <literal>\" <\"lo(c)al\"@(x)example.com>",
+                "\"lo(c)al\"@example.com",
+            ),
+            (
+                "sender(comment(with\\)escape))@example.com",
+                "sender@example.com",
+            ),
+        ] {
+            assert_eq!(mailbox(input), expected, "input={input:?}");
+        }
+    }
 }
