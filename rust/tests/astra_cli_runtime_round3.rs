@@ -121,7 +121,27 @@ def child_group():
  os.setpgid(0,0);os.tcsetpgrp(0,os.getpgrp());signal.signal(signal.SIGTTOU,signal.SIG_DFL)
 p=subprocess.Popen(sys.argv[1:],preexec_fn=child_group,close_fds=True)
 try:
- p.wait(timeout=8)
+ try:p.wait(timeout=8)
+ except subprocess.TimeoutExpired:
+  # Diagnostics only on failure. Never inspect argv, environment, or input.
+  try:
+   mode=termios.tcgetattr(0)
+   observed={'child_pid':p.pid,'child_pgrp':os.getpgid(p.pid),'keeper_pid':os.getpid(),
+             'keeper_pgrp':os.getpgrp(),'tty_foreground':os.tcgetpgrp(0),
+             'ISIG':bool(mode[3]&termios.ISIG),'ECHO':bool(mode[3]&termios.ECHO),
+             'VINTR':repr(mode[6][termios.VINTR]),'VEOF':repr(mode[6][termios.VEOF])}
+   if sys.platform.startswith('linux'):
+    wanted={'State','SigPnd','ShdPnd','SigBlk','SigIgn','SigCgt'}
+    with open(f'/proc/{p.pid}/status') as status:
+     observed['proc_status']={line.split(':',1)[0]:line.split(':',1)[1].strip()
+                              for line in status if line.split(':',1)[0] in wanted}
+    try:
+     with open(f'/proc/{p.pid}/wchan') as wchan:observed['wchan']=wchan.read().strip()
+    except OSError as exc:observed['wchan_error']=type(exc).__name__
+   print('PTY_TIMEOUT_DIAG',repr(observed),flush=True)
+  except Exception as exc:
+   print('PTY_TIMEOUT_DIAG_ERROR',type(exc).__name__,flush=True)
+  raise
  actual=termios.tcgetattr(0)
  # macOS may set the transient PENDIN bit while restoring canonical input.
  # It describes queued input, not the caller's echo/signal/editing modes.
@@ -142,6 +162,14 @@ try:
  while b'Administrator passphrase:' not in data:
   assert time.monotonic()<end,'prompt timed out'
   if select.select([master],[],[],0.1)[0]:data+=os.read(master,4096)
+ def pgrp_or_error(fd):
+  try:return os.tcgetpgrp(fd)
+  except OSError as exc:return f'OSError:{exc.errno}'
+ mode=termios.tcgetattr(slave)
+ prewrite={'keeper_pid':p.pid,'keeper_pgrp':os.getpgid(p.pid),
+           'tty_foreground':pgrp_or_error(master),
+           'ISIG':bool(mode[3]&termios.ISIG),'ECHO':bool(mode[3]&termios.ECHO),
+           'VINTR':repr(mode[6][termios.VINTR]),'VEOF':repr(mode[6][termios.VEOF])}
  os.write(master,b'\x03' if sys.argv[5]=='interrupt' else b'\x04')
  end=time.monotonic()+12
  while p.poll() is None and time.monotonic()<end:
@@ -149,7 +177,9 @@ try:
    try:data+=os.read(master,4096)
    except OSError as e:
     if e.errno!=errno.EIO:raise
- assert p.wait(timeout=2)==0,data
+ try:exit_code=p.wait(timeout=2)
+ except subprocess.TimeoutExpired as exc:raise AssertionError((data,prewrite,'keeper still running')) from exc
+ assert exit_code==0,(data,prewrite)
  assert b'terminal restored' in data,data
 finally:
  if p.poll() is None:p.kill();p.wait()
