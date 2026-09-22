@@ -1146,6 +1146,21 @@ impl RemoteFixture {
         }
         panic!("remote live runtime condition did not occur");
     }
+
+    fn wait_stage(&self, stage: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if condition() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "remote signer stage {stage} did not occur; A sessions={:?}; B connection={:?}",
+            self.sa.status(&self.env).unwrap()["sessions"],
+            self.b.policy.get_connection("box").map(|c| c.status)
+        );
+    }
 }
 
 impl Drop for RemoteFixture {
@@ -1460,7 +1475,9 @@ fn remote_connection_disabled_fact_closes_existing_signer_socket() {
         stop,
         thread: Some(thread),
     };
-    f.wait(|| TcpStream::connect(("127.0.0.1", api_port)).is_ok());
+    f.wait_stage("serve-http-ready", || {
+        TcpStream::connect(("127.0.0.1", api_port)).is_ok()
+    });
     let marker = f._root.path().join("socket-marker");
     let view = api(
         api_port,
@@ -1469,17 +1486,45 @@ fn remote_connection_disabled_fact_closes_existing_signer_socket() {
         json!({"connection":"box","argv":[marker.to_string_lossy()]}),
     );
     let run_id = view["run_id"].as_str().unwrap();
-    f.wait(|| marker.exists());
+    f.wait_stage("signer-child-marker", || marker.exists());
     let socket_path = std::path::PathBuf::from(fs::read_to_string(&marker).unwrap());
     assert!(socket_path.exists(), "real signer socket never opened");
+    // `serve` HTTP readiness does not prove its replacement team session is
+    // established. Ordinary FACTs are one-shot to current sessions, whereas
+    // commits have vector catch-up. A fresh harmless commit reaching B proves
+    // this is the new authenticated session, not A's stale peer status.
+    let a_fp = f.ka.fingerprint().unwrap();
+    let b_fp = DeviceKey::load_or_create(f.b.state, f.b.kms)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    let barrier = commit::sign_commit(
+        &f.ka,
+        &f.env,
+        4,
+        "4000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op":"member.set_role","fingerprint":b_fp,"role":"admin"})],
+    )
+    .unwrap();
+    assert_eq!(f.sa.submit_commit(&f.env, &barrier).unwrap(), "accepted");
+    f.wait_stage("replacement-team-session-commit-delivered", || {
+        CommitStore::new(f.b.state, &f.env).last_seq(&a_fp).unwrap() >= 4
+    });
+    assert!(
+        socket_path.exists(),
+        "signer socket closed before remote FACT"
+    );
     f.sa.publish_fact(
         &f.env,
         "connection_disabled",
         json!({"connection_id":"box"}),
     )
     .unwrap();
-    f.wait(|| f.b.policy.get_connection("box").unwrap().status == "disabled");
-    f.wait(|| !socket_path.exists());
+    f.wait_stage("remote-fact-applied", || {
+        f.b.policy.get_connection("box").unwrap().status == "disabled"
+    });
+    f.wait_stage("signer-socket-removed", || !socket_path.exists());
     assert_eq!(
         api(api_port, &token, "status", json!({"run_id":run_id}))["state"],
         "cancelled"
