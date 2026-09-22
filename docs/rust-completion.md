@@ -400,5 +400,8 @@ Installed registries and revocation callbacks retain weak backreferences.
 The test correction observes both actual Context destruction and owned-
 directory removal within the original four-second completion budget, while
 a separate no-worker test retains immediate no-cycle proof. Independent
-controlled lifecycle testing and a new exact-head Linux run remain required;
-the original failed result is not waived or relabeled a product leak.
+`astra-run-context-lifetime-review.md` accepts the bounded correction with
+19 fresh passing tests at `ca9683a`, including its real-supervisor lease probe
+and all 18 run tests. The unique probe is included in `c27f8e6`. A new exact-
+head Linux run remains required; the original failed result is not waived or
+relabeled a product leak.
