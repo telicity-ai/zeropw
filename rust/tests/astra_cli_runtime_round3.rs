@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use zeropw::context::{Config, Context};
 use zeropw::runs::{self, RunRegistry};
@@ -52,7 +52,14 @@ print(json.dumps(result))
     let (entered_tx, entered_rx) = mpsc::channel();
     ctx.audit.subscribe(move |record| {
         if record.get("event").and_then(serde_json::Value::as_str) == Some("run_finish") {
-            entered_tx.send(()).unwrap();
+            entered_tx
+                .send((
+                    record.get("result").cloned(),
+                    record.get("run_state").cloned(),
+                    record.get("exit_code").cloned(),
+                    record.get("bytes").cloned(),
+                ))
+                .unwrap();
             let (lock, cv) = &*listener_gate;
             let guard = lock.lock().unwrap();
             let _ = cv
@@ -63,7 +70,8 @@ print(json.dumps(result))
     let run = registry.create(
         "alice", "service", "grant", "http", "printf", None, "digest", None, None,
     );
-    registry
+    let run_start = Instant::now();
+    let started_run = registry
         .start(
             &run,
             &["/usr/bin/printf".into(), "business-output".into()],
@@ -74,7 +82,8 @@ print(json.dumps(result))
             Some(3.0),
         )
         .unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let start_elapsed_ms = run_start.elapsed().as_millis();
+    let audit_finish = entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     // A correct implementation may block this query until finalization is
     // complete, or expose a nonterminal state. Neither permits completed/empty.
     let (tx, rx) = mpsc::channel();
@@ -89,7 +98,22 @@ print(json.dumps(result))
     cv.notify_all();
     query.join().unwrap();
     let final_result = registry.wait(&run, Some(5.0));
-    assert_eq!(final_result.stdout, b"business-output");
+    assert_eq!(
+        final_result.stdout,
+        b"business-output",
+        "start_state={}, start_reason={:?}, start_elapsed_ms={start_elapsed_ms}, state={}, reason={:?}, exit_code={:?}, timed_out={}, cancel_requested={}, stderr_bytes={}, stdout_truncated={}, stderr_truncated={}, audit_finish={audit_finish:?}, elapsed_ms={}",
+        started_run.state,
+        started_run.reason,
+        final_result.state,
+        final_result.reason,
+        final_result.exit_code,
+        final_result.timed_out,
+        final_result.cancel_requested,
+        final_result.stderr.len(),
+        final_result.stdout_truncated,
+        final_result.stderr_truncated,
+        run_start.elapsed().as_millis(),
+    );
     assert_eq!(final_result.state, "completed");
     if let Some(observed) = early {
         assert!(
