@@ -36,6 +36,10 @@ pub mod sshwire;
 
 pub mod fake_upstream;
 
+pub mod incident;
+pub mod intrusion;
+pub mod notify;
+
 pub mod team;
 
 #[cfg(test)]
