@@ -22,8 +22,17 @@ fn repeated_prompt_restores_terminal_on_eof_invalid_utf8_and_signals() {
  assert not (termios.tcgetattr(slave)[3]&termios.ECHO),data
  os.write(master,{'interrupt':b'\x03','eof':b'\x04','invalid':b'\xff\n'}[sys.argv[5]])"#,
     );
-    let script = script.replace(" p.wait(timeout=8)", " assert p.wait(timeout=8)!=0");
+    // This is a derived fixture: fail loudly if the source keeper's wait is
+    // reshaped, rather than silently losing the nonzero-exit assertion.
+    let wait = " try:p.wait(timeout=8)";
+    assert_eq!(
+        script.matches(wait).count(),
+        1,
+        "keeper wait anchor changed"
+    );
+    let script = script.replacen(wait, " try:assert p.wait(timeout=8)!=0", 1);
     assert!(script.contains("second prompt timed out"));
+    assert!(script.contains("try:assert p.wait(timeout=8)!=0"));
     for input in ["interrupt", "eof", "invalid"] {
         let temp = tempfile::TempDir::new().unwrap();
         let output = Command::new("python3.12")
