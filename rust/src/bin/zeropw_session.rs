@@ -27,6 +27,11 @@ fn main() {
         let _ = ack.write_all(b"F");
         std::process::exit(127);
     }
+    // Python's subprocess(close_fds=True) must also hold when a trusted
+    // component accidentally left an unrelated descriptor inheritable.
+    // This is a fresh, single-threaded helper process. Marking (rather than
+    // closing) preserves the ACK socket until exec succeeds or fails.
+    close_fds::set_fds_cloexec(3, &[]);
     if ack.write_all(b"R").is_err() {
         std::process::exit(127);
     }

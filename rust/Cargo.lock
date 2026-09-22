@@ -106,6 +106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "close_fds"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bc416f33de9d59e79e57560f450d21ff8393adcf1cdfc3e6d8fb93d5f88a2ed"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1211,6 +1221,7 @@ dependencies = [
  "base64",
  "chacha20",
  "chacha20poly1305",
+ "close_fds",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "hex",

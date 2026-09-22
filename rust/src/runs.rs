@@ -552,29 +552,29 @@ impl RunRegistry {
             clean(cleanup);
             return Err(Error::state("context_closed"));
         };
-        let Some(socket_dir) = ctx.config.socket_dir.as_ref() else {
-            drop(current);
-            self.finalize(&entry, Outcome::failed("spawn_failed"), true);
-            clean(cleanup);
-            return self.get(&run.id, &run.caller);
-        };
-        let ack_path = socket_dir.join(format!("s-{:016x}", rand::random::<u64>()));
-        let setup = (|| -> std::io::Result<(PathBuf, UnixListener)> {
+        // The ACK socket is an internal one-shot control channel, not the
+        // configured SSH signer socket. Own a short private directory so a
+        // missing or long user socket_dir cannot break HTTP-only exec runs.
+        let setup = (|| -> std::io::Result<(PathBuf, tempfile::TempDir, UnixListener)> {
             let helper = session_helper()?;
+            let ack_dir = tempfile::Builder::new()
+                .prefix("zp-ack-")
+                .tempdir_in("/tmp")?;
+            let ack_path = ack_dir.path().join("ack");
             let listener = UnixListener::bind(&ack_path)?;
             listener.set_nonblocking(true)?;
-            Ok((helper, listener))
+            Ok((helper, ack_dir, listener))
         })();
-        let (helper, listener) = match setup {
-            Ok(pair) => pair,
+        let (helper, ack_dir, listener) = match setup {
+            Ok(parts) => parts,
             Err(_) => {
-                let _ = std::fs::remove_file(&ack_path);
                 drop(current);
                 self.finalize(&entry, Outcome::failed("spawn_failed"), true);
                 clean(cleanup);
                 return self.get(&run.id, &run.caller);
             }
         };
+        let ack_path = ack_dir.path().join("ack");
         let spawned = Command::new(helper)
             .arg(&ack_path)
             .args(argv)
@@ -588,7 +588,6 @@ impl RunRegistry {
         let mut child = match spawned {
             Ok(c) => c,
             Err(_) => {
-                let _ = std::fs::remove_file(&ack_path);
                 drop(current);
                 self.finalize(&entry, Outcome::failed("spawn_failed"), true);
                 clean(cleanup);
@@ -596,7 +595,8 @@ impl RunRegistry {
             }
         };
         let acknowledged = wait_for_session_exec(&listener);
-        let _ = std::fs::remove_file(&ack_path);
+        drop(listener);
+        drop(ack_dir);
         if !acknowledged {
             // If exec happened but acknowledgement was lost, descendants may
             // already exist in the new group. Before setsid this group id
