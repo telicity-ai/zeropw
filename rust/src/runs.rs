@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read};
 use std::os::fd::AsFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -564,6 +565,7 @@ impl RunRegistry {
             let helper = session_helper()?;
             let ack_dir = tempfile::Builder::new()
                 .prefix("zp-ack-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
                 .tempdir_in("/tmp")?;
             let ack_path = ack_dir.path().join("ack");
             let listener = UnixListener::bind(&ack_path)?;

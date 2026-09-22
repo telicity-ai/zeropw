@@ -5,8 +5,8 @@ use std::env;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -427,6 +427,7 @@ struct RestoreTerminalEcho {
     original: rustix::termios::Termios,
     signals: signal_hook::iterator::Handle,
     watcher: Option<thread::JoinHandle<()>>,
+    default_signal_action: Arc<AtomicBool>,
 }
 impl Drop for RestoreTerminalEcho {
     fn drop(&mut self) {
@@ -435,6 +436,10 @@ impl Drop for RestoreTerminalEcho {
             rustix::termios::OptionalActions::Now,
             &self.original,
         );
+        // signal-hook unregisters callbacks but does not restore the OS's
+        // previous disposition. Keep a process-lifetime conditional default
+        // action armed whenever no password prompt owns the terminal.
+        self.default_signal_action.store(true, Ordering::SeqCst);
         self.signals.close();
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();
@@ -442,12 +447,35 @@ impl Drop for RestoreTerminalEcho {
     }
 }
 
+static PROMPT_LOCK: Mutex<()> = Mutex::new(());
+static PROMPT_DEFAULT_SIGNALS: OnceLock<Result<Arc<AtomicBool>, String>> = OnceLock::new();
+
+fn prompt_default_signal_action() -> io::Result<Arc<AtomicBool>> {
+    PROMPT_DEFAULT_SIGNALS
+        .get_or_init(|| {
+            let armed = Arc::new(AtomicBool::new(true));
+            for signal in [
+                signal_hook::consts::signal::SIGINT,
+                signal_hook::consts::signal::SIGTERM,
+            ] {
+                signal_hook::flag::register_conditional_default(signal, armed.clone())
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(armed)
+        })
+        .as_ref()
+        .map(Arc::clone)
+        .map_err(|e| io::Error::other(e.clone()))
+}
+
 fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
+    let _prompt_lock = PROMPT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut terminal = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/tty")?;
     let original = rustix::termios::tcgetattr(&terminal)?;
+    let default_signal_action = prompt_default_signal_action()?;
     // Install the interrupt watcher before changing terminal modes. The
     // default SIGINT action skips Drop, so the watcher restores the original
     // flags before exiting on Ctrl-C (or SIGTERM).
@@ -478,7 +506,9 @@ fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
         original: original.clone(),
         signals: handle,
         watcher: Some(watcher),
+        default_signal_action: default_signal_action.clone(),
     };
+    default_signal_action.store(false, Ordering::SeqCst);
     let mut hidden = original.clone();
     hidden
         .local_modes

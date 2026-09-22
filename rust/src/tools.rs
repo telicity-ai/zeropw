@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Weak};
 use zeroize::Zeroize;
@@ -675,6 +675,7 @@ pub fn exec(
         }
         let dir = tempfile::Builder::new()
             .prefix(&format!("{}-", run.id))
+            .permissions(std::fs::Permissions::from_mode(0o700))
             .tempdir_in(run_root)
             .map_err(|_| Error::state("exec_setup_failed"))?;
         let path = dir

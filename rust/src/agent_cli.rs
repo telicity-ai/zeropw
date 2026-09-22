@@ -14,6 +14,28 @@ use crate::pyjson::{self, DumpOptions};
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_CHUNK_LINE_BYTES: usize = 8192;
+const ROOT_HELP: &str = "usage: zeropw-agent [-h] {list-connections,request,exec,status,cancel} ...\n\nZeroPW agent tools client (JSON output)\n\npositional arguments:\n  {list-connections,request,exec,status,cancel}\n    list-connections    connections usable by this caller\n    request             relay one HTTP request through the gateway\n    exec                run the connection's supported CLI; arguments follow\n                        '--'\n    status              state and captured output of one of your runs\n    cancel              cancel one of your runs\n\noptions:\n  -h, --help            show this help message and exit";
+
+fn command_help(command: &str) -> Option<&'static str> {
+    match command {
+        "list-connections" => Some(
+            "usage: zeropw-agent list-connections [-h]\n\noptions:\n  -h, --help  show this help message and exit",
+        ),
+        "request" => Some(
+            "usage: zeropw-agent request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --method METHOD\n  --path PATH\n  --body-file BODY_FILE\n                        file whose bytes form the request body\n  --body BODY           request body text (UTF-8)\n  --header 'K: V'\n  --request-id REQUEST_ID",
+        ),
+        "exec" => Some(
+            "usage: zeropw-agent exec [-h] --connection CONNECTION\n                         [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --request-id REQUEST_ID",
+        ),
+        "status" => Some(
+            "usage: zeropw-agent status [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN",
+        ),
+        "cancel" => Some(
+            "usage: zeropw-agent cancel [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN",
+        ),
+        _ => None,
+    }
+}
 
 #[derive(Default)]
 struct Args {
@@ -445,6 +467,21 @@ fn read_response(io: &mut impl Read) -> (u16, Value) {
 
 /// Returns process exit code; caller supplies argv excluding program name.
 pub fn main(argv: &[String]) -> i32 {
+    let is_help = |arg: &String| arg == "-h" || arg == "--help";
+    if argv.first().is_some_and(is_help) {
+        println!("{ROOT_HELP}");
+        return 0;
+    }
+    if let Some(help) = argv.first().and_then(|command| command_help(command))
+        && argv
+            .iter()
+            .skip(1)
+            .take_while(|arg| *arg != "--")
+            .any(is_help)
+    {
+        println!("{help}");
+        return 0;
+    }
     let args = match parse(argv) {
         Ok(a) => a,
         Err(detail) => {
