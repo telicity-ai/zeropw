@@ -193,8 +193,9 @@ fn mime_message(config: &NotifyConfig, subject: &str, body: &str) -> Vec<u8> {
 }
 fn mailbox(address: &str) -> String {
     // Keep the configured header untouched. A comment is CFWS, not an address
-    // character: in the envelope it must not split `local@domain` or either
-    // side of a dot. This is deliberately only the supported mailbox subset,
+    // character. Preserve its position so Python's domain-atom boundary can
+    // be reproduced rather than silently joining two domain fragments.
+    // This is deliberately only the supported mailbox subset,
     // not a general RFC 5322 address parser.
     let mut without_comments = String::with_capacity(address.len());
     let mut depth = 0usize;
@@ -221,6 +222,9 @@ fn mailbox(address: &str) -> String {
             without_comments.push(ch);
         } else if ch == '(' && !quoted {
             had_comment = true;
+            if depth == 0 {
+                without_comments.push(' ');
+            }
             depth += 1;
         } else if ch == ')' && depth > 0 && !quoted {
             depth -= 1;
@@ -284,6 +288,12 @@ fn envelope_cfws(address: &str, had_comment: bool) -> String {
             in_domain = true;
         } else if !quoted && ch.is_whitespace() {
             let next = chars[index + 1..].iter().find(|c| !c.is_whitespace());
+            if in_domain
+                && result.chars().last().is_some_and(|c| c != '@' && c != '.')
+                && next.is_some_and(|c| c.is_alphanumeric())
+            {
+                break;
+            }
             if in_domain || result.ends_with(['.', '@']) || matches!(next, Some('@' | '.')) {
                 continue;
             }
@@ -479,6 +489,7 @@ fn tls(config: &NotifyConfig, mut tcp: TcpStream) -> Result<Wire, String> {
 #[cfg(test)]
 mod mailbox_tests {
     use super::mailbox;
+    use std::process::Command;
 
     #[test]
     fn supported_comment_forms_match_python_envelope_oracle() {
@@ -500,7 +511,9 @@ mod mailbox_tests {
             ("sender (x) @example.com", "sender@example.com"),
             ("sender@ (x) example.com", "sender@example.com"),
             ("sender (x) .foo@example.com", "sender.foo@example.com"),
-            ("sender@exa(comment)mple.com", "sender@example.com"),
+            // Measured via EmailMessage/getaddresses and actual send_message:
+            // CFWS between domain atoms terminates the selected mailbox.
+            ("sender@exa(comment)mple.com", "sender@exa"),
             (
                 "\"loc(al)\"@(ignored)example.com",
                 "\"loc(al)\"@example.com",
@@ -519,6 +532,38 @@ mod mailbox_tests {
             ),
         ] {
             assert_eq!(mailbox(input), expected, "input={input:?}");
+        }
+    }
+
+    #[test]
+    fn generated_domain_comment_boundaries_match_python() {
+        // The oracle computes the sender actually selected by EmailMessage's
+        // address parser; expected values are not copied from the Rust parser.
+        let script = r#"
+import json
+from email.message import EmailMessage
+from email.utils import getaddresses
+cases=[]
+for before in ('@', '@exa', '@exa.', '@exa-', '@example.com'):
+ for after in ('example.com', 'mple.com', 'com', '.com', ''):
+  address='sender'+before+'(nested(inner))'+after
+  msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
+  parsed=getaddresses([msg['From']])
+  if parsed and parsed[0][1]:cases.append([address,parsed[0][1]])
+print(json.dumps(cases))
+"#;
+        let output = Command::new("python3.12")
+            .args(["-c", script])
+            .output()
+            .expect("Python 3.12 oracle");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cases: Vec<(String, String)> = serde_json::from_slice(&output.stdout).unwrap();
+        for (input, expected) in cases {
+            assert_eq!(mailbox(&input), expected, "input={input:?}");
         }
     }
 }
