@@ -17,11 +17,11 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
 | Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Baseline 04a5634; rerun after integration |
-| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Implemented; Astra found retained-registry and session-isolation defects; Sol fixes in progress |
-| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Implemented; Astra HEAD-error and sanitized logging findings being fixed |
-| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Round-1 fixes integrated; 27 worker tests, 8 original Astra regressions and 6 additional coordinator tests pass; independent re-review pending |
-| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Five Astra fixes plus transport/retry corrections integrated; original three-node process E2E passes; Astra re-review active; coverage incomplete |
-| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle admin 55/55, response 8/8 and agent 6/6 pass; independent CLI review pending |
+| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Registry/session/descriptor and atomic terminal-output fixes integrated; new temporary-directory mode finding remains open |
+| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | HEAD/logging fixes integrated; original preflight/relay boundary assertions added; final exact-head suite pending |
+| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Response round-3 four residual fixes integrated at `4a526a2`; worker regressions pass, fresh independent review pending |
+| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Five original findings resolved by Astra round 2; native process E2E and nine added share/live-runtime tests pass; 62-case map retains partial coverage |
+| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle admin 55/55, response 8/8 and agent 6/6 pass; post-password signal disposition and agent help findings remain open |
 | Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E all pass; full integrated suite/platform acceptance pending |
 | Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Original reports retained; implemented fixes are not accepted until independent verification; no full PASS |
 
@@ -113,3 +113,36 @@ that fix, the unchanged response 27, contract 8, runs 16, tools/server 17 and
 remaining selected first-half integration suites pass. Builds changed during
 this ongoing work: these are component results, **not** a single exact-head full
 suite PASS. Final integrated verification and Linux CI remain required.
+
+## Current round-3/round-4 work (2026-09-22)
+
+Actual Astra response round 3 retains four P2 functional IDs: ENVELOPE, ERRORS,
+SHAPE and COUNTER. The immutable report is bound to `92abed0`. Sol's follow-up
+`cef8ed3`, integrated as `4a526a2`, passes the original 8, round-2 10 and round-3
+6 response review tests, response 27, contract 8, integer 2, canonical 4 and
+affected team oracle 33 in worker verification. Those are fix evidence, not
+independent acceptance. The worker corrected its own DATA-timeout expectation
+only after measuring Python's `SMTPServerDisconnected`; no Astra assertion was
+changed.
+
+Coordinator native-process coverage now observes an actual live signer socket
+before an externally declared manual incident, then verifies both HTTP/SSH run
+cancellation and socket removal. The three process cases pass with 44 native
+administrator and six native agent launches. `rust/RESPONSE_TEST_MAP.md` records
+this evidence; it does not retrospectively change the round-3 review verdict.
+
+Sol's `team_remaining_contract` adds nine cases, independently rerun by the
+coordinator at `927690d`: share conversion and grant staleness, excluded local
+connections, reauthentication/duplicate refusal, session renewal, nonempty TCP
+capture, native listener behavior, remote widening cancelling a live HTTP run,
+and remote disable removing a live signer socket. `rust/TEAM_TEST_MAP.md` maps
+all 62 original methods and explicitly labels remaining partial assertions.
+
+Lifecycle fix `d2c87eb` passes the unchanged terminal-publication and active
+Ctrl-C restoration reproductions. Further Astra checking confirmed that after
+a successful password prompt, SIGINT/SIGTERM can be ignored; coordinator and
+Astra also reproduce new run directories created as 0755 instead of Python's
+0700, and agent `--help` exits 2 instead of 0. These findings are assigned to
+Sol and remain open. Original tool preflight/ownership/audit contracts pass six
+new cases and the real relay text/binary/header-filter case passes; the fresh
+private-directory assertion is intentionally retained failing until fixed.
