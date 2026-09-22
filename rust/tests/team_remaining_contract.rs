@@ -634,14 +634,78 @@ fn explicit_empty_membership_refuses_inprocess_and_tcp_handshakes() {
             )
             .unwrap();
             assert!(ta.dial("native-empty-membership", &env, None).is_err());
+            // The responder closes its queue before invoking this hook, so
+            // dial can return its refusal while the callback is still queued
+            // on the responder thread.
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while failures.lock().unwrap().is_empty() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             tb.close();
         }
         assert!(!accepted.load(Ordering::Acquire));
         assert_eq!(
             failures.lock().unwrap().as_slice(),
-            &[("not_member".to_owned(), Some(fa))]
+            &[("not_member".to_owned(), Some(fa))],
+            "missing or wrong responder rejection hook for tcp={tcp}"
         );
     }
+}
+
+#[test]
+fn inprocess_refusal_can_return_before_responder_hook_finishes() {
+    use std::sync::Barrier;
+
+    let a = DeviceKey::generate();
+    let b = DeviceKey::generate();
+    let fa = a.fingerprint().unwrap();
+    let env = commit::new_env_id(&fa).unwrap();
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let ta = InProcessTransport::new(a, empty.clone());
+    let tb = InProcessTransport::new(b, empty);
+    let hook_started = Arc::new(AtomicBool::new(false));
+    let hook_release = Arc::new(Barrier::new(2));
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let hook_started_cb = hook_started.clone();
+    let hook_release_cb = hook_release.clone();
+    let failures_cb = failures.clone();
+    tb.set_handshake_failed(Some(Arc::new(move |reason, fp| {
+        hook_started_cb.store(true, Ordering::Release);
+        hook_release_cb.wait();
+        failures_cb
+            .lock()
+            .unwrap()
+            .push((reason.to_owned(), fp.map(str::to_owned)));
+    })));
+    let accepted = Arc::new(AtomicBool::new(false));
+    let accepted_cb = accepted.clone();
+    tb.listen(
+        "native-empty-membership-hook-barrier",
+        Arc::new(move |_| accepted_cb.store(true, Ordering::Release)),
+    )
+    .unwrap();
+    assert!(
+        ta.dial("native-empty-membership-hook-barrier", &env, None)
+            .is_err(),
+        "empty membership must refuse the handshake before hook completion"
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !hook_started.load(Ordering::Acquire) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(hook_started.load(Ordering::Acquire));
+    assert!(!accepted.load(Ordering::Acquire));
+    assert!(failures.lock().unwrap().is_empty());
+    hook_release.wait();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while failures.lock().unwrap().is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        failures.lock().unwrap().as_slice(),
+        &[("not_member".to_owned(), Some(fa))]
+    );
+    tb.close();
 }
 
 fn wire_case() {
