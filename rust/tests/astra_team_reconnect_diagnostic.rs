@@ -1,5 +1,7 @@
-//! Bounded observation of fact publication during a disconnected peer interval.
-//! Diagnostic of the e8610ac fixture race, not a new desired-behavior specification.
+//! Desired offline FACT catch-up and deduplication regression (ASTRA-TEAM-T6/P1).
+//! The d1f6ace Git version characterized e8610ac's missing replay; its report and
+//! history remain unchanged. The explicit PO correction requires delivery under
+//! docs/team-sync.md section 6.6. This working test no longer enforces the defect.
 use serde_json::json;
 use std::{
     sync::Arc,
@@ -81,7 +83,7 @@ fn wait(stage: &str, mut predicate: impl FnMut() -> bool) {
 }
 
 #[test]
-fn observed_offline_fact_is_not_replayed_but_connected_publication_arrives() {
+fn offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact() {
     let root = TempDir::new().unwrap();
     let a = Node::new(&root, "a");
     let b = Node::new(&root, "b");
@@ -156,13 +158,12 @@ fn observed_offline_fact_is_not_replayed_but_connected_publication_arrives() {
             .unwrap()
             >= barrier.author_seq
     });
-    assert!(
-        !sync::load_facts(fresh_b.ctx.state, &env)
+    wait("offline fact catches up after reconnect", || {
+        sync::load_facts(fresh_b.ctx.state, &env)
             .unwrap()
             .1
-            .contains(&lost_hash),
-        "e8610ac diagnostic expected the disconnected publication to be absent"
-    );
+            .contains(&lost_hash)
+    });
     let delivered = a
         .team
         .publish_fact(
@@ -178,10 +179,36 @@ fn observed_offline_fact_is_not_replayed_but_connected_publication_arrives() {
             .1
             .contains(&delivered_hash)
     });
-    assert!(
-        !sync::load_facts(fresh_b.ctx.state, &env)
-            .unwrap()
-            .1
-            .contains(&lost_hash)
-    );
+    // Exercise subsequent periodic catch-up after both facts have arrived.
+    // Receiver hash deduplication must also mean exactly one persisted line,
+    // not merely a set containing one hash after duplicate appends.
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(120));
+        a.team.poll().unwrap();
+        fresh_b.team.poll().unwrap();
+    }
+    let hashes = sync::load_facts(fresh_b.ctx.state, &env).unwrap().1;
+    assert!(hashes.contains(&lost_hash));
+    assert!(hashes.contains(&delivered_hash));
+    let persisted = fresh_b
+        .ctx
+        .state
+        .read_lines(&format!("team/{env}/facts.jsonl"), None)
+        .unwrap()
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            sync::Fact::from_dict(&serde_json::from_str(&line).unwrap())
+                .unwrap()
+                .hash()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for expected in [&lost_hash, &delivered_hash] {
+        assert_eq!(
+            persisted.iter().filter(|hash| *hash == expected).count(),
+            1,
+            "each offline/live fact must be persisted exactly once"
+        );
+    }
 }
