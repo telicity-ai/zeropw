@@ -169,18 +169,41 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         .chain(optional.split_whitespace())
         .chain(flags.split_whitespace())
         .collect();
+    let known_options = [
+        "state-dir",
+        "id",
+        "kind",
+        "project",
+        "environment",
+        "value-file",
+        "stdin",
+        "version",
+        "secret-id",
+        "connection",
+        "principal",
+        "ttl",
+        "methods",
+        "path-prefixes",
+        "confirm-methods",
+        "target",
+        "auth",
+        "host",
+        "host-key",
+        "listen",
+        "env",
+        "scope",
+        "digest",
+        "out",
+        "in",
+    ];
+    let mut extras = Vec::new();
     while i < argv.len() {
         let token = &argv[i];
         if let Some(key) = token.strip_prefix("--") {
             if !valid.contains(key) {
-                return Err(format!(
-                    "unrecognized arguments: 1; values are not echoed{}",
-                    if key == "value" {
-                        " (not accepted: --value)"
-                    } else {
-                        ""
-                    }
-                ));
+                extras.push(token.clone());
+                i += 1;
+                continue;
             }
             if flags.split_whitespace().any(|f| f == key) {
                 a.options
@@ -211,6 +234,29 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         }
         i += 1;
     }
+    if !extras.is_empty() || a.positional.len() > positional {
+        let names: BTreeSet<String> = extras
+            .iter()
+            .filter_map(|item| item.strip_prefix("--"))
+            .filter_map(|name| name.split('=').next())
+            .filter(|name| {
+                !name.is_empty() && known_options.iter().any(|known| known.starts_with(name))
+            })
+            .map(|name| format!("--{name}"))
+            .collect();
+        let count = extras.len() + a.positional.len().saturating_sub(positional);
+        let detail = if names.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (not accepted: {})",
+                names.into_iter().collect::<Vec<_>>().join(" ")
+            )
+        };
+        return Err(format!(
+            "unrecognized arguments: {count}{detail}; values are not echoed"
+        ));
+    }
     let missing: Vec<String> = required
         .split_whitespace()
         .filter(|key| !a.has(key))
@@ -234,11 +280,59 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     {
         return Err("one of the arguments --value-file --stdin is required".into());
     }
+    for key in ["version", "secret-version", "port", "max-uses", "limit"] {
+        if let Some(value) = a.get(key) {
+            let number = value
+                .parse::<i64>()
+                .map_err(|_| format!("argument --{key}: invalid int value"))?;
+            if key == "limit" && number < 1 {
+                return Err("argument --limit: must be a positive integer".into());
+            }
+        }
+    }
+    if a.command == "secret"
+        && a.action == "put"
+        && !crate::vault::SECRET_KINDS.contains(&a.req("kind"))
+    {
+        return Err("argument --kind: invalid choice".into());
+    }
+    if a.command == "connection"
+        && a.action == "create-http"
+        && !crate::policy::AUTH_MODES.contains(&a.req("auth"))
+    {
+        return Err("argument --auth: invalid choice".into());
+    }
+    if a.command == "incident"
+        && a.action == "declare"
+        && !["principal", "runtime", "all"].contains(&a.req("scope"))
+    {
+        return Err("argument --scope: invalid choice".into());
+    }
+    if a.command == "incident"
+        && a.action == "escalate"
+        && !["runtime", "all"].contains(&a.req("scope"))
+    {
+        return Err("argument --scope: invalid choice".into());
+    }
+    if a.command == "team"
+        && ["invite", "set-role"].contains(&a.action.as_str())
+        && !["admin", "user"].contains(&a.req("role"))
+    {
+        return Err("argument --role: invalid choice".into());
+    }
     Ok(a)
 }
 
 fn output(v: &Value, stderr: bool) {
-    let text = pyjson::dumps(v, DumpOptions::pretty_sorted()).unwrap_or_else(|_| "{}".into());
+    let text = pyjson::dumps(
+        v,
+        if stderr {
+            DumpOptions::default_sorted()
+        } else {
+            DumpOptions::pretty_sorted()
+        },
+    )
+    .unwrap_or_else(|_| "{}".into());
     if stderr {
         eprintln!("{text}");
     } else {
@@ -1151,6 +1245,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
 
 /// Process entry point for the trusted administrator CLI.
 pub fn main(argv: &[String]) -> i32 {
+    if argv.iter().any(|v| v == "--help" || v == "-h") {
+        println!(
+            "usage: zeropw-admin --state-dir DIR COMMAND ...\n\nZeroPW administrator CLI (trusted; JSON output).\n\ncommands: init, project, secret, connection, principal, grant, stop-all, resume, approvals, rotation, backup, restore, restore-ack, recover, incident, audit, alerts, team, serve"
+        );
+        return 0;
+    }
     let args = match parse(argv) {
         Ok(a) => a,
         Err(detail) => {
@@ -1168,7 +1268,14 @@ pub fn main(argv: &[String]) -> i32 {
             0
         }
         Err(error) => {
-            output(&error.to_dict(), true);
+            if error.reason == "file_not_found" {
+                output(
+                    &json!({"error":"FileNotFoundError","reason":"file_not_found"}),
+                    true,
+                );
+            } else {
+                output(&error.to_dict(), true);
+            }
             1
         }
     }
