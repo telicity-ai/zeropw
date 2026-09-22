@@ -437,7 +437,7 @@ impl Drop for RestoreTerminalEcho {
             &self.original,
         );
         // signal-hook unregisters callbacks but does not restore the OS's
-        // previous disposition. Keep a process-lifetime conditional default
+        // previous disposition. Keep a process-lifetime conditional exit
         // action armed whenever no password prompt owns the terminal.
         self.default_signal_action.store(true, Ordering::SeqCst);
         self.signals.close();
@@ -454,13 +454,19 @@ fn prompt_default_signal_action() -> io::Result<Arc<AtomicBool>> {
     PROMPT_DEFAULT_SIGNALS
         .get_or_init(|| {
             let armed = Arc::new(AtomicBool::new(true));
-            for signal in [
+            // Python's main catches KeyboardInterrupt and returns 130, so
+            // SIGINT must be a normal exit status, not signal termination.
+            signal_hook::flag::register_conditional_shutdown(
                 signal_hook::consts::signal::SIGINT,
+                130,
+                armed.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            signal_hook::flag::register_conditional_default(
                 signal_hook::consts::signal::SIGTERM,
-            ] {
-                signal_hook::flag::register_conditional_default(signal, armed.clone())
-                    .map_err(|e| e.to_string())?;
-            }
+                armed.clone(),
+            )
+            .map_err(|e| e.to_string())?;
             Ok(armed)
         })
         .as_ref()
@@ -494,9 +500,11 @@ fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
                 rustix::termios::OptionalActions::Now,
                 &watcher_original,
             );
-            // Preserve the CLI's ordinary signal-termination status after
-            // restoring the controlling terminal. This safe library API
-            // re-raises the default action; the exit is only a fallback.
+            if signal == signal_hook::consts::signal::SIGINT {
+                // Match Python's caught KeyboardInterrupt after the terminal
+                // is restored. SIGTERM retains OS signal termination below.
+                std::process::exit(130);
+            }
             let _ = signal_hook::low_level::emulate_default_handler(signal);
             std::process::exit(128 + signal);
         }
@@ -2288,6 +2296,13 @@ pub fn main(argv: &[String]) -> i32 {
                 1
             }
         };
+    }
+    // Unlike `serve`, ordinary commands return Python's caught
+    // KeyboardInterrupt status even when an environment passphrase bypasses
+    // the terminal prompt (or no passphrase is needed at all).
+    if prompt_default_signal_action().is_err() {
+        output(&Error::state("signal_handler_unavailable").to_dict(), true);
+        return 1;
     }
     let result = if args.command == "incident" {
         incident_command(&args).map(Some)
