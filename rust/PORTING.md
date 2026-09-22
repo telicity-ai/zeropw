@@ -45,7 +45,17 @@ Native deployments that include `exec` must build and ship the trusted
 agent-controlled `PATH`; if the helper is absent, execution fails closed as
 `spawn_failed`. The helper uses safe `rustix::process::setsid` then `exec`,
 with a close-on-exec acknowledgement socket to preserve synchronous spawn
-failure semantics. This is a packaged Rust helper, not a Python backend.
+failure semantics. Its ACK socket lives in a per-run private short-path
+temporary directory, independent of the configured SSH socket directory.
+Before the final `exec`, `close_fds` 0.3.2 marks every descriptor from 3 upward
+close-on-exec, matching Python's `close_fds=True` for unrelated inheritable
+trusted descriptors; the ACK socket stays open only until that `exec`. The
+crate uses Linux `close_range(CLOEXEC)` when available and enumerates file
+descriptors otherwise, including macOS `/dev/fd`. Its safe API does not report
+individual `fcntl(F_SETFD)` failures, so this boundary assumes a functioning
+local kernel descriptor API; `astra_cli_runtime_round2` tests the actual
+inheritable-FD case through a native child. No `unsafe` was added to this
+repository for this helper. This is a packaged Rust helper, not a Python backend.
 
 Shared contract already in place (do not rewrite): `errors.rs`, `secret.rs`, `clock.rs`, `oracle.rs`.
 
