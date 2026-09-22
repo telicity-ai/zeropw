@@ -26,7 +26,8 @@ fn io_error(e: std::io::Error) -> String {
         std::io::ErrorKind::ConnectionRefused => "ConnectionRefusedError",
         std::io::ErrorKind::ConnectionReset => "ConnectionResetError",
         std::io::ErrorKind::BrokenPipe => "BrokenPipeError",
-        std::io::ErrorKind::TimedOut => "TimeoutError",
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "TimeoutError",
+        std::io::ErrorKind::InvalidData => "SSLError",
         std::io::ErrorKind::NotFound => "FileNotFoundError",
         _ => "OSError",
     }
@@ -310,7 +311,7 @@ fn reply(wire: &mut Wire) -> Result<Reply, String> {
             match wire.read(&mut b) {
                 Ok(0) => return Err(exception("SMTPServerDisconnected")),
                 Ok(_) => (),
-                Err(_) => return Err(exception("SMTPServerDisconnected")),
+                Err(e) => return Err(io_error(e)),
             };
             line.push(b[0]);
             if line.len() > MAX_LINE {

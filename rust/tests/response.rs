@@ -1,5 +1,7 @@
 //! Behavioural ports of incident/intrusion/notify cases using synthetic values.
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Barrier};
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
@@ -16,8 +18,11 @@ use zeropw::context::{Config, Context};
 use zeropw::incident;
 use zeropw::intrusion::{self, DetectorConfig};
 use zeropw::notify;
-use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
+use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget, SshTarget};
 use zeropw::projects;
+use zeropw::runs;
+use zeropw::signer;
+use zeropw::sshwire;
 
 const SECRET: &[u8] = b"synthetic-token-0123456789";
 fn fixture() -> (TempDir, Arc<Context>) {
@@ -158,6 +163,257 @@ fn widening_adds_principals_and_close_does_not_resume() {
     assert_eq!(closed.status, "closed");
     assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
     assert!(ctx.policy.is_stopped().unwrap());
+}
+
+#[test]
+fn lockdown_reapplication_is_idempotent_and_rotation_failure_continues() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy.create_principal("agent-2", "box-1").unwrap();
+    setup_grant(&ctx, "agent-1", "gh");
+    let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let before = i.actions.clone();
+    incident::apply_lockdown(&ctx, &mut i, &["agent-1".into()], "principal", None);
+    assert_eq!(
+        i.actions["principals_disabled"],
+        before["principals_disabled"]
+    );
+    assert_eq!(i.actions["grants_revoked"], before["grants_revoked"]);
+
+    let key_path = ctx.state.path.join("policy/handle.key");
+    fs::rename(&key_path, key_path.with_extension("saved")).unwrap();
+    fs::create_dir(&key_path).unwrap();
+    let widened =
+        incident::widen_incident(&ctx, &i.id, "runtime", Some("box-1"), None, None).unwrap();
+    assert_eq!(widened.actions["handle_key_rotated"], false);
+    assert!(
+        widened.actions["failed_steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "rotate_handle_key")
+    );
+    assert_eq!(
+        ctx.policy.get_principal("agent-2").unwrap().status,
+        "disabled"
+    );
+    assert_eq!(widened.actions["principals_disabled"], 2);
+}
+
+#[test]
+fn widening_keeps_previously_held_secret_recommended() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy.create_principal("agent-2", "box-1").unwrap();
+    setup_grant(&ctx, "agent-2", "gh");
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert!(i.assessment["secrets"].as_array().unwrap().is_empty());
+    let wider =
+        incident::widen_incident(&ctx, &i.id, "runtime", Some("box-1"), None, None).unwrap();
+    assert_eq!(wider.assessment["secrets"][0]["secret_id"], "gh-token");
+    assert_eq!(wider.assessment["secrets"][0]["tier"], "recommended");
+}
+
+#[test]
+fn ssh_assessment_carries_fingerprint_target_and_mandatory_tier() {
+    let (_tmp, ctx) = fixture();
+    let key = sshwire::generate_ed25519_private_key("test");
+    ctx.vault
+        .put_secret(
+            "ssh-key",
+            "ssh_private_key",
+            key.to_openssh_private_key().as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let host_key = key.public.to_authorized_key("test").unwrap();
+    let conn = Connection::new(
+        "box",
+        "demo",
+        "dev",
+        "box-service",
+        "ssh",
+        "ssh-key",
+        None,
+        "",
+        None,
+        None,
+        None,
+        Some(SshTarget::new("127.0.0.1", 2222, "deploy", vec![host_key]).unwrap()),
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    ctx.policy.create_connection(conn).unwrap();
+    let grant = ctx
+        .policy
+        .create_grant("agent-1", "box", Some(3600), None)
+        .unwrap();
+    let manager = signer::install(ctx.clone(), None).unwrap();
+    let binding = manager.bind("agent-1", "box", &grant.id).unwrap();
+    assert!(binding.socket_path.exists());
+    ctx.audit
+        .record(
+            "ssh_sign",
+            RecordArgs {
+                caller: Some("agent-1"),
+                connection: Some("box"),
+                result: Some("ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let secret = &i.assessment["secrets"][0];
+    assert_eq!(secret["tier"], "mandatory");
+    assert_eq!(secret["secret_id"], "ssh-key");
+    assert!(
+        secret["fingerprint"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("SHA256:"))
+    );
+    assert_eq!(secret["targets"][0]["username"], "deploy");
+    assert_eq!(secret["targets"][0]["port"], 2222);
+    assert!(manager.active_bindings().is_empty());
+    assert!(!binding.socket_path.exists());
+    manager.shutdown();
+}
+
+#[test]
+fn assessment_ignores_audit_use_before_principal_creation() {
+    let tmp = TempDir::new().unwrap();
+    let ticks = Arc::new(AtomicU64::new(1_700_000_000));
+    let clock_ticks = ticks.clone();
+    let ctx = Arc::new(
+        Context::initialize(
+            tmp.path().join("state"),
+            "admin-passphrase-1",
+            "recovery-passphrase-1",
+            Config::default(),
+            Arc::new(move || clock_ticks.load(Ordering::Relaxed) as f64),
+        )
+        .unwrap(),
+    );
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    ctx.vault
+        .put_secret("gh-token", "api_key", SECRET, "demo", "dev", true)
+        .unwrap();
+    ctx.policy
+        .create_connection(connection("gh", "gh-token"))
+        .unwrap();
+    ctx.audit
+        .record(
+            "http_relay",
+            RecordArgs {
+                caller: Some("agent-1"),
+                connection: Some("gh"),
+                result: Some("ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    ticks.store(1_700_000_060, Ordering::Relaxed);
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy
+        .create_grant("agent-1", "gh", Some(3600), None)
+        .unwrap();
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert_eq!(i.assessment["secrets"][0]["tier"], "recommended");
+    assert_eq!(i.assessment["secrets"][0]["use_count"], 0);
+}
+
+#[test]
+fn detector_install_is_idempotent_and_decision_failure_is_counted() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let detector = intrusion::install(ctx.clone(), None).unwrap();
+    let same = intrusion::install(ctx.clone(), None).unwrap();
+    assert!(Arc::ptr_eq(&detector, &same));
+    let record = json!({"event":"tools_unknown","caller":"missing-agent","result":"denied"});
+    for _ in 0..2 {
+        detector.on_record(record.as_object().unwrap());
+    }
+    assert_eq!(detector.decision_errors.load(Ordering::Relaxed), 1);
+    let valid = json!({"event":"tools_unknown","caller":"agent-1","result":"denied"});
+    for _ in 0..2 {
+        detector.on_record(valid.as_object().unwrap());
+    }
+    assert!(ctx.policy.open_incident_id().unwrap().is_some());
+}
+
+#[test]
+fn concurrent_detector_trips_open_one_incident_without_reentrancy() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let detector = intrusion::install(ctx.clone(), None).unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let ctx = ctx.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                ctx.audit
+                    .record(
+                        "tools_unknown",
+                        RecordArgs {
+                            caller: Some("agent-1"),
+                            result: Some("denied"),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            })
+        })
+        .collect();
+    barrier.wait();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    assert_eq!(incident::list_incidents(&ctx).unwrap().len(), 1);
+    assert_eq!(detector.decision_errors.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn principal_lockdown_cancels_only_its_live_run() {
+    let (tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy.create_principal("agent-2", "box-2").unwrap();
+    let registry = runs::install(ctx.clone());
+    let spawn = |caller: &str| {
+        let run = registry.create(
+            caller, "gh", "grant", "http", "sh", None, "digest", None, None,
+        );
+        registry
+            .start(
+                &run,
+                &["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+                &HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+                tmp.path(),
+                &[],
+                None,
+                Some(60.0),
+            )
+            .unwrap();
+        run
+    };
+    let owned = spawn("agent-1");
+    let other = spawn("agent-2");
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert_eq!(i.actions["runs_cancelled"], 1);
+    assert_eq!(registry.wait(&owned, Some(2.0)).state, "cancelled");
+    assert_eq!(registry.get(&other.id, "agent-2").unwrap().state, "running");
+    registry
+        .cancel(&other.id, "agent-2", "test_cleanup")
+        .unwrap();
 }
 
 #[test]
@@ -402,6 +658,43 @@ fn enumeration_counts_first_uses_and_burst_ignores_status_polling() {
 }
 
 #[test]
+fn burst_fires_once_when_crossing_limit_not_on_every_later_record() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let cfg = DetectorConfig {
+        weak_threshold: 2,
+        burst_count: 2,
+        ..DetectorConfig::default()
+    };
+    let _detector = intrusion::install(ctx.clone(), Some(cfg)).unwrap();
+    let request = || {
+        ctx.audit
+            .record(
+                "tools_request",
+                RecordArgs {
+                    caller: Some("agent-1"),
+                    result: Some("ok"),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+    };
+    request();
+    request();
+    assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
+    request();
+    let id = ctx.policy.open_incident_id().unwrap().unwrap();
+    assert_eq!(
+        incident::get_incident(&ctx, &id).unwrap().rule.as_deref(),
+        Some("burst")
+    );
+    incident::close_incident(&ctx, &id).unwrap();
+    request();
+    request();
+    assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
+}
+
+#[test]
 fn two_callers_with_http_signals_escalate_to_runtime() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
@@ -507,6 +800,69 @@ fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(S
         }
         (auth, message)
     })
+}
+
+#[test]
+fn smtp_transport_failure_names_track_the_failing_phase() {
+    for (phase, expected) in [
+        ("greeting", "SMTPConnectError"),
+        ("sender", "SMTPSenderRefused"),
+        ("recipient", "SMTPRecipientsRefused"),
+        ("data", "SMTPDataError"),
+        ("disconnect", "SMTPServerDisconnected"),
+        ("timeout", "TimeoutError"),
+    ] {
+        let (tmp, ctx) = fixture();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let phase = phase.to_owned();
+        let receiver_phase = phase.clone();
+        let receiver = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            if receiver_phase == "greeting" {
+                stream.write_all(b"554 unavailable\r\n").unwrap();
+                return;
+            }
+            stream.write_all(b"220 ready\r\n").unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line.starts_with("EHLO") {
+                    stream.write_all(b"250 ready\r\n").unwrap();
+                } else if line.starts_with("MAIL FROM") {
+                    if receiver_phase == "sender" {
+                        stream.write_all(b"550 no\r\n").unwrap();
+                        break;
+                    }
+                    stream.write_all(b"250 ok\r\n").unwrap();
+                } else if line.starts_with("RCPT TO") {
+                    if receiver_phase == "recipient" {
+                        stream.write_all(b"550 no\r\n").unwrap();
+                        break;
+                    }
+                    stream.write_all(b"250 ok\r\n").unwrap();
+                } else if line.starts_with("DATA") {
+                    if receiver_phase == "data" {
+                        stream.write_all(b"554 no\r\n").unwrap();
+                        break;
+                    }
+                    if receiver_phase == "disconnect" {
+                        break;
+                    }
+                    thread::sleep(std::time::Duration::from_millis(250));
+                    break;
+                }
+            }
+        });
+        ctx.state.write_json("notify.json", &json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"sender@example.com","recipients":["admin@example.com"],"timeout_seconds":0.1})).unwrap();
+        let result = notify::send_test_message(&ctx).unwrap();
+        assert_eq!(result["error"], expected, "{phase}");
+        receiver.join().unwrap();
+        drop(tmp);
+    }
 }
 
 #[test]
