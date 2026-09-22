@@ -367,9 +367,24 @@ fn admin_terminal_prompts_without_echo() {
         thread::sleep(Duration::from_millis(50));
         input.write_all(secret).unwrap();
     }
+    // Keep script(1)'s input pipe open until the child consumes the second
+    // password. Closing it immediately can race the final PTY write: even
+    // the original Python CLI then sees EOF at the recovery prompt.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("terminal init did not finish after both passphrases");
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
     drop(input);
     output.read_to_end(&mut seen).unwrap();
-    assert!(child.wait().unwrap().success());
+    assert!(status.success());
     assert!(state.exists());
     assert!(
         !seen
