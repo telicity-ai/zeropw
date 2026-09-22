@@ -590,6 +590,34 @@ impl TeamSync {
                 }
             }
         }
+        let peer_vectors = self
+            .ctx
+            .state
+            .read_json(&format!("team/{env_id}/peer_vectors.json"), json!({}))?;
+        if let Some(entries) = peer_vectors.as_object() {
+            for (fp, vector) in entries {
+                if !valid_fp(fp) {
+                    continue;
+                }
+                if let Some(vector) = vector.as_object() {
+                    env.peer_vectors.insert(
+                        fp.clone(),
+                        vector
+                            .iter()
+                            .filter_map(|(author, seq)| {
+                                if seq.is_boolean() {
+                                    None
+                                } else {
+                                    seq.as_number()
+                                        .and_then(serde_json::Number::as_i128)
+                                        .map(|n| (author.clone(), n))
+                                }
+                            })
+                            .collect(),
+                    );
+                }
+            }
+        }
         env.known_fact_lines = self
             .ctx
             .state
@@ -799,6 +827,7 @@ impl TeamSync {
     }
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<()> {
         let hash = fact.hash()?;
+        let _lock = self.ctx.state.lock()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -806,7 +835,6 @@ impl TeamSync {
         if env.fact_hashes.contains(&hash) {
             return Ok(());
         }
-        let _lock = self.ctx.state.lock()?;
         let line = pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?;
         self.ctx
             .state
@@ -1182,7 +1210,17 @@ impl TeamSync {
         if commit.env_id != env_id {
             return Ok(());
         }
-        if self.submit_commit(env_id, &commit)? == "accepted" {
+        let outcome = {
+            let _lock = self.ctx.state.lock()?;
+            commit::receive_commit(
+                &CommitStore::new(self.ctx.state, env_id),
+                &commit,
+                commit::now_ms(),
+                Some(self.ctx.audit),
+            )?
+        };
+        if outcome == "accepted" {
+            self.refold(env_id)?;
             self.broadcast(
                 env_id,
                 &json!({"type":"COMMIT","commit":commit.to_dict()}),
@@ -1906,5 +1944,120 @@ impl TeamSync {
         Ok(
             json!({"env_id":env_id,"vector":CommitStore::new(self.ctx.state,env_id).vector()?,"sessions":sessions,"synced_at":env.synced_at.map(|ts|iso(Some(ts))),"pending_deferred":CommitStore::new(self.ctx.state,env_id).deferred_commits()?.len()}),
         )
+    }
+
+    pub fn compact(&self, env_id: &str) -> Result<Value> {
+        let (facts, peer_vectors, members) = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let env = envs
+                .get(env_id)
+                .ok_or_else(|| Error::not_found("team_env_unknown"))?;
+            (
+                env.facts.clone(),
+                env.peer_vectors.clone(),
+                env.document["members"].clone(),
+            )
+        };
+        let store = CommitStore::new(self.ctx.state, env_id);
+        let commits = store.all_commits()?;
+        if commits.is_empty() {
+            return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
+        }
+        let now = i128::from(commit::now_ms());
+        let mut cutoff = None;
+        for (i, entry) in commits.iter().enumerate() {
+            let (wall, _) = Hlc::parse(&entry.hlc)?;
+            if now - wall < i128::from(COMPACT_MIN_AGE_MS) {
+                break;
+            }
+            cutoff = Some(i);
+        }
+        let Some(cutoff) = cutoff else {
+            return Ok(
+                json!({"env_id":env_id,"removed":0,"blocked_by":[],"reason":"no_commit_old_enough"}),
+            );
+        };
+        let mut candidate = BTreeMap::<String, i128>::new();
+        for entry in &commits[..=cutoff] {
+            candidate
+                .entry(entry.author.clone())
+                .and_modify(|seq| *seq = (*seq).max(entry.author_seq))
+                .or_insert(entry.author_seq);
+        }
+        let mine = self.device.fingerprint()?;
+        let mut blocked = Vec::new();
+        if let Some(members) = members.as_object() {
+            for (fp, member) in members {
+                if fp == &mine || member["status"] != "active" {
+                    continue;
+                }
+                if candidate.iter().any(|(author, seq)| {
+                    peer_vectors
+                        .get(fp)
+                        .and_then(|v| v.get(author))
+                        .copied()
+                        .unwrap_or(0)
+                        < *seq
+                }) {
+                    blocked.push(fp.clone());
+                }
+            }
+        }
+        blocked.sort();
+        if !blocked.is_empty() {
+            return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
+        }
+        let snapshot = fold::fold(
+            env_id,
+            commits[..=cutoff].to_vec(),
+            Some(&facts),
+            None,
+            None,
+            Some(self.ctx.audit),
+        )?;
+        let total: i128 = candidate.values().sum();
+        fold::save_snapshot(
+            self.ctx.state,
+            env_id,
+            total.try_into().unwrap_or(i64::MAX),
+            &snapshot,
+        )?;
+        let mut removed = 0;
+        {
+            let _lock = self.ctx.state.lock()?;
+            for entry in &commits[..=cutoff] {
+                if entry.ops.iter().any(|op| {
+                    [
+                        "env.init",
+                        "member.add",
+                        "member.set_role",
+                        "member.remove",
+                        "owner.transfer",
+                        "dek.rotate",
+                    ]
+                    .contains(&op["op"].as_str().unwrap_or(""))
+                }) {
+                    continue;
+                }
+                let path = self.ctx.state.path.join(format!(
+                    "team/{env_id}/commits/{}/{}.json",
+                    entry.author, entry.author_seq
+                ));
+                if std::fs::remove_file(path).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.last_snapshot_total = total;
+        }
+        self.refold(env_id)?;
+        self.audit_event("team_compact", env_id, None, None, Some(removed));
+        Ok(json!({"env_id":env_id,"removed":removed,"blocked_by":[]}))
     }
 }
