@@ -663,6 +663,20 @@ fn ssh_cli_keeps_private_key_in_signer_and_fixes_local_ssh_options() {
             .policy
             .create_grant("alice", &id, Some(3600), None)
             .unwrap();
+        // Original SshExecTestCase.test_signer_required and
+        // RequestTestCase.test_ssh_connection_is_not_relayable. The native
+        // server retains its manager separately; removing this lookup seam
+        // must fail explicitly without a plaintext-key fallback.
+        let installed = f.ctx.signer_manager.lock().unwrap().take();
+        let missing = tools::exec(&f.ctx, "alice", &id, &[], None).unwrap_err();
+        *f.ctx.signer_manager.lock().unwrap() = installed;
+        assert_eq!(missing.reason, "ssh_signer_unavailable");
+        assert_eq!(missing.class, zeropw::errors::ErrorClass::Unsupported);
+        let relay =
+            tools::request(&f.ctx, "alice", &id, "GET", "/", &Vec::new(), b"", None).unwrap();
+        assert_eq!(relay["status"], 403);
+        assert_eq!(relay["reason"], "action_kind_mismatch");
+        assert!(f.fake.requests().is_empty());
         let out = f.temp.path().join(format!("capture-{port}"));
         let result = tools::exec(
             &f.ctx,
