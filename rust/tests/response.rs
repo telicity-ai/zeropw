@@ -474,7 +474,12 @@ fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(S
                 auth = line.trim().to_owned();
                 stream.write_all(b"235 authenticated\r\n").unwrap();
             } else if line.starts_with("AUTH LOGIN") {
-                stream.write_all(b"334 VXNlcm5hbWU6\r\n").unwrap();
+                if line.trim() == "AUTH LOGIN" {
+                    stream.write_all(b"334 VXNlcm5hbWU6\r\n").unwrap();
+                } else {
+                    auth = line.trim().to_owned();
+                    stream.write_all(b"334 UGFzc3dvcmQ6\r\n").unwrap();
+                }
             } else if line.starts_with("MAIL FROM") || line.starts_with("RCPT TO") {
                 stream.write_all(b"250 OK\r\n").unwrap();
             } else if line.starts_with("DATA") {

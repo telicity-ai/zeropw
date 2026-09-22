@@ -4,7 +4,7 @@ use std::fs;
 use std::sync::{Arc, Weak};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::audit::RecordArgs;
 use crate::context::Context;
@@ -34,11 +34,19 @@ pub struct Incident {
     pub notification: Value,
     pub closed_at: Option<String>,
     pub widened_from: Vec<Value>,
+    #[serde(skip)]
+    raw_fields: Map<String, Value>,
 }
 
 impl Incident {
     pub fn to_dict(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+        let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
+        if let Some(obj) = value.as_object_mut() {
+            for (key, raw) in &self.raw_fields {
+                obj.insert(key.clone(), raw.clone());
+            }
+        }
+        value
     }
     pub fn from_dict(data: &Value) -> Result<Self> {
         let obj = data
@@ -56,6 +64,16 @@ impl Incident {
                 })
                 .ok_or_else(|| Error::not_found("incident_corrupt"))
         };
+        let principals_raw = python_list(obj.get("principals"))?;
+        let mut raw_fields = Map::new();
+        for key in ["runtime", "rule", "detail", "closed_at"] {
+            if let Some(v) = obj.get(key).filter(|v| !v.is_null() && !v.is_string()) {
+                raw_fields.insert(key.into(), v.clone());
+            }
+        }
+        if principals_raw.iter().any(|v| !v.is_string()) {
+            raw_fields.insert("principals".into(), Value::Array(principals_raw.clone()));
+        }
         Ok(Self {
             id: required("id")?,
             opened_at: required("opened_at")?,
@@ -65,51 +83,74 @@ impl Incident {
                 .get("runtime")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            principals: obj
-                .get("principals")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .map(|v| {
-                            v.as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| crate::pystr::repr_value(v))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            principals: principals_raw.iter().map(python_str).collect(),
             trigger: obj
                 .get("trigger")
-                .and_then(Value::as_str)
-                .unwrap_or("manual")
-                .to_owned(),
+                .map(python_str)
+                .unwrap_or_else(|| "manual".into()),
             rule: obj.get("rule").and_then(Value::as_str).map(str::to_owned),
             detail: obj.get("detail").and_then(Value::as_str).map(str::to_owned),
-            actions: obj
-                .get("actions")
-                .filter(|v| v.is_object())
-                .cloned()
-                .unwrap_or(json!({})),
-            assessment: obj
-                .get("assessment")
-                .filter(|v| v.is_object())
-                .cloned()
-                .unwrap_or(json!({})),
-            notification: obj
-                .get("notification")
-                .filter(|v| v.is_object())
-                .cloned()
-                .unwrap_or(json!({"status":"not_configured","attempts":0})),
+            actions: python_dict(obj.get("actions"), json!({}))?,
+            assessment: python_dict(obj.get("assessment"), json!({}))?,
+            notification: python_dict(
+                obj.get("notification"),
+                json!({"status":"not_configured","attempts":0}),
+            )?,
             closed_at: obj
                 .get("closed_at")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            widened_from: obj
-                .get("widened_from")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
+            widened_from: python_list(obj.get("widened_from"))?,
+            raw_fields,
         })
+    }
+}
+
+fn python_str(v: &Value) -> String {
+    v.as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::pystr::repr_value(v))
+}
+fn python_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+fn python_list(v: Option<&Value>) -> Result<Vec<Value>> {
+    let Some(v) = v.filter(|v| python_truthy(v)) else {
+        return Ok(vec![]);
+    };
+    match v {
+        Value::Array(a) => Ok(a.clone()),
+        Value::String(s) => Ok(s.chars().map(|c| json!(c.to_string())).collect()),
+        Value::Object(o) => Ok(o.keys().map(|k| json!(k)).collect()),
+        _ => Err(Error::not_found("incident_corrupt")),
+    }
+}
+fn python_dict(v: Option<&Value>, default: Value) -> Result<Value> {
+    let Some(v) = v.filter(|v| python_truthy(v)) else {
+        return Ok(default);
+    };
+    match v {
+        Value::Object(_) => Ok(v.clone()),
+        Value::Array(a) => {
+            let mut out = Map::new();
+            for item in a {
+                let parts = python_list(Some(item))?;
+                if parts.len() != 2 {
+                    return Err(Error::not_found("incident_corrupt"));
+                }
+                let key = python_str(&parts[0]);
+                out.insert(key, parts[1].clone());
+            }
+            Ok(Value::Object(out))
+        }
+        _ => Err(Error::not_found("incident_corrupt")),
     }
 }
 
@@ -409,13 +450,17 @@ pub fn open_incident(
     if !TRIGGERS.contains(&trigger) {
         return Err(Error::invalid_input("invalid_incident_trigger"));
     }
-    if let Some(id) = ctx.policy.open_incident_id()?
-        && let Ok(existing) = get_incident(ctx, &id)
-    {
-        if rank(scope) > rank(&existing.scope) {
-            return widen_incident(ctx, &id, scope, runtime, principals, rule);
+    if let Some(id) = ctx.policy.open_incident_id()? {
+        match get_incident(ctx, &id) {
+            Ok(existing) => {
+                if rank(scope) > rank(&existing.scope) {
+                    return widen_incident(ctx, &id, scope, runtime, principals, rule);
+                }
+                return Ok(existing);
+            }
+            Err(e) if e.is(ErrorClass::NotFound) => (),
+            Err(e) => return Err(e),
         }
-        return Ok(existing);
     }
     let resolved = resolve_principals(ctx, scope, principals, runtime)?;
     let mut nonce = [0u8; 4];
@@ -436,6 +481,7 @@ pub fn open_incident(
         notification: json!({"status":"not_configured","attempts":0}),
         closed_at: None,
         widened_from: vec![],
+        raw_fields: Map::new(),
     };
     save_incident(ctx, &mut incident)?;
     ctx.policy.set_open_incident(Some(&incident.id))?;
@@ -477,12 +523,15 @@ pub fn widen_incident(
     );
     incident.scope = scope.into();
     incident.runtime = runtime.map(str::to_owned);
+    incident.raw_fields.remove("runtime");
     if rule.is_some_and(|s| !s.is_empty()) {
         incident.rule = bounded(rule);
+        incident.raw_fields.remove("rule");
     }
     incident.principals.extend(resolved);
     incident.principals.sort();
     incident.principals.dedup();
+    incident.raw_fields.remove("principals");
     apply_lockdown(ctx, &mut incident, &added, scope, runtime);
     incident.assessment = safe_assess(ctx, &mut incident);
     if crate::notify::deliver(ctx, &mut incident).is_err() {
@@ -500,6 +549,7 @@ pub fn close_incident(ctx: &Arc<Context>, incident_id: &str) -> Result<Incident>
     }
     incident.status = "closed".into();
     incident.closed_at = Some(iso(Some((ctx.clock)())));
+    incident.raw_fields.remove("closed_at");
     save_incident(ctx, &mut incident)?;
     if ctx.policy.open_incident_id()?.as_deref() == Some(&incident.id) {
         ctx.policy.set_open_incident(None)?;
@@ -536,9 +586,14 @@ pub fn assess(ctx: &Context, principals: &[String], scope: &str, since: &str) ->
     let mut starts = BTreeMap::new();
     let mut principal_views = vec![];
     for pid in principals {
-        if let Ok(p) = ctx.policy.get_principal(pid) {
-            starts.insert(pid.clone(), p.created_at.clone());
-            principal_views.push(json!({"id":p.id,"created_at":p.created_at,"runtime":p.runtime}));
+        match ctx.policy.get_principal(pid) {
+            Ok(p) => {
+                starts.insert(pid.clone(), p.created_at.clone());
+                principal_views
+                    .push(json!({"id":p.id,"created_at":p.created_at,"runtime":p.runtime}));
+            }
+            Err(e) if e.is(ErrorClass::NotFound) => (),
+            Err(e) => return Err(e),
         }
     }
     let mut uses: BTreeMap<String, (String, String, usize)> = BTreeMap::new();
@@ -591,8 +646,10 @@ pub fn assess(ctx: &Context, principals: &[String], scope: &str, since: &str) ->
         .cloned()
         .collect::<BTreeSet<_>>()
     {
-        let Ok(c) = ctx.policy.get_connection(&cid) else {
-            continue;
+        let c = match ctx.policy.get_connection(&cid) {
+            Ok(c) => c,
+            Err(e) if e.is(ErrorClass::NotFound) => continue,
+            Err(e) => return Err(e),
         };
         if !secrets.contains_key(&c.secret_id) {
             let meta = ctx.vault.get_meta(&c.secret_id)?;

@@ -286,7 +286,7 @@ impl Trip {
     }
 }
 pub struct Detector {
-    ctx: Arc<Context>,
+    ctx: Weak<Context>,
     pub config: DetectorConfig,
     state: Mutex<State>,
     decision: Mutex<()>,
@@ -296,7 +296,7 @@ impl Detector {
     pub fn new(ctx: Arc<Context>, config: DetectorConfig) -> Result<Self> {
         config.validate()?;
         Ok(Self {
-            ctx,
+            ctx: Arc::downgrade(&ctx),
             config,
             state: Mutex::new(State::default()),
             decision: Mutex::new(()),
@@ -308,7 +308,10 @@ impl Detector {
         if event.is_none_or(|e| e.starts_with("incident_")) {
             return;
         }
-        let now = (self.ctx.clock)();
+        let Some(ctx) = self.ctx.upgrade() else {
+            return;
+        };
+        let now = (ctx.clock)();
         let trip = self
             .state
             .lock()
@@ -367,7 +370,11 @@ impl Detector {
         trip
     }
     fn touch(&self, s: &mut State, caller: &str, now: f64) {
-        if let Ok(p) = self.ctx.policy.get_principal(caller) {
+        if let Some(p) = self
+            .ctx
+            .upgrade()
+            .and_then(|ctx| ctx.policy.get_principal(caller).ok())
+        {
             s.runtime_activity
                 .entry(p.runtime)
                 .or_default()
@@ -391,8 +398,8 @@ impl Detector {
             .count();
         let usable = self
             .ctx
-            .policy
-            .usable_connections(caller)
+            .upgrade()
+            .and_then(|ctx| ctx.policy.usable_connections(caller).ok())
             .map(|v| v.len())
             .unwrap_or(0);
         let over = usable > 0
@@ -441,7 +448,10 @@ impl Detector {
         let points = *self.config.weak_points.get(rule).unwrap_or(&0);
         st.weak_events.push_back((now, rule.into(), points));
         prune_weak(&mut st.weak_events, now, self.config.window_seconds);
-        let total = st.weak_events.iter().map(|e| e.2).sum::<i64>();
+        let total = st
+            .weak_events
+            .iter()
+            .fold(0_i64, |sum, e| sum.saturating_add(e.2));
         st.fired_rules.push_back((now, rule.into()));
         prune_tagged(&mut st.fired_rules, now, self.config.window_seconds);
         self.touch(s, caller, now);
@@ -458,9 +468,8 @@ impl Detector {
             fired.contains("signer_misuse") || fired.contains("output_exfiltration");
         let principal_runtime = self
             .ctx
-            .policy
-            .get_principal(caller)
-            .ok()
+            .upgrade()
+            .and_then(|ctx| ctx.policy.get_principal(caller).ok())
             .map(|p| p.runtime);
         let mut scope = "principal".to_owned();
         let mut runtime = None;
@@ -499,7 +508,7 @@ impl Detector {
         let dq = &mut s.global.weak_events;
         dq.push_back((now, rule.into(), points));
         prune_weak(dq, now, self.config.window_seconds);
-        let total = dq.iter().map(|e| e.2).sum::<i64>();
+        let total = dq.iter().fold(0_i64, |sum, e| sum.saturating_add(e.2));
         if total < self.config.weak_threshold {
             None
         } else {
@@ -507,9 +516,12 @@ impl Detector {
         }
     }
     fn apply_decision(&self, trip: Trip) -> Result<()> {
+        let ctx = self
+            .ctx
+            .upgrade()
+            .ok_or_else(|| Error::state("state_missing"))?;
         if trip.unattributed {
-            let active: Vec<_> = self
-                .ctx
+            let active: Vec<_> = ctx
                 .policy
                 .list_principals()?
                 .into_iter()
@@ -520,7 +532,7 @@ impl Detector {
                 return Ok(());
             }
             incident::open_incident(
-                &self.ctx,
+                &ctx,
                 "principal",
                 Some(&active),
                 None,
@@ -530,7 +542,7 @@ impl Detector {
             )?;
         } else if trip.scope == "runtime" {
             incident::open_incident(
-                &self.ctx,
+                &ctx,
                 "runtime",
                 None,
                 trip.runtime.as_deref(),
@@ -540,7 +552,7 @@ impl Detector {
             )?;
         } else {
             incident::open_incident(
-                &self.ctx,
+                &ctx,
                 "principal",
                 Some(&[trip.principal.unwrap_or_default()]),
                 None,
@@ -571,8 +583,8 @@ fn prune_weak(dq: &mut VecDeque<(f64, String, i64)>, now: f64, window: f64) {
 pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<Detector>> {
     if let Some(existing) = ctx.intrusion.lock().ok().and_then(|s| {
         s.as_ref()
-            .and_then(|v| v.downcast_ref::<Weak<Detector>>())
-            .and_then(Weak::upgrade)
+            .and_then(|v| v.downcast_ref::<Arc<Detector>>())
+            .cloned()
     }) {
         return Ok(existing);
     }
@@ -588,6 +600,6 @@ pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<
         }
     });
     *ctx.intrusion.lock().expect("intrusion mutex poisoned") =
-        Some(Box::new(Arc::downgrade(&detector)));
+        Some(Box::new(Arc::clone(&detector)));
     Ok(detector)
 }

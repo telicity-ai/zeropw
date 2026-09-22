@@ -41,6 +41,7 @@ pub mod demo;
 pub mod incident;
 pub mod intrusion;
 pub mod notify;
+mod smtp;
 
 pub mod admin_cli;
 pub mod agent_cli;

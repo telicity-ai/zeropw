@@ -1,18 +1,14 @@
 //! Replacement guidance email, port of `zeropw/notify.py`.
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::audit::RecordArgs;
 use crate::context::Context;
-use crate::errors::{Error, Result};
+use crate::errors::{Error, ErrorClass, Result};
 use crate::incident::{self, Incident};
 use crate::store::iso;
 
@@ -36,7 +32,7 @@ fn secure_file(path: &Path) -> Result<()> {
     let m = path
         .metadata()
         .map_err(|_| Error::invalid_input("notify_config_insecure"))?;
-    if m.permissions().mode() & 0o777 != 0o600 || m.uid() != unsafe_free_uid() {
+    if m.permissions().mode() & 0o7777 != 0o600 || m.uid() != unsafe_free_uid() {
         return Err(Error::invalid_input("notify_config_insecure"));
     }
     Ok(())
@@ -474,7 +470,7 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         failed(ctx, i, "rendered_value_detected")?;
         return Ok(());
     }
-    if let Err(kind) = send(&config, &subject, &body) {
+    if let Err(kind) = crate::smtp::send(&config, &subject, &body) {
         pending(ctx, i, &kind)?;
         return Ok(());
     }
@@ -488,8 +484,10 @@ pub fn retry_pending(ctx: &Arc<Context>, now: f64) -> Result<usize> {
     let Some(id) = ctx.policy.open_incident_id()? else {
         return Ok(0);
     };
-    let Ok(mut i) = incident::get_incident(ctx, &id) else {
-        return Ok(0);
+    let mut i = match incident::get_incident(ctx, &id) {
+        Ok(i) => i,
+        Err(e) if e.is(ErrorClass::NotFound) => return Ok(0),
+        Err(e) => return Err(e),
     };
     if i.status != "open"
         || i.notification["status"] != "pending"
@@ -512,7 +510,7 @@ pub fn send_test_message(ctx: &Arc<Context>) -> Result<Value> {
         audit_test(ctx, "ok", "not_configured");
         return Ok(json!({"status":"not_configured"}));
     };
-    let result = send(
+    let result = crate::smtp::send(
         &config,
         "[ZeroPW] 알림 설정 시험 메시지",
         "ZeroPW 알림 설정을 확인하기 위한 시험 메시지입니다.\n실제 침입 사건이 아닙니다. 이 메시지가 도착했다면 SMTP 설정이 올바르게 동작합니다.\n",
@@ -538,167 +536,4 @@ fn audit_test(ctx: &Context, result: &str, reason: &str) {
             ..Default::default()
         },
     );
-}
-
-// SMTP transport uses a verified TLS stream for STARTTLS/SMTPS. No credentials are retained.
-type Wire = Box<dyn ReadWrite>;
-trait ReadWrite: Read + Write + Send {}
-impl<T: Read + Write + Send> ReadWrite for T {}
-fn smtp_error() -> String {
-    "SMTPException".into()
-}
-fn io_error() -> String {
-    "OSError".into()
-}
-fn io_error_kind(e: std::io::Error) -> String {
-    match e.kind() {
-        std::io::ErrorKind::ConnectionRefused => "ConnectionRefusedError",
-        std::io::ErrorKind::ConnectionReset => "ConnectionResetError",
-        std::io::ErrorKind::BrokenPipe => "BrokenPipeError",
-        std::io::ErrorKind::TimedOut => "TimeoutError",
-        std::io::ErrorKind::NotFound => "FileNotFoundError",
-        _ => "OSError",
-    }
-    .into()
-}
-fn send(config: &NotifyConfig, subject: &str, body: &str) -> std::result::Result<(), String> {
-    let timeout = Duration::from_secs_f64(config.timeout_seconds.min(86400.0));
-    let addr = (config.host.as_str(), config.port)
-        .to_socket_addrs()
-        .map_err(|_| io_error())?
-        .next()
-        .ok_or_else(io_error)?;
-    let tcp = TcpStream::connect_timeout(&addr, timeout).map_err(io_error_kind)?;
-    tcp.set_read_timeout(Some(timeout))
-        .map_err(|_| io_error())?;
-    tcp.set_write_timeout(Some(timeout))
-        .map_err(|_| io_error())?;
-    let mut wire: Wire = if config.mode == "smtps" {
-        tls(config, tcp.try_clone().map_err(|_| io_error())?)?
-    } else {
-        Box::new(tcp.try_clone().map_err(|_| io_error())?)
-    };
-    response(&mut wire, 220)?;
-    let capabilities = ehlo(&mut wire)?;
-    if config.mode == "starttls" {
-        if !capabilities
-            .iter()
-            .any(|line| line.eq_ignore_ascii_case("STARTTLS"))
-        {
-            return Err("SMTPNotSupportedError".into());
-        }
-        command(&mut wire, "STARTTLS\r\n", 220)?;
-        drop(wire);
-        let mut secure = tls(config, tcp)?;
-        let secure_capabilities = ehlo(&mut secure)?;
-        return send_after_greeting(&mut secure, config, subject, body, &secure_capabilities);
-    }
-    send_after_greeting(&mut wire, config, subject, body, &capabilities)
-}
-fn send_after_greeting(
-    wire: &mut Wire,
-    config: &NotifyConfig,
-    subject: &str,
-    body: &str,
-    capabilities: &[String],
-) -> std::result::Result<(), String> {
-    if let Some(user) = &config.username {
-        let password = config
-            .password_file
-            .as_ref()
-            .map(|p| fs::read_to_string(p).map(|s| s.trim().to_owned()))
-            .transpose()
-            .map_err(|_| io_error())?
-            .unwrap_or_default();
-        let auth = capabilities
-            .iter()
-            .find_map(|line| {
-                line.to_ascii_uppercase()
-                    .strip_prefix("AUTH ")
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| "SMTPNotSupportedError".to_owned())?;
-        if auth.split_whitespace().any(|method| method == "PLAIN") {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(format!("\0{user}\0{password}"));
-            command(wire, &format!("AUTH PLAIN {encoded}\r\n"), 235)?;
-        } else if auth.split_whitespace().any(|method| method == "LOGIN") {
-            command(wire, "AUTH LOGIN\r\n", 334)?;
-            let username = base64::engine::general_purpose::STANDARD.encode(user);
-            command(wire, &format!("{username}\r\n"), 334)?;
-            let pw = base64::engine::general_purpose::STANDARD.encode(password);
-            command(wire, &format!("{pw}\r\n"), 235)?;
-        } else {
-            return Err("SMTPException".into());
-        }
-    }
-    command(wire, &format!("MAIL FROM:<{}>\r\n", config.sender), 250)?;
-    for recipient in &config.recipients {
-        command(wire, &format!("RCPT TO:<{recipient}>\r\n"), 250)?;
-    }
-    command(wire, "DATA\r\n", 354)?;
-    let content = base64::engine::general_purpose::STANDARD.encode(body);
-    let mut msg = format!(
-        "Subject: =?utf-8?b?{}?=\r\nFrom: {}\r\nTo: {}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\n\r\n",
-        base64::engine::general_purpose::STANDARD.encode(subject),
-        config.sender,
-        config.recipients.join(", ")
-    );
-    for chunk in content.as_bytes().chunks(76) {
-        msg.push_str(std::str::from_utf8(chunk).map_err(|_| smtp_error())?);
-        msg.push_str("\r\n");
-    }
-    msg.push_str(".\r\n");
-    wire.write_all(msg.as_bytes()).map_err(|_| io_error())?;
-    wire.flush().map_err(|_| io_error())?;
-    response(wire, 250)?;
-    let _ = command(wire, "QUIT\r\n", 221);
-    Ok(())
-}
-fn command(wire: &mut Wire, cmd: &str, expected: u16) -> std::result::Result<(), String> {
-    wire.write_all(cmd.as_bytes()).map_err(|_| io_error())?;
-    wire.flush().map_err(|_| io_error())?;
-    response(wire, expected)
-}
-fn ehlo(wire: &mut Wire) -> std::result::Result<Vec<String>, String> {
-    wire.write_all(b"EHLO localhost\r\n")
-        .map_err(|_| io_error())?;
-    wire.flush().map_err(|_| io_error())?;
-    response_lines(wire, 250)
-}
-fn response(wire: &mut Wire, expected: u16) -> std::result::Result<(), String> {
-    response_lines(wire, expected).map(|_| ())
-}
-fn response_lines(wire: &mut Wire, expected: u16) -> std::result::Result<Vec<String>, String> {
-    let mut reader = BufReader::new(wire);
-    let mut lines = Vec::new();
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|_| io_error())?;
-        if line.len() < 4 {
-            return Err(smtp_error());
-        }
-        let code = line[..3].parse::<u16>().map_err(|_| smtp_error())?;
-        if code != expected {
-            return Err(smtp_error());
-        }
-        lines.push(line[4..].trim_end_matches(['\r', '\n']).to_owned());
-        if line.as_bytes()[3] != b'-' {
-            return Ok(lines);
-        }
-    }
-}
-fn tls(config: &NotifyConfig, tcp: TcpStream) -> std::result::Result<Wire, String> {
-    let mut roots = rustls::RootCertStore::empty();
-    let certs = rustls_native_certs::load_native_certs();
-    for cert in certs.certs {
-        let _ = roots.add(cert);
-    }
-    let cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let name =
-        rustls::pki_types::ServerName::try_from(config.host.clone()).map_err(|_| smtp_error())?;
-    let conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|_| smtp_error())?;
-    Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
 }
