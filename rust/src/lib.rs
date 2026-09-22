@@ -27,6 +27,7 @@ pub mod vault;
 
 pub mod context;
 pub mod runs;
+pub mod server;
 pub mod tools;
 
 pub mod gateway;
