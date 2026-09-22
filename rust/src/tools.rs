@@ -825,7 +825,16 @@ pub fn exec(
             return Err(e);
         }
     };
-    if let Some(reason) = recheck(ctx, caller, &known, &grant)? {
+    let denied = match recheck(ctx, caller, &known, &grant) {
+        Ok(value) => value,
+        Err(error) => {
+            sensitive.zeroize();
+            drop(resources);
+            registry.fail(&run, &error.reason);
+            return Err(error);
+        }
+    };
+    if let Some(reason) = denied {
         sensitive.zeroize();
         drop(resources);
         registry.cancel(&run.id, caller, &reason)?;

@@ -10,7 +10,9 @@ use tempfile::TempDir;
 use zeropw::{
     context::{Config, Context},
     fake_upstream::FakeUpstream,
-    policy::{CliProfile, Connection, HttpAuth, HttpScope, HttpTarget},
+    policy::{
+        CliProfile, Connection, ConnectionChanges, HttpAuth, HttpScope, HttpTarget, SshTarget,
+    },
     server::ZeroPWServer,
     tools,
 };
@@ -369,5 +371,374 @@ fn strict_base64_matches_python_validate_true() {
     let expected: Vec<Option<Vec<u8>>> = serde_json::from_slice(&out.stdout).unwrap();
     for (s, want) in cases.iter().zip(expected) {
         assert_eq!(zeropw::pybase64::b64decode_strict(s).ok(), want, "{s:?}");
+    }
+}
+
+#[test]
+fn queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn() {
+    for action in ["revoke", "stop", "exhaust"] {
+        let f = Fixture::new();
+        f.ctx.policy.revoke_grant(&f.grant).unwrap();
+        let grant = f
+            .ctx
+            .policy
+            .create_grant("alice", "service", Some(3600), Some(1))
+            .unwrap()
+            .id;
+        let weak = Arc::downgrade(&f.ctx);
+        f.ctx.audit.subscribe(move |record| {
+            if record.get("event") == Some(&json!("tools_exec"))
+                && record.get("result") == Some(&json!("ok"))
+            {
+                let ctx = weak.upgrade().unwrap();
+                match action {
+                    "revoke" => {
+                        ctx.policy.revoke_grant(&grant).unwrap();
+                    }
+                    "stop" => ctx.policy.stop_all().unwrap(),
+                    _ => {
+                        ctx.policy.consume(&grant, None, None, None, None).unwrap();
+                    }
+                }
+            }
+        });
+        let marker = f.temp.path().join("must-not-run");
+        let result = tools::exec(
+            &f.ctx,
+            "alice",
+            "service",
+            &[
+                "-c".into(),
+                "touch \"$1\"".into(),
+                "sh".into(),
+                marker.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["state"], "cancelled", "{action}: {result}");
+        assert_eq!(
+            result["reason"],
+            match action {
+                "revoke" => "grant_revoked",
+                "stop" => "global_stop",
+                _ => "grant_exhausted",
+            }
+        );
+        assert!(!marker.exists());
+        assert_eq!(
+            std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(
+            !f.ctx
+                .audit
+                .tail(30)
+                .unwrap()
+                .iter()
+                .any(|r| r["event"] == "run_start")
+        );
+    }
+}
+
+#[test]
+fn corrupt_policy_during_setup_fails_the_registered_run_and_cleans_resources() {
+    let f = Fixture::new();
+    let weak = Arc::downgrade(&f.ctx);
+    f.ctx.audit.subscribe(move |record| {
+        if record.get("event") == Some(&json!("handle_issue")) {
+            std::fs::write(
+                weak.upgrade()
+                    .unwrap()
+                    .state
+                    .path
+                    .join("policy/control.json"),
+                b"{",
+            )
+            .unwrap();
+        }
+    });
+    let error = tools::exec(
+        &f.ctx,
+        "alice",
+        "service",
+        &["-c".into(), "echo should-not-run".into()],
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.reason, "state_corrupt");
+    assert!(
+        zeropw::runs::registry(&f.ctx)
+            .unwrap()
+            .active_runs()
+            .is_empty()
+    );
+    assert_eq!(
+        std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn any_vault_value_in_profile_is_refused_before_handle_or_child() {
+    let f = Fixture::new();
+    let other = b"synthetic-unrelated-secret-7654321";
+    f.ctx
+        .vault
+        .put_secret("other", "api_key", other, "demo", "dev", true)
+        .unwrap();
+    for value in [
+        String::from_utf8(other.to_vec()).unwrap(),
+        zeropw::pybase64::b64encode(other),
+        hex::encode(other),
+    ] {
+        f.ctx
+            .policy
+            .update_connection(
+                "service",
+                ConnectionChanges::new().cli(Some(
+                    CliProfile::new(
+                        "/bin/sh",
+                        "http",
+                        None,
+                        BTreeMap::from([("PUBLIC_LABEL".into(), value)]),
+                    )
+                    .unwrap(),
+                )),
+            )
+            .unwrap();
+        f.ctx
+            .policy
+            .create_grant("alice", "service", Some(3600), None)
+            .unwrap();
+        let error = tools::exec(&f.ctx, "alice", "service", &[], None).unwrap_err();
+        assert_eq!(error.reason, "cli_env_contains_credential");
+        assert!(
+            !f.ctx
+                .audit
+                .tail(100)
+                .unwrap()
+                .iter()
+                .any(|r| r["event"] == "handle_issue" || r["event"] == "run_start")
+        );
+        assert!(
+            zeropw::runs::registry(&f.ctx)
+                .unwrap()
+                .active_runs()
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+}
+
+#[test]
+fn tools_owner_scope_and_cancellation_survive_audit_failure() {
+    let f = Fixture::new();
+    f.ctx.policy.create_principal("bob", "cli").unwrap();
+    let result = tools::exec(
+        &f.ctx,
+        "alice",
+        "service",
+        &["-c".into(), "sleep 20".into()],
+        None,
+    )
+    .unwrap();
+    let id = result["run_id"].as_str().unwrap();
+    assert_eq!(
+        tools::status(&f.ctx, "bob", id).unwrap_err().reason,
+        "run_not_found"
+    );
+    assert_eq!(
+        tools::cancel(&f.ctx, "bob", id).unwrap_err().reason,
+        "run_not_found"
+    );
+    let audit = f.ctx.state.path.join("audit/audit.jsonl");
+    std::fs::rename(&audit, audit.with_extension("saved")).unwrap();
+    std::fs::create_dir(&audit).unwrap();
+    assert!(tools::cancel(&f.ctx, "alice", id).is_err());
+    let registry = zeropw::runs::registry(&f.ctx).unwrap();
+    let done = registry.wait(&registry.get(id, "alice").unwrap(), Some(5.0));
+    assert!(!zeropw::runs::ACTIVE_STATES.contains(&done.state.as_str()));
+    assert!(done.stdout.is_empty() && done.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn duplicate_concurrent_tool_exec_runs_the_fixed_program_once() {
+    let f = Fixture::new();
+    let mark = f.temp.path().join("marks");
+    let args = vec![
+        "-c".into(),
+        "echo ran >> \"$1\"".into(),
+        "sh".into(),
+        mark.to_string_lossy().into_owned(),
+    ];
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            let ctx = f.ctx.clone();
+            let args = args.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                tools::exec(&ctx, "alice", "service", &args, Some("same-request")).unwrap()
+            })
+        })
+        .collect();
+    let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+    assert!(results.iter().all(|v| v["run_id"] == results[0]["run_id"]));
+    let registry = zeropw::runs::registry(&f.ctx).unwrap();
+    let done = registry.wait(
+        &registry
+            .get(results[0]["run_id"].as_str().unwrap(), "alice")
+            .unwrap(),
+        Some(5.0),
+    );
+    assert_eq!(done.state, "completed");
+    assert_eq!(std::fs::read_to_string(mark).unwrap(), "ran\n");
+}
+
+#[test]
+fn ssh_cli_keeps_private_key_in_signer_and_fixes_local_ssh_options() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let key = zeropw::sshwire::generate_ed25519_private_key("synthetic-client");
+    let private = key.to_openssh_private_key();
+    let host = zeropw::sshwire::generate_ed25519_private_key("synthetic-host")
+        .public
+        .to_authorized_key("")
+        .unwrap();
+    f.ctx
+        .vault
+        .put_secret(
+            "ssh-key",
+            "ssh_private_key",
+            private.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    let program = f.temp.path().join("capture-ssh");
+    std::fs::write(&program, b"#!/bin/sh\nfor arg in \"$@\"; do if [ \"$take_next\" = yes ]; then out=$arg; break; fi; if [ \"$arg\" = -- ]; then take_next=yes; fi; done\nprintf '%s\\n' \"$@\" > \"$out.args\"\nenv > \"$out.env\"\ncat known_hosts > \"$out.hosts\"\ncat id.pub > \"$out.public\"\nls -a > \"$out.entries\"\nprintf ssh-business-output\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for port in [22, 2222] {
+        let id = format!("box{port}");
+        let connection = Connection::new(
+            &id,
+            "demo",
+            "dev",
+            "ssh",
+            "ssh",
+            "ssh-key",
+            None,
+            "",
+            None,
+            None,
+            None,
+            Some(SshTarget::new("127.0.0.1", port, "deploy", vec![host.clone()]).unwrap()),
+            Some(CliProfile::new(program.to_string_lossy(), "ssh", None, BTreeMap::new()).unwrap()),
+            0,
+            "active",
+            "",
+            "",
+        )
+        .unwrap();
+        f.ctx.policy.create_connection(connection).unwrap();
+        f.ctx
+            .policy
+            .create_grant("alice", &id, Some(3600), None)
+            .unwrap();
+        let out = f.temp.path().join(format!("capture-{port}"));
+        let result = tools::exec(
+            &f.ctx,
+            "alice",
+            &id,
+            &[
+                out.to_string_lossy().into_owned(),
+                "uptime".into(),
+                "-o".into(),
+                "ProxyCommand=must-stay-remote-argument".into(),
+            ],
+            None,
+        )
+        .unwrap();
+        let registry = zeropw::runs::registry(&f.ctx).unwrap();
+        let done = registry.wait(
+            &registry
+                .get(result["run_id"].as_str().unwrap(), "alice")
+                .unwrap(),
+            Some(5.0),
+        );
+        assert_eq!(done.state, "completed");
+        assert_eq!(done.stdout, b"ssh-business-output");
+        let read = |suffix: &str| std::fs::read_to_string(out.with_extension(suffix)).unwrap();
+        let env = read("env");
+        let home = env.lines().find_map(|s| s.strip_prefix("HOME=")).unwrap();
+        let sock = env
+            .lines()
+            .find_map(|s| s.strip_prefix("SSH_AUTH_SOCK="))
+            .unwrap();
+        assert!(!std::path::Path::new(home).exists());
+        assert!(!std::path::Path::new(sock).exists());
+        assert!(!home.starts_with(f.ctx.state.path.to_str().unwrap()));
+        assert_eq!(
+            read("hosts"),
+            format!(
+                "{} {host}\n",
+                if port == 22 {
+                    "127.0.0.1".into()
+                } else {
+                    format!("[127.0.0.1]:{port}")
+                }
+            )
+        );
+        assert_eq!(
+            read("public"),
+            format!(
+                "{}\n",
+                key.public
+                    .to_authorized_key(&format!("zeropw:{id}"))
+                    .unwrap()
+            )
+        );
+        let args = read("args");
+        assert!(args.starts_with("-F\n/dev/null\n-o\nIdentitiesOnly=yes\n"));
+        assert!(args.contains("-o\nForwardAgent=no\n-o\nStrictHostKeyChecking=yes\n"));
+        assert!(args.ends_with(&format!("-p\n{port}\ndeploy@127.0.0.1\n--\n{}\nuptime\n-o\nProxyCommand=must-stay-remote-argument\n", out.display())));
+        let entries = read("entries");
+        assert_eq!(
+            entries
+                .lines()
+                .filter(|s| ![".", ".."].contains(s))
+                .collect::<Vec<_>>(),
+            vec!["id.pub", "known_hosts"]
+        );
+        for text in [
+            env,
+            args,
+            read("hosts"),
+            read("public"),
+            registry.view(&done).to_string(),
+            serde_json::to_string(&f.ctx.audit.tail(100).unwrap()).unwrap(),
+        ] {
+            assert!(!text.contains("PRIVATE KEY"));
+            assert!(!text.contains(&private));
+            assert!(!text.contains(&hex::encode(key.seed().expose())));
+        }
     }
 }
