@@ -177,7 +177,7 @@ fn transaction(
     match command(wire, b"QUIT\r\n") {
         Ok(Reply { code: 221, .. }) => (),
         Ok(_) => return Err(exception("SMTPResponseException")),
-        Err(e) if e == "OSError" || e == "ConnectionResetError" || e == "BrokenPipeError" => (),
+        Err(e) if e == "SMTPServerDisconnected" => (),
         Err(e) => return Err(e),
     }
     Ok(())
