@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use zeropw::clock;
 use zeropw::context::{Config, Context};
 use zeropw::team::identity::{DeviceKey, DeviceRecord};
 use zeropw::team::transport::{InProcessTransport, MembershipCheck, Transport};
+use zeropw::team::{commit, envelope};
 use zeropw::team::{membership, sync};
 
 const SECRET: &[u8] = b"synthetic-shared-secret-for-rust-test-0123456789";
@@ -215,4 +217,33 @@ fn fact_canonical_bytes_and_hash_match_python() {
         result["canonical"]
     );
     assert_eq!(rust.hash().unwrap(), result["hash"]);
+}
+
+#[test]
+fn compact_preserves_membership_history_and_snapshot_document() {
+    let root = TempDir::new().unwrap();
+    let ctx = new_context(&root, "compact");
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let fp = device.fingerprint().unwrap();
+    let env = commit::new_env_id(&fp).unwrap();
+    let generation = "0123456789abcdef0123456789abcdef";
+    let dek = [7u8; 32];
+    let wrap = envelope::wrap_dek(&dek, &env, generation, &device.record().unwrap()).unwrap();
+    let old = commit::now_ms() - 31 * 24 * 3600 * 1000;
+    let init=commit::sign_commit(&device,&env,1,&format!("{old}-0000"),&BTreeMap::new(),vec![json!({"op":"env.init","owner_device":device.record().unwrap().to_dict(),"owner_name":"alice","generation_id":generation,"wraps":{fp.clone():wrap}})]).unwrap();
+    let ct = envelope::encrypt_secret(&dek, &env, "s", "0011223344556677", SECRET).unwrap();
+    let put=commit::sign_commit(&device,&env,2,&format!("{}-0000",old+1),&BTreeMap::from([(fp.clone(),1)]),vec![json!({"op":"secret.put_version","secret_id":"s","kind":"api_key","generation_id":generation,"version_id":"0011223344556677","ciphertext":ct,"public":{}})]).unwrap();
+    let store = commit::CommitStore::new(ctx.state, &env);
+    store.append(&init).unwrap();
+    store.append(&put).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+    let sync = sync::TeamSync::new(ctx.clone(), transport, device);
+    sync.register_env(&env).unwrap();
+    let before = sync.document(&env).unwrap();
+    let outcome = sync.compact(&env).unwrap();
+    assert_eq!(outcome["removed"], 1);
+    assert!(ctx.state.exists(&format!("team/{env}/commits/{fp}/1.json")));
+    assert!(!ctx.state.exists(&format!("team/{env}/commits/{fp}/2.json")));
+    assert_eq!(sync.document(&env).unwrap(), before);
 }

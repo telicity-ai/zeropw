@@ -156,7 +156,27 @@ pub fn author_fact(
         return team.publish_fact(env_id, kind, target);
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let doc = load_environment(ctx, env_id)?.document;
+    let mut doc = load_environment(ctx, env_id)?.document;
+    if kind == "member_removed" {
+        let (mut facts, _, authors) = sync::load_facts(ctx.state, env_id)?;
+        let author = device.fingerprint()?;
+        let target_fp = target["fingerprint"].as_str().unwrap_or("");
+        if facts.removed_members.contains(&author)
+            && authors
+                .get(&author)
+                .is_some_and(|set| set.len() == 1 && set.contains(target_fp))
+        {
+            facts.removed_members.remove(&author);
+            doc = fold::fold_with_snapshot(
+                env_id,
+                CommitStore::new(ctx.state, env_id).all_commits()?,
+                ctx.state,
+                Some(&facts),
+                Some(ctx.audit),
+            )?
+            .document;
+        }
+    }
     if !sync::fact_role_ok(&doc, kind, &device.fingerprint()?, &target) {
         return Err(Error::policy_denied("team_fact_not_authorized"));
     }

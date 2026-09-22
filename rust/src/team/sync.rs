@@ -212,15 +212,29 @@ impl Fact {
         let bad = || Error::invalid_input("team_fact_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
         let field = |key| obj.get(key).map(commit::python_str_coerce).ok_or_else(bad);
-        let target = obj
-            .get("target")
-            .and_then(Value::as_object)
-            .ok_or_else(bad)?;
+        let target = match obj.get("target").ok_or_else(bad)? {
+            Value::Object(m) => m.clone(),
+            Value::Array(pairs) => {
+                let mut m = Map::new();
+                for pair in pairs {
+                    let (key, value) = match pair {
+                        Value::Array(items) if items.len() == 2 => (&items[0], &items[1]),
+                        _ => return Err(bad()),
+                    };
+                    if key.is_array() || key.is_object() {
+                        return Err(bad());
+                    }
+                    m.insert(commit::python_str_coerce(key), value.clone());
+                }
+                m
+            }
+            _ => return Err(bad()),
+        };
         Ok(Self {
             format: field("format")?,
             env_id: field("env_id")?,
             kind: field("kind")?,
-            target: Value::Object(target.clone()),
+            target: Value::Object(target),
             author: field("author")?,
             hlc: field("hlc")?,
             sig: field("sig")?,
@@ -419,6 +433,7 @@ struct EnvState {
     incident_backoff: HashMap<String, Duration>,
     incident_next_attempt: HashMap<String, Instant>,
     pending_invites: HashMap<String, (String, String)>,
+    alerted_overrides: HashSet<String>,
 }
 impl EnvState {
     fn new(
@@ -447,6 +462,7 @@ impl EnvState {
             incident_backoff: HashMap::new(),
             incident_next_attempt: HashMap::new(),
             pending_invites: HashMap::new(),
+            alerted_overrides: HashSet::new(),
         }
     }
 }
@@ -644,6 +660,17 @@ impl TeamSync {
                 }
             }
         }
+        let alerted = self
+            .ctx
+            .state
+            .read_json(&format!("team/{env_id}/overridden_alerted.json"), json!([]))?;
+        if let Some(values) = alerted.as_array() {
+            env.alerted_overrides = values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+        }
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -696,7 +723,67 @@ impl TeamSync {
             )?;
             env.last_snapshot_total = total;
         }
+        drop(envs);
+        self.record_overrides(env_id, &result.overridden)?;
         Ok(result)
+    }
+    fn record_overrides(&self, env_id: &str, overridden: &[Value]) -> Result<()> {
+        let mine = self.device.fingerprint()?;
+        let mut new = Vec::new();
+        let mut snapshot = None;
+        {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get_mut(env_id) else {
+                return Ok(());
+            };
+            for entry in overridden {
+                if entry["author"] != mine {
+                    continue;
+                }
+                let signature = format!(
+                    "{}:{}",
+                    entry["hash"].as_str().unwrap_or(""),
+                    entry["by_hash"].as_str().unwrap_or("")
+                );
+                if env.alerted_overrides.insert(signature) {
+                    new.push(entry.clone());
+                }
+            }
+            if !new.is_empty() {
+                let mut values: Vec<_> = env.alerted_overrides.iter().cloned().collect();
+                values.sort();
+                snapshot = Some(values);
+            }
+        }
+        let Some(snapshot) = snapshot else {
+            return Ok(());
+        };
+        self.ctx.state.write_json(
+            &format!("team/{env_id}/overridden_alerted.json"),
+            &json!(snapshot),
+        )?;
+        for entry in new {
+            let kind = entry["target_kind"].as_str().unwrap_or("");
+            let target = entry["target_id"].as_str();
+            let mut extra = vec![
+                ("env_id", json!(env_id)),
+                ("author_seq", entry["author_seq"].clone()),
+                ("fingerprint", entry["by_author"].clone()),
+            ];
+            if kind == "secret_active" {
+                extra.push(("secret_id", entry["target_id"].clone()));
+            }
+            let _ = self.ctx.audit.record(
+                "team_op_overridden",
+                RecordArgs {
+                    result: Some("ok"),
+                    connection: if kind == "connection" { target } else { None },
+                    extra,
+                    ..Default::default()
+                },
+            );
+        }
+        Ok(())
     }
     fn membership(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
         let envs = self.envs.lock().ok()?;
@@ -740,7 +827,7 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .get(env_id)
             .map(|e| e.document.clone())
-            .ok_or_else(|| Error::invalid_input("team_env_unknown"))
+            .ok_or_else(|| Error::not_found("team_env_unknown"))
     }
     pub fn is_active_member(&self, env_id: &str, fp: &str) -> bool {
         self.membership(env_id, fp).is_some()
@@ -789,6 +876,14 @@ impl TeamSync {
         };
         if result == "accepted" {
             self.refold(env_id)?;
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+            }
             self.broadcast(
                 env_id,
                 &json!({"type":"COMMIT","commit":commit.to_dict()}),
@@ -799,8 +894,16 @@ impl TeamSync {
     }
     pub fn publish_fact(&self, env_id: &str, kind: &str, target: Value) -> Result<Value> {
         validate_fact_target(kind, &target)?;
-        let doc = self.document(env_id)?;
         let fp = self.device.fingerprint()?;
+        let doc = if kind == "member_removed" {
+            self.role_document_for_removal(
+                env_id,
+                &fp,
+                target["fingerprint"].as_str().unwrap_or(""),
+            )?
+        } else {
+            self.document(env_id)?
+        };
         if !fact_role_ok(&doc, kind, &fp, &target) {
             return Err(Error::policy_denied("team_fact_not_authorized"));
         }
@@ -1220,6 +1323,14 @@ impl TeamSync {
         };
         if outcome == "accepted" {
             self.refold(env_id)?;
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+            }
             self.broadcast(
                 env_id,
                 &json!({"type":"COMMIT","commit":commit.to_dict()}),
@@ -2056,7 +2167,14 @@ impl TeamSync {
             env.last_snapshot_total = total;
         }
         self.refold(env_id)?;
-        self.audit_event("team_compact", env_id, None, None, Some(removed));
+        let _ = self.ctx.audit.record(
+            "team_compact",
+            RecordArgs {
+                result: Some("ok"),
+                extra: vec![("env_id", json!(env_id)), ("count", json!(removed))],
+                ..Default::default()
+            },
+        );
         Ok(json!({"env_id":env_id,"removed":removed,"blocked_by":[]}))
     }
 }
