@@ -202,7 +202,8 @@ fn mailbox(address: &str) -> String {
     let mut quoted = false;
     let mut escaped = false;
     let mut had_comment = false;
-    for ch in address.chars() {
+    let mut chars = address.chars().peekable();
+    while let Some(ch) = chars.next() {
         if escaped {
             if depth == 0 {
                 without_comments.push(ch);
@@ -211,7 +212,7 @@ fn mailbox(address: &str) -> String {
             continue;
         }
         if ch == '\\' {
-            if depth == 0 {
+            if depth == 0 && !(quoted && matches!(chars.peek(), Some('(' | ')'))) {
                 without_comments.push(ch);
             }
             escaped = true;
@@ -259,6 +260,12 @@ fn mailbox(address: &str) -> String {
 }
 
 fn envelope_cfws(address: &str, had_comment: bool) -> String {
+    if had_comment && address.ends_with(char::is_whitespace) {
+        let prefix = address.trim_end();
+        if prefix.ends_with(['@', '.']) {
+            return String::new();
+        }
+    }
     let address = address.trim();
     if !had_comment {
         return address.into();
@@ -289,6 +296,14 @@ fn envelope_cfws(address: &str, had_comment: bool) -> String {
         } else if !quoted && ch.is_whitespace() {
             let next = chars[index + 1..].iter().find(|c| !c.is_whitespace());
             if in_domain
+                && result.ends_with(['@', '.'])
+                && (next.is_none() || matches!(next, Some('.')))
+            {
+                // EmailMessage selects an empty mailbox for these malformed
+                // comment/dot positions; send_message emits MAIL FROM:<>.
+                return String::new();
+            }
+            if in_domain
                 && result.chars().last().is_some_and(|c| c != '@' && c != '.')
                 && next.is_some_and(|c| c.is_alphanumeric())
             {
@@ -306,6 +321,12 @@ fn envelope_cfws(address: &str, had_comment: bool) -> String {
         } else {
             result.push(ch);
         }
+    }
+    if let Some((local, domain)) = result.split_once('@')
+        && local.contains(char::is_whitespace)
+        && !local.starts_with('"')
+    {
+        return format!("\"{local}\"@{domain}");
     }
     result
 }
@@ -514,6 +535,13 @@ mod mailbox_tests {
             // Measured via EmailMessage/getaddresses and actual send_message:
             // CFWS between domain atoms terminates the selected mailbox.
             ("sender@exa(comment)mple.com", "sender@exa"),
+            ("sen(comment)der@example.com", "\"sen der\"@example.com"),
+            (
+                "sender.foo(comment)bar@example.com",
+                "\"sender.foo bar\"@example.com",
+            ),
+            ("sender@(nested(inner)).com", ""),
+            ("sender@exa.(nested(inner))", ""),
             (
                 "\"loc(al)\"@(ignored)example.com",
                 "\"loc(al)\"@example.com",
@@ -536,20 +564,31 @@ mod mailbox_tests {
     }
 
     #[test]
-    fn generated_domain_comment_boundaries_match_python() {
-        // The oracle computes the sender actually selected by EmailMessage's
-        // address parser; expected values are not copied from the Rust parser.
+    fn generated_comment_boundaries_match_python_transport() {
+        // Compute every expected envelope with the same parser and quoteaddr
+        // that send_message uses, rather than copying Rust-derived fixtures.
         let script = r#"
 import json
 from email.message import EmailMessage
 from email.utils import getaddresses
+from smtplib import quoteaddr
 cases=[]
+for base in ('local+tag@domain.example', 'loc.al@domain.example',
+             '"lo cal"@domain.example', 'Display <loc.al@domain.example>'):
+ for pos in range(len(base)+1):
+  for comment in ('(x)', '(nested(inner))', '(escaped\\)paren)'):
+   address=base[:pos]+comment+base[pos:]
+   msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
+   parsed=getaddresses([msg['From']])
+   assert parsed, address
+   cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
 for before in ('@', '@exa', '@exa.', '@exa-', '@example.com'):
  for after in ('example.com', 'mple.com', 'com', '.com', ''):
   address='sender'+before+'(nested(inner))'+after
   msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
   parsed=getaddresses([msg['From']])
-  if parsed and parsed[0][1]:cases.append([address,parsed[0][1]])
+  assert parsed, address
+  cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
 print(json.dumps(cases))
 "#;
         let output = Command::new("python3.12")
