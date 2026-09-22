@@ -50,7 +50,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use serde_json::{Map, Value, json};
 
@@ -180,6 +180,10 @@ pub struct Context {
     pub signer_manager: AnySlot,
     /// SECOND-HALF: set by the intrusion-detection module when attached.
     pub intrusion: AnySlot,
+    /// Weak team coordinator registered by `team::sync::TeamSync`.
+    pub team: AnySlot,
+    /// Server URL is set after binding while the context is shared.
+    pub public_url: RwLock<Option<String>>,
     owned_dirs: Vec<PathBuf>,
 }
 
@@ -218,11 +222,19 @@ impl Context {
             handles,
             projects,
             admin,
+            public_url: RwLock::new(
+                config
+                    .extra
+                    .get("public_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ),
             config,
             clock,
             runs: empty_slot(),
             signer_manager: empty_slot(),
             intrusion: empty_slot(),
+            team: empty_slot(),
             owned_dirs: Vec::new(),
         };
         ctx.apply_config_defaults()?;
@@ -265,11 +277,19 @@ impl Context {
             handles,
             projects,
             admin,
+            public_url: RwLock::new(
+                config
+                    .extra
+                    .get("public_url")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ),
             config,
             clock,
             runs: empty_slot(),
             signer_manager: empty_slot(),
             intrusion: empty_slot(),
+            team: empty_slot(),
             owned_dirs: Vec::new(),
         };
         ctx.apply_config_defaults()?;
