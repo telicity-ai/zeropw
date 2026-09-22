@@ -2,6 +2,19 @@
 //! Python only drives assertions and controlled external test endpoints.
 use std::{path::Path, process::Command};
 
+fn validate_original_case(success: bool, stdout: &str) -> Result<(), &'static str> {
+    if !success {
+        return Err("failed");
+    }
+    if stdout.contains("NATIVE_E2E_SKIPPED=") {
+        return Err("skipped");
+    }
+    if !stdout.contains("NATIVE_E2E_LAUNCHES=") {
+        return Err("did not report native launches");
+    }
+    Ok(())
+}
+
 fn original_case(name: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let output = Command::new("python3.12")
@@ -16,8 +29,25 @@ fn original_case(name: &str) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     eprintln!("{stdout}{stderr}");
-    assert!(output.status.success(), "native E2E {name} failed");
-    assert!(stdout.contains("NATIVE_E2E_LAUNCHES="));
+    validate_original_case(output.status.success(), &stdout)
+        .unwrap_or_else(|reason| panic!("native E2E {name} {reason}"));
+}
+
+#[test]
+fn skipped_original_case_is_not_a_native_success() {
+    let reported = "NATIVE_E2E_SKIPPED=1\nNATIVE_E2E_LAUNCHES={'zeropw.admin_cli': 0}\n";
+    assert_eq!(validate_original_case(true, reported), Err("skipped"));
+}
+
+#[test]
+fn successful_original_case_keeps_status_and_launch_guards() {
+    let reported = "NATIVE_E2E_LAUNCHES={'zeropw.admin_cli': 1}\n";
+    assert_eq!(validate_original_case(true, reported), Ok(()));
+    assert_eq!(validate_original_case(false, reported), Err("failed"));
+    assert_eq!(
+        validate_original_case(true, "ordinary unittest output"),
+        Err("did not report native launches")
+    );
 }
 
 #[test]
