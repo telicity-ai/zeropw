@@ -56,6 +56,9 @@ fn loopback(host: &str) -> bool {
             .parse::<std::net::IpAddr>()
             .is_ok_and(|ip| ip.is_loopback())
 }
+fn header_safe(value: &str) -> bool {
+    !value.chars().any(|c| c.is_control())
+}
 impl NotifyConfig {
     pub fn load(ctx: &Context) -> Result<Option<Self>> {
         let path = ctx.state.path.join(NOTIFY_FILE);
@@ -73,7 +76,7 @@ impl NotifyConfig {
         let field = |k: &str| -> Result<String> {
             obj.get(k)
                 .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && header_safe(s))
                 .map(str::to_owned)
                 .ok_or_else(|| Error::invalid_input("notify_config_invalid"))
         };
@@ -96,14 +99,14 @@ impl NotifyConfig {
             .iter()
             .map(|r| {
                 r.as_str()
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.is_empty() && header_safe(s))
                     .map(str::to_owned)
                     .ok_or_else(|| Error::invalid_input("notify_config_invalid"))
             })
             .collect::<Result<Vec<_>>>()?;
         let username = match obj.get("username") {
             None | Some(Value::Null) => None,
-            Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(Value::String(s)) if !s.is_empty() && header_safe(s) => Some(s.clone()),
             _ => return Err(Error::invalid_input("notify_config_invalid")),
         };
         let password_file = match obj.get("password_file") {
@@ -423,15 +426,29 @@ fn audit_notify(ctx: &Context, i: &mut Incident, result: &str, reason: &str) {
         }
     }
 }
+fn python_int_or_zero(v: &Value) -> u64 {
+    match v {
+        Value::Bool(true) => 1,
+        Value::Bool(false) => 0,
+        _ => v.as_u64().unwrap_or(0),
+    }
+}
+fn python_number(v: &Value) -> Option<f64> {
+    match v {
+        Value::Bool(true) => Some(1.0),
+        Value::Bool(false) => Some(0.0),
+        _ => v.as_f64(),
+    }
+}
 fn pending(ctx: &Context, i: &mut Incident, reason: &str) -> Result<()> {
-    let attempts = i.notification["attempts"].as_u64().unwrap_or(0);
+    let attempts = python_int_or_zero(&i.notification["attempts"]);
     let delay = 2f64.powi(attempts.min(30) as i32).min(MAX_BACKOFF_SECONDS);
     i.notification = json!({"status":"pending","attempts":attempts+1,"last_error":reason,"next_attempt_at":(ctx.clock)()+delay});
     audit_notify(ctx, i, "denied", reason);
     incident::save_incident(ctx, i)
 }
 fn failed(ctx: &Context, i: &mut Incident, reason: &str) -> Result<()> {
-    let attempts = i.notification["attempts"].as_u64().unwrap_or(0);
+    let attempts = python_int_or_zero(&i.notification["attempts"]);
     i.notification = json!({"status":"failed","reason":reason,"attempts":attempts});
     audit_notify(ctx, i, "denied", reason);
     incident::save_incident(ctx, i)
@@ -446,7 +463,7 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         }
     };
     let Some(config) = config else {
-        let attempts = i.notification["attempts"].as_u64().unwrap_or(0);
+        let attempts = python_int_or_zero(&i.notification["attempts"]);
         i.notification = json!({"status":"not_configured","attempts":attempts});
         audit_notify(ctx, i, "ok", "not_configured");
         incident::save_incident(ctx, i)?;
@@ -461,7 +478,7 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         pending(ctx, i, &kind)?;
         return Ok(());
     }
-    let attempts = i.notification["attempts"].as_u64().unwrap_or(0);
+    let attempts = python_int_or_zero(&i.notification["attempts"]);
     i.notification =
         json!({"status":"sent","attempts":attempts+1,"sent_at":iso(Some((ctx.clock)()))});
     audit_notify(ctx, i, "ok", "sent");
@@ -476,9 +493,7 @@ pub fn retry_pending(ctx: &Arc<Context>, now: f64) -> Result<usize> {
     };
     if i.status != "open"
         || i.notification["status"] != "pending"
-        || i.notification["next_attempt_at"]
-            .as_f64()
-            .is_none_or(|t| t > now)
+        || python_number(&i.notification["next_attempt_at"]).is_none_or(|t| t > now)
     {
         return Ok(0);
     }
@@ -564,26 +579,30 @@ fn send(config: &NotifyConfig, subject: &str, body: &str) -> std::result::Result
         Box::new(tcp.try_clone().map_err(|_| io_error())?)
     };
     response(&mut wire, 220)?;
-    command(&mut wire, "EHLO localhost\r\n", 250)?;
+    let capabilities = ehlo(&mut wire)?;
     if config.mode == "starttls" {
+        if !capabilities
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("STARTTLS"))
+        {
+            return Err("SMTPNotSupportedError".into());
+        }
         command(&mut wire, "STARTTLS\r\n", 220)?;
         drop(wire);
         let mut secure = tls(config, tcp)?;
-        command(&mut secure, "EHLO localhost\r\n", 250)?;
-        return send_after_greeting(&mut secure, config, subject, body);
+        let secure_capabilities = ehlo(&mut secure)?;
+        return send_after_greeting(&mut secure, config, subject, body, &secure_capabilities);
     }
-    send_after_greeting(&mut wire, config, subject, body)
+    send_after_greeting(&mut wire, config, subject, body, &capabilities)
 }
 fn send_after_greeting(
     wire: &mut Wire,
     config: &NotifyConfig,
     subject: &str,
     body: &str,
+    capabilities: &[String],
 ) -> std::result::Result<(), String> {
     if let Some(user) = &config.username {
-        command(wire, "AUTH LOGIN\r\n", 334)?;
-        let user = base64::engine::general_purpose::STANDARD.encode(user);
-        command(wire, &format!("{user}\r\n"), 334)?;
         let password = config
             .password_file
             .as_ref()
@@ -591,8 +610,27 @@ fn send_after_greeting(
             .transpose()
             .map_err(|_| io_error())?
             .unwrap_or_default();
-        let pw = base64::engine::general_purpose::STANDARD.encode(password);
-        command(wire, &format!("{pw}\r\n"), 235)?;
+        let auth = capabilities
+            .iter()
+            .find_map(|line| {
+                line.to_ascii_uppercase()
+                    .strip_prefix("AUTH ")
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| "SMTPNotSupportedError".to_owned())?;
+        if auth.split_whitespace().any(|method| method == "PLAIN") {
+            let encoded =
+                base64::engine::general_purpose::STANDARD.encode(format!("\0{user}\0{password}"));
+            command(wire, &format!("AUTH PLAIN {encoded}\r\n"), 235)?;
+        } else if auth.split_whitespace().any(|method| method == "LOGIN") {
+            command(wire, "AUTH LOGIN\r\n", 334)?;
+            let username = base64::engine::general_purpose::STANDARD.encode(user);
+            command(wire, &format!("{username}\r\n"), 334)?;
+            let pw = base64::engine::general_purpose::STANDARD.encode(password);
+            command(wire, &format!("{pw}\r\n"), 235)?;
+        } else {
+            return Err("SMTPException".into());
+        }
     }
     command(wire, &format!("MAIL FROM:<{}>\r\n", config.sender), 250)?;
     for recipient in &config.recipients {
@@ -622,8 +660,18 @@ fn command(wire: &mut Wire, cmd: &str, expected: u16) -> std::result::Result<(),
     wire.flush().map_err(|_| io_error())?;
     response(wire, expected)
 }
+fn ehlo(wire: &mut Wire) -> std::result::Result<Vec<String>, String> {
+    wire.write_all(b"EHLO localhost\r\n")
+        .map_err(|_| io_error())?;
+    wire.flush().map_err(|_| io_error())?;
+    response_lines(wire, 250)
+}
 fn response(wire: &mut Wire, expected: u16) -> std::result::Result<(), String> {
+    response_lines(wire, expected).map(|_| ())
+}
+fn response_lines(wire: &mut Wire, expected: u16) -> std::result::Result<Vec<String>, String> {
     let mut reader = BufReader::new(wire);
+    let mut lines = Vec::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).map_err(|_| io_error())?;
@@ -634,8 +682,9 @@ fn response(wire: &mut Wire, expected: u16) -> std::result::Result<(), String> {
         if code != expected {
             return Err(smtp_error());
         }
+        lines.push(line[4..].trim_end_matches(['\r', '\n']).to_owned());
         if line.as_bytes()[3] != b'-' {
-            return Ok(());
+            return Ok(lines);
         }
     }
 }

@@ -189,21 +189,25 @@ impl DetectorConfig {
         }
         if let Some(points) = o.get("weak_points").and_then(Value::as_object) {
             for (k, v) in points {
-                c.weak_points.insert(
-                    k.clone(),
-                    v.as_i64()
-                        .ok_or_else(|| Error::invalid_input("intrusion_weak_points_invalid"))?,
-                );
+                if WEAK_RULES.contains(&k.as_str()) {
+                    c.weak_points.insert(
+                        k.clone(),
+                        v.as_i64()
+                            .ok_or_else(|| Error::invalid_input("intrusion_weak_points_invalid"))?,
+                    );
+                }
             }
         }
         if let Some(thresholds) = o.get("strong_thresholds").and_then(Value::as_object) {
             for (k, v) in thresholds {
-                c.strong_thresholds.insert(
-                    k.clone(),
-                    v.as_i64().ok_or_else(|| {
-                        Error::invalid_input("intrusion_strong_threshold_invalid")
-                    })?,
-                );
+                if STRONG_RULES.contains(&k.as_str()) {
+                    c.strong_thresholds.insert(
+                        k.clone(),
+                        v.as_i64().ok_or_else(|| {
+                            Error::invalid_input("intrusion_strong_threshold_invalid")
+                        })?,
+                    );
+                }
             }
         }
         c.validate()?;

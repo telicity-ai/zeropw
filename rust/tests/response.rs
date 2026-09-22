@@ -450,7 +450,7 @@ fn email_render_has_ordered_sections_and_no_detail_or_value() {
     assert!(!body.contains(std::str::from_utf8(SECRET).unwrap()));
 }
 
-fn smtp_server(listener: TcpListener) -> thread::JoinHandle<(String, Vec<u8>)> {
+fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(String, Vec<u8>)> {
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -464,8 +464,15 @@ fn smtp_server(listener: TcpListener) -> thread::JoinHandle<(String, Vec<u8>)> {
             }
             if line.starts_with("EHLO") {
                 stream
-                    .write_all(b"250-fake\r\n250-AUTH LOGIN\r\n250 OK\r\n")
+                    .write_all(if plain_auth {
+                        b"250-fake\r\n250-AUTH PLAIN\r\n250 OK\r\n"
+                    } else {
+                        b"250-fake\r\n250-AUTH LOGIN\r\n250 OK\r\n"
+                    })
                     .unwrap();
+            } else if line.starts_with("AUTH PLAIN ") {
+                auth = line.trim().to_owned();
+                stream.write_all(b"235 authenticated\r\n").unwrap();
             } else if line.starts_with("AUTH LOGIN") {
                 stream.write_all(b"334 VXNlcm5hbWU6\r\n").unwrap();
             } else if line.starts_with("MAIL FROM") || line.starts_with("RCPT TO") {
@@ -504,7 +511,7 @@ fn smtp_delivery_uses_password_file_and_marks_sent_without_logging_password() {
     let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let receiver = smtp_server(listener);
+    let receiver = smtp_server(listener, false);
     let pw = tmp.path().join("smtp.pass");
     fs::write(&pw, "synthetic-smtp-password-0123456789\n").unwrap();
     fs::set_permissions(&pw, fs::Permissions::from_mode(0o600)).unwrap();
@@ -529,6 +536,25 @@ fn smtp_delivery_uses_password_file_and_marks_sent_without_logging_password() {
 }
 
 #[test]
+fn smtp_plain_auth_only_server_is_supported() {
+    let (tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let receiver = smtp_server(listener, true);
+    let pw = tmp.path().join("smtp.pass");
+    fs::write(&pw, "synthetic-smtp-password-0123456789\n").unwrap();
+    fs::set_permissions(&pw, fs::Permissions::from_mode(0o600)).unwrap();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"],"username":"smtpuser","password_file":pw.to_str().unwrap()})).unwrap();
+    notify::deliver(&ctx, &mut i).unwrap();
+    assert_eq!(i.notification["status"], "sent");
+    let (auth, message) = receiver.join().unwrap();
+    assert!(auth.starts_with("AUTH PLAIN "));
+    assert!(!message.is_empty());
+}
+
+#[test]
 fn failed_smtp_delivery_goes_pending_and_due_retry_sends() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
@@ -542,7 +568,7 @@ fn failed_smtp_delivery_goes_pending_and_due_retry_sends() {
     assert_eq!(i.notification["attempts"], 1);
     assert_eq!(notify::retry_pending(&ctx, 1_700_000_000.0).unwrap(), 0);
     let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-    let receiver = smtp_server(listener);
+    let receiver = smtp_server(listener, false);
     assert_eq!(notify::retry_pending(&ctx, 1_700_000_400.0).unwrap(), 1);
     assert_eq!(
         incident::get_incident(&ctx, &i.id).unwrap().notification["status"],
@@ -566,6 +592,17 @@ fn insecure_notify_config_is_pending_and_never_sends() {
     assert_eq!(i.notification["status"], "pending");
     assert_eq!(i.notification["last_error"], "notify_config_insecure");
     assert_eq!(i.notification["attempts"], 1);
+}
+
+#[test]
+fn notify_config_rejects_header_and_smtp_command_injection() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":25,"mode":"plain","sender":"zeropw@example.com\r\nBcc: attacker@example.com","recipients":["admin@example.com"]})).unwrap();
+    assert_eq!(
+        notify::NotifyConfig::load(&ctx).unwrap_err().reason,
+        "notify_config_invalid"
+    );
 }
 
 #[test]

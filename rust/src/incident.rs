@@ -258,7 +258,9 @@ fn runtime_covers_all_active(ctx: &Context, runtime: Option<&str>) -> bool {
                 .filter(|p| p.status == "active")
                 .all(|p| Some(p.runtime.as_str()) == runtime)
         })
-        .unwrap_or(false)
+        // A corrupt/unreadable principal document cannot safely prove that any
+        // active principal lies outside this runtime. Over-stop in that case.
+        .unwrap_or(true)
 }
 
 pub fn apply_lockdown(
