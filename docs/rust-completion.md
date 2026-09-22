@@ -345,3 +345,32 @@ correction adds the same bounded callback observation to the in-process case
 and a controlled ordering regression; exact refusal, identity, and no-acceptance
 requirements remain. Independent review and the next exact-head platform
 results determine acceptance, not this diagnosis alone.
+
+The bounded callback correction subsequently received independent Astra
+acceptance at `97a8d0f`: 23 team tests pass (21.39 seconds), with both focused
+cases, strict focused Clippy and formatting also passing. The report is
+`astra-team-refusal-callback-final.md`; the final published `8be0103` differs
+only by that report. A fresh complete macOS run frozen at `97a8d0f` also
+passes formatting, strict all-target Clippy, 507 library tests (four ignored)
+and every integration target. The policy differential took 412.47 seconds,
+eight original native process/CLI adapters took 150.55 seconds, the 23-case
+team suite took 19.97 seconds, and the final tools/vault suites also passed.
+
+Linux run `35717335672` at `8be0103` passed all 1099 original Python tests
+(370.786 seconds), the harness job, Rust formatting/strict Clippy, and 507
+library tests (four ignored; 153.43 seconds). Its Rust job exited 101 after
+five minutes, not an overall timeout. The round-three terminal suite passed
+two of three cases; the original Python branch of the Ctrl+C restoration
+comparison did not exit within its unchanged eight-second child deadline.
+The corresponding Rust branch and all later targets, including the newly
+corrected team contract and policy, were not reached. They are not Linux
+passes for this head.
+
+`astra-pty-linux-second-triage.md` preserves independent evidence: ten local
+instrumented original-Python repetitions pass, and source inspection does
+not support a prompt-before-noecho explanation. The earlier inherited-signal
+normalization is already present. No new product defect or specific hosted
+signal-loss mechanism is established. Additional failure-only process-group,
+terminal and selected signal-state diagnostics are the next bounded step;
+the one Ctrl+C stimulus, original deadline and terminal-restoration assertion
+must remain. This is an open platform gate, not an approved workaround.
