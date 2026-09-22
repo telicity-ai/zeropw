@@ -422,6 +422,37 @@ fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
     Ok(ctx)
 }
 
+struct RestoreTerminalEcho {
+    terminal: fs::File,
+    original: rustix::termios::Termios,
+}
+impl Drop for RestoreTerminalEcho {
+    fn drop(&mut self) {
+        let _ = rustix::termios::tcsetattr(
+            &self.terminal,
+            rustix::termios::OptionalActions::Now,
+            &self.original,
+        );
+    }
+}
+
+fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
+    let terminal = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")?;
+    let original = rustix::termios::tcgetattr(&terminal)?;
+    let mut hidden = original.clone();
+    hidden
+        .local_modes
+        .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
+    rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &hidden)?;
+    let _restore = RestoreTerminalEcho { terminal, original };
+    // rpassword prints its prompt before turning off echo. The outer guard
+    // closes that gap and restores the caller's exact flags on every return.
+    rpassword::prompt_password(prompt)
+}
+
 fn passphrase(name: &str) -> Result<String, Error> {
     let value = env::var(name).unwrap_or_default();
     if !value.is_empty() {
@@ -433,7 +464,7 @@ fn passphrase(name: &str) -> Result<String, Error> {
         } else {
             "Administrator passphrase: "
         };
-        return rpassword::prompt_password(prompt).map_err(|_| {
+        return prompt_password_without_echo_race(prompt).map_err(|_| {
             Error::auth_failed("passphrase_missing")
                 .with_detail(format!("set {name} or run on a terminal"))
         });
