@@ -81,3 +81,35 @@ All figures are bounded results, not a blanket port-completion claim. Complete
 integrated tests, remaining original-feature coverage, independent review, and
 Linux/macOS verification remain acceptance work. No merge or deployment has
 been performed.
+
+## Later review rounds and integrated checks
+
+Team round 2 independently resolves all five original IDs with eight additional
+tests, 13 previous networking/review tests and 105 team library cases passing.
+It explicitly retains a mapping/coverage limit. A subsequent team QA task was
+interrupted twice by the review tool; its partial handoff and coordinator-only
+fixture corrections/eight passing lifecycle tests are recorded separately in
+`docs/reviews/astra-team-round3-partial.md`, not counted as independent approval.
+
+Response round 2 independently verifies both original P1 fixes, successful
+trusted STARTTLS/SMTPS, certificate rejection and CRAM authentication, but keeps
+four original functional IDs open (AUTH/ENVELOPE/ERRORS/SHAPE), adds two P2 IDs
+(COUNTER/CONFIG), and leaves its coverage gate open. A Sol worker is implementing
+those fixes against the unchanged new reproductions.
+
+CLI/runtime round 2 found an inherited-descriptor boundary (P1), dependency on
+an uncreated configured socket directory (P2), and prompt-before-no-echo race
+(P2). Fixes through `db4fc5e` pass their three original independent regressions
+in the worker run; the coordinator separately passes the two runtime cases.
+Fresh Astra follow-up has identified terminal-state/output publication and
+Ctrl-C terminal-restoration defects; those are not waived by earlier passes.
+
+Bounded integrated execution also passed the 502 default library tests and all
+four separately selected signer resource tests. The long policy differential
+passed (465.85s), and the eight native process/CLI adapter tests passed
+(162.93s). A then-current broad run failed the original live-run containment
+test due to the already-confirmed missing socket-directory regression; after
+that fix, the unchanged response 27, contract 8, runs 16, tools/server 17 and
+remaining selected first-half integration suites pass. Builds changed during
+this ongoing work: these are component results, **not** a single exact-head full
+suite PASS. Final integrated verification and Linux CI remain required.

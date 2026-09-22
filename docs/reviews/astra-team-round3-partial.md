@@ -21,3 +21,19 @@ writing peer vectors, and restore explicitly re-derives state after restart.
 The original draft is preserved in Git before coordinator fixture corrections.
 Any corrected test execution is coordinator QA, not a fabricated continuation of
 the interrupted independent review. No product source was changed by this task.
+
+## Coordinator fixture correction and execution
+
+At product revision `8e2ae50`, the coordinator added a test-only `Node::restart`
+that stops the prior sync and constructs a fresh transport/TeamSync before
+registering persisted state. Restore and compaction now perform this real
+restart, and the conflict-alert test now actually restarts both nodes. Original
+assertions and product code were unchanged. The helper is consistent with the
+original Python `_offline_sync`/`_redocument` setup; persisted override-alert
+bookkeeping also explicitly spans restart in the Python implementation.
+
+The corrected eight-test suite passes (49.78s, `--test-threads=1`, clean
+environment). This supplies coordinator evidence for receive-only drain,
+mutual/third-party removal, monotonic notification flags/no-ack, snapshot
+threshold/compaction/gap append, fact deduplication/restore and conflict alert
+exactly-once persistence. It does not turn the interrupted review into a PASS.

@@ -1,4 +1,5 @@
-//! Independent gpt-6-astra coverage completion at 5089848ea0bffb8b9421f4e3e8eaaa80e74bc9a5.
+//! Partial gpt-6-astra test artifact; coordinator-corrected restart fixtures.
+//! No completed independent round-three acceptance verdict was returned.
 //! Session fixtures drive real receive threads and signed messages; no product hooks changed.
 use serde_json::{Value, json};
 use std::{
@@ -53,6 +54,15 @@ impl Node {
     }
     fn fp(&self) -> String {
         self.key.fingerprint().unwrap()
+    }
+    fn restart(&mut self, env: &str) {
+        self.team.stop();
+        let transport = Arc::new(InProcessTransport::new(
+            self.key.clone(),
+            Arc::new(|_, _| None),
+        ));
+        self.team = TeamSync::new(self.ctx.clone(), transport, self.key.clone());
+        self.team.register_env(env).unwrap();
     }
     fn seed(&self, env: &str, commits: &[Commit]) {
         for c in commits {
@@ -453,7 +463,7 @@ fn incident_mandatory_rotation_is_monotone_and_nonadmin_never_acks() {
 #[test]
 fn snapshots_refuse_lagging_member_preserve_history_and_allow_gap_append() {
     let root = TempDir::new().unwrap();
-    let a = Node::new(&root, "a");
+    let mut a = Node::new(&root, "a");
     let b = Node::new(&root, "b");
     let env = commit::new_env_id(&a.fp()).unwrap();
     let old = commit::now_ms() - 40 * 24 * 3600 * 1000;
@@ -503,7 +513,7 @@ fn snapshots_refuse_lagging_member_preserve_history_and_allow_gap_append() {
             &json!({b.fp():{a.fp():8}}),
         )
         .unwrap();
-    a.team.register_env(&env).unwrap();
+    a.restart(&env);
     let result = a.team.compact(&env).unwrap();
     assert_eq!(result["blocked_by"], json!([]));
     assert_eq!(result["removed"], 5);
@@ -577,7 +587,7 @@ fn snapshot_is_created_at_production_threshold_and_not_before() {
 fn facts_replay_deduplicates_and_restore_cannot_undo_later_revocation() {
     use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
     let root = TempDir::new().unwrap();
-    let a = Node::new(&root, "a");
+    let mut a = Node::new(&root, "a");
     a.ctx.projects.create("demo", &["dev"]).unwrap();
     a.ctx
         .vault
@@ -662,7 +672,7 @@ fn facts_replay_deduplicates_and_restore_cannot_undo_later_revocation() {
         a.ctx.vault.get_meta("shared-secret").unwrap().versions[0].status,
         "active"
     );
-    a.team.register_env(env).unwrap();
+    a.restart(env);
     assert_eq!(
         a.ctx.vault.get_meta("shared-secret").unwrap().versions[0].status,
         "revoked"
@@ -681,8 +691,8 @@ fn facts_replay_deduplicates_and_restore_cannot_undo_later_revocation() {
 #[test]
 fn conflict_override_alert_is_exactly_once_and_only_on_loser_including_restart() {
     let root = TempDir::new().unwrap();
-    let a = Node::new(&root, "a");
-    let b = Node::new(&root, "b");
+    let mut a = Node::new(&root, "a");
+    let mut b = Node::new(&root, "b");
     let env = commit::new_env_id(&a.fp()).unwrap();
     let create = signed(
         &a.key,
@@ -727,6 +737,8 @@ fn conflict_override_alert_is_exactly_once_and_only_on_loser_including_restart()
             n.team.register_env(&env).unwrap();
         }
     }
+    a.restart(&env);
+    b.restart(&env);
     assert_eq!(a.audit("team_op_overridden").len(), 1);
     assert!(b.audit("team_op_overridden").is_empty());
     assert_eq!(
