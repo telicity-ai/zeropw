@@ -1604,7 +1604,11 @@ fn remote_connection_disabled_fact_closes_existing_signer_socket() {
     f.wait_stage("remote-fact-applied", || {
         f.b.policy.get_connection("box").unwrap().status == "disabled"
     });
-    f.wait_stage("signer-socket-removed", || !socket_path.exists());
+    f.wait_stage("signer-socket-removed-and-run-cancelled", || {
+        !socket_path.exists()
+            && api(api_port, &token, "status", json!({"run_id":run_id}))["state"] == "cancelled"
+    });
+    assert!(!socket_path.exists());
     assert_eq!(
         api(api_port, &token, "status", json!({"run_id":run_id}))["state"],
         "cancelled"
