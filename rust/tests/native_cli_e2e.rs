@@ -55,3 +55,8 @@ fn original_agent_cli_contract_with_python_server_oracle() {
 fn original_admin_cli_black_box_contract_on_native_binary() {
     original_case("native_admin_contract");
 }
+
+#[test]
+fn original_response_cli_black_box_contract_on_native_binary() {
+    original_case("native_response_cli_contract");
+}

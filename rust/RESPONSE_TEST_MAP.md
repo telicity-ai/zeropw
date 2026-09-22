@@ -1,9 +1,34 @@
-# Response port test map (round-1 fix)
+# Response port test map
 
 Source inventory: 26 cases in `tests/test_incident.py`, 37 in
 `tests/test_intrusion.py`, and 29 in `tests/test_notify.py`. This document
 distinguishes direct Rust assertions from original Python end-to-end checks.
 It is not a claim that 92 cases have one-for-one Rust tests.
+
+## Coordinator verification supplement (2026-09-22)
+
+The detailed matrix below records the round-1 worker handoff. These subsequent
+results close some of its stated gaps, but do not constitute independent Astra
+round-2 acceptance:
+
+- `response_contract` passes six additional tests: 1,250 denial-rule inputs
+  compared with the actual Python matcher; byte-for-byte subject/body comparison
+  for principal/runtime/all incident fixtures; clock-advanced weak expiry and
+  unattributed expired handles; lifetime first-use, half-of-usable and combined
+  enumeration/burst/denial boundaries; normal traffic/status polling; and invalid
+  threshold/window/ratio configuration with default-preserving overrides.
+- The original eight response administrator/notification CLI cases pass against
+  the native binary (42 native administrator launches on CLI worker `b267a4b`).
+  Their original assertions are unchanged. This covers declaration, widening,
+  authentication refusal, show/list, resume/close, and notify-test behavior.
+- The original separate-process compromise E2E passes against native binaries,
+  including automatic containment, SMTP delivery, recovery, and leak scans.
+
+Still not proven by those results: the original in-process mocked serve-poll
+case translated to a real native process; pending-notification retry driven by
+serve; exact pointer-only retry and widening-resend assertions; successful TLS
+SMTP interoperability; and the exposure-tier merge cases noted below. The three
+rendering fixtures do not stand in for every possible incident shape.
 
 ## Incident
 

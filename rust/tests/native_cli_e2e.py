@@ -51,7 +51,7 @@ def main() -> int:
 
     test_cli_e2e.CliEndToEndTestCase.sample_cli = lambda self: Path(options.democli).resolve(strict=True)
     expected = set(binaries)
-    if options.case.split(":", 1)[0] == "native_admin_contract":
+    if options.case.split(":", 1)[0] in {"native_admin_contract", "native_response_cli_contract"}:
         from tests import test_admin_cli
 
         def native_run_cli(self, *argv, stdin_bytes=None, state=None):
@@ -78,7 +78,12 @@ def main() -> int:
         }
         suite = unittest.TestSuite()
         selected = options.case.split(":", 1)[1] if ":" in options.case else None
-        for cls in [test_admin_cli.AdminCliTestCase, test_admin_cli.TeamCliTestCase]:
+        classes = [test_admin_cli.AdminCliTestCase, test_admin_cli.TeamCliTestCase]
+        if options.case.split(":", 1)[0] == "native_response_cli_contract":
+            from tests import test_incident, test_notify
+            classes = [test_incident.AdminCliIncidentTests, test_notify.NotifyTestCliTests]
+            inprocess_only.add("test_serve_applies_an_incident_declared_by_another_process")
+        for cls in classes:
             for name in sorted(cls.__dict__):
                 if name.startswith("test_") and name not in inprocess_only and (selected is None or name == selected):
                     suite.addTest(cls(name))

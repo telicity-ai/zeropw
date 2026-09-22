@@ -17,13 +17,13 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
 | Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Baseline 04a5634; rerun after integration |
-| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Implemented; 13 native tests pass at 63ff815; independent review pending |
-| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Implemented; 17 boundary/integration tests pass at 63ff815; independent review pending |
-| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Implemented; Astra round 1 found 14 open findings; Sol fixes in progress |
-| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Implemented; 7 direct native tests pass; independent Astra review in progress; coverage incomplete |
-| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Implemented; 6 native tests pass; TTL/demo/prompt/HTTP compatibility corrections in progress |
-| Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original process E2E assertions now exercise native binaries; initial run 1 pass / 3 failures, details below |
-| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Response round 1 complete with findings; team round 1 active; runtime/CLI review pending |
+| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Implemented; Astra found retained-registry and session-isolation defects; Sol fixes in progress |
+| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Implemented; Astra HEAD-error and sanitized logging findings being fixed |
+| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Round-1 fixes integrated; 27 worker tests, 8 original Astra regressions and 6 additional coordinator tests pass; independent re-review pending |
+| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Five Astra fixes plus transport/retry corrections integrated; original three-node process E2E passes; Astra re-review active; coverage incomplete |
+| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle admin 55/55, response 8/8 and agent 6/6 pass; independent CLI review pending |
+| Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E all pass; full integrated suite/platform acceptance pending |
+| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Original reports retained; implemented fixes are not accepted until independent verification; no full PASS |
 
 Completion requires the full Python feature inventory, meaningful behavioral
 tests for each feature and failure boundary, Linux and macOS verification where
@@ -32,7 +32,7 @@ Python subprocesses are permitted as test oracles only, never as a Rust product
 backend. Missing APIs, placeholder successes, and silently unsupported existing
 commands do not satisfy acceptance. Deployment and merging are separate actions.
 
-## Integrated evidence and current blockers
+## Initial integrated evidence (historical, not current status)
 
 At integration `63ff815` the native execution/tools suites pass 30 tests and
 all-target Clippy passes with warnings denied. The earlier integrated CLI/team
@@ -56,3 +56,28 @@ until fixes are independently verified. Existing 18 response tests passed but
 `docs/reviews/astra-response-round1.md` in the response worker branch and will
 be integrated with its fixes. Recording a capability removal in DEVIATIONS
 does not waive a finding.
+
+## Subsequent verification and remaining work
+
+The TTL/demo failures above were fixed and the four unchanged original process
+scenarios now pass using native binaries: HTTP (13 admin/17 agent launches), real
+sshd SSH (13/20), three-node team (38/6), and compromise response (18/6). SSH was
+actually exercised, not skipped. The full original black-box administrator
+contract subsequently passed 55 cases with 553 native launches; response CLI
+passed 8 cases with 42 launches; agent CLI passed 6 cases. See the test-only
+adapter in `rust/tests/native_cli_e2e.py` for its explicitly unmapped in-process
+mock cases. `native_atomic_cli` separately passes 24 real-process save races.
+
+Actual Astra reports are retained in `docs/reviews/astra-response-round1.md`,
+`astra-team-round1.md`, and `astra-runtime-round1.md`. Runtime round 1 identifies
+four defects; its independent tests demonstrated three failing cases. A Sol
+worker is fixing retained registry ownership, new-session isolation, HEAD error
+framing, and optional value-free request logging. Response/team fixes passing
+their original regression tests do not yet amount to independent round-2
+approval. `native-cli-contract-round1.md` is coordinator test evidence, not an
+Astra review. Its original C1–C10 findings have passing worker rerun evidence.
+
+All figures are bounded results, not a blanket port-completion claim. Complete
+integrated tests, remaining original-feature coverage, independent review, and
+Linux/macOS verification remain acceptance work. No merge or deployment has
+been performed.
