@@ -2488,6 +2488,15 @@ except InvalidInput as e:
             r#"[[1, "not-an-int"], [1, 5]]"#,
             "overwritten bad value never validated",
         ),
+        (
+            r#"[[9007199254740992, 1], [9007199254740993, 2]]"#,
+            "distinct integer keys above binary64 precision",
+        ),
+        (
+            r#"[[9007199254740992.0, 1], [9007199254740993, 2]]"#,
+            "float and next integer stay distinct",
+        ),
+        (r#"[{"a": 0, "2": 1}]"#, "two-key mapping as pair iterable"),
     ];
 
     for (seen_json, label) in cases {

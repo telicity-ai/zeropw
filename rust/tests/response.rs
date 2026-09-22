@@ -810,7 +810,10 @@ fn smtp_transport_failure_names_track_the_failing_phase() {
         ("recipient", "SMTPRecipientsRefused"),
         ("data", "SMTPDataError"),
         ("disconnect", "SMTPServerDisconnected"),
-        ("timeout", "TimeoutError"),
+        // Measured with original `notify._send` and a loopback peer that
+        // withholds DATA's reply past a 0.1s socket timeout: smtplib.getreply
+        // wraps the read's TimeoutError as SMTPServerDisconnected.
+        ("timeout", "SMTPServerDisconnected"),
     ] {
         let (tmp, ctx) = fixture();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

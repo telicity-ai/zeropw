@@ -192,15 +192,48 @@ fn mime_message(config: &NotifyConfig, subject: &str, body: &str) -> Vec<u8> {
     msg
 }
 fn mailbox(address: &str) -> String {
-    if let Some(start) = address.rfind('<')
-        && let Some(end) = address[start + 1..].find('>')
-    {
-        return address[start + 1..start + 1 + end].trim().into();
+    // `email.utils.parseaddr` ignores RFC 5322 comments wherever they occur
+    // outside a quoted string. Keep the configured header untouched; only
+    // remove comments while deriving the SMTP envelope mailbox.
+    let mut without_comments = String::with_capacity(address.len());
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for ch in address.chars() {
+        if escaped {
+            if depth == 0 {
+                without_comments.push(ch);
+            }
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            if depth == 0 {
+                without_comments.push(ch);
+            }
+            escaped = true;
+            continue;
+        }
+        if ch == '"' && depth == 0 {
+            quoted = !quoted;
+            without_comments.push(ch);
+        } else if ch == '(' && !quoted {
+            if depth == 0 {
+                without_comments.push(' ');
+            }
+            depth += 1;
+        } else if ch == ')' && depth > 0 && !quoted {
+            depth -= 1;
+        } else if depth == 0 {
+            without_comments.push(ch);
+        }
     }
-    // email.utils.parseaddr accepts a trailing RFC 5322 display comment.
-    // Keep the configured header text, but never send that comment in SMTP's
-    // envelope path.
-    address.split(" (").next().unwrap_or(address).trim().into()
+    if let Some(start) = without_comments.rfind('<')
+        && let Some(end) = without_comments[start + 1..].find('>')
+    {
+        return without_comments[start + 1..start + 1 + end].trim().into();
+    }
+    without_comments.trim().into()
 }
 fn has_cap(caps: &[String], name: &str) -> bool {
     caps.iter().any(|c| {
@@ -327,7 +360,9 @@ fn reply(wire: &mut Wire) -> Result<Reply, String> {
             match wire.read(&mut b) {
                 Ok(0) => return Err(exception("SMTPServerDisconnected")),
                 Ok(_) => (),
-                Err(e) => return Err(io_error(e)),
+                // `smtplib.SMTP.getreply` wraps every socket read failure,
+                // including timeout and reset, as SMTPServerDisconnected.
+                Err(_) => return Err(exception("SMTPServerDisconnected")),
             };
             line.push(b[0]);
             if line.len() > MAX_LINE {
@@ -357,7 +392,7 @@ fn reply(wire: &mut Wire) -> Result<Reply, String> {
         }
     }
 }
-fn tls(config: &NotifyConfig, tcp: TcpStream) -> Result<Wire, String> {
+fn tls(config: &NotifyConfig, mut tcp: TcpStream) -> Result<Wire, String> {
     let mut roots = rustls::RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {
@@ -368,7 +403,11 @@ fn tls(config: &NotifyConfig, tcp: TcpStream) -> Result<Wire, String> {
         .with_no_client_auth();
     let name = rustls::pki_types::ServerName::try_from(config.host.clone())
         .map_err(|_| exception("SSLError"))?;
-    let conn =
+    let mut conn =
         rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|_| exception("SSLError"))?;
+    // CPython's SMTP_SSL and STARTTLS perform the TLS handshake before
+    // `getreply`. Do it here too, so certificate failures keep their SSL
+    // identity while later SMTP reply-read errors use getreply's wrapper.
+    conn.complete_io(&mut tcp).map_err(io_error)?;
     Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
 }

@@ -612,11 +612,10 @@ pub(crate) fn python_str_coerce(value: &Value) -> String {
 
 /// `dict(x)` for the shapes actually reachable through a signed commit's
 /// `seen` field (finding H-6): a JSON object (used directly, matching
-/// Python's `dict(mapping)`), or a JSON array of two-element arrays
+/// Python's `dict(mapping)`), or a JSON array of two-element iterables
 /// (matching Python's `dict(iterable_of_pairs)`, e.g. `[["<fp>", 3]]`).
-/// Python's `dict()` also accepts an iterable of *any* two-element
-/// sequence, including a two-character string (`dict(["ab"]) ==
-/// {"a": "b"}`) -- included here too since it costs nothing extra. Anything
+/// Each pair can be an array, a two-character string (`dict(["ab"]) ==
+/// {"a": "b"}`), or a two-key object (iteration yields its keys). Anything
 /// else that is not iterable at all in Python (`dict(5)`) raises `TypeError`
 /// (uncaught, `commit_malformed` per PORTING.md §3.5), returning `None`.
 pub(crate) fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
@@ -638,6 +637,13 @@ pub(crate) fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
                         let k = chars.next().expect("len 2").to_string();
                         let v = chars.next().expect("len 2").to_string();
                         out.push((Value::String(k), Value::String(v)));
+                    }
+                    Value::Object(map) if map.len() == 2 => {
+                        let mut keys = map.keys();
+                        out.push((
+                            Value::String(keys.next()?.clone()),
+                            Value::String(keys.next()?.clone()),
+                        ));
                     }
                     _ => return None,
                 }
@@ -667,22 +673,59 @@ pub(crate) fn dict_keys_equal(a: &Value, b: &Value) -> bool {
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => x == y,
         _ => match (dict_key_numeric_value(a), dict_key_numeric_value(b)) {
-            (Some(x), Some(y)) => x == y,
+            (Some(KeyNumber::Integer(x)), Some(KeyNumber::Integer(y))) => x == y,
+            (Some(KeyNumber::Float(x)), Some(KeyNumber::Float(y))) => x == y,
+            (Some(KeyNumber::Integer(x)), Some(KeyNumber::Float(y)))
+            | (Some(KeyNumber::Float(y)), Some(KeyNumber::Integer(x))) => {
+                float_exact_integer(y).is_some_and(|integer| x == integer)
+            }
             _ => false,
         },
     }
 }
 
-/// A `bool`/JSON number's value as `f64`, for [`dict_keys_equal`]'s
-/// cross-type numeric comparison (`True`/`1`/`1.0` all the same Python
-/// dict key). `None` for anything else, including a number whose text
-/// cannot parse as `f64` at all (unreachable for well-formed JSON).
-fn dict_key_numeric_value(v: &Value) -> Option<f64> {
+enum KeyNumber {
+    Integer(num_bigint::BigInt),
+    Float(f64),
+}
+
+/// Preserve Python's arbitrary-precision integer keys rather than rounding
+/// both operands through f64 (which merges distinct keys above 2^53).
+fn dict_key_numeric_value(v: &Value) -> Option<KeyNumber> {
     match v {
-        Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::Number(n) => n.as_f64(),
+        Value::Bool(b) => Some(KeyNumber::Integer(num_bigint::BigInt::from(u8::from(*b)))),
+        Value::Number(n) if crate::pyjson::is_float_literal(n.as_str()) => {
+            n.as_str().parse().ok().map(KeyNumber::Float)
+        }
+        Value::Number(n) => {
+            num_bigint::BigInt::parse_bytes(n.as_str().as_bytes(), 10).map(KeyNumber::Integer)
+        }
         _ => None,
     }
+}
+
+/// The exact integer represented by a finite binary64 float, if integral.
+/// This mirrors Python int/float equality without lossy integer conversion.
+fn float_exact_integer(value: f64) -> Option<num_bigint::BigInt> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    if value == 0.0 {
+        return Some(num_bigint::BigInt::from(0));
+    }
+    let bits = value.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023 - 52;
+    let mantissa = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+    let mut integer = num_bigint::BigInt::from(mantissa);
+    if exponent >= 0 {
+        integer <<= exponent as usize;
+    } else {
+        integer >>= (-exponent) as usize;
+    }
+    if bits >> 63 != 0 {
+        integer = -integer;
+    }
+    Some(integer)
 }
 
 /// `zeropw.team.commit.sign_commit`: build, format-validate and sign a new

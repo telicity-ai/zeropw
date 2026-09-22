@@ -428,6 +428,17 @@ fn python_int_or_zero(v: &Value) -> crate::pyint::PyInt {
 fn next_attempt(attempts: &crate::pyint::PyInt) -> Value {
     crate::pyint::PyInt(&attempts.0 + num_bigint::BigInt::from(1_u8)).value()
 }
+fn next_success_attempt(value: &Value) -> Value {
+    if let Some(integer) = crate::pyint::PyInt::from_python_int(value) {
+        return next_attempt(&integer);
+    }
+    // Unlike the pending/failure paths, Python's successful-send expression
+    // adds one directly to a previously persisted floating count.
+    value
+        .as_f64()
+        .map(|number| json!(number + 1.0))
+        .unwrap_or_else(|| json!(1))
+}
 fn retry_delay(attempts: &crate::pyint::PyInt) -> f64 {
     if attempts.0 >= num_bigint::BigInt::from(9_u8) {
         return MAX_BACKOFF_SECONDS;
@@ -490,8 +501,9 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         pending(ctx, i, &kind)?;
         return Ok(());
     }
-    let attempts = python_int_or_zero(&i.notification["attempts"]);
-    i.notification = json!({"status":"sent","attempts":next_attempt(&attempts),"sent_at":iso(Some((ctx.clock)()))});
+    let attempts = next_success_attempt(&i.notification["attempts"]);
+    i.notification =
+        json!({"status":"sent","attempts":attempts,"sent_at":iso(Some((ctx.clock)()))});
     audit_notify(ctx, i, "ok", "sent");
     incident::save_incident(ctx, i)
 }
