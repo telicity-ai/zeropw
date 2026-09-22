@@ -45,3 +45,13 @@ fn original_compromise_response_end_to_end_on_native_binaries() {
 fn original_team_end_to_end_on_native_binaries() {
     original_case("tests.test_team_e2e.TeamEndToEndTestCase");
 }
+
+#[test]
+fn original_agent_cli_contract_with_python_server_oracle() {
+    original_case("tests.test_agent_cli.AgentCliTestCase");
+}
+
+#[test]
+fn original_admin_cli_black_box_contract_on_native_binary() {
+    original_case("native_admin_contract");
+}
