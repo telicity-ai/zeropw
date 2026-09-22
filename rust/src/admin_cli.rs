@@ -465,8 +465,8 @@ impl Drop for RestoreTerminalEcho {
         *active = None;
         drop(active);
         // signal-hook unregisters callbacks but does not restore the OS's
-        // previous disposition. Keep a process-lifetime conditional exit
-        // action armed whenever no password prompt owns the terminal.
+        // previous disposition. Re-arm SIGTERM's conditional default action
+        // outside the prompt; SIGINT stays on the process-lifetime watcher.
         self.default_signal_action.store(true, Ordering::SeqCst);
         self.signals.close();
         if let Some(watcher) = self.watcher.take() {
