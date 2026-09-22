@@ -742,3 +742,327 @@ fn ssh_cli_keeps_private_key_in_signer_and_fixes_local_ssh_options() {
         }
     }
 }
+
+// Direct ports of the remaining public-tool preflight cases in
+// tests/test_tools.py. These exercise the native API, not a Python backend.
+#[test]
+fn original_dispatch_shape_limits_are_enforced() {
+    let f = Fixture::new();
+    for (name, payload) in [
+        ("status", json!({"run_id":12})),
+        ("status", json!({})),
+        ("status", json!({"run_id":"bad id!"})),
+        ("exec", json!({"connection":"service","argv":"not-a-list"})),
+        ("exec", json!({"connection":"service","argv":[1,2]})),
+        ("exec", json!({"connection":"service","argv":["a\u{0}b"]})),
+        ("exec", json!({"connection":"../etc","argv":[]})),
+        (
+            "request",
+            json!({"connection":"service","method":"GET","path":"repos"}),
+        ),
+        (
+            "request",
+            json!({"connection":"service","method":"GET","path":"/re pos"}),
+        ),
+        (
+            "request",
+            json!({"connection":"service","method":"GET","path":"/","headers":{"Bad Name":"v"}}),
+        ),
+        (
+            "request",
+            json!({"connection":"service","method":"GET","path":"/","body":"a","body_base64":"YQ=="}),
+        ),
+        (
+            "request",
+            json!({"connection":"service","method":"GET","path":"/","request_id":"has space"}),
+        ),
+    ] {
+        assert_eq!(
+            tools::dispatch(&f.ctx, name, "alice", &payload)
+                .unwrap_err()
+                .class,
+            zeropw::errors::ErrorClass::InvalidInput,
+            "{name}: {payload}"
+        );
+    }
+    for (argv, reason) in [
+        (json!(vec!["x"; 257]), "argv_too_long"),
+        (json!(["y".repeat(4097)]), "argument_too_long"),
+    ] {
+        assert_eq!(
+            tools::dispatch(
+                &f.ctx,
+                "exec",
+                "alice",
+                &json!({"connection":"service","argv":argv})
+            )
+            .unwrap_err()
+            .reason,
+            reason
+        );
+    }
+    assert_eq!(
+        tools::dispatch(
+            &f.ctx,
+            "list_connections",
+            "alice",
+            &json!({"unexpected":{"nested":true}})
+        )
+        .unwrap()["connections"][0]["id"],
+        "service"
+    );
+    assert!(f.fake.requests().is_empty());
+}
+
+#[test]
+fn original_list_ownership_stop_and_revocation_contract() {
+    let f = Fixture::new();
+    f.ctx.policy.create_principal("bob", "cli").unwrap();
+    let mut other = f.ctx.policy.get_connection("service").unwrap();
+    other.id = "other".into();
+    other.cli = None;
+    f.ctx.policy.create_connection(other).unwrap();
+    f.ctx
+        .policy
+        .create_grant("bob", "other", Some(3600), Some(5))
+        .unwrap();
+    for (caller, id) in [("alice", "service"), ("bob", "other")] {
+        let view = tools::list_connections(&f.ctx, caller).unwrap();
+        assert_eq!(view["connections"].as_array().unwrap().len(), 1);
+        assert_eq!(view["connections"][0]["id"], id);
+        if caller == "bob" {
+            assert_eq!(view["connections"][0]["grant"]["remaining_uses"], 5);
+        }
+        for forbidden in [SECRET, "secret_id", "zpw1."] {
+            assert!(!view.to_string().contains(forbidden));
+        }
+    }
+    assert_eq!(
+        tools::list_connections(&f.ctx, "ghost").unwrap(),
+        json!({"connections":[]})
+    );
+    f.ctx.policy.stop_all().unwrap();
+    assert_eq!(
+        tools::list_connections(&f.ctx, "alice").unwrap(),
+        json!({"connections":[]})
+    );
+    f.ctx.policy.resume().unwrap();
+    assert_eq!(
+        tools::list_connections(&f.ctx, "alice").unwrap()["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    f.ctx.policy.revoke_grant(&f.grant).unwrap();
+    assert_eq!(
+        tools::list_connections(&f.ctx, "alice").unwrap(),
+        json!({"connections":[]})
+    );
+}
+
+#[test]
+fn original_cli_preflight_missing_profiles_and_programs_never_spawn() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let plain = f.temp.path().join("not-executable");
+    std::fs::write(&plain, b"#!/bin/sh\necho must-not-run\n").unwrap();
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o600)).unwrap();
+    for (id, program, reason) in [
+        ("nocli", None, "cli_not_supported"),
+        (
+            "missing",
+            Some(f.temp.path().join("absent").to_string_lossy().into_owned()),
+            "cli_program_missing",
+        ),
+        (
+            "notexec",
+            Some(plain.to_string_lossy().into_owned()),
+            "cli_program_missing",
+        ),
+        (
+            "byname",
+            Some("zeropw-no-such-program-xyz".into()),
+            "cli_program_missing",
+        ),
+    ] {
+        let mut connection = f.ctx.policy.get_connection("service").unwrap();
+        connection.id = id.into();
+        connection.cli =
+            program.map(|p| CliProfile::new(p, "http", None, BTreeMap::new()).unwrap());
+        f.ctx.policy.create_connection(connection).unwrap();
+        f.ctx
+            .policy
+            .create_grant("alice", id, Some(3600), None)
+            .unwrap();
+        let error = tools::exec(&f.ctx, "alice", id, &[], None).unwrap_err();
+        assert_eq!(error.class, zeropw::errors::ErrorClass::Unsupported);
+        assert_eq!(error.reason, reason);
+    }
+    let events = f.ctx.audit.tail(100).unwrap();
+    let reasons: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "tools_exec")
+        .map(|v| v["reason"].clone())
+        .collect();
+    assert_eq!(
+        reasons,
+        json!([
+            "cli_not_supported",
+            "cli_program_missing",
+            "cli_program_missing",
+            "cli_program_missing"
+        ])
+        .as_array()
+        .unwrap()
+        .clone()
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|v| v["event"] == "run_start" || v["event"] == "handle_issue")
+    );
+    assert!(
+        zeropw::runs::registry(&f.ctx)
+            .unwrap()
+            .active_runs()
+            .is_empty()
+    );
+}
+
+#[test]
+fn original_exec_policy_denials_are_precise_and_audited() {
+    let f = Fixture::new();
+    f.ctx.policy.create_principal("bob", "cli").unwrap();
+    let refused = |caller: &str, id: &str, reason: &str| {
+        let error = tools::exec(&f.ctx, caller, id, &[], None).unwrap_err();
+        assert_eq!(error.class, zeropw::errors::ErrorClass::PolicyDenied);
+        assert_eq!(error.reason, reason);
+    };
+    refused("bob", "service", "no_grant");
+    refused("alice", "ghost", "connection_unknown");
+    f.ctx.policy.stop_all().unwrap();
+    refused("alice", "service", "global_stop");
+    f.ctx.policy.resume().unwrap();
+    f.ctx.policy.set_restore_pending(true).unwrap();
+    refused("alice", "service", "restore_pending");
+    f.ctx.policy.set_restore_pending(false).unwrap();
+    f.ctx
+        .policy
+        .update_connection(
+            "service",
+            ConnectionChanges::new().http_scope(Some(HttpScope::new(None, None, vec![]).unwrap())),
+        )
+        .unwrap();
+    refused("alice", "service", "grant_stale");
+    let fresh = f.ctx.policy.regrant(&f.grant).unwrap();
+    f.ctx.policy.revoke_grant(&fresh.id).unwrap();
+    refused("alice", "service", "grant_revoked");
+    let capped = f
+        .ctx
+        .policy
+        .create_grant("bob", "service", Some(3600), Some(1))
+        .unwrap();
+    f.ctx
+        .policy
+        .consume(&capped.id, None, None, None, None)
+        .unwrap();
+    refused("bob", "service", "grant_exhausted");
+    f.ctx.policy.disable_principal("alice", true).unwrap();
+    refused("alice", "service", "principal_disabled");
+    let events = f.ctx.audit.tail(100).unwrap();
+    let reasons: Vec<_> = events
+        .iter()
+        .filter(|v| v["event"] == "tools_exec" && v["result"] == "denied")
+        .map(|v| v["reason"].clone())
+        .collect();
+    assert_eq!(
+        reasons,
+        json!([
+            "no_grant",
+            "connection_unknown",
+            "global_stop",
+            "restore_pending",
+            "grant_stale",
+            "grant_revoked",
+            "grant_exhausted",
+            "principal_disabled"
+        ])
+        .as_array()
+        .unwrap()
+        .clone()
+    );
+    assert!(!events.iter().any(|v| v["event"] == "handle_issue"));
+    assert!(
+        zeropw::runs::registry(&f.ctx)
+            .unwrap()
+            .active_runs()
+            .is_empty()
+    );
+}
+
+#[test]
+fn original_audit_failure_refuses_each_tool_before_side_effects() {
+    let f = Fixture::new();
+    let audit = f.ctx.state.path.join("audit/audit.jsonl");
+    let saved = audit.with_extension("saved");
+    std::fs::rename(&audit, &saved).unwrap();
+    std::fs::create_dir(&audit).unwrap();
+    for error in [
+        tools::list_connections(&f.ctx, "alice").unwrap_err(),
+        tools::request(&f.ctx, "alice", "service", "GET", "/me", &Vec::new(), b"", None).unwrap_err(),
+        tools::exec(&f.ctx, "alice", "service", &[], None).unwrap_err(),
+    ] {
+        assert_eq!(error.class, zeropw::errors::ErrorClass::AuditUnavailable);
+    }
+    assert!(f.fake.requests().is_empty());
+    assert!(
+        zeropw::runs::registry(&f.ctx)
+            .unwrap()
+            .active_runs()
+            .is_empty()
+    );
+    let text = std::fs::read_to_string(saved).unwrap();
+    assert!(!text.contains("handle_issue") && !text.contains("run_start"));
+    assert_eq!(
+        std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn original_public_url_and_expired_grant_contract() {
+    let f = Fixture::new();
+    *f.ctx.public_url.write().unwrap() = None;
+    assert_eq!(
+        tools::exec(&f.ctx, "alice", "service", &[], None)
+            .unwrap_err()
+            .reason,
+        "public_url_unset"
+    );
+    assert_eq!(
+        tools::set_public_url(&f.ctx, "ftp://127.0.0.1:1")
+            .unwrap_err()
+            .class,
+        zeropw::errors::ErrorClass::InvalidInput
+    );
+    assert_eq!(
+        tools::set_public_url(&f.ctx, "http://127.0.0.1:1/").unwrap(),
+        "http://127.0.0.1:1"
+    );
+    f.ctx.policy.create_principal("bob", "cli").unwrap();
+    f.ctx
+        .policy
+        .create_grant("bob", "service", Some(1), None)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    assert_eq!(
+        tools::exec(&f.ctx, "bob", "service", &[], None)
+            .unwrap_err()
+            .reason,
+        "grant_expired"
+    );
+    assert_eq!(f.ctx.audit.tail(1).unwrap()[0]["reason"], "grant_expired");
+}
