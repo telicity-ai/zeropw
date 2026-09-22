@@ -405,3 +405,41 @@ a separate no-worker test retains immediate no-cycle proof. Independent
 and all 18 run tests. The unique probe is included in `c27f8e6`. A new exact-
 head Linux run remains required; the original failed result is not waived or
 relabeled a product leak.
+
+## Active-terminal-read platform gate (2026-09-22)
+
+A fresh complete macOS run at exact `6becf5a` passes formatting, strict
+all-target Clippy, all 507 default library tests (four ignored), and every
+integration target. The policy differential took 409.64 seconds and all eight
+native process/CLI adapters took 150.71 seconds. All four separately selected
+signer resource probes also pass (21.38 seconds): three descriptors per
+binding, one server-side descriptor per client, enforced 32-client refusal,
+and a surviving accept loop. Idle CPU was below the macOS measurement
+resolution for both one and nine bindings. This is not a Linux result.
+
+Linux run `35720818752` at the same `6becf5a` passed all 1099 unchanged
+Python tests (371.173 seconds), the harness job, Rust formatting/Clippy and
+507 library tests (four ignored; 103.20 seconds). The Rust job exited 101
+after 3 minutes 49 seconds, not an overall timeout. Round-three terminal
+tests passed two of three cases; the original Python Ctrl+C comparison again
+exceeded its eight-second child wait. Later Rust targets were skipped.
+
+The failure-only diagnostics recorded the actual child as the foreground
+process group before input and at timeout, ISIG enabled, ECHO disabled,
+VINTR Ctrl+C, SIGINT unblocked/unignored with a handler installed, and
+`wait_woken`. Kernel pending-signal sets were empty; these do not expose
+CPython's interpreter-pending flags. This rules out the recorded foreground
+and signal-mode explanations, not every possible cause or the precise hosted
+signal/read interleaving. Controlled local investigation demonstrates a
+CPython pending-signal-before-read mechanism, but does not reproduce the
+historical hosted interleaving and is not claimed as its proof.
+
+Actual Astra PO authorizes the original-Python interrupt comparison on Linux
+to observe a positive-length read of the controlled terminal by the exact
+foreground child before the single Ctrl+C. The observation must share the
+existing five-second startup deadline, fail explicitly if unavailable, and
+retain the eight-second child wait and terminal restoration checks. Native
+Rust's immediate-prompt interrupt path must remain unchanged. Sol's bounded
+test-only implementation and independent Astra review are in progress at
+this entry. Neither this decision nor the macOS pass closes the Linux gate.
+No Python product/test, harness, CI or instruction file is changed for it.
