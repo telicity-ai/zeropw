@@ -117,14 +117,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert!(during.cancel_requested);
     drop(release);
     assert!(cleanup_rx.recv_timeout(Duration::from_secs(5)).unwrap());
-    assert_eq!(
-        cancel_rx
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .unwrap()
-            .state,
-        "cancelled"
-    );
+    // cancel() has a bounded internal wait and may return a nonterminal
+    // snapshot. Only registry.wait below establishes terminal publication.
+    let cancellation = cancel_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(cancellation.cancel_requested);
     canceller.join().unwrap();
     assert_eq!(registry.wait(&run, Some(5.0)).state, "cancelled");
 }
