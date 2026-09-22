@@ -443,3 +443,17 @@ Rust's immediate-prompt interrupt path must remain unchanged. Sol's bounded
 test-only implementation and independent Astra review are in progress at
 this entry. Neither this decision nor the macOS pass closes the Linux gate.
 No Python product/test, harness, CI or instruction file is changed for it.
+
+The initial coordinator affected-target run at observer snapshot `cd17bf1`
+passed all three terminal cases but failed the unchanged runtime-output case
+`ar_runtime_07_terminal_status_never_precedes_captured_output_publication`:
+final stdout was empty instead of the synthetic `business-output` (three
+passed, one failed; 9.54 seconds). That assertion preceded the state/reason
+checks, so the failure did not reveal whether the process failed to start,
+timed out, failed audit, or completed without output. No cause or new product
+defect is established by the empty output alone. An unchanged focused retry
+passed in 2.56 seconds; an unchanged complete affected-target retry passed
+all six cases (5.19, 0.35 and 0.14 seconds). These do not explain or erase the
+first failed run. Failure-only selected state/audit metadata and elapsed
+timing are being added under independent Astra review, retaining every
+existing assertion and timeout. Fresh final-platform validation is required.
