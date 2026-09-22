@@ -40,6 +40,8 @@ pub mod incident;
 pub mod intrusion;
 pub mod notify;
 
+pub mod admin_cli;
+pub mod agent_cli;
 pub mod team;
 
 #[cfg(test)]
