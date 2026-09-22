@@ -36,6 +36,7 @@ pub mod sshwire;
 
 pub mod fake_upstream;
 
+pub mod demo;
 pub mod incident;
 pub mod intrusion;
 pub mod notify;

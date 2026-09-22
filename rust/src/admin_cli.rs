@@ -6,6 +6,9 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -487,7 +490,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
         Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://")
     })?;
-    let scheme=scheme.to_ascii_lowercase();
+    let scheme = scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return Err(Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://"));
@@ -495,7 +498,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
     if rest.contains('@')
         || rest.contains('?')
         || rest.contains('#')
-        || rest.find('/').is_some_and(|i| &rest[i..]!="/")
+        || rest.find('/').is_some_and(|i| &rest[i..] != "/")
     {
         return Err(Error::invalid_input("target_must_be_origin")
             .with_detail("target is scheme://host[:port] only"));
@@ -506,7 +509,9 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
             .find(']')
             .ok_or_else(|| Error::invalid_input("invalid_host"))?;
         let host = &host_port[1..end];
-        if host.parse::<std::net::Ipv6Addr>().is_err(){return Err(Error::invalid_input("invalid_host"));}
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(Error::invalid_input("invalid_host"));
+        }
         let rem = &host_port[end + 1..];
         let port = if rem.is_empty() {
             if scheme == "https" { 443 } else { 80 }
@@ -581,27 +586,10 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     {
         return Err(Error::invalid_input("secret_version_unusable"));
     }
-    if let Some(cli) = &connection.cli {
-        for value in ctx.vault.values_for_trusted_scan()? {
-            if profile_env_carries_credential(cli, value.expose()) {
-                return Err(
-                    Error::invalid_input("cli_env_contains_credential").with_detail(&connection.id)
-                );
-            }
-        }
+    if crate::tools::profile_env_carries_vault_value(ctx, connection)? {
+        return Err(Error::invalid_input("cli_env_contains_credential").with_detail(&connection.id));
     }
     Ok(())
-}
-
-fn profile_env_carries_credential(cli: &CliProfile, credential: &[u8]) -> bool {
-    let patterns = crate::runs::credential_patterns(credential);
-    if patterns.is_empty() {
-        return false;
-    }
-    std::iter::once(cli.base_url_env.as_str())
-        .chain(cli.extra_env.keys().map(String::as_str))
-        .chain(cli.extra_env.values().map(String::as_str))
-        .any(|item| crate::runs::contains_sensitive(item.as_bytes(), &patterns))
 }
 
 fn create_connection(
@@ -704,12 +692,22 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "put") => {
             let value = read_secret(a, a.req("kind"))?;
+            if let Some(env_id) = project_shared_env(&ctx, a.req("project"), a.req("environment"))?
+            {
+                return shared_put(
+                    &ctx,
+                    &env_id,
+                    a.req("id"),
+                    a.req("kind"),
+                    &value,
+                    (a.req("project"), a.req("environment")),
+                    a.has("staged"),
+                );
+            }
             let _lock = ctx.state.lock()?;
             // Reject credentials embedded in any saved CLI environment before committing the new version.
             for conn in ctx.policy.list_connections()? {
-                if let Some(cli) = &conn.cli
-                    && profile_env_carries_credential(cli, &value)
-                {
+                if crate::tools::profile_env_carries_credential(&conn, &value) {
                     return Err(
                         Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
                     );
@@ -756,6 +754,38 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let version = a
                 .integer("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
+            if let Some(env_id) = secret_shared_env(&ctx, id)? {
+                let version_id = shared_version_id(&ctx, id, version)?;
+                let is_retire = a.action == "retire" || a.command == "rotation";
+                let result = if is_retire {
+                    team_commit(
+                        &ctx,
+                        &env_id,
+                        vec![
+                            json!({"op":"secret.set_status","secret_id":id,"version_id":version_id,"status":"retired"}),
+                        ],
+                    )?
+                } else {
+                    team_fact(
+                        &ctx,
+                        &env_id,
+                        "secret_version_revoked",
+                        json!({"secret_id":id,"version_id":version_id}),
+                    )?
+                };
+                let mut out = json!({"secret_id":id,"version":version,"status":if is_retire{"retired"}else{"revoked"},"propagated_to":0});
+                if let Some(commit) = result.get("commit") {
+                    out["commit"] = commit.clone();
+                }
+                if let Some(fact) = result.get("fact") {
+                    out["fact"] = fact.clone();
+                }
+                if !is_retire || a.command == "rotation" {
+                    out["provider_revocation_required"] = json!(true);
+                    out["reminder"] = json!(PROVIDER_REMINDER);
+                }
+                return Ok(out);
+            }
             let meta = ctx.vault.get_meta(id)?;
             let is_retire = a.action == "retire" || a.command == "rotation";
             if is_retire && meta.active_version == Some(version) {
@@ -867,6 +897,22 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 "",
                 "",
             )?;
+            if let Some(env_id) = project_shared_env(&ctx, a.req("project"), a.req("environment"))?
+            {
+                let version_id = a
+                    .integer("secret-version")?
+                    .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
+                    .transpose()?;
+                let result = team_commit(
+                    &ctx,
+                    &env_id,
+                    vec![shared_connection_op(&connection, version_id)],
+                )?;
+                let mut out = ctx.policy.get_connection(a.req("id"))?.to_value();
+                out["commit"] = result["commit"].clone();
+                out["propagated_to"] = json!(0);
+                return Ok(out);
+            }
             Ok(
                 create_connection(&ctx, connection, &format!("{scheme}://{host}:{port}"))?
                     .to_value(),
@@ -898,9 +944,30 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 "",
                 "",
             )?;
-            let stamped =
-                create_connection(&ctx, connection, &format!("{}:{port}", a.req("host")))?;
+            let shared = project_shared_env(&ctx, a.req("project"), a.req("environment"))?;
+            let result = if let Some(env_id) = &shared {
+                let version_id = a
+                    .integer("secret-version")?
+                    .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
+                    .transpose()?;
+                Some(team_commit(
+                    &ctx,
+                    env_id,
+                    vec![shared_connection_op(&connection, version_id)],
+                )?)
+            } else {
+                None
+            };
+            let stamped = if shared.is_some() {
+                ctx.policy.get_connection(a.req("id"))?
+            } else {
+                create_connection(&ctx, connection, &format!("{}:{port}", a.req("host")))?
+            };
             let mut out = stamped.to_value();
+            if let Some(result) = result {
+                out["commit"] = result["commit"].clone();
+                out["propagated_to"] = json!(0);
+            }
             let meta = ctx.vault.get_meta(&stamped.secret_id)?;
             let resolved = ctx
                 .vault
@@ -931,6 +998,19 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 paths(a.get("path-prefixes"), prev.path_prefixes.clone())?,
                 confirmations(a.get("confirm-methods"), prev.confirm_methods.clone()),
             )?;
+            if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
+                let result = team_commit(
+                    &ctx,
+                    &env_id,
+                    vec![
+                        json!({"op":"connection.update","id":a.req("id"),"http_scope":{"methods":scope.methods,"path_prefixes":scope.path_prefixes,"confirm_methods":scope.confirm_methods}}),
+                    ],
+                )?;
+                let after = ctx.policy.get_connection(a.req("id"))?;
+                return Ok(
+                    json!({"id":after.id,"policy_version":after.policy_version,"scope":after.public_view().get("scope"),"commit":result["commit"],"propagated_to":0}),
+                );
+            }
             let (after, widened) = ctx.policy.update_connection(
                 a.req("id"),
                 ConnectionChanges::new().http_scope(Some(scope)),
@@ -952,6 +1032,20 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .integer("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("id"))?;
+            if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
+                let version_id = shared_version_id(&ctx, &before.secret_id, ver)?;
+                let result = team_commit(
+                    &ctx,
+                    &env_id,
+                    vec![
+                        json!({"op":"connection.switch_credential","id":a.req("id"),"secret_id":before.secret_id,"secret_version":version_id}),
+                    ],
+                )?;
+                let after = ctx.policy.get_connection(a.req("id"))?;
+                return Ok(
+                    json!({"id":after.id,"secret_id":after.secret_id,"secret_version":after.secret_version,"policy_version":after.policy_version,"commit":result["commit"],"propagated_to":0}),
+                );
+            }
             let meta = ctx.vault.get_meta(&before.secret_id)?;
             let status = meta
                 .versions
@@ -976,6 +1070,18 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("connection", "disable") => {
+            if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
+                let result = team_fact(
+                    &ctx,
+                    &env_id,
+                    "connection_disabled",
+                    json!({"connection_id":a.req("id")}),
+                )?;
+                let after = ctx.policy.get_connection(a.req("id"))?;
+                return Ok(
+                    json!({"id":after.id,"status":after.status,"policy_version":after.policy_version,"fact":result["fact"],"propagated_to":0}),
+                );
+            }
             let c = ctx.policy.disable_connection(a.req("id"))?;
             admin_record(&ctx, "connection_disable", vec![])?;
             Ok(json!({"id":c.id,"status":c.status,"policy_version":c.policy_version}))
@@ -1117,11 +1223,32 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ("rotation", "start") => {
             let meta = ctx.vault.get_meta(a.req("secret-id"))?;
             let value = read_secret(a, &meta.kind)?;
+            if let Some(env_id) = secret_shared_env(&ctx, &meta.id)? {
+                let result = shared_put(
+                    &ctx,
+                    &env_id,
+                    &meta.id,
+                    &meta.kind,
+                    &value,
+                    (&meta.project, &meta.environment),
+                    true,
+                )?;
+                let version_id = result["version_id"].as_str().unwrap_or("");
+                let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+                let version = doc["secrets"][&meta.id]["versions"]
+                    .as_object()
+                    .and_then(|m| m.iter().find(|(_, v)| v["version_id"] == version_id))
+                    .and_then(|(k, _)| k.parse::<i64>().ok());
+                let next_version = version
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| version_id.to_owned());
+                return Ok(
+                    json!({"secret_id":meta.id,"version_id":version_id,"version":version,"status":"staged","previous_active":meta.active_version,"next":format!("rotation activate --connection <id> --version {next_version}"),"commit":result["commit"],"propagated_to":0}),
+                );
+            }
             let _lock = ctx.state.lock()?;
             for conn in ctx.policy.list_connections()? {
-                if let Some(cli) = &conn.cli
-                    && profile_env_carries_credential(cli, &value)
-                {
+                if crate::tools::profile_env_carries_credential(&conn, &value) {
                     return Err(
                         Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
                     );
@@ -1154,6 +1281,36 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("connection"))?;
             let previous = ctx.vault.get_meta(&before.secret_id)?.active_version;
+            if let Some(env_id) = connection_shared_env(&ctx, &before.id)? {
+                let version_id = shared_version_id(&ctx, &before.secret_id, version)?;
+                team_commit(
+                    &ctx,
+                    &env_id,
+                    vec![
+                        json!({"op":"connection.switch_credential","id":before.id,"secret_id":before.secret_id,"secret_version":version_id}),
+                    ],
+                )?;
+                let result = team_commit(
+                    &ctx,
+                    &env_id,
+                    vec![
+                        json!({"op":"secret.activate","secret_id":before.secret_id,"version_id":version_id}),
+                    ],
+                )?;
+                let after = ctx.policy.get_connection(&before.id)?;
+                let others = ctx
+                    .policy
+                    .list_connections()?
+                    .into_iter()
+                    .filter(|c| {
+                        c.secret_id == before.secret_id && c.status == "active" && c.id != after.id
+                    })
+                    .map(|c| c.id)
+                    .collect::<Vec<_>>();
+                return Ok(
+                    json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|v.to_string()).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0}),
+                );
+            }
             let after = ctx.policy.switch_credential(&before.id, Some(version))?;
             ctx.vault
                 .set_version_status(&before.secret_id, version, "active")?;
@@ -1318,6 +1475,500 @@ fn incident_command(a: &Args) -> Result<Value, Error> {
     }
 }
 
+fn team_env_id(ctx: &Context, reference: &str) -> Result<String, Error> {
+    let (project, environment) = reference.split_once('/').ok_or_else(|| {
+        Error::invalid_input("invalid_env_ref").with_detail("use PROJECT/ENVIRONMENT")
+    })?;
+    if project.is_empty() || environment.is_empty() {
+        return Err(Error::invalid_input("invalid_env_ref").with_detail("use PROJECT/ENVIRONMENT"));
+    }
+    crate::team::sync::resolve_env_id(ctx.state, project, environment)?
+        .ok_or_else(|| Error::not_found("team_env_not_found"))
+}
+
+fn offline_team(ctx: Arc<Context>) -> Result<Arc<crate::team::sync::TeamSync>, Error> {
+    use crate::team::identity::DeviceKey;
+    use crate::team::transport::InProcessTransport;
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let transport = Arc::new(InProcessTransport::new(
+        device.clone(),
+        Arc::new(|_, _| None),
+    ));
+    Ok(crate::team::sync::TeamSync::new(ctx, transport, device))
+}
+
+fn commit_view(commit: &crate::team::commit::Commit) -> Value {
+    json!({"author_seq":commit.author_seq,"hlc":commit.hlc})
+}
+fn team_commit(ctx: &Context, env_id: &str, ops: Vec<Value>) -> Result<Value, Error> {
+    let commit = crate::team::membership::author_commit(ctx, None, env_id, ops)?;
+    Ok(json!({"commit":commit_view(&commit),"propagated_to":0}))
+}
+fn team_fact(ctx: &Context, env_id: &str, kind: &str, target: Value) -> Result<Value, Error> {
+    use sha2::{Digest, Sha256};
+    let fact = crate::team::membership::author_fact(ctx, None, env_id, kind, target)?;
+    let bytes = pyjson::dumps(&fact, DumpOptions::compact_sorted())?;
+    Ok(json!({"fact":{"hash":hex::encode(Sha256::digest(bytes.as_bytes()))},"propagated_to":0}))
+}
+
+fn project_shared_env(
+    ctx: &Context,
+    project: &str,
+    environment: &str,
+) -> Result<Option<String>, Error> {
+    crate::team::sync::resolve_env_id(ctx.state, project, environment)
+}
+fn secret_shared_env(ctx: &Context, secret_id: &str) -> Result<Option<String>, Error> {
+    let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    Ok(doc["secrets"][secret_id]["shared_env"]
+        .as_str()
+        .map(str::to_owned))
+}
+fn connection_shared_env(ctx: &Context, connection_id: &str) -> Result<Option<String>, Error> {
+    let doc = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
+    Ok(doc[connection_id]["shared_env"].as_str().map(str::to_owned))
+}
+fn shared_version_id(ctx: &Context, secret_id: &str, version: i64) -> Result<String, Error> {
+    let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    doc["secrets"][secret_id]["versions"][version.to_string()]["version_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::not_found("secret_version_not_found"))
+}
+fn current_dek(ctx: &Context, env_id: &str) -> Result<(String, crate::secret::SecretBytes), Error> {
+    let doc = crate::team::membership::load_environment(ctx, env_id)?.document;
+    let generation = doc["dek"]["current"]
+        .as_str()
+        .ok_or_else(|| Error::invalid_input("team_env_no_generation"))?
+        .to_owned();
+    let wrapped = ctx
+        .state
+        .read_json(&format!("team/{env_id}/dek/{generation}.json"), Value::Null)?;
+    if wrapped.is_null() {
+        return Err(Error::invalid_input("team_dek_generation_missing"));
+    }
+    let key = ctx
+        .kms
+        .unwrap(&crate::kms::WrappedKey::from_dict(&wrapped)?)?;
+    Ok((generation, key))
+}
+fn random_version_id() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+fn shared_put(
+    ctx: &Context,
+    env_id: &str,
+    id: &str,
+    kind: &str,
+    value: &[u8],
+    location: (&str, &str),
+    staged: bool,
+) -> Result<Value, Error> {
+    let (generation, dek) = current_dek(ctx, env_id)?;
+    let version_id = random_version_id();
+    let ciphertext =
+        crate::team::envelope::encrypt_secret(dek.expose(), env_id, id, &version_id, value)?;
+    let public = Vault::public_metadata(kind, value)?;
+    let mut result = team_commit(
+        ctx,
+        env_id,
+        vec![
+            json!({"op":"secret.put_version","secret_id":id,"kind":kind,"generation_id":generation,"version_id":version_id,"ciphertext":ciphertext,"public":public}),
+        ],
+    )?;
+    if !staged {
+        result = team_commit(
+            ctx,
+            env_id,
+            vec![json!({"op":"secret.activate","secret_id":id,"version_id":version_id})],
+        )?;
+    }
+    Ok(
+        json!({"id":id,"version_id":version_id,"status":if staged{"staged"}else{"active"},"kind":kind,"project":location.0,"environment":location.1,"commit":result["commit"],"propagated_to":0}),
+    )
+}
+fn shared_connection_op(connection: &Connection, secret_version_id: Option<String>) -> Value {
+    let mut data = connection.to_value();
+    if let Some(obj) = data.as_object_mut() {
+        for key in ["id", "policy_version", "status", "created_at", "updated_at"] {
+            obj.shift_remove(key);
+        }
+        obj.insert("secret_version".into(), json!(secret_version_id));
+        obj.insert("op".into(), json!("connection.create"));
+        obj.insert("id".into(), json!(connection.id));
+    }
+    data
+}
+
+fn team_command(a: &Args) -> Result<Option<Value>, Error> {
+    use crate::team::{
+        commit::{CommitStore, sort_total_order},
+        identity::DeviceKey,
+        membership as M, sync,
+    };
+    let mutating = !matches!(
+        a.action.as_str(),
+        "members" | "status" | "log" | "show" | "diff" | "incidents"
+    ) && !(a.action == "peers" && !a.has("add"));
+    let ctx = open(a, mutating)?;
+    if a.action == "init" {
+        let key = DeviceKey::create(ctx.state, ctx.kms)?;
+        return Ok(Some(json!({"fingerprint":key.fingerprint()?})));
+    }
+    if a.action == "share" {
+        let result = M::share_environment(
+            &ctx,
+            None,
+            a.req("project"),
+            a.req("environment"),
+            a.get("name").unwrap_or("owner"),
+            &passphrase("ZEROPW_ADMIN_PASSPHRASE")?,
+        )?;
+        return Ok(Some(
+            json!({"env_id":result["env_id"],"project":a.req("project"),"environment":a.req("environment"),"not_shared":result["not_shared"]}),
+        ));
+    }
+    if a.action == "join" {
+        use crate::team::transport::TcpTransport;
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+        let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 32);
+        let team = sync::TeamSync::new(Arc::new(ctx), Arc::new(transport.clone()), device);
+        team.start(None)?;
+        let result = M::join(
+            &team.ctx,
+            &a.positional[0],
+            &transport,
+            &team,
+            a.get("project"),
+            a.get("environment"),
+            30.0,
+        );
+        team.stop();
+        return result.map(Some);
+    }
+    let env_id = team_env_id(&ctx, a.req("env"))?;
+    let out = match a.action.as_str() {
+        "invite" => {
+            let ttl = ttl(a.get("ttl").unwrap_or("24h"))?;
+            let invite = M::create_invite(
+                &ctx,
+                &env_id,
+                a.req("role"),
+                a.req("name"),
+                ttl,
+                &a.list("address"),
+            )?;
+            json!({"env_id":env_id,"invite":invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"})
+        }
+        "members" => {
+            let doc = M::load_environment(&ctx, &env_id)?.document;
+            let mut members = Vec::new();
+            if let Some(map) = doc["members"].as_object() {
+                let mut keys = map.keys().collect::<Vec<_>>();
+                keys.sort();
+                for fp in keys {
+                    let m = &map[fp];
+                    members.push(json!({"fingerprint":fp,"name":m.get("name"),"role":m.get("role"),"status":m.get("status"),"owner":doc["owner"]==*fp}));
+                }
+            }
+            json!({"env_id":env_id,"members":members})
+        }
+        "remove" => M::remove_member(&ctx, None, &env_id, a.req("device"))?,
+        "set-role" => {
+            let commit = M::author_commit(
+                &ctx,
+                None,
+                &env_id,
+                vec![
+                    json!({"op":"member.set_role","fingerprint":a.req("device"),"role":a.req("role")}),
+                ],
+            )?;
+            json!({"env_id":env_id,"fingerprint":a.req("device"),"role":a.req("role"),"commit":commit_view(&commit)})
+        }
+        "transfer-owner" => {
+            let commit = M::author_commit(
+                &ctx,
+                None,
+                &env_id,
+                vec![json!({"op":"owner.transfer","fingerprint":a.req("device")})],
+            )?;
+            json!({"env_id":env_id,"new_owner":a.req("device"),"commit":commit_view(&commit)})
+        }
+        "status" => {
+            let store = CommitStore::new(ctx.state, &env_id);
+            let vector = store.vector()?;
+            let folded = M::load_environment(&ctx, &env_id)?;
+            let reject_dir = ctx.state.path.join("team").join(&env_id).join("rejected");
+            let rejected = fs::read_dir(reject_dir)
+                .ok()
+                .map(|iter| {
+                    iter.filter_map(Result::ok)
+                        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                        .count()
+                })
+                .unwrap_or(0);
+            json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().sum::<i128>(),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
+        }
+        "log" => {
+            let store = CommitStore::new(ctx.state, &env_id);
+            let commits = sort_total_order(store.all_commits()?)?;
+            let folded = M::load_environment(&ctx, &env_id)?;
+            let mut skips: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (hash, _, reason) in folded.skipped {
+                skips.entry(hash).or_default().push(reason);
+            }
+            let entries=commits.into_iter().map(|c|{let hash=c.hash().unwrap_or_default();json!({"author":c.author,"author_seq":c.author_seq,"hlc":c.hlc,"ops":c.ops.iter().map(|v|v.get("op").cloned().unwrap_or(Value::Null)).collect::<Vec<_>>(),"skipped":skips.get(&hash).cloned().unwrap_or_default()})}).collect::<Vec<_>>();
+            json!({"env_id":env_id,"log":entries})
+        }
+        "show" => {
+            let folded = M::load_environment(&ctx, &env_id)?;
+            let view = crate::team::humanview::strip_document(&folded.document);
+            if a.get("format") == Some("yaml") {
+                print!(
+                    "{}",
+                    crate::team::humanview::to_yaml(&view, &folded.fresh_connections)
+                );
+                return Ok(None);
+            }
+            view
+        }
+        "diff" => {
+            let store = CommitStore::new(ctx.state, &env_id);
+            let commits = sort_total_order(store.all_commits()?)?;
+            let (facts, _, _) = sync::load_facts(ctx.state, &env_id)?;
+            let find = |prefix: &str| -> Result<usize, Error> {
+                let matches = commits
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.hash().is_ok_and(|h| h.starts_with(prefix)))
+                    .map(|(i, _)| i)
+                    .collect::<Vec<_>>();
+                if matches.is_empty() {
+                    Err(Error::not_found("commit_hash_not_found"))
+                } else if matches.len() > 1 {
+                    Err(Error::invalid_input("commit_hash_ambiguous"))
+                } else {
+                    Ok(matches[0])
+                }
+            };
+            let left = find(&a.positional[0])?;
+            let right = find(&a.positional[1])?;
+            let view = |index: usize| -> Result<Value, Error> {
+                let folded = crate::team::fold::fold(
+                    &env_id,
+                    commits[..=index].to_vec(),
+                    Some(&facts),
+                    None,
+                    None,
+                    None,
+                )?;
+                Ok(crate::team::humanview::strip_document(&folded.document))
+            };
+            json!({"env_id":env_id,"left":{"hash":commits[left].hash()?,"view":view(left)?},"right":{"hash":commits[right].hash()?,"view":view(right)?}})
+        }
+        "peers" => {
+            if let Some(add) = a.get("add") {
+                let device = a.get("device").ok_or_else(|| {
+                    Error::invalid_input("peer_add_needs_device")
+                        .with_detail("use --device FP with --add")
+                })?;
+                let team = offline_team(Arc::new(open(a, true)?))?;
+                team.register_env(&env_id)?;
+                team.set_peer_address(&env_id, device, add)?;
+            }
+            json!({"env_id":env_id,"peers":ctx.state.read_json(&format!("team/{env_id}/peers.json"),json!({}))?})
+        }
+        "compact" => {
+            let team = offline_team(Arc::new(open(a, true)?))?;
+            team.register_env(&env_id)?;
+            team.compact(&env_id)?
+        }
+        "incidents" => {
+            let dir = ctx.state.path.join("team").join(&env_id).join("incidents");
+            let mut incidents = Vec::new();
+            if let Ok(entries) = fs::read_dir(dir) {
+                let mut paths = entries
+                    .filter_map(Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                    .collect::<Vec<_>>();
+                paths.sort();
+                for path in paths {
+                    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                        let record = ctx
+                            .state
+                            .read_json(&format!("team/{env_id}/incidents/{name}"), Value::Null)?;
+                        if let Some(obj) = record.as_object() {
+                            let mut view = json!({"id":path.file_stem().and_then(|s|s.to_str()).unwrap_or("")});
+                            for (k, v) in obj {
+                                view[k] = v.clone();
+                            }
+                            incidents.push(view);
+                        }
+                    }
+                }
+            }
+            json!({"env_id":env_id,"incidents":incidents,"rotation_flags":ctx.state.read_json(&format!("team/{env_id}/rotation_flags.json"),json!({}))?})
+        }
+        _ => return Err(Error::invalid_input("invalid_arguments")),
+    };
+    Ok(Some(out))
+}
+
+fn parse_listen(raw: &str) -> Result<(String, u16), Error> {
+    let (host, port) = raw
+        .trim()
+        .rsplit_once(':')
+        .ok_or_else(|| Error::invalid_input("invalid_listen").with_detail("use HOST:PORT"))?;
+    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"));
+    }
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"))?;
+    Ok((host.trim_matches(['[', ']']).to_owned(), port))
+}
+fn require_loopback(host: &str) -> Result<String, Error> {
+    if host == "localhost" {
+        return Ok("127.0.0.1".into());
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) if ip.is_loopback() => Ok(host.to_owned()),
+        Ok(std::net::IpAddr::V6(ip)) if ip.is_loopback() => {
+            Err(Error::unsupported("listen_ipv6_unsupported")
+                .with_detail("the trusted process binds IPv4 loopback only"))
+        }
+        _ => Err(Error::unsupported("listen_not_loopback")
+            .with_detail("the trusted process binds loopback addresses only")),
+    }
+}
+const WITHDRAWN: &[&str] = &[
+    "restore_pending",
+    "global_stop",
+    "principal_unknown",
+    "principal_disabled",
+    "connection_unknown",
+    "connection_disabled",
+    "grant_unknown",
+    "grant_mismatch",
+    "grant_revoked",
+    "grant_stale",
+    "grant_inactive",
+];
+fn withdrawn(ctx: &Context, caller: &str, connection: &str, grant: &str) -> Option<String> {
+    ctx.policy
+        .check_grant(caller, connection, grant)
+        .ok()
+        .and_then(|d| (!d.allowed && WITHDRAWN.contains(&d.reason)).then(|| d.reason.to_owned()))
+}
+fn enforce_withdrawn(ctx: &Context, quiet: bool) {
+    if let Some(runs) = crate::runs::registry(ctx) {
+        for run in runs.active_runs() {
+            if run.cancel_requested {
+                continue;
+            }
+            if let Some(reason) = withdrawn(ctx, &run.caller, &run.connection, &run.grant)
+                && runs.cancel(&run.id, &run.caller, &reason).is_err()
+                && !quiet
+            {
+                eprintln!("run revocation check failed: Error");
+            }
+        }
+    }
+    if let Some(manager) = crate::tools::signer_manager(ctx) {
+        for binding in manager.active_bindings() {
+            if withdrawn(
+                ctx,
+                &binding.caller,
+                &binding.connection_id,
+                &binding.grant_id,
+            )
+            .is_some()
+            {
+                manager.release(&binding);
+            }
+        }
+    }
+}
+
+/// Serve the trusted API until `stop` is set. Prints one compact startup payload before polling.
+pub fn run_serve(
+    state_dir: &str,
+    listen: &str,
+    quiet: bool,
+    team_listen: Option<&str>,
+    stop: Arc<AtomicBool>,
+) -> Result<Value, Error> {
+    use std::io::Write;
+    let (host, port) = parse_listen(listen)?;
+    let host = require_loopback(&host)?;
+    if let Some(address) = team_listen {
+        parse_listen(address)?;
+    }
+    let config = Config {
+        listen_host: host.clone(),
+        listen_port: i64::from(port),
+        ..Config::default()
+    };
+    let ctx = Arc::new(Context::open(state_dir, config, crate::clock::system())?);
+    ctx.audit.require_writable()?;
+    let _detector = crate::intrusion::install(ctx.clone(), None)?;
+    let team = if let Some(address) = team_listen {
+        use crate::team::{identity::DeviceKey, sync::TeamSync, transport::TcpTransport};
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+        let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 64);
+        let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        team.start(Some(address))?;
+        Some(team)
+    } else {
+        None
+    };
+    let server = crate::server::ZeroPWServer::new(ctx.clone(), Some(&host), Some(port))?;
+    server.serve_in_thread()?;
+    let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","state_dir":ctx.state.path.to_string_lossy(),"team_listen":team_listen});
+    if let Some(obj) = control(&ctx)?.as_object() {
+        for (k, v) in obj {
+            payload[k] = v.clone();
+        }
+    }
+    let text = pyjson::dumps(&payload, DumpOptions::compact_sorted())?;
+    println!("{text}");
+    let _ = io::stdout().flush();
+    let mut was_stopped = payload["stopped"] == true;
+    let mut was_pending = payload["restore_pending"] == true;
+    while !stop.load(Ordering::Acquire) {
+        thread::sleep(Duration::from_millis(250));
+        server.service_actions();
+        let _ = ctx.reload_handle_key();
+        if let (Ok(now_stopped), Ok(now_pending)) =
+            (ctx.policy.is_stopped(), ctx.policy.restore_pending())
+        {
+            if let Some(runs) = crate::runs::registry(&ctx) {
+                if now_stopped && !was_stopped {
+                    runs.cancel_all("global_stop", None);
+                }
+                if now_pending && !was_pending {
+                    runs.cancel_all("restore_pending", None);
+                }
+            }
+            was_stopped = now_stopped;
+            was_pending = now_pending;
+            enforce_withdrawn(&ctx, quiet);
+        }
+        if crate::notify::retry_pending(&ctx, (ctx.clock)()).is_err() && !quiet {
+            eprintln!("notification retry failed: Error");
+        }
+    }
+    if let Some(team) = team {
+        team.stop();
+    }
+    server.stop();
+    Ok(payload)
+}
+
 /// Process entry point for the trusted administrator CLI.
 pub fn main(argv: &[String]) -> i32 {
     if argv.iter().any(|v| v == "--help" || v == "-h") {
@@ -1337,16 +1988,44 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
+    if args.command == "serve" {
+        let stop = Arc::new(AtomicBool::new(false));
+        for signal in [
+            signal_hook::consts::signal::SIGINT,
+            signal_hook::consts::signal::SIGTERM,
+        ] {
+            if signal_hook::flag::register(signal, stop.clone()).is_err() {
+                output(&Error::state("signal_handler_unavailable").to_dict(), true);
+                return 1;
+            }
+        }
+        return match run_serve(
+            &args.state_dir,
+            args.get("listen").unwrap_or("127.0.0.1:0"),
+            args.has("quiet"),
+            args.get("team-listen"),
+            stop,
+        ) {
+            Ok(_) => 0,
+            Err(error) => {
+                output(&error.to_dict(), true);
+                1
+            }
+        };
+    }
     let result = if args.command == "incident" {
-        incident_command(&args)
+        incident_command(&args).map(Some)
+    } else if args.command == "team" {
+        team_command(&args)
     } else {
-        local_command(&args)
+        local_command(&args).map(Some)
     };
     match result {
-        Ok(value) => {
+        Ok(Some(value)) => {
             output(&value, false);
             0
         }
+        Ok(None) => 0,
         Err(error) => {
             if error.reason == "file_not_found" {
                 output(
