@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -580,13 +581,7 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     }
     if let Some(cli) = &connection.cli {
         for value in ctx.vault.values_for_trusted_scan()? {
-            let raw = value.expose();
-            if !raw.is_empty()
-                && cli
-                    .extra_env
-                    .values()
-                    .any(|v| v.as_bytes().windows(raw.len()).any(|w| w == raw))
-            {
+            if profile_env_carries_credential(cli, value.expose()) {
                 return Err(
                     Error::invalid_input("cli_env_contains_credential").with_detail(&connection.id)
                 );
@@ -596,11 +591,24 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     Ok(())
 }
 
+fn profile_env_carries_credential(cli: &CliProfile, credential: &[u8]) -> bool {
+    let patterns = crate::runs::credential_patterns(credential);
+    if patterns.is_empty() {
+        return false;
+    }
+    std::iter::once(cli.base_url_env.as_str())
+        .chain(cli.extra_env.keys().map(String::as_str))
+        .chain(cli.extra_env.values().map(String::as_str))
+        .any(|item| crate::runs::contains_sensitive(item.as_bytes(), &patterns))
+}
+
 fn create_connection(
     ctx: &Context,
     connection: Connection,
     target: &str,
 ) -> Result<Connection, Error> {
+    // The credential scan and persisted CLI profile must be one state transaction.
+    let _lock = ctx.state.lock()?;
     check_secret_connection(ctx, &connection)?;
     let stamped = ctx.policy.create_connection(connection)?;
     ctx.audit.record(
@@ -694,13 +702,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "put") => {
             let value = read_secret(a, a.req("kind"))?;
+            let _lock = ctx.state.lock()?;
             // Reject credentials embedded in any saved CLI environment before committing the new version.
             for conn in ctx.policy.list_connections()? {
                 if let Some(cli) = &conn.cli
-                    && cli
-                        .extra_env
-                        .values()
-                        .any(|v| v.as_bytes().windows(value.len()).any(|w| w == value))
+                    && profile_env_carries_credential(cli, &value)
                 {
                     return Err(
                         Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
@@ -1109,6 +1115,16 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ("rotation", "start") => {
             let meta = ctx.vault.get_meta(a.req("secret-id"))?;
             let value = read_secret(a, &meta.kind)?;
+            let _lock = ctx.state.lock()?;
+            for conn in ctx.policy.list_connections()? {
+                if let Some(cli) = &conn.cli
+                    && profile_env_carries_credential(cli, &value)
+                {
+                    return Err(
+                        Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
+                    );
+                }
+            }
             let version = ctx.vault.put_secret(
                 &meta.id,
                 &meta.kind,
@@ -1243,6 +1259,63 @@ fn local_command(a: &Args) -> Result<Value, Error> {
     }
 }
 
+fn incident_command(a: &Args) -> Result<Value, Error> {
+    let mutating = !matches!(a.action.as_str(), "list" | "show");
+    let ctx = Arc::new(open(a, mutating)?);
+    match a.action.as_str() {
+        "declare" => {
+            if a.req("scope") == "all" {
+                verify_admin(&ctx)?;
+            }
+            let principals = a.get("principal").map(|p| vec![p.to_owned()]);
+            let existing_id = ctx.policy.open_incident_id()?;
+            let existing_scope = existing_id
+                .as_ref()
+                .and_then(|id| crate::incident::get_incident(&ctx, id).ok())
+                .map(|i| i.scope);
+            let incident = crate::incident::open_incident(
+                &ctx,
+                a.req("scope"),
+                principals.as_deref(),
+                a.get("runtime"),
+                "manual",
+                None,
+                a.get("reason"),
+            )?;
+            let mut view = incident.to_dict();
+            if existing_scope.is_some() {
+                view["existing"] = json!(true);
+                view["widened"] = json!(Some(&incident.scope) != existing_scope.as_ref());
+            }
+            Ok(view)
+        }
+        "escalate" => {
+            if a.req("scope") == "all" {
+                verify_admin(&ctx)?;
+            }
+            Ok(crate::incident::widen_incident(
+                &ctx,
+                a.req("id"),
+                a.req("scope"),
+                a.get("runtime"),
+                None,
+                None,
+            )?
+            .to_dict())
+        }
+        "list" => Ok(
+            json!({"incidents":crate::incident::list_incidents(&ctx)?.iter().map(crate::incident::Incident::to_dict).collect::<Vec<_>>()}),
+        ),
+        "show" => Ok(crate::incident::get_incident(&ctx, a.req("id"))?.to_dict()),
+        "close" => {
+            verify_admin(&ctx)?;
+            Ok(crate::incident::close_incident(&ctx, a.req("id"))?.to_dict())
+        }
+        "notify-test" => crate::notify::send_test_message(&ctx),
+        _ => Err(Error::invalid_input("invalid_arguments")),
+    }
+}
+
 /// Process entry point for the trusted administrator CLI.
 pub fn main(argv: &[String]) -> i32 {
     if argv.iter().any(|v| v == "--help" || v == "-h") {
@@ -1262,7 +1335,12 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
-    match local_command(&args) {
+    let result = if args.command == "incident" {
+        incident_command(&args)
+    } else {
+        local_command(&args)
+    };
+    match result {
         Ok(value) => {
             output(&value, false);
             0
