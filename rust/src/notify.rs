@@ -416,10 +416,10 @@ fn audit_notify(ctx: &Context, i: &mut Incident, result: &str, reason: &str) {
         .is_err()
     {
         let failed = &mut i.actions["failed_steps"];
-        if let Some(arr) = failed.as_array_mut() {
-            if !arr.contains(&json!("audit_incident_notify")) {
-                arr.push(json!("audit_incident_notify"));
-            }
+        if let Some(arr) = failed.as_array_mut()
+            && !arr.contains(&json!("audit_incident_notify"))
+        {
+            arr.push(json!("audit_incident_notify"));
         }
     }
 }

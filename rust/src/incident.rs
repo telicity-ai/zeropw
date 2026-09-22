@@ -407,21 +407,18 @@ pub fn open_incident(
     if !TRIGGERS.contains(&trigger) {
         return Err(Error::invalid_input("invalid_incident_trigger"));
     }
-    if let Some(id) = ctx.policy.open_incident_id()? {
-        if let Ok(existing) = get_incident(ctx, &id) {
-            if rank(scope) > rank(&existing.scope) {
-                return widen_incident(ctx, &id, scope, runtime, principals, rule);
-            }
-            return Ok(existing);
+    if let Some(id) = ctx.policy.open_incident_id()?
+        && let Ok(existing) = get_incident(ctx, &id)
+    {
+        if rank(scope) > rank(&existing.scope) {
+            return widen_incident(ctx, &id, scope, runtime, principals, rule);
         }
+        return Ok(existing);
     }
     let resolved = resolve_principals(ctx, scope, principals, runtime)?;
     let mut nonce = [0u8; 4];
     getrandom::getrandom(&mut nonce).map_err(|_| Error::state("state_write_failed"))?;
-    let stamp = iso(Some((ctx.clock)()))
-        .replace('-', "")
-        .replace(':', "")
-        .replace('T', "T");
+    let stamp = iso(Some((ctx.clock)())).replace(['-', ':'], "");
     let mut incident = Incident {
         id: format!("inc-{stamp}-{}", hex::encode(nonce)),
         opened_at: iso(Some((ctx.clock)())),

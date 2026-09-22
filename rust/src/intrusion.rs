@@ -220,7 +220,7 @@ impl DetectorConfig {
                 return Err(Error::invalid_input("intrusion_weak_points_invalid"));
             }
         }
-        if !(self.window_seconds > 0.0) {
+        if self.window_seconds <= 0.0 || self.window_seconds.is_nan() {
             return Err(Error::invalid_input("intrusion_window_invalid"));
         }
         if self.weak_threshold < 1 {

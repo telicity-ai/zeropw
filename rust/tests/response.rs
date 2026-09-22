@@ -296,6 +296,141 @@ fn config_merges_thresholds_and_rejects_disabled_strong_rule() {
 }
 
 #[test]
+fn weak_signals_accumulate_but_global_stop_does_not_score() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let _detector = intrusion::install(Arc::clone(&ctx), None).unwrap();
+    for _ in 0..10 {
+        ctx.audit
+            .record(
+                "tools_request",
+                RecordArgs {
+                    caller: Some("agent-1"),
+                    result: Some("denied"),
+                    reason: Some("global_stop"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
+    for reason in ["no_grant", "no_grant", "grant_revoked", "path_not_allowed"] {
+        ctx.audit
+            .record(
+                "tools_request",
+                RecordArgs {
+                    caller: Some("agent-1"),
+                    result: Some("denied"),
+                    reason: Some(reason),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let id = ctx.policy.open_incident_id().unwrap().unwrap();
+    assert_eq!(
+        incident::get_incident(&ctx, &id).unwrap().rule.as_deref(),
+        Some("scope_violation")
+    );
+}
+
+#[test]
+fn enumeration_counts_first_uses_and_burst_ignores_status_polling() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    for n in 1..=4 {
+        let cid = format!("c{n}");
+        ctx.policy
+            .create_connection(connection(&cid, "gh-token"))
+            .unwrap();
+        ctx.policy
+            .create_grant("agent-1", &cid, Some(3600), None)
+            .unwrap();
+    }
+    let cfg = DetectorConfig {
+        weak_threshold: 4,
+        burst_count: 100,
+        ..DetectorConfig::default()
+    };
+    let _detector = intrusion::install(Arc::clone(&ctx), Some(cfg)).unwrap();
+    for _ in 0..100 {
+        ctx.audit
+            .record(
+                "tools_status",
+                RecordArgs {
+                    caller: Some("agent-1"),
+                    result: Some("ok"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
+    for n in 1..=3 {
+        let cid = format!("c{n}");
+        ctx.audit
+            .record(
+                "tools_request",
+                RecordArgs {
+                    caller: Some("agent-1"),
+                    connection: Some(&cid),
+                    result: Some("ok"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(ctx.policy.open_incident_id().unwrap(), None);
+    ctx.audit
+        .record(
+            "tools_request",
+            RecordArgs {
+                caller: Some("agent-1"),
+                connection: Some("c4"),
+                result: Some("ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        incident::get_incident(&ctx, &ctx.policy.open_incident_id().unwrap().unwrap())
+            .unwrap()
+            .rule
+            .as_deref(),
+        Some("enumeration")
+    );
+}
+
+#[test]
+fn two_callers_with_http_signals_escalate_to_runtime() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy.create_principal("agent-2", "box-1").unwrap();
+    let cfg = DetectorConfig {
+        weak_threshold: 3,
+        ..DetectorConfig::default()
+    };
+    let _detector = intrusion::install(Arc::clone(&ctx), Some(cfg)).unwrap();
+    for pid in ["agent-1", "agent-2"] {
+        ctx.audit
+            .record(
+                "tools_request",
+                RecordArgs {
+                    caller: Some(pid),
+                    result: Some("denied"),
+                    reason: Some("grant_revoked"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let id = ctx.policy.open_incident_id().unwrap().unwrap();
+    let i = incident::get_incident(&ctx, &id).unwrap();
+    assert_eq!(i.scope, "runtime");
+    assert_eq!(i.principals, vec!["agent-1", "agent-2"]);
+}
+
+#[test]
 fn email_render_has_ordered_sections_and_no_detail_or_value() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
@@ -415,4 +550,38 @@ fn failed_smtp_delivery_goes_pending_and_due_retry_sends() {
     );
     let (_, message) = receiver.join().unwrap();
     assert!(!message.is_empty());
+}
+
+#[test]
+fn insecure_notify_config_is_pending_and_never_sends() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    fs::write(ctx.state.path.join("notify.json"), b"{}").unwrap();
+    fs::set_permissions(
+        ctx.state.path.join("notify.json"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert_eq!(i.notification["status"], "pending");
+    assert_eq!(i.notification["last_error"], "notify_config_insecure");
+    assert_eq!(i.notification["attempts"], 1);
+}
+
+#[test]
+fn rendered_value_leak_blocks_delivery_without_opening_socket() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"]})).unwrap();
+    i.rule = Some(std::str::from_utf8(SECRET).unwrap().into());
+    notify::deliver(&ctx, &mut i).unwrap();
+    assert_eq!(i.notification["status"], "failed");
+    assert_eq!(i.notification["reason"], "rendered_value_detected");
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_err());
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.assessment, json!({"redacted":true}));
 }
