@@ -33,6 +33,10 @@ fn repeated_prompt_restores_terminal_on_eof_invalid_utf8_and_signals() {
     let script = script.replacen(wait, " try:assert p.wait(timeout=8)!=0", 1);
     assert!(script.contains("second prompt timed out"));
     assert!(script.contains("try:assert p.wait(timeout=8)!=0"));
+    #[cfg(target_os = "linux")]
+    let read_syscall = libc::SYS_read.to_string();
+    #[cfg(not(target_os = "linux"))]
+    let read_syscall = "unsupported".to_owned();
     for input in ["interrupt", "eof", "invalid"] {
         let temp = tempfile::TempDir::new().unwrap();
         let output = Command::new("python3.12")
@@ -42,6 +46,7 @@ fn repeated_prompt_restores_terminal_on_eof_invalid_utf8_and_signals() {
             .arg("rust")
             .arg(format!("{}/..", env!("CARGO_MANIFEST_DIR")))
             .arg(input)
+            .arg(&read_syscall)
             .output()
             .unwrap();
         assert!(

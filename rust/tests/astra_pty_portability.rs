@@ -19,6 +19,10 @@ def inherited():
 p=subprocess.run([sys.executable,'-I','-c',sys.argv[2]]+sys.argv[3:],preexec_fn=inherited,capture_output=True,timeout=20)
 assert p.returncode==0,(p.stdout,p.stderr)
 "#;
+    #[cfg(target_os = "linux")]
+    let read_syscall = libc::SYS_read.to_string();
+    #[cfg(not(target_os = "linux"))]
+    let read_syscall = "unsupported".to_owned();
     for inherited in ["ignored", "blocked"] {
         for mode in ["python", "rust"] {
             let temp = tempfile::TempDir::new().unwrap();
@@ -29,6 +33,7 @@ assert p.returncode==0,(p.stdout,p.stderr)
                 .arg(mode)
                 .arg(format!("{}/..", env!("CARGO_MANIFEST_DIR")))
                 .arg("interrupt")
+                .arg(&read_syscall)
                 .output()
                 .unwrap();
             assert!(
