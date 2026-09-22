@@ -654,57 +654,63 @@ fn explicit_empty_membership_refuses_inprocess_and_tcp_handshakes() {
 
 #[test]
 fn inprocess_refusal_can_return_before_responder_hook_finishes() {
-    use std::sync::Barrier;
+    use std::sync::mpsc;
 
     let a = DeviceKey::generate();
     let b = DeviceKey::generate();
     let fa = a.fingerprint().unwrap();
     let env = commit::new_env_id(&fa).unwrap();
     let empty: MembershipCheck = Arc::new(|_, _| None);
-    let ta = InProcessTransport::new(a, empty.clone());
+    let ta = Arc::new(InProcessTransport::new(a, empty.clone()));
     let tb = InProcessTransport::new(b, empty);
-    let hook_started = Arc::new(AtomicBool::new(false));
-    let hook_release = Arc::new(Barrier::new(2));
-    let failures = Arc::new(Mutex::new(Vec::new()));
-    let hook_started_cb = hook_started.clone();
-    let hook_release_cb = hook_release.clone();
-    let failures_cb = failures.clone();
+    let (hook_started_tx, hook_started_rx) = mpsc::channel();
+    let (hook_release_tx, hook_release_rx) = mpsc::channel();
+    let hook_release_rx = Mutex::new(hook_release_rx);
+    let (hook_completed_tx, hook_completed_rx) = mpsc::channel();
     tb.set_handshake_failed(Some(Arc::new(move |reason, fp| {
-        hook_started_cb.store(true, Ordering::Release);
-        hook_release_cb.wait();
-        failures_cb
+        let _ = hook_started_tx.send(());
+        let released = hook_release_rx
             .lock()
             .unwrap()
-            .push((reason.to_owned(), fp.map(str::to_owned)));
+            .recv_timeout(Duration::from_secs(10))
+            .is_ok();
+        let _ = hook_completed_tx.send((released, reason.to_owned(), fp.map(str::to_owned)));
     })));
     let accepted = Arc::new(AtomicBool::new(false));
     let accepted_cb = accepted.clone();
     tb.listen(
-        "native-empty-membership-hook-barrier",
+        "native-empty-membership-hook-channel",
         Arc::new(move |_| accepted_cb.store(true, Ordering::Release)),
     )
     .unwrap();
+    let (dial_tx, dial_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let refused = ta
+            .dial("native-empty-membership-hook-channel", &env, None)
+            .is_err();
+        let _ = dial_tx.send(refused);
+    });
+    let dial_result = dial_rx.recv_timeout(Duration::from_secs(3));
+    let hook_started = hook_started_rx.recv_timeout(Duration::from_secs(3));
+    let completion_before_release = hook_completed_rx.try_recv();
+    // Release even when an assertion is about to fail: no diagnostic thread
+    // should be left waiting for a main-thread barrier or an unbounded join.
+    let _ = hook_release_tx.send(());
     assert!(
-        ta.dial("native-empty-membership-hook-barrier", &env, None)
-            .is_err(),
+        dial_result.expect("in-process dial did not finish within 3 seconds"),
         "empty membership must refuse the handshake before hook completion"
     );
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !hook_started.load(Ordering::Acquire) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(hook_started.load(Ordering::Acquire));
+    hook_started.expect("responder hook did not start within 3 seconds");
+    assert!(matches!(
+        completion_before_release,
+        Err(mpsc::TryRecvError::Empty)
+    ));
     assert!(!accepted.load(Ordering::Acquire));
-    assert!(failures.lock().unwrap().is_empty());
-    hook_release.wait();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while failures.lock().unwrap().is_empty() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(
-        failures.lock().unwrap().as_slice(),
-        &[("not_member".to_owned(), Some(fa))]
-    );
+    let (released, reason, fingerprint) = hook_completed_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("responder hook did not complete within 3 seconds");
+    assert!(released, "responder hook timed out before release");
+    assert_eq!((reason, fingerprint), ("not_member".to_owned(), Some(fa)));
     tb.close();
 }
 
