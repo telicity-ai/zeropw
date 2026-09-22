@@ -1,0 +1,13 @@
+# Astra signer cleanup / cancellation observation correction
+
+Actual independent reviewer: `gpt-6-astra`. Reviewed exact Sol commit `b84dbc22bac87b0728e1875464afd2c477efae2b`, changing only `rust/tests/team_remaining_contract.rs` (five insertions, one deletion).
+
+**Bounded test-observation correction accepted.** The existing socket-removal wait now requires both socket absence and API state `cancelled` in the same predicate. It keeps the existing `wait_stage` ten-second polling deadline and 20ms polling interval; it does not append another cancellation wait. The explicit final `cancelled` and connection-`disabled` assertions remain, and an explicit final socket-absence assertion is added. Earlier socket-presence, real child marker, authenticated replacement-session commit barrier and remote fact application checks are unchanged. No business postcondition, product code, CI setting or timeout value was removed or relaxed.
+
+Precision on timing: this is the same ten-second **polling deadline**, not a newly proven hard end-to-end wall-clock limit. The existing HTTP helper retains its five-second read timeout, and an in-flight condition evaluation can cross the polling deadline. That helper and timeout were not changed. The review does not claim a stronger timing guarantee than the implementation provides.
+
+The correction follows independent controlled evidence in `astra-cleanup-publication-order.md` / `ae70d39`, with the new control's cancellation-return assumption corrected in `44db97a` and documented separately. Actual Python and Rust run registries can both have a closed/unlinked resource and state `running` while cleanup is paused; releasing cleanup produces `cancelled`. Source connects that generic Unix-socket control to real signer resource cleanup before terminal publication. The prior failed full macOS observation is preserved; no precise historical scheduler trace or new product defect is claimed.
+
+The independent control passed including Python comparison (2.71s initially, 2.57s after its correction); strict focused Clippy passed. Sol reports the exact changed team suite **23/23 passed**, 19.66s, plus formatting/focused Clippy. This report independently reviews that source diff and its contract; it does **not** relabel Sol's team-suite execution as a new independent run. No additional build was needed for this source-only check.
+
+Fresh coordinator all-target validation and final exact-head Linux remain acceptance gates. The older successful 45-minute Linux candidate does not itself approve this later test revision. This report changes no control, existing test, product or previous review.
