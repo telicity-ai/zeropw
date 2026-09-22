@@ -11,12 +11,14 @@ The detailed matrix below records the round-1 worker handoff. These subsequent
 results close some of its stated gaps, but do not constitute independent Astra
 round-2 acceptance:
 
-- `response_contract` passes six additional tests: 1,250 denial-rule inputs
+- `response_contract` passes eight additional tests: 1,250 denial-rule inputs
   compared with the actual Python matcher; byte-for-byte subject/body comparison
   for principal/runtime/all incident fixtures; clock-advanced weak expiry and
   unattributed expired handles; lifetime first-use, half-of-usable and combined
   enumeration/burst/denial boundaries; normal traffic/status polling; and invalid
-  threshold/window/ratio configuration with default-preserving overrides.
+  threshold/window/ratio configuration with default-preserving overrides;
+  used/held/ungranted exposure tiers excluding pre-principal usage; and merging
+  two principals' exposure into one mandatory secret with one use count.
 - The original eight response administrator/notification CLI cases pass against
   the native binary (42 native administrator launches on CLI worker `b267a4b`).
   Their original assertions are unchanged. This covers declaration, widening,
@@ -31,9 +33,9 @@ round-2 acceptance:
   processes; they do not assert the internal signer binding object.
 
 Still not proven by those results: cross-process manual-incident release of an
-already-live signer binding; successful TLS SMTP interoperability; and the
-exposure-tier merge cases noted below. The three rendering fixtures do not stand
-in for every possible incident shape.
+already-live signer binding and successful TLS SMTP interoperability. The three
+rendering fixtures do not stand in for every possible incident shape. The
+round-1 exposure-tier/merge gaps below are closed by the two new direct tests.
 
 ## Incident
 

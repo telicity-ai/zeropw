@@ -359,3 +359,79 @@ fn invalid_threshold_variants_never_disable_required_rules() {
     assert_eq!(config.strong_thresholds["signer_misuse"], 1);
     assert_eq!(config.weak_threshold, 5);
 }
+
+#[test]
+fn assessment_distinguishes_used_held_and_never_granted_secrets() {
+    let (_tmp, ctx, time) = fixture(json!({}), 1);
+    for (id, granted) in [("held", true), ("ungranted", false)] {
+        ctx.vault
+            .put_secret(
+                id,
+                "api_key",
+                format!("synthetic-{id}-0123456789").as_bytes(),
+                "demo",
+                "dev",
+                true,
+            )
+            .unwrap();
+        let mut c = ctx.policy.get_connection("c0").unwrap();
+        c.id = id.into();
+        c.secret_id = id.into();
+        ctx.policy.create_connection(c).unwrap();
+        if granted {
+            ctx.policy
+                .create_grant("agent", id, Some(3600), None)
+                .unwrap();
+        }
+    }
+    let principal = ctx.policy.get_principal("agent").unwrap();
+    time.fetch_sub(10, Ordering::SeqCst);
+    event(&ctx, "http_relay", Some("agent"), Some("c0"), "ok", None);
+    time.fetch_add(15, Ordering::SeqCst);
+    event(&ctx, "http_relay", Some("agent"), Some("c0"), "ok", None);
+    let assessment = incident::assess(
+        &ctx,
+        &["agent".into()],
+        "principal",
+        &zeropw::store::iso(Some((ctx.clock)())),
+    )
+    .unwrap();
+    let secrets = assessment["secrets"].as_array().unwrap();
+    assert_eq!(secrets.len(), 2);
+    let used = secrets.iter().find(|s| s["secret_id"] == "key").unwrap();
+    assert_eq!(used["tier"], "mandatory");
+    assert_eq!(used["use_count"], 1);
+    assert_eq!(
+        secrets.iter().find(|s| s["secret_id"] == "held").unwrap()["tier"],
+        "recommended"
+    );
+    assert!(!secrets.iter().any(|s| s["secret_id"] == "ungranted"));
+    assert_eq!(
+        assessment["principals"],
+        json!([{"id":"agent","created_at":principal.created_at,"runtime":"runtime"}])
+    );
+}
+
+#[test]
+fn assessment_merges_two_principals_into_one_mandatory_secret() {
+    let (_tmp, ctx, time) = fixture(json!({}), 1);
+    ctx.policy.create_principal("agent-2", "runtime").unwrap();
+    ctx.policy
+        .create_grant("agent-2", "c0", Some(3600), None)
+        .unwrap();
+    time.fetch_add(1, Ordering::SeqCst);
+    event(&ctx, "http_relay", Some("agent-2"), Some("c0"), "ok", None);
+    let assessment = incident::assess(
+        &ctx,
+        &["agent".into(), "agent-2".into()],
+        "principal",
+        &zeropw::store::iso(Some((ctx.clock)())),
+    )
+    .unwrap();
+    assert_eq!(assessment["principals"].as_array().unwrap().len(), 2);
+    assert_eq!(assessment["secrets"].as_array().unwrap().len(), 1);
+    assert_eq!(assessment["secrets"][0]["secret_id"], "key");
+    assert_eq!(assessment["secrets"][0]["tier"], "mandatory");
+    assert_eq!(assessment["secrets"][0]["use_count"], 1);
+    assert_eq!(assessment["secrets"][0]["connections"], json!(["c0"]));
+}
