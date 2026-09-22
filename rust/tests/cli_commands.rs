@@ -687,6 +687,103 @@ fn demo_passes_without_printing_credentials() {
 }
 
 #[test]
+fn rotation_activate_keeps_previous_integer_version_in_next_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let path = state.to_str().unwrap();
+    assert!(admin(path, &["init"], None).status.success());
+    assert!(
+        admin(path, &["project", "create", "demo"], None)
+            .status
+            .success()
+    );
+    let put = admin(
+        path,
+        &[
+            "secret",
+            "put",
+            "--id",
+            "token",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ],
+        Some(b"synthetic-first-token\n"),
+    );
+    assert!(
+        put.status.success(),
+        "{}",
+        String::from_utf8_lossy(&put.stderr)
+    );
+    assert_eq!(json_output(&put)["version"], 1);
+    let connection = admin(
+        path,
+        &[
+            "connection",
+            "create-http",
+            "--id",
+            "conn",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--service",
+            "synthetic",
+            "--secret-id",
+            "token",
+            "--target",
+            "http://127.0.0.1:9876",
+            "--auth",
+            "bearer",
+        ],
+        None,
+    );
+    assert!(
+        connection.status.success(),
+        "{}",
+        String::from_utf8_lossy(&connection.stderr)
+    );
+    let start = admin(
+        path,
+        &["rotation", "start", "--secret-id", "token", "--stdin"],
+        Some(b"synthetic-second-token\n"),
+    );
+    assert!(
+        start.status.success(),
+        "{}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    assert_eq!(json_output(&start)["version"], 2);
+    let activate = admin(
+        path,
+        &[
+            "rotation",
+            "activate",
+            "--connection",
+            "conn",
+            "--version",
+            "2",
+        ],
+        None,
+    );
+    assert!(
+        activate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activate.stderr)
+    );
+    let result = json_output(&activate);
+    assert_eq!(result["previous_active"], 1);
+    assert_eq!(
+        result["next"],
+        "verify the new credential works, then: rotation finish --secret-id token --version 1"
+    );
+}
+
+#[test]
 fn team_share_and_member_views_are_value_free() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");

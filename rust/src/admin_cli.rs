@@ -1437,7 +1437,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     .map(|c| c.id)
                     .collect::<Vec<_>>();
                 return Ok(
-                    json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|v.to_string()).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0}),
+                    json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|format!("{v}")).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0}),
                 );
             }
             let after = ctx.policy.switch_credential(&before.id, Some(version))?;
@@ -1468,7 +1468,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .map(|c| c.id)
                 .collect::<Vec<_>>();
             Ok(
-                json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|n|n.to_string()).unwrap_or("<old>".into()))}),
+                json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|n|format!("{n}")).unwrap_or("<old>".into()))}),
             )
         }
         ("backup", "") => {
@@ -2084,7 +2084,8 @@ pub fn run_serve(
     } else {
         None
     };
-    let server = crate::server::ZeroPWServer::new(ctx.clone(), Some(&host), Some(port))?;
+    let server =
+        crate::server::ZeroPWServer::new_with_quiet(ctx.clone(), Some(&host), Some(port), quiet)?;
     server.serve_in_thread()?;
     let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","state_dir":ctx.state.path.to_string_lossy(),"team_listen":team_listen});
     if let Some(obj) = control(&ctx)?.as_object() {
