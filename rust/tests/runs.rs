@@ -433,6 +433,7 @@ fn installed_registry_retains_history_without_return_owner_and_drops_without_cyc
             Some(2.0),
         )
         .unwrap();
+    let completion_deadline = Instant::now() + Duration::from_secs(4);
     assert_eq!(registry.wait(&run, Some(4.0)).state, "completed");
     drop(registry);
     let registry = runs::registry(&ctx).unwrap();
@@ -446,7 +447,19 @@ fn installed_registry_retains_history_without_return_owner_and_drops_without_cyc
     );
     registry.on_revoke("grant", Some("grant"));
     drop(registry);
+    assert!(
+        run_dir.exists(),
+        "owned execution directory must exist before drop"
+    );
     drop(ctx);
+    // `wait` observes the published terminal state, which precedes the
+    // supervisor closure releasing its temporary strong Context lease. Keep
+    // the original four-second completion budget while observing both lease
+    // release and the owned-directory cleanup in Context::drop.
+    while (weak_ctx.strong_count() != 0 || run_dir.exists()) && Instant::now() < completion_deadline
+    {
+        std::thread::yield_now();
+    }
     assert!(
         weak_ctx.upgrade().is_none(),
         "Context and installed registry must not form an Arc cycle"
@@ -454,6 +467,34 @@ fn installed_registry_retains_history_without_return_owner_and_drops_without_cyc
     assert!(
         !run_dir.exists(),
         "owned execution directory must be removed with Context"
+    );
+}
+#[test]
+fn installed_registry_without_worker_has_no_context_cycle() {
+    let temp = TempDir::new().unwrap();
+    let ctx = Arc::new(
+        Context::initialize(
+            temp.path().join("state"),
+            "synthetic-admin-passphrase",
+            "synthetic-recovery-passphrase",
+            Config::default(),
+            Arc::new(zeropw::store::now),
+        )
+        .unwrap(),
+    );
+    let run_dir = ctx.config.run_dir.clone().unwrap();
+    let weak_ctx = Arc::downgrade(&ctx);
+    assert!(run_dir.exists());
+    runs::install(ctx.clone());
+    assert!(runs::registry(&ctx).is_some());
+    drop(ctx);
+    assert!(
+        weak_ctx.upgrade().is_none(),
+        "installed registry must not retain Context without any worker"
+    );
+    assert!(
+        !run_dir.exists(),
+        "owned execution directory must be removed"
     );
 }
 #[test]
