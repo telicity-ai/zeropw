@@ -1,8 +1,9 @@
 //! ZeroPW trusted process, ported from the Python prototype in `zeropw/`.
 //!
 //! Each module mirrors the Python module of the same name; `PORTING.md` holds
-//! the equivalence contract. Modules outside the first-half scope (tools,
-//! runs, server, incident, intrusion, notify, CLIs, demo) are not ported yet.
+//! the equivalence contract. Runtime, response, team networking and native
+//! CLI modules are implemented; complete acceptance is tracked separately
+//! in `docs/rust-completion.md` and requires independent review.
 
 #![deny(unsafe_code)]
 

@@ -7,7 +7,13 @@ against its Python source and its Python tests; "looks reasonable" is not the ba
 Read first: `../docs/security-design.md`, `../docs/implementation.md`, then the Python module you port
 and its tests.
 
-## 1. First-half scope
+## 1. Complete-port scope
+
+The 2026-09-22 user decision expands the earlier first-half milestone to all
+existing functionality. It also replaces new Opus judgments with independent
+reviews by the explicitly selected Astra model. Implementation uses explicitly
+selected Sol workers. An old PASS never approves new code; current acceptance
+and unresolved findings are tracked in `../docs/rust-completion.md`.
 
 | Work unit | Rust files | Python sources | Python tests to port |
 | --- | --- | --- | --- |
@@ -20,9 +26,18 @@ and its tests.
 | G signer | `signer.rs` | `signer.py` | `test_signer.py` |
 | H team data | `team/{identity,envelope,commit,fold,humanview}.rs` | `team/identity.py`, `envelope.py`, `commit.py`, `fold.py`, `humanview.py` | `test_team_identity.py`, `test_team_envelope.py`, `test_team_commit.py`, `test_team_fold.py`, `test_team_facts.py` (data-layer cases) |
 
-Not in this half: `runs`, `tools`, `server`, `incident`, `intrusion`, `notify`, `admin_cli`, `agent_cli`,
-`demo`, `team/transport`, `team/sync`, `team/membership`. Where an in-scope Python module lazily imports one of those, port the in-scope behaviour and
-leave a `// SECOND-HALF: <what>` note at the seam; do not invent the missing module.
+The formerly excluded modules are now required:
+
+| Work unit | Rust files | Python sources and required tests |
+| --- | --- | --- |
+| Execution and HTTP tools | `runs.rs`, `tools.rs`, `server.rs` | same-named Python modules; `test_runs.py`, `test_tools.py`, server cases in `test_gateway.py` and `test_agent_cli.py` |
+| Response and notifications | `incident.rs`, `intrusion.rs`, `notify.rs` | same-named modules and their complete test files; compromise-response process E2E |
+| Team networking | `team/{transport,sync,membership}.rs` | same-named modules; transport, sync, membership, snapshot, facts and team E2E tests |
+| Native interfaces | `admin_cli.rs`, `agent_cli.rs`, `demo.rs`, `bin/` | admin/agent/demo modules and example CLI; CLI, demo, HTTP/SSH/team process E2E tests |
+
+There is no plaintext fallback or Python product backend. Python remains a
+test oracle/driver only. A module's existence or a representative smoke test
+does not satisfy the full behavioral and boundary-test obligations below.
 
 Shared contract already in place (do not rewrite): `errors.rs`, `secret.rs`, `clock.rs`, `oracle.rs`.
 

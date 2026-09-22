@@ -151,8 +151,8 @@ impl Default for Config {
     }
 }
 
-/// A slot for a not-yet-ported second-half module to install its own state
-/// into once it lands (`ctx.runs`/`ctx.signer_manager`/`ctx.intrusion` in
+/// A slot for a runtime module to install its own state
+/// (`ctx.runs`/`ctx.signer_manager`/`ctx.intrusion` in
 /// Python are duck-typed `Any`, `None` until the tools/signer/intrusion
 /// modules attach a server). `PORTING.md` §3.4: a Python-only
 /// `Any`-typed attribute becomes an explicit, typed seam.
@@ -174,11 +174,11 @@ pub struct Context {
     pub admin: AdminCredential<'static>,
     pub config: Config,
     pub clock: Clock,
-    /// SECOND-HALF: set by the tools module when a server is running.
+    /// Run registry attached by the tools module.
     pub runs: AnySlot,
-    /// SECOND-HALF: set by the signer module when a server is running.
+    /// Signer manager attached by the signer module.
     pub signer_manager: AnySlot,
-    /// SECOND-HALF: set by the intrusion-detection module when attached.
+    /// Detector attached by the intrusion-detection module.
     pub intrusion: AnySlot,
     /// Weak team coordinator registered by `team::sync::TeamSync`.
     pub team: AnySlot,
