@@ -215,7 +215,8 @@ mod retry_tests {
         assert!(team.accept_session(&env_id, session.clone(), true));
         let foreign_env = commit::new_env_id(&mine.fingerprint().unwrap()).unwrap();
         // First and 65th lines are valid. Invalid, signed INCIDENT,
-        // cross-environment and tampered rows between them must never be sent.
+        // cross-environment, malformed-target and bad-signature rows between
+        // them must never be sent.
         // Replacement during the first send reaches the old batch's cursor
         // update at line 64, which must not overwrite the new session's zero.
         for i in 0..=64 {
@@ -231,7 +232,7 @@ mod retry_tests {
                 .to_dict()
                 .to_string()
             } else {
-                match i % 4 {
+                match i % 5 {
                     0 => "not-json".to_owned(),
                     1 => sign_fact(
                         &mine,
@@ -253,7 +254,7 @@ mod retry_tests {
                     .unwrap()
                     .to_dict()
                     .to_string(),
-                    _ => {
+                    3 => {
                         let mut tampered = sign_fact(
                             &mine,
                             &env_id,
@@ -264,6 +265,19 @@ mod retry_tests {
                         .unwrap()
                         .to_dict();
                         tampered["target"]["credential"] = json!("synthetic-do-not-send");
+                        tampered.to_string()
+                    }
+                    _ => {
+                        let mut tampered = sign_fact(
+                            &mine,
+                            &env_id,
+                            "connection_disabled",
+                            json!({"connection_id":"gh"}),
+                            &format!("{}-0000", 3000 + i),
+                        )
+                        .unwrap()
+                        .to_dict();
+                        tampered["target"]["connection_id"] = json!("bad-signature");
                         tampered.to_string()
                     }
                 }
@@ -348,11 +362,77 @@ mod retry_tests {
                 .drain_removed(&callback_env, &callback_fp);
         }));
         team.send_fact_catchup(&env_id, &draining_session).unwrap();
+        // The next batch would reach valid line 64 if a drained session were
+        // still eligible for outbound replay.
+        team.send_fact_catchup(&env_id, &draining_session).unwrap();
         assert_eq!(draining.sent.lock().unwrap().len(), 1);
         assert!(
             team.envs.lock().unwrap()[&env_id]
                 .draining
                 .contains_key(&fp)
+        );
+    }
+
+    #[test]
+    fn concurrent_store_fact_has_exactly_one_insert_winner() {
+        use std::sync::Barrier;
+
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("state"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let session: Arc<dyn Session> = Arc::new(StubSession {
+            peer,
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        let team = TeamSync::new(
+            ctx.clone(),
+            Arc::new(StubTransport { session }),
+            mine.clone(),
+        );
+        let env_id = commit::new_env_id(&mine.fingerprint().unwrap()).unwrap();
+        team.envs.lock().unwrap().insert(
+            env_id.clone(),
+            EnvState::new(Facts::default(), HashSet::new(), HashMap::new()),
+        );
+        let fact = sign_fact(
+            &mine,
+            &env_id,
+            "connection_disabled",
+            json!({"connection_id":"synthetic-connection"}),
+            "3000-0000",
+        )
+        .unwrap();
+        let barrier = Barrier::new(2);
+        let inserted = thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                team.store_fact(&env_id, &fact).unwrap()
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                team.store_fact(&env_id, &fact).unwrap()
+            });
+            usize::from(first.join().unwrap()) + usize::from(second.join().unwrap())
+        });
+        assert_eq!(inserted, 1);
+        assert_eq!(team.envs.lock().unwrap()[&env_id].fact_hashes.len(), 1);
+        assert_eq!(
+            ctx.state
+                .read_lines(&format!("team/{env_id}/facts.jsonl"), None)
+                .unwrap()
+                .len(),
+            1
         );
     }
 
@@ -1276,18 +1356,19 @@ impl TeamSync {
                 .tick(None)
         };
         let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
-        self.store_fact(env_id, &fact)?;
-        self.refold(env_id)?;
-        self.audit_fact_apply(env_id, &fact);
-        self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
-        if kind == "member_removed" {
-            if let Some(fp) = fact.target["fingerprint"].as_str() {
-                self.drain_removed(env_id, fp);
+        if self.store_fact(env_id, &fact)? {
+            self.refold(env_id)?;
+            self.audit_fact_apply(env_id, &fact);
+            self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
+            if kind == "member_removed" {
+                if let Some(fp) = fact.target["fingerprint"].as_str() {
+                    self.drain_removed(env_id, fp);
+                }
             }
         }
         Ok(fact.to_dict())
     }
-    fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<()> {
+    fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
         let hash = fact.hash()?;
         let _lock = self.ctx.state.lock()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -1295,7 +1376,7 @@ impl TeamSync {
             .get_mut(env_id)
             .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
         if env.fact_hashes.contains(&hash) {
-            return Ok(());
+            return Ok(false);
         }
         let line = pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?;
         self.ctx
@@ -1312,7 +1393,7 @@ impl TeamSync {
                     .insert(fact.author.clone());
             }
         }
-        Ok(())
+        Ok(true)
     }
     fn broadcast(&self, env_id: &str, message: &Value, exclude: Option<&str>) {
         let sessions = {
@@ -1875,8 +1956,7 @@ impl TeamSync {
         {
             return Ok(());
         }
-        if self.validate_incoming_fact(env_id, &fact)? {
-            self.store_fact(env_id, &fact)?;
+        if self.validate_incoming_fact(env_id, &fact)? && self.store_fact(env_id, &fact)? {
             self.refold(env_id)?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(
@@ -2005,7 +2085,9 @@ impl TeamSync {
         }
         let path = format!("team/{env_id}/incidents/{}-{id}.json", fact.author);
         if !self.ctx.state.exists(&path) {
-            self.store_fact(env_id, &fact)?;
+            // A retry must reconstruct a missing incident record even when a
+            // prior attempt already persisted the fact before failing here.
+            let _newly_stored = self.store_fact(env_id, &fact)?;
             let mut rec = fact.target.clone();
             rec["received_from"] = json!(fact.author);
             rec["received_at"] = json!(iso(Some((self.ctx.clock)())));
@@ -2140,7 +2222,9 @@ impl TeamSync {
                 .tick(None)
         };
         let fact = sign_fact(&self.device, env_id, "incident", clean, &hlc)?;
-        self.store_fact(env_id, &fact)?;
+        // An outbox entry still needs delivery/retry even if this signed fact
+        // was already persisted by an earlier attempt.
+        let _newly_stored = self.store_fact(env_id, &fact)?;
         let hash = fact.hash()?;
         {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -2397,20 +2481,29 @@ impl TeamSync {
             {
                 continue;
             }
-            {
+            let inserted = {
                 let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(env) = envs.get_mut(env_id) {
-                    env.fact_hashes.insert(fact.hash()?);
-                    apply_fact(&mut env.facts, &fact);
-                    if fact.kind == "member_removed" {
-                        if let Some(fp) = fact.target["fingerprint"].as_str() {
-                            env.removal_authors
-                                .entry(fp.into())
-                                .or_default()
-                                .insert(fact.author.clone());
+                    if env.fact_hashes.insert(fact.hash()?) {
+                        apply_fact(&mut env.facts, &fact);
+                        if fact.kind == "member_removed" {
+                            if let Some(fp) = fact.target["fingerprint"].as_str() {
+                                env.removal_authors
+                                    .entry(fp.into())
+                                    .or_default()
+                                    .insert(fact.author.clone());
+                            }
                         }
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
                 }
+            };
+            if !inserted {
+                continue;
             }
             self.refold(env_id)?;
             self.audit_fact_apply(env_id, &fact);
