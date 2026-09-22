@@ -200,6 +200,31 @@ pub fn b64decode(s: &str) -> Result<Vec<u8>, Base64Error> {
     decode_core(s.as_bytes())
 }
 
+/// Python `base64.b64decode(s, validate=True)`: rejects nonalphabet input
+/// and discontinuous padding but accepts noncanonical unused trailing bits.
+/// Complete quads may have excess trailing padding, as CPython permits.
+pub fn b64decode_strict(s: &str) -> Result<Vec<u8>, Base64Error> {
+    require_ascii(s)?;
+    let data = s.as_bytes();
+    let head = data.iter().position(|b| *b == b'=').unwrap_or(data.len());
+    if data[..head].iter().any(|b| TABLE[*b as usize] < 0)
+        || data[head..].iter().any(|b| *b != b'=')
+        || (head == 0 && !data.is_empty())
+    {
+        return Err(Base64Error::new("Invalid base64 data"));
+    }
+    let valid_padding = match head % 4 {
+        0 => true,
+        2 => data.len() - head == 2,
+        3 => data.len() - head == 1,
+        _ => false,
+    };
+    if !valid_padding {
+        return Err(Base64Error::new("Incorrect padding"));
+    }
+    decode_core(data)
+}
+
 /// Port of `base64.b64decode(s)` for a `bytes`-like argument: no ASCII
 /// precheck (non-alphabet bytes, including non-ASCII ones, are just skipped
 /// by the scan).
