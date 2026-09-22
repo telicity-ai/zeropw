@@ -16,12 +16,12 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
-| Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Baseline 04a5634; rerun after integration |
-| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Registry/session/descriptor and atomic terminal-output fixes integrated; new temporary-directory mode finding remains open |
-| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | HEAD/logging fixes integrated; original preflight/relay boundary assertions added; final exact-head suite pending |
-| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Response round-3 four residual fixes integrated at `4a526a2`; worker regressions pass, fresh independent review pending |
-| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Five original findings resolved by Astra round 2; native process E2E and nine added share/live-runtime tests pass; 62-case map retains partial coverage |
-| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle admin 55/55, response 8/8 and agent 6/6 pass; post-password signal disposition and agent help findings remain open |
+| Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Full integrated frozen-318386d suite passes; persisted-project A-R2-6(b) compatibility correction remains pending |
+| Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Astra bounded runtime acceptance at 318386d; all eight runtime findings resolved, including creation-time directory modes |
+| Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Bounded runtime review and 25 tool/server tests pass; final-head platform acceptance pending |
+| Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Astra bounded response acceptance at 897c9a6: all 16 findings resolved, 72 selected test functions pass |
+| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Astra round-4 addendum accepts bounded coverage: 104 checks and original native process E2E pass; 62-method map and explicit native API distinctions retained |
+| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle contracts pass; AR-CLI-01–04 resolved. Separate AR-CLI-05/P3 ordinary SIGINT exit-status compatibility correction pending |
 | Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E all pass; full integrated suite/platform acceptance pending |
 | Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Original reports retained; implemented fixes are not accepted until independent verification; no full PASS |
 
@@ -114,7 +114,7 @@ remaining selected first-half integration suites pass. Builds changed during
 this ongoing work: these are component results, **not** a single exact-head full
 suite PASS. Final integrated verification and Linux CI remain required.
 
-## Current round-3/round-4 work (2026-09-22)
+## Round-3/round-4 work (historical, 2026-09-22)
 
 Actual Astra response round 3 retains four P2 functional IDs: ENVELOPE, ERRORS,
 SHAPE and COUNTER. The immutable report is bound to `92abed0`. Sol's follow-up
@@ -146,3 +146,47 @@ Astra also reproduce new run directories created as 0755 instead of Python's
 Sol and remain open. Original tool preflight/ownership/audit contracts pass six
 new cases and the real relay text/binary/header-filter case passes; the fresh
 private-directory assertion is intentionally retained failing until fixed.
+
+## Latest bounded acceptance and remaining gates (2026-09-22)
+
+The current table above supersedes the historical progress sections, which are
+retained to preserve failures and their chronology. Actual `gpt-6-astra` reports
+now independently close runtime/CLI findings AR-RUNTIME-01–08 and AR-CLI-01–04
+(`astra-runtime-final.md`), all original team findings and bounded coverage
+(`astra-team-round4-addendum.md`), and all sixteen response findings
+(`astra-response-acceptance.md`, product `897c9a6`). The final response run
+includes 334 Python-derived mailbox comparisons without discarding empty
+results, and sixteen independent native/Python SMTP envelope fixtures.
+
+The PO inventory (`astra-po-acceptance-checklist.md`) identified the obsolete
+first-half scope waiver for persisted project shapes, A-R2-6(b). This is being
+corrected, not accepted as a loss of functionality. A separate PO compatibility
+disposition requires ordinary administrator SIGINT to return exit 130 as Python
+does, rather than terminate by signal 2 (`Popen.returncode == -2`). This is
+AR-CLI-05/P3, distinct from the already-resolved AR-CLI-03 termination/TTY issue.
+Neither correction is counted as accepted before independent review.
+
+Coordinator verification on the frozen exact revision
+`318386de404ccbff4cdd8c3e0a79dbb1a4aa25e0` completed the unchanged
+`cargo test --offline --locked --manifest-path rust/Cargo.toml --all-targets`
+suite successfully. Its library result is 503 passed/four ignored; its long
+policy differential passed in 452.87 seconds and all eight original native
+process/CLI adapter tests passed. Formatting and all-target Clippy with warnings
+denied also passed at that revision. The first loaded-host library attempt
+failed the unchanged ten-cycle signer latency ceiling (57.759ms versus 25ms);
+the full unchanged retry passed after concurrent build/review load subsided.
+No threshold, assertion, CI or harness was changed to obtain that result.
+
+All four normally ignored signer resource probes then ran serially and passed
+at the same frozen revision (21.32 seconds). Measurements: 0.00/0.01 seconds
+process CPU over five idle seconds with one/nine bindings; three descriptors
+per binding, one server descriptor per client; 32 clients served at the host's
+1048575 descriptor limit, cap refusal recorded, accept loop still alive. These
+are host measurements, not a new cross-platform performance guarantee.
+
+Later SMTP changes are outside that frozen full-run result and have their own
+fresh affected-suite/Astra evidence. Final product-head integration and Linux
+CI remain pending. Disk exhaustion during duplicate worker builds was an
+environment failure; only regenerable completed-worker build caches were
+cleaned, and affected checks were rerun. No source/review evidence was deleted.
+No merge or deployment has occurred, and no full-product PASS is claimed yet.
