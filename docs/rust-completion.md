@@ -14,15 +14,13 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 
 ## Full scope and acceptance evidence
 
-Current blocking addendum: Linux run `35706839572` failed at head `e8610ac`
-in the remote SSH fact test; its generic timeout did not identify the failing
-stage. The later policy step was skipped, not passed. Controlled TCP triage
-also exposed a separate required product defect: emergency facts published
-offline remain absent after authenticated reconnection in both Python and
-Rust, contrary to `docs/team-sync.md` §6.6. Astra PO requires this functionality;
-parity with the original defect is not acceptance. A bounded native catch-up
-fix and independent review are in progress. Earlier component closures below
-remain historical evidence, not closure of this new gate.
+Latest component checkpoint: the additional offline-fact delivery finding
+ASTRA-TEAM-T6/P1 and concurrent ordinary-fact processing finding
+ASTRA-TEAM-T7/P2 have independent bounded Astra closures. Their final tested
+product is included in `2e88f88`; see the post-Linux handoff below. The failed
+Linux run `35706839572` at `e8610ac` remains historical failure evidence, not
+approval of this revision. Full-platform acceptance must use the exact final
+PR head and its actual check results; component closure does not replace it.
 
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
@@ -30,10 +28,10 @@ remain historical evidence, not closure of this new gate.
 | Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Astra bounded runtime acceptance at 318386d; all eight runtime findings resolved, including creation-time directory modes |
 | Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Bounded runtime review and 25 tool/server tests pass; final-head platform acceptance pending |
 | Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Astra bounded response acceptance at 897c9a6: all 16 findings resolved, 72 selected test functions pass |
-| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Prior bounded 104 checks and original native process E2E pass; new required offline emergency-fact catch-up finding remains open; 62-method map and explicit native API distinctions retained |
+| Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Prior bounded 104 checks and original native process E2E pass; T6/P1 reconnect catch-up and T7/P2 concurrent ordinary-fact processing independently closed with 27 and nine selected checks; 62-method map and explicit native API distinctions retained |
 | User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle contracts pass; AR-CLI-01–06 resolved, including handled SIGINT status and exact-owned-directory cleanup |
 | Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E pass; final overall decision must use exact PR-head checks and the handoff below |
-| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Prior remediation findings have independent bounded closures; new offline-fact functionality gate remains open. Original reports remain immutable. Component PASS is not itself platform/deployment approval |
+| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | All recorded remediation findings, including T6/P1 and T7/P2, have independent bounded closures. Original reports remain immutable. Component PASS is not itself final-head platform/deployment approval |
 
 Completion requires the full Python feature inventory, meaningful behavioral
 tests for each feature and failure boundary, Linux and macOS verification where
@@ -201,7 +199,7 @@ environment failure; only regenerable completed-worker build caches were
 cleaned, and affected checks were rerun. No source/review evidence was deleted.
 No merge or deployment has occurred, and no full-product PASS is claimed yet.
 
-## Final compatibility handoff (2026-09-22)
+## Earlier compatibility handoff (historical, 2026-09-22)
 
 Actual Astra has now closed the remaining current-scope compatibility gates:
 
@@ -259,3 +257,59 @@ disposition after integrated/platform validation. Do not treat an earlier
 candidate's green checks or any historical report as approval of a later head.
 This handoff records component closure and the evidence available at writing;
 merge, deployment and production host-isolation approval remain separate.
+
+## Post-Linux team correction handoff (2026-09-22)
+
+Linux run `35706839572` at `e8610ac` passed the original 1099 Python tests and
+harness checks but failed the Rust remote signer test in a generic wait.
+The exact failed stage remains unknown; the later long policy step was skipped.
+The independent triage report preserves this distinction. The completed full
+macOS run at earlier cleanup product `ec58f8d` passed all integration targets,
+including the 463.22-second policy differential and eight native process/CLI
+adapters (151.01 seconds). That result is not proof of subsequent team changes.
+
+Controlled investigation exposed required offline emergency-fact delivery
+missing in both Python and Rust. Astra PO required correction under team
+specification §6.6, not acceptance of the original defect. Sol implemented
+authenticated reconnect catch-up in `5b9995c`, retaining receiver authorization,
+signature/target/environment checks, INCIDENT isolation, removed-peer guards,
+and exact-session cursor ownership. An additional actual concurrency test
+found 20 stored ordinary facts but 22 application audit events; Sol's
+`af1d455` gates ordinary side effects on atomic insertion ownership. Incident
+artifact recovery and its ACK/outbox retries remain separate and unchanged.
+
+Independent actual `gpt-6-astra` closures:
+
+- `astra-team-fact-catchup-final.md`: T6/P1 resolved at `2e88f88`, 27 selected
+  checks pass, including offline sender restart, more than one replay batch,
+  malformed/incident/cross-environment/tampered outbound filtering, revoked
+  version effects, current-role rejection, removed-peer restrictions, and
+  actual cancellation of an already-running native SSH signer and run.
+- `astra-team-fact-dedup-final.md`: T7/P2 resolved at `af1d455`, nine selected
+  checks pass, including the unchanged 20-row/20-application regression and
+  existing incident retry/restart/admin-removal boundaries. Product source is
+  unchanged from `af1d455` through `2e88f88`.
+
+The intermediate ledger-before-refold test failures and a worker's missing
+socket assertion remain recorded. Test-only correction `2e88f88` waits for
+ledger arrival and revocation within the same original 10-second bound and
+publishes the synthetic signer marker by rename after writing it. Security
+postconditions remain unchanged. Neither correction proves the cause of the
+earlier unlabelled Linux failure or the worker's missing-socket observation.
+
+Replay examines at most 64 ledger lines per VECTOR, not a bounded total ledger
+read/CPU/memory budget. Already-admitted network sends cannot be retracted by
+a concurrent removal. Current-role authorization at receipt is retained;
+author-supplied timestamps do not restore revoked privilege. Ordinary fact
+insertion ownership is not a crash-transactional exactly-once guarantee.
+These measured boundaries are not universal CLI/network/RFC compatibility,
+production isolation, or deployment approval.
+
+The coordinator's new full macOS verification is frozen at `2e88f88`; at this
+handoff's writing, formatting, strict all-target Clippy and 507 library tests
+pass, with all-target integration still running. Subsequent reports/handoff
+documentation do not change its product or test sources. Final completion is
+recorded against the exact published head on PR 6 only after that run, the
+final Linux checks, and Astra PO verification finish. No Python product,
+original Python test, harness, CI or instruction file was changed, and no
+merge or deployment occurred.
