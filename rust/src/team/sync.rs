@@ -30,6 +30,10 @@ pub const FACT_KINDS: [&str; 4] = [
     "member_removed",
     "incident",
 ];
+// Replay advances over at most this many persisted lines per VECTOR, including
+// malformed lines. A full pass restarts so a rejected/out-of-order frame is
+// retried after later commit catch-up, while receiver hashes deduplicate it.
+const FACT_REPLAY_LINES_PER_VECTOR: usize = 64;
 pub const ENVS_MAP_PATH: &str = "team/envs.json";
 pub const SNAPSHOT_INTERVAL_COMMITS: i128 = 1000;
 pub const COMPACT_MIN_AGE_MS: i64 = 30 * 24 * 3600 * 1000;
@@ -98,6 +102,258 @@ mod retry_tests {
             Ok(self.session.clone())
         }
         fn close(&self) {}
+    }
+
+    struct RecordingSession {
+        peer: DeviceRecord,
+        env_id: String,
+        sent: Mutex<Vec<Value>>,
+        on_first_send: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+        closed: AtomicBool,
+        created: Instant,
+    }
+    impl Session for RecordingSession {
+        fn peer(&self) -> DeviceRecord {
+            self.peer.clone()
+        }
+        fn env_id(&self) -> &str {
+            &self.env_id
+        }
+        fn send(&self, message: &Value) -> Result<()> {
+            let first = {
+                let mut sent = self.sent.lock().unwrap();
+                sent.push(message.clone());
+                sent.len() == 1
+            };
+            if first && let Some(callback) = self.on_first_send.lock().unwrap().take() {
+                callback();
+            }
+            Ok(())
+        }
+        fn recv(&self, _: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+            Err(SessionClosed("peer_closed"))
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+        fn is_closed(&self) -> bool {
+            self.closed.load(Ordering::SeqCst)
+        }
+        fn created_at(&self) -> Instant {
+            self.created
+        }
+    }
+
+    #[test]
+    fn fact_replay_stops_on_session_replacement_and_receive_only_drain() {
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("state"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let peer_key = DeviceKey::generate();
+        let peer = peer_key.record().unwrap();
+        let mine_fp = mine.fingerprint().unwrap();
+        let fp = peer.fingerprint();
+        let env_id = commit::new_env_id(&mine_fp).unwrap();
+        let generation = "0000000000000000";
+        let wrap = crate::team::envelope::wrap_dek(
+            &[7u8; 32],
+            &env_id,
+            generation,
+            &mine.record().unwrap(),
+        )
+        .unwrap();
+        let init = commit::sign_commit(
+            &mine,
+            &env_id,
+            1,
+            "1000-0000",
+            &BTreeMap::new(),
+            vec![json!({"op":"env.init","owner_device":mine.record().unwrap().to_dict(),"owner_name":"alice","generation_id":generation,"wraps":{mine_fp:wrap}})],
+        )
+        .unwrap();
+        let add = commit::sign_commit(
+            &mine,
+            &env_id,
+            2,
+            "2000-0000",
+            &BTreeMap::new(),
+            vec![json!({"op":"member.add","device":peer.to_dict(),"name":"bob","role":"admin"})],
+        )
+        .unwrap();
+        let store = CommitStore::new(ctx.state, &env_id);
+        store.append(&init).unwrap();
+        store.append(&add).unwrap();
+        let make_recorder = || {
+            Arc::new(RecordingSession {
+                peer: peer.clone(),
+                env_id: env_id.clone(),
+                sent: Mutex::new(Vec::new()),
+                on_first_send: Mutex::new(None),
+                closed: AtomicBool::new(false),
+                created: Instant::now(),
+            })
+        };
+        let recorder = make_recorder();
+        let session: Arc<dyn Session> = recorder.clone();
+        let team = TeamSync::new(
+            ctx.clone(),
+            Arc::new(StubTransport {
+                session: session.clone(),
+            }),
+            mine.clone(),
+        );
+        team.register_env(&env_id).unwrap();
+        assert!(team.accept_session(&env_id, session.clone(), true));
+        let foreign_env = commit::new_env_id(&mine.fingerprint().unwrap()).unwrap();
+        // First and 65th lines are valid. Invalid, signed INCIDENT,
+        // cross-environment and tampered rows between them must never be sent.
+        // Replacement during the first send reaches the old batch's cursor
+        // update at line 64, which must not overwrite the new session's zero.
+        for i in 0..=64 {
+            let line = if i == 0 || i == 64 {
+                sign_fact(
+                    &mine,
+                    &env_id,
+                    "connection_disabled",
+                    json!({"connection_id":"gh"}),
+                    &format!("{}-0000", 3000 + i),
+                )
+                .unwrap()
+                .to_dict()
+                .to_string()
+            } else {
+                match i % 4 {
+                    0 => "not-json".to_owned(),
+                    1 => sign_fact(
+                        &mine,
+                        &env_id,
+                        "incident",
+                        json!({"incident_id":"0123456789abcdef"}),
+                        &format!("{}-0000", 3000 + i),
+                    )
+                    .unwrap()
+                    .to_dict()
+                    .to_string(),
+                    2 => sign_fact(
+                        &mine,
+                        &foreign_env,
+                        "connection_disabled",
+                        json!({"connection_id":"gh"}),
+                        &format!("{}-0000", 3000 + i),
+                    )
+                    .unwrap()
+                    .to_dict()
+                    .to_string(),
+                    _ => {
+                        let mut tampered = sign_fact(
+                            &mine,
+                            &env_id,
+                            "connection_disabled",
+                            json!({"connection_id":"gh"}),
+                            &format!("{}-0000", 3000 + i),
+                        )
+                        .unwrap()
+                        .to_dict();
+                        tampered["target"]["credential"] = json!("synthetic-do-not-send");
+                        tampered.to_string()
+                    }
+                }
+            };
+            ctx.state
+                .append_line(&format!("team/{env_id}/facts.jsonl"), &line)
+                .unwrap();
+        }
+        let replacement = make_recorder();
+        let replacement_session: Arc<dyn Session> = replacement.clone();
+        let keep_new_inbound = mine.fingerprint().unwrap() > fp;
+        let weak = Arc::downgrade(&team);
+        let callback_env = env_id.clone();
+        *recorder.on_first_send.lock().unwrap() = Some(Box::new(move || {
+            assert!(weak.upgrade().unwrap().accept_session(
+                &callback_env,
+                replacement_session.clone(),
+                keep_new_inbound
+            ));
+        }));
+        team.send_fact_catchup(&env_id, &session).unwrap();
+        assert_eq!(recorder.sent.lock().unwrap().len(), 1);
+        assert_eq!(
+            team.envs.lock().unwrap()[&env_id].fact_replay_cursor[&fp],
+            0
+        );
+        let replacement_session: Arc<dyn Session> = replacement.clone();
+        team.send_fact_catchup(&env_id, &replacement_session)
+            .unwrap();
+        assert_eq!(replacement.sent.lock().unwrap().len(), 1);
+        team.send_fact_catchup(&env_id, &replacement_session)
+            .unwrap();
+        assert_eq!(replacement.sent.lock().unwrap().len(), 2);
+        let frames = replacement.sent.lock().unwrap().clone();
+        assert!(frames.iter().all(|v| v["type"] == "FACT"));
+        assert!(
+            frames
+                .iter()
+                .all(|v| v["fact"]["kind"] == "connection_disabled")
+        );
+        assert!(
+            frames
+                .iter()
+                .all(|v| v["fact"]["target"] == json!({"connection_id":"gh"}))
+        );
+        assert!(!json!(frames).to_string().contains("synthetic-do-not-send"));
+        let appended = sign_fact(
+            &mine,
+            &env_id,
+            "secret_version_revoked",
+            json!({"secret_id":"key","version_id":"0011223344556677"}),
+            "4000-0000",
+        )
+        .unwrap();
+        ctx.state
+            .append_line(
+                &format!("team/{env_id}/facts.jsonl"),
+                &appended.to_dict().to_string(),
+            )
+            .unwrap();
+        // Same live session, after EOF had reset to zero: a later line still
+        // arrives on the next bounded cycle. Earlier frames may repeat and
+        // are deduplicated by the real receiving path.
+        team.send_fact_catchup(&env_id, &replacement_session)
+            .unwrap();
+        team.send_fact_catchup(&env_id, &replacement_session)
+            .unwrap();
+        let frames = replacement.sent.lock().unwrap();
+        assert_eq!(frames.len(), 5);
+        assert_eq!(frames.last().unwrap()["fact"], appended.to_dict());
+        drop(frames);
+
+        let draining = make_recorder();
+        let draining_session: Arc<dyn Session> = draining.clone();
+        assert!(team.accept_session(&env_id, draining_session.clone(), keep_new_inbound));
+        let weak = Arc::downgrade(&team);
+        let callback_env = env_id.clone();
+        let callback_fp = fp.clone();
+        *draining.on_first_send.lock().unwrap() = Some(Box::new(move || {
+            weak.upgrade()
+                .unwrap()
+                .drain_removed(&callback_env, &callback_fp);
+        }));
+        team.send_fact_catchup(&env_id, &draining_session).unwrap();
+        assert_eq!(draining.sent.lock().unwrap().len(), 1);
+        assert!(
+            team.envs.lock().unwrap()[&env_id]
+                .draining
+                .contains_key(&fp)
+        );
     }
 
     #[test]
@@ -520,6 +776,7 @@ struct EnvState {
     fact_hashes: HashSet<String>,
     removal_authors: HashMap<String, HashSet<String>>,
     sessions: HashMap<String, Arc<dyn Session>>,
+    fact_replay_cursor: HashMap<String, usize>,
     candidate_addresses: HashMap<String, BTreeSet<String>>,
     draining: HashMap<String, Instant>,
     peer_vectors: HashMap<String, BTreeMap<String, i128>>,
@@ -549,6 +806,7 @@ impl EnvState {
             fact_hashes: hashes,
             removal_authors: authors,
             sessions: HashMap::new(),
+            fact_replay_cursor: HashMap::new(),
             candidate_addresses: HashMap::new(),
             draining: HashMap::new(),
             peer_vectors: HashMap::new(),
@@ -657,6 +915,7 @@ impl TeamSync {
             for (_, session) in env.sessions.drain() {
                 session.close();
             }
+            env.fact_replay_cursor.clear();
         }
     }
     pub fn known_envs(&self) -> Vec<String> {
@@ -1117,6 +1376,7 @@ impl TeamSync {
             }
             current.close();
         }
+        env.fact_replay_cursor.insert(fp.clone(), 0);
         env.sessions.insert(fp, session);
         true
     }
@@ -1239,6 +1499,7 @@ impl TeamSync {
                 return;
             }
             env.draining.remove(fp);
+            env.fact_replay_cursor.remove(fp);
             env.sessions.remove(fp)
         };
         if let Some(session) = removed {
@@ -1381,6 +1642,10 @@ impl TeamSync {
         if sent > 0 {
             self.audit_event("team_sync_vector", env_id, Some(&fp), None, Some(sent));
         }
+        // Ordinary facts have no sequence in the commit vector. Replay a
+        // bounded slice after missing commits on this authenticated session;
+        // otherwise an offline disable/revoke can be lost permanently.
+        self.send_fact_catchup(env_id, session)?;
         if let Some(env) = self
             .envs
             .lock()
@@ -1388,6 +1653,76 @@ impl TeamSync {
             .get_mut(env_id)
         {
             env.synced_at = Some((self.ctx.clock)());
+        }
+        Ok(())
+    }
+    fn current_fact_session(&self, env_id: &str, fp: &str, session: &Arc<dyn Session>) -> bool {
+        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        envs.get(env_id).is_some_and(|env| {
+            !env.draining.contains_key(fp)
+                && env.document["members"][fp]["status"] == "active"
+                && env
+                    .sessions
+                    .get(fp)
+                    .is_some_and(|current| Arc::ptr_eq(current, session))
+        })
+    }
+    fn send_fact_catchup(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        let fp = session.peer().fingerprint();
+        if !self.current_fact_session(env_id, &fp, session) {
+            return Ok(());
+        }
+        let lines = self
+            .ctx
+            .state
+            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let start = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            envs.get(env_id)
+                .and_then(|env| env.fact_replay_cursor.get(&fp))
+                .copied()
+                .unwrap_or(0)
+                .min(lines.len())
+        };
+        let end = start
+            .saturating_add(FACT_REPLAY_LINES_PER_VECTOR)
+            .min(lines.len());
+        for line in &lines[start..end] {
+            let Ok(value) = pyjson::loads(line) else {
+                continue;
+            };
+            let Ok(fact) = Fact::from_dict(&value) else {
+                continue;
+            };
+            if fact.env_id != env_id || fact.kind == "incident" {
+                continue;
+            }
+            let Some(author) = self.known_record(env_id, &fact.author) else {
+                continue;
+            };
+            if !verify_fact(&fact, &author) {
+                continue;
+            }
+            if !self.current_fact_session(env_id, &fp, session) {
+                return Ok(());
+            }
+            if session
+                .send(&json!({"type":"FACT","fact":fact.to_dict()}))
+                .is_err()
+            {
+                self.drop_session(env_id, &fp, Some(session));
+                return Ok(());
+            }
+        }
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id)
+            && env
+                .sessions
+                .get(&fp)
+                .is_some_and(|current| Arc::ptr_eq(current, session))
+        {
+            env.fact_replay_cursor
+                .insert(fp, if end == lines.len() { 0 } else { end });
         }
         Ok(())
     }

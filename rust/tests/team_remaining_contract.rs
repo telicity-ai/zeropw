@@ -1531,3 +1531,350 @@ fn remote_connection_disabled_fact_closes_existing_signer_socket() {
     );
     assert_eq!(f.b.policy.get_connection("box").unwrap().status, "disabled");
 }
+
+#[test]
+fn offline_fact_reconnect_cancels_live_native_signer_and_run() {
+    let user_key = zeropw::sshwire::generate_ed25519_private_key("synthetic-user");
+    let host_key = zeropw::sshwire::generate_ed25519_private_key("synthetic-host");
+    let host_line = host_key.public.to_authorized_key("synthetic-host").unwrap();
+    let op = json!({"op":"connection.create","id":"box","project":"demo","environment":"dev","service":"synthetic","kind":"ssh","secret_id":"key","secret_version":null,"description":"","ssh_target":{"host":"127.0.0.1","port":2222,"username":"deploy","host_keys":[host_line]},"cli":{"program":"__SYNTHETIC_SLEEP_CLI__","kind":"ssh"}});
+    let public = json!({"public_key":user_key.public.to_authorized_key("synthetic-user").unwrap()});
+    let f = RemoteFixture::new(
+        op,
+        "ssh_private_key",
+        user_key.to_openssh_private_key().as_bytes(),
+        public,
+    );
+    let token =
+        f.b.policy
+            .create_principal("agent-offline", "default")
+            .unwrap();
+    f.b.policy
+        .create_grant("agent-offline", "box", Some(3600), None)
+        .unwrap();
+    let team_addr = f.tb.bound_address().unwrap();
+    f.sb.stop();
+    f.tb.shutdown();
+    let api_port = reserve_port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (state, stop_thread, listen) = (
+        f.b.state.path.to_string_lossy().to_string(),
+        stop.clone(),
+        format!("127.0.0.1:{api_port}"),
+    );
+    let team_listen = team_addr.clone();
+    let thread = std::thread::spawn(move || {
+        zeropw::admin_cli::run_serve(&state, &listen, true, Some(&team_listen), stop_thread)
+    });
+    let _serve = ServeGuard {
+        stop,
+        thread: Some(thread),
+    };
+    f.wait_stage("offline-serve-http-ready", || {
+        TcpStream::connect(("127.0.0.1", api_port)).is_ok()
+    });
+    let a_fp = f.ka.fingerprint().unwrap();
+    let b_fp = DeviceKey::load_or_create(f.b.state, f.b.kms)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    let barrier = commit::sign_commit(
+        &f.ka,
+        &f.env,
+        4,
+        "4000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op":"member.set_role","fingerprint":b_fp,"role":"admin"})],
+    )
+    .unwrap();
+    assert_eq!(f.sa.submit_commit(&f.env, &barrier).unwrap(), "accepted");
+    f.wait_stage("offline-serve-session-ready", || {
+        CommitStore::new(f.b.state, &f.env).last_seq(&a_fp).unwrap() >= 4
+    });
+    let marker = f._root.path().join("offline-socket-marker");
+    let view = api(
+        api_port,
+        &token,
+        "exec",
+        json!({"connection":"box","argv":[marker.to_string_lossy()]}),
+    );
+    let run_id = view["run_id"].as_str().unwrap();
+    f.wait_stage("offline-signer-child-marker", || marker.exists());
+    let socket_path = std::path::PathBuf::from(fs::read_to_string(&marker).unwrap());
+    assert!(socket_path.exists(), "live signer socket was not created");
+    f.wait_stage("offline-run-running", || {
+        api(api_port, &token, "status", json!({"run_id":run_id}))["state"] == "running"
+    });
+
+    f.sa.stop();
+    f.ta.shutdown();
+    f.sa.publish_fact(
+        &f.env,
+        "connection_disabled",
+        json!({"connection_id":"box"}),
+    )
+    .unwrap();
+    assert_eq!(f.b.policy.get_connection("box").unwrap().status, "active");
+    assert!(
+        socket_path.exists(),
+        "offline publication closed remote socket"
+    );
+    assert_eq!(
+        api(api_port, &token, "status", json!({"run_id":run_id}))["state"],
+        "running"
+    );
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let ta2 = TcpTransport::new(f.ka.clone(), empty, 4);
+    let sa2 = TeamSync::new(f.sa.ctx.clone(), Arc::new(ta2.clone()), f.ka.clone());
+    sa2.start(None).unwrap();
+    struct StopSource(Arc<TeamSync>, Arc<TcpTransport>);
+    impl Drop for StopSource {
+        fn drop(&mut self) {
+            self.0.stop();
+            self.1.shutdown();
+        }
+    }
+    let _source = StopSource(sa2.clone(), ta2);
+    sa2.set_peer_address(&f.env, &b_fp, &team_addr).unwrap();
+    f.wait_stage("offline-fact-applied-to-native-serve", || {
+        f.b.policy.get_connection("box").unwrap().status == "disabled"
+    });
+    f.wait_stage("offline-signer-socket-removed", || !socket_path.exists());
+    f.wait_stage("offline-run-cancelled", || {
+        api(api_port, &token, "status", json!({"run_id":run_id}))["state"] == "cancelled"
+    });
+    assert_eq!(
+        f.b.state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn offline_facts_catch_up_after_sender_restart_in_bounded_batches() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let a_fp = f.ka.fingerprint().unwrap();
+    let kb = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+    let b_fp = kb.fingerprint().unwrap();
+    f.sb.stop();
+    f.tb.shutdown();
+    let facts_path = format!("team/{}/facts.jsonl", f.env);
+    let foreign_env = commit::new_env_id(&a_fp).unwrap();
+    // Invalid local ledger entries occupy two whole replay batches. They may
+    // not starve the valid tail or be forwarded as ordinary FACTs.
+    for index in 0..128 {
+        let line = match index % 4 {
+            0 => "not-json".to_owned(),
+            1 => zeropw::team::sync::sign_fact(
+                &f.ka,
+                &f.env,
+                "incident",
+                json!({"incident_id":"0123456789abcdef"}),
+                &format!("{}-0000", 5000 + index),
+            )
+            .unwrap()
+            .to_dict()
+            .to_string(),
+            2 => zeropw::team::sync::sign_fact(
+                &f.ka,
+                &foreign_env,
+                "connection_disabled",
+                json!({"connection_id":"gh"}),
+                &format!("{}-0000", 5000 + index),
+            )
+            .unwrap()
+            .to_dict()
+            .to_string(),
+            _ => {
+                let mut tampered = zeropw::team::sync::sign_fact(
+                    &f.ka,
+                    &f.env,
+                    "connection_disabled",
+                    json!({"connection_id":"gh"}),
+                    &format!("{}-0000", 5000 + index),
+                )
+                .unwrap()
+                .to_dict();
+                tampered["target"]["connection_id"] = json!("changed-after-signing");
+                tampered.to_string()
+            }
+        };
+        f.sa.ctx.state.append_line(&facts_path, &line).unwrap();
+    }
+    f.sa.publish_fact(&f.env, "connection_disabled", json!({"connection_id":"gh"}))
+        .unwrap();
+    assert_eq!(f.b.policy.get_connection("gh").unwrap().status, "active");
+    f.sa.stop();
+    f.ta.shutdown();
+
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let ta = TcpTransport::new(f.ka.clone(), empty.clone(), 4);
+    let sa = TeamSync::new(f.sa.ctx.clone(), Arc::new(ta.clone()), f.ka.clone());
+    sa.start(None).unwrap();
+    let tb = TcpTransport::new(kb.clone(), empty.clone(), 4);
+    let sb = TeamSync::new(f.b.clone(), Arc::new(tb.clone()), kb.clone());
+    sb.start(Some("127.0.0.1:0")).unwrap();
+    struct StopReplay {
+        sa: Arc<TeamSync>,
+        sb: Arc<TeamSync>,
+        ta: Arc<TcpTransport>,
+        tb: Arc<TcpTransport>,
+    }
+    impl Drop for StopReplay {
+        fn drop(&mut self) {
+            self.sa.stop();
+            self.sb.stop();
+            self.ta.shutdown();
+            self.tb.shutdown();
+        }
+    }
+    let mut cleanup = StopReplay { sa, sb, ta, tb };
+    let address = cleanup.tb.bound_address().unwrap();
+    let session = cleanup.ta.dial(&address, &f.env, None).unwrap();
+    cleanup.sa.adopt_outbound_session(&f.env, session, &address);
+    f.wait_stage("offline-fact-replayed-after-restart", || {
+        f.b.policy.get_connection("gh").unwrap().status == "disabled"
+    });
+    assert_eq!(
+        f.b.state.read_lines(&facts_path, None).unwrap().len(),
+        1,
+        "only the signed same-env non-incident fact may reach B"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(f.b.state.read_lines(&facts_path, None).unwrap().len(), 1);
+
+    // A second offline fact appears after the cursor has reached EOF. A new
+    // authenticated session must replay it, without duplicating the first.
+    cleanup.sb.stop();
+    cleanup.tb.shutdown();
+    let second = cleanup
+        .sa
+        .publish_fact(
+            &f.env,
+            "secret_version_revoked",
+            json!({"secret_id":"key","version_id":"0011223344556677"}),
+        )
+        .unwrap();
+    assert_eq!(second["kind"], "secret_version_revoked");
+    assert_eq!(f.b.state.read_lines(&facts_path, None).unwrap().len(), 1);
+    let tb2 = TcpTransport::new(kb.clone(), empty, 4);
+    let sb2 = TeamSync::new(f.b.clone(), Arc::new(tb2.clone()), kb);
+    sb2.start(Some("127.0.0.1:0")).unwrap();
+    cleanup.sb = sb2;
+    cleanup.tb = tb2;
+    let address = cleanup.tb.bound_address().unwrap();
+    let session = cleanup.ta.dial(&address, &f.env, None).unwrap();
+    cleanup.sa.adopt_outbound_session(&f.env, session, &address);
+    f.wait_stage("appended-offline-fact-replayed", || {
+        f.b.state.read_lines(&facts_path, None).unwrap().len() == 2
+    });
+    assert_eq!(
+        f.b.vault.get_meta("key").unwrap().versions[0].status,
+        "revoked"
+    );
+    assert_eq!(
+        cleanup.sa.status(&f.env).unwrap()["sessions"],
+        json!([b_fp])
+    );
+}
+
+#[test]
+fn catchup_keeps_current_role_authorization_after_offline_demotion() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let kb = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+    let b_fp = kb.fingerprint().unwrap();
+    f.sb.stop();
+    f.tb.shutdown();
+    let demote = commit::sign_commit(
+        &f.ka,
+        &f.env,
+        4,
+        "4000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op":"member.set_role","fingerprint":b_fp,"role":"user"})],
+    )
+    .unwrap();
+    assert_eq!(f.sa.submit_commit(&f.env, &demote).unwrap(), "accepted");
+    // B's offline replica has not learned its demotion, so it can originate a
+    // signed fact. A must still evaluate B's role at receipt and reject it.
+    f.sb.publish_fact(&f.env, "connection_disabled", json!({"connection_id":"gh"}))
+        .unwrap();
+    assert_eq!(
+        f.sa.ctx.policy.get_connection("gh").unwrap().status,
+        "active"
+    );
+    let rejects = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = rejects.clone();
+    f.sa.ctx.audit.subscribe(move |record| {
+        if record.get("event") == Some(&json!("team_fact_rejected")) {
+            captured.lock().unwrap().push(Value::Object(record.clone()));
+        }
+    });
+    f.wait(|| {
+        !f.sa.status(&f.env).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == &b_fp)
+    });
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let tb = TcpTransport::new(kb.clone(), empty, 4);
+    let sb = TeamSync::new(f.b.clone(), Arc::new(tb.clone()), kb);
+    sb.start(Some("127.0.0.1:0")).unwrap();
+    let address = tb.bound_address().unwrap();
+    let session = f.ta.dial(&address, &f.env, None).unwrap();
+    f.sa.adopt_outbound_session(&f.env, session, &address);
+    f.wait_stage("demoted-fact-rejected-on-catchup", || {
+        rejects
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|v| v["reason"] == "team_fact_not_authorized")
+    });
+    assert_eq!(
+        f.sa.ctx.policy.get_connection("gh").unwrap().status,
+        "active"
+    );
+    assert!(
+        f.sa.ctx
+            .state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap()
+            .is_empty()
+    );
+    sb.stop();
+    tb.shutdown();
+}
+
+#[test]
+fn removed_offline_peer_gets_no_fact_replay_or_authenticated_session() {
+    let f = RemoteFixture::new(connection_create("gh"), "api_key", SECRET, json!({}));
+    let kb = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+    let b_fp = kb.fingerprint().unwrap();
+    f.sb.stop();
+    f.tb.shutdown();
+    f.sa.publish_fact(&f.env, "connection_disabled", json!({"connection_id":"gh"}))
+        .unwrap();
+    f.sa.publish_fact(&f.env, "member_removed", json!({"fingerprint":b_fp}))
+        .unwrap();
+    let empty: MembershipCheck = Arc::new(|_, _| None);
+    let tb = TcpTransport::new(kb.clone(), empty, 4);
+    let sb = TeamSync::new(f.b.clone(), Arc::new(tb.clone()), kb);
+    sb.start(Some("127.0.0.1:0")).unwrap();
+    let address = tb.bound_address().unwrap();
+    assert!(
+        f.ta.dial(&address, &f.env, None).is_err(),
+        "removed peer was allowed to authenticate for replay"
+    );
+    assert!(
+        f.b.state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap()
+            .is_empty(),
+        "removed peer received a queued fact"
+    );
+    sb.stop();
+    tb.shutdown();
+}
