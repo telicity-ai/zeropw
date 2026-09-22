@@ -313,3 +313,35 @@ recorded against the exact published head on PR 6 only after that run, the
 final Linux checks, and Astra PO verification finish. No Python product,
 original Python test, harness, CI or instruction file was changed, and no
 merge or deployment occurred.
+
+## Latest platform gate and refusal-callback correction (2026-09-22)
+
+The complete frozen macOS run at `2e88f88` finished successfully: formatting,
+strict all-target Clippy, 507 default library tests (four ignored), and every
+integration target pass. The policy differential took 423.59 seconds, all
+eight original native process/CLI adapters took 150.41 seconds, and the
+22-case team contract suite took 19.72 seconds. All four separately selected
+signer resource probes also pass (21.29 seconds). These are results for that
+snapshot, not a claim that a subsequently changed test file was already run.
+
+Linux run `35713108864` at `aab6306` passed all 1099 unchanged Python tests,
+all 80 harness tests, and Rust formatting, strict Clippy, and library tests.
+Its Rust job failed with exit 101 after 29 minutes 40 seconds, not an overall
+job timeout. The team contract suite passed 21 of 22 tests; the explicit-empty-
+membership test observed an empty responder callback list instead of the
+exact `not_member` and initiator-fingerprint tuple. The dial was refused and
+the no-acceptance assertion passed. All new T6/T7 cases and both offline/live
+native SSH cancellation cases passed. Later suites and policy were skipped.
+
+Independent actual Astra triage found that both Rust and Python close the
+channel before invoking the failure callback. The Linux failure appeared
+about 90 milliseconds after suite startup; only the first, in-process branch
+lacked callback synchronization, whereas TCP already waited up to three
+seconds. A controlled Python probe returned a refused dial before recording
+the callback in ten of ten cases, then recorded the exact expected tuple
+after release. This supports an in-process test-ordering race, not a failed
+refusal. The historical Linux failure remains a failed gate. Sol's test-only
+correction adds the same bounded callback observation to the in-process case
+and a controlled ordering regression; exact refusal, identity, and no-acceptance
+requirements remain. Independent review and the next exact-head platform
+results determine acceptance, not this diagnosis alone.
