@@ -102,23 +102,51 @@ fn administrator_serve_keeps_its_graceful_signal_stop() {
     let script = r#"
 import json,os,pathlib,select,signal,subprocess,sys,time
 from zeropw.context import Context
+python_serve='''
+import os,signal,sys
+from zeropw.admin_cli import main
+ready_fd=int(sys.argv.pop(1))
+original_signal=signal.signal
+installed={}
+def observe_registration(signum,handler):
+ previous=original_signal(signum,handler)
+ if signum in (signal.SIGINT,signal.SIGTERM):installed[signum]=handler
+ if signum==signal.SIGTERM:
+  assert callable(installed.get(signal.SIGINT)) and callable(handler)
+  assert signal.getsignal(signal.SIGINT) is installed[signal.SIGINT]
+  assert signal.getsignal(signal.SIGTERM) is handler
+  signal.signal=original_signal
+  os.write(ready_fd,b'R');os.close(ready_fd)
+ return previous
+signal.signal=observe_registration
+sys.exit(main(sys.argv[1:]))
+'''
 results=[]
 for mode in ('python','rust'):
  for sig in (signal.SIGINT,signal.SIGTERM):
   state=pathlib.Path(sys.argv[2])/f'{mode}-{sig}'
   Context.initialize(state,'synthetic-admin-serve','synthetic-recovery-serve')
-  command=([sys.executable,'-m','zeropw.admin_cli'] if mode=='python' else [sys.argv[1]])
-  p=subprocess.Popen(command+['--state-dir',str(state),'serve','--quiet'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/usr/bin:/bin','PYTHONPATH':sys.argv[3]})
+  ready_read,ready_write=os.pipe()
+  command=([sys.executable,'-c',python_serve,str(ready_write)] if mode=='python' else [sys.argv[1]])
+  p=subprocess.Popen(command+['--state-dir',str(state),'serve','--quiet'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={'PATH':'/usr/bin:/bin','PYTHONPATH':sys.argv[3]},pass_fds=(ready_write,) if mode=='python' else ())
+  os.close(ready_write)
   try:
-   ready,_,_=select.select([p.stdout],[],[],5)
+   deadline=time.monotonic()+5
+   ready,_,_=select.select([p.stdout],[],[],max(0,deadline-time.monotonic()))
    assert ready,('serve startup timeout',mode,sig)
    payload=json.loads(p.stdout.readline())
    assert payload['url'].startswith('http://127.0.0.1:'),(mode,payload)
+   # Python prints its banner before installing handlers. Observe the actual
+   # registrations, without changing them; the native banner follows both.
+   if mode=='python':
+    ready,_,_=select.select([ready_read],[],[],max(0,deadline-time.monotonic()))
+    assert ready and os.read(ready_read,1)==b'R',('serve signal readiness timeout',mode,sig)
    os.kill(p.pid,sig)
    _,stderr=p.communicate(timeout=5)
    results.append({'mode':mode,'signal':int(sig),'code':p.returncode,'stderr':stderr.decode()})
   finally:
    if p.poll() is None:p.kill();p.communicate(timeout=2)
+   os.close(ready_read)
 print(json.dumps(results))
 assert all(r['code']==0 and not r['stderr'] for r in results),results
 "#;
