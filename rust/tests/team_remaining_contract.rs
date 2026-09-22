@@ -1021,7 +1021,7 @@ impl RemoteFixture {
         fs::create_dir(root.path().join("runs")).unwrap();
         if connection_op["cli"]["program"] == "__SYNTHETIC_SLEEP_CLI__" {
             let script = root.path().join("synthetic-ssh-cli");
-            fs::write(&script, b"#!/bin/sh\nfor arg in \"$@\"; do marker=$arg; done\nprintf '%s' \"$SSH_AUTH_SOCK\" > \"$marker\"\nsleep 30\n").unwrap();
+            fs::write(&script, b"#!/bin/sh\nfor arg in \"$@\"; do marker=$arg; done\nprintf '%s' \"$SSH_AUTH_SOCK\" > \"$marker.tmp\"\nmv \"$marker.tmp\" \"$marker\"\nsleep 30\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
             connection_op["cli"]["program"] = json!(script.to_string_lossy());
@@ -1487,12 +1487,22 @@ fn remote_connection_disabled_fact_closes_existing_signer_socket() {
     );
     let run_id = view["run_id"].as_str().unwrap();
     f.wait_stage("signer-child-marker", || marker.exists());
-    let socket_path = std::path::PathBuf::from(fs::read_to_string(&marker).unwrap());
-    assert!(socket_path.exists(), "real signer socket never opened");
+    let marker_content = fs::read_to_string(&marker).unwrap();
+    let socket_path = std::path::PathBuf::from(&marker_content);
+    if !socket_path.exists() {
+        // Synthetic child output only; capture the actual run outcome if the
+        // marker was written but the signer socket is already absent.
+        let status =
+            std::panic::catch_unwind(|| api(api_port, &token, "status", json!({"run_id":run_id})));
+        panic!(
+            "real signer socket never opened; marker_length={}; path={socket_path:?}; exec={view}; status={status:?}",
+            marker_content.len()
+        );
+    }
     // `serve` HTTP readiness does not prove its replacement team session is
-    // established. Ordinary FACTs are one-shot to current sessions, whereas
-    // commits have vector catch-up. A fresh harmless commit reaching B proves
-    // this is the new authenticated session, not A's stale peer status.
+    // established. This case tests live FACT delivery over a confirmed new
+    // session; the separate offline case covers FACT replay. A fresh harmless
+    // commit reaching B proves this is not A's stale peer status.
     let a_fp = f.ka.fingerprint().unwrap();
     let b_fp = DeviceKey::load_or_create(f.b.state, f.b.kms)
         .unwrap()
@@ -1767,9 +1777,18 @@ fn offline_facts_catch_up_after_sender_restart_in_bounded_batches() {
     let address = cleanup.tb.bound_address().unwrap();
     let session = cleanup.ta.dial(&address, &f.env, None).unwrap();
     cleanup.sa.adopt_outbound_session(&f.env, session, &address);
-    f.wait_stage("appended-offline-fact-replayed", || {
-        f.b.state.read_lines(&facts_path, None).unwrap().len() == 2
-    });
+    f.wait_stage(
+        "appended-offline-fact-ledger-and-revocation-applied",
+        || {
+            f.b.state.read_lines(&facts_path, None).unwrap().len() == 2
+                && f.b.vault.get_meta("key").is_ok_and(|meta| {
+                    meta.versions
+                        .first()
+                        .is_some_and(|version| version.status == "revoked")
+                })
+        },
+    );
+    assert_eq!(f.b.state.read_lines(&facts_path, None).unwrap().len(), 2);
     assert_eq!(
         f.b.vault.get_meta("key").unwrap().versions[0].status,
         "revoked"
