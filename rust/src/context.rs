@@ -50,7 +50,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde_json::{Map, Value, json};
 
@@ -162,6 +162,55 @@ fn empty_slot() -> AnySlot {
     Mutex::new(None)
 }
 
+/// Exact private directories created by opted-in Contexts. The administrator
+/// CLI uses this to clean up on SIGINT from a normal watcher thread before
+/// returning 130; user-supplied Config paths are never registered.
+#[derive(Default)]
+pub(crate) struct OwnedTempDirRegistry {
+    state: Mutex<OwnedTempDirState>,
+}
+
+#[derive(Default)]
+struct OwnedTempDirState {
+    paths: Vec<PathBuf>,
+    shutting_down: bool,
+}
+
+impl OwnedTempDirRegistry {
+    fn create(&self, base: &Path, prefix: &str) -> Result<PathBuf, Error> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.shutting_down {
+            return Err(Error::state("signal_handler_unavailable"));
+        }
+        let path = create_private_dir(base, prefix)?;
+        state.paths.push(path.clone());
+        Ok(path)
+    }
+
+    fn remove(&self, path: &Path) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = state.paths.iter().position(|owned| owned == path) {
+            let _ = fs::remove_dir_all(path);
+            state.paths.swap_remove(index);
+        }
+    }
+
+    pub(crate) fn cleanup(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        for path in state.paths.drain(..) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+
+    pub(crate) fn shutdown_and_cleanup(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.shutting_down = true;
+        for path in state.paths.drain(..) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
 /// Port of `context.Context`.
 pub struct Context {
     pub state: &'static StateDir,
@@ -185,6 +234,7 @@ pub struct Context {
     /// Server URL is set after binding while the context is shared.
     pub public_url: RwLock<Option<String>>,
     owned_dirs: Vec<PathBuf>,
+    owned_dir_registry: Option<Arc<OwnedTempDirRegistry>>,
 }
 
 impl Context {
@@ -194,6 +244,42 @@ impl Context {
         recovery_passphrase: &str,
         config: Config,
         clock: Clock,
+    ) -> Result<Context, Error> {
+        Self::initialize_inner(
+            state_dir,
+            admin_passphrase,
+            recovery_passphrase,
+            config,
+            clock,
+            None,
+        )
+    }
+
+    pub(crate) fn initialize_with_tempdir_cleanup(
+        state_dir: impl AsRef<Path>,
+        admin_passphrase: &str,
+        recovery_passphrase: &str,
+        config: Config,
+        clock: Clock,
+        registry: Arc<OwnedTempDirRegistry>,
+    ) -> Result<Context, Error> {
+        Self::initialize_inner(
+            state_dir,
+            admin_passphrase,
+            recovery_passphrase,
+            config,
+            clock,
+            Some(registry),
+        )
+    }
+
+    fn initialize_inner(
+        state_dir: impl AsRef<Path>,
+        admin_passphrase: &str,
+        recovery_passphrase: &str,
+        config: Config,
+        clock: Clock,
+        registry: Option<Arc<OwnedTempDirRegistry>>,
     ) -> Result<Context, Error> {
         let state: &'static StateDir =
             Box::leak(Box::new(StateDir::new(state_dir.as_ref().to_path_buf())));
@@ -236,6 +322,7 @@ impl Context {
             intrusion: empty_slot(),
             team: empty_slot(),
             owned_dirs: Vec::new(),
+            owned_dir_registry: registry,
         };
         ctx.apply_config_defaults()?;
         ctx.audit.record(
@@ -253,6 +340,24 @@ impl Context {
         state_dir: impl AsRef<Path>,
         config: Config,
         clock: Clock,
+    ) -> Result<Context, Error> {
+        Self::open_inner(state_dir, config, clock, None)
+    }
+
+    pub(crate) fn open_with_tempdir_cleanup(
+        state_dir: impl AsRef<Path>,
+        config: Config,
+        clock: Clock,
+        registry: Arc<OwnedTempDirRegistry>,
+    ) -> Result<Context, Error> {
+        Self::open_inner(state_dir, config, clock, Some(registry))
+    }
+
+    fn open_inner(
+        state_dir: impl AsRef<Path>,
+        config: Config,
+        clock: Clock,
+        registry: Option<Arc<OwnedTempDirRegistry>>,
     ) -> Result<Context, Error> {
         let state: &'static StateDir =
             Box::leak(Box::new(StateDir::new(state_dir.as_ref().to_path_buf())));
@@ -291,6 +396,7 @@ impl Context {
             intrusion: empty_slot(),
             team: empty_slot(),
             owned_dirs: Vec::new(),
+            owned_dir_registry: registry,
         };
         ctx.apply_config_defaults()?;
         Ok(ctx)
@@ -337,7 +443,11 @@ impl Context {
 
     fn private_tempdir(&mut self, prefix: &str) -> Result<PathBuf, Error> {
         let base = std::env::temp_dir();
-        let path = create_private_dir(&base, prefix)?;
+        let path = if let Some(registry) = &self.owned_dir_registry {
+            registry.create(&base, prefix)?
+        } else {
+            create_private_dir(&base, prefix)?
+        };
         self.owned_dirs.push(path.clone());
         Ok(path)
     }
@@ -348,36 +458,22 @@ impl Context {
     /// dropped `Context` never leaves an owned temp dir behind even if the
     /// caller never calls this explicitly.
     ///
-    /// X-17 (equivalence review, round 8): this doc comment used to claim
-    /// this was "not a strict improvement" over Python's
-    /// `atexit.register(shutil.rmtree, ...)`, since it would "never run at
-    /// all for a `Context` lost to `std::process::exit`/abort", and that
-    /// closing that gap "would need `libc::atexit`, an `unsafe` FFI call ...
-    /// so this gap is recorded rather than closed with `unsafe`" --
-    /// `DEVIATIONS.md` finding E-5. Round 7 (finding E-R7-1) measured both
-    /// claims false and closed the gap in safe Rust: there are zero
-    /// `std::process::exit`/`std::process::abort` call sites anywhere in
-    /// this crate's `src/`/`tests/` (verify with `grep -rn
-    /// 'process::exit\|process::abort' rust/src rust/tests`), so the
-    /// "lost to `process::exit`" case this comment warned about was never
-    /// actually reachable through this crate's own code; the real gap was
-    /// `signer::install`'s old `&'static Context` parameter, satisfiable in
-    /// safe Rust only via `Box::leak` -- fixed by taking an owned
-    /// `Arc<Context>` instead, so a `Context` dropped at the end of scope
-    /// (an `Arc` clone going out of scope on every exit path, including the
-    /// signer's) removes both owned dirs through ordinary `Drop`, no
-    /// `unsafe` involved. See `DEVIATIONS.md` row 68 (the corrected E-5
-    /// row) for the full measurement and the one remaining, structurally
-    /// matched gap (`std::process::exit`/abort skipping Rust destructors,
-    /// the direct equivalent of Python's own `atexit` gap, `os._exit`) --
-    /// this doc comment and that row must not drift apart again: a reader
-    /// of this function alone should not be told the gap is unclosable in
-    /// safe Rust when it already is closed, the exact invitation to
-    /// reintroduce `Box::leak`/`&'static Context` that row exists to
-    /// prevent.
+    /// X-17/E-R7-1 fixed the signer lifetime in safe Rust: the signer owns
+    /// an `Arc<Context>`, so its final drop runs this cleanup rather than
+    /// leaking the Context. Later native administrator SIGINT handling added
+    /// direct process exits, which do skip `Drop` (unlike Python's caught
+    /// KeyboardInterrupt and atexit). Ordinary administrator Contexts now
+    /// opt into an exact-owned-directory registry; their normal-thread
+    /// signal watcher drains it before exit 130. Generic Contexts still use
+    /// this Drop path, and `serve` stops gracefully. See `DEVIATIONS.md` E-5
+    /// for the measured scope; do not claim that all process exits unwind.
     pub fn close(&mut self) {
         for dir in self.owned_dirs.drain(..) {
-            let _ = fs::remove_dir_all(&dir);
+            if let Some(registry) = &self.owned_dir_registry {
+                registry.remove(&dir);
+            } else {
+                let _ = fs::remove_dir_all(&dir);
+            }
         }
     }
 
@@ -773,6 +869,42 @@ fn resolve_components(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shutdown_registry_never_adopts_configured_dirs_or_creates_after_cleanup() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let socket = temp.path().join("configured-socket");
+        let run = temp.path().join("configured-run");
+        fs::create_dir(&socket).unwrap();
+        fs::create_dir(&run).unwrap();
+        let registry = Arc::new(OwnedTempDirRegistry::default());
+        let mut ctx = Context::initialize_with_tempdir_cleanup(
+            temp.path().join("state"),
+            "synthetic-admin-owned-test",
+            "synthetic-recovery-owned-test",
+            Config {
+                socket_dir: Some(socket.clone()),
+                run_dir: Some(run.clone()),
+                ..Config::default()
+            },
+            clock::system(),
+            registry.clone(),
+        )
+        .unwrap();
+        assert!(
+            registry
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .paths
+                .is_empty()
+        );
+        registry.shutdown_and_cleanup();
+        ctx.close();
+        assert!(socket.is_dir());
+        assert!(run.is_dir());
+        assert!(registry.create(temp.path(), "new-after-signal-").is_err());
+    }
 
     /// Finding E-2: `mkdir_private_0700` must set mode 0700 in the `mkdir`
     /// syscall itself (`DirBuilder::mode`), not via a separate `chmod`

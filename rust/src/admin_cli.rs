@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::audit::RecordArgs;
-use crate::context::{Config, Context};
+use crate::context::{Config, Context, OwnedTempDirRegistry};
 use crate::errors::Error;
 use crate::policy::{
     CliProfile, Connection, ConnectionChanges, HttpAuth, HttpScope, HttpTarget, SshTarget,
@@ -415,11 +415,36 @@ fn refuse_cli_env<T>(
 }
 
 fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
-    let ctx = Context::open(&a.state_dir, Config::default(), crate::clock::system())?;
+    let ctx = Context::open_with_tempdir_cleanup(
+        &a.state_dir,
+        Config::default(),
+        crate::clock::system(),
+        admin_owned_dir_registry(),
+    )?;
     if mutating {
         ctx.audit.require_writable()?;
     }
     Ok(ctx)
+}
+
+// Only ordinary administrator Contexts opt into this registry. Its entries
+// are the exact private paths they create, never supplied/adopted paths.
+static ADMIN_OWNED_DIRS: OnceLock<Arc<OwnedTempDirRegistry>> = OnceLock::new();
+
+fn admin_owned_dir_registry() -> Arc<OwnedTempDirRegistry> {
+    Arc::clone(ADMIN_OWNED_DIRS.get_or_init(|| Arc::new(OwnedTempDirRegistry::default())))
+}
+
+fn shutdown_admin_owned_dirs() {
+    admin_owned_dir_registry().shutdown_and_cleanup();
+}
+
+struct AdminOwnedDirCleanup;
+
+impl Drop for AdminOwnedDirCleanup {
+    fn drop(&mut self) {
+        admin_owned_dir_registry().cleanup();
+    }
 }
 
 struct RestoreTerminalEcho {
@@ -431,11 +456,14 @@ struct RestoreTerminalEcho {
 }
 impl Drop for RestoreTerminalEcho {
     fn drop(&mut self) {
+        let mut active = PROMPT_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
         let _ = rustix::termios::tcsetattr(
             &self.terminal,
             rustix::termios::OptionalActions::Now,
             &self.original,
         );
+        *active = None;
+        drop(active);
         // signal-hook unregisters callbacks but does not restore the OS's
         // previous disposition. Keep a process-lifetime conditional exit
         // action armed whenever no password prompt owns the terminal.
@@ -448,20 +476,49 @@ impl Drop for RestoreTerminalEcho {
 }
 
 static PROMPT_LOCK: Mutex<()> = Mutex::new(());
+struct PromptTerminal {
+    terminal: fs::File,
+    original: rustix::termios::Termios,
+}
+static PROMPT_TERMINAL: Mutex<Option<PromptTerminal>> = Mutex::new(None);
 static PROMPT_DEFAULT_SIGNALS: OnceLock<Result<Arc<AtomicBool>, String>> = OnceLock::new();
+
+fn exit_after_prompt_signal(signal: i32) -> ! {
+    // Keep this lock through process termination: a concurrently executing
+    // prompt cannot disable echo again after restoration but before exit.
+    let active = PROMPT_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(prompt) = active.as_ref() {
+        let _ = rustix::termios::tcsetattr(
+            &prompt.terminal,
+            rustix::termios::OptionalActions::Now,
+            &prompt.original,
+        );
+    }
+    if signal == signal_hook::consts::signal::SIGINT {
+        shutdown_admin_owned_dirs();
+        std::process::exit(130);
+    }
+    let _ = signal_hook::low_level::emulate_default_handler(signal);
+    std::process::exit(128 + signal);
+}
 
 fn prompt_default_signal_action() -> io::Result<Arc<AtomicBool>> {
     PROMPT_DEFAULT_SIGNALS
         .get_or_init(|| {
             let armed = Arc::new(AtomicBool::new(true));
-            // Python's main catches KeyboardInterrupt and returns 130, so
-            // SIGINT must be a normal exit status, not signal termination.
-            signal_hook::flag::register_conditional_shutdown(
-                signal_hook::consts::signal::SIGINT,
-                130,
-                armed.clone(),
-            )
-            .map_err(|e| e.to_string())?;
+            // Signal callbacks only wake this thread. Filesystem cleanup is
+            // performed here, never in the asynchronous signal handler.
+            let mut interrupts =
+                signal_hook::iterator::Signals::new([signal_hook::consts::signal::SIGINT])
+                    .map_err(|e| e.to_string())?;
+            thread::Builder::new()
+                .name("zeropw-admin-sigint".into())
+                .spawn(move || {
+                    if interrupts.forever().next().is_some() {
+                        exit_after_prompt_signal(signal_hook::consts::signal::SIGINT);
+                    }
+                })
+                .map_err(|e| e.to_string())?;
             signal_hook::flag::register_conditional_default(
                 signal_hook::consts::signal::SIGTERM,
                 armed.clone(),
@@ -482,31 +539,14 @@ fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
         .open("/dev/tty")?;
     let original = rustix::termios::tcgetattr(&terminal)?;
     let default_signal_action = prompt_default_signal_action()?;
-    // Install the interrupt watcher before changing terminal modes. The
-    // default SIGINT action skips Drop, so the watcher restores the original
-    // flags before exiting on Ctrl-C (or SIGTERM).
-    let mut signals = signal_hook::iterator::Signals::new([
-        signal_hook::consts::signal::SIGINT,
-        signal_hook::consts::signal::SIGTERM,
-    ])?;
+    // The process-lifetime SIGINT watcher restores active terminal state.
+    // This prompt-local watcher handles SIGTERM while echo is disabled.
+    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::signal::SIGTERM])?;
     let handle = signals.handle();
-    let watcher_terminal = terminal.try_clone()?;
     let restore_terminal = terminal.try_clone()?;
-    let watcher_original = original.clone();
     let watcher = thread::Builder::new().spawn(move || {
         if let Some(signal) = signals.forever().next() {
-            let _ = rustix::termios::tcsetattr(
-                &watcher_terminal,
-                rustix::termios::OptionalActions::Now,
-                &watcher_original,
-            );
-            if signal == signal_hook::consts::signal::SIGINT {
-                // Match Python's caught KeyboardInterrupt after the terminal
-                // is restored. SIGTERM retains OS signal termination below.
-                std::process::exit(130);
-            }
-            let _ = signal_hook::low_level::emulate_default_handler(signal);
-            std::process::exit(128 + signal);
+            exit_after_prompt_signal(signal);
         }
     })?;
     let restore = RestoreTerminalEcho {
@@ -521,7 +561,14 @@ fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
     hidden
         .local_modes
         .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
-    rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &hidden)?;
+    {
+        let mut active = PROMPT_TERMINAL.lock().unwrap_or_else(|e| e.into_inner());
+        *active = Some(PromptTerminal {
+            terminal: terminal.try_clone()?,
+            original: original.clone(),
+        });
+        rustix::termios::tcsetattr(&terminal, rustix::termios::OptionalActions::Now, &hidden)?;
+    }
     terminal.write_all(prompt.as_bytes())?;
     terminal.flush()?;
     // Canonical TTY input retains the usual backspace and line-kill editing.
@@ -855,12 +902,13 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             return Err(Error::invalid_input("passphrases_identical")
                 .with_detail("the recovery passphrase must be independent of the admin one"));
         }
-        let ctx = Context::initialize(
+        let ctx = Context::initialize_with_tempdir_cleanup(
             &a.state_dir,
             &admin,
             &recovery,
             Config::default(),
             crate::clock::system(),
+            admin_owned_dir_registry(),
         )?;
         return Ok(
             json!({"state_dir":ctx.state.path.to_string_lossy(),"kms_key_id":ctx.kms.key_id()}),
@@ -2304,6 +2352,7 @@ pub fn main(argv: &[String]) -> i32 {
         output(&Error::state("signal_handler_unavailable").to_dict(), true);
         return 1;
     }
+    let _owned_dir_cleanup = AdminOwnedDirCleanup;
     let result = if args.command == "incident" {
         incident_command(&args).map(Some)
     } else if args.command == "team" {
