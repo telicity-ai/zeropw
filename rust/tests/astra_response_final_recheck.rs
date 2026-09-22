@@ -83,4 +83,3 @@ assert not differences,differences
         String::from_utf8_lossy(&output.stderr)
     );
 }
-
