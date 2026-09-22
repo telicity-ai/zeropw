@@ -49,10 +49,23 @@ fn b32e(raw: &[u8]) -> String {
     out.to_ascii_lowercase()
 }
 fn b32d(text: &str) -> Result<Vec<u8>> {
+    // Python pads the complete, stripped input to an eight-character block
+    // before calling b32decode. This also accepts already-padded tokens.
+    let mut encoded = text.trim().to_ascii_uppercase().into_bytes();
+    encoded.resize(encoded.len() + (8 - encoded.len() % 8) % 8, b'=');
+    let data_len = encoded
+        .iter()
+        .position(|b| *b == b'=')
+        .unwrap_or(encoded.len());
+    if encoded[data_len..].iter().any(|b| *b != b'=')
+        || !matches!(data_len % 8, 0 | 2 | 4 | 5 | 7)
+        || encoded.len() - data_len != (8 - data_len % 8) % 8
+    {
+        return Err(Error::invalid_input("invite_malformed"));
+    }
     let mut out = Vec::new();
     let (mut bits, mut held) = (0u32, 0u32);
-    for c in text.trim().bytes() {
-        let c = c.to_ascii_uppercase();
+    for c in encoded[..data_len].iter().copied() {
         let Some(v) = B32.iter().position(|b| *b == c) else {
             return Err(Error::invalid_input("invite_malformed"));
         };
@@ -63,10 +76,75 @@ fn b32d(text: &str) -> Result<Vec<u8>> {
             out.push((bits >> held) as u8);
         }
     }
-    if held > 0 && (bits & ((1 << held) - 1)) != 0 {
-        return Err(Error::invalid_input("invite_malformed"));
-    }
+    // CPython's b32decode does not reject non-zero unused pad bits.
     Ok(out)
+}
+
+/// The persisted invite format accepts either a numeric epoch or Python's
+/// `%Y-%m-%dT%H:%M:%SZ` UTC form. Keep this independent of the host timezone.
+fn parse_expiry(value: &Value) -> Option<f64> {
+    if let Some(n) = value.as_f64().filter(|_| value.is_number()) {
+        return Some(n);
+    }
+    let text = value.as_str()?;
+    let (date, time) = text.split_once('T')?;
+    let (year, month_day) = date.split_once('-')?;
+    let (month, day) = month_day.split_once('-')?;
+    let time = time.strip_suffix('Z')?;
+    let mut hms = time.split(':');
+    let (hour, minute, second) = (hms.next()?, hms.next()?, hms.next()?);
+    if hms.next().is_some() || year.len() != 4 {
+        return None;
+    }
+    let parse_part = |s: &str, max_len: usize| -> Option<i64> {
+        (1..=max_len)
+            .contains(&s.len())
+            .then(|| s.parse::<i64>().ok())
+            .flatten()
+    };
+    let (y, m, d) = (
+        parse_part(year, 4)?,
+        parse_part(month, 2)?,
+        parse_part(day, 2)?,
+    );
+    let (h, min, sec) = (
+        parse_part(hour, 2)?,
+        parse_part(minute, 2)?,
+        parse_part(second, 2)?,
+    );
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || !(1..=month_days[(m - 1) as usize]).contains(&d)
+        || !(0..=23).contains(&h)
+        || !(0..=59).contains(&min)
+        || !(0..=61).contains(&sec)
+    {
+        return None;
+    }
+    // Howard Hinnant's Gregorian civil-date conversion, shifted to Unix days.
+    let y = y - i64::from(m <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = m + if m > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some((days * 86_400 + h * 3_600 + min * 60 + sec) as f64)
 }
 fn token(n: usize) -> String {
     let mut data = vec![0; n];
@@ -313,7 +391,7 @@ pub fn consume_invite(
         if entry["used"] == true {
             continue;
         }
-        let Some(expires) = entry["expires_at"].as_f64() else {
+        let Some(expires) = parse_expiry(&entry["expires_at"]) else {
             continue;
         };
         if (ctx.clock)() > expires {
@@ -357,9 +435,12 @@ pub fn join(
 ) -> Result<Value> {
     let invite = parse_invite(invite_text)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let project = project
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("team-{}", &invite.inviter[..invite.inviter.len().min(8)]));
+    let project = project.map(str::to_owned).unwrap_or_else(|| {
+        format!(
+            "team-{}",
+            invite.inviter.chars().take(8).collect::<String>()
+        )
+    });
     let environment = environment.unwrap_or("shared");
     sync::write_env_mapping(ctx.state, &invite.env_id, &project, environment)?;
     team.register_env(&invite.env_id)?;

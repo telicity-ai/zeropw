@@ -212,24 +212,28 @@ impl Fact {
         let bad = || Error::invalid_input("team_fact_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
         let field = |key| obj.get(key).map(commit::python_str_coerce).ok_or_else(bad);
-        let target = match obj.get("target").ok_or_else(bad)? {
-            Value::Object(m) => m.clone(),
-            Value::Array(pairs) => {
-                let mut m = Map::new();
-                for pair in pairs {
-                    let (key, value) = match pair {
-                        Value::Array(items) if items.len() == 2 => (&items[0], &items[1]),
-                        _ => return Err(bad()),
-                    };
-                    if key.is_array() || key.is_object() {
-                        return Err(bad());
-                    }
-                    m.insert(commit::python_str_coerce(key), value.clone());
-                }
-                m
+        // Python applies dict(target) before stringifying its keys. Reuse the
+        // commit parser's sequence-of-pairs conversion and key equivalence.
+        let pairs =
+            commit::python_dict_pairs(obj.get("target").ok_or_else(bad)?).ok_or_else(bad)?;
+        let mut merged: Vec<(Value, Value)> = Vec::new();
+        for (key, value) in pairs {
+            if !commit::dict_key_is_hashable(&key) {
+                return Err(bad());
             }
-            _ => return Err(bad()),
-        };
+            if let Some((_, prior_value)) = merged
+                .iter_mut()
+                .find(|(prior, _)| commit::dict_keys_equal(prior, &key))
+            {
+                *prior_value = value;
+            } else {
+                merged.push((key, value));
+            }
+        }
+        let mut target = Map::new();
+        for (key, value) in merged {
+            target.insert(commit::python_str_coerce(&key), value);
+        }
         Ok(Self {
             format: field("format")?,
             env_id: field("env_id")?,
@@ -917,9 +921,8 @@ impl TeamSync {
         let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
         self.store_fact(env_id, &fact)?;
         self.refold(env_id)?;
-        if kind != "incident" {
-            self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
-        }
+        self.audit_fact_apply(env_id, &fact);
+        self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
         if kind == "member_removed" {
             if let Some(fp) = fact.target["fingerprint"].as_str() {
                 self.drain_removed(env_id, fp);

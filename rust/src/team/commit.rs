@@ -619,7 +619,7 @@ pub(crate) fn python_str_coerce(value: &Value) -> String {
 /// {"a": "b"}`) -- included here too since it costs nothing extra. Anything
 /// else that is not iterable at all in Python (`dict(5)`) raises `TypeError`
 /// (uncaught, `commit_malformed` per PORTING.md §3.5), returning `None`.
-fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
+pub(crate) fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
     match value {
         Value::Object(m) => Some(
             m.iter()
@@ -652,7 +652,7 @@ fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
 /// key (finding H-R5-5): everything except a `list`/`dict` (Python's own
 /// unhashable types -- confirmed against real `python3.12`:
 /// `dict([([1], 1)])` raises `TypeError: unhashable type: 'list'`).
-fn dict_key_is_hashable(v: &Value) -> bool {
+pub(crate) fn dict_key_is_hashable(v: &Value) -> bool {
     !matches!(v, Value::Array(_) | Value::Object(_))
 }
 
@@ -662,7 +662,7 @@ fn dict_key_is_hashable(v: &Value) -> bool {
 /// they collide across type -- confirmed against real `python3.12`:
 /// `True == 1 == 1.0` and `False == 0 == 0.0`. A `list`/`dict` never
 /// reaches this function (see [`dict_key_is_hashable`], checked first).
-fn dict_keys_equal(a: &Value, b: &Value) -> bool {
+pub(crate) fn dict_keys_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::String(x), Value::String(y)) => x == y,
