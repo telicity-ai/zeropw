@@ -49,8 +49,8 @@ pub fn validate_name(value: &str, what: &str) -> Result<String, Error> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     pub name: String,
-    pub environments: Vec<String>,
-    pub created_at: String,
+    pub environments: Vec<Value>,
+    pub created_at: Value,
 }
 
 /// `projects.Projects`.
@@ -176,8 +176,8 @@ impl<'a> Projects<'a> {
         self.state.write_json(DOC, &Value::Object(doc))?;
         Ok(Project {
             name,
-            environments: envs,
-            created_at,
+            environments: envs.into_iter().map(Value::String).collect(),
+            created_at: Value::String(created_at),
         })
     }
 
@@ -199,7 +199,11 @@ impl<'a> Projects<'a> {
     /// `Projects.require_environment`.
     pub fn require_environment(&self, project: &str, environment: &str) -> Result<(), Error> {
         let entry = self.get(project)?;
-        if !entry.environments.iter().any(|e| e == environment) {
+        if !entry
+            .environments
+            .iter()
+            .any(|e| e == &Value::String(environment.to_owned()))
+        {
             return Err(Error::not_found("environment_not_found"));
         }
         Ok(())
@@ -250,35 +254,17 @@ fn is_falsy(value: &Value) -> bool {
 /// `environments` (a number, bool, or `null`), and an uncaught `KeyError`
 /// for either field missing outright.
 ///
-/// This port keeps requiring the exact expected JSON shape (`environments`:
-/// array of strings; `created_at`: string) and returns `state_corrupt`
-/// otherwise, for every one of those cases uniformly -- the same
-/// strict-typing convention already used for every other state document in
-/// this crate (`policy.rs`'s `Connection`/`Grant`/`Principal` loading,
-/// `audit.rs`, `handles.rs`). PORTING.md §3.5 covers the non-iterable/
-/// missing-key cases outright (an uncaught Python exception); the
-/// loose-but-non-crashing cases (a string or wrong-typed list/dict that
-/// Python *would* accept) are recorded in `rust/DEVIATIONS.md` under the
-/// same reasoning: the only in-scope caller of `Project.environments`/
-/// `.created_at` is `Projects.require_environment`'s membership test
-/// (`environment not in entry.environments`), which does not care about
-/// element types either way, and every writer in this crate only ever
-/// produces well-typed documents, so this is unreachable for any state this
-/// crate (or the Python prototype, on the matching write paths) produced
-/// itself.
+/// Iterable persisted shapes and arbitrary `created_at` JSON are retained,
+/// including for native admin listing. Missing/non-iterable fields use the
+/// existing fail-closed `state_corrupt` boundary (PORTING.md §3.5).
 fn project_from_entry(name: &str, entry: &Value) -> Result<Project, Error> {
-    let environments = entry
-        .get("environments")
-        .and_then(Value::as_array)
-        .ok_or_else(state_corrupt)?
-        .iter()
-        .map(|v| v.as_str().map(str::to_string).ok_or_else(state_corrupt))
-        .collect::<Result<Vec<_>, _>>()?;
-    let created_at = entry
-        .get("created_at")
-        .and_then(Value::as_str)
-        .ok_or_else(state_corrupt)?
-        .to_string();
+    let environments = match entry.get("environments").ok_or_else(state_corrupt)? {
+        Value::Array(items) => items.clone(),
+        Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+        Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+        _ => return Err(state_corrupt()),
+    };
+    let created_at = entry.get("created_at").ok_or_else(state_corrupt)?.clone();
     Ok(Project {
         name: name.to_string(),
         environments,
@@ -324,7 +310,7 @@ mod tests {
         let p = projects.create("acme", DEFAULT_ENVIRONMENTS).unwrap();
         assert_eq!(p.name, "acme");
         assert_eq!(p.environments, vec!["dev", "staging", "prod"]);
-        assert!(!p.created_at.is_empty());
+        assert!(!p.created_at.as_str().unwrap().is_empty());
     }
 
     #[test]
@@ -522,23 +508,13 @@ mod tests {
         }
     }
 
-    // A-R2-6(b): Python's `Project(name, tuple(entry["environments"]),
-    // entry["created_at"])` performs no type checking at all (see
-    // `rust/DEVIATIONS.md` for the full reasoning); this port instead keeps
-    // requiring the exact expected JSON shape for every field, uniformly,
-    // and reports `state_corrupt` for anything else -- a non-array/
-    // non-string `environments`, a wrong-typed `environments` element, a
-    // non-string `created_at`, and a missing field either way.
+    // Only non-iterable or missing `environments`, and missing `created_at`,
+    // escape Python as built-in exceptions and fail closed here.
     #[test]
-    fn malformed_environments_or_created_at_is_state_corrupt() {
+    fn noniterable_or_missing_project_fields_are_state_corrupt() {
         let (_tmp, state) = new_state();
         let projects = Projects::new(&state);
         let cases = [
-            json!({"acme": {"environments": [1, 2], "created_at": "2024-01-01T00:00:00Z"}}),
-            json!({"acme": {"environments": "dev", "created_at": "2024-01-01T00:00:00Z"}}),
-            json!({"acme": {"environments": {"a": 1}, "created_at": "2024-01-01T00:00:00Z"}}),
-            json!({"acme": {"environments": ["dev"], "created_at": null}}),
-            json!({"acme": {"environments": ["dev"], "created_at": 1700000000}}),
             json!({"acme": {"environments": 5, "created_at": "2024-01-01T00:00:00Z"}}),
             json!({"acme": {"created_at": "2024-01-01T00:00:00Z"}}),
             json!({"acme": {"environments": ["dev"]}}),

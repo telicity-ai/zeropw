@@ -79,7 +79,10 @@ projects.create("beta", ("dev",))
     // created_at must be an iso() string Rust itself can also produce the
     // same shape for -- not byte-compared here since real-time timestamps
     // differ, but must parse without corruption.
-    assert_eq!(acme.created_at.len(), "2023-11-14T22:13:20Z".len());
+    assert_eq!(
+        acme.created_at.as_str().unwrap().len(),
+        "2023-11-14T22:13:20Z".len()
+    );
 }
 
 #[test]
