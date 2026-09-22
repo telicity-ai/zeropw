@@ -1,3 +1,5 @@
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +29,17 @@ fn new_context(root: &TempDir, name: &str) -> Arc<Context> {
         )
         .unwrap(),
     )
+}
+
+fn wait_until(mut check: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if check() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("team state did not converge");
 }
 
 #[test]
@@ -81,6 +94,46 @@ fn share_invite_join_and_secret_derivation() {
             .expose(),
         SECRET
     );
+    let incident = b_sync
+        .send_incident(
+            env_id,
+            &json!({"incident_id":"0123456789abcdef","secret_ids_mandatory":["gh-token"],"uses":2}),
+        )
+        .unwrap();
+    assert_eq!(incident["hash"].as_str().unwrap().len(), 64);
+    wait_until(|| {
+        a.state.exists(&format!(
+            "team/{env_id}/incidents/{}-0123456789abcdef.json",
+            b_sync.device.fingerprint().unwrap()
+        ))
+    });
+    wait_until(|| {
+        b.state
+            .read_bytes(&format!("team/{env_id}/incident_outbox.jsonl"))
+            .is_ok_and(|v| v.is_empty())
+    });
+    assert_eq!(
+        a.state
+            .read_json(&format!("team/{env_id}/rotation_flags.json"), json!({}))
+            .unwrap()["gh-token"]["reason"],
+        "rotation_required"
+    );
+    let fact = b_sync
+        .publish_fact(
+            env_id,
+            "connection_disabled",
+            json!({"connection_id":"test-connection"}),
+        )
+        .unwrap();
+    wait_until(|| {
+        a.state
+            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)
+            .is_ok_and(|lines| {
+                lines
+                    .iter()
+                    .any(|line| line.contains(fact["sig"].as_str().unwrap()))
+            })
+    });
     let c = new_context(&root, "c");
     let c_device = DeviceKey::load_or_create(c.state, c.kms).unwrap();
     let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
@@ -99,6 +152,10 @@ fn share_invite_join_and_secret_derivation() {
         )
         .is_err()
     );
+    let b_fp = b_sync.device.fingerprint().unwrap();
+    let removed = membership::remove_member(&b, Some(&b_sync), env_id, &b_fp).unwrap();
+    assert_eq!(removed["dek_rotated"], false);
+    wait_until(|| !a_sync.is_active_member(env_id, &b_fp));
     c_sync.stop();
     b_sync.stop();
     a_sync.stop();
@@ -123,5 +180,39 @@ fn fact_sign_verify_and_sanitize() {
     assert_eq!(clean["secret_ids_mandatory"], json!(["a", "b"]));
     assert!(clean.get("unknown").is_none());
     assert!(sync::sanitize_incident_summary(&json!({"incident_id":"../bad"})).is_err());
-    std::thread::sleep(Duration::from_millis(1));
+}
+
+#[test]
+fn fact_canonical_bytes_and_hash_match_python() {
+    let source = json!({"format":"zeropw-team-fact-v1","env_id":"owner-0123456789abcdef0123456789abcdef","kind":"connection_disabled","target":{"connection_id":"café-1"},"author":"aaaaaaaaaaaaaaaaaaaaaaaaaa","hlc":"123-0001","sig":"AA=="});
+    let rust = sync::Fact::from_dict(&source).unwrap();
+    let script = "import base64,json,sys\nfrom zeropw.team.sync import Fact\nf=Fact.from_dict(json.load(sys.stdin))\nprint(json.dumps({'canonical':base64.b64encode(f.canonical_json(True)).decode(),'hash':f.hash}))";
+    let mut child = Command::new("python3.12")
+        .arg("-c")
+        .arg(script)
+        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(source.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    use base64::Engine;
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(rust.canonical_json(true).unwrap()),
+        result["canonical"]
+    );
+    assert_eq!(rust.hash().unwrap(), result["hash"]);
 }
