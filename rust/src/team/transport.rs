@@ -67,9 +67,13 @@ pub trait Session: Send + Sync {
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed>;
     fn close(&self);
     fn is_closed(&self) -> bool;
+    fn created_at(&self) -> Instant;
 }
 
 pub trait Transport: Send + Sync {
+    fn set_membership(&self, cb: MembershipCheck);
+    fn set_invite_check(&self, cb: Option<InviteCheck>);
+    fn set_handshake_failed(&self, cb: Option<HandshakeFailedHook>);
     fn listen(&self, address: &str, on_session: OnSession) -> Result<()>;
     fn dial(
         &self,
@@ -124,6 +128,7 @@ struct EncryptedSession {
     send_count: Mutex<u64>,
     recv_count: Mutex<u64>,
     closed: AtomicBool,
+    created_at: Instant,
     on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl EncryptedSession {
@@ -147,6 +152,7 @@ impl EncryptedSession {
             send_count: Mutex::new(0),
             recv_count: Mutex::new(0),
             closed: AtomicBool::new(false),
+            created_at: Instant::now(),
             on_close: Mutex::new(None),
         }
     }
@@ -237,6 +243,9 @@ impl Session for EncryptedSession {
     }
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::SeqCst)
+    }
+    fn created_at(&self) -> Instant {
+        self.created_at
     }
 }
 
@@ -626,6 +635,15 @@ impl InProcessTransport {
     }
 }
 impl Transport for InProcessTransport {
+    fn set_membership(&self, cb: MembershipCheck) {
+        InProcessTransport::set_membership(self, cb);
+    }
+    fn set_invite_check(&self, cb: Option<InviteCheck>) {
+        InProcessTransport::set_invite_check(self, cb);
+    }
+    fn set_handshake_failed(&self, cb: Option<HandshakeFailedHook>) {
+        InProcessTransport::set_handshake_failed(self, cb);
+    }
     fn listen(&self, address: &str, on_session: OnSession) -> Result<()> {
         let mut map = listeners().lock().unwrap_or_else(|e| e.into_inner());
         if map.contains_key(address) {
@@ -943,6 +961,15 @@ impl TcpTransport {
     }
 }
 impl Transport for Arc<TcpTransport> {
+    fn set_membership(&self, cb: MembershipCheck) {
+        TcpTransport::set_membership(self, cb);
+    }
+    fn set_invite_check(&self, cb: Option<InviteCheck>) {
+        TcpTransport::set_invite_check(self, cb);
+    }
+    fn set_handshake_failed(&self, cb: Option<HandshakeFailedHook>) {
+        TcpTransport::set_handshake_failed(self, cb);
+    }
     fn listen(&self, address: &str, on_session: OnSession) -> Result<()> {
         self.listen_arc(address, on_session)
     }
