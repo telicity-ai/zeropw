@@ -1,6 +1,7 @@
 //! Authenticated team transport, port of `zeropw/team/transport.py`.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,6 +31,16 @@ pub const SESSION_INFO: &[u8] = b"zeropw-team-session-v1";
 pub const HANDSHAKE_RESPONDER_CONTEXT: &[u8] = b"zeropw-team-hs-responder-v1";
 pub const HANDSHAKE_INITIATOR_CONTEXT: &[u8] = b"zeropw-team-hs-initiator-v1";
 const WIRE_FRAME_LIMIT: usize = MAX_FRAME_BYTES + aead::TAG_SIZE + 4096;
+const WIRE_CAPTURE_ENV: &str = "ZEROPW_TEAM_WIRE_CAPTURE";
+
+fn capture_wire(direction: &str, bytes: &[u8]) {
+    let Some(path) = std::env::var_os(WIRE_CAPTURE_ENV) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{} {}", direction, hex::encode(bytes));
+    }
+}
 
 pub type MembershipCheck = Arc<dyn Fn(&str, &str) -> Option<DeviceRecord> + Send + Sync>;
 pub type InviteCheck = Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> bool + Send + Sync>;
@@ -334,6 +345,7 @@ impl ByteChannel for SocketChannel {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SessionClosed("channel_closed"));
         }
+        capture_wire("send", bytes);
         let mut stream = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         stream
             .set_write_timeout(Some(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)))
@@ -388,6 +400,7 @@ impl ByteChannel for SocketChannel {
                 SessionClosed("recv_failed")
             }
         })?;
+        capture_wire("recv", &payload);
         Ok(Some(payload))
     }
     fn close(&self) {
