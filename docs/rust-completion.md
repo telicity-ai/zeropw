@@ -16,14 +16,14 @@ findings, fixes, and rerun evidence. Earlier PASS results do not approve new cod
 
 | Area | Required implementation and proof | State |
 | --- | --- | --- |
-| Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Full integrated frozen-318386d suite passes; persisted-project A-R2-6(b) compatibility correction remains pending |
+| Existing first half | Existing Rust foundation, crypto, vault, policy, gateway, signer and team data continue to pass their complete suites | Full integrated snapshots 318386d and 019b92e pass; persisted-project A-R2-6(b) correction independently accepted |
 | Execution | Run registry, ownership, bounded capture, redaction, idempotency, timeout, process-group cancellation, audit failure boundaries | Astra bounded runtime acceptance at 318386d; all eight runtime findings resolved, including creation-time directory modes |
 | Native tools and server | All five tools, HTTP relay, strict framing, caller authentication, listener limits, polling and shutdown | Bounded runtime review and 25 tool/server tests pass; final-head platform acceptance pending |
 | Incident response | Incident assessment/lockdown/widen/close, detector rules, SMTP delivery and retry, value-free outputs | Astra bounded response acceptance at 897c9a6: all 16 findings resolved, 72 selected test functions pass |
 | Team networking | Authenticated transport, sync, facts, snapshots, invitation/join/removal, DEK rotation, incident sharing | Astra round-4 addendum accepts bounded coverage: 104 checks and original native process E2E pass; 62-method map and explicit native API distinctions retained |
-| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle contracts pass; AR-CLI-01–04 resolved. Separate AR-CLI-05/P3 ordinary SIGINT exit-status compatibility correction pending |
-| Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E all pass; full integrated suite/platform acceptance pending |
-| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | Original reports retained; implemented fixes are not accepted until independent verification; no full PASS |
+| User interfaces | Full administrator and agent CLI command trees, demo, native Rust executables | Original native-oracle contracts pass; AR-CLI-01–06 resolved, including handled SIGINT status and exact-owned-directory cleanup |
+| Integration QA | Cross-language state/wire compatibility; separate-process CLI/API/SSH/team scenarios; negative tests for secret leakage and authorization | Original HTTP, real-sshd SSH, three-node team and compromise E2E pass; final overall decision must use exact PR-head checks and the handoff below |
+| Astra review | Independent product and adversarial review of integrated revision; all findings resolved with evidence and a clean rerun | All recorded current remediation findings have independent bounded closures; original reports remain immutable. Component PASS is not itself platform/deployment approval |
 
 Completion requires the full Python feature inventory, meaningful behavioral
 tests for each feature and failure boundary, Linux and macOS verification where
@@ -147,7 +147,7 @@ Sol and remain open. Original tool preflight/ownership/audit contracts pass six
 new cases and the real relay text/binary/header-filter case passes; the fresh
 private-directory assertion is intentionally retained failing until fixed.
 
-## Latest bounded acceptance and remaining gates (2026-09-22)
+## Compatibility checkpoint (historical, 2026-09-22)
 
 The current table above supersedes the historical progress sections, which are
 retained to preserve failures and their chronology. Actual `gpt-6-astra` reports
@@ -190,3 +190,62 @@ CI remain pending. Disk exhaustion during duplicate worker builds was an
 environment failure; only regenerable completed-worker build caches were
 cleaned, and affected checks were rerun. No source/review evidence was deleted.
 No merge or deployment has occurred, and no full-product PASS is claimed yet.
+
+## Final compatibility handoff (2026-09-22)
+
+Actual Astra has now closed the remaining current-scope compatibility gates:
+
+- Persisted project shapes: `astra-projects-and-signal-addendum.md`, product
+  `cb88215`, preserves Python-successful iterable environments and arbitrary
+  creation-time JSON without coercing environment membership.
+- Ordinary administrator SIGINT status: AR-CLI-05/P3, product `80c7eea`, verified
+  for active/completed prompts and non-prompt input; handled exit 130 remains
+  distinct from OS signal termination. SIGTERM and graceful serve behavior
+  retain their separate contracts.
+- Owned-directory cleanup: AR-CLI-06/P2, `astra-sigint-cleanup-final.md`, product
+  `c71ec3d` plus comment-only `ec58f8d`; 45 selected checks pass. The normal
+  SIGINT watcher restores an active terminal before cleanup/exit, removes exact
+  registered Context-owned paths, and prevents late registrations. Configured
+  and unrelated paths remain untouched. Filesystem work is not performed in
+  an asynchronous signal callback. This does not claim arbitrary exception
+  unwinding, transaction rollback, or cleanup after every OS signal.
+
+The complete frozen `019b92e` all-target suite also passed: library 504 passed
+and four ignored, policy differential 459.98 seconds, all eight original native
+process/CLI adapters 150.75 seconds. This includes the final mailbox and project
+fixes but predates AR-CLI-06, so it is not proof of that later product revision.
+At final cleanup snapshot `ec58f8d`, formatting and all-target strict Clippy
+pass, default library tests pass 505/four ignored, and all four explicitly
+selected signer resource probes pass (22.10 seconds). Resource measurements
+remain three descriptors/binding and one server descriptor/client, cap 32
+enforced with the accept loop alive. Idle CPU was below the macOS ps tool's
+0.01-second resolution over each five-second sample. The full all-target run
+for that snapshot was in progress when this handoff was written; its eventual
+result must be recorded separately, not inferred from these component counts.
+
+Two actual Linux candidate runs remain historical evidence:
+
+- `35703888623`, head `5e2a131`: harness/format/Clippy/library pass; original
+  Python PTY comparison times out and one unchanged Python team case fails.
+  The latter is not a demonstrated Rust regression. A controlled reconnect
+  reproduces a stale-session spy false negative, but the exact hosted
+  interleaving remains unobserved (`astra-team-ci-triage.md`).
+- `35705000593`, head `019b92e`: all 1099 original Python tests and harness pass;
+  new ordinary/prompt SIGINT cases pass on Linux, but the new serve test races
+  Python's post-banner handler installation. `astra-serve-readiness.md` records
+  deterministic before-registration exit 130 and after-registration exit 0.
+  The corrected fixture waits on an explicit readiness pipe and preserves the
+  original graceful-exit assertions and startup deadline.
+
+`astra-pty-portability.md` separately records controlled ignored/blocked-signal
+inheritance and its fixture-only normalization. Neither fixture correction
+changes a product behavior, skips a check, accepts the wrong outcome, or
+relaxes a deadline. No Python product, original Python test, harness or CI file
+was changed during this completion work.
+
+Final acceptance is bound to the exact head and check results on
+[PR 6](https://github.com/handlecusion/zeropw/pull/6), with a final Astra PO
+disposition after integrated/platform validation. Do not treat an earlier
+candidate's green checks or any historical report as approval of a later head.
+This handoff records component closure and the evidence available at writing;
+merge, deployment and production host-isolation approval remain separate.
