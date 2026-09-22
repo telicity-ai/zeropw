@@ -487,6 +487,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
         Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://")
     })?;
+    let scheme=scheme.to_ascii_lowercase();
     if scheme != "http" && scheme != "https" {
         return Err(Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://"));
@@ -494,7 +495,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
     if rest.contains('@')
         || rest.contains('?')
         || rest.contains('#')
-        || (rest.contains('/') && !rest.ends_with('/'))
+        || rest.find('/').is_some_and(|i| &rest[i..]!="/")
     {
         return Err(Error::invalid_input("target_must_be_origin")
             .with_detail("target is scheme://host[:port] only"));
@@ -505,6 +506,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
             .find(']')
             .ok_or_else(|| Error::invalid_input("invalid_host"))?;
         let host = &host_port[1..end];
+        if host.parse::<std::net::Ipv6Addr>().is_err(){return Err(Error::invalid_input("invalid_host"));}
         let rem = &host_port[end + 1..];
         let port = if rem.is_empty() {
             if scheme == "https" { 443 } else { 80 }
@@ -530,7 +532,7 @@ fn target(v: &str) -> Result<(String, String, i64), Error> {
     if host.is_empty() {
         return Err(Error::invalid_input("invalid_host"));
     }
-    Ok((scheme.to_owned(), host, port))
+    Ok((scheme, host, port))
 }
 
 fn control(ctx: &Context) -> Result<Value, Error> {

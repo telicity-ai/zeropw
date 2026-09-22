@@ -87,6 +87,11 @@ fn admin_local_flow_and_value_hygiene() {
             .windows(secret.len() - 1)
             .any(|w| w == &secret[..secret.len() - 1])
     );
+    let encoded=base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&secret[..secret.len()-1]);
+    let assignment=format!("X_TRACE={encoded}");
+    let rejected=admin(path,&["connection","create-http","--id","gh-encoded","--project","demo","--environment","dev","--service","fake","--secret-id","gh-token","--target","http://127.0.0.1:9876","--auth","bearer","--cli-program","/bin/echo","--cli-env",&assignment],None);
+    assert_eq!(rejected.status.code(),Some(1));
+    assert_eq!(json_output(&rejected)["reason"],"cli_env_contains_credential");
     let out = admin(
         path,
         &[
@@ -150,6 +155,13 @@ fn admin_local_flow_and_value_hygiene() {
         json_output(&out)["value"],
         "synthetic-token-0123456789abcdef"
     );
+    let declared=admin(path,&["incident","declare","--scope","principal","--principal","agent-1"],None);
+    assert!(declared.status.success(),"{}",String::from_utf8_lossy(&declared.stderr));
+    let id=json_output(&declared)["id"].as_str().unwrap().to_owned();
+    let shown=admin(path,&["incident","show","--id",&id],None);
+    assert_eq!(json_output(&shown)["scope"],"principal");
+    let closed=admin(path,&["incident","close","--id",&id],None);
+    assert_eq!(json_output(&closed)["status"],"closed");
     let out = admin(
         path,
         &[
@@ -170,6 +182,7 @@ fn admin_local_flow_and_value_hygiene() {
     );
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(json_output(&out)["reason"], "usage");
+    assert_eq!(json_output(&out)["detail"],"unrecognized arguments: 2 (not accepted: --value); values are not echoed");
     assert!(
         !out.stderr
             .windows(secret.len() - 1)
