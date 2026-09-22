@@ -379,6 +379,41 @@ fn admin_record(ctx: &Context, event: &str, extra: Vec<(&str, Value)>) -> Result
     Ok(())
 }
 
+fn record_auth_failure(ctx: &Context, reason: &str, extra: Vec<(&str, Value)>) {
+    let _ = ctx.audit.record(
+        "auth_failed",
+        RecordArgs {
+            caller: Some("admin"),
+            result: Some("denied"),
+            reason: Some(reason),
+            extra,
+            ..Default::default()
+        },
+    );
+}
+
+fn refuse_cli_env<T>(
+    ctx: &Context,
+    connection: &str,
+    secret_id: Option<&str>,
+    event: &str,
+) -> Result<T, Error> {
+    ctx.audit.record(
+        event,
+        RecordArgs {
+            caller: Some("admin"),
+            connection: Some(connection),
+            result: Some("denied"),
+            reason: Some("cli_env_contains_credential"),
+            extra: secret_id
+                .map(|id| vec![("secret_id", json!(id))])
+                .unwrap_or_default(),
+            ..Default::default()
+        },
+    )?;
+    Err(Error::invalid_input("cli_env_contains_credential").with_detail(connection))
+}
+
 fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
     let ctx = Context::open(&a.state_dir, Config::default(), crate::clock::system())?;
     if mutating {
@@ -517,6 +552,10 @@ fn ttl(v: &str) -> Result<i64, Error> {
 }
 
 fn target(v: &str) -> Result<(String, String, i64), Error> {
+    let source = v.trim();
+    if (source.starts_with("http:") || source.starts_with("https:")) && !source.contains("://") {
+        return Err(Error::invalid_input("invalid_host"));
+    }
     let (scheme, rest) = v.trim().split_once("://").ok_or_else(|| {
         Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://")
@@ -585,9 +624,32 @@ fn grant_view(grant: &crate::policy::Grant) -> Value {
         "credential_version":grant.credential_version})
 }
 
-fn verify_admin(ctx: &Context) -> Result<(), Error> {
+fn check_admin_document(ctx: &Context) -> Result<(), Error> {
+    let doc = ctx.state.read_json(crate::vault::ADMIN_DOC, Value::Null)?;
+    if doc.is_null() {
+        return Ok(()); // Preserve AdminCredential's own admin_missing reason.
+    }
+    let object = doc
+        .as_object()
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("TypeError"))?;
+    for key in ["salt", "hash"] {
+        if !object.contains_key(key) {
+            return Err(Error::state("state_corrupt").with_detail("KeyError"));
+        }
+        if !object[key].is_string() {
+            return Err(Error::state("state_corrupt").with_detail("TypeError"));
+        }
+    }
+    Ok(())
+}
+
+fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
+    check_admin_document(ctx)?;
     let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
-    ctx.admin.verify(&pass, None)?;
+    if let Err(error) = ctx.admin.verify(&pass, None) {
+        record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -610,15 +672,14 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     let ver = ctx
         .vault
         .resolve_version(&connection.secret_id, connection.secret_version)?;
-    if !meta
-        .versions
-        .iter()
-        .any(|v| v.version == ver && (v.status == "active" || v.status == "staged"))
+    if let Some(version) = meta.versions.iter().find(|v| v.version == ver)
+        && version.status != "active"
+        && version.status != "staged"
     {
-        return Err(Error::invalid_input("secret_version_unusable"));
+        return Err(Error::invalid_input("secret_version_unusable").with_detail(&version.status));
     }
     if crate::tools::profile_env_carries_vault_value(ctx, connection)? {
-        return Err(Error::invalid_input("cli_env_contains_credential").with_detail(&connection.id));
+        return refuse_cli_env(ctx, &connection.id, None, "connection_create");
     }
     Ok(())
 }
@@ -739,9 +800,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             // Reject credentials embedded in any saved CLI environment before committing the new version.
             for conn in ctx.policy.list_connections()? {
                 if crate::tools::profile_env_carries_credential(&conn, &value) {
-                    return Err(
-                        Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
-                    );
+                    return refuse_cli_env(&ctx, &conn.id, Some(a.req("id")), "secret_put");
                 }
             }
             let version = ctx.vault.put_secret(
@@ -761,9 +820,19 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
         ("secret", "reveal") => {
-            let auth = ctx
-                .admin
-                .verify(&passphrase("ZEROPW_ADMIN_PASSPHRASE")?, None)?;
+            check_admin_document(&ctx)?;
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            let auth = match ctx.admin.verify(&pass, None) {
+                Ok(auth) => auth,
+                Err(error) => {
+                    record_auth_failure(
+                        &ctx,
+                        &error.reason,
+                        vec![("secret_id", json!(a.req("id")))],
+                    );
+                    return Err(error);
+                }
+            };
             let version = a.integer("version")?;
             let value = ctx.vault.reveal(a.req("id"), version, &auth, None)?;
             let resolved = ctx.vault.resolve_version(a.req("id"), version)?;
@@ -951,7 +1020,23 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("connection", "create-ssh") => {
             let port = a.integer("port")?.unwrap_or(22);
-            let ssh = SshTarget::new(a.req("host"), port, a.req("username"), a.list("host-key"))?;
+            let host_keys = a
+                .list("host-key")
+                .iter()
+                .map(|line| {
+                    let entry = crate::sshwire::parse_authorized_key_entry(line)
+                        .map_err(|_| Error::invalid_input("invalid_host_key"))?;
+                    if entry.options.starts_with('@') {
+                        return Err(Error::invalid_input("invalid_host_key")
+                            .with_detail("known_hosts_marker"));
+                    }
+                    entry
+                        .key
+                        .to_authorized_key(&entry.comment)
+                        .map_err(|_| Error::invalid_input("invalid_host_key"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let ssh = SshTarget::new(a.req("host"), port, a.req("username"), host_keys)?;
             let cli = a
                 .get("cli-program")
                 .map(|p| CliProfile::new(p, "ssh", None, BTreeMap::new()))
@@ -1088,13 +1173,19 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
             }
             let after = ctx.policy.switch_credential(a.req("id"), Some(ver))?;
-            admin_record(
-                &ctx,
+            ctx.audit.record(
                 "connection_switch_credential",
-                vec![
-                    ("secret_id", json!(after.secret_id)),
-                    ("version", json!(ver)),
-                ],
+                RecordArgs {
+                    caller: Some("admin"),
+                    connection: Some(&after.id),
+                    result: Some("ok"),
+                    policy_version: Some(after.policy_version),
+                    extra: vec![
+                        ("secret_id", json!(after.secret_id)),
+                        ("version", json!(ver)),
+                    ],
+                    ..Default::default()
+                },
             )?;
             Ok(
                 json!({"id":after.id,"secret_id":after.secret_id,"secret_version":after.secret_version,"policy_version":after.policy_version}),
@@ -1114,7 +1205,16 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 );
             }
             let c = ctx.policy.disable_connection(a.req("id"))?;
-            admin_record(&ctx, "connection_disable", vec![])?;
+            ctx.audit.record(
+                "connection_disable",
+                RecordArgs {
+                    caller: Some("admin"),
+                    connection: Some(&c.id),
+                    result: Some("ok"),
+                    policy_version: Some(c.policy_version),
+                    ..Default::default()
+                },
+            )?;
             Ok(json!({"id":c.id,"status":c.status,"policy_version":c.policy_version}))
         }
         ("principal", "create") => {
@@ -1280,9 +1380,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let _lock = ctx.state.lock()?;
             for conn in ctx.policy.list_connections()? {
                 if crate::tools::profile_env_carries_credential(&conn, &value) {
-                    return Err(
-                        Error::invalid_input("cli_env_contains_credential").with_detail(conn.id)
-                    );
+                    return refuse_cli_env(&ctx, &conn.id, Some(&meta.id), "rotation");
                 }
             }
             let version = ctx.vault.put_secret(
@@ -1343,6 +1441,20 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 );
             }
             let after = ctx.policy.switch_credential(&before.id, Some(version))?;
+            ctx.audit.record(
+                "connection_switch_credential",
+                RecordArgs {
+                    caller: Some("admin"),
+                    connection: Some(&after.id),
+                    result: Some("ok"),
+                    policy_version: Some(after.policy_version),
+                    extra: vec![
+                        ("secret_id", json!(after.secret_id)),
+                        ("version", json!(version)),
+                    ],
+                    ..Default::default()
+                },
+            )?;
             ctx.vault
                 .set_version_status(&before.secret_id, version, "active")?;
             let after = ctx.policy.get_connection(&after.id)?;
@@ -1361,6 +1473,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("backup", "") => {
             let path = PathBuf::from(a.req("out"));
+            if path
+                .parent()
+                .is_some_and(|parent| !parent.as_os_str().is_empty() && !parent.exists())
+            {
+                return Err(Error::invalid_input("file_not_found"));
+            }
             let manifest = ctx.vault.backup(&path)?;
             Ok(
                 json!({"out":path.to_string_lossy(),"manifest":manifest,"note":"encrypted archive; needs the KMS key or recovery passphrase"}),
@@ -1384,7 +1502,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(v)
         }
         ("restore-ack", "") => {
-            verify_admin(&ctx)?;
+            verify_admin(&ctx, "restore_pending")?;
             let reapplied = Vault::reapply_revocations(ctx.state)?;
             ctx.policy.set_restore_pending(false)?;
             let active = ctx
@@ -1414,7 +1532,16 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(v)
         }
         ("recover", "") => {
-            let count = ctx.recover(&passphrase("ZEROPW_RECOVERY_PASSPHRASE")?)?;
+            let pass = passphrase("ZEROPW_RECOVERY_PASSPHRASE")?;
+            let count = match ctx.recover(&pass) {
+                Ok(count) => count,
+                Err(error) => {
+                    if error.class == crate::errors::ErrorClass::AuthFailed {
+                        record_auth_failure(&ctx, &error.reason, vec![("state", json!("recover"))]);
+                    }
+                    return Err(error);
+                }
+            };
             Ok(
                 json!({"kms_key_id":ctx.kms.key_id(),"grants_revoked":count,"handles_invalidated":true}),
             )
@@ -1455,7 +1582,7 @@ fn incident_command(a: &Args) -> Result<Value, Error> {
     match a.action.as_str() {
         "declare" => {
             if a.req("scope") == "all" {
-                verify_admin(&ctx)?;
+                verify_admin(&ctx, "incident_declare")?;
             }
             let principals = a.get("principal").map(|p| vec![p.to_owned()]);
             let existing_id = ctx.policy.open_incident_id()?;
@@ -1481,7 +1608,7 @@ fn incident_command(a: &Args) -> Result<Value, Error> {
         }
         "escalate" => {
             if a.req("scope") == "all" {
-                verify_admin(&ctx)?;
+                verify_admin(&ctx, "incident_escalate")?;
             }
             Ok(crate::incident::widen_incident(
                 &ctx,
@@ -1498,7 +1625,7 @@ fn incident_command(a: &Args) -> Result<Value, Error> {
         ),
         "show" => Ok(crate::incident::get_incident(&ctx, a.req("id"))?.to_dict()),
         "close" => {
-            verify_admin(&ctx)?;
+            verify_admin(&ctx, "incident_close")?;
             Ok(crate::incident::close_incident(&ctx, a.req("id"))?.to_dict())
         }
         "notify-test" => crate::notify::send_test_message(&ctx),
@@ -2061,6 +2188,18 @@ pub fn main(argv: &[String]) -> i32 {
             if error.reason == "file_not_found" {
                 output(
                     &json!({"error":"FileNotFoundError","reason":"file_not_found"}),
+                    true,
+                );
+            } else if error.reason == "state_corrupt"
+                && (!error.detail.ends_with(".json")
+                    || fs::read_to_string(Path::new(&args.state_dir).join(&error.detail))
+                        .ok()
+                        .is_some_and(|text| pyjson::loads(&text).is_ok()))
+            {
+                // Python's CLI reports only the built-in exception class for
+                // semantically broken JSON; internal model labels are not public.
+                output(
+                    &json!({"error":"StateError","reason":"state_corrupt","detail":"KeyError"}),
                     true,
                 );
             } else {
