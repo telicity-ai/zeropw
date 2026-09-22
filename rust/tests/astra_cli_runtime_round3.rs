@@ -114,6 +114,10 @@ import os,signal,subprocess,sys,termios
 signal.signal(signal.SIGTTOU,signal.SIG_IGN)
 original=termios.tcgetattr(0)
 def child_group():
+ # The controlled foreground child models an ordinary interactive launch,
+ # independent of a CI parent's ignored or blocked interrupt disposition.
+ signal.signal(signal.SIGINT,signal.SIG_DFL)
+ signal.pthread_sigmask(signal.SIG_UNBLOCK,[signal.SIGINT])
  os.setpgid(0,0);os.tcsetpgrp(0,os.getpgrp());signal.signal(signal.SIGTTOU,signal.SIG_DFL)
 p=subprocess.Popen(sys.argv[1:],preexec_fn=child_group,close_fds=True)
 try:

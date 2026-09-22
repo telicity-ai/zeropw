@@ -22,6 +22,10 @@ import json,os,signal,subprocess,sys,termios
 signal.signal(signal.SIGTTOU,signal.SIG_IGN)
 original=termios.tcgetattr(0)
 def child_group():
+ # Normalize only this synthetic foreground child's tested signals; ignored
+ # dispositions and masks otherwise survive exec from some CI launchers.
+ for sig in (signal.SIGINT,signal.SIGTERM):signal.signal(sig,signal.SIG_DFL)
+ signal.pthread_sigmask(signal.SIG_UNBLOCK,[signal.SIGINT,signal.SIGTERM])
  os.setpgid(0,0);os.tcsetpgrp(0,os.getpgrp());signal.signal(signal.SIGTTOU,signal.SIG_DFL)
 p=subprocess.Popen(sys.argv[1:],preexec_fn=child_group,close_fds=True)
 print('CHILD_PID='+str(p.pid),flush=True)
