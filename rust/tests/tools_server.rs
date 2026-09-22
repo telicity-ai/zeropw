@@ -376,7 +376,7 @@ fn strict_base64_matches_python_validate_true() {
 
 #[test]
 fn queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn() {
-    for action in ["revoke", "stop", "exhaust"] {
+    for action in ["revoke", "stop", "exhaust", "widen"] {
         let f = Fixture::new();
         f.ctx.policy.revoke_grant(&f.grant).unwrap();
         let grant = f
@@ -396,6 +396,15 @@ fn queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn() {
                         ctx.policy.revoke_grant(&grant).unwrap();
                     }
                     "stop" => ctx.policy.stop_all().unwrap(),
+                    "widen" => {
+                        ctx.policy
+                            .update_connection(
+                                "service",
+                                ConnectionChanges::new()
+                                    .http_scope(Some(HttpScope::new(None, None, vec![]).unwrap())),
+                            )
+                            .unwrap();
+                    }
                     _ => {
                         ctx.policy.consume(&grant, None, None, None, None).unwrap();
                     }
@@ -422,6 +431,9 @@ fn queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn() {
             match action {
                 "revoke" => "grant_revoked",
                 "stop" => "global_stop",
+                // This local update synchronously emits the connection-change
+                // notification; remote fold cancellation is tested separately.
+                "widen" => "connection_changed",
                 _ => "grant_exhausted",
             }
         );
@@ -949,6 +961,9 @@ fn original_exec_policy_denials_are_precise_and_audited() {
     let f = Fixture::new();
     f.ctx.policy.create_principal("bob", "cli").unwrap();
     let refused = |caller: &str, id: &str, reason: &str| {
+        let relay = tools::request(&f.ctx, caller, id, "GET", "/", &Vec::new(), b"", None).unwrap();
+        assert_eq!(relay["status"], 403);
+        assert_eq!(relay["reason"], reason);
         let error = tools::exec(&f.ctx, caller, id, &[], None).unwrap_err();
         assert_eq!(error.class, zeropw::errors::ErrorClass::PolicyDenied);
         assert_eq!(error.reason, reason);
@@ -1013,6 +1028,7 @@ fn original_exec_policy_denials_are_precise_and_audited() {
             .active_runs()
             .is_empty()
     );
+    assert!(f.fake.requests().is_empty());
 }
 
 #[test]
