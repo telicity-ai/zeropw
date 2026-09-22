@@ -42,6 +42,7 @@ rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 signal-hook = "0.3"
 rpassword = "7.4.0"
+num-bigint = { version = "=0.5.1", features = ["serde"] }
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

@@ -422,12 +422,28 @@ fn audit_notify(ctx: &Context, i: &mut Incident, result: &str, reason: &str) {
         }
     }
 }
-fn python_int_or_zero(v: &Value) -> u64 {
-    match v {
-        Value::Bool(true) => 1,
-        Value::Bool(false) => 0,
-        _ => v.as_u64().unwrap_or(0),
+fn python_int_or_zero(v: &Value) -> crate::pyint::PyInt {
+    crate::pyint::PyInt::from_python_int(v).unwrap_or_else(|| 0_i64.into())
+}
+fn next_attempt(attempts: &crate::pyint::PyInt) -> Value {
+    crate::pyint::PyInt(&attempts.0 + num_bigint::BigInt::from(1_u8)).value()
+}
+fn retry_delay(attempts: &crate::pyint::PyInt) -> f64 {
+    if attempts.0 >= num_bigint::BigInt::from(9_u8) {
+        return MAX_BACKOFF_SECONDS;
     }
+    // Very negative accepted Python integers underflow to zero. Avoid
+    // converting the arbitrary-precision exponent through a narrow integer.
+    if attempts.0 < num_bigint::BigInt::from(-1074_i32) {
+        return 0.0;
+    }
+    2f64.powi(
+        attempts
+            .0
+            .to_string()
+            .parse::<i32>()
+            .expect("bounded exponent"),
+    )
 }
 fn python_number(v: &Value) -> Option<f64> {
     match v {
@@ -438,14 +454,14 @@ fn python_number(v: &Value) -> Option<f64> {
 }
 fn pending(ctx: &Context, i: &mut Incident, reason: &str) -> Result<()> {
     let attempts = python_int_or_zero(&i.notification["attempts"]);
-    let delay = 2f64.powi(attempts.min(30) as i32).min(MAX_BACKOFF_SECONDS);
-    i.notification = json!({"status":"pending","attempts":attempts+1,"last_error":reason,"next_attempt_at":(ctx.clock)()+delay});
+    let delay = retry_delay(&attempts);
+    i.notification = json!({"status":"pending","attempts":next_attempt(&attempts),"last_error":reason,"next_attempt_at":(ctx.clock)()+delay});
     audit_notify(ctx, i, "denied", reason);
     incident::save_incident(ctx, i)
 }
 fn failed(ctx: &Context, i: &mut Incident, reason: &str) -> Result<()> {
     let attempts = python_int_or_zero(&i.notification["attempts"]);
-    i.notification = json!({"status":"failed","reason":reason,"attempts":attempts});
+    i.notification = json!({"status":"failed","reason":reason,"attempts":attempts.value()});
     audit_notify(ctx, i, "denied", reason);
     incident::save_incident(ctx, i)
 }
@@ -459,7 +475,7 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         }
     };
     let Some(config) = config else {
-        let attempts = python_int_or_zero(&i.notification["attempts"]);
+        let attempts = i.notification.get("attempts").cloned().unwrap_or(json!(0));
         i.notification = json!({"status":"not_configured","attempts":attempts});
         audit_notify(ctx, i, "ok", "not_configured");
         incident::save_incident(ctx, i)?;
@@ -475,8 +491,7 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         return Ok(());
     }
     let attempts = python_int_or_zero(&i.notification["attempts"]);
-    i.notification =
-        json!({"status":"sent","attempts":attempts+1,"sent_at":iso(Some((ctx.clock)()))});
+    i.notification = json!({"status":"sent","attempts":next_attempt(&attempts),"sent_at":iso(Some((ctx.clock)()))});
     audit_notify(ctx, i, "ok", "sent");
     incident::save_incident(ctx, i)
 }
