@@ -32,19 +32,13 @@ fn secure_file(path: &Path) -> Result<()> {
     let m = path
         .metadata()
         .map_err(|_| Error::invalid_input("notify_config_insecure"))?;
-    if m.permissions().mode() & 0o7777 != 0o600 || m.uid() != unsafe_free_uid() {
+    // `st.st_uid != os.getuid()`: the *real* user id of this process, read
+    // directly (no helper process, so an environment without `id` or
+    // unable to spawn cannot turn every file into "insecure").
+    if m.permissions().mode() & 0o7777 != 0o600 || m.uid() != rustix::process::getuid().as_raw() {
         return Err(Error::invalid_input("notify_config_insecure"));
     }
     Ok(())
-}
-fn unsafe_free_uid() -> u32 {
-    std::process::Command::new("/usr/bin/id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(u32::MAX)
 }
 fn loopback(host: &str) -> bool {
     host == "localhost"
@@ -563,4 +557,76 @@ fn audit_test(ctx: &Context, result: &str, reason: &str) {
             ..Default::default()
         },
     );
+}
+
+#[cfg(test)]
+mod uid_tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    const CHILD_ENV: &str = "ZEROPW_NOTIFY_SECURE_FILE_CHILD";
+    const TEST: &str =
+        "notify::uid_tests::secure_file_owner_is_compared_with_the_real_uid_without_spawning";
+
+    /// `_require_secure_file` compares `st_uid` with `os.getuid()` (the real
+    /// uid) and never starts a process. Run the Rust check in a process that
+    /// cannot start one (non-root: `RLIMIT_NPROC` 0) or whose real and
+    /// effective uids differ (root: `setreuid`), and compare it with Python's
+    /// verdict measured in that same process state before `exec`.
+    #[test]
+    fn secure_file_owner_is_compared_with_the_real_uid_without_spawning() {
+        if let Ok(path) = std::env::var(CHILD_ENV) {
+            println!(
+                "RUST_VERDICT={}",
+                super::secure_file(Path::new(&path)).is_ok()
+            );
+            return;
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("notify.json");
+        std::fs::write(&file, b"{}").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let script = r#"
+import os, resource, sys
+from pathlib import Path
+from zeropw.errors import InvalidInput
+from zeropw.notify import _require_secure_file
+path, exe, test, child_env = sys.argv[1:5]
+if os.geteuid() == 0:
+    os.chown(path, 4242, -1)
+    os.setreuid(4242, 0)
+else:
+    resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
+try:
+    _require_secure_file(Path(path))
+    verdict = True
+except InvalidInput:
+    verdict = False
+print(f"PY_VERDICT={str(verdict).lower()}", flush=True)
+os.execve(exe, [exe, test, "--exact", "--nocapture", "--test-threads=1"],
+          dict(os.environ, **{child_env: path}))
+"#;
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        let output = Command::new(interpreter)
+            .arg("-c")
+            .arg(script)
+            .arg(&file)
+            .arg(std::env::current_exe().unwrap())
+            .arg(TEST)
+            .arg(CHILD_ENV)
+            .env("PYTHONPATH", crate::oracle::repo_root())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("PY_VERDICT=true"), "{stdout}");
+        assert!(stdout.contains("RUST_VERDICT=true"), "{stdout}");
+    }
 }
