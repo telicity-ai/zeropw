@@ -1,7 +1,8 @@
 //! Audit-stream intrusion detector, port of `zeropw/intrusion.py`.
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{
-    Arc, Mutex, Weak,
+    Arc, Mutex, PoisonError, TryLockError, Weak,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -345,16 +346,24 @@ impl Detector {
             return;
         };
         let now = (ctx.clock)();
-        let trip = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|mut s| self.accumulate(&mut s, record, now));
-        let Some(trip) = trip else { return };
-        let Ok(_decision) = self.decision.try_lock() else {
-            return;
+        // `with self._lock:` releases the lock when `_accumulate` raises and
+        // the next record keeps using the (partially updated) state, so a
+        // poisoned lock is recovered rather than disabling detection.
+        let trip = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            self.accumulate(&mut state, record, now)
         };
-        if self.apply_decision(trip).is_err() {
+        let Some(trip) = trip else { return };
+        let _decision = match self.decision.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        // `_apply_decision`'s `except Exception: self.decision_errors += 1`:
+        // a failure *or a panic* inside the decision is counted, never
+        // propagated, and never leaves later trips ignored.
+        let outcome = panic::catch_unwind(AssertUnwindSafe(|| self.apply_decision(trip)));
+        if !matches!(outcome, Ok(Ok(()))) {
             self.decision_errors.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -638,11 +647,14 @@ fn prune_weak(dq: &mut VecDeque<(f64, String, PyInt)>, now: f64, window: f64) {
 }
 
 pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<Detector>> {
-    if let Some(existing) = ctx.intrusion.lock().ok().and_then(|s| {
-        s.as_ref()
-            .and_then(|v| v.downcast_ref::<Arc<Detector>>())
-            .cloned()
-    }) {
+    if let Some(existing) = ctx
+        .intrusion
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|v| v.downcast_ref::<Arc<Detector>>())
+        .cloned()
+    {
         return Ok(existing);
     }
     let config = match config {
@@ -656,7 +668,7 @@ pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<
             detector.on_record(record);
         }
     });
-    *ctx.intrusion.lock().expect("intrusion mutex poisoned") =
+    *ctx.intrusion.lock().unwrap_or_else(PoisonError::into_inner) =
         Some(Box::new(Arc::clone(&detector)));
     Ok(detector)
 }
