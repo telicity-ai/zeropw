@@ -1,11 +1,12 @@
 //! Port of `tests/test_fake_upstream.py`.
 //!
-//! Not ported: `FakeUpstream(SECRET, mode="digest")` / `mode="basic"` with no
-//! `basic_username` raising Python's `ValueError` at construction -- the
-//! Rust builder (`FakeUpstream::new(..).mode_basic(username)`/
-//! `.mode_header(..)`) has no way to construct an invalid mode or a missing
-//! `basic_username` at all (compile-time impossible, PORTING.md §3.4, same
-//! reasoning as `gateway.rs`'s dropped dynamic-type checks).
+//! `FakeUpstream(SECRET, mode="digest")` / `mode="basic"` with no
+//! `basic_username` raising Python's `ValueError` at construction are ported
+//! through `FakeUpstream::with_mode` (the `mode=` string form) and
+//! `mode_basic("")` (which panics with the same message). The request
+//! parsing and routing rules the fixture shares with `BaseHTTPRequestHandler`
+//! and `urllib.parse` are compared byte-for-byte with the Python fixture in
+//! `request_handling_matches_the_python_fixture`.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -1060,4 +1061,228 @@ fn stop_is_idempotent_and_reusable_after_restart() {
     other.stop(); // idempotent
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| other.port()));
     assert!(result.is_err());
+}
+
+#[test]
+fn invalid_modes_are_refused_like_python() {
+    // `with self.assertRaises(ValueError): FakeUpstream(SECRET, mode="digest")`
+    assert_eq!(
+        FakeUpstream::with_mode(SECRET, "digest", None).err(),
+        Some("unsupported fake upstream mode")
+    );
+    // `with self.assertRaises(ValueError): FakeUpstream(SECRET, mode="basic")`
+    for username in [None, Some("")] {
+        assert_eq!(
+            FakeUpstream::with_mode(SECRET, "basic", username).err(),
+            Some("basic mode requires basic_username")
+        );
+    }
+    // `mode_basic("")` panics like Python's constructor raises; checked in
+    // a child process so no panic happens in this test process (another
+    // test here watches for panics with a process-wide hook).
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "empty_basic_username_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("ZEROPW_EMPTY_BASIC_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(!child.status.success());
+    assert!(String::from_utf8_lossy(&child.stderr).contains("basic mode requires basic_username"));
+    let basic = FakeUpstream::with_mode(SECRET, "basic", Some("synthetic-user"))
+        .unwrap()
+        .start();
+    assert_eq!(
+        (basic.mode(), basic.basic_username(), basic.credential()),
+        ("basic", Some("synthetic-user"), SECRET)
+    );
+    let custom = FakeUpstream::new(SECRET).mode_header("X-Api-Key", "Key ");
+    assert_eq!(
+        (custom.mode(), custom.header_name(), custom.value_prefix()),
+        ("header", "X-Api-Key", "Key ")
+    );
+}
+
+/// Runs only as the child of `invalid_modes_are_refused_like_python`.
+#[test]
+fn empty_basic_username_child() {
+    if std::env::var_os("ZEROPW_EMPTY_BASIC_CHILD").is_some() {
+        let _ = FakeUpstream::new(SECRET).mode_basic("");
+    }
+}
+
+#[test]
+fn issue_counter_counts_created_issues() {
+    let fake = FakeUpstream::new(SECRET).start();
+    assert_eq!(fake.issue_counter(), 0);
+    let (name, value) = auth_header(SECRET);
+    for expected in 1..=2 {
+        let resp = request(
+            fake.host(),
+            fake.port(),
+            "POST",
+            "/repos/demo/issues",
+            &[(name, &value)],
+            Some(br#"{"title": "t"}"#),
+        );
+        assert_eq!(resp.status, 201);
+        assert_eq!(fake.issue_counter(), expected);
+    }
+}
+
+/// The Python prototype as the oracle (script on stdin, repository on
+/// `PYTHONPATH`).
+fn python(script: &str) -> String {
+    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let mut child = std::process::Command::new(&interpreter)
+        .arg("-")
+        .env("PYTHONPATH", root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "python oracle failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Python's `FakeUpstream` answering each raw request in `CASES` (base64
+/// JSON): send, half-close, read to EOF. Prints the replies, then what the
+/// fixture recorded.
+const PY_FAKE_EXCHANGE: &str = r#"
+import base64, json, socket
+from zeropw.fake_upstream import FakeUpstream
+fake = FakeUpstream(SECRET).start()
+replies = []
+for raw in json.loads(base64.b64decode(CASES)):
+    with socket.create_connection((fake.host, fake.port), timeout=10) as sock:
+        sock.sendall(base64.b64decode(raw))
+        sock.shutdown(socket.SHUT_WR)
+        out = b""
+        try:
+            while chunk := sock.recv(65536):
+                out += chunk
+        except OSError:
+            pass
+    replies.append(base64.b64encode(out).decode())
+print(json.dumps(replies))
+print(json.dumps([[r["method"], r["path"], r["headers"], base64.b64encode(r["body"]).decode()]
+                  for r in fake.requests], sort_keys=True))
+fake.stop()
+"#;
+
+fn raw_exchange(port: u16, raw: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(raw).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut out = Vec::new();
+    let _ = stream.read_to_end(&mut out);
+    out
+}
+
+/// The status line and body of a reply (`Server`/`Date` values are the
+/// fixture's own boilerplate, pinned separately).
+fn status_and_body(reply: &[u8]) -> (String, Vec<u8>) {
+    let split = find(reply, b"\r\n\r\n").map_or(reply.len(), |i| i + 4);
+    let head = String::from_utf8_lossy(&reply[..split]).into_owned();
+    let status = head.lines().next().unwrap_or("").to_string();
+    (status, reply[split..].to_vec())
+}
+
+/// Methods without a `do_` handler, `parse_qs` and `int()`/`float()` query
+/// rules, a short body, folded and malformed header lines, `//` paths and
+/// fragments -- reply status lines and bodies and the recorded requests
+/// match Python's fixture.
+#[test]
+fn request_handling_matches_the_python_fixture() {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let auth = format!("Authorization: Bearer {SECRET}\r\n");
+    let get = |target: &str| format!("GET {target} HTTP/1.1\r\n{auth}\r\n").into_bytes();
+    let cases: Vec<Vec<u8>> = vec![
+        format!("TRACE /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("PROPFIND /me HTTP/1.1\r\n{auth}Content-Length: 2\r\n\r\n{{}}").into_bytes(),
+        get("/base64-embedded-leak?offset=&wrap=60"),
+        get("/base64-embedded-leak?offset=%202%20&wrap=1_0"),
+        get("/base64-embedded-leak?offset=%2B1&wrap"),
+        get("/base64-embedded-leak?offset=x"),
+        get("/base64-embedded-leak?offset=\u{663}"),
+        get("/slow?seconds=0.0_5"),
+        get("/slow?seconds=+0.01"),
+        get("/slow?seconds=bogus"),
+        get("/leak?auth=a&auth=b"),
+        get("/leak?auth=&auth=c"),
+        get("/leak?=x&auth"),
+        get("//me"),
+        get("/me#frag?x=1"),
+        get("/encoded-leak?form=raw#frag"),
+        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length: 50\r\n\r\n{{\"title\"").into_bytes(),
+        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length:  1_4 \r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Folded: a\r\n b\r\n\tc\r\nX-Pad: v  \r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\nX-Before: 1\r\nNot a header\r\n{auth}\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}:empty-name\r\nX-After: 2\r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Last: end").into_bytes(),
+    ];
+    let encoded: Vec<String> = cases.iter().map(|c| engine.encode(c)).collect();
+    let script = format!(
+        "SECRET = {SECRET:?}\nCASES = '{}'\n{PY_FAKE_EXCHANGE}",
+        engine.encode(serde_json::to_string(&encoded).unwrap())
+    );
+    let out = python(&script);
+    let mut lines = out.lines();
+    let python_replies: Vec<String> = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let python_recorded: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+
+    let fake = FakeUpstream::new(SECRET).start();
+    for (case, python) in cases.iter().zip(&python_replies) {
+        let python = engine.decode(python).unwrap();
+        let rust = raw_exchange(fake.port(), case);
+        assert_eq!(
+            status_and_body(&rust),
+            status_and_body(&python),
+            "request {:?}",
+            String::from_utf8_lossy(case)
+        );
+    }
+    let rust_recorded: Vec<serde_json::Value> = fake
+        .requests()
+        .into_iter()
+        .map(|r| {
+            let headers: serde_json::Map<String, serde_json::Value> = r
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            serde_json::json!([r.method, r.path, headers, engine.encode(&r.body)])
+        })
+        .collect();
+    assert_eq!(serde_json::Value::from(rust_recorded), python_recorded);
+    // The shapes the audit named, on Python's own replies.
+    let status = |i: usize| status_and_body(&engine.decode(&python_replies[i]).unwrap()).0;
+    assert_eq!(status(0), "HTTP/1.1 501 Unsupported method ('TRACE')");
+    assert_eq!(status(2), "HTTP/1.1 200 OK");
+    assert_eq!(status(16), "HTTP/1.1 400 Bad Request");
+    assert_eq!(python_recorded.as_array().unwrap().len(), cases.len() - 2);
 }

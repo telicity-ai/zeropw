@@ -935,6 +935,21 @@ fn html_escape(text: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+/// `BaseHTTPRequestHandler.send_error`'s reason phrase (the message, or the
+/// status's own phrase) and its `error_message_format` HTML body.
+pub(crate) fn error_page(
+    code: u16,
+    message: Option<String>,
+    explain: Option<&str>,
+) -> (String, String) {
+    let message = message.unwrap_or_else(|| reason_phrase(code).into());
+    let body = format!(
+        "<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: {code}</p>\n        <p>Message: {}.</p>\n        <p>Error code explanation: {code} - {}.</p>\n    </body>\n</html>\n",
+        html_escape(&message),
+        html_escape(explain.unwrap_or(explanation(code)))
+    );
+    (message, body)
+}
 /// `BaseHTTPRequestHandler.send_error(code, message, explain)`.
 fn send_error(
     inner: &Inner,
@@ -944,12 +959,7 @@ fn send_error(
     message: Option<String>,
     explain: Option<&str>,
 ) -> std::io::Result<()> {
-    let message = message.unwrap_or_else(|| reason_phrase(code).into());
-    let body = format!(
-        "<!DOCTYPE HTML>\n<html lang=\"en\">\n    <head>\n        <meta charset=\"utf-8\">\n        <title>Error response</title>\n    </head>\n    <body>\n        <h1>Error response</h1>\n        <p>Error code: {code}</p>\n        <p>Message: {}.</p>\n        <p>Error code explanation: {code} - {}.</p>\n    </body>\n</html>\n",
-        html_escape(&message),
-        html_escape(explain.unwrap_or(explanation(code)))
-    );
+    let (message, body) = error_page(code, message, explain);
     let headers = [
         ("Connection".into(), "close".into()),
         ("Content-Type".into(), "text/html;charset=utf-8".into()),
@@ -1041,6 +1051,14 @@ mod tests {
     pub(super) const PANIC_PATH: &str = "/__synthetic_panic__";
 
     fn server() -> (tempfile::TempDir, ZeroPWServer) {
+        let (temp, server) = idle_server();
+        server.serve_in_thread().unwrap();
+        (temp, server)
+    }
+
+    /// `ZeroPWServer(self.ctx)` without `serve_in_thread`: nothing reaps
+    /// except an explicit `reap_slow_clients`.
+    fn idle_server() -> (tempfile::TempDir, ZeroPWServer) {
         let temp = tempfile::TempDir::new().unwrap();
         let ctx = Arc::new(
             Context::initialize(
@@ -1053,7 +1071,6 @@ mod tests {
             .unwrap(),
         );
         let server = ZeroPWServer::new(ctx, None, None).unwrap();
-        server.serve_in_thread().unwrap();
         (temp, server)
     }
 
@@ -1141,7 +1158,7 @@ mod tests {
     /// reaped connection learns so when it next marks progress.
     #[test]
     fn request_cut_at_the_deadline_is_never_acted_on() {
-        let (_temp, server) = server();
+        let (_temp, server) = idle_server();
         let inner = server.inner.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
