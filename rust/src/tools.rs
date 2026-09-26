@@ -46,8 +46,6 @@ const DROP_RESPONSE_HEADERS: &[&str] = &[
 ];
 static PUBLIC_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^https?://[A-Za-z0-9.\-\[\]:_]+(?:/[\x21-\x7e]*)?$").unwrap());
-static HEADER_NAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$").unwrap());
 static REQUEST_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._:-]{1,128}$").unwrap());
 static RUN_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{1,64}$").unwrap());
@@ -170,19 +168,14 @@ pub fn dispatch(
                     None | Some(Value::Null) => (),
                     Some(Value::Object(h)) if h.len() <= MAX_HEADERS => {
                         for (name, value) in h {
-                            if !HEADER_NAME.is_match(name) {
+                            // `policy.HEADER_NAME_RE.match(name)`, `$` quirk included.
+                            if !crate::policy::header_name_matches(name) {
                                 return Err(Error::invalid_input("invalid_header_name"));
                             }
                             let v = value
                                 .as_str()
                                 .ok_or_else(|| Error::invalid_input("invalid_header_value"))?;
-                            if v.chars().count() > MAX_HEADER_VALUE
-                                || v.chars().any(|c| {
-                                    c <= '\u{8}'
-                                        || ('\u{a}'..='\u{1f}').contains(&c)
-                                        || c == '\u{7f}'
-                                })
-                            {
+                            if v.chars().count() > MAX_HEADER_VALUE || !header_value_matches(v) {
                                 return Err(Error::invalid_input("invalid_header_value"));
                             }
                             headers.push((name.clone(), v.into()));
@@ -215,6 +208,17 @@ pub fn dispatch(
             }
         }
     }
+}
+/// `HEADER_VALUE_RE.match(value)` (`^[^\x00-\x08\x0a-\x1f\x7f]*$`): like
+/// every `re.match` ending in `$`, one trailing `"\n"` still matches
+/// (measured with python3.12: `{"Accept": "x\n"}` reaches the gateway and is
+/// refused there as `upstream_connection_lost`; `"x\n\n"` is refused here).
+fn header_value_matches(value: &str) -> bool {
+    value
+        .strip_suffix('\n')
+        .unwrap_or(value)
+        .chars()
+        .all(|c| !(c <= '\u{8}' || ('\u{a}'..='\u{1f}').contains(&c) || c == '\u{7f}'))
 }
 fn request_id(p: &Map<String, Value>) -> Result<Option<&str>, Error> {
     let id = string(p, "request_id", false, 128)?;

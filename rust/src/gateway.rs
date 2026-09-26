@@ -984,9 +984,23 @@ fn self_referential_target(ctx: &Context, connection: &Connection) -> bool {
         .trim_matches(|c| c == '[' || c == ']')
         .to_lowercase();
     let host = host.trim_end_matches('.');
-    if let Some(Value::String(public_url)) = ctx.config.extra.get("public_url")
+    // Python reads `ctx.config.extra["public_url"]`, where `set_public_url`
+    // stores it. A shared Rust `Context` cannot mutate `config`, so
+    // `tools::set_public_url` (called once the server is bound) stores into
+    // `ctx.public_url`, which wins; `config.extra["public_url"]` (seeded into
+    // it at construction, or set on a not-yet-shared context) is the fallback.
+    let public_url = ctx
+        .public_url
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .or_else(|| match ctx.config.extra.get("public_url") {
+            Some(Value::String(url)) => Some(url.clone()),
+            _ => None,
+        });
+    if let Some(public_url) = public_url
         && !public_url.is_empty()
-        && let Some((url_host, public_port)) = parse_authority(public_url)
+        && let Some((url_host, public_port)) = parse_authority(&public_url)
         && url_host.trim_end_matches('.') == host
         && public_port == target.port
     {
