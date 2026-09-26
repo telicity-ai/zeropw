@@ -1,13 +1,17 @@
 //! Port of `tests/test_gateway.py`.
 //!
-//! Not ported: everything under Python's `ServerRouteTests`/`SlowClientTests`
-//! and the `ZeroPWServer`-dependent parts of `SelfReferenceTests` -- they
-//! exercise `zeropw/server.py`, which is `server.rs`, out of this work
-//! unit's scope (`rust/PORTING.md` §1: "Not in this half: ... `server` ...").
-//! The underlying self-referential-target mechanism
-//! (`register_local_listener`/`_reaches_listener`/`_peer_is_local_listener`)
-//! is still exercised directly, using a raw `TcpListener` in place of
-//! `ZeroPWServer`, in `self_reference` below.
+//! `ServerRouteTests`, `SlowClientTests` and the `ZeroPWServer`-dependent
+//! parts of `SelfReferenceTests` are ported against a live
+//! `zeropw::server::ZeroPWServer` in the "server routes" section at the end
+//! of this file (`server_*` tests). Where Python disables a check with
+//! `mock.patch`, the port reaches the same situation without a mock: a name
+//! resolved through the resolver seam for `_self_referential_target`, a
+//! loopback TCP forwarder (the "another host, a proxy" case) for both address
+//! checks, and a directory in the audit log's place for `append_line`
+//! failing. `test_request_cut_at_the_deadline_is_never_acted_on` drives the
+//! server's connection table directly and is the `server.rs` unit test of
+//! the same name. The self-referential-target mechanism is also exercised
+//! with a raw `TcpListener` in `self_reference` below.
 //!
 //! `TlsTests` used `openssl` via `subprocess` to generate test certificates;
 //! this port uses `rcgen` (dev-dependency) instead, a test-infrastructure
@@ -5787,3 +5791,1006 @@ fn run_python_oracle(script: &str) -> String {
 // ------------------------------------------------------------- HashMap import
 #[allow(unused)]
 fn _anchor(_: HashMap<(), ()>) {}
+
+// ------------------------------------------------------------ server routes
+//
+// Ports of `ServerRouteTests`, the `ZeroPWServer`-dependent
+// `SelfReferenceTests` and `SlowClientTests`
+// (`SlowClientTests.test_request_cut_at_the_deadline_is_never_acted_on`
+// drives `mark_reading`/`reap_slow_clients` on mock sockets; it is ported as
+// the `server.rs` unit test `request_cut_at_the_deadline_is_never_acted_on`).
+
+/// `GatewayBase` plus `ZeroPWServer(self.ctx, quiet=False).serve_in_thread()`.
+struct ServerTest {
+    _tmp: TempDir,
+    ctx: Arc<Context>,
+    fake: FakeUpstream,
+    grant: P::Grant,
+    handle: String,
+    now: f64,
+    server: zeropw::server::ZeroPWServer,
+    address: String,
+}
+
+impl ServerTest {
+    fn new() -> Self {
+        Self::with_limits(None)
+    }
+
+    /// `SlowClientTests.start(timeout, deadline, max_connections)`.
+    fn with_limits(limits: Option<(Duration, Duration, usize)>) -> Self {
+        let GatewayTest {
+            _tmp,
+            ctx,
+            clock,
+            fake,
+            grant,
+            handle,
+        } = GatewayTest::new();
+        let now = *clock.lock().unwrap();
+        let ctx = Arc::new(ctx);
+        let server =
+            zeropw::server::ZeroPWServer::new_with_quiet(ctx.clone(), None, None, false).unwrap();
+        if let Some((timeout, deadline, max_connections)) = limits {
+            server.set_limits(max_connections, timeout, deadline);
+        }
+        server.serve_in_thread().unwrap();
+        let address = server.url().trim_start_matches("http://").to_string();
+        ServerTest {
+            _tmp,
+            ctx,
+            fake,
+            grant,
+            handle,
+            now,
+            server,
+            address,
+        }
+    }
+
+    /// `http.client` request (keep-alive, `Host` added unless given):
+    /// `(status, lower-cased headers, body)`.
+    fn http(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<&[u8]>,
+    ) -> (u16, HashMap<String, String>, Vec<u8>) {
+        let mut stream = std::net::TcpStream::connect(&self.address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = format!("{method} {path} HTTP/1.1\r\n");
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("host")) {
+            request.push_str(&format!("Host: {}\r\n", self.address));
+        }
+        request.push_str("Accept-Encoding: identity\r\n");
+        if let Some(body) = body {
+            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
+        for (k, v) in headers {
+            request.push_str(&format!("{k}: {v}\r\n"));
+        }
+        request.push_str("\r\n");
+        let mut bytes = request.into_bytes();
+        bytes.extend_from_slice(body.unwrap_or_default());
+        stream.write_all(&bytes).unwrap();
+        let mut raw = Vec::new();
+        let mut chunk = [0u8; 65536];
+        let split = loop {
+            if let Some(i) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "connection closed before the response head");
+            raw.extend_from_slice(&chunk[..n]);
+        };
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let mut lines = head.split("\r\n");
+        let status = lines
+            .next()
+            .unwrap()
+            .split(' ')
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let headers: HashMap<String, String> = lines
+            .filter_map(|l| l.split_once(": "))
+            .map(|(k, v)| (k.to_lowercase(), v.to_string()))
+            .collect();
+        let length: usize = headers
+            .get("content-length")
+            .map_or(0, |v| v.parse().unwrap());
+        let mut body = raw[split..].to_vec();
+        while body.len() < length && method != "HEAD" {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0);
+            body.extend_from_slice(&chunk[..n]);
+        }
+        (status, headers, body)
+    }
+
+    /// `raw(request)`: send, then read until EOF or a 5 s timeout.
+    fn raw(&self, request: &[u8]) -> Vec<u8> {
+        let mut stream = std::net::TcpStream::connect(&self.address).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream.write_all(request).unwrap();
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 65536];
+        while let Ok(n) = stream.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..n]);
+        }
+        out
+    }
+
+    fn uses(&self) -> i64 {
+        self.ctx.policy.get_grant(&self.grant.id).unwrap().uses
+    }
+
+    fn assert_credential_free(&self, blob: &[u8]) {
+        let text = String::from_utf8_lossy(blob);
+        for secret in [SECRET_A, SECRET_B] {
+            for encoding in all_encodings(secret) {
+                assert!(!text.contains(&encoding), "leaked {encoding}");
+            }
+        }
+    }
+}
+
+impl Drop for ServerTest {
+    fn drop(&mut self) {
+        self.server.stop();
+        self.fake.stop();
+    }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+fn json_body(body: &[u8]) -> Value {
+    serde_json::from_slice(body).unwrap()
+}
+
+#[test]
+fn server_handle_in_url_route() {
+    let s = ServerTest::new();
+    let (status, headers, body) = s.http(
+        "GET",
+        &format!("/h/{}/repos?page=1", s.handle),
+        &[
+            ("Authorization", PLACEHOLDER),
+            ("Host", "evil.invalid"),
+            ("Cookie", "a=b"),
+        ],
+        None,
+    );
+    assert_eq!(
+        (status, json_body(&body)),
+        (
+            200,
+            serde_json::json!([{"name": "demo"}, {"name": "tools"}])
+        )
+    );
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(headers["cache-control"], "no-store");
+    assert!(!headers.contains_key("set-cookie"));
+    let seen = s.fake.requests().last().unwrap().clone();
+    assert_eq!(seen.path, "/repos?page=1");
+    assert_eq!(seen.headers["authorization"], format!("Bearer {SECRET_A}"));
+    assert_eq!(seen.headers["host"], format!("127.0.0.1:{}", s.fake.port()));
+    assert!(!seen.headers.contains_key("cookie"));
+    let payload = br#"{"title": "via server"}"#;
+    let (status, _, body) = s.http(
+        "POST",
+        &format!("/h/{}/repos/demo/issues", s.handle),
+        &[
+            ("Authorization", PLACEHOLDER),
+            ("Content-Type", "application/json"),
+        ],
+        Some(payload),
+    );
+    assert_eq!(
+        (status, json_body(&body)["title"].clone()),
+        (201, Value::from("via server"))
+    );
+    assert_eq!(s.fake.requests().last().unwrap().body, payload);
+    let (status, _, _) = s.http("GET", &format!("/h/{}", s.handle), &[], None);
+    assert_eq!(status, 404); // "/" is relayed; the fake has no root route
+    assert_eq!(s.fake.requests().last().unwrap().path, "/");
+}
+
+#[test]
+fn server_header_handle_route() {
+    let s = ServerTest::new();
+    let (status, _, body) = s.http(
+        "GET",
+        "/relay/me",
+        &[
+            ("X-ZeroPW-Handle", &s.handle),
+            ("Authorization", PLACEHOLDER),
+        ],
+        None,
+    );
+    assert_eq!(
+        (status, json_body(&body)),
+        (200, serde_json::json!({"login": "synthetic-user"}))
+    );
+    assert!(
+        !s.fake
+            .requests()
+            .last()
+            .unwrap()
+            .headers
+            .contains_key("x-zeropw-handle")
+    );
+    let (status, _, body) = s.http("GET", "/relay/me", &[], None);
+    assert_eq!(
+        (status, json_body(&body)["reason"].clone()),
+        (401, Value::from("handle_malformed"))
+    );
+    let forged = format!("{}xyz", &s.handle[..s.handle.len() - 3]);
+    let (status, _, body) = s.http("GET", "/relay/me", &[("X-ZeroPW-Handle", &forged)], None);
+    assert_eq!(
+        (status, json_body(&body)["reason"].clone()),
+        (401, Value::from("handle_signature"))
+    );
+    let (status, _, body) = s.http(
+        "GET",
+        "/relay/../admin",
+        &[("X-ZeroPW-Handle", &s.handle)],
+        None,
+    );
+    assert_eq!(
+        (status, json_body(&body)["reason"].clone()),
+        (400, Value::from("invalid_path"))
+    );
+    let (status, _, body) = s.http("GET", &format!("/h/{}/debug/token", s.handle), &[], None);
+    assert_eq!(
+        (status, json_body(&body)["reason"].clone()),
+        (502, Value::from("credential_reflection_blocked"))
+    );
+    s.assert_credential_free(&body);
+}
+
+#[test]
+fn server_client_cannot_change_target() {
+    let s = ServerTest::new();
+    let response = s.raw(
+        format!(
+            "GET http://evil.invalid/repos HTTP/1.1\r\nHost: evil.invalid\r\n\
+             X-ZeroPW-Handle: {}\r\nConnection: close\r\n\r\n",
+            s.handle
+        )
+        .as_bytes(),
+    );
+    assert!(response.starts_with(b"HTTP/1.1 400"));
+    assert!(contains(&response, b"absolute_uri_unsupported"));
+    let response = s.raw(
+        b"CONNECT evil.invalid:443 HTTP/1.1\r\nHost: evil.invalid:443\r\nConnection: close\r\n\r\n",
+    );
+    assert!(response.starts_with(b"HTTP/1.1 405"));
+    assert!(contains(&response, b"connect_tunnel_unsupported"));
+    let response = s.raw(
+        format!(
+            "GET /h/{}/repos HTTP/1.1\r\nHost: evil.invalid:1\r\nConnection: close\r\n\r\n",
+            s.handle
+        )
+        .as_bytes(),
+    );
+    assert!(response.starts_with(b"HTTP/1.1 200"));
+    assert_eq!(
+        s.fake.requests().last().unwrap().headers["host"],
+        format!("127.0.0.1:{}", s.fake.port())
+    );
+    assert_eq!(s.fake.requests().len(), 1);
+}
+
+#[test]
+fn server_ambiguous_request_framing_is_refused() {
+    let s = ServerTest::new();
+    let h = s.handle.as_bytes();
+    let smuggled = [b"GET /h/".as_slice(), h, b"/me HTTP/1.1\r\nHost: x\r\n\r\n"].concat();
+    let post = [
+        b"POST /h/".as_slice(),
+        h,
+        b"/repos/demo/issues HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n",
+    ]
+    .concat();
+    let with = |tail: &[u8]| [post.as_slice(), tail].concat();
+    let get = |line_end: &[u8], rest: &[u8]| {
+        [b"GET /h/".as_slice(), h, b"/repos HTTP/1.1", line_end, rest].concat()
+    };
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (
+            with(b"Transfer-Encoding: gzip, chunked\r\n\r\nd\r\nHELLO-PAYLOAD\r\n0\r\n\r\n"),
+            "transfer_encoding_unsupported",
+        ),
+        (
+            with(b"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n"),
+            "transfer_encoding_unsupported",
+        ),
+        (
+            with(b"Transfer-Encoding: chunked \r\n\r\n0\r\n\r\n"),
+            "transfer_encoding_unsupported",
+        ),
+        (
+            with(b"Transfer-Encoding: identity\r\nContent-Length: 2\r\n\r\n{}"),
+            "transfer_encoding_unsupported",
+        ),
+        (
+            [
+                with(
+                    format!(
+                        "Content-Length: 5\r\nContent-Length: {}\r\n\r\nAAAAA",
+                        5 + smuggled.len()
+                    )
+                    .as_bytes(),
+                ),
+                smuggled.clone(),
+            ]
+            .concat(),
+            "invalid_content_length",
+        ),
+        (
+            with(b"Content-Length: 5, 5\r\n\r\nAAAAA"),
+            "invalid_content_length",
+        ),
+        (
+            with(b"Content-Length: +5\r\n\r\nAAAAA"),
+            "invalid_content_length",
+        ),
+        (
+            with(b"Content-Length: 1_0\r\n\r\nAAAAAAAAAA"),
+            "invalid_content_length",
+        ),
+        (
+            with(b"Content-Length: -1\r\n\r\n"),
+            "invalid_content_length",
+        ),
+        (
+            with(b"Transfer-Encoding : chunked\r\nContent-Length: 3\r\n\r\nabc"),
+            "malformed_header",
+        ),
+        (
+            with(b"X-A: 1\r\n Transfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n{}"),
+            "obsolete_line_folding",
+        ),
+        (
+            get(b"\n", b"Host: x\nConnection: close\n\n"),
+            "malformed_header",
+        ),
+        (
+            get(b"\n", b"Host: x\r\nConnection: close\r\n\r\n"),
+            "malformed_request_line",
+        ),
+        (
+            [
+                b"GET  /h/".as_slice(),
+                h,
+                b"/repos HTTP/1.1\r\nHost: x\r\n\r\n",
+            ]
+            .concat(),
+            "malformed_request_line",
+        ),
+        (
+            get(b"\r\n", b"Host: x\r\nX-Nul: a\x00b\r\n\r\n"),
+            "malformed_header",
+        ),
+    ];
+    for (raw, reason) in cases {
+        let response = s.raw(&raw);
+        let shown = String::from_utf8_lossy(&raw[raw.len().saturating_sub(60)..]).into_owned();
+        assert!(
+            response.starts_with(b"HTTP/1.1 400"),
+            "{reason} {shown:?}: {:?}",
+            String::from_utf8_lossy(&response[..response.len().min(80)])
+        );
+        assert!(
+            contains(&response, format!("\"reason\": \"{reason}\"").as_bytes()),
+            "{reason} {shown:?}"
+        );
+        assert!(
+            contains(&response, b"\r\nConnection: close\r\n"),
+            "{reason}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&response)
+                .matches("HTTP/1.1 ")
+                .count(),
+            1,
+            "{reason}"
+        );
+    }
+    assert!(s.fake.requests().is_empty());
+    assert_eq!(s.uses(), 0);
+}
+
+#[test]
+fn server_keep_alive_works_and_unread_or_short_bodies_never_frame_a_request() {
+    let s = ServerTest::new();
+    let h = &s.handle;
+    let pair = s.raw(
+        format!(
+            "GET /h/{h}/repos HTTP/1.1\r\nHost: x\r\n\r\n\
+             GET /h/{h}/me HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&pair)
+            .matches("HTTP/1.1 200 OK")
+            .count(),
+        2
+    );
+    let paths: Vec<_> = s.fake.requests().into_iter().map(|r| r.path).collect();
+    assert_eq!(paths, ["/repos", "/me"]);
+    // A tools call refused before its body is read closes the connection, so
+    // the body is never parsed as a second (authenticated) request.
+    let smuggled = format!("GET /h/{h}/repos HTTP/1.1\r\nHost: x\r\n\r\n");
+    let refused = s.raw(
+        format!(
+            "POST /v1/tools/request HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer zpwc_wrong\r\n\
+             Content-Length: {}\r\n\r\n{smuggled}",
+            smuggled.len()
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&refused)
+            .matches("HTTP/1.1 ")
+            .count(),
+        1
+    );
+    assert!(contains(&refused, b"caller_token_invalid"));
+    assert!(contains(&refused, b"\r\nConnection: close\r\n"));
+    // A body the client cuts short is never relayed as a truncated write.
+    let mut sock = std::net::TcpStream::connect(&s.address).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    sock.write_all(
+        format!(
+            "POST /h/{h}/repos/demo/issues HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+             Content-Length: 100\r\n\r\n{{\"title\":\"cut\"}}"
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    sock.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut buf = [0u8; 65536];
+    assert_eq!(sock.read(&mut buf).unwrap(), 0);
+    assert_eq!(s.fake.requests().len(), 2);
+    assert_eq!(s.uses(), 2);
+}
+
+#[test]
+fn server_tools_caller_authentication_failures_are_audited_and_alerted() {
+    let s = ServerTest::new();
+    let token = s.ctx.policy.create_principal("agent-2", "cli").unwrap();
+    let call = |headers: &[(&str, &str)], name: &str| -> (u16, Value) {
+        let (status, _, body) = s.http("POST", &format!("/v1/tools/{name}"), headers, Some(b"{}"));
+        (status, json_body(&body))
+    };
+    let bearer = format!("Bearer {token}");
+    assert_eq!(
+        call(&[("Authorization", &bearer)], "list_connections").0,
+        200
+    );
+    s.ctx.policy.disable_principal("agent-2", true).unwrap();
+    type Case<'a> = (&'a [(&'a str, &'a str)], &'a str, Option<&'a str>);
+    let cases: [Case; 4] = [
+        (&[], "caller_token_missing", None),
+        (
+            &[("Authorization", "Basic c3ludGhldGlj")],
+            "caller_token_missing",
+            None,
+        ),
+        (
+            &[("Authorization", "Bearer zpwc_synthetic-not-issued")],
+            "caller_token_invalid",
+            None,
+        ),
+        (
+            &[("Authorization", &bearer)],
+            "principal_disabled",
+            Some("agent-2"),
+        ),
+    ];
+    for (headers, reason, caller) in cases {
+        let (status, payload) = call(headers, "list_connections");
+        assert_eq!(
+            (status, payload),
+            (
+                401,
+                serde_json::json!({"error": "AuthFailed", "reason": reason})
+            )
+        );
+        let record = s
+            .ctx
+            .audit
+            .tail(1000)
+            .unwrap()
+            .into_iter()
+            .rfind(|r| r["event"] == "auth_failed")
+            .unwrap();
+        assert_eq!(
+            (
+                record["caller"].clone(),
+                record["action"].clone(),
+                record["result"].clone(),
+                record["reason"].clone()
+            ),
+            (
+                caller.map_or(Value::Null, Value::from),
+                Value::from("list_connections"),
+                Value::from("denied"),
+                Value::from(reason)
+            )
+        );
+    }
+    let alerts = s.ctx.audit.alerts(50).unwrap();
+    assert!(
+        alerts
+            .iter()
+            .any(|a| a["alert"] == "revoked_use_attempt" && a["caller"] == "agent-2")
+    );
+    // An agent-chosen tool name is not copied into the log.
+    assert_eq!(
+        call(
+            &[("Authorization", "Bearer zpwc_synthetic-not-issued")],
+            "free-text-name"
+        )
+        .0,
+        401
+    );
+    let last = s
+        .ctx
+        .audit
+        .tail(1000)
+        .unwrap()
+        .into_iter()
+        .rfind(|r| r["event"] == "auth_failed")
+        .unwrap();
+    assert!(last["action"].is_null());
+    let state =
+        |name: &str| std::fs::read_to_string(s.ctx.state.path.join(name)).unwrap_or_default();
+    let blob = format!(
+        "{}\n{}",
+        state("audit/audit.jsonl"),
+        state("audit/alerts.jsonl")
+    );
+    assert!(!blob.contains(&token));
+    assert!(!blob.contains("zpwc_synthetic-not-issued"));
+    assert!(!blob.contains("free-text-name"));
+    // If the failure cannot be recorded, the answer is audit_unavailable, not
+    // a silent 401. (Python patches `state.append_line` to raise `OSError`;
+    // a directory in the log's place makes the append fail even as root.)
+    let log = s.ctx.state.path.join(zeropw::audit::AUDIT_FILE);
+    let aside = s.ctx.state.path.join("audit/audit.jsonl.aside");
+    std::fs::rename(&log, &aside).unwrap();
+    std::fs::create_dir(&log).unwrap();
+    let refused = call(&[("Authorization", &bearer)], "list_connections");
+    std::fs::remove_dir(&log).unwrap();
+    std::fs::rename(&aside, &log).unwrap();
+    assert_eq!(
+        refused,
+        (
+            503,
+            serde_json::json!({"error": "AuditUnavailable", "reason": "audit_unavailable"})
+        )
+    );
+}
+
+#[test]
+fn server_logs_never_contain_handles_or_queries() {
+    let s = ServerTest::new();
+    s.http(
+        "GET",
+        &format!("/h/{}/repos?token=agent-guess", s.handle),
+        &[("Authorization", PLACEHOLDER)],
+        None,
+    );
+    s.http(
+        "GET",
+        "/relay/me?x=1",
+        &[("X-ZeroPW-Handle", &s.handle)],
+        None,
+    );
+    let lines = s.server.log_lines();
+    assert!(!lines.is_empty());
+    let signature_part: String = s
+        .handle
+        .split('.')
+        .nth(1)
+        .unwrap()
+        .chars()
+        .take(20)
+        .collect();
+    for line in &lines {
+        assert!(!line.contains(&s.handle));
+        assert!(!line.contains(&signature_part));
+        assert!(!line.contains("agent-guess"));
+        assert!(!line.contains('?'));
+    }
+    assert!(lines.contains(&"GET /h/<handle>/...".to_string()));
+    s.assert_credential_free(lines.join("\n").as_bytes());
+}
+
+// ------------------------------------------ self-reference with a live server
+
+fn server_connection(
+    s: &ServerTest,
+    cid: &str,
+    host: &str,
+    port: u16,
+    secret_id: &str,
+    allow_private: bool,
+) -> String {
+    s.ctx
+        .policy
+        .create_connection(
+            Connection::new(
+                cid,
+                "demo",
+                "dev",
+                "named",
+                "http",
+                secret_id,
+                None,
+                "",
+                Some(
+                    HttpTarget::from_stored("http", host, i64::from(port), None, allow_private)
+                        .unwrap(),
+                ),
+                Some(HttpAuth::bearer()),
+                Some(HttpScope::new(None, None, vec![]).unwrap()),
+                None,
+                None,
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    s.ctx
+        .policy
+        .create_grant("agent-1", cid, Some(3600), None)
+        .unwrap()
+        .id
+}
+
+#[test]
+fn server_target_that_is_zeropw_itself_is_refused_before_use() {
+    let s = ServerTest::new();
+    let (host, port) = s.address.rsplit_once(':').unwrap();
+    let port: u16 = port.parse().unwrap();
+    let token = s.ctx.policy.create_principal("agent-2", "cli").unwrap();
+    s.ctx
+        .vault
+        .put_secret("zpw-self", "api_key", token.as_bytes(), "demo", "dev", true)
+        .unwrap();
+    zeropw::tools::set_public_url(&s.ctx, "http://zeropw.invalid:8443").unwrap();
+    // An unspecified address (0.0.0.0 / ::) is never a valid credential
+    // target: refused at configuration.
+    for unspecified in ["0.0.0.0", "::"] {
+        let error = HttpTarget::new("http", unspecified, i64::from(port), None, false).unwrap_err();
+        assert_eq!(error.reason, "target_address_not_allowed");
+    }
+    for (cid, target_host, target_port, secret_id) in [
+        ("literal", host, port, "zpw-self"),
+        ("localhost", "localhost", port, "gh-token"),
+        ("public", "zeropw.invalid", 8443, "gh-token"),
+    ] {
+        let grant = server_connection(&s, cid, target_host, target_port, secret_id, false);
+        let result = gateway::relay_for_caller(
+            &s.ctx,
+            "agent-1",
+            cid,
+            "POST",
+            "/v1/tools/list_connections",
+            &headers(&[("Content-Type", "application/json")]),
+            b"{}",
+            None,
+        );
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (501, Some("self_referential_target")),
+            "{cid}"
+        );
+        assert_eq!(result.json().unwrap()["error"], "Unsupported");
+        assert_eq!(s.ctx.policy.get_grant(&grant).unwrap().uses, 0);
+        let last = s
+            .ctx
+            .audit
+            .tail(10_000)
+            .unwrap()
+            .into_iter()
+            .rfind(|r| r["event"] == "http_relay")
+            .unwrap();
+        assert_eq!(
+            (last["result"].clone(), last["reason"].clone()),
+            (
+                Value::from("denied"),
+                Value::from("self_referential_target")
+            )
+        );
+    }
+    assert!(s.server.log_lines().is_empty()); // ZeroPW's API was never contacted
+    assert!(
+        !s.ctx
+            .audit
+            .tail(1000)
+            .unwrap()
+            .iter()
+            .any(|r| r["event"] == "tools_list_connections")
+    );
+}
+
+/// `test_peer_that_resolves_to_zeropw_is_refused_before_transmission`:
+/// Python disables the literal check with a mock; here a name the literal
+/// check cannot recognise resolves (resolver seam) to the live server.
+#[test]
+fn server_peer_that_resolves_to_zeropw_is_refused_before_transmission() {
+    let s = ServerTest::new();
+    let port: u16 = s.address.rsplit_once(':').unwrap().1.parse().unwrap();
+    // A name (with the private-network opt-in its loopback answer needs).
+    let grant = server_connection(&s, "alias", "upstream.zeropw.test", port, "gh-token", true);
+    let handle = s
+        .ctx
+        .handles
+        .issue(
+            "agent-1",
+            "alias",
+            &grant,
+            s.ctx.policy.get_connection("alias").unwrap().policy_version,
+            300,
+            Some(s.now),
+        )
+        .unwrap();
+    let result = gateway::relay_with_resolver(
+        &s.ctx,
+        &handle,
+        "GET",
+        "/healthz",
+        &no_headers(),
+        b"",
+        Some("r-alias"),
+        resolver_answering(vec!["127.0.0.1".parse().unwrap()]),
+    );
+    assert_eq!(
+        (result.status, result.reason.as_deref()),
+        (501, Some("self_referential_target"))
+    );
+    assert!(s.server.log_lines().is_empty());
+    let ledger = s
+        .ctx
+        .state
+        .read_json(gateway::LEDGER_DOC, Value::Null)
+        .unwrap();
+    assert!(
+        ledger
+            .get("agent-1")
+            .and_then(|e| e.get("r-alias"))
+            .is_none()
+    );
+}
+
+/// A loopback TCP forwarder: what neither address check can recognise as
+/// ZeroPW ("another host, a proxy").
+fn forwarder(to: String) -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for client in listener.incoming() {
+            let Ok(client) = client else { return };
+            let Ok(upstream) = std::net::TcpStream::connect(&to) else {
+                return;
+            };
+            for (mut from, mut into) in [
+                (client.try_clone().unwrap(), upstream.try_clone().unwrap()),
+                (upstream, client),
+            ] {
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut from, &mut into);
+                    let _ = into.shutdown(std::net::Shutdown::Write);
+                });
+            }
+        }
+    });
+    port
+}
+
+#[test]
+fn server_relayed_request_marker_is_refused_by_the_server() {
+    let s = ServerTest::new();
+    // Normal relays announce themselves to the upstream.
+    let normal = gateway::relay(&s.ctx, &s.handle, "GET", "/me", &no_headers(), b"", None);
+    assert_eq!(normal.status, 200);
+    assert_eq!(
+        s.fake.requests().last().unwrap().headers["via"],
+        format!("1.1 {}", gateway::RELAY_PSEUDONYM)
+    );
+    // Even when neither address check recognises ZeroPW (another host, a
+    // proxy), the server refuses.
+    let proxy = forwarder(s.address.clone());
+    server_connection(&s, "proxied", "127.0.0.1", proxy, "gh-token", false);
+    let result = gateway::relay_for_caller(
+        &s.ctx,
+        "agent-1",
+        "proxied",
+        "GET",
+        "/healthz",
+        &no_headers(),
+        b"",
+        None,
+    );
+    assert_eq!(
+        (result.status, result.json().unwrap()),
+        (
+            501,
+            serde_json::json!({"error": "Unsupported", "reason": "self_referential_target"})
+        )
+    );
+    let refused: Vec<_> = s
+        .ctx
+        .audit
+        .tail(1000)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "unsupported")
+        .map(|r| {
+            (
+                r["action"].clone(),
+                r["reason"].clone(),
+                r["result"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        [(
+            Value::from("GET"),
+            Value::from("self_referential_target"),
+            Value::from("denied")
+        )]
+    );
+    for (via, status) in [
+        ("1.1 zeropw-relay", 501),
+        ("1.0 edge, 1.1 ZEROPW-RELAY (x)", 501),
+        ("1.1 proxy.example", 200),
+    ] {
+        assert_eq!(
+            s.http("GET", "/healthz", &[("Via", via)], None).0,
+            status,
+            "{via}"
+        );
+    }
+}
+
+#[test]
+fn server_closed_listener_is_forgotten() {
+    let s = ServerTest::new();
+    let other = zeropw::server::ZeroPWServer::new(s.ctx.clone(), None, None).unwrap();
+    let port: u16 = other.url().rsplit_once(':').unwrap().1.parse().unwrap();
+    assert!(
+        gateway::listener_addresses()
+            .iter()
+            .any(|(_, p)| *p == port)
+    );
+    other.server_close();
+    assert!(
+        !gateway::listener_addresses()
+            .iter()
+            .any(|(_, p)| *p == port)
+    );
+}
+
+// --------------------------------------------------------------- slow clients
+
+fn seconds_until_closed(sock: &mut std::net::TcpStream, limit: Duration) -> Duration {
+    let started = std::time::Instant::now();
+    sock.set_read_timeout(Some(limit)).unwrap();
+    let mut buf = [0u8; 65536];
+    while let Ok(n) = sock.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+    }
+    started.elapsed()
+}
+
+#[test]
+fn server_idle_and_dribbling_clients_are_dropped() {
+    let s = ServerTest::with_limits(Some((
+        Duration::from_millis(300),
+        Duration::from_millis(800),
+        128,
+    )));
+    let h = s.handle.clone();
+    let mut partial = std::net::TcpStream::connect(&s.address).unwrap();
+    partial
+        .write_all(
+            format!(
+                "POST /h/{h}/repos/demo/issues HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\nabc"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    assert!(seconds_until_closed(&mut partial, Duration::from_secs(5)) < Duration::from_secs(3));
+    let mut dribbler = std::net::TcpStream::connect(&s.address).unwrap();
+    let mut request = format!("GET /h/{h}/repos HTTP/1.1\r\nHost: x\r\nX-Slow: ").into_bytes();
+    request.extend(std::iter::repeat_n(b'a', 200));
+    let mut writer = dribbler.try_clone().unwrap();
+    std::thread::spawn(move || {
+        for byte in request {
+            if writer.write_all(&[byte]).is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let elapsed = seconds_until_closed(&mut dribbler, Duration::from_secs(5));
+    assert!(elapsed > Duration::from_millis(600), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(s.fake.requests().is_empty());
+    assert_eq!(s.uses(), 0);
+    let ok = s.raw(
+        format!("GET /h/{h}/repos HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").as_bytes(),
+    );
+    assert!(ok.starts_with(b"HTTP/1.1 200"));
+}
+
+#[test]
+fn server_concurrent_connections_are_capped() {
+    let s = ServerTest::with_limits(Some((Duration::from_secs(5), Duration::from_secs(10), 2)));
+    let held: Vec<_> = (0..2)
+        .map(|_| std::net::TcpStream::connect(&s.address).unwrap())
+        .collect();
+    // Admission happens on the accept thread; let it see both.
+    std::thread::sleep(Duration::from_millis(100));
+    let mut extra = std::net::TcpStream::connect(&s.address).unwrap();
+    extra
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut response = Vec::new();
+    let _ = extra.read_to_end(&mut response);
+    assert!(
+        response.starts_with(b"HTTP/1.1 503"),
+        "{:?}",
+        String::from_utf8_lossy(&response[..response.len().min(40)])
+    );
+    assert!(contains(&response, b"\"reason\": \"too_many_connections\""));
+    drop(held);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let again = s.raw(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+        if again.starts_with(b"HTTP/1.1 200") || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(std::time::Instant::now() < deadline);
+}
+
+#[test]
+fn server_stop_does_not_wait_for_idle_keep_alive_clients() {
+    let s = ServerTest::new();
+    let mut idle = std::net::TcpStream::connect(&s.address).unwrap();
+    idle.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    idle.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+        .unwrap();
+    let mut buf = [0u8; 65536];
+    let n = idle.read(&mut buf).unwrap();
+    assert!(buf[..n].starts_with(b"HTTP/1.1 200"));
+    let started = std::time::Instant::now();
+    s.server.stop();
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
