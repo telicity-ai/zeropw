@@ -2306,6 +2306,253 @@ print(json.dumps(out))
             mismatches.join("\n")
         );
     }
+
+    /// `set_content(body)`'s transfer-encoding choice and payload (7bit,
+    /// 8bit, quoted-printable with soft breaks and trailing whitespace,
+    /// base64), for bodies around each heuristic boundary.
+    #[test]
+    fn body_transfer_encoding_matches_python_bytes() {
+        let long_ascii = "x".repeat(79);
+        let mut bodies: Vec<String> = vec![
+            "short ascii\n".into(),
+            "짧은 본문\n".into(),
+            format!("{long_ascii}\n"),
+            format!("{} \n{}\t\n", "y".repeat(76), "z".repeat(77)),
+            format!("{}=abc\n{}=\n", "q".repeat(75), "r".repeat(76)),
+            format!("{}\n한글 한 줄\n", "ascii ".repeat(40)),
+            format!("{}끝\n", "ascii text line that is quite long indeed, ".repeat(3)),
+            "no trailing newline".into(),
+            "crlf line one\r\ncr line two\rlf line three\n".into(),
+            ".leading dot line\n..two dots\n".into(),
+            "안내 생성 시각: 2023-11-14T22:13:21Z\n\n1. 무슨 일이 있었나\n침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.\n".into(),
+        ];
+        let mut many = String::new();
+        for index in 0..14 {
+            many.push_str(&format!("line {index} {}\n", "w".repeat(70 + index)));
+        }
+        bodies.push(many);
+        let mut mixed = String::new();
+        for index in 0..12 {
+            mixed.push_str(&format!("{} 한\n", "a".repeat(60 + index * 3)));
+        }
+        bodies.push(mixed);
+        let script = format!(
+            r#"
+import base64, email.generator, io, json
+from email.message import EmailMessage
+out = []
+for body in json.loads({bodies:?}):
+    m = EmailMessage()
+    m["Subject"] = "s"
+    m["From"] = "a@example.com"
+    m["To"] = "b@example.com"
+    m.set_content(body)
+    b = io.BytesIO()
+    email.generator.BytesGenerator(b).flatten(m, linesep="\r\n")
+    out.append(base64.b64encode(b.getvalue()).decode())
+print(json.dumps(out))
+"#,
+            bodies = serde_json::to_string(&bodies).unwrap(),
+        );
+        let expected: Vec<String> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let recipients = ["b@example.com".to_owned()];
+        let mut ctes = std::collections::BTreeSet::new();
+        for (body, flat) in bodies.iter().zip(expected) {
+            let message = Message::new(&config("a@example.com", &recipients), "s", body);
+            ctes.insert(message.cte);
+            let actual = message.flatten(false);
+            let expected = crate::pybase64::b64decode(&flat).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&actual),
+                String::from_utf8_lossy(&expected),
+                "body {body:?}"
+            );
+        }
+        assert_eq!(
+            ctes.into_iter().collect::<Vec<_>>(),
+            ["7bit", "8bit", "base64", "quoted-printable"]
+        );
+    }
+
+    /// Deterministic pseudo-random subjects and address lists inside the
+    /// supported grammar (atoms, quoted strings with escapes and specials,
+    /// obsolete dots, long words, ASCII and non-ASCII, internationalized
+    /// addresses), compared with Python byte for byte.
+    #[test]
+    fn generated_header_shapes_match_python_bytes() {
+        let mut seed: u64 = 0x5eed_2026_0926;
+        let mut next = move |bound: usize| -> usize {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) as usize) % bound
+        };
+        let words = [
+            "a",
+            "ZeroPW",
+            "알림",
+            "관리자",
+            "보안-담당",
+            "x-y.z",
+            "[tag]",
+            "(note)",
+            "Ünï",
+            "—",
+            "averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx",
+            "긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어",
+            "a=b",
+            "q?x",
+            "_u_",
+            "mix한글mix",
+            "50%",
+            "tab\tsep",
+            "sp  ace",
+        ];
+        let atoms = [
+            "Admin",
+            "ZeroPW",
+            "알림",
+            "관리자",
+            "Ünïcode",
+            "Q.",
+            "O'Neil",
+            "x-y",
+            "teamname",
+            "averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx",
+            "긴한국어이름긴한국어이름긴한국어이름긴한국어이름",
+            "a+b",
+            "Ops_Team",
+            "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure",
+        ];
+        let quoted = [
+            "\"Doe, John\"",
+            "\"관리자 (보안)\"",
+            "\"a;b:c\"",
+            "\"esc \\\"q\\\" \\\\\"",
+            "\"\"",
+            "\"long quoted display name with, commas and (parens) that must fold\"",
+            "\"한국어, 쉼표\"",
+            "\"관리자, Admin; Ops\"",
+            "\"a very long quoted display name, with specials; that cannot fit on one folded line at all\"",
+            "\"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\"",
+            "\"averyveryveryverylongquotedwordwithoutanyspacesthatcannotbefoldedanywhereatallxx\"",
+        ];
+        let locals = [
+            "a",
+            "admin",
+            "first.last",
+            "very.long.local.part.name.for.folding",
+            "사용자",
+            "x+tag",
+            "anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx",
+            "\"quoted local\"",
+        ];
+        let domains = [
+            "example.com",
+            "sub.example-domain.org",
+            "도메인.example",
+            "an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+        ];
+        let mut cases = vec![];
+        for _ in 0..240 {
+            let subject: Vec<&str> = (0..1 + next(9)).map(|_| words[next(words.len())]).collect();
+            let separators = [" ", " ", " ", "  ", "\t"];
+            let mut text = String::new();
+            for (index, word) in subject.iter().enumerate() {
+                if index > 0 {
+                    text.push_str(separators[next(separators.len())]);
+                }
+                text.push_str(word);
+            }
+            let subject = text.replace("\\t", "\t");
+            let mut mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
+                let local = locals[next(locals.len())];
+                let domain = domains[next(domains.len())];
+                let address = format!("{local}@{domain}");
+                match next(4) {
+                    0 => address,
+                    1 => format!("{} <{address}>", quoted[next(quoted.len())]),
+                    _ => {
+                        let name: Vec<&str> =
+                            (0..1 + next(4)).map(|_| atoms[next(atoms.len())]).collect();
+                        format!("{} <{address}>", name.join(" "))
+                    }
+                }
+            };
+            let sender = mailbox(&mut next);
+            let recipients: Vec<String> = (0..1 + next(5)).map(|_| mailbox(&mut next)).collect();
+            cases.push(json!([subject, sender, recipients]));
+        }
+        let body = "짧은 본문\n";
+        let script = format!(
+            r#"
+import base64, email.generator, email.utils, io, json
+from email.message import EmailMessage
+out = []
+for subject, sender, recipients in json.loads({cases:?}):
+    m = EmailMessage()
+    m["Subject"] = subject
+    m["From"] = sender
+    m["To"] = ", ".join(recipients)
+    m.set_content({body:?})
+    from_addr = email.utils.getaddresses([m["From"]])[0][1]
+    to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
+    try:
+        "".join([from_addr, *to_addrs]).encode("ascii")
+        intl = False
+    except UnicodeEncodeError:
+        intl = True
+    b = io.BytesIO()
+    g = email.generator.BytesGenerator(b, policy=m.policy.clone(utf8=True)) if intl else email.generator.BytesGenerator(b)
+    g.flatten(m, linesep="\r\n")
+    out.append([intl, base64.b64encode(b.getvalue()).decode()])
+print(json.dumps(out))
+"#,
+            cases = Value::Array(cases.clone()).to_string(),
+        );
+        let expected: Vec<(bool, String)> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let mut mismatches = vec![];
+        let mut unsupported = 0;
+        for (case, (intl, flat)) in cases.iter().zip(expected) {
+            let subject = case[0].as_str().unwrap();
+            let sender = case[1].as_str().unwrap();
+            let recipients: Vec<String> = case[2]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r.as_str().unwrap().to_owned())
+                .collect();
+            if super::get_address_list(sender).is_none()
+                || super::get_address_list(&recipients.join(", ")).is_none()
+            {
+                unsupported += 1;
+            }
+            let rust_intl =
+                !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
+            let message = Message::new(&config(sender, &recipients), subject, body);
+            let actual = message.flatten(rust_intl);
+            let expected = crate::pybase64::b64decode(&flat).unwrap();
+            if rust_intl != intl || actual != expected {
+                mismatches.push(format!(
+                    "case {case}\n python: {:?}\n rust:   {:?}",
+                    String::from_utf8_lossy(&expected),
+                    String::from_utf8_lossy(&actual)
+                ));
+            }
+        }
+        assert_eq!(
+            unsupported, 0,
+            "generated shapes left the supported grammar"
+        );
+        assert!(
+            mismatches.is_empty(),
+            "{} mismatches:\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
+    }
 }
 
 #[cfg(test)]
