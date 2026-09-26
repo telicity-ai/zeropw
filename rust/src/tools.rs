@@ -430,18 +430,69 @@ pub fn profile_env_carries_vault_value(ctx: &Context, c: &Connection) -> Result<
         .iter()
         .any(|v| profile_env_carries_credential(c, v.expose())))
 }
+/// `tools._resolve_program`: the program itself when it contains `/`,
+/// otherwise `shutil.which(program, path=os.environ.get("PATH", DEFAULT_PATH))`;
+/// then a regular file with execute permission, returned as
+/// `os.path.abspath(candidate)`.
 pub fn resolve_program(program: &str) -> Option<PathBuf> {
-    let candidates: Vec<_> = if program.contains('/') {
-        vec![PathBuf::from(program)]
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let executable = |p: &Path, access: rustix::fs::Access| rustix::fs::access(p, access).is_ok();
+    let candidate = if program.contains('/') {
+        PathBuf::from(program)
     } else {
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_else(|| DEFAULT_PATH.into()))
-            .map(|p| p.join(program))
-            .collect()
+        let search = std::env::var_os("PATH").unwrap_or_else(|| DEFAULT_PATH.into());
+        // `which`: `PATH=""` matches nothing (`PATH=":"` is the cwd); the
+        // first entry that exists, is executable and is not a directory.
+        if search.is_empty() {
+            return None;
+        }
+        search
+            .as_bytes()
+            .split(|b| *b == b':')
+            .map(|dir| Path::new(std::ffi::OsStr::from_bytes(dir)).join(program))
+            .find(|name| {
+                name.exists()
+                    && executable(
+                        name,
+                        rustix::fs::Access::EXISTS | rustix::fs::Access::EXEC_OK,
+                    )
+                    && !name.is_dir()
+            })?
     };
-    candidates
-        .into_iter()
-        .find(|p| p.is_file() && rustix::fs::access(p, rustix::fs::Access::EXEC_OK).is_ok())
-        .and_then(|p| std::path::absolute(p).ok())
+    if !candidate.is_file() || !executable(&candidate, rustix::fs::Access::EXEC_OK) {
+        return None;
+    }
+    // `os.path.abspath`: join to the cwd, then `posixpath.normpath`.
+    let joined = if candidate.is_absolute() {
+        candidate
+    } else {
+        std::env::current_dir().ok()?.join(candidate)
+    };
+    let bytes = joined.as_os_str().as_bytes();
+    let root: &[u8] = if bytes.starts_with(b"//") && !bytes.starts_with(b"///") {
+        b"//"
+    } else if bytes.starts_with(b"/") {
+        b"/"
+    } else {
+        b""
+    };
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for part in bytes.split(|b| *b == b'/') {
+        match part {
+            b"" | b"." => (),
+            b".." if !parts.is_empty() && parts.last() != Some(&b"..".as_slice()) => {
+                parts.pop();
+            }
+            b".." if !root.is_empty() && parts.is_empty() => (),
+            _ => parts.push(part),
+        }
+    }
+    let mut normal = root.to_vec();
+    normal.extend(parts.join(&b'/'));
+    if normal.is_empty() {
+        normal.push(b'.');
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_vec(normal)))
 }
 fn child_env(
     dir: &Path,

@@ -738,3 +738,319 @@ fn server_framing_matches_python_byte_for_byte() {
     assert!(text(25).starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 401"));
     assert!(text(cases.len() - 5).starts_with("HTTP/1.1 414 Request-URI Too Long\r\n"));
 }
+
+// ------------------------------------------------ gap 7: run registry parity
+
+/// `credential_patterns` strips with `bytes.strip()` (`Py_ISSPACE`, which
+/// includes `\x0b`); the whole pattern list matches Python's.
+#[test]
+fn credential_patterns_strip_like_bytes_strip() {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    for secret in [
+        b"\x0bsynthetic-secret\x0b".as_slice(),
+        b"\x0c\t synthetic-secret\r\n",
+        b"\x1csynthetic-secret\x1c",
+        b"synthetic-secret",
+    ] {
+        let expected = python(&format!(
+            "import base64\nfrom zeropw import runs\nfor p in runs.credential_patterns(base64.b64decode('{}')):\n    print(base64.b64encode(p).decode())\n",
+            engine.encode(secret)
+        ));
+        let actual: Vec<String> = zeropw::runs::credential_patterns(secret)
+            .iter()
+            .map(|p| engine.encode(p))
+            .collect();
+        assert_eq!(actual, expected.lines().collect::<Vec<_>>(), "{secret:?}");
+    }
+}
+
+fn sleeper(r: &Arc<RunRegistry>, temp: &TempDir, grant: &str) -> Run {
+    let run = r.create(
+        "alice", "conn", grant, "http", "/bin/sh", None, "digest", None, None,
+    );
+    r.start(
+        &run,
+        &["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+        &HashMap::new(),
+        temp.path(),
+        &[],
+        None,
+        Some(60.0),
+    )
+    .unwrap()
+}
+
+/// `on_revoke`: `if kind == "grant" and grant_id` -- an empty grant id is
+/// falsy, so the notification cancels every active run.
+#[test]
+fn grant_revoke_without_an_id_cancels_every_run() {
+    let (temp, ctx, r) = registry();
+    let first = sleeper(&r, &temp, "grant-1");
+    let second = sleeper(&r, &temp, "grant-2");
+    r.on_revoke("grant", Some(""));
+    for run in [&first, &second] {
+        let done = r.wait(run, Some(10.0));
+        assert_eq!(
+            (done.state.as_str(), done.reason.as_deref()),
+            ("cancelled", Some("grant_revoked"))
+        );
+        assert_eq!(finish_reasons(&ctx, &done), vec![json!("grant_revoked")]);
+    }
+    // A named grant still cancels only its own runs.
+    let third = sleeper(&r, &temp, "grant-3");
+    let fourth = sleeper(&r, &temp, "grant-4");
+    r.on_revoke("grant", Some("grant-3"));
+    assert_eq!(r.wait(&third, Some(10.0)).state, "cancelled");
+    assert_eq!(r.get(&fourth.id, "alice").unwrap().state, "running");
+    r.shutdown("shutdown");
+}
+
+/// Blocks the first `run_finish` audit record (the supervisor is then
+/// "mid-finish") and reports when that has begun.
+fn slow_first_finish(ctx: &Context) -> Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let entered = Arc::new(AtomicBool::new(false));
+    let flag = entered.clone();
+    ctx.audit.subscribe(move |record| {
+        if record.get("event").and_then(Value::as_str) == Some("run_finish")
+            && !flag.swap(true, Ordering::SeqCst)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
+    entered
+}
+
+fn quick(r: &Arc<RunRegistry>, temp: &TempDir) -> Run {
+    let run = r.create(
+        "alice", "conn", "grant", "http", "/bin/sh", None, "digest", None, None,
+    );
+    r.start(
+        &run,
+        &["/bin/sh".into(), "-c".into(), "printf done".into()],
+        &HashMap::new(),
+        temp.path(),
+        &[],
+        None,
+        Some(10.0),
+    )
+    .unwrap()
+}
+
+fn await_flag(flag: &std::sync::atomic::AtomicBool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !flag.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(std::time::Instant::now() < deadline, "run never finished");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// `RunRegistry.shutdown` joins every supervisor thread: a run that was
+/// already finishing is terminal when `shutdown` returns.
+#[test]
+fn shutdown_joins_a_run_that_is_finishing() {
+    let (temp, ctx, r) = registry();
+    let entered = slow_first_finish(&ctx);
+    let run = quick(&r, &temp);
+    await_flag(&entered);
+    r.shutdown("shutdown");
+    let after = r.get(&run.id, "alice").unwrap();
+    assert_eq!(
+        (after.state.as_str(), after.stdout.as_slice()),
+        ("completed", b"done".as_slice())
+    );
+}
+
+/// Python publishes a finishing run's terminal state before recording
+/// `run_finish`, so `cancel` neither cancels it nor reports it active.
+#[test]
+fn cancel_of_a_finishing_run_reports_its_terminal_state() {
+    let (temp, ctx, r) = registry();
+    let entered = slow_first_finish(&ctx);
+    let run = quick(&r, &temp);
+    await_flag(&entered);
+    let cancelled = r.cancel(&run.id, "alice", "cancelled_by_caller").unwrap();
+    assert_eq!(
+        (cancelled.state.as_str(), cancelled.reason.as_deref()),
+        ("completed", None)
+    );
+    let cancels = ctx
+        .audit
+        .tail(100)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "run_cancel")
+        .count();
+    assert_eq!(cancels, 0);
+}
+
+/// `_supervise` joins each output reader for `FINALIZE_WAIT_SECONDS` in
+/// turn: stderr, closed 12 s after the child exited while stdout stays open
+/// longer, is still collected (measured with python3.12: completed after
+/// 12.0 s with stdout b'' and stderr b'err-data').
+#[test]
+fn each_output_reader_gets_its_own_wait() {
+    let (temp, _ctx, r) = registry();
+    let script =
+        "printf err-data >&2; (sleep 16 2>/dev/null &) ; (exec 1>/dev/null; sleep 12 &) ; exit 0";
+    let run = r.create(
+        "alice", "conn", "grant", "http", "/bin/sh", None, "digest", None, None,
+    );
+    let started = r
+        .start(
+            &run,
+            &["/bin/sh".into(), "-c".into(), script.into()],
+            &HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+            temp.path(),
+            &[],
+            None,
+            Some(5.0),
+        )
+        .unwrap();
+    let done = r.wait(&started, Some(40.0));
+    assert_eq!(done.state, "completed", "{:?}", done.reason);
+    assert_eq!(done.stdout, b"");
+    assert_eq!(done.stderr, b"err-data");
+}
+
+/// Python's registry keeps its context alive: dropping every other owner
+/// while `start` records `run_start` never leaves the run queued.
+#[test]
+fn start_keeps_its_context_for_the_whole_start() {
+    let temp = TempDir::new().unwrap();
+    let ctx = Arc::new(
+        Context::initialize(
+            temp.path().join("state"),
+            "synthetic-admin-passphrase",
+            "synthetic-recovery-passphrase",
+            Config::default(),
+            zeropw::clock::system(),
+        )
+        .unwrap(),
+    );
+    let r = zeropw::runs::install(ctx.clone());
+    let owner = Arc::new(std::sync::Mutex::new(Some(ctx.clone())));
+    let released = owner.clone();
+    ctx.audit.subscribe(move |record| {
+        if record.get("event").and_then(Value::as_str) == Some("run_start") {
+            released.lock().unwrap().take();
+        }
+    });
+    drop(ctx);
+    let run = r.create(
+        "alice", "conn", "grant", "http", "/bin/sh", None, "digest", None, None,
+    );
+    let started = r
+        .start(
+            &run,
+            &["/bin/sh".into(), "-c".into(), "printf ok".into()],
+            &HashMap::new(),
+            temp.path(),
+            &[],
+            None,
+            Some(5.0),
+        )
+        .expect("start must not fail because another owner let go");
+    let done = r.wait(&started, Some(10.0));
+    assert_eq!(
+        (done.state.as_str(), done.stdout.as_slice()),
+        ("completed", b"ok".as_slice())
+    );
+    assert!(owner.lock().unwrap().is_none());
+}
+
+/// `tools._resolve_program` in a child process whose `PATH` and cwd are
+/// controlled (`std::env::set_var` is `unsafe`): prints one JSON line.
+#[test]
+fn resolve_program_child() {
+    let Ok(program) = std::env::var("ZEROPW_RESOLVE_PROGRAM") else {
+        return;
+    };
+    let resolved = zeropw::tools::resolve_program(&program).map(|p| p.display().to_string());
+    println!("RESOLVED={}", json!(resolved));
+}
+
+/// `shutil.which` semantics (`PATH=""` matches nothing, `PATH=":"` is the
+/// cwd, the first existing executable non-directory wins even when it is
+/// not a regular file) and `os.path.abspath` normalisation, against Python.
+#[test]
+fn resolve_program_matches_python() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    executable(&root.join("tool"), b"#!/bin/sh\n");
+    std::fs::create_dir_all(root.join("dirs/tool")).unwrap();
+    std::fs::create_dir(root.join("fifo")).unwrap();
+    std::fs::create_dir(root.join("regular")).unwrap();
+    executable(&root.join("regular/tool"), b"#!/bin/sh\n");
+    let fifo_made = std::process::Command::new("mkfifo")
+        .arg(root.join("fifo/tool"))
+        .status()
+        .is_ok_and(|s| s.success());
+    if fifo_made {
+        std::fs::set_permissions(
+            root.join("fifo/tool"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let r = root.display().to_string();
+    let mut cases = vec![
+        ("tool".to_string(), String::new()),
+        ("tool".to_string(), ":".to_string()),
+        ("tool".to_string(), "/nonexistent-zeropw:".to_string()),
+        ("tool".to_string(), format!("{r}/dirs:{r}/regular")),
+        ("./tool".to_string(), "/usr/bin:/bin".to_string()),
+        (format!("{r}/regular/../tool"), "/usr/bin:/bin".to_string()),
+        ("regular//./tool".to_string(), "/usr/bin:/bin".to_string()),
+        ("sh".to_string(), "/usr/bin/../bin".to_string()),
+        (
+            "missing-zeropw-tool".to_string(),
+            "/usr/bin:/bin".to_string(),
+        ),
+    ];
+    if fifo_made {
+        cases.push(("tool".to_string(), format!("{r}/fifo:{r}/regular")));
+    }
+    let exe = std::env::current_exe().unwrap();
+    // Resolved here: the child's own `PATH` is the case under test.
+    let interpreter = std::env::var("ZEROPW_PYTHON")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| zeropw::tools::resolve_program("python3.12"))
+        .expect("python3.12 oracle");
+    for (program, path) in cases {
+        let python_out = std::process::Command::new(&interpreter)
+        .args([
+            "-c",
+            "import json, sys\nfrom zeropw import tools\nprint(json.dumps(tools._resolve_program(sys.argv[1])))",
+            &program,
+        ])
+        .env("PYTHONPATH", repo_root())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PATH", &path)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+        assert!(python_out.status.success(), "{python_out:?}");
+        let expected = String::from_utf8(python_out.stdout).unwrap();
+        let rust_out = std::process::Command::new(&exe)
+            .args([
+                "resolve_program_child",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("ZEROPW_RESOLVE_PROGRAM", &program)
+            .env("PATH", &path)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(rust_out.stdout).unwrap();
+        let actual = stdout
+            .lines()
+            .find_map(|line| line.split_once("RESOLVED=").map(|(_, value)| value))
+            .unwrap_or_else(|| panic!("child printed no result: {stdout}"));
+        assert_eq!(actual, expected.trim(), "program {program:?} PATH {path:?}");
+    }
+}
