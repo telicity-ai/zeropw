@@ -14,10 +14,10 @@
 //! or when `sshd` cannot start as the current user in this environment: a
 //! host that cannot actually run this coverage cannot report green either.
 //!
-//! The exec-tool variant of the Python suite
-//! (`ExecToolSshEndToEndTestCase`) is not ported: it drives `zeropw.tools`,
-//! which is outside this half's scope (`rust/PORTING.md` §1 lists `tools`
-//! under "Not in this half").
+//! The exec-tool variant of the Python suite (`ExecToolSshEndToEndTestCase`)
+//! is ported at the end of this file (`exec_tool_*`): `zeropw::tools::exec`
+//! runs an inspector-wrapped real `ssh` through the signer to the real
+//! `sshd`, under the same availability rule.
 //!
 //! Process supervision here is a simplified, Rust-test-scoped version of
 //! `tests/lifeline.py`'s pipe-based orphan supervisor: a `Drop` guard
@@ -665,4 +665,267 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+// ------------------------------------------------------------ exec tool
+//
+// Port of `ExecToolSshEndToEndTestCase`: the agent-native exec tool drives
+// the real ssh client through the signer to a real sshd. Same availability
+// rule as above: when sshd cannot start, `build_fixture` fails the test.
+
+/// `INSPECTOR_TEMPLATE`: wraps the real ssh client as the connection's CLI
+/// program, records what the exec child can see, then becomes ssh.
+const INSPECTOR_TEMPLATE: &str = r#"#!{python}
+import json, os, sys, time
+entries = {}
+for name in sorted(os.listdir(".")):
+    if os.path.isfile(name):
+        with open(name, "rb") as fh:
+            entries[name] = fh.read().hex()
+    else:
+        entries[name] = None
+report = {"argv": sys.argv, "cwd": os.getcwd(), "env": dict(os.environ), "entries": entries}
+with open(os.path.join({reports}, "%d-%d.json" % (time.time_ns(), os.getpid())), "w") as fh:
+    json.dump(report, fh)
+os.execv({ssh}, [{ssh}, *sys.argv[1:]])
+"#;
+
+/// The Python test oracle (its `tests.leakcheck` helpers are used for the
+/// key-material search).
+fn python_interpreter() -> PathBuf {
+    std::env::var_os("ZEROPW_PYTHON")
+        .map(PathBuf::from)
+        .or_else(|| which("python3.12"))
+        .expect("python3.12 test oracle")
+}
+
+/// `assert_exec_children_held_no_key`, plus `find_secret(blob, material)`
+/// for the tool results and audit trail, run by `tests/leakcheck.py`.
+const PY_HELD_NO_KEY: &str = r#"
+import json, sys
+from pathlib import Path
+from tests.leakcheck import find_secret, ssh_key_material
+reports, pem, blob, minimum = Path(sys.argv[1]), Path(sys.argv[2]).read_text(), Path(sys.argv[3]).read_text(), int(sys.argv[4])
+material = ssh_key_material(pem)
+assert find_secret(blob, material) is None, "tool results or audit"
+files = sorted(reports.glob("*.json"))
+assert len(files) >= minimum, "the inspector never ran"
+for path in files:
+    report = json.loads(path.read_text())
+    assert set(report["entries"]) == {"id.pub", "known_hosts"}, sorted(report["entries"])
+    for name, content in report["entries"].items():
+        assert find_secret(bytes.fromhex(content), material) is None, "run directory file " + name
+    env = report["env"]
+    names = {name for name in env if not name.startswith("__CF_")}
+    assert names == {"PATH", "HOME", "LANG", "TMPDIR", "ZEROPW_RUN_ID", "SSH_AUTH_SOCK"}, sorted(names)
+    for name, value in env.items():
+        assert find_secret(value, material) is None, "environment variable " + name
+    for item in report["argv"]:
+        assert find_secret(item, material) is None, "exec child argument"
+print(len(files))
+"#;
+
+struct ExecFixture {
+    f: Fixture,
+    registry: std::sync::Arc<zeropw::runs::RunRegistry>,
+    grant: String,
+    reports: PathBuf,
+    private_pem: String,
+}
+
+fn build_exec_fixture() -> Fixture2 {
+    let f = build_fixture();
+    let private_pem = f.user_key.to_openssh_private_key();
+    let (_, ssh_bin, _) = tools_available();
+    // The connection's CLI program records what the exec child sees, then
+    // becomes the real ssh.
+    let bin_dir = f.root.join("inspector-bin");
+    let reports = f.root.join("inspector-reports");
+    // `build_fixture` names an explicit `run_dir` (Python's test leaves it
+    // to `Context`, which makes a private one); exec runs are made in it.
+    let run_dir = f.root.join("ctx-run");
+    for dir in [&bin_dir, &reports, &run_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let inspector = bin_dir.join("ssh-inspector");
+    let py_str = |p: &Path| serde_json::to_string(&p.display().to_string()).unwrap();
+    std::fs::write(
+        &inspector,
+        INSPECTOR_TEMPLATE
+            .replace("{python}", &python_interpreter().display().to_string())
+            .replace("{reports}", &py_str(&reports))
+            .replace("{ssh}", &py_str(&ssh_bin)),
+    )
+    .unwrap();
+    std::fs::set_permissions(&inspector, std::fs::Permissions::from_mode(0o700)).unwrap();
+    f.ctx
+        .policy
+        .create_connection(
+            P::Connection::new(
+                "box",
+                "demo",
+                "dev",
+                "ssh-box",
+                "ssh",
+                "box-key",
+                None,
+                "",
+                None,
+                None,
+                None,
+                Some(
+                    P::SshTarget::new(
+                        "127.0.0.1",
+                        i64::from(f.sshd.port),
+                        &f.username,
+                        vec![f.sshd.host_key_line.clone()],
+                    )
+                    .unwrap(),
+                ),
+                Some(
+                    P::CliProfile::new(
+                        inspector.display().to_string(),
+                        "ssh",
+                        None,
+                        std::collections::BTreeMap::new(),
+                    )
+                    .unwrap(),
+                ),
+                0,
+                "active",
+                "",
+                "",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let grant = f
+        .ctx
+        .policy
+        .create_grant("agent-1", "box", Some(3600), None)
+        .unwrap()
+        .id;
+    let registry = zeropw::tools::install(std::sync::Arc::clone(&f.ctx));
+    Fixture2(ExecFixture {
+        f,
+        registry,
+        grant,
+        reports,
+        private_pem,
+    })
+}
+
+/// `addCleanup(registry.shutdown)` then `addCleanup(manager.shutdown)`:
+/// cleanups run LIFO, so the signer shuts down first.
+struct Fixture2(ExecFixture);
+
+impl Drop for Fixture2 {
+    fn drop(&mut self) {
+        self.0.f.manager.shutdown();
+        self.0.registry.shutdown("shutdown");
+    }
+}
+
+impl std::ops::Deref for Fixture2 {
+    type Target = ExecFixture;
+    fn deref(&self) -> &ExecFixture {
+        &self.0
+    }
+}
+
+impl ExecFixture {
+    fn run_exec(&self, remote: &[&str]) -> serde_json::Value {
+        let argv: Vec<String> = remote.iter().map(|s| s.to_string()).collect();
+        let result = zeropw::tools::exec(&self.f.ctx, "agent-1", "box", &argv, None).unwrap();
+        let run_id = result["run_id"].as_str().unwrap();
+        let run = self.registry.get(run_id, "agent-1").unwrap();
+        self.registry.wait(&run, Some(60.0));
+        zeropw::tools::status(&self.f.ctx, "agent-1", run_id).unwrap()
+    }
+}
+
+// Port of ExecToolSshEndToEndTestCase::test_exec_tool_runs_two_remote_commands_on_one_connection
+#[test]
+fn exec_tool_runs_two_remote_commands_on_one_connection() {
+    let x = build_exec_fixture();
+    let first = x.run_exec(&["echo", "exec-tool-first"]);
+    assert_eq!(
+        (first["state"].as_str(), first["exit_code"].as_i64()),
+        (Some("completed"), Some(0)),
+        "{first}"
+    );
+    assert_eq!(first["stdout"].as_str().unwrap().trim(), "exec-tool-first");
+    let second = x.run_exec(&["printf", "exec-%s", "second"]);
+    assert_eq!(
+        (second["state"].as_str(), second["exit_code"].as_i64()),
+        (Some("completed"), Some(0)),
+        "{second}"
+    );
+    assert_eq!(second["stdout"].as_str().unwrap().trim(), "exec-second");
+    let signs =
+        x.f.ctx
+            .audit
+            .tail(200)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "ssh_sign" && r["result"] == "ok")
+            .count();
+    assert_eq!(signs, 2);
+    // Per-run sockets are closed afterwards.
+    assert!(x.f.manager.active_bindings().is_empty());
+    let blob = serde_json::json!([
+        first,
+        second,
+        zeropw::tools::list_connections(&x.f.ctx, "agent-1").unwrap(),
+        x.f.ctx.audit.tail(500).unwrap(),
+    ])
+    .to_string();
+    assert!(!blob.contains(&x.f.root.join("state").display().to_string()));
+    // What both exec children could see: their run directory, its files and
+    // their environment; and the results and audit trail above.
+    let pem_path = x.f.root.join("private.pem.check");
+    let blob_path = x.f.root.join("blob.check");
+    std::fs::write(&pem_path, &x.private_pem).unwrap();
+    std::fs::write(&blob_path, &blob).unwrap();
+    let output = Command::new(python_interpreter())
+        .arg("-c")
+        .arg(PY_HELD_NO_KEY)
+        .arg(&x.reports)
+        .arg(&pem_path)
+        .arg(&blob_path)
+        .arg("2")
+        .env(
+            "PYTHONPATH",
+            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap(),
+        )
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap();
+    std::fs::remove_file(&pem_path).unwrap();
+    assert!(
+        output.status.success(),
+        "exec children or results held key material:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+// Port of ExecToolSshEndToEndTestCase::test_exec_tool_after_revocation_is_denied_before_ssh_starts
+#[test]
+fn exec_tool_after_revocation_is_denied_before_ssh_starts() {
+    let x = build_exec_fixture();
+    x.f.ctx.policy.revoke_grant(&x.grant).unwrap();
+    let error = zeropw::tools::exec(
+        &x.f.ctx,
+        "agent-1",
+        "box",
+        &["echo".to_string(), "should-not-run".to_string()],
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(
+        (error.name.as_ref(), error.reason.as_ref()),
+        ("PolicyDenied", "grant_revoked")
+    );
+    assert_eq!(std::fs::read_dir(&x.reports).unwrap().count(), 0);
 }

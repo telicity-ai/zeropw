@@ -984,9 +984,23 @@ fn self_referential_target(ctx: &Context, connection: &Connection) -> bool {
         .trim_matches(|c| c == '[' || c == ']')
         .to_lowercase();
     let host = host.trim_end_matches('.');
-    if let Some(Value::String(public_url)) = ctx.config.extra.get("public_url")
+    // Python reads `ctx.config.extra["public_url"]`, where `set_public_url`
+    // stores it. A shared Rust `Context` cannot mutate `config`, so
+    // `tools::set_public_url` (called once the server is bound) stores into
+    // `ctx.public_url`, which wins; `config.extra["public_url"]` (seeded into
+    // it at construction, or set on a not-yet-shared context) is the fallback.
+    let public_url = ctx
+        .public_url
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .or_else(|| match ctx.config.extra.get("public_url") {
+            Some(Value::String(url)) => Some(url.clone()),
+            _ => None,
+        });
+    if let Some(public_url) = public_url
         && !public_url.is_empty()
-        && let Some((url_host, public_port)) = parse_authority(public_url)
+        && let Some((url_host, public_port)) = parse_authority(&public_url)
         && url_host.trim_end_matches('.') == host
         && public_port == target.port
     {
@@ -1777,12 +1791,268 @@ fn classify_read_write_error(e: &std::io::Error) -> &'static str {
     }
 }
 
+/// `_exchange`'s handshake mapping: `ssl.SSLError` (a TLS failure, or the
+/// peer closing mid-handshake: `SSLEOFError`) is `upstream_tls_failed`, a
+/// timeout is `upstream_timeout`, any other `OSError` (reset, broken pipe)
+/// is `upstream_unreachable`.
+fn classify_handshake_error(e: &std::io::Error) -> &'static str {
+    match e.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "upstream_timeout",
+        std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof => {
+            "upstream_tls_failed"
+        }
+        _ => "upstream_unreachable",
+    }
+}
+
+/// OpenSSL (Python's `ssl`) accepts a self-signed CA certificate from
+/// `ca_file` presented as the server's own certificate (`openssl req -x509`
+/// sets `CA:TRUE` by default); webpki refuses any CA certificate as an end
+/// entity (`CaUsedAsEndEntity`). Only for that refusal, and only when the
+/// presented certificate is byte-identical to one pinned in the connection's
+/// `ca_file`, the checks OpenSSL applies to a trusted self-signed leaf are
+/// made here instead: subject-alternative-name match (no CN fallback, see
+/// the F-19 row), validity period, and the TLS server purpose (extended key
+/// usage and key usage). The handshake signature is always verified.
+#[derive(Debug)]
+struct PinnedCaVerifier {
+    inner: Arc<rustls::client::WebPkiServerVerifier>,
+    pinned: Vec<rustls_pki_types::CertificateDer<'static>>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedCaVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls_pki_types::CertificateDer<'_>,
+        intermediates: &[rustls_pki_types::CertificateDer<'_>],
+        server_name: &rustls_pki_types::ServerName<'_>,
+        ocsp_response: &[u8],
+        now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let error = match self.inner.verify_server_cert(
+            end_entity,
+            intermediates,
+            server_name,
+            ocsp_response,
+            now,
+        ) {
+            Ok(verified) => return Ok(verified),
+            Err(error) => error,
+        };
+        let ca_as_end_entity = matches!(
+            &error,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other))
+                if other.0.to_string() == "CaUsedAsEndEntity"
+        );
+        if !ca_as_end_entity
+            || !self
+                .pinned
+                .iter()
+                .any(|c| c.as_ref() == end_entity.as_ref())
+        {
+            return Err(error);
+        }
+        let parsed = rustls::server::ParsedCertificate::try_from(end_entity)?;
+        rustls::client::verify_server_name(&parsed, server_name)?;
+        pinned_leaf_usable(end_entity.as_ref(), now.as_secs())
+            .map_err(rustls::Error::InvalidCertificate)?;
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
+
+/// One DER TLV: `(tag, contents)`, advancing `input` (definite lengths only).
+fn der_read<'a>(input: &mut &'a [u8]) -> Option<(u8, &'a [u8])> {
+    let (&tag, rest) = input.split_first()?;
+    let (&first, rest) = rest.split_first()?;
+    let (length, rest) = if first < 0x80 {
+        (usize::from(first), rest)
+    } else {
+        let count = usize::from(first & 0x7f);
+        if count == 0 || count > 4 {
+            return None;
+        }
+        let (bytes, rest) = rest.split_at_checked(count)?;
+        let length = bytes
+            .iter()
+            .fold(0usize, |acc, b| (acc << 8) | usize::from(*b));
+        (length, rest)
+    };
+    let (contents, rest) = rest.split_at_checked(length)?;
+    *input = rest;
+    Some((tag, contents))
+}
+
+/// `UTCTime`/`GeneralizedTime` (`...Z`) as seconds since the Unix epoch.
+fn der_time(tag: u8, value: &[u8]) -> Option<i64> {
+    let digits = |range: std::ops::Range<usize>| -> Option<i64> {
+        let text = std::str::from_utf8(value.get(range)?).ok()?;
+        text.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| text.parse().ok())
+            .flatten()
+    };
+    let (year, rest) = match (tag, value.len()) {
+        (0x17, 13) => {
+            let year = digits(0..2)?;
+            (if year >= 50 { 1900 + year } else { 2000 + year }, 2)
+        }
+        (0x18, 15) => (digits(0..4)?, 4),
+        _ => return None,
+    };
+    if value.last() != Some(&b'Z') {
+        return None;
+    }
+    let field = |i: usize| digits(rest + 2 * i..rest + 2 * i + 2);
+    let (month, day, hour, minute, second) =
+        (field(0)?, field(1)?, field(2)?, field(3)?, field(4)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    // Days from the civil date (proleptic Gregorian).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    Some(days * 86400 + hour * 3600 + minute * 60 + second)
+}
+
+/// The checks OpenSSL's `X509_verify_cert` makes on a trusted self-signed
+/// server certificate that webpki does not reach for a CA end entity:
+/// `check_cert_time` and `X509_PURPOSE_SSL_SERVER` (`xku_reject(XKU_SSL_SERVER
+/// | XKU_SGC)`, `ku_reject(digitalSignature | keyEncipherment | keyAgreement)`).
+fn pinned_leaf_usable(der: &[u8], now: u64) -> Result<(), rustls::CertificateError> {
+    use rustls::CertificateError as E;
+    const EKU: &[u8] = &[0x55, 0x1d, 0x25];
+    const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
+    const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
+    // serverAuth, Netscape SGC, Microsoft SGC.
+    const SERVER_PURPOSES: &[&[u8]] = &[
+        &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01],
+        &[0x60, 0x86, 0x48, 0x01, 0x86, 0xf8, 0x42, 0x04, 0x01],
+        &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0a, 0x03, 0x03],
+    ];
+    let bad = || E::BadEncoding;
+    let mut outer = der;
+    let (0x30, mut certificate) = der_read(&mut outer).ok_or_else(bad)? else {
+        return Err(bad());
+    };
+    let (0x30, mut tbs) = der_read(&mut certificate).ok_or_else(bad)? else {
+        return Err(bad());
+    };
+    // [0] version (optional), then serialNumber.
+    if der_read(&mut tbs).ok_or_else(bad)?.0 == 0xa0 {
+        der_read(&mut tbs).ok_or_else(bad)?;
+    }
+    for _ in 0..2 {
+        der_read(&mut tbs).ok_or_else(bad)?; // signature, issuer
+    }
+    let (0x30, mut validity) = der_read(&mut tbs).ok_or_else(bad)? else {
+        return Err(bad());
+    };
+    let mut time = || {
+        let (tag, value) = der_read(&mut validity)?;
+        der_time(tag, value)
+    };
+    let (not_before, not_after) = (time().ok_or_else(bad)?, time().ok_or_else(bad)?);
+    let now = i64::try_from(now).unwrap_or(i64::MAX);
+    if now < not_before {
+        return Err(E::NotValidYet);
+    }
+    if now > not_after {
+        return Err(E::Expired);
+    }
+    let mut extensions: &[u8] = &[];
+    while let Some((tag, value)) = der_read(&mut tbs) {
+        if tag == 0xa3 {
+            let mut wrapped = value;
+            let (0x30, list) = der_read(&mut wrapped).ok_or_else(bad)? else {
+                return Err(bad());
+            };
+            extensions = list;
+        }
+    }
+    let mut is_ca = false;
+    while !extensions.is_empty() {
+        let (0x30, mut extension) = der_read(&mut extensions).ok_or_else(bad)? else {
+            return Err(bad());
+        };
+        let (0x06, oid) = der_read(&mut extension).ok_or_else(bad)? else {
+            return Err(bad());
+        };
+        let mut next = der_read(&mut extension).ok_or_else(bad)?;
+        if next.0 == 0x01 {
+            next = der_read(&mut extension).ok_or_else(bad)?; // critical
+        }
+        let (0x04, mut value) = next else {
+            return Err(bad());
+        };
+        if oid == EKU {
+            let (0x30, mut purposes) = der_read(&mut value).ok_or_else(bad)? else {
+                return Err(bad());
+            };
+            let mut allowed = false;
+            while let Some((tag, purpose)) = der_read(&mut purposes) {
+                allowed |= tag == 0x06 && SERVER_PURPOSES.contains(&purpose);
+            }
+            if !allowed {
+                return Err(E::InvalidPurpose);
+            }
+        } else if oid == KEY_USAGE {
+            let (0x03, bits) = der_read(&mut value).ok_or_else(bad)? else {
+                return Err(bad());
+            };
+            // digitalSignature (0x80), keyEncipherment (0x20), keyAgreement (0x08).
+            if bits.get(1).is_none_or(|first| first & 0xa8 == 0) {
+                return Err(E::InvalidPurpose);
+            }
+        } else if oid == BASIC_CONSTRAINTS {
+            let (0x30, mut constraints) = der_read(&mut value).ok_or_else(bad)? else {
+                return Err(bad());
+            };
+            is_ca = matches!(der_read(&mut constraints), Some((0x01, [0xff])));
+        }
+    }
+    // Reached only for webpki's `CaUsedAsEndEntity`: anything else is not
+    // the case this exception exists for.
+    if is_ca { Ok(()) } else { Err(bad()) }
+}
+
 fn build_tls_config(ca_file: Option<&str>) -> Result<Arc<rustls::ClientConfig>, UpstreamFailure> {
     ensure_crypto_provider();
     let mut roots = rustls::RootCertStore::empty();
     for cert in rustls_native_certs::load_native_certs().certs {
         let _ = roots.add(cert);
     }
+    let mut pinned = Vec::new();
     if let Some(path) = ca_file {
         let file =
             std::fs::File::open(path).map_err(|_| UpstreamFailure::error("ca_file_unavailable"))?;
@@ -1795,13 +2065,20 @@ fn build_tls_config(ca_file: Option<&str>) -> Result<Arc<rustls::ClientConfig>, 
         }
         for cert in certs {
             roots
-                .add(cert)
+                .add(cert.clone())
                 .map_err(|_| UpstreamFailure::error("ca_file_unavailable"))?;
+            pinned.push(cert);
         }
     }
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let roots = Arc::new(roots);
+    let builder = rustls::ClientConfig::builder();
+    let config = match rustls::client::WebPkiServerVerifier::builder(roots.clone()).build() {
+        Ok(inner) if !pinned.is_empty() => builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinnedCaVerifier { inner, pinned }))
+            .with_no_client_auth(),
+        _ => builder.with_root_certificates(roots).with_no_client_auth(),
+    };
     Ok(Arc::new(config))
 }
 
@@ -1841,8 +2118,8 @@ fn open_connection(
         // self-referential peer check that follows sees the same state
         // Python does: TLS established, HTTP request not yet written.
         while stream.conn.is_handshaking() {
-            if stream.conn.complete_io(&mut stream.sock).is_err() {
-                return Err(UpstreamFailure::error("upstream_tls_failed"));
+            if let Err(e) = stream.conn.complete_io(&mut stream.sock) {
+                return Err(UpstreamFailure::error(classify_handshake_error(&e)));
             }
         }
         return Ok(UpstreamStream::Tls(Box::new(stream)));

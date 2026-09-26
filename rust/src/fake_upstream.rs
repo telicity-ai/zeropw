@@ -28,6 +28,9 @@ use serde_json::{Map, Value, json};
 
 use crate::pyjson::{self, DumpOptions};
 
+/// `_Handler` defines `do_GET`/`HEAD`/`POST`/`PUT`/`PATCH`/`DELETE`/`OPTIONS`.
+const HANDLED_METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
 pub const LARGE_BODY_SIZE: usize = 2 * 1024 * 1024;
 pub const HUGE_BODY_SIZE: usize = 9 * 1024 * 1024;
 pub const STREAM_PARTS: &[&[u8]] = &[b"part-1\n", b"part-2\n", b"part-3\n"];
@@ -241,10 +244,69 @@ impl FakeUpstream {
         }
     }
 
+    /// `FakeUpstream(credential, mode=..., basic_username=...)`'s checks:
+    /// `Err` with Python's `ValueError` message for an unsupported mode or a
+    /// `basic` mode without a (truthy) `basic_username`.
+    pub fn with_mode(
+        credential: impl Into<String>,
+        mode: &str,
+        basic_username: Option<&str>,
+    ) -> Result<Self, &'static str> {
+        if !["bearer", "basic", "header"].contains(&mode) {
+            return Err("unsupported fake upstream mode");
+        }
+        if mode == "basic" && basic_username.is_none_or(str::is_empty) {
+            return Err("basic mode requires basic_username");
+        }
+        let mut fake = Self::new(credential);
+        fake.mode = mode.to_string();
+        fake.basic_username = basic_username.map(str::to_string);
+        Ok(fake)
+    }
+
+    /// `mode="basic"`: an empty `basic_username` is Python's construction
+    /// `ValueError`, raised here as a panic in the test that built it.
     pub fn mode_basic(mut self, basic_username: impl Into<String>) -> Self {
+        let basic_username = basic_username.into();
+        assert!(
+            !basic_username.is_empty(),
+            "basic mode requires basic_username"
+        );
         self.mode = "basic".to_string();
-        self.basic_username = Some(basic_username.into());
+        self.basic_username = Some(basic_username);
         self
+    }
+
+    /// `fake.credential`.
+    pub fn credential(&self) -> &str {
+        &self.credential
+    }
+
+    /// `fake.mode`.
+    pub fn mode(&self) -> &str {
+        &self.mode
+    }
+
+    /// `fake.basic_username`.
+    pub fn basic_username(&self) -> Option<&str> {
+        self.basic_username.as_deref()
+    }
+
+    /// `fake.header_name`.
+    pub fn header_name(&self) -> &str {
+        &self.header_name
+    }
+
+    /// `fake.value_prefix`.
+    pub fn value_prefix(&self) -> &str {
+        &self.value_prefix
+    }
+
+    /// `fake.issue_counter` (0 before the fake is started).
+    pub fn issue_counter(&self) -> i64 {
+        self.state
+            .as_ref()
+            .map_or(0, |server| server.issue_counter.load(Ordering::SeqCst))
     }
 
     pub fn mode_header(
@@ -416,6 +478,29 @@ fn handle_connection(tcp: TcpStream, server: &Server) -> std::io::Result<()> {
         Ok(None) => return Ok(()),
         Err(_) => return Ok(()),
     };
+    // Any other command is `send_error(501, ...)`, not recorded.
+    if !HANDLED_METHODS.contains(&request.method.as_str()) {
+        let message = format!(
+            "Unsupported method ({})",
+            crate::pystr::repr_str(&request.method)
+        );
+        let (message, body) = crate::server::error_page(501, Some(message), None);
+        let mut out = format!("HTTP/1.1 501 {message}\r\n").into_bytes();
+        out.extend_from_slice(format!("Server: {FAKE_SERVER_HEADER}\r\n").as_bytes());
+        out.extend_from_slice(format!("Date: {FAKE_DATE_HEADER}\r\n").as_bytes());
+        out.extend_from_slice(
+            format!(
+                "Connection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(body.as_bytes());
+        let stream = reader.get_mut();
+        let _ = stream.write_all(&out);
+        let _ = stream.flush();
+        return Ok(());
+    }
     dispatch(reader.get_mut(), server, request);
     Ok(())
 }
@@ -433,9 +518,6 @@ fn read_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     if n == 0 {
         return Ok(None);
     }
-    while line.last() == Some(&b'\n') || line.last() == Some(&b'\r') {
-        line.pop();
-    }
     Ok(Some(line))
 }
 
@@ -443,42 +525,48 @@ fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| b as char).collect()
 }
 
+/// `BaseHTTPRequestHandler.parse_request` for the requests this fixture
+/// answers (three words; `//` paths reduced to one slash), then
+/// `http.client.parse_headers`' header block as the `email` parser reads it
+/// (see [`parse_header_block`]) and `_Handler._read_body`.
 fn read_request(reader: &mut impl BufRead) -> std::io::Result<Option<IncomingRequest>> {
     let Some(line) = read_line(reader)? else {
         return Ok(None);
     };
-    if line.is_empty() {
-        return Ok(None);
-    }
     let line = latin1(&line);
-    let mut parts = line.splitn(3, ' ');
-    let method = parts.next().unwrap_or("").to_string();
-    let raw_path = parts.next().unwrap_or("").to_string();
-    if method.is_empty() || raw_path.is_empty() {
+    let words: Vec<&str> = line
+        .trim_end_matches(['\r', '\n'])
+        .split(crate::pystr::is_space)
+        .filter(|w| !w.is_empty())
+        .collect();
+    let [method, raw_path, _version] = words[..] else {
         return Ok(None);
-    }
-    let mut headers = Vec::new();
-    loop {
-        let Some(header_line) = read_line(reader)? else {
-            return Ok(None);
-        };
-        if header_line.is_empty() {
+    };
+    let method = method.to_string();
+    let raw_path = if raw_path.starts_with("//") {
+        format!("/{}", raw_path.trim_start_matches('/'))
+    } else {
+        raw_path.to_string()
+    };
+    // `_read_headers`: lines up to a blank one or the end of the stream.
+    let mut block = Vec::new();
+    while let Some(header_line) = read_line(reader)? {
+        if header_line == b"\r\n" || header_line == b"\n" {
             break;
         }
-        let header_line = latin1(&header_line);
-        let Some((name, value)) = header_line.split_once(':') else {
-            continue;
-        };
-        headers.push((name.trim().to_string(), value.trim().to_string()));
+        block.push(latin1(&header_line));
     }
-    let content_length = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse::<usize>().ok());
-    let body = match content_length {
-        Some(size) if size > 0 => {
-            let mut buf = vec![0u8; size];
-            reader.read_exact(&mut buf)?;
+    let headers = parse_header_block(&block);
+    // An unsupported method is answered 501 before `_read_body` runs.
+    let handled = HANDLED_METHODS.contains(&method.as_str());
+    let body = match header_get(&headers, "Content-Length").map(crate::pystr::int_from_str) {
+        // `rfile.read(size)`: everything up to `size` bytes, fewer if the
+        // client stops sending first.
+        Some(Some(size)) if size > 0 && handled => {
+            let mut buf = Vec::new();
+            reader
+                .take(u64::try_from(size).unwrap_or(u64::MAX))
+                .read_to_end(&mut buf)?;
             buf
         }
         _ => Vec::new(),
@@ -489,6 +577,54 @@ fn read_request(reader: &mut impl BufRead) -> std::io::Result<Option<IncomingReq
         headers,
         body,
     }))
+}
+
+/// The `email` parser's (compat32) view of a header block: a line is a
+/// field when it matches `^[\041-\071\073-\176]*:` (an empty name is a
+/// skipped defect); a line starting with a space or tab continues the
+/// previous field; a `From ` envelope line is not a field; any other line
+/// starts the body, so the fields after it are not headers. A field's value
+/// is its first line after the colon with leading blanks removed, plus each
+/// continuation line as sent, with trailing CR/LF removed.
+fn parse_header_block(lines: &[String]) -> Vec<(String, String)> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut last: Option<usize> = None;
+    for line in lines {
+        if line.starts_with([' ', '\t']) {
+            if let Some(index) = last
+                && let Some((_, value)) = headers.get_mut(index)
+            {
+                value.push_str(line);
+            }
+            continue;
+        }
+        if line.starts_with("From ") {
+            last = None;
+            continue;
+        }
+        let Some(colon) = line.find(':') else {
+            break;
+        };
+        let (name, value) = line.split_at(colon);
+        if !name.chars().all(|c| ('\x21'..='\x7e').contains(&c)) {
+            break;
+        }
+        if name.is_empty() {
+            last = None;
+            continue;
+        }
+        let value = value.get(1..).unwrap_or_default();
+        headers.push((
+            name.to_string(),
+            value.trim_start_matches([' ', '\t']).to_string(),
+        ));
+        last = Some(headers.len() - 1);
+    }
+    for (_, value) in &mut headers {
+        let trimmed = value.trim_end_matches(['\r', '\n']).len();
+        value.truncate(trimmed);
+    }
+    headers
 }
 
 fn header_get<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -612,16 +748,58 @@ impl Responder<'_> {
     }
 }
 
+/// `urllib.parse.parse_qs(query)` (as `(name, value)` pairs in order): a
+/// field without `=` or with an empty value is dropped
+/// (`keep_blank_values=False`).
 fn parse_query(query: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for pair in query.split('&') {
-        if pair.is_empty() {
-            continue;
+    query
+        .split('&')
+        .filter_map(|field| {
+            let (name, value) = field.split_once('=')?;
+            (!value.is_empty()).then(|| (unquote_plus(name), unquote_plus(value)))
+        })
+        .collect()
+}
+
+/// `float(text)` for a `str` (CPython 3.12 `PyFloat_FromString`): non-ASCII
+/// whitespace becomes a space and non-ASCII decimal digits their ASCII
+/// digit (any other non-ASCII character fails), PEP 515 underscores only
+/// between digits, `Py_ISSPACE` stripped from both ends, then the float
+/// literal grammar (`inf`/`infinity`/`nan` in any case, optional sign),
+/// which Rust's `f64` parser shares.
+fn python_float(text: &str) -> Option<f64> {
+    let mut ascii = String::new();
+    for c in text.chars() {
+        if u32::from(c) < 127 {
+            ascii.push(c);
+        } else if crate::pystr::is_space(c) {
+            ascii.push(' ');
+        } else {
+            ascii.push(char::from_digit(
+                crate::pystr::unicode_decimal_digit(c)?,
+                10,
+            )?);
         }
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        out.push((unquote_plus(k), unquote_plus(v)));
     }
-    out
+    let mut plain = String::new();
+    let mut previous = '\0';
+    for c in ascii.chars() {
+        if c == '_' {
+            if !previous.is_ascii_digit() {
+                return None;
+            }
+        } else {
+            if previous == '_' && !c.is_ascii_digit() {
+                return None;
+            }
+            plain.push(c);
+        }
+        previous = c;
+    }
+    if previous == '_' || plain.contains('\0') {
+        return None;
+    }
+    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
 }
 
 /// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`): `+`
@@ -718,10 +896,14 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         return;
     }
 
-    let (path, query_str) = request
+    // `urllib.parse.urlsplit(self.path)` of an origin-form target (never
+    // `//` after `parse_request`): the fragment goes first, then the query.
+    let target = request
         .raw_path
-        .split_once('?')
-        .unwrap_or((request.raw_path.as_str(), ""));
+        .trim_start_matches(|c: char| c <= ' ')
+        .replace(['\t', '\r', '\n'], "");
+    let target = target.split_once('#').map_or(target.as_str(), |(t, _)| t);
+    let (path, query_str) = target.split_once('?').unwrap_or((target, ""));
     let query = parse_query(query_str);
     let is_get_or_head = method == "GET" || method == "HEAD";
 
@@ -798,14 +980,15 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         let blob = base64::engine::general_purpose::STANDARD.encode(server.credential.as_bytes());
         responder.send_json(200, &json!({"blob": blob}), &[]);
     } else if is_get_or_head && path == "/base64-embedded-leak" {
-        let offset_raw = query_get(&query, "offset").unwrap_or("0").parse::<i64>();
-        let wrap_raw = query_get(&query, "wrap").unwrap_or("0").parse::<i64>();
-        let (Ok(offset_raw), Ok(wrap_raw)) = (offset_raw, wrap_raw) else {
+        // `int(...)`: CPython's grammar (blanks, `_` separators, signs).
+        let offset_raw = crate::pystr::int_from_str(query_get(&query, "offset").unwrap_or("0"));
+        let wrap_raw = crate::pystr::int_from_str(query_get(&query, "wrap").unwrap_or("0"));
+        let (Some(offset_raw), Some(wrap_raw)) = (offset_raw, wrap_raw) else {
             responder.send_json(400, &json!({"error": "invalid_query"}), &[]);
             return;
         };
-        let offset = offset_raw.clamp(0, 8) as usize;
-        let wrap = wrap_raw.clamp(0, 1024) as usize;
+        let offset = usize::try_from(offset_raw.clamp(0, 8)).unwrap_or(0);
+        let wrap = usize::try_from(wrap_raw.clamp(0, 1024)).unwrap_or(0);
         let urlsafe = query_get(&query, "alphabet") == Some("url");
         let content = embedded_base64_blob(&server.credential, offset, wrap, urlsafe);
         responder.send_json(200, &json!({"encoding": "base64", "content": content}), &[]);
@@ -852,9 +1035,7 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         // echoes `{"slept": -5.0}`) -- the previous version applied
         // `.clamp(0.0, 30.0)` before both the sleep *and* the echo, so a
         // negative `seconds` wrongly echoed `0.0`.
-        let seconds: f64 = query_get(&query, "seconds")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1.0);
+        let seconds: f64 = python_float(query_get(&query, "seconds").unwrap_or("1")).unwrap_or(1.0);
         // Rust's `f64::min`/`max` ignore a NaN operand and return the
         // *other* one (`f64::NAN.min(30.0) == 30.0`), unlike Python's
         // comparison-based `min`/`max`, which propagate NaN (confirmed
@@ -939,6 +1120,66 @@ mod tests {
             &[0x31, 0x30, 0x30, 0x25, 0x64, 0x6f, 0x6e, 0x65],
         );
         case(b"\xff\xfe%41", &[0xff, 0xfe, 0x41]);
+    }
+
+    /// `python_float` against CPython's `float(str)` over the shapes the
+    /// `/slow?seconds=` query can carry.
+    #[test]
+    fn python_float_matches_cpython() {
+        let cases = [
+            "1",
+            " 1.5 ",
+            "\t2\n",
+            "1_0.5",
+            "1__0",
+            "_1",
+            "1_",
+            "1_e5",
+            "1e_5",
+            "1e5",
+            "-0.25",
+            "+.5",
+            "5.",
+            ".",
+            "e5",
+            "inf",
+            "-Infinity",
+            "INF",
+            "nan",
+            "+NaN",
+            "infin",
+            "0x10",
+            "1e999",
+            "\u{1c}1",
+            "\u{a0}3\u{2003}",
+            "\u{0663}.\u{0665}",
+            "1\u{0}",
+            "\u{7f}1",
+            "\u{e9}",
+            "",
+            "  ",
+            "1 2",
+            "--1",
+            "+-1",
+            "1.5e+3",
+            "1.5E-3",
+            "١_٢",
+        ];
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
+        let script = format!(
+            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
+        );
+        let expected = crate::oracle::python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let rust = match python_float(case) {
+                Some(v) if v.is_nan() => "nan".to_string(),
+                Some(v) => crate::pyjson::python_float_repr(v),
+                None => "error".to_string(),
+            };
+            assert_eq!(rust, python, "float({case:?})");
+        }
     }
 
     /// Finding X-6, unit-level: the `/repos/` prefix and `/issues` suffix

@@ -112,7 +112,17 @@ pub fn credential_patterns_with_minimum(secret: &[u8], minimum: usize) -> Vec<Ve
             patterns.push(value);
         }
     };
-    let stripped = secret.trim_ascii();
+    // `bytes.strip()`: CPython's `Py_ISSPACE` set, which includes `\x0b`.
+    let space = |b: &u8| crate::pystr::is_int_space(char::from(*b));
+    let start = secret
+        .iter()
+        .position(|b| !space(b))
+        .unwrap_or(secret.len());
+    let end = secret
+        .iter()
+        .rposition(|b| !space(b))
+        .map_or(start, |i| i + 1);
+    let stripped = secret.get(start..end).unwrap_or_default();
     if !stripped.is_empty() && stripped != secret {
         add(stripped.to_vec());
     }
@@ -223,6 +233,9 @@ struct Entry {
     // active until that call returns, but do not allow a listener to cancel
     // and wait for the very finalization it is running inside.
     finalizing: AtomicBool,
+    finalizer: Mutex<Option<thread::ThreadId>>,
+    // `run.thread`: joined (bounded) by `shutdown`.
+    supervisor: Mutex<Option<thread::JoinHandle<()>>>,
 }
 #[derive(Default)]
 struct RegistryState {
@@ -447,6 +460,8 @@ impl RunRegistry {
                 done: Mutex::new(false),
                 changed: Condvar::new(),
                 finalizing: AtomicBool::new(false),
+                finalizer: Mutex::new(None),
+                supervisor: Mutex::new(None),
             }),
         );
         state.order.push_back(id.clone());
@@ -525,6 +540,14 @@ impl RunRegistry {
             clean(cleanup);
             return Ok(before);
         }
+        // Python's registry holds its context strongly. Hold it for the whole
+        // start (and the supervisor) so a run is never left queued because
+        // the last other owner dropped the context mid-start.
+        let Some(ctx) = self.ctx.upgrade() else {
+            self.finalize(&entry, Outcome::failed("audit_unavailable"), false);
+            clean(cleanup);
+            return Err(Error::state("context_closed"));
+        };
         if let Err(e) = self.record(
             "run_start",
             &before,
@@ -552,11 +575,6 @@ impl RunRegistry {
             self.finalize(&entry, Outcome::failed("spawn_failed"), true);
             clean(cleanup);
             return self.get(&run.id, &run.caller);
-        };
-        let Some(ctx) = self.ctx.upgrade() else {
-            drop(current);
-            clean(cleanup);
-            return Err(Error::state("context_closed"));
         };
         // The ACK socket is an internal one-shot control channel, not the
         // configured SSH signer socket. Own a short private directory so a
@@ -633,10 +651,11 @@ impl RunRegistry {
         let registry = self.clone();
         let entry_thread = entry.clone();
         let timeout = timeout.unwrap_or(ctx.config.exec_timeout_seconds);
-        thread::spawn(move || {
+        let supervisor = thread::spawn(move || {
             let _keep_context_alive = ctx;
             registry.supervise(entry_thread, stdout, stderr, timeout, patterns, cleanup)
         });
+        *entry.supervisor.lock().unwrap_or_else(|e| e.into_inner()) = Some(supervisor);
         self.get(&run.id, &run.caller)
     }
     fn supervise(
@@ -668,12 +687,13 @@ impl RunRegistry {
             }
             thread::sleep(Duration::from_millis(10));
         };
-        let deadline = Instant::now() + Duration::from_secs_f64(FINALIZE_WAIT_SECONDS);
+        // `for pump in pumps: pump.join(FINALIZE_WAIT_SECONDS)`: each reader
+        // gets its own wait.
         let (stdout, out_trunc) = out
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .recv_timeout(seconds(FINALIZE_WAIT_SECONDS))
             .unwrap_or_default();
         let (stderr, err_trunc) = err
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .recv_timeout(seconds(FINALIZE_WAIT_SECONDS))
             .unwrap_or_default();
         stop.store(true, Ordering::Release);
         let snapshot = entry.run.lock().unwrap().clone();
@@ -722,6 +742,8 @@ impl RunRegistry {
             if entry.finalizing.swap(true, Ordering::AcqRel) {
                 return;
             }
+            *entry.finalizer.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(thread::current().id());
             let mut staged = run.clone();
             staged.state = out.state.clone();
             staged.reason = out.reason.clone();
@@ -844,7 +866,10 @@ impl RunRegistry {
             "principal" => "principal_disabled",
             _ => "grant_revoked",
         };
-        self.cancel_all(reason, if kind == "grant" { grant } else { None });
+        // `if kind == "grant" and grant_id`: an empty id is falsy and cancels
+        // every active run.
+        let grant = grant.filter(|g| kind == "grant" && !g.is_empty());
+        self.cancel_all(reason, grant);
     }
     fn cancel_runs(&self, runs: &[Run], reason: &str) {
         let mut running = Vec::new();
@@ -852,9 +877,19 @@ impl RunRegistry {
             if let Ok(e) = self.entry(&r.id) {
                 let (run, fresh) = {
                     let mut run = e.run.lock().unwrap();
-                    if !ACTIVE_STATES.contains(&run.state.as_str())
-                        || e.finalizing.load(Ordering::Acquire)
-                    {
+                    if !ACTIVE_STATES.contains(&run.state.as_str()) {
+                        continue;
+                    }
+                    if e.finalizing.load(Ordering::Acquire) {
+                        // Python publishes the terminal state before it
+                        // records `run_finish`: a finishing run is not
+                        // cancelled, and the caller then sees it terminal.
+                        // Wait for that publication, except from inside the
+                        // finalization itself (an audit listener).
+                        let finalizer = *e.finalizer.lock().unwrap_or_else(|e| e.into_inner());
+                        if finalizer != Some(thread::current().id()) {
+                            running.push((e.clone(), false));
+                        }
                         continue;
                     }
                     let fresh = !run.cancel_requested;
@@ -887,12 +922,17 @@ impl RunRegistry {
                         true,
                     );
                 } else {
-                    running.push(e);
+                    running.push((e, true));
                 }
             }
         }
-        self.terminate(&running);
-        for e in running {
+        let signalled: Vec<_> = running
+            .iter()
+            .filter(|(_, signal)| *signal)
+            .map(|(e, _)| e.clone())
+            .collect();
+        self.terminate(&signalled);
+        for (e, _) in running {
             let done = e.done.lock().unwrap();
             let _ = e
                 .changed
@@ -939,8 +979,37 @@ impl RunRegistry {
             Self::signal(e, Signal::KILL);
         }
     }
+    /// `RunRegistry.shutdown`: cancel every active run, then join every
+    /// supervisor (each for up to `FINALIZE_WAIT_SECONDS`), so runs that were
+    /// already finishing are terminal and cleaned up when it returns.
     pub fn shutdown(&self, reason: &str) {
         self.cancel_all(reason, None);
+        let entries: Vec<_> = {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state
+                .order
+                .iter()
+                .filter_map(|id| state.runs.get(id).cloned())
+                .collect()
+        };
+        for entry in entries {
+            let handle = entry
+                .supervisor
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            let Some(handle) = handle else { continue };
+            if handle.thread().id() == thread::current().id() {
+                continue;
+            }
+            let deadline = Instant::now() + seconds(FINALIZE_WAIT_SECONDS);
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
     }
 }
 struct Outcome {
