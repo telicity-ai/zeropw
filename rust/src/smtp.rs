@@ -3,7 +3,7 @@
 //! byte-oriented replies and zeroizing credential buffers.
 //!
 //! The session mirrors `smtplib`'s own command sequence and failure mapping
-//! (lower-case `ehlo`/`mail`/`rcpt`/`data`/`rset`, the context manager's
+//! (`ehlo`, `mail FROM:`, `rcpt TO:`, `data`, `rset`, the context manager's
 //! `QUIT` after any failure inside the `with` block, `_rset` after a refusal,
 //! the AUTH challenge counter), and the message is flattened like
 //! `BytesGenerator` with the default `EmailPolicy` (RFC 2047 encoded words
@@ -697,7 +697,7 @@ impl Client {
             }
             optionlist = format!(" {}", options.join(" "));
         }
-        self.docmd("mail", &format!("from:<{sender}>{optionlist}"))
+        self.docmd("mail", &format!("FROM:<{sender}>{optionlist}"))
     }
 
     /// `data(msg)`: dot-stuffing and the terminating line.
@@ -2305,6 +2305,60 @@ print(json.dumps(out))
             mismatches.len(),
             mismatches.join("\n")
         );
+    }
+}
+
+#[cfg(test)]
+mod hostname_tests {
+    /// `smtplib.SMTP().local_hostname` (`socket.getfqdn()` or the `[ip]`
+    /// literal) is what EHLO/HELO send. The Rust lookup answers
+    /// `gethostbyaddr` from the hosts database only, so the comparison is
+    /// exact whenever Python's answer did not come from another NSS source
+    /// (`DEVIATIONS.md`).
+    #[test]
+    fn local_hostname_matches_smtplib() {
+        let script = r##"
+import ipaddress, json, smtplib, socket
+name = smtplib.SMTP().local_hostname
+host = socket.gethostname()
+try:
+    address = socket.getaddrinfo(host, None)[0][4][0]
+except socket.gaierror:
+    address = None
+comparable = address is None
+if address is not None:
+    for line in open("/etc/hosts"):
+        fields = line.split("#")[0].split()
+        try:
+            if len(fields) > 1 and ipaddress.ip_address(fields[0]) == ipaddress.ip_address(address):
+                comparable = True
+                break
+        except ValueError:
+            pass
+    if not comparable:
+        try:
+            socket.gethostbyaddr(address)
+        except OSError:
+            comparable = True
+nsswitch = ""
+try:
+    nsswitch = next((l.split(":", 1)[1].split() for l in open("/etc/nsswitch.conf") if l.startswith("hosts:")), [""])[0]
+except OSError:
+    pass
+print(json.dumps({"name": name, "comparable": comparable and nsswitch in ("", "files")}))
+"##;
+        let out: serde_json::Value =
+            serde_json::from_str(crate::oracle::python(script).trim()).unwrap();
+        let rust = super::local_hostname();
+        if out["comparable"] == true {
+            assert_eq!(rust, out["name"].as_str().unwrap());
+        } else {
+            println!(
+                "Python local_hostname {} came from DNS; Rust {rust}",
+                out["name"]
+            );
+            assert!(rust.contains('.') || (rust.starts_with('[') && rust.ends_with(']')));
+        }
     }
 }
 

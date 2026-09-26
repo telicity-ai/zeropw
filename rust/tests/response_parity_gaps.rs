@@ -388,3 +388,463 @@ fn email_rendering_follows_python_truthiness_for_loaded_incidents() {
         assert_eq!(actual.1, expected.1, "case {case}");
     }
 }
+
+// ---------------------------------------------------------------- SMTP
+// Every SMTP scenario runs Python's `send_test_message` and Rust's against a
+// fresh scripted loopback server, then compares the outcome, the new audit
+// records and the exact bytes the server received (the EHLO/HELO argument
+// is compared separately by `smtp::tests`, since Python may answer it from
+// DNS).
+
+const EHLO_BASE: &str = "250-fake.example\r\n250-SIZE 1000000\r\n250-8BITMIME\r\n";
+
+fn ehlo_reply(scenario: &str) -> String {
+    let extra = match scenario {
+        "auth_plain" | "password_crlf" | "password_non_ascii" | "bad_challenge" | "plain_five" => {
+            "250-AUTH PLAIN\r\n"
+        }
+        "auth_login" | "login_non_ascii" => "250-AUTH LOGIN\r\n",
+        "cram_six" | "cram_non_ascii" => "250-AUTH CRAM-MD5\r\n",
+        "auth_no_suitable" => "250-AUTH XOAUTH2\r\n",
+        "auth_lowercase" => "250-AUTH plain login\r\n",
+        "oldstyle_auth" => "250-AUTH=LOGIN\r\n",
+        "smtputf8" => "250-SMTPUTF8\r\n",
+        "starttls_refused" => "250-STARTTLS\r\n",
+        _ => "",
+    };
+    format!("{EHLO_BASE}{extra}250 HELP\r\n")
+}
+
+/// The reply to one received line, or `None` to close the connection.
+fn scripted_reply(
+    scenario: &str,
+    line: &[u8],
+    auth: &mut bool,
+    rcpt: &mut usize,
+) -> Option<String> {
+    let text = String::from_utf8_lossy(line).to_ascii_uppercase();
+    let verb = text
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    let known = [
+        "EHLO", "HELO", "STARTTLS", "AUTH", "MAIL", "RCPT", "DATA", "RSET", "QUIT",
+    ];
+    if *auth && !known.contains(&verb.as_str()) {
+        return Some(match scenario {
+            "auth_login" | "oldstyle_auth" | "login_non_ascii" => {
+                *auth = false;
+                "235 authenticated\r\n".into()
+            }
+            "cram_six" => "334 PDEyMzQ1LjY3ODlAZXhhbXBsZT4=\r\n".into(),
+            "plain_five" => "334 \r\n".into(),
+            _ => {
+                *auth = false;
+                "235 authenticated\r\n".into()
+            }
+        });
+    }
+    *auth = false;
+    Some(match verb.as_str() {
+        "EHLO" => match scenario {
+            "helo_fallback" => "500 unknown\r\n".into(),
+            "ehlo_251" => "251 fine\r\n".into(),
+            "ehlo_garbage" => "xyz\r\n".into(),
+            _ => ehlo_reply(scenario),
+        },
+        "HELO" => "250 fake\r\n".into(),
+        "STARTTLS" => "454 not now\r\n".into(),
+        "AUTH" => {
+            *auth = true;
+            match scenario {
+                "auth_plain" | "password_crlf" => {
+                    *auth = false;
+                    "235 authenticated\r\n".into()
+                }
+                "bad_challenge" => "334 abc\r\n".into(),
+                "plain_five" => "334 \r\n".into(),
+                "auth_login" | "oldstyle_auth" | "login_non_ascii" => "334 UGFzc3dvcmQ6\r\n".into(),
+                _ => "334 PDEyMzQ1LjY3ODlAZXhhbXBsZT4=\r\n".into(),
+            }
+        }
+        "MAIL" => match scenario {
+            "sender_refused" | "error_then_quit_non221" => "550 sender refused\r\n".into(),
+            "sender_421" => return Some("421 closing\r\n".into()).filter(|_| false).or(None),
+            _ => "250 sender ok\r\n".into(),
+        },
+        "RCPT" => {
+            *rcpt += 1;
+            match (scenario, *rcpt) {
+                ("recipients_partial", 1) | ("recipients_all_refused", _) => {
+                    "550 no such user\r\n".into()
+                }
+                ("rcpt_251", _) => "251 forwarded\r\n".into(),
+                _ => "250 recipient ok\r\n".into(),
+            }
+        }
+        "DATA" => match scenario {
+            "data_refused" => "554 no data\r\n".into(),
+            _ => "354 go ahead\r\n".into(),
+        },
+        "RSET" => "250 reset\r\n".into(),
+        "QUIT" => match scenario {
+            "quit_non_221" | "error_then_quit_non221" => "500 not quitting\r\n".into(),
+            _ => "221 bye\r\n".into(),
+        },
+        _ => "500 unrecognized\r\n".into(),
+    })
+}
+
+fn scripted_server(
+    scenario: &'static str,
+    listener: std::net::TcpListener,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<Vec<Vec<u8>>> {
+    use std::io::{BufRead, BufReader, Write};
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let (mut stream, _) = loop {
+            if let Ok(pair) = listener.accept() {
+                break pair;
+            }
+            if stop.load(Ordering::SeqCst) {
+                return vec![];
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        if scenario == "tls_eof" {
+            // Read the ClientHello, then end the stream cleanly (FIN).
+            use std::io::Read;
+            let mut hello = [0u8; 4096];
+            let _ = stream.read(&mut hello);
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            while stream.read(&mut hello).unwrap_or(0) > 0 {}
+            return vec![];
+        }
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut log = vec![];
+        let greeting: &[u8] = if scenario == "greeting_rejected" {
+            b"554 unavailable\r\n"
+        } else {
+            b"220 fake ready\r\n"
+        };
+        if stream.write_all(greeting).is_err() {
+            return log;
+        }
+        let (mut auth, mut rcpt) = (false, 0);
+        loop {
+            let mut line = Vec::new();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            log.push(line.clone());
+            if scenario == "sender_421" && line.to_ascii_uppercase().starts_with(b"MAIL") {
+                let _ = stream.write_all(b"421 closing\r\n");
+                break;
+            }
+            let Some(reply) = scripted_reply(scenario, &line, &mut auth, &mut rcpt) else {
+                break;
+            };
+            let data = reply.starts_with("354");
+            if stream.write_all(reply.as_bytes()).is_err() {
+                break;
+            }
+            if data {
+                loop {
+                    let mut chunk = Vec::new();
+                    if reader.read_until(b'\n', &mut chunk).unwrap_or(0) == 0 {
+                        return log;
+                    }
+                    log.push(chunk.clone());
+                    if chunk == b".\r\n" {
+                        break;
+                    }
+                }
+                let final_reply: &[u8] = if scenario == "data_final_refused" {
+                    b"550 rejected\r\n"
+                } else {
+                    b"250 accepted\r\n"
+                };
+                if stream.write_all(final_reply).is_err() {
+                    break;
+                }
+            }
+            if line.to_ascii_uppercase().starts_with(b"QUIT") {
+                break;
+            }
+        }
+        log
+    })
+}
+
+/// `EHLO`/`HELO` argument masked: `smtp::tests` compares it directly.
+fn mask_greeting_argument(line: &[u8]) -> Vec<u8> {
+    let upper = line.to_ascii_uppercase();
+    if upper.starts_with(b"EHLO ") || upper.starts_with(b"HELO ") {
+        let mut masked = line[..5].to_vec();
+        masked.extend_from_slice(b"<local>\r\n");
+        masked
+    } else {
+        line.to_vec()
+    }
+}
+
+fn audit_lines(ctx: &Context) -> Vec<Value> {
+    ctx.audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .map(|record| {
+            json!([
+                record.get("event"),
+                record.get("result"),
+                record.get("reason"),
+                record.get("kind")
+            ])
+        })
+        .collect()
+}
+
+enum Password {
+    None,
+    Text(&'static [u8]),
+    Directory,
+}
+
+#[test]
+fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
+    let scenarios: Vec<(&'static str, Value, Password)> = vec![
+        ("plain_ok", json!({}), Password::None),
+        ("helo_fallback", json!({}), Password::None),
+        ("ehlo_251", json!({}), Password::None),
+        ("ehlo_garbage", json!({}), Password::None),
+        ("greeting_rejected", json!({}), Password::None),
+        ("sender_refused", json!({}), Password::None),
+        ("sender_421", json!({}), Password::None),
+        (
+            "recipients_partial",
+            json!({"recipients": ["bad@example.com", "good@example.com"]}),
+            Password::None,
+        ),
+        (
+            "recipients_all_refused",
+            json!({"recipients": ["bad@example.com", "worse@example.com"]}),
+            Password::None,
+        ),
+        ("rcpt_251", json!({}), Password::None),
+        ("data_refused", json!({}), Password::None),
+        ("data_final_refused", json!({}), Password::None),
+        ("quit_non_221", json!({}), Password::None),
+        ("error_then_quit_non221", json!({}), Password::None),
+        (
+            "auth_plain",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password\n"),
+        ),
+        (
+            "password_crlf",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b" pa\rss\r\nword \r\n"),
+        ),
+        (
+            "auth_login",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "oldstyle_auth",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "cram_six",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "plain_five",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "bad_challenge",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "password_non_ascii",
+            json!({"username": "synthetic-user"}),
+            Password::Text("synthetic-pässword".as_bytes()),
+        ),
+        (
+            "cram_non_ascii",
+            json!({"username": "synthetic-user"}),
+            Password::Text("synthetic-pässword".as_bytes()),
+        ),
+        (
+            "login_non_ascii",
+            json!({"username": "synthetic-user"}),
+            Password::Text("synthetic-pässword".as_bytes()),
+        ),
+        (
+            "auth_no_suitable",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "auth_lowercase",
+            json!({"username": "synthetic-user"}),
+            Password::Text(b"synthetic-password"),
+        ),
+        (
+            "auth_unadvertised",
+            json!({"username": "synthetic-user"}),
+            Password::None,
+        ),
+        ("password_directory", json!({}), Password::Directory),
+        (
+            "password_non_utf8",
+            json!({}),
+            Password::Text(b"synthetic-\xff-password"),
+        ),
+        (
+            "starttls_unsupported",
+            json!({"mode": "starttls"}),
+            Password::None,
+        ),
+        (
+            "starttls_refused",
+            json!({"mode": "starttls"}),
+            Password::None,
+        ),
+        (
+            "smtputf8",
+            json!({"recipients": ["관리자 <사용자@example.com>"]}),
+            Password::None,
+        ),
+        (
+            "smtputf8_missing",
+            json!({"recipients": ["사용자@example.com"]}),
+            Password::None,
+        ),
+        (
+            "display_names",
+            json!({"sender": "ZeroPW 알림 <zeropw@example.com>", "recipients": ["\"Doe, John\" <john@example.com>", "관리자 <admin@example.com>"]}),
+            Password::None,
+        ),
+        (
+            "timeout_overflow",
+            json!({"timeout_seconds": 1e10}),
+            Password::None,
+        ),
+        (
+            "unresolvable",
+            json!({"host": "zeropw-nonexistent.invalid", "mode": "starttls"}),
+            Password::None,
+        ),
+        ("connection_refused", json!({}), Password::None),
+        // TLS: the ClientHello bytes differ by TLS stack, so only the
+        // outcome and audit are compared for these.
+        ("tls_plaintext", json!({"mode": "smtps"}), Password::None),
+        ("tls_eof", json!({"mode": "smtps"}), Password::None),
+    ];
+    let (tmp, ctx) = fixture();
+    let state = tmp.path().join("state");
+    let mut failures = vec![];
+    for (scenario, overrides, password) in scenarios {
+        let mut results = vec![];
+        for language in ["python", "rust"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let server = scripted_server(scenario, listener, Arc::clone(&stop));
+            let port = if scenario == "connection_refused" {
+                let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                closed.local_addr().unwrap().port()
+            } else {
+                port
+            };
+            let mut config = json!({"host": "127.0.0.1", "port": port, "mode": "plain",
+                "sender": "zeropw@example.com", "recipients": ["admin@example.com"],
+                "timeout_seconds": 2.0});
+            for (key, value) in overrides.as_object().unwrap() {
+                config[key] = value.clone();
+            }
+            let password_path = tmp
+                .path()
+                .join(format!("smtp-password-{scenario}-{language}"));
+            match password {
+                Password::None => {}
+                Password::Text(bytes) => {
+                    fs::write(&password_path, bytes).unwrap();
+                    config["password_file"] = json!(password_path);
+                }
+                Password::Directory => {
+                    fs::create_dir(&password_path).unwrap();
+                    config["password_file"] = json!(password_path);
+                }
+            }
+            if password_path.exists() {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&password_path, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            ctx.state.write_json("notify.json", &config).unwrap();
+            let before = audit_lines(&ctx).len();
+            let outcome = if language == "python" {
+                let script = format!(
+                    "import json\nfrom zeropw.context import Context\nfrom zeropw.notify import send_test_message\nc=Context.open({:?})\ntry:\n    out={{'result': send_test_message(c)}}\nexcept Exception as e:\n    out={{'exception': type(e).__name__}}\nprint(json.dumps(out))\n",
+                    state.to_str().unwrap()
+                );
+                serde_json::from_str::<Value>(oracle::python(&script).trim()).unwrap()
+            } else {
+                match zeropw::notify::send_test_message(&ctx) {
+                    Ok(result) => json!({"result": result}),
+                    Err(error) if error.reason == "state_corrupt" => {
+                        json!({"exception": error.detail})
+                    }
+                    Err(error) => json!({"exception": error.name}),
+                }
+            };
+            stop.store(true, Ordering::SeqCst);
+            let transcript: Vec<Vec<u8>> = server
+                .join()
+                .unwrap()
+                .iter()
+                .map(|line| mask_greeting_argument(line))
+                .filter(|_| !scenario.starts_with("tls_"))
+                .collect();
+            let audit: Vec<Value> = audit_lines(&ctx).split_off(before);
+            results.push((outcome, audit, transcript));
+        }
+        println!("{scenario}: python {} rust {}", results[0].0, results[1].0);
+        if results[0] != results[1] {
+            let show = |r: &(Value, Vec<Value>, Vec<Vec<u8>>)| {
+                format!(
+                    "{} audit={:?} transcript={:?}",
+                    r.0,
+                    r.1,
+                    r.2.iter()
+                        .map(|l| String::from_utf8_lossy(l).into_owned())
+                        .collect::<Vec<_>>()
+                )
+            };
+            failures.push(format!(
+                "{scenario}:\n  python {}\n  rust   {}",
+                show(&results[0]),
+                show(&results[1])
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} scenario(s) differ:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
