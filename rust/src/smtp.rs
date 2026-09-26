@@ -1212,7 +1212,7 @@ fn get_cfws(mut value: &str) -> Parsed<'_> {
     let mut parts = Vec::new();
     while let Some(c) = first(value).filter(|c| is_cfws_leader(*c)) {
         let (token, rest) = if c == '(' {
-            get_comment(value)?
+            get_comment(value, 0)?
         } else {
             get_fws(value)
         };
@@ -1222,8 +1222,14 @@ fn get_cfws(mut value: &str) -> Parsed<'_> {
     Ok((Tok::List(Kind::Cfws, parts), value))
 }
 
+/// Nesting beyond this is left unfolded rather than parsed recursively.
+const MAX_COMMENT_DEPTH: usize = 64;
+
 /// `get_comment` (closed comments only).
-fn get_comment(value: &str) -> Parsed<'_> {
+fn get_comment(value: &str, depth: usize) -> Parsed<'_> {
+    if depth >= MAX_COMMENT_DEPTH {
+        return Err(PErr::Unsupported);
+    }
     let Some(mut value) = value.strip_prefix('(') else {
         return Err(PErr::Header);
     };
@@ -1232,7 +1238,7 @@ fn get_comment(value: &str) -> Parsed<'_> {
         let (token, rest) = if is_wsp(c) {
             get_fws(value)
         } else if c == '(' {
-            get_comment(value)?
+            get_comment(value, depth + 1)?
         } else {
             // `get_qp_ctext`: a `WhiteSpaceTerminal` of unquoted ctext.
             let (text, rest) = get_ptext_to_endchars(value, "()");
@@ -2458,6 +2464,7 @@ print(json.dumps(out))
             "\"unterminated <a@example.com>",
             "a@example.com,, b@example.com",
             "first last@example.com",
+            &format!("a@example.com {}x{}", "(".repeat(100), ")".repeat(100)),
         ] {
             assert!(super::get_address_list(value).is_none(), "{value}");
             let recipients = [value.to_owned()];
