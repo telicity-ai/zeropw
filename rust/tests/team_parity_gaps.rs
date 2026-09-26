@@ -57,6 +57,8 @@ struct Scripted {
     created: Instant,
     /// When set, `recv` ignores its timeout and `close` and blocks this long.
     stuck_for: Option<Duration>,
+    /// When set, `send` fails although the session is still open.
+    fail_sends: AtomicBool,
 }
 impl Scripted {
     fn new(
@@ -74,6 +76,7 @@ impl Scripted {
                 closed: AtomicBool::new(false),
                 created: Instant::now(),
                 stuck_for,
+                fail_sends: AtomicBool::new(false),
             }),
             tx,
         )
@@ -102,7 +105,7 @@ impl Session for Scripted {
         &self.env_id
     }
     fn send(&self, message: &Value) -> Result<()> {
-        if self.closed.load(Ordering::SeqCst) {
+        if self.closed.load(Ordering::SeqCst) || self.fail_sends.load(Ordering::SeqCst) {
             return Err(Error::state("session_closed"));
         }
         self.sent.lock().unwrap().push(message.clone());
@@ -706,6 +709,95 @@ fn join_with_non_dict_peers_document_fails_before_dialing() {
             .iter()
             .all(|r| r["event"] != "team_member_add")
     );
+}
+
+// ------------------------------------------------------- failed broadcast send
+
+const PY_BROADCAST_DROP: &str = r#"
+import json, tempfile, pathlib, time
+from zeropw.context import Config, Context
+from zeropw.team import membership as M, sync as S, transport as T
+from zeropw.team.identity import DeviceKey
+
+root = pathlib.Path(tempfile.mkdtemp())
+ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
+ctx.projects.create("demo", ["dev"])
+env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+team = S.TeamSync(ctx, T.InProcessTransport(device), device)
+team.register_env(env_id)
+peer = DeviceKey.generate()
+
+class Failing:
+    def __init__(self, peer):
+        self.peer, self.env_id, self.closed = peer, env_id, False
+        self.created_at = time.monotonic()
+    def send(self, m): raise T.SessionClosed("synthetic_send_failure")
+    def recv(self, timeout): return None
+    def close(self): self.closed = True
+
+session = Failing(peer.record)
+assert team._accept_or_replace_session(env_id, session, inbound=False)
+team.publish_fact(env_id, "connection_disabled", connection_id="gh")
+closes = [r for r in ctx.audit.tail(200) if r["event"] == "team_session_close"]
+for r in closes:
+    r.pop("ts")
+    assert r.pop("env_id") == env_id and r.pop("fingerprint") == peer.fingerprint
+print(json.dumps({"closes": closes, "sessions": sorted(team._envs[env_id].sessions),
+                  "closed": session.closed}))
+"#;
+
+/// sync.py `_broadcast`: a send failure calls `_drop_session` right away --
+/// the session leaves the table, is closed, and `team_session_close` is
+/// audited before the broadcasting call returns (not at the next poll).
+#[test]
+fn failed_broadcast_send_drops_the_session_immediately() {
+    let python = python(PY_BROADCAST_DROP);
+    let root = TempDir::new().unwrap();
+    let node = Node::new(&root, "a");
+    // A receive loop that never notices `close`, so only the broadcast path
+    // can drop the session.
+    let (session, _inbox) = Scripted::new(
+        DeviceKey::generate().record().unwrap(),
+        &node.env,
+        Some(Duration::from_millis(200)),
+    );
+    let fp = session.peer.fingerprint();
+    node.team
+        .adopt_outbound_session(&node.env, session.clone(), "gap-broadcast");
+    assert_eq!(
+        node.team.status(&node.env).unwrap()["sessions"],
+        json!([fp])
+    );
+    session.fail_sends.store(true, Ordering::SeqCst);
+    node.team
+        .publish_fact(
+            &node.env,
+            "connection_disabled",
+            json!({"connection_id":"gh"}),
+        )
+        .unwrap();
+    let closes = |node: &Node| -> Vec<Value> {
+        node.audit("team_session_close")
+            .into_iter()
+            .map(|mut r| {
+                let obj = r.as_object_mut().unwrap();
+                obj.remove("ts");
+                assert_eq!(obj.remove("env_id").unwrap(), json!(node.env));
+                assert_eq!(obj.remove("fingerprint").unwrap(), json!(fp));
+                r
+            })
+            .collect()
+    };
+    assert_eq!(json!(closes(&node)), python["closes"]);
+    assert_eq!(python["closes"].as_array().unwrap().len(), 1);
+    assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
+    assert_eq!(python["sessions"], json!([]));
+    assert!(session.is_closed());
+    assert_eq!(python["closed"], json!(true));
+    // The receive thread's own exit later finds nothing left to drop.
+    node.team.stop();
+    assert_eq!(closes(&node).len(), 1);
 }
 
 // ------------------------------------------------------- receive thread ownership (gap 8)
