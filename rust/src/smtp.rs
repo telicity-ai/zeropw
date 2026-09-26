@@ -1028,9 +1028,10 @@ fn qp_body_encode(data: &[u8]) -> Vec<u8> {
 // Header folding: `email._header_value_parser` for the header shapes this
 // module writes (an unstructured Subject; From/To address lists of
 // addr-specs and `display-name <addr-spec>` mailboxes, with atoms, quoted
-// strings and obsolete dots in display names). `None` from a parser means
-// "outside that subset": the caller then writes the configured value
-// unfolded (`DEVIATIONS.md`).
+// strings, comments and obsolete dots in display names). `None` from a
+// parser means "outside that subset" (groups, encoded words, domain
+// literals, obsolete routes/local parts/domains, invalid mailboxes): the
+// caller then writes the configured value unfolded (`DEVIATIONS.md`).
 
 const WSP: [char; 2] = [' ', '\t'];
 const SPECIALS: &str = "()<>@,:;.\\\"[]";
@@ -1072,6 +1073,7 @@ enum Kind {
     HeaderLabel,
     Cfws,
     Unstructured,
+    Comment,
     DisplayName,
     Atom,
     QuotedString,
@@ -1109,6 +1111,22 @@ impl Tok {
             Tok::Term(text, ..) => text.clone(),
             Tok::List(Kind::BareQuotedString, parts) => {
                 quote_string(&parts.iter().map(Tok::text).collect::<String>())
+            }
+            // `Comment.__str__`: parentheses around each part, with `\`,
+            // `(` and `)` quoted outside nested comments.
+            Tok::List(Kind::Comment, parts) => {
+                let inner: String = parts
+                    .iter()
+                    .map(|part| match part {
+                        Tok::List(Kind::Comment, _) => part.text(),
+                        _ => part
+                            .text()
+                            .replace('\\', "\\\\")
+                            .replace('(', "\\(")
+                            .replace(')', "\\)"),
+                    })
+                    .collect();
+                format!("({inner})")
             }
             Tok::List(_, parts) => parts.iter().map(Tok::text).collect(),
         }
@@ -1172,18 +1190,45 @@ fn get_fws(value: &str) -> (Tok, &str) {
     (Tok::fws(&value[..value.len() - rest.len()]), rest)
 }
 
-/// `get_cfws` without comments.
+/// `get_cfws`.
 fn get_cfws(mut value: &str) -> Parsed<'_> {
     let mut parts = Vec::new();
     while let Some(c) = first(value).filter(|c| is_cfws_leader(*c)) {
-        if c == '(' {
-            return Err(PErr::Unsupported);
-        }
-        let (token, rest) = get_fws(value);
+        let (token, rest) = if c == '(' {
+            get_comment(value)?
+        } else {
+            get_fws(value)
+        };
         parts.push(token);
         value = rest;
     }
     Ok((Tok::List(Kind::Cfws, parts), value))
+}
+
+/// `get_comment` (closed comments only).
+fn get_comment(value: &str) -> Parsed<'_> {
+    let Some(mut value) = value.strip_prefix('(') else {
+        return Err(PErr::Header);
+    };
+    let mut parts = Vec::new();
+    while let Some(c) = first(value).filter(|c| *c != ')') {
+        let (token, rest) = if is_wsp(c) {
+            get_fws(value)
+        } else if c == '(' {
+            get_comment(value)?
+        } else {
+            // `get_qp_ctext`: a `WhiteSpaceTerminal` of unquoted ctext.
+            let (text, rest) = get_ptext_to_endchars(value, "()");
+            (Tok::Term(text, "ptext", Space::Fws, false), rest)
+        };
+        parts.push(token);
+        value = rest;
+    }
+    // Unterminated: an InvalidHeaderDefect.
+    let Some(rest) = value.strip_prefix(')') else {
+        return Err(PErr::Unsupported);
+    };
+    Ok((Tok::List(Kind::Comment, parts), rest))
 }
 
 /// `get_atext`.
@@ -1269,8 +1314,9 @@ fn get_dot_atom(mut value: &str) -> Parsed<'_> {
     Ok((Tok::List(Kind::DotAtom, parts), value))
 }
 
-/// `_get_ptext_to_endchars(value, '"')` as used by `get_qcontent`.
-fn get_qcontent(value: &str) -> (Tok, &str) {
+/// `_get_ptext_to_endchars(value, endchars)`: the unquoted text of the
+/// first whitespace-delimited fragment, up to an unescaped end character.
+fn get_ptext_to_endchars<'a>(value: &'a str, endchars: &str) -> (String, &'a str) {
     let fragment_end = value.find(WSP).unwrap_or(value.len());
     let fragment = &value[..fragment_end];
     let mut text = String::new();
@@ -1287,13 +1333,19 @@ fn get_qcontent(value: &str) -> (Tok, &str) {
         }
         if escape {
             escape = false;
-        } else if c == '"' {
+        } else if endchars.contains(c) {
             stop = pos;
             break;
         }
         text.push(c);
     }
-    (Tok::value(text, "ptext"), &value[stop..])
+    (text, &value[stop..])
+}
+
+/// `get_qcontent`.
+fn get_qcontent(value: &str) -> (Tok, &str) {
+    let (text, rest) = get_ptext_to_endchars(value, "\"");
+    (Tok::value(text, "ptext"), rest)
 }
 
 /// `get_bare_quoted_string` (no encoded words, closed).
@@ -2375,6 +2427,30 @@ print(json.dumps(out))
         );
     }
 
+    /// Address shapes outside the ported grammar (DEVIATIONS.md) are
+    /// written as configured instead of folded.
+    #[test]
+    fn unsupported_address_shapes_are_written_as_configured() {
+        for value in [
+            "undisclosed-recipients: a@example.com;",
+            "a@[127.0.0.1]",
+            "=?utf-8?q?Admin?= <a@example.com>",
+            "<@route.example:a@example.com>",
+            "<>",
+            "admin",
+            "\"unterminated <a@example.com>",
+            "a@example.com,, b@example.com",
+            "first last@example.com",
+        ] {
+            assert!(super::get_address_list(value).is_none(), "{value}");
+            let recipients = [value.to_owned()];
+            let flat =
+                Message::new(&config("a@example.com", &recipients), "s", "x\n").flatten(false);
+            let text = String::from_utf8(flat).unwrap();
+            assert!(text.contains(&format!("\r\nTo: {value}\r\n")), "{text}");
+        }
+    }
+
     /// Deterministic pseudo-random subjects and address lists inside the
     /// supported grammar (atoms, quoted strings with escapes and specials,
     /// obsolete dots, long words, ASCII and non-ASCII, internationalized
@@ -2424,6 +2500,8 @@ print(json.dumps(out))
             "a+b",
             "Ops_Team",
             "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure",
+            "Ops (team)",
+            "관리자 (보안)",
         ];
         let quoted = [
             "\"Doe, John\"",
@@ -2455,7 +2533,7 @@ print(json.dumps(out))
             "an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
         ];
         let mut cases = vec![];
-        for _ in 0..240 {
+        for _ in 0..400 {
             let subject: Vec<&str> = (0..1 + next(9)).map(|_| words[next(words.len())]).collect();
             let separators = [" ", " ", " ", "  ", "\t"];
             let mut text = String::new();
@@ -2469,7 +2547,22 @@ print(json.dumps(out))
             let mut mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
                 let local = locals[next(locals.len())];
                 let domain = domains[next(domains.len())];
-                let address = format!("{local}@{domain}");
+                let comments = [
+                    "",
+                    "",
+                    "",
+                    " (ops)",
+                    " (보안팀)",
+                    " (nested (inner) comment)",
+                    " (escaped \\) paren, and; specials)",
+                    " (a very long comment that goes on and on and on and on and on and on and on)",
+                    "(tight)",
+                ];
+                let comment = comments[next(comments.len())];
+                let address = match next(3) {
+                    0 => format!("{local}{comment}@{domain}"),
+                    _ => format!("{local}@{domain}{comment}"),
+                };
                 match next(4) {
                     0 => address,
                     1 => format!("{} <{address}>", quoted[next(quoted.len())]),
