@@ -1943,7 +1943,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     let mutating = !matches!(
         a.action.as_str(),
         "members" | "status" | "log" | "show" | "diff" | "incidents"
-    ) && !(a.action == "peers" && !a.has("add"));
+    ) && (a.action != "peers" || a.has("add"));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
         let key = DeviceKey::create(ctx.state, ctx.kms)?;

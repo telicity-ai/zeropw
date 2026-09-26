@@ -3913,7 +3913,7 @@ sys.stdout.write(json.dumps(out))
     // --------------------------------------------------------- generators
 
     fn random_status_line(rng: &mut Lcg) -> Vec<u8> {
-        let version: &str = rng.choice(&[
+        let version = *rng.choice(&[
             "HTTP/1.1",
             "HTTP/1.0",
             "HTTP/0.9",
@@ -3942,7 +3942,7 @@ sys.stdout.write(json.dumps(out))
         } else {
             format!("{}", 100 + rng.below(800))
         };
-        let sep: &str = rng.choice(&[" ", "\t", "  "]);
+        let sep = *rng.choice(&[" ", "\t", "  "]);
         let mut line = format!("{version}{sep}{status}{sep}OK\r\n").into_bytes();
         if rng.one_in(20) {
             // LF-only status line terminator.

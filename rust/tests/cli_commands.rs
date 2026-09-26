@@ -467,7 +467,8 @@ fn native_democli_matches_whoami_issue_and_exposure_contract() {
             assert!(request.contains("User-Agent: democli/1"));
             if path.contains("issues") {
                 assert!(request.contains("POST "));
-                assert!(request.contains("\"title\":\"Hello issue\""));
+                // `json.dumps({"title": title})`, as the original democli sends it.
+                assert!(request.contains("{\"title\": \"Hello issue\"}"));
             }
             let reply = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
@@ -689,7 +690,10 @@ fn demo_passes_without_printing_credentials() {
         "{text}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.matches("[PASS]").count() >= 25);
+    // The original demo runs 47 checks; every phase must still be present.
+    assert_eq!(text.matches("[PASS]").count(), 47, "{text}");
+    // The demo explains that the agent holds a `zpwc_...` token; no real one may appear.
+    let scrubbed = text.replace("zpwc_...", "");
     for forbidden in [
         "[FAIL]",
         "zpwc_",
@@ -697,7 +701,12 @@ fn demo_passes_without_printing_credentials() {
         "PRIVATE KEY",
         "synthetic-token-",
     ] {
-        assert!(!text.contains(forbidden), "demo leaked {forbidden}");
+        assert!(!scrubbed.contains(forbidden), "demo leaked {forbidden}");
+    }
+    for phase in [
+        "[1] ", "[2] ", "[3] ", "[4] ", "[5] ", "[6] ", "[7] ", "[8] ",
+    ] {
+        assert!(text.contains(phase), "demo phase {phase} missing");
     }
 }
 
