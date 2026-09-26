@@ -848,3 +848,70 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
         failures.join("\n")
     );
 }
+
+/// `deliver` reads the password file before connecting, whether or not a
+/// username is configured: an `OSError` (here `IsADirectoryError`) becomes
+/// `notification.last_error` and the `incident_notify` audit reason, while
+/// a `UnicodeDecodeError` escapes `deliver` and `_deliver_notification`
+/// records `notify` in `failed_steps`, leaving the notification as it was.
+#[test]
+fn incident_delivery_failures_record_what_python_records() {
+    for case in [
+        "password_directory",
+        "password_non_utf8",
+        "connection_refused",
+    ] {
+        let (tmp, ctx) = fixture();
+        ctx.policy.create_principal("agent-1", "box-1").unwrap();
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let mut config = json!({"host": "127.0.0.1", "port": port, "mode": "plain",
+            "sender": "zeropw@example.com", "recipients": ["admin@example.com"]});
+        let password = tmp.path().join("smtp-password");
+        match case {
+            "password_directory" => fs::create_dir(&password).unwrap(),
+            "password_non_utf8" => fs::write(&password, b"synthetic-\xff").unwrap(),
+            _ => {}
+        }
+        if password.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&password, fs::Permissions::from_mode(0o600)).unwrap();
+            config["password_file"] = json!(password);
+        }
+        ctx.state.write_json("notify.json", &config).unwrap();
+        let python_state = tmp.path().join("python-state");
+        copy_dir(&tmp.path().join("state"), &python_state);
+
+        let incident = zeropw::incident::open_incident(
+            &ctx,
+            "principal",
+            Some(&["agent-1".to_owned()]),
+            None,
+            "manual",
+            None,
+            None,
+        )
+        .unwrap();
+        let notify_audit = |records: Vec<Value>| -> Vec<Value> {
+            records
+                .into_iter()
+                .filter(|r| r.get("event").and_then(Value::as_str) == Some("incident_notify"))
+                .map(|r| json!([r.get("result"), r.get("reason")]))
+                .collect()
+        };
+        let rust = json!({
+            "status": incident.notification["status"],
+            "attempts": incident.notification["attempts"],
+            "last_error": incident.notification.get("last_error"),
+            "failed_steps": incident.actions["failed_steps"],
+            "audit": notify_audit(ctx.audit.iter_records().unwrap()),
+        });
+        let script = format!(
+            "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.open_incident(c, scope='principal', principals=['agent-1'], trigger='manual')\nn=inc.notification\naudit=[[r.get('result'), r.get('reason')] for r in c.audit.iter_records() if r.get('event')=='incident_notify']\nprint(json.dumps({{'status': n.get('status'), 'attempts': n.get('attempts'), 'last_error': n.get('last_error'), 'failed_steps': inc.actions['failed_steps'], 'audit': audit}}))\n",
+            python_state.to_str().unwrap()
+        );
+        let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
+        assert_eq!(rust, python, "{case}");
+    }
+}
