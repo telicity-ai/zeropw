@@ -326,3 +326,65 @@ fn declare_principal_scope_without_principal_matches_python_cli() {
     assert_eq!(results[0].1["reason"], json!("principal_not_found"));
     assert_eq!(results[1], results[0]);
 }
+
+/// `render_incident_email` skips a falsy runtime/rule, uses `x or default`
+/// for first/last use, service, creation time and fingerprint, renders
+/// `.get(key, 0)` values with `str()`, and tests flags by truthiness. Loaded
+/// (legacy or hand-edited) incidents must render byte-identically.
+#[test]
+fn email_rendering_follows_python_truthiness_for_loaded_incidents() {
+    let base = json!({
+        "id": "inc-20231114T221320Z-0123abcd", "opened_at": "2023-11-14T22:13:20Z",
+        "status": "open", "scope": "principal", "principals": ["agent-1"],
+        "trigger": "manual", "detail": null, "closed_at": null, "widened_from": [],
+        "notification": {"status": "not_configured", "attempts": 0},
+        "actions": {"stopped": false, "principals_disabled": 1, "grants_revoked": 0,
+                    "handle_key_rotated": false, "runs_cancelled": 0, "sockets_closed": 0,
+                    "failed_steps": []},
+        "assessment": {"principals": [{"id": "agent-1", "created_at": "2023-11-14T22:00:00Z"}],
+                       "secrets": []}
+    });
+    let mandatory = json!({
+        "secret_id": "deploy-key", "kind": "ssh_private_key", "project": "demo",
+        "environment": "dev", "service": "", "connections": "ab",
+        "targets": [{"host": 7, "port": null, "username": 0},
+                    {"host": "box.example", "port": 22, "username": "deploy"}, "not-a-dict"],
+        "first_used": "", "last_used": 0, "use_count": 2.5, "active_version": 1,
+        "fingerprint": "", "tier": "mandatory"
+    });
+    let mut cases = vec![];
+    for (runtime, rule) in [
+        (json!(""), json!("")),
+        (json!(null), json!(null)),
+        (json!(5), json!(["x"])),
+        (json!("box-1"), json!("unknown_tool")),
+    ] {
+        let mut case = base.clone();
+        case["runtime"] = runtime;
+        case["rule"] = rule;
+        cases.push(case);
+    }
+    let mut case = base.clone();
+    case["runtime"] = json!(null);
+    case["rule"] = json!(null);
+    case["actions"] = json!({"stopped": 1, "principals_disabled": true, "grants_revoked": 1.5,
+                             "handle_key_rotated": "yes", "runs_cancelled": null});
+    case["assessment"] = json!({
+        "principals": [{"id": "agent-1", "created_at": ""}, {"id": 5}, "x"],
+        "secrets": [mandatory, {"secret_id": 9, "kind": null, "tier": "recommended"}],
+        "recover_required": 1
+    });
+    cases.push(case);
+    let script = format!(
+        "import json\nfrom zeropw import incident as I\nfrom zeropw.notify import render_incident_email\nout=[]\nfor d in json.loads({:?}):\n    out.append(render_incident_email(I.Incident.from_dict(d), now='2023-11-14T22:13:21Z'))\nprint(json.dumps(out))\n",
+        Value::Array(cases.clone()).to_string()
+    );
+    let expected: Vec<(String, String)> =
+        serde_json::from_str(oracle::python(&script).trim()).unwrap();
+    for (case, expected) in cases.iter().zip(expected) {
+        let incident = zeropw::incident::Incident::from_dict(case).unwrap();
+        let actual = zeropw::notify::render_incident_email(&incident, "2023-11-14T22:13:21Z");
+        assert_eq!(actual.0, expected.0);
+        assert_eq!(actual.1, expected.1, "case {case}");
+    }
+}

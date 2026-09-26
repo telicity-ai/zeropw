@@ -143,11 +143,30 @@ fn display(v: &Value) -> String {
 fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
     v.get(key).unwrap_or(&Value::Null)
 }
-fn fallback(v: &Value) -> String {
-    if v.is_null() || v == "" {
-        "알 수 없음".into()
-    } else {
+/// `value or default` inside an f-string: any falsy value (`None`, `""`,
+/// `0`, `False`, `[]`, `{}`) selects `default`.
+fn or_default(v: &Value, default: &str) -> String {
+    if incident::python_truthy(v) {
         display(v)
+    } else {
+        default.into()
+    }
+}
+fn fallback(v: &Value) -> String {
+    or_default(v, "알 수 없음")
+}
+/// `mapping.get(key, 0)` inside an f-string.
+fn get_or_zero(v: &Value, key: &str) -> String {
+    v.get(key).map_or_else(|| "0".into(), display)
+}
+/// Python iteration of `value or []` for the value kinds it can iterate:
+/// list items, string characters, dict keys.
+fn python_items(v: &Value) -> Vec<Value> {
+    match v {
+        Value::Array(items) => items.clone(),
+        Value::String(text) => text.chars().map(|c| json!(c.to_string())).collect(),
+        Value::Object(map) => map.keys().map(|k| json!(k)).collect(),
+        _ => vec![],
     }
 }
 fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
@@ -165,10 +184,15 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
             display(get(s, "active_version"))
         ),
     ];
-    if let Some(cs) = s["connections"].as_array().filter(|a| !a.is_empty()) {
+    let connections = python_items(&s["connections"]);
+    if !connections.is_empty() {
         lines.push(format!(
             "  연결: {}",
-            cs.iter().map(display).collect::<Vec<_>>().join(", ")
+            connections
+                .iter()
+                .map(display)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     let labels: Vec<_> = s["targets"]
@@ -176,18 +200,14 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|t| {
-            let host = t.get("host")?.as_str()?;
+            let host = display(t.get("host").filter(|v| !v.is_null())?);
             let mut label = if let Some(port) = t.get("port").filter(|v| !v.is_null()) {
                 format!("{host}:{}", display(port))
             } else {
-                host.to_owned()
+                host
             };
-            if let Some(user) = t
-                .get("username")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                label = format!("{user}@{label}");
+            if let Some(user) = t.get("username").filter(|v| incident::python_truthy(v)) {
+                label = format!("{}@{label}", display(user));
             }
             Some(label)
         })
@@ -198,17 +218,9 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
     if mandatory {
         lines.push(format!(
             "  첫 사용: {}  마지막 사용: {}  사용 횟수: {}",
-            if s["first_used"].is_null() {
-                "없음".into()
-            } else {
-                display(&s["first_used"])
-            },
-            if s["last_used"].is_null() {
-                "없음".into()
-            } else {
-                display(&s["last_used"])
-            },
-            s["use_count"].as_u64().unwrap_or(0)
+            or_default(&s["first_used"], "없음"),
+            or_default(&s["last_used"], "없음"),
+            get_or_zero(s, "use_count")
         ));
     }
     let steps: &[&str] = match s["kind"].as_str().unwrap_or("") {
@@ -271,15 +283,19 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "all" => "전체",
         s => s,
     };
+    // `incident.runtime`/`incident.rule` as loaded (any JSON value), each
+    // rendered only when truthy.
+    let raw = i.to_dict();
     l.push(format!(
         "봉쇄 범위: {scope}{}",
-        i.runtime
-            .as_ref()
-            .map(|r| format!(" (실행 환경: {r})"))
-            .unwrap_or_default()
+        if incident::python_truthy(&raw["runtime"]) {
+            format!(" (실행 환경: {})", display(&raw["runtime"]))
+        } else {
+            String::new()
+        }
     ));
-    if let Some(rule) = &i.rule {
-        l.push(format!("판정 규칙: {rule}"));
+    if incident::python_truthy(&raw["rule"]) {
+        l.push(format!("판정 규칙: {}", display(&raw["rule"])));
     }
     l.push("침해된 호출 주체:".into());
     let mut views: Vec<String> = i.assessment["principals"]
@@ -301,7 +317,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "2. ZeroPW가 이미 한 것".into(),
         format!(
             "전체 정지: {}",
-            if i.actions["stopped"] == true {
+            if incident::python_truthy(&i.actions["stopped"]) {
                 "예"
             } else {
                 "아니오"
@@ -309,15 +325,15 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         ),
         format!(
             "비활성화된 호출 주체 수: {}",
-            i.actions["principals_disabled"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "principals_disabled")
         ),
         format!(
             "회수한 권한 수: {}",
-            i.actions["grants_revoked"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "grants_revoked")
         ),
         format!(
             "핸들 키 교체: {}",
-            if i.actions["handle_key_rotated"] == true {
+            if incident::python_truthy(&i.actions["handle_key_rotated"]) {
                 "예"
             } else {
                 "아니오"
@@ -325,11 +341,11 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         ),
         format!(
             "취소한 실행 수: {}",
-            i.actions["runs_cancelled"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "runs_cancelled")
         ),
         format!(
             "닫은 서명기 소켓 수: {}",
-            i.actions["sockets_closed"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "sockets_closed")
         ),
         String::new(),
         "3. 지금 해야 할 것 — 필수 교체".into(),
@@ -378,7 +394,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "  grant create --principal <새 호출 주체 ID> --connection <연결 ID>".into(),
         "  resume".into(),
     ]);
-    if i.scope == "all" || i.assessment["recover_required"] == true {
+    if i.scope == "all" || incident::python_truthy(&i.assessment["recover_required"]) {
         l.extend([
             String::new(),
             "이 사건은 금고 전체 노출로 판정되었습니다. `incident close` 전에 다음을 수행하십시오:"
