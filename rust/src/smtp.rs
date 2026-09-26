@@ -65,34 +65,8 @@ fn escaped_other(name: &'static str) -> SendError {
 
 /// CPython's `OSError` constructor: the PEP 3151 subclass selected by
 /// `errno`, `OSError` otherwise.
-// Mirrors CPython's errno table; delegate to `crate::pystr::os_error_class`
-// once that canonical helper is available on this branch.
 fn os_error_class(error: &io::Error) -> &'static str {
-    let Some(errno) = error.raw_os_error() else {
-        return match error.kind() {
-            io::ErrorKind::TimedOut => "TimeoutError",
-            _ => "OSError",
-        };
-    };
-    match errno {
-        libc::EAGAIN | libc::EALREADY | libc::EINPROGRESS => "BlockingIOError",
-        #[allow(unreachable_patterns)]
-        libc::EWOULDBLOCK => "BlockingIOError",
-        libc::ECHILD => "ChildProcessError",
-        libc::EPIPE | libc::ESHUTDOWN => "BrokenPipeError",
-        libc::ECONNABORTED => "ConnectionAbortedError",
-        libc::ECONNREFUSED => "ConnectionRefusedError",
-        libc::ECONNRESET => "ConnectionResetError",
-        libc::EEXIST => "FileExistsError",
-        libc::ENOENT => "FileNotFoundError",
-        libc::EISDIR => "IsADirectoryError",
-        libc::ENOTDIR => "NotADirectoryError",
-        libc::EINTR => "InterruptedError",
-        libc::EACCES | libc::EPERM => "PermissionError",
-        libc::ESRCH => "ProcessLookupError",
-        libc::ETIMEDOUT => "TimeoutError",
-        _ => "OSError",
-    }
+    crate::pystr::os_error_class(error)
 }
 
 /// A `getaddrinfo` failure: `socket.gaierror`, except `EAI_SYSTEM`, which
@@ -835,11 +809,12 @@ fn local_hostname() -> String {
     format!("[{address}]")
 }
 
-/// `socket.gethostname()`: the kernel host name (Linux `uname().nodename`).
+/// `socket.gethostname()`: `uname().nodename` on every POSIX platform.
 fn gethostname() -> String {
-    fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|name| name.trim_end_matches('\n').to_owned())
-        .unwrap_or_else(|_| "localhost".to_owned())
+    rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// `socket.getfqdn(hostname)`: `gethostbyaddr` of the host name's first

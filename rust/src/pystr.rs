@@ -1247,7 +1247,11 @@ fn unquote_ascii_run(run: &[char]) -> String {
 /// any other errno or an error with no errno.
 pub fn os_error_class(error: &std::io::Error) -> &'static str {
     match error.raw_os_error() {
+        // A timeout Rust reports without an errno is CPython's `socket.timeout`.
+        None if error.kind() == std::io::ErrorKind::TimedOut => "TimeoutError",
         Some(libc::EAGAIN | libc::EALREADY | libc::EINPROGRESS) => "BlockingIOError",
+        #[allow(unreachable_patterns)]
+        Some(libc::EWOULDBLOCK) => "BlockingIOError",
         Some(libc::ECHILD) => "ChildProcessError",
         Some(libc::EPIPE | libc::ESHUTDOWN) => "BrokenPipeError",
         Some(libc::ECONNABORTED) => "ConnectionAbortedError",

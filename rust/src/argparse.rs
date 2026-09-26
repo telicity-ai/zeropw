@@ -757,8 +757,8 @@ impl ParseState<'_> {
                 };
                 if let Val::Str(s) = value {
                     items.push(s);
-                } else if let Val::Int(n) = value {
-                    items.push(n.to_string());
+                } else if let Val::Int(int) = value {
+                    items.push(int.to_string());
                 }
                 self.namespace.insert(action.dest.clone(), Val::List(items));
             }
@@ -994,7 +994,7 @@ fn check_value(action: &Arg, value: &Val) -> Result<(), Failure> {
     };
     let text = match value {
         Val::Str(s) => s.clone(),
-        Val::Int(n) => n.to_string(),
+        Val::Int(int) => int.to_string(),
         _ => return Ok(()),
     };
     if choices.contains(&text) {

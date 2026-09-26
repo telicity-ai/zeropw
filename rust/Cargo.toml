@@ -31,7 +31,7 @@ libc = "0.2"
 mio = { version = "1", default-features = false, features = ["os-poll", "os-ext"] }
 socket2 = "0.5"
 close_fds = "=0.3.2"
-rustix = { version = "1", features = ["process", "fs", "termios"] }
+rustix = { version = "1", features = ["process", "fs", "termios", "system"] }
 tempfile = "3"
 regex = "1"
 percent-encoding = "2"

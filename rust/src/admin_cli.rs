@@ -690,7 +690,7 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
         };
         let values = match value {
             Val::Str(s) => vec![s.clone()],
-            Val::Int(n) => vec![n.to_string()],
+            Val::Int(int) => vec![int.to_string()],
             Val::Bool(true) => vec!["true".to_owned()],
             Val::List(items) => items.clone(),
             Val::None | Val::Bool(false) => continue,
@@ -785,6 +785,29 @@ fn refuse_cli_env<T>(
         },
     )?;
     Err(Error::invalid_input("cli_env_contains_credential").with_detail(connection))
+}
+
+/// Built-in exceptions that a module ports as `StateError("state_corrupt",
+/// <class name>)` because Python lets them escape (PORTING.md §3.5); the CLI
+/// prints that class name as Python's handler does.
+const ESCAPED_BUILTIN_ERRORS: [&str; 8] = [
+    "KeyError",
+    "TypeError",
+    "AttributeError",
+    "ValueError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "JSONDecodeError",
+    "Error",
+];
+
+/// `type(exc).__name__` for an error that reached a CLI handler.
+fn python_exception_name(error: &Error) -> String {
+    if error.reason == "state_corrupt" && ESCAPED_BUILTIN_ERRORS.contains(&error.detail.as_str()) {
+        error.detail.clone()
+    } else {
+        error.name.to_string()
+    }
 }
 
 /// Python truthiness of a JSON value.
@@ -2848,8 +2871,14 @@ pub fn run_serve(
             was_pending = now_pending;
             enforce_withdrawn(&ctx, quiet);
         }
-        if crate::notify::retry_pending(&ctx, (ctx.clock)()).is_err() && !quiet {
-            eprintln!("notification retry failed: Error");
+        // `_notice(f"notification retry failed: {type(exc).__name__}")`.
+        if let Err(error) = crate::notify::retry_pending(&ctx, (ctx.clock)())
+            && !quiet
+        {
+            eprintln!(
+                "notification retry failed: {}",
+                python_exception_name(&error)
+            );
         }
     }
     if let Some(team) = team {
@@ -2952,6 +2981,7 @@ pub fn main(argv: &[String]) -> i32 {
                     true,
                 );
             } else if error.reason == "state_corrupt"
+                && !ESCAPED_BUILTIN_ERRORS.contains(&error.detail.as_str())
                 && (!error.detail.ends_with(".json")
                     || [
                         "admin.json",
@@ -2963,9 +2993,12 @@ pub fn main(argv: &[String]) -> i32 {
                         "vault/secrets.json",
                     ]
                     .contains(&error.detail.as_str())
-                        && fs::read_to_string(Path::new(&args.state_dir).join(&error.detail))
-                            .ok()
-                            .is_some_and(|text| pyjson::loads(&text).is_ok()))
+                        && fs::read_to_string(
+                            Path::new(&user_path(&args.state_dir).unwrap_or_default())
+                                .join(&error.detail),
+                        )
+                        .ok()
+                        .is_some_and(|text| pyjson::loads(&text).is_ok()))
             {
                 // Python's CLI reports only the built-in exception class for
                 // semantically broken JSON; internal model labels are not public.

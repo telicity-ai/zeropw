@@ -924,13 +924,13 @@ fn incident_delivery_failures_record_what_python_records() {
 
 /// `incident notify-test` when `_send` raises a built-in exception: the
 /// administrator CLIs report the same error object and exit status
-/// (`OverflowError` from the socket timeout). The `ValueError` family
-/// (`UnicodeDecodeError` from the password file) additionally depends on
-/// `admin_cli.rs`'s `state_corrupt` rendering, recorded in `DEVIATIONS.md`.
+/// (`OverflowError` from the socket timeout, `UnicodeDecodeError` from a
+/// non-UTF-8 password file, which the CLI prints as Python's
+/// `state_corrupt` handler does).
 #[test]
 fn notify_test_cli_reports_escaping_errors_like_python() {
     let tmp = TempDir::new().unwrap();
-    for case in ["timeout_overflow"] {
+    for case in ["timeout_overflow", "password_non_utf8"] {
         let mut results = vec![];
         for language in ["python", "rust"] {
             let state = tmp.path().join(format!("{case}-{language}"));
