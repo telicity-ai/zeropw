@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -34,6 +34,10 @@ pub const FACT_KINDS: [&str; 4] = [
 // malformed lines. A full pass restarts so a rejected/out-of-order frame is
 // retried after later commit catch-up, while receiver hashes deduplicate it.
 const FACT_REPLAY_LINES_PER_VECTOR: usize = 64;
+/// `sync._SEEN_CAPACITY`: bound of the rebroadcast-dedup set.
+const SEEN_CAPACITY: usize = 4096;
+/// `thread.join(timeout=5)` in `TeamSync.stop`.
+const THREAD_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub const ENVS_MAP_PATH: &str = "team/envs.json";
 pub const SNAPSHOT_INTERVAL_COMMITS: i128 = 1000;
 pub const COMPACT_MIN_AGE_MS: i64 = 30 * 24 * 3600 * 1000;
@@ -850,6 +854,98 @@ pub fn discover_envs(state: &StateDir) -> Result<Vec<String>> {
     Ok(found)
 }
 
+/// Python `list(x)` / `for a in x` over a `json.load`ed value: a list yields
+/// its elements, a str its characters, a dict its keys. `None`/`bool`/numbers
+/// are not iterable (`TypeError` in Python), returned as `None` here.
+pub(crate) fn python_list(value: &Value) -> Option<Vec<Value>> {
+    match value {
+        Value::Array(items) => Some(items.clone()),
+        Value::String(s) => Some(s.chars().map(|c| Value::String(c.to_string())).collect()),
+        Value::Object(map) => Some(map.keys().map(|k| Value::String(k.clone())).collect()),
+        Value::Null | Value::Bool(_) | Value::Number(_) => None,
+    }
+}
+
+/// `StateDir.read_json(path, {}) or {}` for a document Python then uses as a
+/// `dict`: a falsy document becomes `{}`, and a truthy non-dict (on which
+/// Python's `.get`/`.items`/item assignment raises an uncaught
+/// `AttributeError`/`TypeError`) is `state_corrupt` (PORTING.md §3.5).
+fn read_dict_or_empty(state: &StateDir, path: &str) -> Result<Map<String, Value>> {
+    match state.read_json(path, json!({}))? {
+        Value::Object(map) => Ok(map),
+        other if super::json_falsy(&other) => Ok(Map::new()),
+        _ => Err(Error::state("state_corrupt").with_detail(path)),
+    }
+}
+
+/// Port of `sync._LruSet`: a bounded set deduplicating rebroadcast of
+/// already-seen commit hashes. A hit refreshes the key's recency
+/// (`move_to_end`); an insert past capacity evicts the least recent key.
+struct LruSet {
+    capacity: usize,
+    tick: u64,
+    by_key: HashMap<String, u64>,
+    by_tick: BTreeMap<u64, String>,
+}
+impl LruSet {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            tick: 0,
+            by_key: HashMap::new(),
+            by_tick: BTreeMap::new(),
+        }
+    }
+    fn add_if_new(&mut self, key: &str) -> bool {
+        self.tick += 1;
+        if let Some(previous) = self.by_key.get_mut(key) {
+            self.by_tick.remove(previous);
+            *previous = self.tick;
+            self.by_tick.insert(self.tick, key.to_owned());
+            return false;
+        }
+        self.by_key.insert(key.to_owned(), self.tick);
+        self.by_tick.insert(self.tick, key.to_owned());
+        if self.by_key.len() > self.capacity
+            && let Some((_, oldest)) = self.by_tick.pop_first()
+        {
+            self.by_key.remove(&oldest);
+        }
+        true
+    }
+}
+
+/// A spawned thread plus a channel that disconnects when its closure ends,
+/// so `stop` can wait for it with Python's `join(timeout=5)` bound.
+struct BoundedThread {
+    handle: thread::JoinHandle<()>,
+    done: mpsc::Receiver<()>,
+}
+impl BoundedThread {
+    fn spawn(body: impl FnOnce() + Send + 'static) -> Self {
+        let (done_tx, done) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            // Dropped when the closure returns (or unwinds): disconnects `done`.
+            let _done = done_tx;
+            body();
+        });
+        Self { handle, done }
+    }
+    /// `thread.join(timeout=5)`: a thread still running after the bound is
+    /// left detached, exactly like a timed-out Python join.
+    fn join_bounded(self, timeout: Duration) {
+        if self.handle.thread().id() == thread::current().id() {
+            return;
+        }
+        match self.done.recv_timeout(timeout) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = self.handle.join();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
 struct EnvState {
     document: Value,
     facts: Facts,
@@ -873,6 +969,11 @@ struct EnvState {
     incident_next_attempt: HashMap<String, Instant>,
     pending_invites: HashMap<String, (String, String)>,
     alerted_overrides: HashSet<String>,
+    /// `_EnvState.relaxed_cache`: (store vector, relaxed document).
+    relaxed_cache: Option<(BTreeMap<String, i128>, Arc<Value>)>,
+    /// Bumped wherever Python clears `relaxed_cache` (`_refold`), so a fold
+    /// computed concurrently with that invalidation is never cached.
+    relaxed_generation: u64,
 }
 impl EnvState {
     fn new(
@@ -903,6 +1004,8 @@ impl EnvState {
             incident_next_attempt: HashMap::new(),
             pending_invites: HashMap::new(),
             alerted_overrides: HashSet::new(),
+            relaxed_cache: None,
+            relaxed_generation: 0,
         }
     }
 }
@@ -913,8 +1016,17 @@ pub struct TeamSync {
     pub device: DeviceKey,
     envs: Mutex<HashMap<String, EnvState>>,
     stop: AtomicBool,
-    poll_thread: Mutex<Option<thread::JoinHandle<()>>>,
+    poll_thread: Mutex<Option<BoundedThread>>,
     last_discovery: Mutex<Instant>,
+    /// This instance, for the receive threads it starts (Python's `self`).
+    this: Weak<TeamSync>,
+    /// `TeamSync._commit_seen`.
+    commit_seen: Mutex<LruSet>,
+    /// `TeamSync._session_threads`.
+    receivers: Mutex<Vec<BoundedThread>>,
+    /// Test observability: how many relaxed-document folds actually ran.
+    #[cfg(test)]
+    relaxed_folds: std::sync::atomic::AtomicUsize,
 }
 pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
     let guard = ctx.team.lock().ok()?;
@@ -922,7 +1034,7 @@ pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
 }
 impl TeamSync {
     pub fn new(ctx: Arc<Context>, transport: Arc<dyn Transport>, device: DeviceKey) -> Arc<Self> {
-        let this = Arc::new(Self {
+        let this = Arc::new_cyclic(|this| Self {
             ctx,
             transport,
             device,
@@ -930,6 +1042,11 @@ impl TeamSync {
             stop: AtomicBool::new(false),
             poll_thread: Mutex::new(None),
             last_discovery: Mutex::new(Instant::now() - Duration::from_secs(2)),
+            this: this.clone(),
+            commit_seen: Mutex::new(LruSet::new(SEEN_CAPACITY)),
+            receivers: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
         });
         let weak = Arc::downgrade(&this);
         let membership: MembershipCheck =
@@ -968,7 +1085,7 @@ impl TeamSync {
         self.stop.store(false, Ordering::SeqCst);
         let weak = Arc::downgrade(self);
         *self.poll_thread.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(thread::spawn(move || {
+            Some(BoundedThread::spawn(move || {
                 while let Some(s) = weak.upgrade() {
                     if s.stop.load(Ordering::SeqCst) {
                         break;
@@ -982,20 +1099,33 @@ impl TeamSync {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         self.transport.close();
-        if let Some(t) = self
+        let poll_thread = self
             .poll_thread
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
-            let _ = t.join();
+            .take();
+        if let Some(t) = poll_thread {
+            t.join_bounded(THREAD_JOIN_TIMEOUT);
         }
-        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        for env in envs.values_mut() {
-            for (_, session) in env.sessions.drain() {
-                session.close();
+        let sessions = {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let mut all = Vec::new();
+            for env in envs.values_mut() {
+                all.extend(env.sessions.drain().map(|(_, session)| session));
+                env.fact_replay_cursor.clear();
             }
-            env.fact_replay_cursor.clear();
+            all
+        };
+        for session in sessions {
+            session.close();
+        }
+        // Python: `threads, self._session_threads = self._session_threads, []`
+        // then `t.join(timeout=5)` each, outside every lock (a receive
+        // thread's own exit path takes `envs` via `drop_session`).
+        let receivers =
+            std::mem::take(&mut *self.receivers.lock().unwrap_or_else(|e| e.into_inner()));
+        for t in receivers {
+            t.join_bounded(THREAD_JOIN_TIMEOUT);
         }
     }
     pub fn known_envs(&self) -> Vec<String> {
@@ -1155,6 +1285,8 @@ impl TeamSync {
             .get_mut(env_id)
             .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
         env.document = result.document.clone();
+        env.relaxed_cache = None;
+        env.relaxed_generation = env.relaxed_generation.wrapping_add(1);
         if total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS {
             fold::save_snapshot(
                 self.ctx.state,
@@ -1287,15 +1419,34 @@ impl TeamSync {
                 .or_default()
                 .insert(address.into());
         }
+        // `_persist_peer_address`: `doc = read_json(...) or {}`,
+        // `addrs = list(doc.get(fp, []))`, append if absent, write back.
         let _lock = self.ctx.state.lock()?;
         let path = format!("team/{env_id}/peers.json");
-        let mut peers = self.ctx.state.read_json(&path, json!({}))?;
-        let mut addrs = peers[fp].as_array().cloned().unwrap_or_default();
+        let mut peers = read_dict_or_empty(self.ctx.state, &path)?;
+        let mut addrs = match peers.get(fp) {
+            None => Vec::new(),
+            Some(value) => python_list(value)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail(&path))?,
+        };
         if !addrs.iter().any(|v| v == address) {
             addrs.push(json!(address));
         }
-        peers[fp] = Value::Array(addrs);
-        self.ctx.state.write_json(&path, &peers)
+        peers.insert(fp.to_owned(), Value::Array(addrs));
+        self.ctx.state.write_json(&path, &Value::Object(peers))
+    }
+    /// `self._commit_seen.add_if_new(commit.hash)`.
+    fn commit_first_seen(&self, commit: &Commit) -> bool {
+        // A commit that cannot be hashed cannot be deduplicated; keep the
+        // broadcast rather than silently dropping it (unreachable for a
+        // commit `receive_commit`/`CommitStore` already accepted).
+        let Ok(hash) = commit.hash() else {
+            return true;
+        };
+        self.commit_seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_if_new(&hash)
     }
     pub fn submit_commit(&self, env_id: &str, commit: &Commit) -> Result<&'static str> {
         if !self
@@ -1316,20 +1467,18 @@ impl TeamSync {
             )?
         };
         if result == "accepted" {
+            // The local-commit pickup baseline is moved only by
+            // `pick_up_local_commits`, as in Python: resetting it here would
+            // swallow a commit another process wrote meanwhile. The seen-set
+            // keeps that pickup from broadcasting this commit a second time.
             self.refold(env_id)?;
-            if let Some(env) = self
-                .envs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(env_id)
-            {
-                env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+            if self.commit_first_seen(commit) {
+                self.broadcast(
+                    env_id,
+                    &json!({"type":"COMMIT","commit":commit.to_dict()}),
+                    None,
+                );
             }
-            self.broadcast(
-                env_id,
-                &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                None,
-            );
         }
         Ok(result)
     }
@@ -1419,7 +1568,11 @@ impl TeamSync {
     fn drain_removed(&self, env_id: &str, fp: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
+            // `_drop_member_sessions`: forget the removed peer as a dial
+            // candidate entirely -- addresses and retry/backoff state.
             env.candidate_addresses.remove(fp);
+            env.backoff.remove(fp);
+            env.next_attempt.remove(fp);
             if env.sessions.contains_key(fp) {
                 env.draining.insert(
                     fp.into(),
@@ -1478,7 +1631,11 @@ impl TeamSync {
         self.audit_event("team_session_open", &env_id, Some(&fp), None, None);
         self.start_receiver(env_id.clone(), session.clone());
         self.send_vector(&env_id, &session);
-        self.send_peers(&env_id, &session);
+        // Python lets `_send_peers`'s exception (corrupt/non-dict peers.json)
+        // escape `_on_inbound_session`, skipping the remaining step.
+        if self.send_peers(&env_id, &session).is_err() {
+            return;
+        }
         self.retry_pending_incidents_to(&env_id, &session);
     }
     fn admit_member(
@@ -1532,18 +1689,27 @@ impl TeamSync {
         if outcome != "accepted" {
             return Err(Error::state(format!("team_local_commit_{outcome}")));
         }
-        self.audit_event(
+        // Python: extra={"env_id", "fingerprint", "role"} (the role is not a
+        // fact/op `kind`).
+        let _ = self.ctx.audit.record(
             "team_member_add",
-            env_id,
-            Some(&record.fingerprint()),
-            Some(role),
-            None,
+            RecordArgs {
+                result: Some("ok"),
+                extra: vec![
+                    ("env_id", json!(env_id)),
+                    ("fingerprint", json!(record.fingerprint())),
+                    ("role", json!(role)),
+                ],
+                ..Default::default()
+            },
         );
         Ok(())
     }
-    fn start_receiver(self: &Arc<Self>, env_id: String, session: Arc<dyn Session>) {
-        let weak: Weak<Self> = Arc::downgrade(self);
-        thread::spawn(move || {
+    /// `_start_receiver`: always a receive thread of THIS instance (Python's
+    /// `self`), registered for `stop`'s bounded join.
+    fn start_receiver(&self, env_id: String, session: Arc<dyn Session>) {
+        let weak: Weak<Self> = self.this.clone();
+        let thread = BoundedThread::spawn(move || {
             loop {
                 let Some(this) = weak.upgrade() else {
                     break;
@@ -1565,6 +1731,11 @@ impl TeamSync {
                 this.drop_session(&env_id, &session.peer().fingerprint(), Some(&session));
             }
         });
+        let mut receivers = self.receivers.lock().unwrap_or_else(|e| e.into_inner());
+        // Joining an already-finished thread is immediate in Python; pruning
+        // them here only bounds this list's growth.
+        receivers.retain(|t| !t.handle.is_finished());
+        receivers.push(thread);
     }
     fn drop_session(&self, env_id: &str, fp: &str, expected: Option<&Arc<dyn Session>>) {
         let removed = {
@@ -1615,28 +1786,45 @@ impl TeamSync {
             env.synced_at = Some((self.ctx.clock)());
         }
     }
-    fn send_peers(&self, env_id: &str, session: &Arc<dyn Session>) {
+    /// `_send_peers`: only list-valued entries, each reduced to its sorted
+    /// string addresses. A corrupt or non-dict `peers.json` is an error the
+    /// caller stops on, as Python's escaping exception does.
+    fn send_peers(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
         let fp = session.peer().fingerprint();
         {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if envs
                 .get(env_id)
-                .is_none_or(|e| e.draining.contains_key(&fp))
+                .is_some_and(|e| e.draining.contains_key(&fp))
             {
-                return;
+                return Ok(());
             }
         }
-        let peers = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/peers.json"), json!({}))
-            .unwrap_or(json!({}));
+        let peers_doc = read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peers.json"))?;
+        let mut payload = Map::new();
+        for (peer_fp, addrs) in peers_doc {
+            let Value::Array(addrs) = addrs else {
+                continue;
+            };
+            let mut strings: Vec<String> = addrs
+                .into_iter()
+                .filter_map(|a| match a {
+                    Value::String(s) => Some(s),
+                    _ => None,
+                })
+                .collect();
+            // Python's `sorted()` on str orders by code point, which is
+            // exactly UTF-8 byte order.
+            strings.sort();
+            payload.insert(peer_fp, json!(strings));
+        }
         if session
-            .send(&json!({"type":"PEERS","peers":peers}))
+            .send(&json!({"type":"PEERS","peers":payload}))
             .is_err()
         {
             self.drop_session(env_id, &fp, Some(session));
         }
+        Ok(())
     }
     fn handle_message(
         &self,
@@ -1839,43 +2027,58 @@ impl TeamSync {
             )?
         };
         if outcome == "accepted" {
+            // As in `submit_commit`: the pickup baseline is left alone and the
+            // seen-set gates the (single) rebroadcast.
             self.refold(env_id)?;
-            if let Some(env) = self
-                .envs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get_mut(env_id)
-            {
-                env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+            if self.commit_first_seen(&commit) {
+                self.broadcast(
+                    env_id,
+                    &json!({"type":"COMMIT","commit":commit.to_dict()}),
+                    Some(&session.peer().fingerprint()),
+                );
             }
-            self.broadcast(
-                env_id,
-                &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                Some(&session.peer().fingerprint()),
-            );
         }
         Ok(())
     }
-    fn relaxed_document(&self, env_id: &str) -> Result<Value> {
-        let mut facts = {
-            self.envs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+    /// `_relaxed_document`, including its store-vector-keyed cache: while no
+    /// commit has changed the vector and no `_refold` has run since, the
+    /// previous fold is reused instead of re-folding the whole commit log
+    /// (one lookup per replayed/received fact and per incident).
+    fn relaxed_document(&self, env_id: &str) -> Result<Arc<Value>> {
+        let vector_key = CommitStore::new(self.ctx.state, env_id).vector()?;
+        let (mut facts, generation) = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let env = envs
                 .get(env_id)
-                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?
-                .facts
-                .clone()
+                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
+            if let Some((cached_key, cached)) = &env.relaxed_cache
+                && *cached_key == vector_key
+            {
+                return Ok(cached.clone());
+            }
+            (env.facts.clone(), env.relaxed_generation)
         };
         facts.removed_members.clear();
-        Ok(fold::fold(
-            env_id,
-            CommitStore::new(self.ctx.state, env_id).all_commits()?,
-            Some(&facts),
-            None,
-            None,
-            None,
-        )?
-        .document)
+        #[cfg(test)]
+        self.relaxed_folds.fetch_add(1, Ordering::SeqCst);
+        let document = Arc::new(
+            fold::fold(
+                env_id,
+                CommitStore::new(self.ctx.state, env_id).all_commits()?,
+                Some(&facts),
+                None,
+                None,
+                None,
+            )?
+            .document,
+        );
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id)
+            && env.relaxed_generation == generation
+        {
+            env.relaxed_cache = Some((vector_key, document.clone()));
+        }
+        Ok(document)
     }
     fn known_record(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
         let doc = self.relaxed_document(env_id).ok()?;
@@ -2064,10 +2267,12 @@ impl TeamSync {
         {
             return Ok(());
         }
-        let Some(record) = self.known_record(env_id, &fact.author) else {
-            return Ok(());
-        };
-        if !verify_fact(&fact, &record) {
+        // `author_record is None or not verify_fact(...)`: an unknown author is
+        // audited exactly like a bad signature.
+        if !self
+            .known_record(env_id, &fact.author)
+            .is_some_and(|record| verify_fact(&fact, &record))
+        {
             self.audit_fact_rejected(env_id, &fact, "team_fact_signature_invalid");
             return Ok(());
         }
@@ -2110,29 +2315,58 @@ impl TeamSync {
         Ok(())
     }
     fn apply_incident_rotation_flags(&self, env_id: &str, target: &Value) -> Result<()> {
+        let mandatory: Vec<&str> = target["secret_ids_mandatory"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let recommended: Vec<&str> = target["secret_ids_recommended"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
         let _lock = self.ctx.state.lock()?;
         let path = format!("team/{env_id}/rotation_flags.json");
-        let mut flags = self.ctx.state.read_json(&path, json!({}))?;
+        let corrupt = || Error::state("state_corrupt").with_detail(&path);
+        // `flags = read_json(...) or {}`. On a truthy non-dict Python's item
+        // assignment / `.get` raises uncaught (§3.5: `state_corrupt`), but
+        // only once there is a secret id to flag; with none it writes the
+        // document back unchanged.
+        let mut flags = match self.ctx.state.read_json(&path, json!({}))? {
+            Value::Object(map) => map,
+            other if super::json_falsy(&other) => Map::new(),
+            other if mandatory.is_empty() && recommended.is_empty() => {
+                return self.ctx.state.write_json(&path, &other);
+            }
+            _ => return Err(corrupt()),
+        };
         let now = iso(Some((self.ctx.clock)()));
-        for id in target["secret_ids_mandatory"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            flags[id] = json!({"reason":"rotation_required","flagged_at":now});
+        for id in mandatory {
+            flags.insert(
+                id.to_owned(),
+                json!({"reason":"rotation_required","flagged_at":now}),
+            );
         }
-        for id in target["secret_ids_recommended"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            if flags[id]["reason"] != "rotation_required" {
-                flags[id] = json!({"reason":"rotation_recommended","flagged_at":now});
+        for id in recommended {
+            // `flags.get(id, {}).get("reason")`: a present non-dict entry
+            // raises in Python.
+            let required = match flags.get(id) {
+                None => false,
+                Some(Value::Object(entry)) => entry
+                    .get("reason")
+                    .is_some_and(|reason| reason == "rotation_required"),
+                Some(_) => return Err(corrupt()),
+            };
+            if !required {
+                flags.insert(
+                    id.to_owned(),
+                    json!({"reason":"rotation_recommended","flagged_at":now}),
+                );
             }
         }
-        self.ctx.state.write_json(&path, &flags)
+        self.ctx.state.write_json(&path, &Value::Object(flags))
     }
     fn handle_incident_ack(&self, env_id: &str, message: &Value) -> Result<()> {
         let Some(hash) = message["hash"].as_str() else {
@@ -2337,11 +2571,15 @@ impl TeamSync {
         if !released.is_empty() {
             self.refold(env_id)?;
             for commit in released {
-                self.broadcast(
-                    env_id,
-                    &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                    None,
-                );
+                // The next pickup tick sees these as new store commits too;
+                // the seen-set keeps that from broadcasting them again.
+                if self.commit_first_seen(&commit) {
+                    self.broadcast(
+                        env_id,
+                        &json!({"type":"COMMIT","commit":commit.to_dict()}),
+                        None,
+                    );
+                }
             }
         }
         let (close, dial, send) = {
@@ -2444,11 +2682,13 @@ impl TeamSync {
         if !added.is_empty() {
             self.refold(env_id)?;
             for commit in added {
-                self.broadcast(
-                    env_id,
-                    &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                    None,
-                );
+                if self.commit_first_seen(&commit) {
+                    self.broadcast(
+                        env_id,
+                        &json!({"type":"COMMIT","commit":commit.to_dict()}),
+                        None,
+                    );
+                }
             }
         }
         Ok(())
@@ -2571,11 +2811,11 @@ impl TeamSync {
             return;
         }
         self.audit_event("team_session_open", env_id, Some(fp), None, None);
-        if let Some(this) = attached(&self.ctx) {
-            this.start_receiver(env_id.into(), session.clone());
-        }
+        self.start_receiver(env_id.into(), session.clone());
         self.send_vector(env_id, &session);
-        self.send_peers(env_id, &session);
+        if self.send_peers(env_id, &session).is_err() {
+            return;
+        }
         self.retry_pending_incidents_to(env_id, &session);
     }
     pub fn adopt_outbound_session(&self, env_id: &str, session: Arc<dyn Session>, address: &str) {

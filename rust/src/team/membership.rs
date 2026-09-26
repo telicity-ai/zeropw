@@ -51,7 +51,15 @@ fn b32e(raw: &[u8]) -> String {
 fn b32d(text: &str) -> Result<Vec<u8>> {
     // Python pads the complete, stripped input to an eight-character block
     // before calling b32decode. This also accepts already-padded tokens.
-    let mut encoded = text.trim().to_ascii_uppercase().into_bytes();
+    // `str.strip()` removes `str.isspace()` characters (a wider set than
+    // Rust's `trim`, e.g. U+001C..U+001F) and `str.upper()` is the full
+    // Unicode mapping (`"ſ".upper() == "S"`, `"ﬁ".upper() == "FI"`);
+    // b32decode then rejects anything still non-ASCII.
+    let upper = text.trim_matches(crate::pystr::is_space).to_uppercase();
+    if !upper.is_ascii() {
+        return Err(Error::invalid_input("invite_malformed"));
+    }
+    let mut encoded = upper.into_bytes();
     encoded.resize(encoded.len() + (8 - encoded.len() % 8) % 8, b'=');
     let data_len = encoded
         .iter()
@@ -285,22 +293,42 @@ pub fn parse_invite(text: &str) -> Result<Invite> {
     let value: Value =
         pyjson::loads(source).map_err(|_| Error::invalid_input("invite_malformed"))?;
     let bad = || Error::invalid_input("invite_malformed");
-    if value["format"] != INVITE_FORMAT {
+    let Some(payload) = value.as_object() else {
+        return Err(bad());
+    };
+    if payload.get("format").is_none_or(|f| f != INVITE_FORMAT) {
         return Err(bad());
     }
-    let field = |key| value[key].as_str().map(str::to_owned).ok_or_else(bad);
+    // `str(payload[key])`: any JSON value is accepted and stringified; only a
+    // missing key (`KeyError`) is malformed.
+    let field = |key| {
+        payload
+            .get(key)
+            .map(commit::python_str_coerce)
+            .ok_or_else(bad)
+    };
     let env_id = field("env_id")?;
     if !commit::valid_env_id(&env_id) {
         return Err(bad());
     }
     let inviter = field("inviter")?;
-    let addresses = value["addresses"]
-        .as_array()
-        .ok_or_else(bad)?
-        .iter()
-        .map(|v| v.as_str().map(str::to_owned).ok_or_else(bad))
-        .collect::<Result<Vec<_>>>()?;
-    let secret = pybase64::b64decode(&field("invite_secret")?).map_err(|_| bad())?;
+    // `[str(a) for a in payload.get("addresses", [])]`: a missing key is an
+    // empty list, a string iterates its characters and an object its keys;
+    // null/bool/number are not iterable (`TypeError` -> malformed).
+    let addresses = match payload.get("addresses") {
+        None => Vec::new(),
+        Some(value) => sync::python_list(value)
+            .ok_or_else(bad)?
+            .iter()
+            .map(commit::python_str_coerce)
+            .collect(),
+    };
+    // `base64.b64decode(payload["invite_secret"])` only takes a str here
+    // (any other JSON value is a `TypeError` -> malformed).
+    let secret = match payload.get("invite_secret") {
+        Some(Value::String(s)) => pybase64::b64decode(s).map_err(|_| bad())?,
+        _ => return Err(bad()),
+    };
     let expires_at = field("expires_at")?;
     let role = field("role")?;
     let name = field("name")?;
