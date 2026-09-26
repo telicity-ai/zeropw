@@ -617,7 +617,7 @@ impl Client {
     fn send_message(&mut self, config: &NotifyConfig, message: &Message) -> Result<(), SendError> {
         self.ehlo_or_helo_if_needed()?;
         let from = mailbox(&config.sender);
-        let to: Vec<String> = config.recipients.iter().map(|r| mailbox(r)).collect();
+        let to = envelope_recipients(config);
         let international = !from.is_ascii() || to.iter().any(|r| !r.is_ascii());
         if international && !self.has_extn("smtputf8") {
             return Err(caught("SMTPNotSupportedError"));
@@ -730,6 +730,23 @@ impl Client {
             Err(error) => Err(error),
         }
     }
+}
+
+/// `[a[1] for a in getaddresses([msg["To"]])]` for the joined recipients:
+/// one address per configured entry, unless an entry itself holds several
+/// comma-separated addresses, which Python's list parse splits.
+fn envelope_recipients(config: &NotifyConfig) -> Vec<String> {
+    if let Some(Tok::List(_, parts)) = get_address_list(&config.recipients.join(", ")) {
+        let addresses: Vec<String> = parts
+            .iter()
+            .filter(|part| matches!(part, Tok::List(Kind::Address, _)))
+            .map(|address| mailbox(address.text().trim_start()))
+            .collect();
+        if addresses.len() != config.recipients.len() {
+            return addresses;
+        }
+    }
+    config.recipients.iter().map(|r| mailbox(r)).collect()
 }
 
 /// `self.file.readline(limit)`: up to `limit` bytes, through `\n`; a short

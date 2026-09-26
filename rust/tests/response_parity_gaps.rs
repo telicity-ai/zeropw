@@ -739,6 +739,11 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
             Password::None,
         ),
         (
+            "multi_address_entry",
+            json!({"recipients": ["a@example.com, b@example.com", "c@example.com"]}),
+            Password::None,
+        ),
+        (
             "timeout_overflow",
             json!({"timeout_seconds": 1e10}),
             Password::None,
