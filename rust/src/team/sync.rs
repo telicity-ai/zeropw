@@ -2384,14 +2384,16 @@ impl TeamSync {
                         .filter(|(fp, _)| {
                             Some(fp.as_str()) != exclude && !e.draining.contains_key(*fp)
                         })
-                        .map(|(_, s)| s.clone())
+                        .map(|(fp, s)| (fp.clone(), s.clone()))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         };
-        for session in sessions {
+        // `_broadcast`: a failed send drops that session at once
+        // (`_drop_session`: unregister, close, `team_session_close` audit).
+        for (fp, session) in sessions {
             if session.send(message).is_err() {
-                session.close();
+                self.drop_session(env_id, &fp, Some(&session));
             }
         }
     }
