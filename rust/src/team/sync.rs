@@ -1069,6 +1069,93 @@ print(json.dumps(out))
         assert!(python[6]["commits"].as_u64().unwrap() >= 2);
     }
 
+    /// `stop()`'s ordering, observed through a transport whose `dial` is
+    /// slow: Python joins the poll thread (so the in-flight dial returns)
+    /// before closing the transport.
+    const PY_STOP_ORDER: &str = r#"
+import threading
+events = []
+started = threading.Event()
+
+class Slow:
+    def dial(self, address, env_id, invite_proof=None):
+        events.append("dial_start")
+        started.set()
+        time.sleep(0.3)
+        events.append("dial_end")
+        raise T.SessionClosed("synthetic_refused")
+    def close(self):
+        events.append("close")
+
+slow = S.TeamSync(ctx, Slow(), device)
+slow.register_env(env_id)
+slow.set_peer_address(env_id, peer.fingerprint, "synthetic-slow-address")
+slow.start()
+assert started.wait(10)
+slow.stop()
+print(json.dumps(events))
+"#;
+
+    struct SlowDialTransport {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl Transport for SlowDialTransport {
+        fn set_membership(&self, _: MembershipCheck) {}
+        fn set_invite_check(&self, _: Option<InviteCheck>) {}
+        fn set_handshake_failed(&self, _: Option<HandshakeFailedHook>) {}
+        fn listen(&self, _: &str, _: OnSession) -> Result<()> {
+            Ok(())
+        }
+        fn dial(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<InviteProof>,
+        ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
+            self.events.lock().unwrap().push("dial_start");
+            thread::sleep(Duration::from_millis(300));
+            self.events.lock().unwrap().push("dial_end");
+            Err(SessionClosed("synthetic_refused"))
+        }
+        fn close(&self) {
+            self.events.lock().unwrap().push("close");
+        }
+    }
+
+    #[test]
+    fn stop_joins_the_poll_thread_before_closing_the_transport() {
+        let python: Value = serde_json::from_str(
+            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_STOP_ORDER}")).trim(),
+        )
+        .unwrap();
+        let fixture = owner_with_admin_peer();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let slow = TeamSync::new(
+            fixture.ctx.clone(),
+            Arc::new(SlowDialTransport {
+                events: events.clone(),
+            }),
+            fixture.team.device.clone(),
+        );
+        slow.register_env(&fixture.env_id).unwrap();
+        slow.set_peer_address(
+            &fixture.env_id,
+            &fixture.peer_key.fingerprint().unwrap(),
+            "synthetic-slow-address",
+        )
+        .unwrap();
+        slow.start(None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !events.lock().unwrap().contains(&"dial_start") {
+            assert!(Instant::now() < deadline, "the poll thread never dialed");
+            thread::sleep(Duration::from_millis(5));
+        }
+        slow.stop();
+        let events = events.lock().unwrap().clone();
+        assert_eq!(json!(events), python);
+        assert_eq!(events, ["dial_start", "dial_end", "close"]);
+    }
+
     /// Gap 7: `_drop_member_sessions` forgets a removed peer's addresses and
     /// its dial backoff/next-attempt state, not only its addresses.
     #[test]
@@ -1836,9 +1923,12 @@ impl TeamSync {
             }));
         Ok(())
     }
+    /// `TeamSync.stop`: signal, join the poll thread (bounded), and only then
+    /// close the transport -- an in-flight poll tick (e.g. a dial) finishes
+    /// against a live transport, as in Python -- then close every session
+    /// and join the receive threads.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        self.transport.close();
         let poll_thread = self
             .poll_thread
             .lock()
@@ -1847,6 +1937,7 @@ impl TeamSync {
         if let Some(t) = poll_thread {
             t.join_bounded(THREAD_JOIN_TIMEOUT);
         }
+        self.transport.close();
         let sessions = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let mut all = Vec::new();

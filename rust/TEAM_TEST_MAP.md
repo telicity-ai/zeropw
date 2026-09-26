@@ -85,5 +85,5 @@ These cover behaviour an audit found differing from `zeropw/team/sync.py`/`membe
 | `parse_invite` `str()` coercion, `addresses` default and iteration, `_b32d` `strip().upper()` | PG / `parse_invite_accepts_every_shape_python_accepts` |
 | `_drop_member_sessions` clears backoff/next-attempt | SU / `member_removal_forgets_dial_backoff_state` |
 | `_apply_incident_rotation_flags` over a corrupt flags document | SU / `corrupt_rotation_flags_fail_the_incident_like_python` |
-| `_wire_dialed_session` starts `self._start_receiver`; `stop` joins receive threads with `join(timeout=5)` | PG / `outbound_receiver_belongs_to_the_adopting_instance`, `stop_joins_receiver_threads`, `stop_join_is_bounded_like_python` |
+| `_wire_dialed_session` starts `self._start_receiver`; `stop` joins the poll thread before closing the transport and joins receive threads with `join(timeout=5)` | PG / `outbound_receiver_belongs_to_the_adopting_instance`, `stop_joins_receiver_threads`, `stop_join_is_bounded_like_python`; SU / `stop_joins_the_poll_thread_before_closing_the_transport` |
 | `_load_env_locked` over every `peer_vectors.json`/`overridden_alerted.json` shape; `_handle_vector` Python-int edge values | SU / `peer_state_documents_load_like_python`, `peer_vector_ints_are_exact_like_python` |
