@@ -111,7 +111,8 @@ fn python_str(v: &Value) -> String {
         .map(str::to_owned)
         .unwrap_or_else(|| crate::pystr::repr_value(v))
 }
-fn python_truthy(v: &Value) -> bool {
+/// Python `bool(value)` for a JSON-decoded value.
+pub(crate) fn python_truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
@@ -194,19 +195,42 @@ fn bounded(value: Option<&str>) -> Option<String> {
 fn actions() -> Value {
     json!({"stopped":false,"principals_disabled":0,"grants_revoked":0,"handle_key_rotated":false,"runs_cancelled":0,"sockets_closed":0,"failed_steps":[]})
 }
+/// `incident.actions.setdefault("failed_steps", [])`, returning the list
+/// Python would `.append` to. `None` is a persisted non-list value, on which
+/// Python's `.append` raises an uncaught `AttributeError` that aborts the
+/// remaining containment steps; containment continues here instead (see
+/// `DEVIATIONS.md`, incident hand-edited `actions` shapes).
+pub(crate) fn failed_steps(i: &mut Incident) -> Option<&mut Vec<Value>> {
+    let actions = i.actions.as_object_mut()?;
+    actions
+        .entry("failed_steps")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+}
+/// `incident.actions.setdefault("failed_steps", []).append(step)`.
 fn fail(i: &mut Incident, step: impl Into<String>) {
-    let step = step.into();
-    if let Some(arr) = i
-        .actions
-        .get_mut("failed_steps")
-        .and_then(Value::as_array_mut)
-    {
-        arr.push(json!(step));
+    if let Some(steps) = failed_steps(i) {
+        steps.push(json!(step.into()));
     }
 }
+/// `actions[key] = actions.get(key, 0) + delta` for a persisted counter,
+/// with Python's numeric promotion: `bool` counts as `int`, an integer stays
+/// exact, a float stays a float. A non-numeric value (Python `TypeError`) is
+/// left unchanged, like a non-list `failed_steps`.
 fn increment(i: &mut Incident, key: &str, delta: usize) {
-    let old = i.actions.get(key).and_then(Value::as_u64).unwrap_or(0);
-    i.actions[key] = json!(old + delta as u64);
+    let sum = match i.actions.get(key) {
+        None => Some(json!(delta)),
+        Some(value @ (Value::Bool(_) | Value::Number(_))) => {
+            match crate::pyint::PyInt::from_python_int(value) {
+                Some(int) => Some(crate::pyint::PyInt(int.0 + delta).value()),
+                None => value.as_f64().map(|float| json!(float + delta as f64)),
+            }
+        }
+        Some(_) => None,
+    };
+    if let (Some(sum), Some(actions)) = (sum, i.actions.as_object_mut()) {
+        actions.insert(key.into(), sum);
+    }
 }
 fn rank(scope: &str) -> Option<usize> {
     SCOPES.iter().position(|s| *s == scope)
@@ -217,11 +241,10 @@ pub fn save_incident(ctx: &Context, incident: &mut Incident) -> Result<()> {
         .map_err(|_| Error::state("state_write_failed"))?;
     if value_leak(ctx, payload.as_bytes()) {
         incident.assessment = json!({"redacted":true});
-        if !incident.actions["failed_steps"]
-            .as_array()
-            .is_some_and(|a| a.contains(&json!("assessment_redacted")))
+        if let Some(steps) = failed_steps(incident)
+            && !steps.contains(&json!("assessment_redacted"))
         {
-            fail(incident, "assessment_redacted");
+            steps.push(json!("assessment_redacted"));
         }
     }
     ctx.state
@@ -279,7 +302,23 @@ fn resolve_principals(
 ) -> Result<Vec<String>> {
     let mut ids: Vec<String> = match scope {
         "principal" => {
-            let ids = principals.unwrap_or_default();
+            // `None` is what the administrator CLI passes when `--scope
+            // principal` has no `--principal`; Python's `cmd_incident_declare`
+            // passes `[args.principal]`, i.e. `[None]`, and
+            // `ctx.policy.get_principal(None)` reads the principal document
+            // and finds no such key. `Some(&[])` stays Python's empty list.
+            let Some(ids) = principals else {
+                let doc = ctx.state.read_json(crate::policy::PRINCIPALS, json!({}))?;
+                if python_truthy(&doc) && !doc.is_object() {
+                    // `.get` on a non-dict document: uncaught AttributeError
+                    // in Python (PORTING.md §3.5); Policy's own reader
+                    // reports this document shape as state_corrupt.
+                    return Err(
+                        Error::state("state_corrupt").with_detail(crate::policy::PRINCIPALS)
+                    );
+                }
+                return Err(Error::not_found("principal_not_found"));
+            };
             if ids.is_empty() {
                 return Err(Error::invalid_input("incident_principals_required"));
             }
@@ -331,6 +370,7 @@ pub fn apply_lockdown(
     scope: &str,
     runtime: Option<&str>,
 ) {
+    failed_steps(incident);
     let ids: BTreeSet<&str> = target_ids.iter().map(String::as_str).collect();
     let registry = crate::runs::registry(ctx);
     let signer = ctx.signer_manager.lock().ok().and_then(|s| {
@@ -356,7 +396,7 @@ pub fn apply_lockdown(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if !incident.actions["stopped"].as_bool().unwrap_or(false)
+    if !python_truthy(&incident.actions["stopped"])
         && (scope == "all" || (scope == "runtime" && runtime_covers_all_active(ctx, runtime)))
     {
         match ctx.policy.stop_all() {
@@ -364,25 +404,26 @@ pub fn apply_lockdown(
             Err(_) => fail(incident, "stop_all"),
         }
     }
+    let (mut disabled, mut revoked) = (0, 0);
     for pid in target_ids {
         let active = ctx
             .policy
             .get_principal(pid)
             .is_ok_and(|p| p.status == "active");
         match ctx.policy.disable_principal(pid, false) {
-            Ok(()) if active => increment(incident, "principals_disabled", 1),
+            Ok(()) if active => disabled += 1,
             Ok(()) => (),
             Err(_) => fail(incident, format!("disable_principal:{pid}")),
         }
         match ctx.policy.revoke_grants_of(pid) {
-            Ok(n) => increment(incident, "grants_revoked", n),
+            Ok(n) => revoked += n,
             Err(_) => fail(incident, format!("revoke_grants:{pid}")),
         }
     }
+    increment(incident, "principals_disabled", disabled);
+    increment(incident, "grants_revoked", revoked);
     if (scope == "runtime" || scope == "all")
-        && !incident.actions["handle_key_rotated"]
-            .as_bool()
-            .unwrap_or(false)
+        && !python_truthy(&incident.actions["handle_key_rotated"])
     {
         match ctx.rotate_handle_key() {
             Ok(()) => incident.actions["handle_key_rotated"] = json!(true),
@@ -397,13 +438,17 @@ pub fn apply_lockdown(
             fail(incident, "cancel_runs");
         }
     }
-    increment(incident, "runs_cancelled", runs_before.len());
+    if !runs_before.is_empty() {
+        increment(incident, "runs_cancelled", runs_before.len());
+    }
     for binding in &bindings_before {
         if let Some(manager) = &signer {
             manager.release(binding);
         }
     }
-    increment(incident, "sockets_closed", bindings_before.len());
+    if !bindings_before.is_empty() {
+        increment(incident, "sockets_closed", bindings_before.len());
+    }
     if registry.is_none() && signer.is_none() {
         incident.actions["applied_by_serve"] = json!(true);
     }

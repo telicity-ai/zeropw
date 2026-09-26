@@ -755,7 +755,9 @@ fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(S
             if reader.read_line(&mut line).unwrap() == 0 {
                 break;
             }
-            if line.starts_with("EHLO") {
+            // SMTP verbs are case-insensitive; smtplib sends `ehlo`/`mail`.
+            let upper = line.to_ascii_uppercase();
+            if upper.starts_with("EHLO") {
                 stream
                     .write_all(if plain_auth {
                         b"250-fake\r\n250-AUTH PLAIN\r\n250 OK\r\n"
@@ -763,19 +765,19 @@ fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(S
                         b"250-fake\r\n250-AUTH LOGIN\r\n250 OK\r\n"
                     })
                     .unwrap();
-            } else if line.starts_with("AUTH PLAIN ") {
+            } else if upper.starts_with("AUTH PLAIN ") {
                 auth = line.trim().to_owned();
                 stream.write_all(b"235 authenticated\r\n").unwrap();
-            } else if line.starts_with("AUTH LOGIN") {
+            } else if upper.starts_with("AUTH LOGIN") {
                 if line.trim() == "AUTH LOGIN" {
                     stream.write_all(b"334 VXNlcm5hbWU6\r\n").unwrap();
                 } else {
                     auth = line.trim().to_owned();
                     stream.write_all(b"334 UGFzc3dvcmQ6\r\n").unwrap();
                 }
-            } else if line.starts_with("MAIL FROM") || line.starts_with("RCPT TO") {
+            } else if upper.starts_with("MAIL FROM") || upper.starts_with("RCPT TO") {
                 stream.write_all(b"250 OK\r\n").unwrap();
-            } else if line.starts_with("DATA") {
+            } else if upper.starts_with("DATA") {
                 stream.write_all(b"354 send\r\n").unwrap();
                 loop {
                     let mut data = Vec::new();
@@ -786,7 +788,7 @@ fn smtp_server(listener: TcpListener, plain_auth: bool) -> thread::JoinHandle<(S
                     message.extend(data);
                 }
                 stream.write_all(b"250 OK\r\n").unwrap();
-            } else if line.starts_with("QUIT") {
+            } else if upper.starts_with("QUIT") {
                 stream.write_all(b"221 bye\r\n").unwrap();
                 break;
             } else if auth.is_empty() {
@@ -833,6 +835,7 @@ fn smtp_transport_failure_names_track_the_failing_phase() {
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
                     break;
                 }
+                let line = line.to_ascii_uppercase();
                 if line.starts_with("EHLO") {
                     stream.write_all(b"250 ready\r\n").unwrap();
                 } else if line.starts_with("MAIL FROM") {

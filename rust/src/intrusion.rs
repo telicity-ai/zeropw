@@ -1,7 +1,8 @@
 //! Audit-stream intrusion detector, port of `zeropw/intrusion.py`.
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{
-    Arc, Mutex, Weak,
+    Arc, Mutex, PoisonError, TryLockError, Weak,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -183,94 +184,128 @@ impl DetectorConfig {
                 o.insert(key, value);
             }
         }
-        for (key, out) in [
-            ("window_seconds", &mut c.window_seconds),
-            ("enumeration_ratio", &mut c.enumeration_ratio),
+        // `DetectorConfig(**kwargs)` performs every type and range check in
+        // `__post_init__`, in the order strong -> weak -> window ->
+        // weak_threshold -> enumeration_min -> enumeration_ratio ->
+        // burst_count. A value whose type cannot be stored here is recorded
+        // and reported at its own position in that order, not first.
+        let mut unrepresentable: Vec<&'static str> = Vec::new();
+        for (key, reason, out) in [
+            (
+                "window_seconds",
+                "intrusion_window_invalid",
+                &mut c.window_seconds,
+            ),
+            (
+                "enumeration_ratio",
+                "intrusion_enumeration_ratio_invalid",
+                &mut c.enumeration_ratio,
+            ),
         ] {
             if let Some(v) = o.get(key) {
-                *out = v.as_f64().ok_or_else(|| {
-                    Error::invalid_input(if key == "window_seconds" {
-                        "intrusion_window_invalid"
-                    } else {
-                        "intrusion_enumeration_ratio_invalid"
-                    })
-                })?;
-            }
-        }
-        for (key, out) in [
-            ("weak_threshold", &mut c.weak_threshold),
-            ("enumeration_min", &mut c.enumeration_min),
-            ("burst_count", &mut c.burst_count),
-        ] {
-            if let Some(v) = o.get(key) {
-                *out = PyInt::from_json_integer(v).ok_or_else(|| {
-                    Error::invalid_input(match key {
-                        "weak_threshold" => "intrusion_weak_threshold_invalid",
-                        "enumeration_min" => "intrusion_enumeration_min_invalid",
-                        _ => "intrusion_burst_count_invalid",
-                    })
-                })?;
-            }
-        }
-        if let Some(points) = o.get("weak_points").and_then(Value::as_object) {
-            for (k, v) in points {
-                if WEAK_RULES.contains(&k.as_str()) {
-                    c.weak_points.insert(
-                        k.clone(),
-                        PyInt::from_json_integer(v)
-                            .ok_or_else(|| Error::invalid_input("intrusion_weak_points_invalid"))?,
-                    );
+                match v.as_f64() {
+                    Some(value) => *out = value,
+                    None => unrepresentable.push(reason),
                 }
             }
         }
-        if let Some(thresholds) = o.get("strong_thresholds").and_then(Value::as_object) {
-            for (k, v) in thresholds {
-                if STRONG_RULES.contains(&k.as_str()) {
-                    c.strong_thresholds.insert(
-                        k.clone(),
-                        PyInt::from_json_integer(v).ok_or_else(|| {
-                            Error::invalid_input("intrusion_strong_threshold_invalid")
-                        })?,
-                    );
+        for (key, reason, out) in [
+            (
+                "weak_threshold",
+                "intrusion_weak_threshold_invalid",
+                &mut c.weak_threshold,
+            ),
+            (
+                "enumeration_min",
+                "intrusion_enumeration_min_invalid",
+                &mut c.enumeration_min,
+            ),
+            (
+                "burst_count",
+                "intrusion_burst_count_invalid",
+                &mut c.burst_count,
+            ),
+        ] {
+            if let Some(v) = o.get(key) {
+                match PyInt::from_json_integer(v) {
+                    Some(value) => *out = value,
+                    None => unrepresentable.push(reason),
                 }
             }
         }
-        c.validate()?;
+        for (key, rules, reason, out) in [
+            (
+                "weak_points",
+                WEAK_RULES,
+                "intrusion_weak_points_invalid",
+                &mut c.weak_points,
+            ),
+            (
+                "strong_thresholds",
+                STRONG_RULES,
+                "intrusion_strong_threshold_invalid",
+                &mut c.strong_thresholds,
+            ),
+        ] {
+            for (k, v) in o.get(key).and_then(Value::as_object).into_iter().flatten() {
+                if rules.contains(&k.as_str()) {
+                    match PyInt::from_json_integer(v) {
+                        Some(value) => {
+                            out.insert(k.clone(), value);
+                        }
+                        None => unrepresentable.push(reason),
+                    }
+                }
+            }
+        }
+        c.validate_reporting(&unrepresentable)?;
         Ok(c)
     }
     pub fn validate(&self) -> Result<()> {
-        for rule in STRONG_RULES {
-            if self
-                .strong_thresholds
-                .get(*rule)
-                .is_none_or(|v| v.0 < BigInt::from(1))
-            {
-                return Err(Error::invalid_input("intrusion_strong_threshold_invalid"));
+        self.validate_reporting(&[])
+    }
+    /// `DetectorConfig.__post_init__`, where `unrepresentable` names the
+    /// checks whose input already failed its type test during parsing.
+    fn validate_reporting(&self, unrepresentable: &[&'static str]) -> Result<()> {
+        let checks: [(&'static str, bool); 7] = [
+            (
+                "intrusion_strong_threshold_invalid",
+                STRONG_RULES.iter().all(|rule| {
+                    self.strong_thresholds
+                        .get(*rule)
+                        .is_some_and(|v| v.0 >= BigInt::from(1))
+                }),
+            ),
+            (
+                "intrusion_weak_points_invalid",
+                WEAK_RULES.iter().all(|rule| {
+                    self.weak_points
+                        .get(*rule)
+                        .is_some_and(|v| v.0 >= BigInt::from(0))
+                }),
+            ),
+            ("intrusion_window_invalid", self.window_seconds > 0.0),
+            (
+                "intrusion_weak_threshold_invalid",
+                self.weak_threshold.0 >= BigInt::from(1),
+            ),
+            (
+                "intrusion_enumeration_min_invalid",
+                self.enumeration_min.0 >= BigInt::from(1),
+            ),
+            (
+                "intrusion_enumeration_ratio_invalid",
+                self.enumeration_ratio > 0.0 && self.enumeration_ratio <= 1.0,
+            ),
+            (
+                "intrusion_burst_count_invalid",
+                self.burst_count.0 >= BigInt::from(1),
+            ),
+        ];
+        for (reason, valid) in checks {
+            if !valid || unrepresentable.contains(&reason) {
+                return Err(Error::invalid_input(reason));
             }
-        }
-        for rule in WEAK_RULES {
-            if self
-                .weak_points
-                .get(*rule)
-                .is_none_or(|v| v.0 < BigInt::from(0))
-            {
-                return Err(Error::invalid_input("intrusion_weak_points_invalid"));
-            }
-        }
-        if self.window_seconds <= 0.0 || self.window_seconds.is_nan() {
-            return Err(Error::invalid_input("intrusion_window_invalid"));
-        }
-        if self.weak_threshold.0 < BigInt::from(1) {
-            return Err(Error::invalid_input("intrusion_weak_threshold_invalid"));
-        }
-        if self.enumeration_min.0 < BigInt::from(1) {
-            return Err(Error::invalid_input("intrusion_enumeration_min_invalid"));
-        }
-        if !(self.enumeration_ratio > 0.0 && self.enumeration_ratio <= 1.0) {
-            return Err(Error::invalid_input("intrusion_enumeration_ratio_invalid"));
-        }
-        if self.burst_count.0 < BigInt::from(1) {
-            return Err(Error::invalid_input("intrusion_burst_count_invalid"));
         }
         Ok(())
     }
@@ -345,16 +380,24 @@ impl Detector {
             return;
         };
         let now = (ctx.clock)();
-        let trip = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|mut s| self.accumulate(&mut s, record, now));
-        let Some(trip) = trip else { return };
-        let Ok(_decision) = self.decision.try_lock() else {
-            return;
+        // `with self._lock:` releases the lock when `_accumulate` raises and
+        // the next record keeps using the (partially updated) state, so a
+        // poisoned lock is recovered rather than disabling detection.
+        let trip = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            self.accumulate(&mut state, record, now)
         };
-        if self.apply_decision(trip).is_err() {
+        let Some(trip) = trip else { return };
+        let _decision = match self.decision.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        // `_apply_decision`'s `except Exception: self.decision_errors += 1`:
+        // a failure *or a panic* inside the decision is counted, never
+        // propagated, and never leaves later trips ignored.
+        let outcome = panic::catch_unwind(AssertUnwindSafe(|| self.apply_decision(trip)));
+        if !matches!(outcome, Ok(Ok(()))) {
             self.decision_errors.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -638,11 +681,14 @@ fn prune_weak(dq: &mut VecDeque<(f64, String, PyInt)>, now: f64, window: f64) {
 }
 
 pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<Detector>> {
-    if let Some(existing) = ctx.intrusion.lock().ok().and_then(|s| {
-        s.as_ref()
-            .and_then(|v| v.downcast_ref::<Arc<Detector>>())
-            .cloned()
-    }) {
+    if let Some(existing) = ctx
+        .intrusion
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .and_then(|v| v.downcast_ref::<Arc<Detector>>())
+        .cloned()
+    {
         return Ok(existing);
     }
     let config = match config {
@@ -656,7 +702,7 @@ pub fn install(ctx: Arc<Context>, config: Option<DetectorConfig>) -> Result<Arc<
             detector.on_record(record);
         }
     });
-    *ctx.intrusion.lock().expect("intrusion mutex poisoned") =
+    *ctx.intrusion.lock().unwrap_or_else(PoisonError::into_inner) =
         Some(Box::new(Arc::clone(&detector)));
     Ok(detector)
 }

@@ -10,6 +10,7 @@ use crate::audit::RecordArgs;
 use crate::context::Context;
 use crate::errors::{Error, ErrorClass, Result};
 use crate::incident::{self, Incident};
+use crate::smtp::SendError;
 use crate::store::iso;
 
 pub const NOTIFY_FILE: &str = "notify.json";
@@ -32,19 +33,13 @@ fn secure_file(path: &Path) -> Result<()> {
     let m = path
         .metadata()
         .map_err(|_| Error::invalid_input("notify_config_insecure"))?;
-    if m.permissions().mode() & 0o7777 != 0o600 || m.uid() != unsafe_free_uid() {
+    // `st.st_uid != os.getuid()`: the *real* user id of this process, read
+    // directly (no helper process, so an environment without `id` or
+    // unable to spawn cannot turn every file into "insecure").
+    if m.permissions().mode() & 0o7777 != 0o600 || m.uid() != rustix::process::getuid().as_raw() {
         return Err(Error::invalid_input("notify_config_insecure"));
     }
     Ok(())
-}
-fn unsafe_free_uid() -> u32 {
-    std::process::Command::new("/usr/bin/id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(u32::MAX)
 }
 fn loopback(host: &str) -> bool {
     host == "localhost"
@@ -149,11 +144,30 @@ fn display(v: &Value) -> String {
 fn get<'a>(v: &'a Value, key: &str) -> &'a Value {
     v.get(key).unwrap_or(&Value::Null)
 }
-fn fallback(v: &Value) -> String {
-    if v.is_null() || v == "" {
-        "알 수 없음".into()
-    } else {
+/// `value or default` inside an f-string: any falsy value (`None`, `""`,
+/// `0`, `False`, `[]`, `{}`) selects `default`.
+fn or_default(v: &Value, default: &str) -> String {
+    if incident::python_truthy(v) {
         display(v)
+    } else {
+        default.into()
+    }
+}
+fn fallback(v: &Value) -> String {
+    or_default(v, "알 수 없음")
+}
+/// `mapping.get(key, 0)` inside an f-string.
+fn get_or_zero(v: &Value, key: &str) -> String {
+    v.get(key).map_or_else(|| "0".into(), display)
+}
+/// Python iteration of `value or []` for the value kinds it can iterate:
+/// list items, string characters, dict keys.
+fn python_items(v: &Value) -> Vec<Value> {
+    match v {
+        Value::Array(items) => items.clone(),
+        Value::String(text) => text.chars().map(|c| json!(c.to_string())).collect(),
+        Value::Object(map) => map.keys().map(|k| json!(k)).collect(),
+        _ => vec![],
     }
 }
 fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
@@ -171,10 +185,15 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
             display(get(s, "active_version"))
         ),
     ];
-    if let Some(cs) = s["connections"].as_array().filter(|a| !a.is_empty()) {
+    let connections = python_items(&s["connections"]);
+    if !connections.is_empty() {
         lines.push(format!(
             "  연결: {}",
-            cs.iter().map(display).collect::<Vec<_>>().join(", ")
+            connections
+                .iter()
+                .map(display)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     let labels: Vec<_> = s["targets"]
@@ -182,18 +201,14 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|t| {
-            let host = t.get("host")?.as_str()?;
+            let host = display(t.get("host").filter(|v| !v.is_null())?);
             let mut label = if let Some(port) = t.get("port").filter(|v| !v.is_null()) {
                 format!("{host}:{}", display(port))
             } else {
-                host.to_owned()
+                host
             };
-            if let Some(user) = t
-                .get("username")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                label = format!("{user}@{label}");
+            if let Some(user) = t.get("username").filter(|v| incident::python_truthy(v)) {
+                label = format!("{}@{label}", display(user));
             }
             Some(label)
         })
@@ -204,17 +219,9 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
     if mandatory {
         lines.push(format!(
             "  첫 사용: {}  마지막 사용: {}  사용 횟수: {}",
-            if s["first_used"].is_null() {
-                "없음".into()
-            } else {
-                display(&s["first_used"])
-            },
-            if s["last_used"].is_null() {
-                "없음".into()
-            } else {
-                display(&s["last_used"])
-            },
-            s["use_count"].as_u64().unwrap_or(0)
+            or_default(&s["first_used"], "없음"),
+            or_default(&s["last_used"], "없음"),
+            get_or_zero(s, "use_count")
         ));
     }
     let steps: &[&str] = match s["kind"].as_str().unwrap_or("") {
@@ -277,15 +284,19 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "all" => "전체",
         s => s,
     };
+    // `incident.runtime`/`incident.rule` as loaded (any JSON value), each
+    // rendered only when truthy.
+    let raw = i.to_dict();
     l.push(format!(
         "봉쇄 범위: {scope}{}",
-        i.runtime
-            .as_ref()
-            .map(|r| format!(" (실행 환경: {r})"))
-            .unwrap_or_default()
+        if incident::python_truthy(&raw["runtime"]) {
+            format!(" (실행 환경: {})", display(&raw["runtime"]))
+        } else {
+            String::new()
+        }
     ));
-    if let Some(rule) = &i.rule {
-        l.push(format!("판정 규칙: {rule}"));
+    if incident::python_truthy(&raw["rule"]) {
+        l.push(format!("판정 규칙: {}", display(&raw["rule"])));
     }
     l.push("침해된 호출 주체:".into());
     let mut views: Vec<String> = i.assessment["principals"]
@@ -307,7 +318,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "2. ZeroPW가 이미 한 것".into(),
         format!(
             "전체 정지: {}",
-            if i.actions["stopped"] == true {
+            if incident::python_truthy(&i.actions["stopped"]) {
                 "예"
             } else {
                 "아니오"
@@ -315,15 +326,15 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         ),
         format!(
             "비활성화된 호출 주체 수: {}",
-            i.actions["principals_disabled"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "principals_disabled")
         ),
         format!(
             "회수한 권한 수: {}",
-            i.actions["grants_revoked"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "grants_revoked")
         ),
         format!(
             "핸들 키 교체: {}",
-            if i.actions["handle_key_rotated"] == true {
+            if incident::python_truthy(&i.actions["handle_key_rotated"]) {
                 "예"
             } else {
                 "아니오"
@@ -331,11 +342,11 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         ),
         format!(
             "취소한 실행 수: {}",
-            i.actions["runs_cancelled"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "runs_cancelled")
         ),
         format!(
             "닫은 서명기 소켓 수: {}",
-            i.actions["sockets_closed"].as_u64().unwrap_or(0)
+            get_or_zero(&i.actions, "sockets_closed")
         ),
         String::new(),
         "3. 지금 해야 할 것 — 필수 교체".into(),
@@ -384,7 +395,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         "  grant create --principal <새 호출 주체 ID> --connection <연결 ID>".into(),
         "  resume".into(),
     ]);
-    if i.scope == "all" || i.assessment["recover_required"] == true {
+    if i.scope == "all" || incident::python_truthy(&i.assessment["recover_required"]) {
         l.extend([
             String::new(),
             "이 사건은 금고 전체 노출로 판정되었습니다. `incident close` 전에 다음을 수행하십시오:"
@@ -413,13 +424,10 @@ fn audit_notify(ctx: &Context, i: &mut Incident, result: &str, reason: &str) {
             },
         )
         .is_err()
+        && let Some(failed) = incident::failed_steps(i)
+        && !failed.contains(&json!("audit_incident_notify"))
     {
-        let failed = &mut i.actions["failed_steps"];
-        if let Some(arr) = failed.as_array_mut()
-            && !arr.contains(&json!("audit_incident_notify"))
-        {
-            arr.push(json!("audit_incident_notify"));
-        }
+        failed.push(json!("audit_incident_notify"));
     }
 }
 fn python_int_or_zero(v: &Value) -> crate::pyint::PyInt {
@@ -497,9 +505,16 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         failed(ctx, i, "rendered_value_detected")?;
         return Ok(());
     }
-    if let Err(kind) = crate::smtp::send(&config, &subject, &body) {
-        pending(ctx, i, &kind)?;
-        return Ok(());
+    match crate::smtp::send(&config, &subject, &body) {
+        Ok(()) => {}
+        // `except (OSError, smtplib.SMTPException) as exc`.
+        Err(SendError::Caught(kind)) => {
+            pending(ctx, i, &kind)?;
+            return Ok(());
+        }
+        // Any other exception leaves `deliver` untouched by it; the incident
+        // records `notify` in `failed_steps`.
+        Err(SendError::Escaped(error)) => return Err(error),
     }
     let attempts = next_success_attempt(&i.notification["attempts"]);
     i.notification =
@@ -547,10 +562,11 @@ pub fn send_test_message(ctx: &Arc<Context>) -> Result<Value> {
             audit_test(ctx, "ok", "sent");
             Ok(json!({"status":"sent"}))
         }
-        Err(kind) => {
+        Err(SendError::Caught(kind)) => {
             audit_test(ctx, "denied", &kind);
             Ok(json!({"status":"failed","error":kind}))
         }
+        Err(SendError::Escaped(error)) => Err(error),
     }
 }
 fn audit_test(ctx: &Context, result: &str, reason: &str) {
@@ -563,4 +579,76 @@ fn audit_test(ctx: &Context, result: &str, reason: &str) {
             ..Default::default()
         },
     );
+}
+
+#[cfg(test)]
+mod uid_tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    const CHILD_ENV: &str = "ZEROPW_NOTIFY_SECURE_FILE_CHILD";
+    const TEST: &str =
+        "notify::uid_tests::secure_file_owner_is_compared_with_the_real_uid_without_spawning";
+
+    /// `_require_secure_file` compares `st_uid` with `os.getuid()` (the real
+    /// uid) and never starts a process. Run the Rust check in a process that
+    /// cannot start one (non-root: `RLIMIT_NPROC` 0) or whose real and
+    /// effective uids differ (root: `setreuid`), and compare it with Python's
+    /// verdict measured in that same process state before `exec`.
+    #[test]
+    fn secure_file_owner_is_compared_with_the_real_uid_without_spawning() {
+        if let Ok(path) = std::env::var(CHILD_ENV) {
+            println!(
+                "RUST_VERDICT={}",
+                super::secure_file(Path::new(&path)).is_ok()
+            );
+            return;
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("notify.json");
+        std::fs::write(&file, b"{}").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let script = r#"
+import os, resource, sys
+from pathlib import Path
+from zeropw.errors import InvalidInput
+from zeropw.notify import _require_secure_file
+path, exe, test, child_env = sys.argv[1:5]
+if os.geteuid() == 0:
+    os.chown(path, 4242, -1)
+    os.setreuid(4242, 0)
+else:
+    resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
+try:
+    _require_secure_file(Path(path))
+    verdict = True
+except InvalidInput:
+    verdict = False
+print(f"PY_VERDICT={str(verdict).lower()}", flush=True)
+os.execve(exe, [exe, test, "--exact", "--nocapture", "--test-threads=1"],
+          dict(os.environ, **{child_env: path}))
+"#;
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        let output = Command::new(interpreter)
+            .arg("-c")
+            .arg(script)
+            .arg(&file)
+            .arg(std::env::current_exe().unwrap())
+            .arg(TEST)
+            .arg(CHILD_ENV)
+            .env("PYTHONPATH", crate::oracle::repo_root())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.contains("PY_VERDICT=true"), "{stdout}");
+        assert!(stdout.contains("RUST_VERDICT=true"), "{stdout}");
+    }
 }
