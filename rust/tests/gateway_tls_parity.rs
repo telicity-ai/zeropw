@@ -461,6 +461,99 @@ fn pinned_ca_decisions_match_python() {
     assert_eq!(expected[7], (502, Some("upstream_tls_failed".into())));
 }
 
+/// An OpenSSL (Python `ssl`) HTTPS upstream presenting `cert`: rustls
+/// refuses to serve a certificate with an unhandled critical extension, so
+/// the fake upstream cannot present these variants.
+fn openssl_upstream(cert: &Path, key: &Path) -> (std::process::Child, u16) {
+    let script = format!(
+        r#"
+import socket, ssl, sys, threading
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain({cert:?}, {key:?})
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen(8)
+print(listener.getsockname()[1], flush=True)
+def answer(raw):
+    try:
+        with context.wrap_socket(raw, server_side=True) as tls:
+            tls.recv(65536)
+            body = b'{{"login": "synthetic"}}'
+            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                        + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+    except Exception:
+        pass
+while True:
+    raw, _ = listener.accept()
+    threading.Thread(target=answer, args=(raw,), daemon=True).start()
+"#,
+        cert = cert.display().to_string(),
+        key = key.display().to_string(),
+    );
+    let mut child = std::process::Command::new(
+        std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into()),
+    )
+    .args(["-c", &script])
+    .stdout(std::process::Stdio::piped())
+    .spawn()
+    .unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    (child, line.trim().parse().unwrap())
+}
+
+/// OpenSSL refuses a certificate carrying a critical extension it does not
+/// handle ("unhandled critical extension") even when it is the pinned
+/// trust anchor; a non-critical unknown extension is ignored. The pinned
+/// CA exception must not accept what OpenSSL refuses. (webpki parses a
+/// trust anchor with `UnknownExtensionPolicy::IgnoreCritical` but the end
+/// entity strictly, so `UnsupportedCriticalExtension` is raised before
+/// `CaUsedAsEndEntity` and `PinnedCaVerifier`'s exception is never reached;
+/// this test guards that ordering.)
+#[test]
+fn pinned_ca_with_unhandled_critical_extension_is_refused_like_python() {
+    if !openssl(&["version"]) {
+        panic!("openssl binary not available: the differential cannot run");
+    }
+    let dir = TempDir::new().unwrap();
+    let base = "subjectAltName = IP:127.0.0.1\nbasicConstraints = CA:TRUE";
+    let mut children = Vec::new();
+    let mut cases = Vec::new();
+    for (name, ext) in [
+        (
+            "unknown-critical",
+            format!("{base}\n1.2.3.4.5 = critical,ASN1:UTF8String:synthetic"),
+        ),
+        (
+            "unknown-noncritical",
+            format!("{base}\n1.2.3.4.5 = ASN1:UTF8String:synthetic"),
+        ),
+    ] {
+        let (crt, _) = openssl_certificate(&dir, name, &ext, "2");
+        let key = dir.path().join(format!("{name}.key"));
+        let (child, port) = openssl_upstream(&crt, &key);
+        children.push(child);
+        cases.push((name.to_string(), port, Some(crt)));
+    }
+    let expected = python_relays(&cases);
+    let g = Gateway::new();
+    let actual: Vec<_> = cases
+        .iter()
+        .map(|(id, port, ca)| g.relay(id, *port, ca.as_deref()))
+        .collect();
+    for mut child in children {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(expected[0], (502, Some("upstream_tls_failed".into())));
+    assert_eq!(expected[1], (200, None));
+}
+
 // --------------------------------------------- handshake failure reasons
 
 /// A loopback listener that misbehaves during the TLS handshake.
