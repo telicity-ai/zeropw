@@ -1758,5 +1758,125 @@
     "--stdin"
    ]
   ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "https://api.example.com",
+   "--auth",
+   "bearer",
+   "--cli-program",
+   "/bin/true",
+   "--cli-env",
+   "zz=x",
+   "--cli-env",
+   "AA=\u0001"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "https://api.example.com",
+   "--auth",
+   "bearer",
+   "--cli-program",
+   "/bin/true",
+   "--cli-env",
+   "B_X=1",
+   "--cli-env",
+   "A_Y=2",
+   "--cli-env",
+   "B_X=3"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
  }
 ]

@@ -1623,7 +1623,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 confirmations(a.get("confirm-methods"), Vec::new()),
             )?;
             let cli = if let Some(program) = a.get("cli-program").filter(|p| !p.is_empty()) {
-                let mut extra = BTreeMap::new();
+                // `_parse_env_assignments`: a dict, so a repeated key keeps its
+                // first position with the last value, and `CliProfile`
+                // validates entries in that insertion order.
+                let mut extra: Vec<(String, String)> = Vec::new();
                 for item in a.list("cli-env") {
                     let (key, val) = item.split_once('=').ok_or_else(|| {
                         Error::invalid_input("invalid_cli_env").with_detail("use KEY=VALUE")
@@ -1633,9 +1636,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                             Error::invalid_input("invalid_cli_env").with_detail("use KEY=VALUE")
                         );
                     }
-                    extra.insert(key.to_owned(), val.to_owned());
+                    match extra.iter_mut().find(|(k, _)| k == key) {
+                        Some(entry) => entry.1 = val.to_owned(),
+                        None => extra.push((key.to_owned(), val.to_owned())),
+                    }
                 }
-                Some(CliProfile::new(program, "http", None, extra)?)
+                Some(CliProfile::new_ordered(program, "http", None, extra)?)
             } else {
                 None
             };
