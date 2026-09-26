@@ -571,3 +571,170 @@ fn set_public_url_feeds_the_self_reference_precheck() {
     );
     assert!(f.fake.requests().is_empty());
 }
+
+// -------------------------------------------- gap 6: server request framing
+
+/// Python's `ZeroPWServer` (synthetic context) answering each raw request in
+/// `CASES` (base64 JSON list): connect, send, half-close, read to EOF. One
+/// base64 response per line.
+const PY_SERVER_EXCHANGE: &str = r#"
+import base64, json, socket, tempfile
+from pathlib import Path
+from zeropw.context import Config, Context
+from zeropw.server import ZeroPWServer
+tmp = tempfile.TemporaryDirectory()
+ctx = Context.initialize(Path(tmp.name) / "state", "synthetic-admin-passphrase", "synthetic-recovery-passphrase", Config())
+server = ZeroPWServer(ctx).serve_in_thread()
+for raw in json.loads(base64.b64decode(CASES)):
+    with socket.create_connection(server.server_address[:2], timeout=10) as sock:
+        sock.sendall(base64.b64decode(raw))
+        sock.shutdown(socket.SHUT_WR)
+        out = b""
+        try:
+            while chunk := sock.recv(65536):
+                out += chunk
+        except OSError:
+            pass
+    print(base64.b64encode(out).decode())
+server.stop()
+"#;
+
+fn rust_exchange(url: &str, raw: &[u8]) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(url.trim_start_matches("http://")).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(raw).unwrap();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 65536];
+    while let Ok(n) = stream.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..n]);
+    }
+    out
+}
+
+/// Replace each `Date:` header value (the only per-response variable).
+fn without_dates(response: &[u8]) -> Vec<u8> {
+    let text: String = response.iter().map(|b| char::from(*b)).collect();
+    let re = regex::Regex::new(r"\r\nDate: [^\r]*\r\n").unwrap();
+    re.replace_all(&text, "\r\nDate: <date>\r\n")
+        .chars()
+        .map(|c| c as u8)
+        .collect()
+}
+
+/// `tests/test_gateway.py` framing cases plus the `BaseHTTPRequestHandler`
+/// rules the audit found diverging: bare-LF lines, other HTTP/1.x versions,
+/// malformed and 2.x versions, over-long request and header lines, header
+/// count, unknown methods (HTML `send_error`), HTTP/0.9 requests, HTTP/1.0
+/// keep-alive and `Expect: 100-continue` by version. Byte-identical replies
+/// (apart from `Date`).
+#[test]
+fn server_framing_matches_python_byte_for_byte() {
+    use base64::Engine as _;
+    let mut cases: Vec<Vec<u8>> = vec![
+        b"GET /healthz HTTP/1.1\nHost: x\n".to_vec(),
+        b"GET /healthz HTTP/1.1\nHost: x\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nHost: x\n".to_vec(),
+        b"GET /healthz HTTP/1.2\r\nConnection: close\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/01.1\r\nConnection: close\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.x\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1.1\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/2.0\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/12345678901.1\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1 extra\r\n\r\n".to_vec(),
+        b"GET /healthz\r\n\r\n".to_vec(),
+        b"POST /healthz\r\n\r\n".to_vec(),
+        b"GET\r\n\r\n".to_vec(),
+        b"\r\n".to_vec(),
+        b"  \t \r\n".to_vec(),
+        b"BREW /healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"get /healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"G\xc9T /healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"TRACE /healthz HTTP/1.1\r\nConnection: close\r\n\r\n".to_vec(),
+        b"CONNECT x:443 HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        b"GET /healthz HTTP/1.0\r\nConnection: keep-alive\r\n\r\nGET /healthz HTTP/1.1\r\nConnection: close\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.0\r\n\r\nGET /healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nConnection: close\r\n\r\nGET /healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"POST /v1/tools/list_connections HTTP/1.0\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        b"POST /v1/tools/list_connections HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        b"POST /v1/tools/list_connections HTTP/1.01\r\nExpect: 100-Continue\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        b"POST /relay HTTP/1.1\r\nExpect: 100-continue\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nHost : x\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nHost: x\r\n  folded\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nContent-Length: 1, 1\r\n\r\n".to_vec(),
+        b"GET http://x/healthz HTTP/1.1\r\n\r\n".to_vec(),
+        b"GET http://x/healthz HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        b"GET //healthz HTTP/1.1\r\nConnection: close\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nVia: 1.0 edge, 1.1 ZEROPW-RELAY (x)\r\nConnection: close\r\n\r\n".to_vec(),
+        b"GET /healthz HTTP/1.1\r\nVia: 1.1\x1czeropw-relay\r\nConnection: close\r\n\r\n".to_vec(),
+        b"HEAD /healthz HTTP/1.1\r\nConnection: close\r\n\r\n".to_vec(),
+    ];
+    // Over-long request line and header line (exactly 65537 bytes, so the
+    // server drains the socket), and 100 header lines plus the terminator.
+    let mut long_line = b"GET /".to_vec();
+    long_line.resize(65537, b'a');
+    cases.push(long_line);
+    let mut long_header = b"GET /healthz HTTP/1.1\r\nX-Long: ".to_vec();
+    let header_start = b"GET /healthz HTTP/1.1\r\n".len();
+    long_header.resize(header_start + 65537, b'b');
+    cases.push(long_header);
+    for (method, count) in [("GET", 100), ("HEAD", 100), ("GET", 99)] {
+        let mut many = format!("{method} /healthz HTTP/1.1\r\n").into_bytes();
+        for index in 0..count {
+            many.extend_from_slice(format!("X-{index}: v\r\n").as_bytes());
+        }
+        many.extend_from_slice(b"Connection: close\r\n\r\n");
+        cases.push(many);
+    }
+    let encoded: Vec<String> = cases
+        .iter()
+        .map(|c| base64::engine::general_purpose::STANDARD.encode(c))
+        .collect();
+    let script = format!(
+        "CASES = '{}'\n{PY_SERVER_EXCHANGE}",
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_string(&encoded).unwrap())
+    );
+    let expected: Vec<Vec<u8>> = python(&script)
+        .lines()
+        .map(|line| {
+            base64::engine::general_purpose::STANDARD
+                .decode(line)
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(expected.len(), cases.len());
+    let (_temp, ctx) = context();
+    let server = zeropw::server::ZeroPWServer::new(ctx, Some("127.0.0.1"), Some(0)).unwrap();
+    server.serve_in_thread().unwrap();
+    let mut mismatches = Vec::new();
+    for (case, python) in cases.iter().zip(&expected) {
+        let rust = rust_exchange(&server.url(), case);
+        if without_dates(&rust) != without_dates(python) {
+            mismatches.push(format!(
+                "request {:?}\n  python {:?}\n  rust   {:?}",
+                String::from_utf8_lossy(&case[..case.len().min(120)]),
+                String::from_utf8_lossy(&without_dates(python)),
+                String::from_utf8_lossy(&without_dates(&rust))
+            ));
+        }
+    }
+    server.stop();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    // The shapes the audit named, spelled out on Python's own replies.
+    let text = |i: usize| String::from_utf8_lossy(&expected[i]).into_owned();
+    assert!(text(0).contains("\"malformed_header\""));
+    assert!(text(3).starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(text(8).starts_with("<!DOCTYPE HTML>"), "{}", text(8));
+    assert!(text(16).starts_with("HTTP/1.1 501 Unsupported method ('BREW')\r\n"));
+    assert_eq!(text(21).matches("HTTP/1.1 200 OK").count(), 2);
+    assert!(!text(24).contains("100 Continue"));
+    assert!(text(25).starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 401"));
+    assert!(text(cases.len() - 5).starts_with("HTTP/1.1 414 Request-URI Too Long\r\n"));
+}
