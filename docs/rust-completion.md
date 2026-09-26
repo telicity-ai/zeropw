@@ -457,3 +457,129 @@ all six cases (5.19, 0.35 and 0.14 seconds). These do not explain or erase the
 first failed run. Failure-only selected state/audit metadata and elapsed
 timing are being added under independent Astra review, retaining every
 existing assertion and timeout. Fresh final-platform validation is required.
+
+## Python-parity gap audit and closure (2026-09-26)
+
+A Claude Code session took over PR #6 at `d1b51df` and audited the Rust port
+against the Python modules, which are the specification. It was not an Astra
+review and is not final-head platform approval. The audit covered six groups:
+administrator/agent CLI, demo, runtime/server/gateway, response
+(notify/SMTP/intrusion/incident), and team sync.
+
+Each claimed gap was confirmed by running the same input through the Python
+module and the Rust binary or API before anything was changed. The branch
+`claude/vigilant-johnson-nv4fx1` holds the fixes and their differential tests.
+Three workers ran in separate worktrees (response, team, runtime), and the
+coordinator merged their branches. Python is only a test oracle; no product
+path calls it.
+
+Defects found and fixed, by area:
+
+- **Build.** The branch no longer compiled or passed strict Clippy on the
+  current stable toolchain. Fixed first.
+- **Administrator and agent CLI.**
+  - `rust/src/argparse.rs` ports CPython 3.12 `argparse` exactly: abbreviation
+    rules, nargs patterns, error text, and `HelpFormatter`/`textwrap` wrapping.
+    Before this, many inputs that Python rejects or accepts were handled
+    differently.
+  - `rotation activate` could re-activate a retired version or pin a missing
+    one. It now validates the version status first.
+  - Non-UTF-8 argv panicked and printed the raw token.
+  - `serve` never printed its request log, and the log grew without bound.
+  - Audit records were missing fields, and team share did not audit
+    `auth_failed`.
+  - restore-ack was not atomic.
+  - `~` and `~user` were not expanded, so a literal `~` directory was created.
+  - `--cli-env` was not validated in insertion order.
+  - The agent CLI ignored `*_proxy`/`no_proxy`, including CONNECT tunnels and
+    `Proxy-Authorization`.
+  - Integer options did not follow Python's arbitrary-precision acceptance.
+- **Demo.** `zeropw-demo` and `zeropw-democli` now produce the Python output
+  (47 checks), including errors and URL handling.
+- **Runtime, server and gateway.**
+  - A file without `#!` ran through `/bin/sh`; it is now refused as
+    `ENOEXEC` like `execve`.
+  - Request header names were not validated.
+  - A handler panic leaked its connection slot, and an accept error ended the
+    accept loop.
+  - HTTP framing did not match `http.server`.
+  - A pinned self-signed `CA:TRUE` certificate was rejected where OpenSSL
+    accepts it. `PinnedCaVerifier` now accepts it only when it is
+    byte-identical to the pinned certificate, and still checks SAN, validity,
+    EKU and key usage.
+  - Handshake failures did not map to Python's reasons.
+  - The run registry's shutdown, revoke and resolution rules did not match
+    Python.
+- **Response.**
+  - notify took the owner uid from `/usr/bin/id`; it now compares the real uid
+    directly.
+  - A panicking detector decision poisoned its lock.
+  - smtplib/`EmailMessage` behaviour did not match, including header folding,
+    RFC 2047 encoding, comment and address parsing, the `mail FROM:` spelling,
+    EHLO hostname, and error class names.
+  - Incident `failed_steps` and counter handling and `principal_not_found`
+    did not match.
+- **Team.**
+  - The relaxed-document refold was an unbounded-work DoS.
+  - Local commits were not picked up.
+  - `peer_vectors`/`overridden_alerted` loading and corrupt-document handling
+    did not match Python.
+  - A session whose broadcast send failed was not dropped.
+  - `stop()` closed the transport before joining the poll thread.
+
+New differential tests:
+
+- `cli_parity` (78 argv/state cases in `cli_parity_cases.json`).
+- `agent_proxy_parity`, `serve_request_log` and `democli_parity`.
+- `gateway_tls_parity`, which includes the unhandled-critical-extension guard.
+- `runtime_parity_gaps`, `server_accept_resilience`, `response_parity_gaps`
+  and `team_parity_gaps`.
+- Additions to `gateway`, `fake_upstream` and `signer_e2e`.
+
+Every remaining difference has a `rust/DEVIATIONS.md` row with its probe.
+The rows added here cover:
+
+- non-UTF-8 argv;
+- integer saturation above 2^63-1;
+- `~user` through `/etc/passwd` rather than every NSS source;
+- macOS System Configuration proxies, which Rust does not read;
+- urllib's extra headers and exception granularity;
+- the exec-format pre-check;
+- the pinned-CA exception, with its P-521 and non-CA key-usage residuals;
+- residual SMTP header shapes and `local_hostname`;
+- hand-edited incident and team documents.
+
+Known residual, low severity. `last_snapshot_total` in team `register_env`
+sums only integer vector values. The snapshot file is local state that only
+this node writes, so a difference needs a hand-edited snapshot. Python would
+raise `TypeError` on a non-numeric value, and Rust ignores it.
+
+Validation at the head that carries this section:
+Linux container, 4 CPUs, rustc 1.94.1, CPython 3.12.11 as the oracle. This is
+not a macOS result and not a hosted CI run.
+
+- `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D
+  warnings` are clean.
+- `cargo test --lib`: 527 passed, 4 ignored, three consecutive runs as a
+  non-root user. As root, the four store permission-denied tests fail by
+  design because root bypasses the permission check.
+- Every integration target passed, run one target at a time as CI does, as
+  root. The exceptions are the root-sensitive cases, which were re-run as a
+  non-root user and passed: `signer_e2e` (6),
+  `native_cli_e2e::original_real_ssh_end_to_end_on_native_binaries` and
+  `gateway::audit_unavailable_refuses_before_credential_use`.
+  `policy_differential` passed in 97.48 seconds.
+- Python product suite: 1099 tests OK (355 seconds, non-root).
+- Harness: 80 tests OK; `compileall` is clean.
+- No Python product, Python test, harness, CI or instruction file changed.
+
+Test robustness change: `signer::tests::accept_latency_is_not_bound_by_a_fixed_poll_interval`
+failed in one of three full root `--lib` runs. It passed every time when run
+alone. Under sustained CPU saturation this kernel (`CONFIG_HZ=250`) delayed
+each wakeup to a 4 ms tick. That gave about 4 ms per cycle, which is
+scheduling delay and not a poll interval in the code.
+
+The 25 ms bound and the workload are unchanged. The assertion now applies to
+the fastest of up to three runs. A fixed poll interval raises the floor of
+every run, so it still fails. Sustained external CPU saturation can still
+fail the test; it is a wall-clock latency pin by design.
