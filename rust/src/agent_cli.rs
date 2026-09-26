@@ -286,6 +286,239 @@ fn url_error(error: &io::Error) -> (u16, Value) {
     gateway_unreachable(&text)
 }
 
+/// `urllib.request.getproxies_environment()`: `<scheme>_proxy` variables,
+/// lowercase names preferred, `HTTP_PROXY` ignored under CGI.
+fn env_proxies() -> BTreeMap<String, String> {
+    let vars: Vec<(String, String)> = env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect();
+    let mut proxies = BTreeMap::new();
+    let mut environment = Vec::new();
+    for (name, value) in &vars {
+        let chars: Vec<char> = name.chars().collect();
+        if chars.len() > 5
+            && chars[chars.len() - 6] == '_'
+            && chars[chars.len() - 5..]
+                .iter()
+                .collect::<String>()
+                .to_lowercase()
+                == "proxy"
+        {
+            let proxy_name: String = chars[..chars.len() - 6]
+                .iter()
+                .collect::<String>()
+                .to_lowercase();
+            environment.push((name.clone(), value.clone(), proxy_name.clone()));
+            if !value.is_empty() {
+                proxies.insert(proxy_name, value.clone());
+            }
+        }
+    }
+    if vars.iter().any(|(name, _)| name == "REQUEST_METHOD") {
+        proxies.remove("http");
+    }
+    for (name, value, proxy_name) in environment {
+        if name.ends_with("_proxy") {
+            if value.is_empty() {
+                proxies.remove(&proxy_name);
+            } else {
+                proxies.insert(proxy_name, value);
+            }
+        }
+    }
+    proxies
+}
+
+/// `urllib.parse._splitport` (`(.*):([0-9]*)`, full match).
+fn split_port(host: &str) -> &str {
+    match host.rsplit_once(':') {
+        Some((head, port)) if port.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => host,
+    }
+}
+
+/// `urllib.request.proxy_bypass_environment(host)`.
+fn proxy_bypass(host: &str, proxies: &BTreeMap<String, String>) -> bool {
+    let Some(no_proxy) = proxies.get("no") else {
+        return false;
+    };
+    if no_proxy == "*" {
+        return true;
+    }
+    let host = host.to_lowercase();
+    let hostonly = split_port(&host);
+    for name in no_proxy.split(',') {
+        let name = name.trim().trim_start_matches('.').to_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        if hostonly == name || host == name {
+            return true;
+        }
+        let suffix = format!(".{name}");
+        if hostonly.ends_with(&suffix) || host.ends_with(&suffix) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `(scheme, user, password, hostport)` of a proxy URL.
+type ParsedProxy = (Option<String>, Option<String>, Option<String>, String);
+
+/// `urllib.request._parse_proxy(proxy)`.
+fn parse_proxy(proxy: &str) -> Result<ParsedProxy, &'static str> {
+    let split = proxy
+        .split_once(':')
+        .filter(|(scheme, _)| !scheme.is_empty() && !scheme.contains('/'));
+    let (scheme, authority) = match split {
+        Some((scheme, rest)) if rest.starts_with('/') => {
+            let Some(after) = rest.strip_prefix("//") else {
+                return Err("ValueError");
+            };
+            let end = match after.find('@') {
+                Some(at) => after[at..].find('/').map(|i| i + at),
+                None => after.find('/'),
+            };
+            (
+                Some(scheme.to_lowercase()),
+                end.map_or(after, |end| &after[..end]),
+            )
+        }
+        _ => (None, proxy),
+    };
+    let (userinfo, hostport) = match authority.rsplit_once('@') {
+        Some((userinfo, hostport)) => (Some(userinfo), hostport),
+        None => (None, authority),
+    };
+    let (user, password) = match userinfo {
+        Some(userinfo) => match userinfo.split_once(':') {
+            Some((user, password)) => (Some(user.to_owned()), Some(password.to_owned())),
+            None => (Some(userinfo.to_owned()), None),
+        },
+        None => (None, None),
+    };
+    Ok((scheme, user, password, hostport.to_owned()))
+}
+
+/// How `ProxyHandler` routes one request.
+struct Route {
+    /// Connect here (the proxy, or the target itself).
+    connect: String,
+    /// TLS to `connect`'s host (an `https` connection class).
+    tls: bool,
+    /// Request target: the selector, or the whole URL through an HTTP proxy.
+    selector: String,
+    /// `CONNECT` through the proxy to this `host[:port]` first (https targets).
+    tunnel: Option<String>,
+    proxy_authorization: Option<String>,
+}
+
+fn route(
+    url_without_fragment: &str,
+    tls: bool,
+    host: Option<&str>,
+    selector: &str,
+) -> Result<Route, (u16, Value)> {
+    let direct = || Route {
+        connect: host.unwrap_or("").to_owned(),
+        tls,
+        selector: selector.to_owned(),
+        tunnel: None,
+        proxy_authorization: None,
+    };
+    let proxies = env_proxies();
+    let Some(proxy) = proxies.get(if tls { "https" } else { "http" }) else {
+        return Ok(direct());
+    };
+    let (scheme, user, password, hostport) = parse_proxy(proxy).map_err(gateway_unreachable)?;
+    let orig_type = if tls { "https" } else { "http" };
+    let proxy_type = scheme.unwrap_or_else(|| orig_type.to_owned());
+    if host.is_some_and(|h| !h.is_empty() && proxy_bypass(h, &proxies)) {
+        return Ok(direct());
+    }
+    let proxy_authorization = match (user, password) {
+        (Some(user), Some(password)) if !user.is_empty() && !password.is_empty() => Some(format!(
+            "Basic {}",
+            pybase64::b64encode(
+                format!(
+                    "{}:{}",
+                    crate::pystr::unquote(&user),
+                    crate::pystr::unquote(&password)
+                )
+                .as_bytes()
+            )
+        )),
+        _ => None,
+    };
+    let hostport = crate::pystr::unquote(&hostport);
+    if tls {
+        // `set_proxy` on an https request only records the tunnel host.
+        return Ok(Route {
+            connect: hostport,
+            tls: true,
+            selector: selector.to_owned(),
+            tunnel: Some(host.unwrap_or("").to_owned()),
+            proxy_authorization,
+        });
+    }
+    match proxy_type.as_str() {
+        "http" | "https" => Ok(Route {
+            connect: hostport,
+            tls: proxy_type == "https",
+            selector: url_without_fragment.to_owned(),
+            tunnel: None,
+            proxy_authorization,
+        }),
+        other => Err(gateway_unreachable(&format!("unknown url type: {other}"))),
+    }
+}
+
+/// `HTTPConnection._tunnel`: `CONNECT` and a `200` answer before TLS.
+fn tunnel(
+    stream: &mut TcpStream,
+    target: &str,
+    proxy_authorization: Option<&str>,
+) -> Result<(), (u16, Value)> {
+    let (host, port) = host_port(target, 443).map_err(gateway_unreachable)?;
+    let wrapped = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.clone()
+    };
+    let mut request = format!("CONNECT {wrapped}:{port} HTTP/1.1\r\n");
+    if let Some(value) = proxy_authorization {
+        request.push_str(&format!("Proxy-Authorization: {value}\r\n"));
+    }
+    request.push_str(&format!("Host: {host}:{port}\r\n\r\n"));
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| url_error(&e))?;
+    let status_line = read_line(stream, MAX_HEADER_BYTES)
+        .map_err(|_| gateway_unreachable("RemoteDisconnected"))?;
+    let status_text = String::from_utf8_lossy(&status_line);
+    let mut fields = status_text.trim_end().splitn(3, ' ');
+    let _version = fields.next();
+    let code = fields.next().unwrap_or("");
+    let message = fields.next().unwrap_or("").trim();
+    loop {
+        let line = read_line(stream, MAX_HEADER_BYTES)
+            .map_err(|_| gateway_unreachable("RemoteDisconnected"))?;
+        if line == b"\r\n" {
+            break;
+        }
+    }
+    if code != "200" {
+        return Err(gateway_unreachable(
+            &format!("Tunnel connection failed: {code} {message}")
+                .chars()
+                .take(200)
+                .collect::<String>(),
+        ));
+    }
+    Ok(())
+}
+
 /// Port of `agent_cli.call_tool`; refuses redirects and caps the response body.
 pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u16, Value) {
     let url = format!("{}/v1/tools/{tool}", base_url.trim_end_matches('/'));
@@ -307,24 +540,48 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
     {
         return gateway_unreachable("InvalidURL");
     }
-    let (connect_host, port) = match host_port(&host, if tls { 443 } else { 80 }) {
+    let url_without_fragment = url.rsplit_once('#').map_or(url.as_str(), |(u, _)| u);
+    let route = match route(url_without_fragment, tls, Some(&host), &selector) {
+        Ok(route) => route,
+        Err(failure) => return failure,
+    };
+    let (connect_host, port) = match host_port(&route.connect, if route.tls { 443 } else { 80 }) {
         Ok(target) => target,
         Err(name) => return gateway_unreachable(name),
     };
     let timeout = Duration::from_secs(120);
-    let stream = match create_connection(&connect_host, port, timeout) {
+    let mut stream = match create_connection(&connect_host, port, timeout) {
         Ok(s) => s,
         Err(error) => return url_error(&error),
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
+    let server_name = match &route.tunnel {
+        Some(target) => {
+            if let Err(failure) = tunnel(&mut stream, target, route.proxy_authorization.as_deref())
+            {
+                return failure;
+            }
+            match host_port(target, 443) {
+                Ok((name, _)) => name,
+                Err(name) => return gateway_unreachable(name),
+            }
+        }
+        None => connect_host.clone(),
+    };
     let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
-    // urllib sends the URL's own authority as `Host`.
+    // urllib sends the URL's own authority as `Host`, and the proxy
+    // credentials only to an HTTP proxy (never through a CONNECT tunnel).
+    let proxy_header = match (&route.proxy_authorization, &route.tunnel) {
+        (Some(value), None) => format!("Proxy-Authorization: {value}\r\n"),
+        _ => String::new(),
+    };
     let request = format!(
-        "POST {selector} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {} HTTP/1.1\r\nHost: {host}\r\n{proxy_header}Authorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        route.selector,
         body.len()
     );
-    if tls {
+    if route.tls {
         // TLS validation is supplied by rustls and the host's certificate store.
         let roots = rustls_native_certs::load_native_certs();
         let mut store = rustls::RootCertStore::empty();
@@ -334,7 +591,7 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(store)
             .with_no_client_auth();
-        let name = match rustls_pki_types::ServerName::try_from(connect_host.clone()) {
+        let name = match rustls_pki_types::ServerName::try_from(server_name) {
             Ok(n) => n,
             Err(_) => return gateway_unreachable("InvalidURL"),
         };

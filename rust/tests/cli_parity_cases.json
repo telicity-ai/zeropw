@@ -1581,5 +1581,182 @@
     "1"
    ]
   ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "audit",
+   "tail",
+   "--limit",
+   "100000000000000000000000000000000000000000"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "a",
+   "--connection",
+   "c1",
+   "--max-uses",
+   "10000000000"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "principal",
+    "create",
+    "--id",
+    "a"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "retire",
+   "--id",
+   "s",
+   "--version",
+   "100000000000000000000000000000000000000000"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "retire",
+   "--id",
+   "s",
+   "--version",
+   "99999999999"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
  }
 ]

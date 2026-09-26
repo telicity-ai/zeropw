@@ -56,10 +56,11 @@ pub struct TypeFn {
     pub convert: fn(&str) -> Result<Val, Option<String>>,
 }
 
-/// `type=int`.
+/// `type=int`. CPython's `int()` is arbitrary precision; a magnitude
+/// beyond `i128` saturates (callers narrow further, see `DEVIATIONS.md`).
 pub const INT: TypeFn = TypeFn {
     name: "int",
-    convert: |s| pystr::int_from_str_checked(s).map(Val::Int).ok_or(None),
+    convert: |s| pystr::int_from_str(s).map(Val::Int).ok_or(None),
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]

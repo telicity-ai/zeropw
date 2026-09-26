@@ -50,10 +50,15 @@ impl Args {
     fn req(&self, key: &str) -> &str {
         self.get(key).unwrap_or("")
     }
+    /// An argparse `type=int` value narrowed to `i64` by saturation: a
+    /// version, port or limit beyond the range behaves like the (never
+    /// existing / always exceeding) value Python's arbitrary-precision int
+    /// would have been.
     fn integer(&self, key: &str) -> Result<Option<i64>, Error> {
         self.get(key)
             .map(|s| {
-                s.parse::<i64>()
+                s.parse::<i128>()
+                    .map(|n| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
                     .map_err(|_| Error::invalid_input("invalid_arguments"))
             })
             .transpose()
@@ -66,7 +71,7 @@ impl Args {
 /// `_positive_int`.
 const POSITIVE_INT: TypeFn = TypeFn {
     name: "_positive_int",
-    convert: |text| match crate::pystr::int_from_str_checked(text) {
+    convert: |text| match crate::pystr::int_from_str(text) {
         Some(value) if value >= 1 => Ok(Val::Int(value)),
         _ => Err(Some("must be a positive integer".into())),
     },
