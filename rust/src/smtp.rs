@@ -281,7 +281,7 @@ impl Client {
         // `sock.settimeout(timeout)`: seconds to whole nanoseconds, rounded
         // up; outside `_PyTime_t` it raises OverflowError.
         let nanos = (config.timeout_seconds * 1e9).ceil();
-        if !(nanos < 9_223_372_036_854_775_808.0) {
+        if nanos >= 9_223_372_036_854_775_808.0 {
             return Err(escaped_other("OverflowError"));
         }
         let timeout = Duration::from_nanos((nanos as u64).max(1));
@@ -1690,10 +1690,12 @@ fn get_unstructured(mut value: &str, decode_ew: bool) -> Option<Tok> {
                 EwParse::Ok(text, rest) => {
                     let have_ws = parts.last().is_none_or(|last| last.token_type() == "fws");
                     let len = parts.len();
-                    if have_ws && len > 1 && kinds[len - 2] {
-                        if let Some(Tok::Term(_, _, space, _)) = parts.last_mut() {
-                            *space = Space::EwFws;
-                        }
+                    if have_ws
+                        && len > 1
+                        && kinds[len - 2]
+                        && let Some(Tok::Term(_, _, space, _)) = parts.last_mut()
+                    {
+                        *space = Space::EwFws;
                     }
                     parts.push(Tok::value(text, "encoded-word"));
                     kinds.push(true);
@@ -1927,7 +1929,7 @@ fn refold(tree: Tok, utf8: bool) -> Option<String> {
             continue;
         }
         leading_whitespace.clear();
-        if part.syntactic_break() && clen(&tstr) as isize + 1 <= maxlen {
+        if part.syntactic_break() && (clen(&tstr) as isize) < maxlen {
             let newline = steal_trailing_wsp(&mut lines);
             if !newline.is_empty() || part.startswith_fws() {
                 let line = newline + &tstr;
@@ -2062,7 +2064,7 @@ fn ew_encode(text: &str, charset: &str) -> String {
         .iter()
         .map(|&b| if q_safe(b) || b == b' ' { 1 } else { 3 })
         .sum();
-    let blen = bytes.len() / 3 * 4 + if bytes.len() % 3 == 0 { 0 } else { 4 };
+    let blen = bytes.len() / 3 * 4 + if bytes.len().is_multiple_of(3) { 0 } else { 4 };
     if (qlen as isize) - (blen as isize) < 5 {
         let encoded: String = bytes
             .iter()
@@ -2568,7 +2570,7 @@ print(json.dumps(out))
                 text.push_str(word);
             }
             let subject = text.replace("\\t", "\t");
-            let mut mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
+            let mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
                 let local = locals[next(locals.len())];
                 let domain = domains[next(domains.len())];
                 let comments = [

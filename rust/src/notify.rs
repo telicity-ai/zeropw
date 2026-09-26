@@ -424,12 +424,10 @@ fn audit_notify(ctx: &Context, i: &mut Incident, result: &str, reason: &str) {
             },
         )
         .is_err()
+        && let Some(failed) = incident::failed_steps(i)
+        && !failed.contains(&json!("audit_incident_notify"))
     {
-        if let Some(failed) = incident::failed_steps(i)
-            && !failed.contains(&json!("audit_incident_notify"))
-        {
-            failed.push(json!("audit_incident_notify"));
-        }
+        failed.push(json!("audit_incident_notify"));
     }
 }
 fn python_int_or_zero(v: &Value) -> crate::pyint::PyInt {
