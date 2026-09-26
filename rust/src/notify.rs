@@ -10,6 +10,7 @@ use crate::audit::RecordArgs;
 use crate::context::Context;
 use crate::errors::{Error, ErrorClass, Result};
 use crate::incident::{self, Incident};
+use crate::smtp::SendError;
 use crate::store::iso;
 
 pub const NOTIFY_FILE: &str = "notify.json";
@@ -506,9 +507,16 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         failed(ctx, i, "rendered_value_detected")?;
         return Ok(());
     }
-    if let Err(kind) = crate::smtp::send(&config, &subject, &body) {
-        pending(ctx, i, &kind)?;
-        return Ok(());
+    match crate::smtp::send(&config, &subject, &body) {
+        Ok(()) => {}
+        // `except (OSError, smtplib.SMTPException) as exc`.
+        Err(SendError::Caught(kind)) => {
+            pending(ctx, i, &kind)?;
+            return Ok(());
+        }
+        // Any other exception leaves `deliver` untouched by it; the incident
+        // records `notify` in `failed_steps`.
+        Err(SendError::Escaped(error)) => return Err(error),
     }
     let attempts = next_success_attempt(&i.notification["attempts"]);
     i.notification =
@@ -556,10 +564,11 @@ pub fn send_test_message(ctx: &Arc<Context>) -> Result<Value> {
             audit_test(ctx, "ok", "sent");
             Ok(json!({"status":"sent"}))
         }
-        Err(kind) => {
+        Err(SendError::Caught(kind)) => {
             audit_test(ctx, "denied", &kind);
             Ok(json!({"status":"failed","error":kind}))
         }
+        Err(SendError::Escaped(error)) => Err(error),
     }
 }
 fn audit_test(ctx: &Context, result: &str, reason: &str) {
