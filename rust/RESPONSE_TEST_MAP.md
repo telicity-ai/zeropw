@@ -44,6 +44,27 @@ overridden by this coverage supplement. The round-1 exposure-tier/merge gaps
 below are closed by the two new direct tests. The matrix below remains a
 historical handoff inventory; this supplement records subsequent evidence.
 
+## Response parity-gap supplement (2026-09-26)
+
+Worker supplement, not an independent acceptance. Each test below compares
+with CPython 3.12 (`python3.12` oracle) and was checked to fail on the code
+before its fix.
+
+| Gap | Rust evidence |
+| --- | --- |
+| `_require_secure_file` owner check uses `os.getuid()` without spawning a process | `notify::uid_tests::secure_file_owner_is_compared_with_the_real_uid_without_spawning` (non-root: `RLIMIT_NPROC` 0; root: real/effective uid split) |
+| A failing (panicking) decision is counted in `decision_errors` and the next crossing still opens an incident (`test_a_failing_open_incident_is_counted_not_raised`) | `response_parity_gaps::panic_inside_the_decision_is_counted_and_detection_keeps_working` |
+| `DetectorConfig.__post_init__` validation order | `response_parity_gaps::detector_config_reports_invalid_fields_in_python_order` (every pair of differently invalid fields) |
+| `failed_steps` `setdefault`, counter promotion, flag truthiness on hand-edited incidents | `response_parity_gaps::widening_a_hand_edited_incident_updates_actions_like_python`, `close_with_unavailable_audit_records_the_step_without_a_prior_list` |
+| `incident declare --scope principal` without `--principal` | `response_parity_gaps::declare_principal_scope_without_principal_matches_python_cli` (both CLIs) |
+| Email rendering truthiness (falsy rule/runtime, `or` defaults, `.get(key, 0)`) | `response_parity_gaps::email_rendering_follows_python_truthiness_for_loaded_incidents` |
+| `EmailMessage` header folding/encoding and body transfer encoding | `smtp::message_tests::flattened_message_matches_python_bytes`, `generated_header_shapes_match_python_bytes` (400 generated shapes), `body_transfer_encoding_matches_python_bytes`, `unsupported_address_shapes_are_written_as_configured` |
+| smtplib session: `local_hostname`, command spelling, EHLO features, `_rset`, 421 close, context-manager `QUIT`, AUTH challenge limits, password read before connecting, failure class names, escaping built-ins | `smtp::hostname_tests::local_hostname_matches_smtplib`; `response_parity_gaps::smtp_sessions_match_python_transcripts_outcomes_and_audit` (40 scripted loopback sessions: outcome, new audit records and received bytes), `incident_delivery_failures_record_what_python_records`, `notify_test_cli_reports_escaping_errors_like_python` |
+
+Residual differences are recorded in `DEVIATIONS.md` (notify residual header
+shapes, SMTP `local_hostname`, non-ASCII SMTP host, escaping built-ins, and
+hand-edited incident `actions`/principal-scope rows).
+
 ## Incident
 
 | Original behavior/cases | Rust evidence | Remaining boundary |
