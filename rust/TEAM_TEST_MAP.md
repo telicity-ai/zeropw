@@ -70,3 +70,19 @@ Abbreviations: `TM` = `team_membership_sync.rs`, `TR` = `team_transport.rs`, `AR
 | membership / `test_two_admins_remove_each_other` | AR3 / mutual removal test | Covered |
 
 `Covered` is a mapping for these behaviors, not an assertion that all Python tests or the full Rust suite passed at this head. The two constructor rows remain an explicit **API-shape difference**: Python permits an omitted membership callback; Rust's type requires one, and the supplied empty callback is verified fail-closed. This is not represented as exact Python call-signature coverage. The remote live-runtime cases use the receiving native `serve` with an active run or signer socket; a state-only stale grant or fact log was not counted as their substitute.
+
+## Parity-gap regressions (not original Python test methods)
+
+These cover behaviour an audit found differing from `zeropw/team/sync.py`/`membership.py`; they are additional to the 62-method map above. `PG` = `team_parity_gaps.rs`; `SU` = `team::sync` unit tests (`cargo test --lib team::sync::`).
+
+| Behaviour (Python source) | Native evidence |
+| --- | --- |
+| `_relaxed_document` vector-keyed cache, cleared only by `_refold` | SU / `relaxed_document_is_cached_by_store_vector_like_python` (fold counts compared with CPython's wrapped `F.fold`; Rust-only replay folds once per pass) |
+| Pickup baseline moved only by `_pick_up_local_commits`; `_LruSet` rebroadcast dedup | PG / `cli_commit_written_before_a_received_commit_is_still_picked_up_once`, `cli_commit_written_before_a_submitted_commit_is_still_picked_up_once`, `released_deferred_commit_is_broadcast_once_across_polls`; SU / `lru_seen_set_matches_python` |
+| `_handle_incident` unknown author audited `team_fact_signature_invalid` | PG / `incident_from_unknown_author_is_audited_like_python` |
+| `_admit_member` audit `extra` carries `role` | PG / `member_add_audit_records_role_like_python` |
+| `_send_peers` payload filtering/sorting; `_persist_peer_address` over falsy/non-dict documents; `_load_env_locked` over a non-dict document | PG / `peers_frame_is_filtered_and_sorted_like_python`, `falsy_peers_document_is_an_empty_dict`, `non_dict_peers_document_is_never_sent`, `join_with_non_dict_peers_document_fails_before_dialing` |
+| `parse_invite` `str()` coercion, `addresses` default and iteration, `_b32d` `strip().upper()` | PG / `parse_invite_accepts_every_shape_python_accepts` |
+| `_drop_member_sessions` clears backoff/next-attempt | SU / `member_removal_forgets_dial_backoff_state` |
+| `_apply_incident_rotation_flags` over a corrupt flags document | SU / `corrupt_rotation_flags_fail_the_incident_like_python` |
+| `_wire_dialed_session` starts `self._start_receiver`; `stop` joins receive threads with `join(timeout=5)` | PG / `outbound_receiver_belongs_to_the_adopting_instance`, `stop_joins_receiver_threads`, `stop_join_is_bounded_like_python` |

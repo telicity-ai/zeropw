@@ -1,12 +1,13 @@
-//! Port of `zeropw/team/` (data layer only in the first half).
+//! Port of `zeropw/team/`: the complete team-sharing stack.
 //!
-//! Stage 1 only (docs/team-sync.md section 13, "단계 1"): device identity,
-//! DEK envelopes, signed commits, deterministic fold, human-readable
-//! rendering. No networking: `zeropw/team/transport.py` and `sync.py` (and
-//! `membership.py`) are later stages, out of this half's scope
-//! (`rust/PORTING.md` section 1). Where an in-scope module here lazily
-//! imports one of those in Python, this port leaves a `// SECOND-HALF:` note
-//! at the seam instead of inventing the missing module.
+//! Data layer (docs/team-sync.md section 13, stage 1): device identity
+//! (`identity`), DEK envelopes (`envelope`), signed commits (`commit`),
+//! deterministic fold and local derivation (`fold`), human-readable rendering
+//! (`humanview`). Networking and membership (later stages): the authenticated
+//! session transport (`transport`, in-process and TCP), the replication /
+//! monotone-fact runtime attached to a running context (`sync`), and
+//! share/invite/join/remove flows (`membership`). Python behaviour is the
+//! specification; recorded differences live in `rust/DEVIATIONS.md`.
 
 pub mod commit;
 pub mod envelope;
