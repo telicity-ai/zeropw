@@ -2840,31 +2840,47 @@ mod tests {
     // normally runs debug tests) but far tighter than the old, 35x-looser
     // 500ms bound (which would not have caught either the round-1 or the
     // round-3 regression).
+    //
+    // A fixed poll interval raises the floor of every run, so the pin is
+    // on the fastest of up to three runs of the same ten cycles: one
+    // scheduler stall while the rest of the library suite saturates the
+    // host's CPUs (measured: one failing full `cargo test --lib` run in
+    // three on a 4-CPU host, the test alone passing every time) cannot fail
+    // it, while any fixed interval still fails all three.
     #[test]
     fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
         let f = fixture();
-        let mut samples = Vec::with_capacity(10);
-        let started = Instant::now();
-        for _ in 0..10 {
-            let cycle_started = Instant::now();
-            let mut conn = f.connect();
-            let reply = conn
-                .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
-                .unwrap();
-            assert_eq!(reply[0], sshwire::SSH_AGENT_IDENTITIES_ANSWER);
-            samples.push(cycle_started.elapsed());
+        let bound = Duration::from_millis(25);
+        let mut runs = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let mut samples = Vec::with_capacity(10);
+            let started = Instant::now();
+            for _ in 0..10 {
+                let cycle_started = Instant::now();
+                let mut conn = f.connect();
+                let reply = conn
+                    .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                    .unwrap();
+                assert_eq!(reply[0], sshwire::SSH_AGENT_IDENTITIES_ANSWER);
+                samples.push(cycle_started.elapsed());
+            }
+            let elapsed = started.elapsed();
+            eprintln!(
+                "[G-R5-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
+                 {elapsed:?}; this session's own measurements in this environment: real \
+                 python3.12 4.17-6.37ms total/10 cycles (0.26-0.94ms/cycle typical), Rust debug \
+                 4.12-10.42ms total (0.37-1.49ms/cycle), Rust release 1.12-2.29ms total \
+                 (0.09-0.50ms/cycle) -- see DEVIATIONS.md and the comment above this test)"
+            );
+            runs.push(elapsed);
+            if elapsed < bound {
+                break;
+            }
         }
-        let elapsed = started.elapsed();
-        eprintln!(
-            "[G-R5-1] Rust connect+REQUEST_IDENTITIES latency per cycle: {samples:?} (total \
-             {elapsed:?}; this session's own measurements in this environment: real \
-             python3.12 4.17-6.37ms total/10 cycles (0.26-0.94ms/cycle typical), Rust debug \
-             4.12-10.42ms total (0.37-1.49ms/cycle), Rust release 1.12-2.29ms total \
-             (0.09-0.50ms/cycle) -- see DEVIATIONS.md and the comment above this test)"
-        );
+        let best = *runs.iter().min().expect("at least one run");
         assert!(
-            elapsed < Duration::from_millis(25),
-            "10 sequential connections took {elapsed:?}; this environment measures \
+            best < bound,
+            "10 sequential connections took {runs:?} in every run; this environment measures \
              4.12-10.42ms for a debug build of the same workload with the event-driven \
              accept wait (finding G-R4-1/G-R5-1) -- 25ms is a real, tight pin (not the old, \
              35x-loose 500ms) with headroom for a loaded CI host, and is still far below \
