@@ -440,6 +440,487 @@ mod retry_tests {
         );
     }
 
+    /// Python half of [`owner_with_admin_peer`]: an owner node with a shared
+    /// environment, a `TeamSync` and one admin peer, plus a recording session
+    /// for that peer (driven through `_handle_message` directly).
+    const PY_OWNER_WITH_ADMIN_PEER: &str = r#"
+import json, tempfile, pathlib, time
+from zeropw.context import Config, Context
+from zeropw.team import membership as M, sync as S, transport as T
+from zeropw.team.identity import DeviceKey
+
+root = pathlib.Path(tempfile.mkdtemp())
+ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
+ctx.projects.create("demo", ["dev"])
+env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+team = S.TeamSync(ctx, T.InProcessTransport(device), device)
+team.register_env(env_id)
+peer = DeviceKey.generate()
+M.author_commit(ctx, team, env_id, [{"op": "member.add", "device": peer.record.to_dict(), "name": "bob",
+                                     "role": "admin"}])
+
+class Fake:
+    def __init__(self, peer):
+        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
+        self.created_at = time.monotonic()
+    def send(self, m): self.sent.append(m)
+    def recv(self, timeout): return None
+    def close(self): self.closed = True
+
+session = Fake(peer.record)
+"#;
+
+    struct OwnerWithAdminPeer {
+        _root: TempDir,
+        ctx: Arc<Context>,
+        env_id: String,
+        peer_key: DeviceKey,
+        recorder: Arc<RecordingSession>,
+        session: Arc<dyn Session>,
+        team: Arc<TeamSync>,
+    }
+    fn owner_with_admin_peer() -> OwnerWithAdminPeer {
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("a"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        ctx.projects.create("demo", &["dev"]).unwrap();
+        let env_id = crate::team::membership::share_environment(
+            &ctx,
+            None,
+            "demo",
+            "dev",
+            "owner",
+            "synthetic-admin",
+        )
+        .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let peer_key = DeviceKey::generate();
+        let peer = peer_key.record().unwrap();
+        let recorder = Arc::new(RecordingSession {
+            peer: peer.clone(),
+            env_id: env_id.clone(),
+            sent: Mutex::new(Vec::new()),
+            on_first_send: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        let session: Arc<dyn Session> = recorder.clone();
+        let team = TeamSync::new(
+            ctx.clone(),
+            Arc::new(StubTransport {
+                session: session.clone(),
+            }),
+            mine,
+        );
+        team.register_env(&env_id).unwrap();
+        crate::team::membership::author_commit(
+            &ctx,
+            Some(&team),
+            &env_id,
+            vec![json!({"op":"member.add","device":peer.to_dict(),"name":"bob","role":"admin"})],
+        )
+        .unwrap();
+        OwnerWithAdminPeer {
+            _root: root,
+            ctx,
+            env_id,
+            peer_key,
+            recorder,
+            session,
+            team,
+        }
+    }
+
+    /// The same inbound traffic replayed against Python, whose
+    /// `_relaxed_document` is wrapped to count the `F.fold` calls it makes.
+    const PY_RELAXED_FOLDS: &str = r#"
+folds = [0]
+real_relaxed = S.TeamSync._relaxed_document
+def counted(self, env_id):
+    real_fold = S.F.fold
+    def fold(*args, **kwargs):
+        folds[0] += 1
+        return real_fold(*args, **kwargs)
+    S.F.fold = fold
+    try:
+        return real_relaxed(self, env_id)
+    finally:
+        S.F.fold = real_fold
+S.TeamSync._relaxed_document = counted
+
+def bad_fact(i):
+    fact = S.sign_fact(peer, env_id, "connection_disabled", {"connection_id": f"c{i}"}, f"{5000 + i}-0000").to_dict()
+    fact["target"]["connection_id"] = "tampered"
+    return {"type": "FACT", "fact": fact}
+
+def incident(i):
+    fact = S.sign_fact(peer, env_id, "incident", {"incident_id": f"{i:016x}"}, f"{6000 + i}-0000")
+    return {"type": "INCIDENT", "fact": fact.to_dict()}
+
+counts = []
+for i in range(5):
+    team._handle_message(env_id, session, bad_fact(i))
+counts.append(folds[0])
+for i in range(3):
+    team._handle_message(env_id, session, incident(i))
+counts.append(folds[0])
+M.author_commit(ctx, None, env_id, [{"op": "settings.update", "sync_interval_seconds": 7}])
+team._handle_message(env_id, session, bad_fact(10))
+counts.append(folds[0])
+team._handle_message(env_id, session, bad_fact(11))
+counts.append(folds[0])
+team.poll()
+team._handle_message(env_id, session, bad_fact(12))
+counts.append(folds[0])
+acks = sum(1 for m in session.sent if m["type"] == "INCIDENT_ACK")
+rejected = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_fact_rejected")
+print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
+"#;
+
+    /// Gap 1: `_relaxed_document` is cached by the store vector and cleared
+    /// only by `_refold`, so a removed member's device record is resolved
+    /// without re-folding the whole log per FACT/INCIDENT -- and the
+    /// Rust-only offline fact replay folds at most once per pass, not once
+    /// per replayed line.
+    #[test]
+    fn relaxed_document_is_cached_by_store_vector_like_python() {
+        let python: Value = serde_json::from_str(
+            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_RELAXED_FOLDS}")).trim(),
+        )
+        .unwrap();
+        let OwnerWithAdminPeer {
+            _root,
+            ctx,
+            env_id,
+            peer_key,
+            recorder,
+            session,
+            team,
+        } = owner_with_admin_peer();
+        let folds = || team.relaxed_folds.load(Ordering::SeqCst);
+        assert_eq!(folds(), 0);
+        let bad_fact = |i: u64| {
+            let mut fact = sign_fact(
+                &peer_key,
+                &env_id,
+                "connection_disabled",
+                json!({"connection_id":format!("c{i}")}),
+                &format!("{}-0000", 5000 + i),
+            )
+            .unwrap()
+            .to_dict();
+            fact["target"]["connection_id"] = json!("tampered");
+            json!({"type":"FACT","fact":fact})
+        };
+        let incident = |i: u64| {
+            let fact = sign_fact(
+                &peer_key,
+                &env_id,
+                "incident",
+                json!({"incident_id":format!("{i:016x}")}),
+                &format!("{}-0000", 6000 + i),
+            )
+            .unwrap();
+            json!({"type":"INCIDENT","fact":fact.to_dict()})
+        };
+        let mut counts = Vec::new();
+        for i in 0..5 {
+            team.handle_message(&env_id, &session, &bad_fact(i))
+                .unwrap();
+        }
+        counts.push(folds());
+        for i in 0..3 {
+            team.handle_message(&env_id, &session, &incident(i))
+                .unwrap();
+        }
+        counts.push(folds());
+        // Another process's commit moves the store vector: a cache miss.
+        crate::team::membership::author_commit(
+            &ctx,
+            None,
+            &env_id,
+            vec![json!({"op":"settings.update","sync_interval_seconds":7})],
+        )
+        .unwrap();
+        team.handle_message(&env_id, &session, &bad_fact(10))
+            .unwrap();
+        counts.push(folds());
+        team.handle_message(&env_id, &session, &bad_fact(11))
+            .unwrap();
+        counts.push(folds());
+        // The pickup refolds, which clears the cache even at the same vector.
+        team.poll().unwrap();
+        team.handle_message(&env_id, &session, &bad_fact(12))
+            .unwrap();
+        counts.push(folds());
+        let sent = recorder.sent.lock().unwrap().clone();
+        let acks = sent.iter().filter(|m| m["type"] == "INCIDENT_ACK").count();
+        let rejected = ctx
+            .audit
+            .tail(500)
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "team_fact_rejected")
+            .count();
+        assert_eq!(
+            json!({"counts":counts,"acks":acks,"rejected":rejected}),
+            python
+        );
+        assert_eq!(python["counts"], json!([1, 1, 2, 2, 3]));
+
+        // Rust-only offline fact replay (DEVIATIONS.md): 64 lines, each
+        // needing the author's device record.
+        for i in 0..64u64 {
+            let line = sign_fact(
+                &peer_key,
+                &env_id,
+                "connection_disabled",
+                json!({"connection_id":format!("r{i}")}),
+                &format!("{}-0000", 7000 + i),
+            )
+            .unwrap()
+            .to_dict()
+            .to_string();
+            ctx.state
+                .append_line(&format!("team/{env_id}/facts.jsonl"), &line)
+                .unwrap();
+        }
+        assert!(team.accept_session(&env_id, session.clone(), true));
+        recorder.sent.lock().unwrap().clear();
+        let warm = folds();
+        team.send_fact_catchup(&env_id, &session).unwrap();
+        let replayed = recorder.sent.lock().unwrap().len();
+        assert!(replayed >= 60, "only {replayed} facts replayed");
+        assert_eq!(folds(), warm, "a warm cache must not fold again");
+        team.refold(&env_id).unwrap();
+        team.send_fact_catchup(&env_id, &session).unwrap();
+        assert!(recorder.sent.lock().unwrap().len() > replayed);
+        assert_eq!(folds(), warm + 1, "one fold per replay pass, not per line");
+    }
+
+    /// `_apply_incident_rotation_flags` over a corrupt `rotation_flags.json`.
+    const PY_ROTATION_FLAGS: &str = r#"
+path = f"team/{env_id}/rotation_flags.json"
+cases = [(["x"], {"secret_ids_mandatory": ["s1"]}), (["x"], {}),
+         ({"s2": "bad"}, {"secret_ids_recommended": ["s2"]}), ({"s2": "bad"}, {"secret_ids_mandatory": ["s2"]}),
+         ({"s2": None}, {"secret_ids_recommended": ["s2"]}), (0, {"secret_ids_recommended": ["s3"]}),
+         ({"s4": {"reason": "rotation_required", "flagged_at": "T0"}},
+          {"secret_ids_recommended": ["s4", "s5"], "secret_ids_mandatory": ["s6"]})]
+out = []
+for i, (flags, extra) in enumerate(cases):
+    ctx.state.write_json(path, flags)
+    before = len(session.sent)
+    fact = S.sign_fact(peer, env_id, "incident", dict(extra, incident_id=f"{i:016x}"), f"{6000 + i}-0000")
+    try:
+        team._handle_message(env_id, session, {"type": "INCIDENT", "fact": fact.to_dict()})
+        raised = False
+    except Exception:
+        raised = True
+    after = ctx.state.read_json(path, None)
+    if isinstance(after, dict):
+        after = {k: dict(v, flagged_at="T") if isinstance(v, dict) and v.get("flagged_at") != "T0" else v
+                 for k, v in after.items()}
+    out.append({"raised": raised, "flags": after, "acked": len(session.sent) - before,
+                "record": ctx.state.exists(f"team/{env_id}/incidents/{peer.fingerprint}-{i:016x}.json")})
+received = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_incident_received")
+print(json.dumps({"cases": out, "received": received}))
+"#;
+
+    /// A truthy non-dict `rotation_flags.json` (or a non-dict entry that a
+    /// recommended id reads) raises in Python inside `_handle_incident`,
+    /// after the incident record is written and before the ACK; Rust returns
+    /// `state_corrupt` from the same step (so the receive loop drops the
+    /// session exactly as Python's escaping exception does) instead of
+    /// panicking on `Value` index assignment.
+    #[test]
+    fn corrupt_rotation_flags_fail_the_incident_like_python() {
+        let python: Value = serde_json::from_str(
+            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_ROTATION_FLAGS}")).trim(),
+        )
+        .unwrap();
+        let fixture = owner_with_admin_peer();
+        let (ctx, env_id, team) = (&fixture.ctx, &fixture.env_id, &fixture.team);
+        let path = format!("team/{env_id}/rotation_flags.json");
+        let cases = [
+            (json!(["x"]), json!({"secret_ids_mandatory":["s1"]})),
+            (json!(["x"]), json!({})),
+            (
+                json!({"s2":"bad"}),
+                json!({"secret_ids_recommended":["s2"]}),
+            ),
+            (json!({"s2":"bad"}), json!({"secret_ids_mandatory":["s2"]})),
+            (json!({"s2":null}), json!({"secret_ids_recommended":["s2"]})),
+            (json!(0), json!({"secret_ids_recommended":["s3"]})),
+            (
+                json!({"s4":{"reason":"rotation_required","flagged_at":"T0"}}),
+                json!({"secret_ids_recommended":["s4","s5"],"secret_ids_mandatory":["s6"]}),
+            ),
+        ];
+        let peer_fp = fixture.peer_key.fingerprint().unwrap();
+        let mut out = Vec::new();
+        for (i, (flags, extra)) in cases.into_iter().enumerate() {
+            ctx.state.write_json(&path, &flags).unwrap();
+            let before = fixture.recorder.sent.lock().unwrap().len();
+            let mut target = extra;
+            target["incident_id"] = json!(format!("{i:016x}"));
+            let fact = sign_fact(
+                &fixture.peer_key,
+                env_id,
+                "incident",
+                target,
+                &format!("{}-0000", 6000 + i),
+            )
+            .unwrap();
+            let result = team.handle_message(
+                env_id,
+                &fixture.session,
+                &json!({"type":"INCIDENT","fact":fact.to_dict()}),
+            );
+            if let Err(error) = &result {
+                assert_eq!(error.reason, "state_corrupt");
+            }
+            let mut after = ctx.state.read_json(&path, Value::Null).unwrap();
+            if let Some(map) = after.as_object_mut() {
+                for entry in map.values_mut() {
+                    if entry.is_object() && entry["flagged_at"] != "T0" {
+                        entry["flagged_at"] = json!("T");
+                    }
+                }
+            }
+            out.push(json!({
+                "raised": result.is_err(),
+                "flags": after,
+                "acked": fixture.recorder.sent.lock().unwrap().len() - before,
+                "record": ctx.state.exists(&format!("team/{env_id}/incidents/{peer_fp}-{i:016x}.json")),
+            }));
+        }
+        let received = ctx
+            .audit
+            .tail(500)
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "team_incident_received")
+            .count();
+        assert_eq!(json!({"cases":out,"received":received}), python);
+        assert_eq!(python["cases"][0]["raised"], json!(true));
+        assert_eq!(python["cases"][1]["raised"], json!(false));
+    }
+
+    /// Gap 7: `_drop_member_sessions` forgets a removed peer's addresses and
+    /// its dial backoff/next-attempt state, not only its addresses.
+    #[test]
+    fn member_removal_forgets_dial_backoff_state() {
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("a"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        ctx.projects.create("demo", &["dev"]).unwrap();
+        let env_id = crate::team::membership::share_environment(
+            &ctx,
+            None,
+            "demo",
+            "dev",
+            "owner",
+            "synthetic-admin",
+        )
+        .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let other = DeviceKey::generate().record().unwrap();
+        let other_fp = other.fingerprint();
+        let session: Arc<dyn Session> = Arc::new(StubSession {
+            peer: peer.clone(),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        let team = TeamSync::new(ctx.clone(), Arc::new(StubTransport { session }), mine);
+        team.register_env(&env_id).unwrap();
+        for record in [&peer, &other] {
+            crate::team::membership::author_commit(
+                &ctx,
+                Some(&team),
+                &env_id,
+                vec![json!({"op":"member.add","device":record.to_dict(),"name":"m","role":"user"})],
+            )
+            .unwrap();
+        }
+        {
+            let mut envs = team.envs.lock().unwrap();
+            let env = envs.get_mut(&env_id).unwrap();
+            for key in [&fp, &other_fp] {
+                env.candidate_addresses
+                    .insert(key.clone(), BTreeSet::from(["unreachable".to_owned()]));
+                env.backoff.insert(key.clone(), Duration::from_secs(8));
+                env.next_attempt
+                    .insert(key.clone(), Instant::now() + Duration::from_secs(8));
+            }
+        }
+        team.publish_fact(&env_id, "member_removed", json!({"fingerprint":fp}))
+            .unwrap();
+        let envs = team.envs.lock().unwrap();
+        let env = &envs[&env_id];
+        assert!(!env.candidate_addresses.contains_key(&fp));
+        assert!(!env.backoff.contains_key(&fp));
+        assert!(!env.next_attempt.contains_key(&fp));
+        // No live session to drain, and an unrelated member is untouched.
+        assert!(!env.draining.contains_key(&fp));
+        assert!(env.candidate_addresses.contains_key(&other_fp));
+        assert!(env.backoff.contains_key(&other_fp));
+        assert!(env.next_attempt.contains_key(&other_fp));
+    }
+
+    /// Gap 2: the rebroadcast seen-set is `sync._LruSet` (hit refreshes
+    /// recency, overflow evicts the least recent), compared call by call.
+    #[test]
+    fn lru_seen_set_matches_python() {
+        let mut state = 0x2545_f491_u64;
+        let keys: Vec<String> = (0..400)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                format!("k{}", state % 9)
+            })
+            .collect();
+        let script = format!(
+            "import json\nfrom zeropw.team.sync import _LruSet\ns = _LruSet(4)\nprint(json.dumps([s.add_if_new(k) for k in json.loads({:?})]))",
+            json!(keys).to_string()
+        );
+        let python: Vec<bool> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let mut seen = LruSet::new(4);
+        let rust: Vec<bool> = keys.iter().map(|k| seen.add_if_new(k)).collect();
+        assert_eq!(rust, python);
+        assert!(
+            rust.iter().filter(|new| **new).count() > 9,
+            "no eviction exercised"
+        );
+        assert_eq!(SEEN_CAPACITY, 4096);
+    }
+
     #[test]
     fn successful_retry_resets_backoff_before_next_disconnect() {
         let root = TempDir::new().unwrap();
@@ -866,6 +1347,13 @@ pub(crate) fn python_list(value: &Value) -> Option<Vec<Value>> {
     }
 }
 
+/// The device record of `members[fp]` in a folded document, if it parses and
+/// really is `fp`'s (`_known_device_record` after its `_relaxed_document`).
+fn member_device_record(doc: &Value, fp: &str) -> Option<DeviceRecord> {
+    let record = DeviceRecord::from_dict(&doc["members"][fp]["device"]).ok()?;
+    (record.fingerprint() == fp).then_some(record)
+}
+
 /// `StateDir.read_json(path, {}) or {}` for a document Python then uses as a
 /// `dict`: a falsy document becomes `{}`, and a truthy non-dict (on which
 /// Python's `.get`/`.items`/item assignment raises an uncaught
@@ -1156,23 +1644,20 @@ impl TeamSync {
         }
         let (facts, hashes, authors) = load_facts(self.ctx.state, env_id)?;
         let mut env = EnvState::new(facts, hashes, authors);
-        let peers = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/peers.json"), json!({}))?;
-        if let Some(peers) = peers.as_object() {
-            for (fp, addrs) in peers {
-                if valid_fp(fp) {
-                    if let Some(addrs) = addrs.as_array() {
-                        env.candidate_addresses.insert(
-                            fp.clone(),
-                            addrs
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect(),
-                        );
-                    }
+        // `self._read_peers(env_id).items()`: a truthy non-dict document
+        // raises in Python before the environment is loaded (§3.5).
+        let peers = read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peers.json"))?;
+        for (fp, addrs) in &peers {
+            if valid_fp(fp) {
+                if let Some(addrs) = addrs.as_array() {
+                    env.candidate_addresses.insert(
+                        fp.clone(),
+                        addrs
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect(),
+                    );
                 }
             }
         }
@@ -1419,8 +1904,13 @@ impl TeamSync {
                 .or_default()
                 .insert(address.into());
         }
-        // `_persist_peer_address`: `doc = read_json(...) or {}`,
-        // `addrs = list(doc.get(fp, []))`, append if absent, write back.
+        self.persist_peer_address(env_id, fp, address)
+    }
+    /// `_persist_peer_address`: `doc = read_json(...) or {}`,
+    /// `addrs = list(doc.get(fp, []))`, append if absent, write back. A truthy
+    /// non-dict document (or a non-iterable entry) raises in Python; here it
+    /// is `state_corrupt` and the file is left untouched (PORTING.md §3.5).
+    fn persist_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
         let _lock = self.ctx.state.lock()?;
         let path = format!("team/{env_id}/peers.json");
         let mut peers = read_dict_or_empty(self.ctx.state, &path)?;
@@ -1956,7 +2446,8 @@ impl TeamSync {
         let end = start
             .saturating_add(FACT_REPLAY_LINES_PER_VECTOR)
             .min(lines.len());
-        for line in &lines[start..end] {
+        let mut relaxed: Option<Option<Arc<Value>>> = None;
+        for line in lines.get(start..end).unwrap_or_default() {
             let Ok(value) = pyjson::loads(line) else {
                 continue;
             };
@@ -1966,7 +2457,13 @@ impl TeamSync {
             if fact.env_id != env_id || fact.kind == "incident" {
                 continue;
             }
-            let Some(author) = self.known_record(env_id, &fact.author) else {
+            // One relaxed-document lookup per replay pass (not per line):
+            // resolved lazily, so a pass with nothing to verify folds nothing.
+            let relaxed = relaxed.get_or_insert_with(|| self.relaxed_document(env_id).ok());
+            let Some(author) = relaxed
+                .as_deref()
+                .and_then(|doc| member_device_record(doc, &fact.author))
+            else {
                 continue;
             };
             if !verify_fact(&fact, &author) {
@@ -2080,10 +2577,9 @@ impl TeamSync {
         }
         Ok(document)
     }
+    /// `_known_device_record`.
     fn known_record(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
-        let doc = self.relaxed_document(env_id).ok()?;
-        let record = DeviceRecord::from_dict(&doc["members"][fp]["device"]).ok()?;
-        (record.fingerprint() == fp).then_some(record)
+        member_device_record(self.relaxed_document(env_id).ok()?.as_ref(), fp)
     }
     fn role_document_for_removal(&self, env_id: &str, author: &str, target: &str) -> Result<Value> {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -2784,7 +3280,9 @@ impl TeamSync {
             env.backoff.remove(fp);
             env.next_attempt.remove(fp);
         }
-        self.wire_dialed_session(env_id, fp, &address, session);
+        // Python lets this escape `poll()` (the poll loop swallows it); the
+        // failure is confined to this one dial here.
+        let _ = self.wire_dialed_session(env_id, fp, &address, session);
     }
     fn record_dial_failure(&self, env_id: &str, fp: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -2799,28 +3297,58 @@ impl TeamSync {
             env.next_attempt.insert(fp.into(), Instant::now() + dur);
         }
     }
+    /// `_wire_dialed_session`. Python persists the dialed address first and an
+    /// exception there (a corrupt `peers.json`) escapes before the session is
+    /// accepted, so it is never wired: here it is returned (`state_corrupt`)
+    /// and the session is closed rather than leaked. A later `_send_peers`
+    /// failure likewise stops before the incident retry.
     fn wire_dialed_session(
         &self,
         env_id: &str,
         fp: &str,
         address: &str,
         session: Arc<dyn Session>,
-    ) {
-        let _ = self.set_peer_address(env_id, fp, address);
+    ) -> Result<()> {
+        // A successful dial also becomes a redial candidate (as through
+        // `set_peer_address`); only the persisted address is Python's step.
+        if valid_fp(fp) && !address.is_empty() {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(env) = envs.get_mut(env_id) {
+                env.candidate_addresses
+                    .entry(fp.into())
+                    .or_default()
+                    .insert(address.into());
+            }
+        }
+        if let Err(error) = self.persist_peer_address(env_id, fp, address) {
+            session.close();
+            return Err(error);
+        }
         if !self.accept_session(env_id, session.clone(), false) {
-            return;
+            return Ok(());
         }
         self.audit_event("team_session_open", env_id, Some(fp), None, None);
         self.start_receiver(env_id.into(), session.clone());
         self.send_vector(env_id, &session);
-        if self.send_peers(env_id, &session).is_err() {
-            return;
-        }
+        self.send_peers(env_id, &session)?;
         self.retry_pending_incidents_to(env_id, &session);
+        Ok(())
     }
+    /// `adopt_outbound_session`: hand a session the caller dialed itself
+    /// (`membership::join`) to the gossip machinery.
     pub fn adopt_outbound_session(&self, env_id: &str, session: Arc<dyn Session>, address: &str) {
+        let _ = self.adopt_outbound_session_checked(env_id, session, address);
+    }
+    /// [`Self::adopt_outbound_session`] reporting what Python's version would
+    /// raise, for `join` to fail with it instead of waiting out its timeout.
+    pub(crate) fn adopt_outbound_session_checked(
+        &self,
+        env_id: &str,
+        session: Arc<dyn Session>,
+        address: &str,
+    ) -> Result<()> {
         let fp = session.peer().fingerprint();
-        self.wire_dialed_session(env_id, &fp, address, session);
+        self.wire_dialed_session(env_id, &fp, address, session)
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());

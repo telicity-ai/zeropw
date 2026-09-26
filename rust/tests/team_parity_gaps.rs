@@ -531,14 +531,88 @@ fn falsy_peers_document_is_an_empty_dict() {
     );
 }
 
-/// A truthy non-dict peers document makes Python raise (AttributeError) in
-/// `_persist_peer_address`/`_send_peers`; Rust fails closed (§3.5) instead of
-/// panicking or relaying the raw document.
+const PY_NON_DICT_PEERS: &str = r#"
+import json, tempfile, pathlib, time
+from zeropw.context import Config, Context
+from zeropw.team import membership as M, sync as S, transport as T
+from zeropw.team.identity import DeviceKey
+
+root = pathlib.Path(tempfile.mkdtemp())
+ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
+ctx.projects.create("demo", ["dev"])
+env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+path = f"team/{env_id}/peers.json"
+load = {}
+for doc in (["x"], "x", 5, True, [], 0, "", None, {}):
+    ctx.state.write_json(path, doc)
+    try:
+        S.TeamSync(ctx, T.InProcessTransport(device), device).register_env(env_id)
+        load[json.dumps(doc)] = "ok"
+    except Exception as exc:
+        load[json.dumps(doc)] = type(exc).__name__
+
+class Fake:
+    def __init__(self, peer):
+        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
+        self.created_at = time.monotonic()
+    def send(self, m): self.sent.append(m)
+    def recv(self, timeout): return None
+    def close(self): self.closed = True
+
+ctx.state.write_json(path, {})
+team = S.TeamSync(ctx, T.InProcessTransport(device), device)
+team.register_env(env_id)
+ctx.state.write_json(path, ["synthetic-raw-entry"])
+session = Fake(DeviceKey.generate().record)
+try:
+    team.adopt_outbound_session(env_id, session, "gap-non-dict")
+    wired = "ok"
+except Exception as exc:
+    wired = type(exc).__name__
+peers_after = ctx.state.read_json(path, None)
+other = Fake(DeviceKey.generate().record)
+ctx.state.write_json(path, {other.peer.fingerprint: 5})
+try:
+    team.adopt_outbound_session(env_id, other, "gap-non-list")
+    entry = "ok"
+except Exception as exc:
+    entry = type(exc).__name__
+print(json.dumps({"load": load, "wired": wired, "sent": session.sent, "peers": peers_after, "entry": entry,
+                  "entry_sent": other.sent, "sessions": sorted(team._envs[env_id].sessions)}))
+"#;
+
+/// A truthy non-dict peers document makes Python raise `AttributeError`
+/// (`_read_peers(...).items()` loading the environment, `doc.get` in
+/// `_persist_peer_address` before a dialed session is accepted). Rust fails
+/// closed at the same steps with `state_corrupt` (PORTING.md §3.5) instead of
+/// panicking, wiring the session anyway or relaying the raw document.
 #[test]
 fn non_dict_peers_document_is_never_sent() {
+    let python = python(PY_NON_DICT_PEERS);
     let root = TempDir::new().unwrap();
     let node = Node::new(&root, "a");
     let path = format!("team/{}/peers.json", node.env);
+    for (doc, expected) in python["load"].as_object().unwrap() {
+        node.ctx
+            .state
+            .write_json(&path, &serde_json::from_str::<Value>(doc).unwrap())
+            .unwrap();
+        let fresh = sync::TeamSync::new(
+            node.ctx.clone(),
+            Arc::new(InProcessTransport::new(node.key.clone(), no_members())),
+            node.key.clone(),
+        );
+        match fresh.register_env(&node.env) {
+            Ok(()) => assert_eq!(expected, "ok", "{doc}"),
+            Err(error) => {
+                assert_eq!(expected, "AttributeError", "{doc}");
+                assert_eq!(error.reason, "state_corrupt", "{doc}");
+            }
+        }
+    }
+    assert_eq!(python["load"]["[\"x\"]"], "AttributeError");
+    // `Node::new` registered its environment while the document was valid.
     node.ctx
         .state
         .write_json(&path, &json!(["synthetic-raw-entry"]))
@@ -546,15 +620,91 @@ fn non_dict_peers_document_is_never_sent() {
     let (session, _inbox) = Scripted::new(DeviceKey::generate().record().unwrap(), &node.env, None);
     node.team
         .adopt_outbound_session(&node.env, session.clone(), "gap-non-dict");
-    assert!(session.frames("PEERS").is_empty());
+    assert_eq!(python["wired"], "AttributeError");
+    assert_eq!(python["sent"], json!([]));
+    assert!(session.sent.lock().unwrap().is_empty());
+    assert_eq!(python["sessions"], json!([]));
+    assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
     assert!(
-        !json!(*session.sent.lock().unwrap())
-            .to_string()
-            .contains("synthetic-raw-entry")
+        session.is_closed(),
+        "an unwired dialed session is not leaked"
     );
+    assert_eq!(python["peers"], json!(["synthetic-raw-entry"]));
     assert_eq!(
         node.ctx.state.read_json(&path, json!(null)).unwrap(),
         json!(["synthetic-raw-entry"])
+    );
+    // `list(doc.get(fp, []))` over a non-iterable entry: `TypeError`.
+    let (other, _other_inbox) =
+        Scripted::new(DeviceKey::generate().record().unwrap(), &node.env, None);
+    let entry = json!({(other.peer.fingerprint()): 5});
+    node.ctx.state.write_json(&path, &entry).unwrap();
+    node.team
+        .adopt_outbound_session(&node.env, other.clone(), "gap-non-list");
+    assert_eq!(python["entry"], "TypeError");
+    assert_eq!(python["entry_sent"], json!([]));
+    assert!(other.sent.lock().unwrap().is_empty());
+    assert!(other.is_closed());
+    assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
+    assert_eq!(node.ctx.state.read_json(&path, json!(null)).unwrap(), entry);
+}
+
+/// `join` with a corrupt local peers document: Python's `register_env`
+/// raises before any dial, so the inviter's one-time invite is not consumed.
+#[test]
+fn join_with_non_dict_peers_document_fails_before_dialing() {
+    let root = TempDir::new().unwrap();
+    let a = context(&root, "a");
+    a.projects.create("demo", &["dev"]).unwrap();
+    let env =
+        membership::share_environment(&a, None, "demo", "dev", "owner", ADMIN).unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let a_key = DeviceKey::load_or_create(a.state, a.kms).unwrap();
+    let a_team = sync::TeamSync::new(
+        a.clone(),
+        Arc::new(InProcessTransport::new(a_key.clone(), no_members())),
+        a_key,
+    );
+    let address = "gap-join-corrupt-peers";
+    a_team.start(Some(address)).unwrap();
+    let invite =
+        membership::create_invite(&a, &env, "user", "synthetic-b", 3600, &[address.into()])
+            .unwrap();
+    let b = context(&root, "b");
+    b.state
+        .write_json(&format!("team/{env}/peers.json"), &json!(["x"]))
+        .unwrap();
+    let b_key = DeviceKey::load_or_create(b.state, b.kms).unwrap();
+    let b_transport = Arc::new(InProcessTransport::new(b_key.clone(), no_members()));
+    let b_team = sync::TeamSync::new(b.clone(), b_transport.clone(), b_key);
+    let error = membership::join(
+        &b,
+        &invite,
+        b_transport.as_ref() as &dyn Transport,
+        &b_team,
+        Some("demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap_err();
+    b_team.stop();
+    a_team.stop();
+    assert_eq!(error.reason, "state_corrupt");
+    let invites = a
+        .state
+        .read_json(&format!("team/{env}/invites.json"), json!({}))
+        .unwrap();
+    let entries = invites.as_object().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries.values().all(|entry| entry["used"] == false));
+    assert!(
+        a.audit
+            .tail(500)
+            .unwrap()
+            .iter()
+            .all(|r| r["event"] != "team_member_add")
     );
 }
 

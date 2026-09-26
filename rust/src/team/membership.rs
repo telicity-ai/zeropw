@@ -499,7 +499,7 @@ pub fn join(
         session.close();
         return Err(Error::state("team_join_wrong_peer"));
     }
-    team.adopt_outbound_session(&invite.env_id, session, &address);
+    team.adopt_outbound_session_checked(&invite.env_id, session, &address)?;
     let deadline = Instant::now() + Duration::from_secs_f64(timeout);
     while Instant::now() < deadline {
         if team.is_active_member(&invite.env_id, &device.fingerprint()?) {
