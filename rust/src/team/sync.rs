@@ -20,6 +20,7 @@ use crate::context::Context;
 use crate::crypto::ed25519;
 use crate::errors::{Error, Result};
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::store::{StateDir, iso};
 
@@ -818,6 +819,256 @@ print(json.dumps({"cases": out, "received": received}))
         assert_eq!(python["cases"][1]["raised"], json!(false));
     }
 
+    /// `_load_env_locked`'s reads of `peer_vectors.json` and
+    /// `overridden_alerted.json`, shape by shape, against CPython.
+    const PY_LOAD_PEER_STATE: &str = r#"
+import json, tempfile, pathlib
+from zeropw.context import Config, Context
+from zeropw.team import membership as M, sync as S, transport as T
+from zeropw.team.identity import DeviceKey
+
+cases = json.loads(CASES)
+root = pathlib.Path(tempfile.mkdtemp())
+ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
+ctx.projects.create("demo", ["dev"])
+env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+out = []
+for vectors, alerted in cases:
+    ctx.state.write_json(f"team/{env_id}/peer_vectors.json", vectors)
+    ctx.state.write_json(f"team/{env_id}/overridden_alerted.json", alerted)
+    team = S.TeamSync(ctx, T.InProcessTransport(device), device)
+    try:
+        team.register_env(env_id)
+    except Exception as exc:
+        out.append({"error": type(exc).__name__})
+        continue
+    env = team._envs[env_id]
+    out.append({"peer_vectors": env.peer_vectors, "alerted": sorted(env.alerted_overrides)})
+print(json.dumps(out))
+"#;
+
+    /// `register_env` over every JSON shape of the two peer-state documents:
+    /// a truthy non-dict `peer_vectors.json` raises `AttributeError` and a
+    /// truthy non-iterable `overridden_alerted.json` raises `TypeError` in
+    /// Python (`state_corrupt` here, §3.5); a falsy document is empty; any
+    /// other iterable is iterated like Python; peer-vector ints are exact.
+    #[test]
+    fn peer_state_documents_load_like_python() {
+        let fps: Vec<String> = (0..3)
+            .map(|_| DeviceKey::generate().record().unwrap().fingerprint())
+            .collect();
+        let big = "100000000000000000000000000000000000000000";
+        let vectors_doc: Value = serde_json::from_str(&format!(
+            r#"{{"{a}": {{"a": 1, "b": true, "c": 1.5, "d": -3, "e": {big}, "e2": -{big}, "f": "7",
+                "g": null, "h": [1], "i": 1e2, "j": 0, "k": -0}},
+               "not-a-fingerprint": {{"a": 1}}, "{b}": [1, 2], "{c}": {{}}}}"#,
+            a = fps[0],
+            b = fps[1],
+            c = fps[2],
+        ))
+        .unwrap();
+        let mut cases = vec![json!([vectors_doc, ["o1", 1, null, "o2", ["o3"], {"o4": 1}]])];
+        let falsy = [
+            json!([]),
+            json!(0),
+            json!(""),
+            json!(null),
+            json!(false),
+            json!({}),
+        ];
+        let odd = [json!(["x"]), json!("x"), json!(5), json!(true), json!(1.5)];
+        for doc in falsy.iter().chain(odd.iter()) {
+            cases.push(json!([doc, ["o1"]]));
+        }
+        let alerted = [
+            json!({"k1": 1, "k2": [2]}),
+            json!("xyz"),
+            json!([["a"], {"b": 1}, "c", "c"]),
+            json!(5),
+            json!(true),
+            json!(1.5),
+        ];
+        for doc in falsy.iter().chain(alerted.iter()) {
+            cases.push(json!([{}, doc]));
+        }
+        let script = PY_LOAD_PEER_STATE.replace(
+            "json.loads(CASES)",
+            &format!("json.loads({:?})", json!(cases).to_string()),
+        );
+        let python: Value = serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let python = python.as_array().unwrap();
+        assert_eq!(python.len(), cases.len());
+
+        let root = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("a"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        ctx.projects.create("demo", &["dev"]).unwrap();
+        let env_id = crate::team::membership::share_environment(
+            &ctx,
+            None,
+            "demo",
+            "dev",
+            "owner",
+            "synthetic-admin",
+        )
+        .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let session: Arc<dyn Session> = Arc::new(StubSession {
+            peer: DeviceKey::generate().record().unwrap(),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        for (case, expected) in cases.iter().zip(python) {
+            ctx.state
+                .write_json(&format!("team/{env_id}/peer_vectors.json"), &case[0])
+                .unwrap();
+            ctx.state
+                .write_json(&format!("team/{env_id}/overridden_alerted.json"), &case[1])
+                .unwrap();
+            let team = TeamSync::new(
+                ctx.clone(),
+                Arc::new(StubTransport {
+                    session: session.clone(),
+                }),
+                mine.clone(),
+            );
+            match team.register_env(&env_id) {
+                Err(error) => {
+                    assert_eq!(error.reason, "state_corrupt", "{case}");
+                    assert!(
+                        expected["error"] == "AttributeError" || expected["error"] == "TypeError",
+                        "{case}: Rust failed, Python gave {expected}"
+                    );
+                }
+                Ok(()) => {
+                    let envs = team.envs.lock().unwrap();
+                    let env = &envs[&env_id];
+                    let mut alerted: Vec<&String> = env.alerted_overrides.iter().collect();
+                    alerted.sort();
+                    assert_eq!(
+                        json!({"peer_vectors": env.peer_vectors, "alerted": alerted}),
+                        *expected,
+                        "{case}"
+                    );
+                }
+            }
+        }
+        // The shapes this test is about really do reach each Python branch.
+        assert_eq!(
+            python[0]["peer_vectors"][&fps[0]]["e"],
+            serde_json::from_str::<Value>(big).unwrap()
+        );
+        assert_eq!(python[7]["error"], "AttributeError");
+        assert!(python.iter().any(|r| r["error"] == "TypeError"));
+        assert!(
+            python
+                .iter()
+                .any(|r| r["alerted"] == json!(["x", "y", "z"]))
+        );
+    }
+
+    /// `_handle_vector` with Python-int edge values from a peer: the stored
+    /// and persisted vector keeps every non-negative int exactly, and the
+    /// catch-up range treats a claim past the local sequence (at any
+    /// magnitude) as "nothing to send", a negative/bool/float as 0.
+    const PY_VECTOR_INTS: &str = r#"
+own = device.fingerprint
+big = 10 ** 30
+huge = 10 ** 40
+out = []
+for vector in ({"a": huge, "b": -1, "c": True, "d": 1.5, "e": 5, own: huge},
+               {own: big}, {own: -5}, {own: True}, {own: 1.0}, {own: 1}, {}):
+    session.sent.clear()
+    team._handle_message(env_id, session, {"type": "VECTOR", "vector": vector})
+    out.append({"commits": sum(1 for m in session.sent if m["type"] == "COMMIT"),
+                "stored": {("OWN" if k == own else k): v for k, v in
+                           ctx.state.read_json(f"team/{env_id}/peer_vectors.json", None)[peer.fingerprint].items()}})
+print(json.dumps(out))
+"#;
+
+    #[test]
+    fn peer_vector_ints_are_exact_like_python() {
+        let python: Value = serde_json::from_str(
+            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_VECTOR_INTS}")).trim(),
+        )
+        .unwrap();
+        let fixture = owner_with_admin_peer();
+        let own = fixture.team.device.fingerprint().unwrap();
+        let peer_fp = fixture.peer_key.fingerprint().unwrap();
+        let big = "1000000000000000000000000000000";
+        let huge = "10000000000000000000000000000000000000000";
+        let vectors = [
+            format!(r#"{{"a": {huge}, "b": -1, "c": true, "d": 1.5, "e": 5, "{own}": {huge}}}"#),
+            format!(r#"{{"{own}": {big}}}"#),
+            format!(r#"{{"{own}": -5}}"#),
+            format!(r#"{{"{own}": true}}"#),
+            format!(r#"{{"{own}": 1.0}}"#),
+            format!(r#"{{"{own}": 1}}"#),
+            "{}".to_owned(),
+        ];
+        let mut out = Vec::new();
+        for vector in vectors {
+            let vector: Value = serde_json::from_str(&vector).unwrap();
+            fixture.recorder.sent.lock().unwrap().clear();
+            fixture
+                .team
+                .handle_message(
+                    &fixture.env_id,
+                    &fixture.session,
+                    &json!({"type":"VECTOR","vector":vector}),
+                )
+                .unwrap();
+            let commits = fixture
+                .recorder
+                .sent
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|m| m["type"] == "COMMIT")
+                .count();
+            let stored = fixture
+                .ctx
+                .state
+                .read_json(
+                    &format!("team/{}/peer_vectors.json", fixture.env_id),
+                    Value::Null,
+                )
+                .unwrap()[&peer_fp]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        if *k == own {
+                            "OWN".to_owned()
+                        } else {
+                            k.clone()
+                        },
+                        v.clone(),
+                    )
+                })
+                .collect::<Map<String, Value>>();
+            out.push(json!({"commits": commits, "stored": stored}));
+        }
+        assert_eq!(json!(out), python);
+        // A huge claim sends nothing; an invalid one is treated as 0.
+        assert_eq!(python[1]["commits"], 0);
+        assert_eq!(python[2]["commits"], python[6]["commits"]);
+        assert!(python[6]["commits"].as_u64().unwrap() >= 2);
+    }
+
     /// Gap 7: `_drop_member_sessions` forgets a removed peer's addresses and
     /// its dial backoff/next-attempt state, not only its addresses.
     #[test]
@@ -1443,7 +1694,8 @@ struct EnvState {
     fact_replay_cursor: HashMap<String, usize>,
     candidate_addresses: HashMap<String, BTreeSet<String>>,
     draining: HashMap<String, Instant>,
-    peer_vectors: HashMap<String, BTreeMap<String, i128>>,
+    /// `_EnvState.peer_vectors`: Python ints, so exact at any magnitude.
+    peer_vectors: HashMap<String, BTreeMap<String, PyInt>>,
     backoff: HashMap<String, Duration>,
     next_attempt: HashMap<String, Instant>,
     hlc: Hlc,
@@ -1661,32 +1913,25 @@ impl TeamSync {
                 }
             }
         }
-        let peer_vectors = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/peer_vectors.json"), json!({}))?;
-        if let Some(entries) = peer_vectors.as_object() {
-            for (fp, vector) in entries {
-                if !valid_fp(fp) {
-                    continue;
-                }
-                if let Some(vector) = vector.as_object() {
-                    env.peer_vectors.insert(
-                        fp.clone(),
-                        vector
-                            .iter()
-                            .filter_map(|(author, seq)| {
-                                if seq.is_boolean() {
-                                    None
-                                } else {
-                                    seq.as_number()
-                                        .and_then(serde_json::Number::as_i128)
-                                        .map(|n| (author.clone(), n))
-                                }
-                            })
-                            .collect(),
-                    );
-                }
+        // `(read_json(...) or {}).items()`: a truthy non-dict raises (§3.5);
+        // each dict-valued entry keeps `{str(k): int(v) ... if isinstance(v,
+        // int) and not isinstance(v, bool)}` -- any magnitude, any sign.
+        let peer_vectors =
+            read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peer_vectors.json"))?;
+        for (fp, vector) in &peer_vectors {
+            if !valid_fp(fp) {
+                continue;
+            }
+            if let Some(vector) = vector.as_object() {
+                env.peer_vectors.insert(
+                    fp.clone(),
+                    vector
+                        .iter()
+                        .filter_map(|(author, seq)| {
+                            PyInt::from_json_integer(seq).map(|n| (author.clone(), n))
+                        })
+                        .collect(),
+                );
             }
         }
         env.known_fact_lines = self
@@ -1716,15 +1961,19 @@ impl TeamSync {
                 }
             }
         }
-        let alerted = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/overridden_alerted.json"), json!([]))?;
-        if let Some(values) = alerted.as_array() {
-            env.alerted_overrides = values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
+        // `{s for s in (read_json(...) or []) if isinstance(s, str)}`: any
+        // iterable (a dict's keys, a string's characters); a truthy number or
+        // `true` is not iterable (`TypeError`, §3.5).
+        let alerted_path = format!("team/{env_id}/overridden_alerted.json");
+        let alerted = self.ctx.state.read_json(&alerted_path, json!([]))?;
+        if !super::json_falsy(&alerted) {
+            env.alerted_overrides = python_list(&alerted)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail(&alerted_path))?
+                .into_iter()
+                .filter_map(|value| match value {
+                    Value::String(s) => Some(s),
+                    _ => None,
+                })
                 .collect();
         }
         self.envs
@@ -2356,16 +2605,13 @@ impl TeamSync {
             return Ok(());
         };
         let fp = session.peer().fingerprint();
-        let clean: BTreeMap<String, i128> = vector
+        // `isinstance(v, int) and not isinstance(v, bool) and v >= 0`, exact.
+        let clean: BTreeMap<String, PyInt> = vector
             .iter()
             .filter_map(|(k, v)| {
-                if !v.is_boolean() {
-                    v.as_i64()
-                        .filter(|n| *n >= 0)
-                        .map(|n| (k.clone(), i128::from(n)))
-                } else {
-                    None
-                }
+                PyInt::from_json_integer(v)
+                    .filter(|n| n.0.sign() != num_bigint::Sign::Minus)
+                    .map(|n| (k.clone(), n))
             })
             .collect();
         {
@@ -2379,13 +2625,21 @@ impl TeamSync {
         let local = store.vector()?;
         let mut sent = 0;
         for (author, last) in local {
+            // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
+            // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
+            // is empty for any claim at or past `last_seq`, however large.
             let their = vector
                 .get(&author)
-                .and_then(Value::as_i64)
-                .filter(|n| *n >= 0)
-                .map(i128::from)
-                .unwrap_or(0);
-            for seq in their + 1..=last {
+                .and_then(PyInt::from_json_integer)
+                .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
+            let first = match their {
+                None => 1,
+                Some(n) => match i128::try_from(&n.0).ok().and_then(|t| t.checked_add(1)) {
+                    Some(first) => first,
+                    None => continue,
+                },
+            };
+            for seq in first..=last {
                 if let Some(commit) = store.get(&author, seq)? {
                     if session
                         .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
@@ -3411,9 +3665,7 @@ impl TeamSync {
                     peer_vectors
                         .get(fp)
                         .and_then(|v| v.get(author))
-                        .copied()
-                        .unwrap_or(0)
-                        < *seq
+                        .map_or(0 < *seq, |known| known.0 < num_bigint::BigInt::from(*seq))
                 }) {
                     blocked.push(fp.clone());
                 }
