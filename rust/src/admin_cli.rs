@@ -787,6 +787,18 @@ fn refuse_cli_env<T>(
     Err(Error::invalid_input("cli_env_contains_credential").with_detail(connection))
 }
 
+/// Python truthiness of a JSON value.
+fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
 /// `str(pathlib.PurePosixPath(path))`: repeated and trailing separators and
 /// `.` components dropped (a leading `//` is kept, as POSIX allows).
 fn pathlib_str(path: &str) -> String {
@@ -2641,7 +2653,12 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 team.register_env(&env_id)?;
                 team.set_peer_address(&env_id, device, add)?;
             }
-            json!({"env_id":env_id,"peers":ctx.state.read_json(&format!("team/{env_id}/peers.json"),json!({}))?})
+            // `read_json(...) or {}`: a falsy document prints as `{}`.
+            let doc = ctx
+                .state
+                .read_json(&format!("team/{env_id}/peers.json"), json!({}))?;
+            let doc = if python_truthy(&doc) { doc } else { json!({}) };
+            json!({"env_id":env_id,"peers":doc})
         }
         "compact" => {
             let team = offline_team(Arc::new(open(a, true)?))?;
