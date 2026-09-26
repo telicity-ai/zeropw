@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use zeropw::audit::RecordArgs;
 use zeropw::clock::Clock;
@@ -101,4 +101,49 @@ fn panic_inside_the_decision_is_counted_and_detection_keeps_working() {
     assert_eq!(incident.principals, vec!["agent-1".to_owned()]);
     assert_eq!(incident.rule.as_deref(), Some("unknown_tool"));
     assert_eq!(detector.decision_errors.load(Ordering::SeqCst), 1);
+}
+
+/// `DetectorConfig.__post_init__` validates strong -> weak -> window ->
+/// weak_threshold -> enumeration_min -> enumeration_ratio -> burst_count.
+/// Every pair of differently invalid fields (wrong type or out of range)
+/// must report the same first reason as Python.
+#[test]
+fn detector_config_reports_invalid_fields_in_python_order() {
+    let invalid: Vec<(&str, Value)> = vec![
+        ("strong_thresholds", json!({"unknown_tool": "2"})),
+        ("strong_thresholds", json!({"signer_misuse": 0})),
+        ("weak_points", json!({"burst": 1.5})),
+        ("weak_points", json!({"revoked_use": -1})),
+        ("window_seconds", json!("120")),
+        ("window_seconds", json!(true)),
+        ("window_seconds", json!(0)),
+        ("weak_threshold", json!(2.0)),
+        ("weak_threshold", json!(0)),
+        ("enumeration_min", json!(null)),
+        ("enumeration_min", json!(0)),
+        ("enumeration_ratio", json!([0.5])),
+        ("enumeration_ratio", json!(1.5)),
+        ("burst_count", json!("60")),
+        ("burst_count", json!(-3)),
+    ];
+    let mut configs = vec![];
+    for (i, (key_a, value_a)) in invalid.iter().enumerate() {
+        for (key_b, value_b) in invalid.iter().skip(i + 1) {
+            if key_a != key_b {
+                configs.push(json!({ *key_a: value_a, *key_b: value_b }));
+            }
+        }
+    }
+    let script = format!(
+        "import json\nfrom zeropw.errors import InvalidInput\nfrom zeropw.intrusion import DetectorConfig\nout=[]\nfor c in json.loads({:?}):\n    try:\n        DetectorConfig.from_mapping(c)\n        out.append(None)\n    except InvalidInput as e:\n        out.append(e.reason)\nprint(json.dumps(out))\n",
+        Value::Array(configs.clone()).to_string()
+    );
+    let expected: Vec<Option<String>> =
+        serde_json::from_str(oracle::python(&script).trim()).unwrap();
+    for (config, expected) in configs.iter().zip(expected) {
+        let actual = intrusion::DetectorConfig::from_mapping(Some(config))
+            .err()
+            .map(|e| e.reason.to_string());
+        assert_eq!(actual, expected, "config {config}");
+    }
 }
