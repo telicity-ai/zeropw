@@ -1,13 +1,16 @@
 //! Response parity gaps: each test pins one Python behaviour of
 //! `zeropw/{incident,intrusion,notify}.py` (and `smtplib` as used there) that
 //! the Rust port previously diverged from. Synthetic values and loopback only.
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zeropw::audit::RecordArgs;
-use zeropw::clock::Clock;
+use zeropw::clock::{self, Clock};
 use zeropw::context::{Config, Context};
 use zeropw::intrusion;
 
@@ -146,4 +149,180 @@ fn detector_config_reports_invalid_fields_in_python_order() {
             .map(|e| e.reason.to_string());
         assert_eq!(actual, expected, "config {config}");
     }
+}
+
+fn fixture() -> (TempDir, Arc<Context>) {
+    fixture_with_clock(clock::fixed(1_700_000_000.0))
+}
+
+fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    fs::set_permissions(dst, fs::metadata(src).unwrap().permissions()).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let target = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+fn edit_incident_actions(ctx: &Context, id: &str, actions: Value) {
+    let path = format!("incidents/{id}.json");
+    let mut doc = ctx.state.read_json(&path, Value::Null).unwrap();
+    doc["actions"] = actions;
+    ctx.state.write_json(&path, &doc).unwrap();
+}
+
+/// `_apply_lockdown` starts with `actions.setdefault("failed_steps", [])`,
+/// always adds `principals_disabled`/`grants_revoked` with Python numeric
+/// promotion (`True + 1 == 2`, a float stays a float), touches
+/// `runs_cancelled`/`sockets_closed` only when something was cancelled, and
+/// tests `stopped`/`handle_key_rotated` by truthiness. A legacy or
+/// hand-edited `actions` document must widen exactly like Python's.
+#[test]
+fn widening_a_hand_edited_incident_updates_actions_like_python() {
+    let (tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    ctx.policy.create_principal("agent-2", "box-1").unwrap();
+    ctx.policy.create_principal("agent-3", "box-2").unwrap();
+    let opened = zeropw::incident::open_incident(
+        &ctx,
+        "principal",
+        Some(&["agent-1".to_owned()]),
+        None,
+        "manual",
+        None,
+        None,
+    )
+    .unwrap();
+    edit_incident_actions(
+        &ctx,
+        &opened.id,
+        json!({"stopped": 1, "principals_disabled": true, "grants_revoked": 1.5,
+               "runs_cancelled": "legacy", "handle_key_rotated": 0}),
+    );
+    let python_state = tmp.path().join("python-state");
+    copy_dir(&tmp.path().join("state"), &python_state);
+
+    let widened =
+        zeropw::incident::widen_incident(&ctx, &opened.id, "runtime", Some("box-1"), None, None)
+            .unwrap();
+    let script = format!(
+        "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.widen_incident(c, {:?}, scope='runtime', runtime='box-1')\nprint(json.dumps(inc.to_dict()['actions']))\n",
+        python_state.to_str().unwrap(),
+        opened.id
+    );
+    let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
+    assert_eq!(widened.to_dict()["actions"], python);
+    assert_eq!(python["principals_disabled"], json!(2));
+    assert_eq!(python["failed_steps"], json!([]));
+}
+
+/// `_audit_incident` records an unavailable audit log with
+/// `actions.setdefault("failed_steps", []).append(...)`, so an incident whose
+/// `actions` has no `failed_steps` list still records the failed step.
+#[test]
+fn close_with_unavailable_audit_records_the_step_without_a_prior_list() {
+    let (tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let opened = zeropw::incident::open_incident(
+        &ctx,
+        "principal",
+        Some(&["agent-1".to_owned()]),
+        None,
+        "manual",
+        None,
+        None,
+    )
+    .unwrap();
+    edit_incident_actions(&ctx, &opened.id, json!({"stopped": false}));
+    let audit_log = tmp.path().join("state/audit/audit.jsonl");
+    fs::remove_file(&audit_log).unwrap();
+    fs::create_dir(&audit_log).unwrap();
+    let python_state = tmp.path().join("python-state");
+    copy_dir(&tmp.path().join("state"), &python_state);
+
+    let closed = zeropw::incident::close_incident(&ctx, &opened.id).unwrap();
+    let script = format!(
+        "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.close_incident(c, {:?})\nprint(json.dumps(inc.to_dict()['actions']))\n",
+        python_state.to_str().unwrap(),
+        opened.id
+    );
+    let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
+    assert_eq!(python["failed_steps"], json!(["audit_incident_close"]));
+    assert_eq!(closed.to_dict()["actions"], python);
+}
+
+fn admin_cli(language: &str, state: &Path, args: &[&str]) -> (i32, Value) {
+    let mut command = if language == "python" {
+        let mut command = Command::new(
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string()),
+        );
+        command
+            .args(["-m", "zeropw.admin_cli"])
+            .env("PYTHONPATH", oracle::repo_root())
+            .env("PYTHONDONTWRITEBYTECODE", "1");
+        command
+    } else {
+        Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
+    };
+    let output = command
+        .arg("--state-dir")
+        .arg(state)
+        .args(args)
+        .env("ZEROPW_ADMIN_PASSPHRASE", "synthetic-admin-passphrase")
+        .env(
+            "ZEROPW_RECOVERY_PASSPHRASE",
+            "synthetic-recovery-passphrase",
+        )
+        .output()
+        .unwrap();
+    let text = if output.status.success() {
+        output.stdout
+    } else {
+        output.stderr
+    };
+    let text = String::from_utf8(text).unwrap();
+    let last = text.lines().last().unwrap_or_default().to_owned();
+    (
+        output.status.code().unwrap_or(-1),
+        serde_json::from_str(&last).unwrap_or(Value::String(text)),
+    )
+}
+
+/// `incident declare --scope principal` without `--principal`: Python passes
+/// `principals=[None]`, so `get_principal(None)` fails `principal_not_found`
+/// rather than `incident_principals_required`.
+#[test]
+fn declare_principal_scope_without_principal_matches_python_cli() {
+    let tmp = TempDir::new().unwrap();
+    let mut results = vec![];
+    for language in ["python", "rust"] {
+        let state = tmp.path().join(language);
+        let (code, _) = admin_cli(language, &state, &["init"]);
+        assert_eq!(code, 0, "{language} init");
+        let (_, created) = admin_cli(
+            language,
+            &state,
+            &[
+                "principal",
+                "create",
+                "--id",
+                "agent-1",
+                "--runtime",
+                "box-1",
+            ],
+        );
+        assert!(created.get("error").is_none(), "{created}");
+        results.push(admin_cli(
+            language,
+            &state,
+            &["incident", "declare", "--scope", "principal"],
+        ));
+    }
+    assert_eq!(results[0].1["reason"], json!("principal_not_found"));
+    assert_eq!(results[1], results[0]);
 }
