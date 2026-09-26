@@ -470,7 +470,8 @@ fn scripted_reply(
         }
         "MAIL" => match scenario {
             "sender_refused" | "error_then_quit_non221" => "550 sender refused\r\n".into(),
-            "sender_421" => return Some("421 closing\r\n".into()).filter(|_| false).or(None),
+            // Answered (421, then close) by the server loop itself.
+            "sender_421" => return None,
             _ => "250 sender ok\r\n".into(),
         },
         "RCPT" => {
