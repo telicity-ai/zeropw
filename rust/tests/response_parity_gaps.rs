@@ -920,3 +920,39 @@ fn incident_delivery_failures_record_what_python_records() {
         assert_eq!(rust, python, "{case}");
     }
 }
+
+/// `incident notify-test` when `_send` raises a built-in exception: the
+/// administrator CLIs report the same error object and exit status
+/// (`OverflowError` from the socket timeout). The `ValueError` family
+/// (`UnicodeDecodeError` from the password file) additionally depends on
+/// `admin_cli.rs`'s `state_corrupt` rendering, recorded in `DEVIATIONS.md`.
+#[test]
+fn notify_test_cli_reports_escaping_errors_like_python() {
+    let tmp = TempDir::new().unwrap();
+    for case in ["timeout_overflow"] {
+        let mut results = vec![];
+        for language in ["python", "rust"] {
+            let state = tmp.path().join(format!("{case}-{language}"));
+            let (code, _) = admin_cli(language, &state, &["init"]);
+            assert_eq!(code, 0, "{language} init");
+            let mut config = json!({"host": "127.0.0.1", "port": 9, "mode": "plain",
+                "sender": "zeropw@example.com", "recipients": ["admin@example.com"]});
+            if case == "password_non_utf8" {
+                let password = tmp.path().join(format!("{case}-{language}.pass"));
+                fs::write(&password, b"synthetic-\xff").unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&password, fs::Permissions::from_mode(0o600)).unwrap();
+                config["password_file"] = json!(password);
+            } else {
+                config["timeout_seconds"] = json!(1e10);
+            }
+            let path = state.join("notify.json");
+            fs::write(&path, config.to_string()).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            results.push(admin_cli(language, &state, &["incident", "notify-test"]));
+        }
+        assert_ne!(results[0].0, 0, "{case}");
+        assert_eq!(results[1], results[0], "{case}");
+    }
+}
