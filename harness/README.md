@@ -20,15 +20,21 @@ Python 3.11 이상, Git, 로그인된 `gh`·`codex`·`claude` CLI가 로컬 조�
 
 1. Codex Cloud의 GitHub 연결에서 `handlecusion/zeropw` 접근을 허용하고 해당 저장소의 환경을 만든다. 자동으로 다른 저장소 권한을 넓히지 않는다.
 2. Cloud setup 명령은 `bash harness/cloud_setup.sh`로 지정한다. 이 단계는 필요한 명령의 존재와 격리 모드 Python 컴파일만 확인하며 테스트를 실행하지 않는다. 테스트는 CI와 작업자 단계에서 수행한다. 현재 추가 패키지 설치는 없으며 실제 키나 토큰을 환경 Secrets에 넣지 않는다. 제품 의존성이 생기면 검증한 설치 절차를 별도로 추가한다.
-   Claude Code 클라우드 환경(claude.ai/code)의 설정 스크립트는 저장소 체크아웃과 작업 디렉터리가 보장되기 전에 실행되므로 `harness/cloud_setup.sh` 같은 저장소 경로를 참조하지 않는다. 참조하면 `No such file or directory`(exit 127)로 세션 시작이 실패한다. 다음 자체완결 스크립트를 쓰고, 컴파일 검사는 세션과 CI에서 수행한다.
+   Claude Code 클라우드 환경(claude.ai/code)의 설정 스크립트는 저장소 체크아웃과 작업 디렉터리가 보장되기 전에 실행되므로 `harness/cloud_setup.sh` 같은 저장소 경로를 참조하지 않는다. 참조하면 `No such file or directory`(exit 127)로 세션 시작이 실패한다. 기본 컨테이너에는 `ssh`가 없으므로 없을 때 `openssh-client`를 설치한다. 컨테이너에 등록된 일부 PPA가 403을 돌려주므로 `apt-get update` 실패는 경고로만 처리한다. 다음 자체완결 스크립트를 쓰고, 컴파일 검사는 세션과 CI에서 수행한다.
 
    ```bash
    #!/bin/bash
    set -eu
    # Self-contained: runs before the repo checkout is guaranteed, so do not reference repo paths here.
    command -v python3 >/dev/null 2>&1 || { echo 'error: python3 is required' >&2; exit 1; }
+   if ! command -v ssh >/dev/null 2>&1; then
+     SUDO=''; [ "$(id -u)" -ne 0 ] && SUDO='sudo'
+     $SUDO apt-get update -qq || echo 'warn: apt-get update partially failed (blocked PPAs); continuing'
+     DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq openssh-client >/dev/null
+   fi
    command -v ssh >/dev/null 2>&1 || { echo 'error: ssh is required' >&2; exit 1; }
    python3 --version
+   ssh -V
    echo 'ZeroPW cloud prerequisites OK. Harness compile check runs in the session/CI.'
    ```
 3. 실제 Cloud 환경 ID와 사용자가 결정한 작업자 모드를 `.zeropw-harness/config.json`에 기록한다. 이 경로는 Git에서 제외한다.
