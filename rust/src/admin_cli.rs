@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::argparse::{Arg, INT, Outcome, Parser, TypeFn, Val};
 use crate::audit::RecordArgs;
 use crate::context::{Config, Context, OwnedTempDirRegistry};
 use crate::errors::Error;
@@ -23,6 +24,8 @@ use crate::pyjson::{self, DumpOptions};
 use crate::store::iso;
 use crate::vault::{MAX_SECRET_BYTES, SecretMeta, Vault};
 
+const DEFAULT_GRANT_TTL: &str = "1h";
+const DEFAULT_LISTEN: &str = "127.0.0.1:0";
 const PROVIDER_REMINDER: &str = "Retiring a vault version does not revoke the credential at the provider. Revoke the old credential in the provider's console or API now.";
 
 #[derive(Default)]
@@ -60,291 +63,634 @@ impl Args {
     }
 }
 
-fn spec(command: &str, action: &str) -> Option<(&'static str, &'static str, &'static str, usize)> {
-    // Required-value options, optional-value options, flags, positional count.
-    let spec = match (command, action) {
-        ("init", "") => ("", "", "", 0),
-        ("project", "create") => ("", "environments", "", 1),
-        ("project", "list") => ("", "", "", 0),
-        ("secret", "put") => (
-            "id kind project environment",
-            "value-file",
-            "stdin staged",
-            0,
-        ),
-        ("secret", "list") => ("", "project environment", "", 0),
-        ("secret", "versions") => ("id", "", "", 0),
-        ("secret", "reveal") => ("id", "version", "", 0),
-        ("secret", "retire" | "revoke") => ("id version", "", "", 0),
-        ("connection", "create-http") => (
-            "id project environment service secret-id target auth",
-            "secret-version header-name value-prefix basic-username methods path-prefixes confirm-methods ca-file cli-program cli-env description",
-            "allow-private-network",
-            0,
-        ),
-        ("connection", "create-ssh") => (
-            "id project environment service secret-id host username host-key",
-            "secret-version port cli-program description",
-            "",
-            0,
-        ),
-        ("connection", "list") => ("", "", "", 0),
-        ("connection", "show" | "disable") => ("id", "", "", 0),
-        ("connection", "update" | "update-scope") => {
-            ("id", "methods path-prefixes confirm-methods", "", 0)
-        }
-        ("connection", "switch-credential") => ("id version", "", "", 0),
-        ("principal", "create") => ("id", "runtime", "", 0),
-        ("principal", "list") => ("", "", "", 0),
-        ("principal", "disable") => ("id", "", "", 0),
-        ("grant", "create") => ("principal connection", "ttl max-uses", "", 0),
-        ("grant", "list") => ("", "principal", "", 0),
-        ("grant", "revoke" | "regrant") => ("id", "", "", 0),
-        ("stop-all" | "resume" | "restore-ack" | "recover", "") => ("", "", "", 0),
-        ("approvals", "list") => ("", "", "", 0),
-        ("approvals", "approve") => ("digest", "", "", 0),
-        ("rotation", "start") => ("secret-id", "value-file", "stdin", 0),
-        ("rotation", "activate") => ("connection version", "", "", 0),
-        ("rotation", "finish") => ("secret-id version", "", "", 0),
-        ("backup", "") => ("out", "", "", 0),
-        ("restore", "") => ("in", "", "", 0),
-        ("incident", "declare") => ("scope", "principal runtime reason", "", 0),
-        ("incident", "escalate") => ("id scope", "runtime", "", 0),
-        ("incident", "list" | "notify-test") => ("", "", "", 0),
-        ("incident", "show" | "close") => ("id", "", "", 0),
-        ("audit", "tail") | ("alerts", "") => ("", "limit", "", 0),
-        ("team", "init") => ("", "", "", 0),
-        ("team", "share") => ("project environment", "name", "", 0),
-        ("team", "invite") => ("env role name", "ttl address", "", 0),
-        ("team", "join") => ("", "project environment", "", 1),
-        ("team", "members" | "status" | "log" | "compact" | "incidents") => ("env", "", "", 0),
-        ("team", "show") => ("env", "format", "", 0),
-        ("team", "diff") => ("env", "", "", 2),
-        ("team", "peers") => ("env", "add device", "", 0),
-        ("team", "remove" | "transfer-owner") => ("env device", "", "", 0),
-        ("team", "set-role") => ("env device role", "", "", 0),
-        ("serve", "") => ("", "listen team-listen", "quiet", 0),
-        _ => return None,
-    };
-    Some(spec)
+/// `_positive_int`.
+const POSITIVE_INT: TypeFn = TypeFn {
+    name: "_positive_int",
+    convert: |text| match crate::pystr::int_from_str_checked(text) {
+        Some(value) if value >= 1 => Ok(Val::Int(value)),
+        _ => Err(Some("must be a positive integer".into())),
+    },
+};
+
+const ENV_METAVAR: &str = "PROJECT/ENVIRONMENT";
+
+/// `_add`: a subcommand whose help and description are the same text.
+fn add<'a>(parent: &'a mut Parser, name: &str, help: &str) -> &'a mut Parser {
+    parent.add_parser(name, Some(help), Some(help))
 }
 
-fn parse(argv: &[String]) -> Result<Args, String> {
-    let mut a = Args::default();
-    let mut i = 0;
-    match argv.get(i).map(String::as_str) {
-        Some("--state-dir") => {
-            i += 1;
-            a.state_dir = argv
-                .get(i)
-                .cloned()
-                .ok_or("argument --state-dir: expected one argument")?;
-            i += 1;
-        }
-        Some(value) if value.starts_with("--state-dir=") => {
-            a.state_dir = value["--state-dir=".len()..].to_owned();
-            i += 1;
-        }
-        _ => return Err("the following arguments are required: --state-dir".into()),
-    }
-    a.command = argv
-        .get(i)
-        .cloned()
-        .ok_or("the following arguments are required: COMMAND")?;
-    i += 1;
-    if [
-        "project",
+/// `_group`: a subcommand holding its own required `SUBCOMMAND`.
+fn group<'a>(parent: &'a mut Parser, name: &str, help: &str) -> &'a mut Parser {
+    let group = parent.add_parser(name, Some(help), Some(help));
+    group.subparsers(&format!("{name}_command"), Some("SUBCOMMAND"));
+    group
+}
+
+/// `_value_source`.
+fn value_source(p: &mut Parser) {
+    p.exclusive(
+        true,
+        vec![
+            Arg::opt("--value-file")
+                .metavar("PATH")
+                .help("read the secret value from this file (delete it afterwards)"),
+            Arg::opt("--stdin")
+                .flag()
+                .help("read the secret value from standard input"),
+        ],
+    );
+}
+
+fn env_arg() -> Arg {
+    Arg::opt("--env").required().metavar(ENV_METAVAR)
+}
+
+/// `build_parser()`: the same tree, options, help text and choices as
+/// `zeropw/admin_cli.py`, with abbreviation off for every (sub)parser.
+fn build_parser() -> Parser {
+    let mut parser = Parser::new(
+        "zeropw-admin",
+        Some("ZeroPW administrator CLI (trusted; JSON output)."),
+        false,
+    );
+    parser.arg(
+        Arg::opt("--state-dir")
+            .required()
+            .metavar("DIR")
+            .help("trusted state directory (0700)"),
+    );
+    parser.subparsers("command", Some("COMMAND"));
+    let sub = &mut parser;
+    add(
+        sub,
+        "init",
+        "create a new state directory (passphrases from env or prompt)",
+    );
+
+    let project = group(sub, "project", "projects and environments");
+    add(project, "create", "create a project")
+        .arg(Arg::positional("name"))
+        .arg(
+            Arg::opt("--environments")
+                .metavar("A,B")
+                .help("default: dev,staging,prod"),
+        );
+    add(project, "list", "list projects");
+
+    let secret = group(
+        sub,
         "secret",
-        "connection",
-        "principal",
+        "vault secrets (metadata only, except reveal)",
+    );
+    let p = add(
+        secret,
+        "put",
+        "store a new secret version; value via --value-file or --stdin only",
+    );
+    p.arg(Arg::opt("--id").required())
+        .arg(
+            Arg::opt("--kind")
+                .required()
+                .choices(crate::vault::SECRET_KINDS),
+        )
+        .arg(Arg::opt("--project").required())
+        .arg(Arg::opt("--environment").required())
+        .arg(Arg::opt("--staged").flag().help("store without activating"));
+    value_source(p);
+    add(secret, "list", "list secrets (metadata only)")
+        .arg(Arg::opt("--project"))
+        .arg(Arg::opt("--environment"));
+    add(
+        secret,
+        "versions",
+        "list the versions of one secret (metadata only)",
+    )
+    .arg(Arg::opt("--id").required());
+    add(
+        secret,
+        "reveal",
+        "reveal ONE secret version (admin re-auth; audited and alerted)",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--version").ty(INT));
+    add(secret, "retire", "retire a non-active version")
+        .arg(Arg::opt("--id").required())
+        .arg(Arg::opt("--version").ty(INT).required());
+    add(
+        secret,
+        "revoke",
+        "revoke a version (connections using it fail closed)",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--version").ty(INT).required());
+
+    let connection = group(sub, "connection", "service connections");
+    add(
+        connection,
+        "create-http",
+        "create an HTTP connection (gateway-injected auth)",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--project").required())
+    .arg(Arg::opt("--environment").required())
+    .arg(Arg::opt("--service").required())
+    .arg(Arg::opt("--secret-id").required())
+    .arg(
+        Arg::opt("--secret-version")
+            .ty(INT)
+            .help("pin a version (default: follow the active version)"),
+    )
+    .arg(
+        Arg::opt("--target")
+            .required()
+            .metavar("URL")
+            .help("scheme://host[:port]; port defaults to 80/443"),
+    )
+    .arg(
+        Arg::opt("--auth")
+            .required()
+            .choices(crate::policy::AUTH_MODES),
+    )
+    .arg(Arg::opt("--header-name").help("header for --auth header"))
+    .arg(Arg::opt("--value-prefix").help("e.g. \"token \" placed before the credential"))
+    .arg(
+        Arg::opt("--basic-username")
+            .help("username for --auth basic (the vault value is the password)"),
+    )
+    .arg(
+        Arg::opt("--methods")
+            .metavar("GET,POST|all")
+            .help("default: GET,HEAD"),
+    )
+    .arg(
+        Arg::opt("--path-prefixes")
+            .metavar("/a,/b|all")
+            .help("default: all"),
+    )
+    .arg(
+        Arg::opt("--confirm-methods")
+            .metavar("DELETE")
+            .help("methods needing a one-shot approval"),
+    )
+    .arg(Arg::opt("--ca-file").help("CA bundle for TLS verification (tests)"))
+    .arg(Arg::opt("--allow-private-network").flag().help(
+        "allow a host-name target to resolve to loopback/private addresses (internal services); \
+         metadata and link-local addresses stay refused",
+    ))
+    .arg(
+        Arg::opt("--cli-program")
+            .metavar("PATH")
+            .help("supported CLI executable for exec"),
+    )
+    .arg(
+        Arg::opt("--cli-env")
+            .append()
+            .metavar("K=V")
+            .help("non-secret env for the CLI (repeatable)"),
+    )
+    .arg(Arg::opt("--description"));
+    add(
+        connection,
+        "create-ssh",
+        "create an SSH connection (signer-delegated auth)",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--project").required())
+    .arg(Arg::opt("--environment").required())
+    .arg(Arg::opt("--service").required())
+    .arg(Arg::opt("--secret-id").required())
+    .arg(Arg::opt("--secret-version").ty(INT))
+    .arg(Arg::opt("--host").required())
+    .arg(Arg::opt("--port").ty(INT).default(Val::Int(22)))
+    .arg(Arg::opt("--username").required())
+    .arg(
+        Arg::opt("--host-key")
+            .append()
+            .required()
+            .metavar("\"ssh-ed25519 AAAA...\"")
+            .help("expected host key (repeatable)"),
+    )
+    .arg(
+        Arg::opt("--cli-program")
+            .metavar("PATH")
+            .help("ssh executable (default: none registered)"),
+    )
+    .arg(Arg::opt("--description"));
+    add(connection, "list", "list connections");
+    add(connection, "show", "show one connection").arg(Arg::opt("--id").required());
+    // "update" is the primary name (docs/team-sync.md section 12); "update-scope" is kept as an alias.
+    for name in ["update", "update-scope"] {
+        add(
+            connection,
+            name,
+            "change the HTTP scope (widening stales grants)",
+        )
+        .arg(Arg::opt("--id").required())
+        .arg(Arg::opt("--methods").metavar("GET,POST|all"))
+        .arg(Arg::opt("--path-prefixes").metavar("/a,/b|all"))
+        .arg(Arg::opt("--confirm-methods").metavar("DELETE|none"));
+    }
+    add(
+        connection,
+        "switch-credential",
+        "pin the connection to a secret version",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--version").ty(INT).required());
+    add(connection, "disable", "disable a connection").arg(Arg::opt("--id").required());
+
+    let principal = group(sub, "principal", "agent identities");
+    add(
+        principal,
+        "create",
+        "create a principal; prints its caller token once",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(
+        Arg::opt("--runtime")
+            .default(Val::Str("default".into()))
+            .help(
+                "execution runtime this principal is bound to (default: default); a compromise-response \
+                 'runtime' incident disables every principal sharing one",
+            ),
+    );
+    add(principal, "list", "list principals (no tokens, no hashes)");
+    add(principal, "disable", "disable a principal").arg(Arg::opt("--id").required());
+
+    let grant = group(
+        sub,
         "grant",
-        "approvals",
+        "grants (principal x connection, expiry, usage)",
+    );
+    add(grant, "create", "grant a principal use of a connection")
+        .arg(Arg::opt("--principal").required())
+        .arg(Arg::opt("--connection").required())
+        .arg(
+            Arg::opt("--ttl")
+                .default(Val::Str(DEFAULT_GRANT_TTL.into()))
+                .help("30m, 1h, 3600s, 86400 (default: 1h; max 30d)"),
+        )
+        .arg(Arg::opt("--max-uses").ty(INT));
+    add(grant, "list", "list grants").arg(Arg::opt("--principal"));
+    add(grant, "revoke", "revoke a grant immediately").arg(Arg::opt("--id").required());
+    add(
+        grant,
+        "regrant",
+        "re-issue a stale grant at the current policy version",
+    )
+    .arg(Arg::opt("--id").required());
+
+    add(
+        sub,
+        "stop-all",
+        "refuse every relay, signature and execution until resume",
+    );
+    add(sub, "resume", "lift the global stop");
+
+    let approvals = group(sub, "approvals", "one-shot approvals for risky methods");
+    add(approvals, "list", "list approval requests");
+    add(approvals, "approve", "approve a pending request by digest")
+        .arg(Arg::opt("--digest").required());
+
+    let rotation = group(
+        sub,
         "rotation",
+        "credential rotation: start -> activate -> finish",
+    );
+    let p = add(rotation, "start", "stage a new version of a secret");
+    p.arg(Arg::opt("--secret-id").required());
+    value_source(p);
+    add(
+        rotation,
+        "activate",
+        "activate a version and switch a connection to it",
+    )
+    .arg(Arg::opt("--connection").required())
+    .arg(Arg::opt("--version").ty(INT).required());
+    add(
+        rotation,
+        "finish",
+        "retire the old version (provider revocation is separate)",
+    )
+    .arg(Arg::opt("--secret-id").required())
+    .arg(
+        Arg::opt("--version")
+            .ty(INT)
+            .required()
+            .help("the OLD version to retire"),
+    );
+
+    add(sub, "backup", "write an encrypted backup archive")
+        .arg(Arg::opt("--out").required().metavar("FILE"));
+    add(
+        sub,
+        "restore",
+        "restore an archive; leaves restore_pending set",
+    )
+    .arg(Arg::opt("--in").dest("input").required().metavar("FILE"));
+    add(
+        sub,
+        "restore-ack",
+        "clear restore_pending after re-applying revocations (admin re-auth)",
+    );
+    add(
+        sub,
+        "recover",
+        "disaster recovery: new KMS key, grants revoked, handles rotated",
+    );
+
+    let inc = group(
+        sub,
         "incident",
-        "audit",
+        "compromise-response incidents: lockdown and exposure assessment",
+    );
+    add(
+        inc,
+        "declare",
+        "open an incident: lock down the given scope (docs/compromise-response.md \u{a7}4)",
+    )
+    .arg(
+        Arg::opt("--scope")
+            .required()
+            .choices(crate::incident::SCOPES),
+    )
+    .arg(Arg::opt("--principal").help("required for --scope principal"))
+    .arg(Arg::opt("--runtime").help("required for --scope runtime"))
+    .arg(Arg::opt("--reason").help("admin note stored on the incident (bounded to 200 chars)"));
+    add(
+        inc,
+        "escalate",
+        "widen an open incident's scope (never narrows)",
+    )
+    .arg(Arg::opt("--id").required())
+    .arg(Arg::opt("--scope").required().choices(&["runtime", "all"]))
+    .arg(Arg::opt("--runtime").help("required when widening to --scope runtime"));
+    add(inc, "list", "list incidents, newest last");
+    add(
+        inc,
+        "show",
+        "show one incident, including its exposure assessment",
+    )
+    .arg(Arg::opt("--id").required());
+    add(
+        inc,
+        "close",
+        "close an incident (admin re-auth; does not resume)",
+    )
+    .arg(Arg::opt("--id").required());
+    add(
+        inc,
+        "notify-test",
+        "send a short test message through the configured SMTP path (docs/compromise-response.md \u{a7}6.1)",
+    );
+
+    let audit = group(sub, "audit", "audit log (administrator only)");
+    add(audit, "tail", "print the last records").arg(
+        Arg::opt("--limit")
+            .ty(POSITIVE_INT)
+            .default(Val::Int(50))
+            .metavar("N")
+            .help("last N records (default 50)"),
+    );
+    add(sub, "alerts", "print the last alerts").arg(
+        Arg::opt("--limit")
+            .ty(POSITIVE_INT)
+            .default(Val::Int(50))
+            .metavar("N")
+            .help("last N alerts (default 50)"),
+    );
+
+    let team = group(
+        sub,
         "team",
-    ]
-    .contains(&a.command.as_str())
-    {
-        a.action = argv
-            .get(i)
-            .cloned()
-            .ok_or("the following arguments are required: SUBCOMMAND")?;
-        i += 1;
-    }
-    let (required, optional, flags, positional) =
-        spec(&a.command, &a.action).ok_or("invalid choice")?;
-    let valid: BTreeSet<&str> = required
-        .split_whitespace()
-        .chain(optional.split_whitespace())
-        .chain(flags.split_whitespace())
+        "team sync: environment sharing between teammate nodes (docs/team-sync.md)",
+    );
+    add(
+        team,
+        "init",
+        "create this node's device key; refuses if one already exists",
+    );
+    add(
+        team,
+        "share",
+        "promote a local project/environment to a shared one (admin re-auth)",
+    )
+    .arg(Arg::opt("--project").required())
+    .arg(Arg::opt("--environment").required())
+    .arg(Arg::opt("--name").help("this node's displayed member name (default: owner)"));
+    add(
+        team,
+        "invite",
+        "print a one-time invite string (never paste it into chat/issues)",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--role").required().choices(&["admin", "user"]))
+    .arg(
+        Arg::opt("--name")
+            .required()
+            .help("display name for the invited member"),
+    )
+    .arg(Arg::opt("--ttl").help("30m, 1h, 3600s, 86400 (default: 24h)"))
+    .arg(
+        Arg::opt("--address")
+            .append()
+            .metavar("HOST:PORT")
+            .help("this node's reachable address (repeatable)"),
+    );
+    add(team, "join", "dial the inviter, prove the invite, and join")
+        .arg(Arg::positional("invite"))
+        .arg(Arg::opt("--project").help("local project name (default: derived from the inviter)"))
+        .arg(Arg::opt("--environment").help("local environment name (default: shared)"));
+    add(team, "members", "list team members").arg(env_arg());
+    add(
+        team,
+        "remove",
+        "remove a team member (fact) and rotate the DEK if applicable",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--device").required().metavar("FINGERPRINT"));
+    add(team, "set-role", "change a member's role")
+        .arg(env_arg())
+        .arg(Arg::opt("--device").required().metavar("FINGERPRINT"))
+        .arg(Arg::opt("--role").required().choices(&["admin", "user"]));
+    add(
+        team,
+        "transfer-owner",
+        "transfer ownership to another active admin/member",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--device").required().metavar("FINGERPRINT"));
+    add(
+        team,
+        "status",
+        "version vector, folded/skipped/rejected/pending counts",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "log",
+        "commits in fold order, with skip reasons (no values)",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "show",
+        "render the environment document (no ciphertext/wraps/signatures)",
+    )
+    .arg(env_arg())
+    .arg(
+        Arg::opt("--format")
+            .choices(&["json", "yaml"])
+            .default(Val::Str("json".into())),
+    );
+    add(
+        team,
+        "diff",
+        "compare the folded view at two commit hashes (prefixes accepted)",
+    )
+    .arg(env_arg())
+    .arg(Arg::positional("left").metavar("COMMIT-HASH-PREFIX"))
+    .arg(Arg::positional("right").metavar("COMMIT-HASH-PREFIX"));
+    add(
+        team,
+        "peers",
+        "list, or (with --device) add, a peer's known address",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--add").metavar("HOST:PORT"))
+    .arg(
+        Arg::opt("--device")
+            .metavar("FINGERPRINT")
+            .help("required with --add"),
+    );
+    add(
+        team,
+        "compact",
+        "delete commits every active member's vector already covers",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "incidents",
+        "list received incident summaries and rotation flags",
+    )
+    .arg(env_arg());
+
+    add(
+        sub,
+        "serve",
+        "run the trusted server (tools API, relay, signer) until SIGINT/SIGTERM",
+    )
+    .arg(
+        Arg::opt("--listen")
+            .default(Val::Str(DEFAULT_LISTEN.into()))
+            .metavar("HOST:PORT")
+            .help("IPv4 loopback only (127.0.0.1 or localhost); port 0 = ephemeral"),
+    )
+    .arg(
+        Arg::opt("--team-listen")
+            .metavar("HOST:PORT")
+            .help("start team sync on a separate LAN/VPN-facing socket (default: team sync off)"),
+    )
+    .arg(
+        Arg::opt("--quiet")
+            .flag()
+            .help("no request log lines on stderr"),
+    );
+    parser
+}
+
+/// Why argv did not produce [`Args`]: argparse printed help (exit 0), or a
+/// usage error (`_Parser.error`: usage, then the JSON error, exit 2).
+#[derive(Debug)]
+enum ParseFail {
+    Help(String),
+    Usage { usage: String, detail: String },
+}
+
+/// `_Parser._unrecognized_detail`: a count, plus only those tokens that are
+/// (or abbreviate) an option registered somewhere in the tree.
+fn unrecognized_detail(parser: &Parser, extras: &[String]) -> String {
+    let registered = parser.registered_options();
+    let names: BTreeSet<&str> = extras
+        .iter()
+        .map(|item| item.split('=').next().unwrap_or(""))
+        .filter(|name| {
+            name.starts_with("--")
+                && name.chars().count() > 2
+                && registered.iter().any(|option| option.starts_with(name))
+        })
         .collect();
-    let known_options = [
-        "state-dir",
-        "id",
-        "kind",
-        "project",
-        "environment",
-        "value-file",
-        "stdin",
-        "version",
-        "secret-id",
-        "connection",
-        "principal",
-        "ttl",
-        "methods",
-        "path-prefixes",
-        "confirm-methods",
-        "target",
-        "auth",
-        "host",
-        "host-key",
-        "listen",
-        "env",
-        "scope",
-        "digest",
-        "out",
-        "in",
-    ];
-    let mut extras = Vec::new();
-    while i < argv.len() {
-        let token = &argv[i];
-        if token == "--" {
-            a.positional.extend_from_slice(&argv[i + 1..]);
-            break;
-        }
-        if let Some(raw) = token.strip_prefix("--") {
-            let (key, inline) = raw
-                .split_once('=')
-                .map_or((raw, None), |(k, v)| (k, Some(v)));
-            if !valid.contains(key) {
-                extras.push(token.clone());
-                i += 1;
-                continue;
-            }
-            if flags.split_whitespace().any(|f| f == key) {
-                if inline.is_some() {
-                    extras.push(token.clone());
-                    i += 1;
-                    continue;
-                }
-                a.options
-                    .entry(key.to_owned())
-                    .or_default()
-                    .push("true".into());
-                i += 1;
-                continue;
-            }
-            let value = if let Some(inline) = inline {
-                inline.to_owned()
-            } else {
-                i += 1;
-                let value = argv
-                    .get(i)
-                    .ok_or_else(|| format!("argument --{key}: expected one argument"))?;
-                if value.starts_with("--") {
-                    return Err(format!("argument --{key}: expected one argument"));
-                }
-                value.clone()
-            };
-            a.options.entry(key.to_owned()).or_default().push(value);
-        } else {
-            a.positional.push(token.clone());
-        }
-        i += 1;
+    let mut detail = format!("unrecognized arguments: {}", extras.len());
+    if !names.is_empty() {
+        detail.push_str(&format!(
+            " (not accepted: {})",
+            names.into_iter().collect::<Vec<_>>().join(" ")
+        ));
     }
-    if !extras.is_empty() || a.positional.len() > positional {
-        let names: BTreeSet<String> = extras
-            .iter()
-            .filter_map(|item| item.strip_prefix("--"))
-            .filter_map(|name| name.split('=').next())
-            .filter(|name| {
-                !name.is_empty() && known_options.iter().any(|known| known.starts_with(name))
-            })
-            .map(|name| format!("--{name}"))
-            .collect();
-        let count = extras.len() + a.positional.len().saturating_sub(positional);
-        let detail = if names.is_empty() {
-            String::new()
+    detail + "; values are not echoed"
+}
+
+/// `build_parser().parse_args(argv)` with `_Parser`'s error reporting,
+/// converted to the option map the command handlers read.
+fn parse(argv: &[String]) -> Result<Args, ParseFail> {
+    let parser = build_parser();
+    let (namespace, extras) = match parser.parse_known_args(argv) {
+        Outcome::Parsed(namespace, extras) => (namespace, extras),
+        Outcome::Help(text) => return Err(ParseFail::Help(text)),
+        Outcome::Error { usage, message, .. } => {
+            return Err(ParseFail::Usage {
+                usage,
+                detail: message,
+            });
+        }
+    };
+    if !extras.is_empty() {
+        return Err(ParseFail::Usage {
+            usage: parser.format_usage(),
+            detail: unrecognized_detail(&parser, &extras),
+        });
+    }
+    let text = |key: &str| {
+        namespace
+            .get(key)
+            .and_then(Val::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let mut a = Args {
+        state_dir: text("state_dir"),
+        command: text("command"),
+        ..Args::default()
+    };
+    a.action = text(&format!("{}_command", a.command));
+    let positionals: &[&str] = match (a.command.as_str(), a.action.as_str()) {
+        ("project", "create") => &["name"],
+        ("team", "join") => &["invite"],
+        ("team", "diff") => &["left", "right"],
+        _ => &[],
+    };
+    for positional in positionals {
+        a.positional.push(text(positional));
+    }
+    for (dest, value) in &namespace {
+        if dest == "state_dir" || dest.ends_with("command") || positionals.contains(&dest.as_str())
+        {
+            continue;
+        }
+        let key = if dest == "input" {
+            "in".to_owned()
         } else {
-            format!(
-                " (not accepted: {})",
-                names.into_iter().collect::<Vec<_>>().join(" ")
-            )
+            dest.replace('_', "-")
         };
-        return Err(format!(
-            "unrecognized arguments: {count}{detail}; values are not echoed"
-        ));
-    }
-    let missing: Vec<String> = required
-        .split_whitespace()
-        .filter(|key| !a.has(key))
-        .map(|key| format!("--{key}"))
-        .collect();
-    if !missing.is_empty() {
-        return Err(format!(
-            "the following arguments are required: {}",
-            missing.join(", ")
-        ));
-    }
-    if a.positional.len() != positional {
-        return Err(format!(
-            "unrecognized arguments: {}; values are not echoed",
-            a.positional.len().abs_diff(positional)
-        ));
-    }
-    if ((a.command == "secret" && a.action == "put")
-        || (a.command == "rotation" && a.action == "start"))
-        && a.has("stdin") == a.has("value-file")
-    {
-        return Err("one of the arguments --value-file --stdin is required".into());
-    }
-    for key in ["version", "secret-version", "port", "max-uses", "limit"] {
-        if let Some(value) = a.get(key) {
-            let number = value
-                .parse::<i64>()
-                .map_err(|_| format!("argument --{key}: invalid int value"))?;
-            if key == "limit" && number < 1 {
-                return Err("argument --limit: must be a positive integer".into());
-            }
-        }
-    }
-    if a.command == "secret"
-        && a.action == "put"
-        && !crate::vault::SECRET_KINDS.contains(&a.req("kind"))
-    {
-        return Err("argument --kind: invalid choice".into());
-    }
-    if a.command == "connection"
-        && a.action == "create-http"
-        && !crate::policy::AUTH_MODES.contains(&a.req("auth"))
-    {
-        return Err("argument --auth: invalid choice".into());
-    }
-    if a.command == "incident"
-        && a.action == "declare"
-        && !["principal", "runtime", "all"].contains(&a.req("scope"))
-    {
-        return Err("argument --scope: invalid choice".into());
-    }
-    if a.command == "incident"
-        && a.action == "escalate"
-        && !["runtime", "all"].contains(&a.req("scope"))
-    {
-        return Err("argument --scope: invalid choice".into());
-    }
-    if a.command == "team"
-        && ["invite", "set-role"].contains(&a.action.as_str())
-        && !["admin", "user"].contains(&a.req("role"))
-    {
-        return Err("argument --role: invalid choice".into());
-    }
-    if a.command == "team"
-        && a.action == "show"
-        && a.get("format")
-            .is_some_and(|value| !["json", "yaml"].contains(&value))
-    {
-        return Err("argument --format: invalid choice".into());
+        let values = match value {
+            Val::Str(s) => vec![s.clone()],
+            Val::Int(n) => vec![n.to_string()],
+            Val::Bool(true) => vec!["true".to_owned()],
+            Val::List(items) => items.clone(),
+            Val::None | Val::Bool(false) => continue,
+        };
+        a.options.insert(key, values);
     }
     Ok(a)
 }
@@ -372,6 +718,28 @@ fn admin_record(ctx: &Context, event: &str, extra: Vec<(&str, Value)>) -> Result
         RecordArgs {
             caller: Some("admin"),
             result: Some("ok"),
+            extra,
+            ..Default::default()
+        },
+    )?;
+    Ok(())
+}
+
+/// `_admin_record(ctx, event, connection=..., policy_version=..., extra=...)`.
+fn admin_record_for(
+    ctx: &Context,
+    event: &str,
+    connection: Option<&str>,
+    policy_version: Option<i64>,
+    extra: Vec<(&str, Value)>,
+) -> Result<(), Error> {
+    ctx.audit.record(
+        event,
+        RecordArgs {
+            caller: Some("admin"),
+            connection,
+            result: Some("ok"),
+            policy_version,
             extra,
             ..Default::default()
         },
@@ -414,9 +782,100 @@ fn refuse_cli_env<T>(
     Err(Error::invalid_input("cli_env_contains_credential").with_detail(connection))
 }
 
+/// `str(pathlib.PurePosixPath(path))`: repeated and trailing separators and
+/// `.` components dropped (a leading `//` is kept, as POSIX allows).
+fn pathlib_str(path: &str) -> String {
+    let (root, rel) = if !path.starts_with('/') {
+        ("", path)
+    } else if path[1..].starts_with('/') && !path[2..].starts_with('/') {
+        ("//", &path[2..])
+    } else {
+        ("/", &path[1..])
+    };
+    let tail: Vec<&str> = rel
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    let text = format!("{root}{}", tail.join("/"));
+    if text.is_empty() {
+        ".".to_owned()
+    } else {
+        text
+    }
+}
+
+/// The home directory `pwd` reports for `user` (or the current uid), read
+/// from the local passwd database.
+fn passwd_home(user: Option<&str>) -> Option<String> {
+    let uid = rustix::process::getuid().as_raw().to_string();
+    let text = fs::read_to_string("/etc/passwd").ok()?;
+    text.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 7 {
+            return None;
+        }
+        let matches = match user {
+            Some(name) => fields[0] == name,
+            None => fields[2] == uid,
+        };
+        matches.then(|| fields[5].to_owned())
+    })
+}
+
+/// `str(pathlib.Path(path).expanduser())`; `pathlib` raises
+/// `RuntimeError("Could not determine home directory.")` when `~` or `~user`
+/// cannot be resolved, which the CLI reports as an internal error.
+fn user_path(path: &str) -> Result<String, Error> {
+    let normalized = pathlib_str(path);
+    let (first, rest) = match normalized.split_once('/') {
+        Some((first, rest)) => (first, Some(rest)),
+        None => (normalized.as_str(), None),
+    };
+    if normalized.starts_with('/') || !first.starts_with('~') {
+        return Ok(normalized);
+    }
+    let home = if first == "~" {
+        match env::var_os("HOME") {
+            Some(home) => Some(home.to_string_lossy().into_owned()),
+            None => passwd_home(None),
+        }
+    } else {
+        passwd_home(Some(&first[1..]))
+    };
+    let Some(home) = home else {
+        return Err(Error::subclass(
+            crate::errors::ErrorClass::ZeroPW,
+            "RuntimeError",
+            "internal_error",
+            "",
+        ));
+    };
+    let home = home.trim_end_matches('/');
+    let home = if home.is_empty() { "/" } else { home };
+    Ok(pathlib_str(&match rest {
+        Some(rest) => format!("{home}/{rest}"),
+        None => home.to_owned(),
+    }))
+}
+
+/// The CLI's `except OSError` mapping for a file named on the command line:
+/// `FileNotFoundError` is reported without detail, any other error by its
+/// `OSError` subclass name and `strerror`.
+fn os_error(error: &io::Error) -> Error {
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        return Error::invalid_input("file_not_found");
+    }
+    Error::subclass(
+        crate::errors::ErrorClass::ZeroPW,
+        crate::pystr::os_error_class(error),
+        "io_error",
+        crate::pystr::os_error_strerror(error).unwrap_or_default(),
+    )
+}
+
 fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
     let ctx = Context::open_with_tempdir_cleanup(
-        &a.state_dir,
+        user_path(&a.state_dir)?,
         Config::default(),
         crate::clock::system(),
         admin_owned_dir_registry(),
@@ -615,12 +1074,12 @@ fn passphrase(name: &str) -> Result<String, Error> {
 }
 
 fn read_secret(a: &Args, kind: &str) -> Result<Vec<u8>, Error> {
-    let mut data = if let Some(path) = a.get("value-file") {
-        let file = fs::File::open(path).map_err(|_| Error::invalid_input("file_not_found"))?;
+    let mut data = if let Some(path) = a.get("value-file").filter(|p| !p.is_empty()) {
+        let file = fs::File::open(path).map_err(|e| os_error(&e))?;
         let mut data = Vec::new();
         file.take((MAX_SECRET_BYTES + 1) as u64)
             .read_to_end(&mut data)
-            .map_err(|_| Error::invalid_input("io_error"))?;
+            .map_err(|e| os_error(&e))?;
         data
     } else if a.has("stdin") {
         let mut data = Vec::new();
@@ -723,63 +1182,39 @@ fn ttl(v: &str) -> Result<i64, Error> {
     Ok(seconds)
 }
 
+/// `_parse_target`: `scheme://host[:port]` with no path, query, fragment or
+/// userinfo, parsed by `urllib.parse.urlsplit` semantics.
 fn target(v: &str) -> Result<(String, String, i64), Error> {
-    let source = v.trim();
-    if (source.starts_with("http:") || source.starts_with("https:")) && !source.contains("://") {
-        return Err(Error::invalid_input("invalid_host"));
-    }
-    let (scheme, rest) = v.trim().split_once("://").ok_or_else(|| {
-        Error::invalid_input("invalid_scheme")
-            .with_detail("target must start with http:// or https://")
-    })?;
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
+    let origin_only = || {
+        Error::invalid_input("target_must_be_origin")
+            .with_detail("target is scheme://host[:port] only")
+    };
+    let parts = crate::pystr::urlsplit(v.trim_matches(crate::pystr::is_space))
+        .map_err(|_| Error::invalid_input("invalid_host"))?;
+    let host = parts.hostname();
+    if parts.scheme != "http" && parts.scheme != "https" {
         return Err(Error::invalid_input("invalid_scheme")
             .with_detail("target must start with http:// or https://"));
     }
-    if rest.contains('@')
-        || rest.contains('?')
-        || rest.contains('#')
-        || rest.find('/').is_some_and(|i| &rest[i..] != "/")
+    let (username, password) = parts.userinfo();
+    if !(parts.path.is_empty() || parts.path == "/")
+        || !parts.query.is_empty()
+        || !parts.fragment.is_empty()
+        || username.is_some_and(|u| !u.is_empty())
+        || password.is_some_and(|p| !p.is_empty())
     {
-        return Err(Error::invalid_input("target_must_be_origin")
-            .with_detail("target is scheme://host[:port] only"));
+        return Err(origin_only());
     }
-    let host_port = rest.trim_end_matches('/');
-    let (host, port) = if host_port.starts_with('[') {
-        let end = host_port
-            .find(']')
-            .ok_or_else(|| Error::invalid_input("invalid_host"))?;
-        let host = &host_port[1..end];
-        if host.parse::<std::net::Ipv6Addr>().is_err() {
-            return Err(Error::invalid_input("invalid_host"));
-        }
-        let rem = &host_port[end + 1..];
-        let port = if rem.is_empty() {
-            if scheme == "https" { 443 } else { 80 }
-        } else {
-            rem.strip_prefix(':')
-                .ok_or_else(|| Error::invalid_input("invalid_port"))?
-                .parse::<i64>()
-                .map_err(|_| Error::invalid_input("invalid_port"))?
-        };
-        (host.to_owned(), port)
-    } else if let Some((host, port)) = host_port.rsplit_once(':') {
-        (
-            host.to_owned(),
-            port.parse::<i64>()
-                .map_err(|_| Error::invalid_input("invalid_port"))?,
-        )
-    } else {
-        (
-            host_port.to_owned(),
-            if scheme == "https" { 443 } else { 80 },
-        )
+    let port = parts
+        .port()
+        .map_err(|_| Error::invalid_input("invalid_port"))?;
+    let host = host.ok_or_else(|| Error::invalid_input("invalid_host"))?;
+    let port = match port {
+        Some(port) => i64::from(port),
+        None if parts.scheme == "https" => 443,
+        None => 80,
     };
-    if host.is_empty() {
-        return Err(Error::invalid_input("invalid_host"));
-    }
-    Ok((scheme, host, port))
+    Ok((parts.scheme, host, port))
 }
 
 fn control(ctx: &Context) -> Result<Value, Error> {
@@ -856,15 +1291,29 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     Ok(())
 }
 
+/// `_create_connection`: the state-locked credential scan and write, then
+/// the `connection_create` record with the kind-specific `extra` fields.
 fn create_connection(
     ctx: &Context,
     connection: Connection,
     target: &str,
+    extra: Vec<(&str, Value)>,
 ) -> Result<Connection, Error> {
-    // The credential scan and persisted CLI profile must be one state transaction.
-    let _lock = ctx.state.lock()?;
-    check_secret_connection(ctx, &connection)?;
-    let stamped = ctx.policy.create_connection(connection)?;
+    let stamped = {
+        // The credential scan and persisted CLI profile must be one state transaction.
+        let _lock = ctx.state.lock()?;
+        check_secret_connection(ctx, &connection)?;
+        ctx.policy.create_connection(connection)?
+    };
+    let mut fields = vec![
+        ("kind", json!(stamped.kind)),
+        ("service", json!(stamped.service)),
+        ("project", json!(stamped.project)),
+        ("environment", json!(stamped.environment)),
+        ("secret_id", json!(stamped.secret_id)),
+        ("version", json!(stamped.secret_version)),
+    ];
+    fields.extend(extra);
     ctx.audit.record(
         "connection_create",
         RecordArgs {
@@ -873,27 +1322,59 @@ fn create_connection(
             target: Some(target),
             result: Some("ok"),
             policy_version: Some(stamped.policy_version),
-            extra: vec![
-                ("kind", json!(stamped.kind)),
-                ("service", json!(stamped.service)),
-                ("project", json!(stamped.project)),
-                ("environment", json!(stamped.environment)),
-                ("secret_id", json!(stamped.secret_id)),
-            ],
+            extra: fields,
             ..Default::default()
         },
     )?;
     Ok(stamped)
 }
 
+/// `_switch_credential`: pin a local connection to one usable version of its
+/// secret. The version is checked before the connection changes, so a
+/// missing, retired or revoked version leaves the connection untouched.
+fn switch_credential(
+    ctx: &Context,
+    connection_id: &str,
+    version: i64,
+) -> Result<Connection, Error> {
+    let before = ctx.policy.get_connection(connection_id)?;
+    let meta = ctx.vault.get_meta(&before.secret_id)?;
+    let status = meta
+        .versions
+        .iter()
+        .find(|v| v.version == version)
+        .map(|v| v.status.clone())
+        .ok_or_else(|| Error::not_found("secret_version_not_found"))?;
+    if status != "active" && status != "staged" {
+        return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
+    }
+    let after = ctx.policy.switch_credential(connection_id, Some(version))?;
+    ctx.audit.record(
+        "connection_switch_credential",
+        RecordArgs {
+            caller: Some("admin"),
+            connection: Some(&after.id),
+            result: Some("ok"),
+            policy_version: Some(after.policy_version),
+            extra: vec![
+                ("secret_id", json!(after.secret_id)),
+                ("version", json!(version)),
+            ],
+            ..Default::default()
+        },
+    )?;
+    Ok(after)
+}
+
 fn local_command(a: &Args) -> Result<Value, Error> {
     if a.command == "init" {
+        // `_check_passphrase_strength` runs on each passphrase as soon as it is read.
         let admin = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
-        let recovery = passphrase("ZEROPW_RECOVERY_PASSPHRASE")?;
         if admin.chars().count() < 8 {
             return Err(Error::invalid_input("passphrase_too_short")
                 .with_detail("administrator passphrase needs at least 8 characters"));
         }
+        let recovery = passphrase("ZEROPW_RECOVERY_PASSPHRASE")?;
         if recovery.chars().count() < 8 {
             return Err(Error::invalid_input("passphrase_too_short")
                 .with_detail("recovery passphrase needs at least 8 characters"));
@@ -903,7 +1384,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .with_detail("the recovery passphrase must be independent of the admin one"));
         }
         let ctx = Context::initialize_with_tempdir_cleanup(
-            &a.state_dir,
+            user_path(&a.state_dir)?,
             &admin,
             &recovery,
             Config::default(),
@@ -933,7 +1414,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
     let mut ctx = open(a, mutating)?;
     match (a.command.as_str(), a.action.as_str()) {
         ("project", "create") => {
-            let envs = if let Some(v) = a.get("environments") {
+            // `tuple(_csv(args.environments)) if args.environments else DEFAULT_ENVIRONMENTS`.
+            let envs = if let Some(v) = a.get("environments").filter(|v| !v.is_empty()) {
                 csv(Some(v))
             } else {
                 vec!["dev".into(), "staging".into(), "prod".into()]
@@ -1107,10 +1589,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("connection", "create-http") => {
             let (scheme, host, port) = target(a.req("target"))?;
-            let ca = if let Some(p) = a.get("ca-file") {
-                let path = Path::new(p);
+            let ca = if let Some(p) = a.get("ca-file").filter(|p| !p.is_empty()) {
+                let expanded = user_path(p)?;
+                let path = Path::new(&expanded);
                 if !path.is_file() {
-                    return Err(Error::invalid_input("ca_file_missing").with_detail(p));
+                    return Err(Error::invalid_input("ca_file_missing").with_detail(&expanded));
                 }
                 Some(
                     path.canonicalize()
@@ -1134,7 +1617,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 paths(a.get("path-prefixes"), None)?,
                 confirmations(a.get("confirm-methods"), Vec::new()),
             )?;
-            let cli = if let Some(program) = a.get("cli-program") {
+            let cli = if let Some(program) = a.get("cli-program").filter(|p| !p.is_empty()) {
                 let mut extra = BTreeMap::new();
                 for item in a.list("cli-env") {
                     let (key, val) = item.split_once('=').ok_or_else(|| {
@@ -1186,10 +1669,28 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 out["propagated_to"] = json!(0);
                 return Ok(out);
             }
-            Ok(
-                create_connection(&ctx, connection, &format!("{scheme}://{host}:{port}"))?
-                    .to_value(),
-            )
+            let origin = connection
+                .http_target
+                .as_ref()
+                .map(HttpTarget::origin)
+                .unwrap_or_default();
+            let (host, port) = connection
+                .http_target
+                .as_ref()
+                .map(|t| (t.host.clone(), t.port))
+                .unwrap_or_default();
+            Ok(create_connection(
+                &ctx,
+                connection,
+                &origin,
+                vec![
+                    ("scheme", json!(scheme)),
+                    ("host", json!(host)),
+                    ("port", json!(port)),
+                    ("method", json!(a.req("auth"))),
+                ],
+            )?
+            .to_value())
         }
         ("connection", "create-ssh") => {
             let port = a.integer("port")?.unwrap_or(22);
@@ -1212,6 +1713,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let ssh = SshTarget::new(a.req("host"), port, a.req("username"), host_keys)?;
             let cli = a
                 .get("cli-program")
+                .filter(|p| !p.is_empty())
                 .map(|p| CliProfile::new(p, "ssh", None, BTreeMap::new()))
                 .transpose()?;
             let connection = Connection::new(
@@ -1250,7 +1752,21 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let stamped = if shared.is_some() {
                 ctx.policy.get_connection(a.req("id"))?
             } else {
-                create_connection(&ctx, connection, &format!("{}:{port}", a.req("host")))?
+                let (host, port, username) = connection
+                    .ssh_target
+                    .as_ref()
+                    .map(|t| (t.host.clone(), t.port, t.username.clone()))
+                    .unwrap_or_default();
+                create_connection(
+                    &ctx,
+                    connection,
+                    &format!("{host}:{port}"),
+                    vec![
+                        ("host", json!(host)),
+                        ("port", json!(port)),
+                        ("username", json!(username)),
+                    ],
+                )?
             };
             let mut out = stamped.to_value();
             if let Some(result) = result {
@@ -1304,9 +1820,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("id"),
                 ConnectionChanges::new().http_scope(Some(scope)),
             )?;
-            admin_record(
+            admin_record_for(
                 &ctx,
                 "connection_update",
+                Some(&after.id),
+                Some(after.policy_version),
                 vec![
                     ("detail", json!("scope")),
                     ("state", json!(if widened { "widened" } else { "narrowed" })),
@@ -1335,31 +1853,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     json!({"id":after.id,"secret_id":after.secret_id,"secret_version":after.secret_version,"policy_version":after.policy_version,"commit":result["commit"],"propagated_to":0}),
                 );
             }
-            let meta = ctx.vault.get_meta(&before.secret_id)?;
-            let status = meta
-                .versions
-                .iter()
-                .find(|v| v.version == ver)
-                .map(|v| v.status.as_str())
-                .ok_or_else(|| Error::not_found("secret_version_not_found"))?;
-            if status != "active" && status != "staged" {
-                return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
-            }
-            let after = ctx.policy.switch_credential(a.req("id"), Some(ver))?;
-            ctx.audit.record(
-                "connection_switch_credential",
-                RecordArgs {
-                    caller: Some("admin"),
-                    connection: Some(&after.id),
-                    result: Some("ok"),
-                    policy_version: Some(after.policy_version),
-                    extra: vec![
-                        ("secret_id", json!(after.secret_id)),
-                        ("version", json!(ver)),
-                    ],
-                    ..Default::default()
-                },
-            )?;
+            let after = switch_credential(&ctx, a.req("id"), ver)?;
             Ok(
                 json!({"id":after.id,"secret_id":after.secret_id,"secret_version":after.secret_version,"policy_version":after.policy_version}),
             )
@@ -1426,9 +1920,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 Some(seconds),
                 max_uses,
             )?;
-            admin_record(
+            admin_record_for(
                 &ctx,
                 "grant_create",
+                Some(&grant.connection),
+                Some(grant.policy_version),
                 vec![
                     ("grant", json!(grant.id)),
                     ("principal", json!(grant.principal)),
@@ -1443,18 +1939,22 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("grant", "revoke") => {
             let g = ctx.policy.revoke_grant(a.req("id"))?;
-            admin_record(
+            admin_record_for(
                 &ctx,
                 "grant_revoke",
+                Some(&g.connection),
+                None,
                 vec![("grant", json!(g.id)), ("principal", json!(g.principal))],
             )?;
             Ok(grant_view(&g))
         }
         ("grant", "regrant") => {
             let g = ctx.policy.regrant(a.req("id"))?;
-            admin_record(
+            admin_record_for(
                 &ctx,
                 "grant_regrant",
+                Some(&g.connection),
+                Some(g.policy_version),
                 vec![
                     ("grant", json!(g.id)),
                     ("principal", json!(g.principal)),
@@ -1500,9 +2000,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("approvals", "approve") => {
             let entry = ctx.policy.approve(a.req("digest"))?;
-            admin_record(
+            admin_record_for(
                 &ctx,
                 "approval_grant",
+                entry.get("connection").and_then(Value::as_str),
+                None,
                 vec![
                     ("digest", json!(a.req("digest"))),
                     (
@@ -1613,21 +2115,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|format!("{v}")).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0}),
                 );
             }
-            let after = ctx.policy.switch_credential(&before.id, Some(version))?;
-            ctx.audit.record(
-                "connection_switch_credential",
-                RecordArgs {
-                    caller: Some("admin"),
-                    connection: Some(&after.id),
-                    result: Some("ok"),
-                    policy_version: Some(after.policy_version),
-                    extra: vec![
-                        ("secret_id", json!(after.secret_id)),
-                        ("version", json!(version)),
-                    ],
-                    ..Default::default()
-                },
-            )?;
+            // Pin first (one policy-version bump for this connection), then activate:
+            // activating re-binds only the other unpinned connections that follow the secret.
+            let after = switch_credential(&ctx, &before.id, version)?;
             ctx.vault
                 .set_version_status(&before.secret_id, version, "active")?;
             let after = ctx.policy.get_connection(&after.id)?;
@@ -1645,7 +2135,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("backup", "") => {
-            let path = PathBuf::from(a.req("out"));
+            let path = PathBuf::from(user_path(a.req("out"))?);
             if path
                 .parent()
                 .is_some_and(|parent| !parent.as_os_str().is_empty() && !parent.exists())
@@ -1658,8 +2148,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("restore", "") => {
-            let manifest =
-                Vault::restore(ctx.state, Path::new(a.req("in")), ctx.audit, Some(ctx.kms))?;
+            let manifest = Vault::restore(
+                ctx.state,
+                Path::new(&user_path(a.req("in"))?),
+                ctx.audit,
+                Some(ctx.kms),
+            )?;
             let mut v = control(&ctx)?;
             v["manifest"] = manifest;
             v["reapplied"] = ctx
@@ -1676,8 +2170,13 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("restore-ack", "") => {
             verify_admin(&ctx, "restore_pending")?;
-            let reapplied = Vault::reapply_revocations(ctx.state)?;
-            ctx.policy.set_restore_pending(false)?;
+            // The latest revocation state is applied again under the lock before execution reopens.
+            let reapplied = {
+                let _lock = ctx.state.lock()?;
+                let reapplied = Vault::reapply_revocations(ctx.state)?;
+                ctx.policy.set_restore_pending(false)?;
+                reapplied
+            };
             let active = ctx
                 .policy
                 .list_grants(None)?
@@ -1943,21 +2442,34 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     let mutating = !matches!(
         a.action.as_str(),
         "members" | "status" | "log" | "show" | "diff" | "incidents"
-    ) && (a.action != "peers" || a.has("add"));
+    ) && (a.action != "peers" || a.get("add").is_some_and(|v| !v.is_empty()));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
         let key = DeviceKey::create(ctx.state, ctx.kms)?;
         return Ok(Some(json!({"fingerprint":key.fingerprint()?})));
     }
     if a.action == "share" {
+        let admin = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
         let result = M::share_environment(
             &ctx,
             None,
             a.req("project"),
             a.req("environment"),
-            a.get("name").unwrap_or("owner"),
-            &passphrase("ZEROPW_ADMIN_PASSPHRASE")?,
-        )?;
+            a.get("name").filter(|n| !n.is_empty()).unwrap_or("owner"),
+            &admin,
+        )
+        .inspect_err(|error| {
+            if error.is(crate::errors::ErrorClass::AuthFailed) {
+                record_auth_failure(
+                    &ctx,
+                    &error.reason,
+                    vec![
+                        ("project", json!(a.req("project"))),
+                        ("environment", json!(a.req("environment"))),
+                    ],
+                );
+            }
+        })?;
         return Ok(Some(
             json!({"env_id":result["env_id"],"project":a.req("project"),"environment":a.req("environment"),"not_shared":result["not_shared"]}),
         ));
@@ -1965,7 +2477,11 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     if a.action == "join" {
         use crate::team::transport::TcpTransport;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-        let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 32);
+        let transport = TcpTransport::new(
+            device.clone(),
+            Arc::new(|_, _| None),
+            crate::team::transport::DEFAULT_MAX_CONNECTIONS,
+        );
         let team = sync::TeamSync::new(Arc::new(ctx), Arc::new(transport.clone()), device);
         team.start(None)?;
         let result = M::join(
@@ -1975,7 +2491,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             &team,
             a.get("project"),
             a.get("environment"),
-            30.0,
+            M::JOIN_TIMEOUT_SECONDS,
         );
         team.stop();
         return result.map(Some);
@@ -1983,7 +2499,11 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     let env_id = team_env_id(&ctx, a.req("env"))?;
     let out = match a.action.as_str() {
         "invite" => {
-            let ttl = ttl(a.get("ttl").unwrap_or("24h"))?;
+            // `_parse_ttl(args.ttl) if args.ttl else DEFAULT_INVITE_TTL_SECONDS`.
+            let ttl = match a.get("ttl").filter(|t| !t.is_empty()) {
+                Some(text) => ttl(text)?,
+                None => M::DEFAULT_INVITE_TTL_SECONDS,
+            };
             let invite = M::create_invite(
                 &ctx,
                 &env_id,
@@ -2101,8 +2621,8 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             json!({"env_id":env_id,"left":{"hash":commits[left].hash()?,"view":view(left)?},"right":{"hash":commits[right].hash()?,"view":view(right)?}})
         }
         "peers" => {
-            if let Some(add) = a.get("add") {
-                let device = a.get("device").ok_or_else(|| {
+            if let Some(add) = a.get("add").filter(|v| !v.is_empty()) {
+                let device = a.get("device").filter(|d| !d.is_empty()).ok_or_else(|| {
                     Error::invalid_input("peer_add_needs_device")
                         .with_detail("use --device FP with --add")
                 })?;
@@ -2244,7 +2764,11 @@ pub fn run_serve(
         listen_port: i64::from(port),
         ..Config::default()
     };
-    let ctx = Arc::new(Context::open(state_dir, config, crate::clock::system())?);
+    let ctx = Arc::new(Context::open(
+        user_path(state_dir)?,
+        config,
+        crate::clock::system(),
+    )?);
     ctx.audit.require_writable()?;
     let _detector = crate::intrusion::install(ctx.clone(), None)?;
     let team = if let Some(address) = team_listen {
@@ -2273,6 +2797,12 @@ pub fn run_serve(
     let mut was_pending = payload["restore_pending"] == true;
     while !stop.load(Ordering::Acquire) {
         thread::sleep(Duration::from_millis(250));
+        // The server records only "METHOD query-free-path" lines; handles are already masked.
+        if !quiet {
+            for line in server.take_log_lines() {
+                eprintln!("{line}");
+            }
+        }
         server.service_actions();
         let _ = ctx.reload_handle_key();
         if let (Ok(now_stopped), Ok(now_pending)) =
@@ -2301,18 +2831,39 @@ pub fn run_serve(
     Ok(payload)
 }
 
+/// Process entry point taking the raw OS arguments. Python decodes a
+/// non-UTF-8 argument with `surrogateescape`; a Rust `String` cannot hold
+/// the resulting lone surrogates (PORTING.md §3.6), so such an argument is a
+/// usage error -- and, like every unrecognized token, it is never echoed.
+pub fn main_os(argv: Vec<std::ffi::OsString>) -> i32 {
+    match argv
+        .into_iter()
+        .map(std::ffi::OsString::into_string)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(argv) => main(&argv),
+        Err(_) => {
+            eprint!("{}", build_parser().format_usage());
+            output(
+                &json!({"error":"UsageError","reason":"usage","detail":"argument is not valid UTF-8; values are not echoed"}),
+                true,
+            );
+            2
+        }
+    }
+}
+
 /// Process entry point for the trusted administrator CLI.
 pub fn main(argv: &[String]) -> i32 {
-    if argv.iter().any(|v| v == "--help" || v == "-h") {
-        println!(
-            "usage: zeropw-admin --state-dir DIR COMMAND ...\n\nZeroPW administrator CLI (trusted; JSON output).\n\ncommands: init, project, secret, connection, principal, grant, stop-all, resume, approvals, rotation, backup, restore, restore-ack, recover, incident, audit, alerts, team, serve"
-        );
-        return 0;
-    }
     let args = match parse(argv) {
         Ok(a) => a,
-        Err(detail) => {
-            eprintln!("usage: zeropw-admin --state-dir DIR COMMAND ...");
+        Err(ParseFail::Help(text)) => {
+            print!("{text}");
+            let _ = io::stdout().flush();
+            return 0;
+        }
+        Err(ParseFail::Usage { usage, detail }) => {
+            eprint!("{usage}");
             output(
                 &json!({"error":"UsageError","reason":"usage","detail":detail}),
                 true,

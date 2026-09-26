@@ -1242,6 +1242,276 @@ fn unquote_ascii_run(run: &[char]) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+/// `type(exc).__name__` of the `OSError` CPython raises for `error`: the
+/// PEP 3151 errno-to-subclass map (`Objects/exceptions.c`), `OSError` for
+/// any other errno or an error with no errno.
+pub fn os_error_class(error: &std::io::Error) -> &'static str {
+    match error.raw_os_error() {
+        Some(libc::EAGAIN | libc::EALREADY | libc::EINPROGRESS) => "BlockingIOError",
+        Some(libc::ECHILD) => "ChildProcessError",
+        Some(libc::EPIPE | libc::ESHUTDOWN) => "BrokenPipeError",
+        Some(libc::ECONNABORTED) => "ConnectionAbortedError",
+        Some(libc::ECONNREFUSED) => "ConnectionRefusedError",
+        Some(libc::ECONNRESET) => "ConnectionResetError",
+        Some(libc::EEXIST) => "FileExistsError",
+        Some(libc::ENOENT) => "FileNotFoundError",
+        Some(libc::EISDIR) => "IsADirectoryError",
+        Some(libc::ENOTDIR) => "NotADirectoryError",
+        Some(libc::EINTR) => "InterruptedError",
+        Some(libc::EACCES | libc::EPERM) => "PermissionError",
+        Some(libc::ESRCH) => "ProcessLookupError",
+        Some(libc::ETIMEDOUT) => "TimeoutError",
+        _ => "OSError",
+    }
+}
+
+/// `exc.strerror` of that `OSError` (the C library's `strerror` text), or
+/// `None` for an error with no errno.
+pub fn os_error_strerror(error: &std::io::Error) -> Option<String> {
+    let code = error.raw_os_error()?;
+    let text = error.to_string();
+    Some(
+        text.strip_suffix(&format!(" (os error {code})"))
+            .unwrap_or(&text)
+            .to_owned(),
+    )
+}
+
+/// `(EAI code, gai_strerror text)` pairs of glibc and the BSD/macOS
+/// resolver, used to recover the `socket.gaierror` errno that
+/// `std::net::ToSocketAddrs` folds into its message.
+const GAI_MESSAGES: [(i32, &str); 20] = [
+    (libc::EAI_BADFLAGS, "Bad value for ai_flags"),
+    (libc::EAI_BADFLAGS, "Invalid value for ai_flags"),
+    (libc::EAI_NONAME, "Name or service not known"),
+    (
+        libc::EAI_NONAME,
+        "nodename nor servname provided, or not known",
+    ),
+    (libc::EAI_AGAIN, "Temporary failure in name resolution"),
+    (libc::EAI_FAIL, "Non-recoverable failure in name resolution"),
+    (libc::EAI_NODATA, "No address associated with hostname"),
+    (libc::EAI_NODATA, "No address associated with nodename"),
+    (libc::EAI_FAMILY, "ai_family not supported"),
+    (libc::EAI_SOCKTYPE, "ai_socktype not supported"),
+    (libc::EAI_SERVICE, "Servname not supported for ai_socktype"),
+    (libc::EAI_SERVICE, "servname not supported for ai_socktype"),
+    (libc::EAI_MEMORY, "Memory allocation failure"),
+    (libc::EAI_SYSTEM, "System error"),
+    (libc::EAI_OVERFLOW, "Argument buffer overflow"),
+    (libc::EAI_OVERFLOW, "argument buffer overflow"),
+    (libc::EAI_NONAME, "Name does not resolve"),
+    (libc::EAI_AGAIN, "Try again"),
+    (libc::EAI_FAIL, "Non-recoverable error"),
+    (libc::EAI_NODATA, "Address not available"),
+];
+
+/// `str(exc)` for the `OSError` a socket connect or name lookup raises in
+/// CPython: `[Errno N] strerror`, `[Errno EAI] gai_strerror` for a
+/// resolver failure, or `timed out` for a socket timeout.
+pub fn socket_error_text(error: &std::io::Error) -> String {
+    if let Some(code) = error.raw_os_error() {
+        let text = os_error_strerror(error).unwrap_or_default();
+        return format!("[Errno {code}] {text}");
+    }
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        return "timed out".to_owned();
+    }
+    let text = error.to_string();
+    if let Some(message) = text.strip_prefix("failed to lookup address information: ")
+        && let Some((code, _)) = GAI_MESSAGES.iter().find(|(_, m)| *m == message)
+    {
+        return format!("[Errno {code}] {message}");
+    }
+    text
+}
+
+/// Non-ASCII code points whose NFKC form contains one of `/?#@:` (Unicode
+/// 15.0.0, the UCD CPython 3.12 bundles). `urllib.parse._checknetloc`
+/// rejects a netloc when normalization would introduce such a delimiter;
+/// NFKC of a single character is exactly its decomposition here because
+/// these ASCII delimiters are never produced by canonical composition.
+/// Generated with `unicodedata.normalize("NFKC", chr(cp))` over every code
+/// point; pinned by `urlsplit_matches_python` below.
+const NFKC_NETLOC_DELIMITERS: [u32; 19] = [
+    0x2047, 0x2048, 0x2049, 0x2100, 0x2101, 0x2105, 0x2106, 0x2a74, 0xfe13, 0xfe16, 0xfe55, 0xfe56,
+    0xfe5f, 0xfe6b, 0xff03, 0xff0f, 0xff1a, 0xff1f, 0xff20,
+];
+
+/// A `ValueError` raised by an emulated CPython function.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValueError;
+
+/// `urllib.parse.SplitResult` (CPython 3.12) with the netloc accessors
+/// callers need.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitResult {
+    pub scheme: String,
+    pub netloc: String,
+    pub path: String,
+    pub query: String,
+    pub fragment: String,
+}
+
+impl SplitResult {
+    /// `_hostinfo`: `(hostname, port)` text before any conversion.
+    fn hostinfo(&self) -> (&str, Option<&str>) {
+        let hostinfo = self
+            .netloc
+            .rsplit_once('@')
+            .map_or(self.netloc.as_str(), |(_, h)| h);
+        let (hostname, port) = match hostinfo.split_once('[') {
+            Some((_, bracketed)) => {
+                let (hostname, rest) = bracketed.split_once(']').unwrap_or((bracketed, ""));
+                (hostname, rest.split_once(':').map_or("", |(_, p)| p))
+            }
+            None => hostinfo.split_once(':').unwrap_or((hostinfo, "")),
+        };
+        (hostname, (!port.is_empty()).then_some(port))
+    }
+
+    /// `.hostname`: lower-cased (except a `%zone`), `None` when empty.
+    pub fn hostname(&self) -> Option<String> {
+        let (hostname, _) = self.hostinfo();
+        if hostname.is_empty() {
+            return None;
+        }
+        Some(match hostname.split_once('%') {
+            Some((host, zone)) => format!("{}%{zone}", host.to_lowercase()),
+            None => hostname.to_lowercase(),
+        })
+    }
+
+    /// `.port`: `Err` where CPython raises `ValueError`.
+    pub fn port(&self) -> Result<Option<u16>, ValueError> {
+        match self.hostinfo().1 {
+            None => Ok(None),
+            Some(port) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                // Arbitrarily long digit strings are still "out of range".
+                let value = port.trim_start_matches('0');
+                if value.len() > 5 {
+                    return Err(ValueError);
+                }
+                u16::try_from(value.parse::<u32>().unwrap_or(0))
+                    .map(Some)
+                    .map_err(|_| ValueError)
+            }
+            Some(_) => Err(ValueError),
+        }
+    }
+
+    /// `(.username, .password)`.
+    pub fn userinfo(&self) -> (Option<&str>, Option<&str>) {
+        match self.netloc.rsplit_once('@') {
+            Some((userinfo, _)) => match userinfo.split_once(':') {
+                Some((user, password)) => (Some(user), Some(password)),
+                None => (Some(userinfo), None),
+            },
+            None => (None, None),
+        }
+    }
+}
+
+/// `ipaddress.ip_address(text)` succeeds; `Some(true)` for IPv4.
+fn python_ip_address(text: &str) -> Option<bool> {
+    if text.parse::<std::net::Ipv4Addr>().is_ok() {
+        return Some(true);
+    }
+    // IPv6Address accepts one non-empty `%scope` suffix.
+    let address = match text.split_once('%') {
+        Some((address, scope)) if !scope.is_empty() && !scope.contains('%') => address,
+        Some(_) => return None,
+        None => text,
+    };
+    address.parse::<std::net::Ipv6Addr>().ok().map(|_| false)
+}
+
+/// `urllib.parse.urlsplit(url)` (CPython 3.12, default arguments):
+/// `Err` where it raises `ValueError`.
+pub fn urlsplit(url: &str) -> Result<SplitResult, ValueError> {
+    let mut url: String = url
+        .trim_start_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+        .collect();
+    let mut scheme = String::new();
+    if let Some(i) = url.find(':')
+        && i > 0
+        && url.as_bytes()[0].is_ascii_alphabetic()
+        && url[..i]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+    {
+        scheme = url[..i].to_ascii_lowercase();
+        url = url[i + 1..].to_owned();
+    }
+    let mut netloc = String::new();
+    if let Some(rest) = url.strip_prefix("//") {
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        netloc = rest[..end].to_owned();
+        url = rest[end..].to_owned();
+        if netloc.contains('[') != netloc.contains(']') {
+            return Err(ValueError);
+        }
+        if netloc.contains('[') {
+            // `_check_bracketed_netloc`, then `_check_bracketed_host`.
+            let host_port = netloc.rsplit_once('@').map_or(netloc.as_str(), |(_, h)| h);
+            let hostname = match host_port.split_once('[') {
+                Some((before, bracketed)) => {
+                    if !before.is_empty() {
+                        return Err(ValueError);
+                    }
+                    let (hostname, port) = bracketed.split_once(']').unwrap_or((bracketed, ""));
+                    if !port.is_empty() && !port.starts_with(':') {
+                        return Err(ValueError);
+                    }
+                    hostname
+                }
+                None => host_port.split_once(':').map_or(host_port, |(h, _)| h),
+            };
+            if let Some(future) = hostname.strip_prefix('v') {
+                let digits = future.bytes().take_while(u8::is_ascii_hexdigit).count();
+                if digits == 0
+                    || !future[digits..].starts_with('.')
+                    || future[digits + 1..].is_empty()
+                    || future[digits + 1..].contains('\n')
+                {
+                    return Err(ValueError);
+                }
+            } else if python_ip_address(hostname) != Some(false) {
+                return Err(ValueError);
+            }
+        }
+    }
+    let mut fragment = String::new();
+    if let Some((before, after)) = url.split_once('#') {
+        fragment = after.to_owned();
+        url = before.to_owned();
+    }
+    let mut query = String::new();
+    if let Some((before, after)) = url.split_once('?') {
+        query = after.to_owned();
+        url = before.to_owned();
+    }
+    // `_checknetloc`.
+    if netloc
+        .chars()
+        .any(|c| NFKC_NETLOC_DELIMITERS.contains(&(c as u32)))
+    {
+        return Err(ValueError);
+    }
+    Ok(SplitResult {
+        scheme,
+        netloc,
+        path: url,
+        query,
+        fragment,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1664,6 +1934,70 @@ print(h.hexdigest())
                     .unwrap_or_else(|_| panic!("python printed a non-integer: {line:?}"));
                 assert_eq!(ours, Some(expected), "input {s:?} base {base}");
             }
+        }
+    }
+
+    #[test]
+    fn urlsplit_matches_python() {
+        let cases = [
+            "http://host",
+            "https://Host.Example:0443/",
+            "http://host:",
+            "http://host:+80",
+            "http://host/?",
+            "http://host#",
+            "http:/host",
+            "http://[::1",
+            "http://[::1]:8080",
+            "http://[fe80::1%25eth0]/",
+            "http://[1.2.3.4]/",
+            "http://[v1.x]/",
+            "http://[vg.x]/",
+            "http://u:p@h:1/p?q#f",
+            "http://@h",
+            " \x01http://h\t/x",
+            "HTTP://h:99999",
+            "http://h:00080",
+            "ftp://h",
+            "http://a\u{ff0f}b/",
+            "http://a\u{2100}/",
+            "x:y",
+            "1http://h",
+            "//h:5/p",
+            "http://h:\u{0663}",
+            "http://x[::1]/",
+            "http://[::1]x/",
+            "",
+        ];
+        let script = format!(
+            "import json\nfrom urllib.parse import urlsplit\nout=[]\nfor u in {}:\n    try:\n        r=urlsplit(u)\n    except ValueError:\n        out.append(None); continue\n    try: port=r.port\n    except ValueError: port='ERR'\n    out.append([r.scheme,r.netloc,r.path,r.query,r.fragment,r.hostname,port,r.username,r.password])\nprint(json.dumps(out))",
+            repr_value(&serde_json::json!(cases))
+        );
+        let expected: Vec<serde_json::Value> =
+            serde_json::from_str(&crate::oracle::python(&script)).unwrap();
+        for (case, expected) in cases.iter().zip(expected) {
+            let actual = match urlsplit(case) {
+                Err(ValueError) => serde_json::Value::Null,
+                Ok(r) => {
+                    let port = match r.port() {
+                        Ok(p) => serde_json::json!(p),
+                        Err(ValueError) => serde_json::json!("ERR"),
+                    };
+                    let (user, password) = r.userinfo();
+                    serde_json::json!([
+                        r.scheme,
+                        r.netloc,
+                        r.path,
+                        r.query,
+                        r.fragment,
+                        r.hostname(),
+                        port,
+                        user,
+                        password
+                    ])
+                }
+            };
+            assert_eq!(actual, expected, "{case:?}");
         }
     }
 }

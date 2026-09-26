@@ -1,0 +1,1585 @@
+[
+ {
+  "kind": "admin",
+  "argv": []
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "-h"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "bogus"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "-h"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "-h"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "nope",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin",
+   "--value-file",
+   "f"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin",
+   "--value",
+   "hunter2"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "reveal",
+   "--id",
+   "x",
+   "--version",
+   "abc"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "audit",
+   "tail",
+   "--limit",
+   "0"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "audit",
+   "tail",
+   "--limit",
+   "x"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "principal",
+   "list",
+   "--runtime",
+   "r"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "-x",
+   "--connection",
+   "c"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create",
+   "a",
+   "b"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "diff",
+   "--env",
+   "a/b",
+   "x"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "incident",
+   "declare",
+   "--scope",
+   "bad"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "serve",
+   "--help"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "-h"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "show",
+   "--env",
+   "a/b",
+   "--format",
+   "xml"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init",
+   "extra"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init",
+   "--",
+   "x"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "init"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "list",
+   "--project"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "list",
+   "--project",
+   "--environment",
+   "e"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": []
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "-h"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "-h"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "-h"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "bogus"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--conn",
+   "c",
+   "--meth",
+   "get",
+   "--pa",
+   "/x"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "--bo",
+   "x"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "--body",
+   "a",
+   "--body-file",
+   "f"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "extra",
+   "more"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "--connection",
+   "c",
+   "--",
+   "-h",
+   "--x"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "--connection",
+   "c",
+   "stray"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "status"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "status",
+   "--run",
+   "-x"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections",
+   "--",
+   "x"
+  ]
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "ftp://x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://nonexistent.invalid:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://user@127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--body-file",
+   "/nonexistent"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--body-file",
+   "/tmp"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--header",
+   "nocolon"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "2"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "!stdin=tok-two-bbbbbbbb",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "retire",
+    "--id",
+    "s",
+    "--version",
+    "1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "versions",
+    "--id",
+    "s"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "1"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "!stdin=tok-two-bbbbbbbb",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "retire",
+    "--id",
+    "s",
+    "--version",
+    "1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "versions",
+    "--id",
+    "s"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "3"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "9"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "2"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "share",
+   "--project",
+   "p",
+   "--environment",
+   "dev"
+  ],
+  "env_extra": {
+   "ZEROPW_ADMIN_PASSPHRASE": "wrong-passphrase"
+  },
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "team",
+    "init"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "a",
+   "--connection",
+   "c1"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://API.example.com:8443",
+    "--auth",
+    "bearer",
+    "--methods",
+    "GET,POST"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "principal",
+    "create",
+    "--id",
+    "a"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "6"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-ssh",
+   "--id",
+   "c2",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "k",
+   "--host",
+   "Box.Example",
+   "--username",
+   "deploy",
+   "--host-key",
+   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl box"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!sh",
+    "ssh-keygen -q -t ed25519 -N '' -f {tmp}/k >/dev/null"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "k",
+    "--kind",
+    "ssh_private_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--value-file",
+    "{tmp}/k"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "revoke",
+   "--id",
+   "PLACEHOLDER"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "~/state",
+   "init"
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init"
+  ],
+  "env_extra": {
+   "ZEROPW_ADMIN_PASSPHRASE": "short",
+   "ZEROPW_RECOVERY_PASSPHRASE": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create",
+   "p",
+   "--environments",
+   ""
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{tmp}"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{tmp}/nope"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{state}/admin.json/x"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host:",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host:+80",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host/?",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host#",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http:/host",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://[::1",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ]
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "HTTPS://Host.Example:0443/",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ]
+ }
+]

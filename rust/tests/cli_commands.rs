@@ -223,6 +223,9 @@ fn admin_local_flow_and_value_hygiene() {
             "demo",
             "--environment",
             "dev",
+            // With the value source satisfied, the mistyped option is the
+            // top-level parser's unrecognized-argument error.
+            "--stdin",
             "--value",
             "synthetic-token-0123456789abcdef",
         ],

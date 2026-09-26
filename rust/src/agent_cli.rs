@@ -8,33 +8,70 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::argparse::{Arg, Outcome, Parser, Val};
 use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_CHUNK_LINE_BYTES: usize = 8192;
-const ROOT_HELP: &str = "usage: zeropw-agent [-h] {list-connections,request,exec,status,cancel} ...\n\nZeroPW agent tools client (JSON output)\n\npositional arguments:\n  {list-connections,request,exec,status,cancel}\n    list-connections    connections usable by this caller\n    request             relay one HTTP request through the gateway\n    exec                run the connection's supported CLI; arguments follow\n                        '--'\n    status              state and captured output of one of your runs\n    cancel              cancel one of your runs\n\noptions:\n  -h, --help            show this help message and exit";
 
-fn command_help(command: &str) -> Option<&'static str> {
-    match command {
-        "list-connections" => Some(
-            "usage: zeropw-agent list-connections [-h]\n\noptions:\n  -h, --help  show this help message and exit",
-        ),
-        "request" => Some(
-            "usage: zeropw-agent request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --method METHOD\n  --path PATH\n  --body-file BODY_FILE\n                        file whose bytes form the request body\n  --body BODY           request body text (UTF-8)\n  --header 'K: V'\n  --request-id REQUEST_ID",
-        ),
-        "exec" => Some(
-            "usage: zeropw-agent exec [-h] --connection CONNECTION\n                         [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --request-id REQUEST_ID",
-        ),
-        "status" => Some(
-            "usage: zeropw-agent status [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN",
-        ),
-        "cancel" => Some(
-            "usage: zeropw-agent cancel [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN",
-        ),
-        _ => None,
-    }
+/// `build_parser()`: plain `argparse` (abbreviations allowed, standard
+/// `prog: error:` reporting), with the same tree and help text as
+/// `zeropw/agent_cli.py`.
+fn build_parser() -> Parser {
+    let mut parser = Parser::new(
+        "zeropw-agent",
+        Some("ZeroPW agent tools client (JSON output)"),
+        true,
+    );
+    parser.subparsers("command", None);
+    parser.add_parser(
+        "list-connections",
+        Some("connections usable by this caller"),
+        None,
+    );
+    let req = parser.add_parser(
+        "request",
+        Some("relay one HTTP request through the gateway"),
+        None,
+    );
+    req.arg(Arg::opt("--connection").required())
+        .arg(Arg::opt("--method").required())
+        .arg(Arg::opt("--path").required());
+    req.exclusive(
+        false,
+        vec![
+            Arg::opt("--body-file").help("file whose bytes form the request body"),
+            Arg::opt("--body").help("request body text (UTF-8)"),
+        ],
+    );
+    req.arg(
+        Arg::opt("--header")
+            .append()
+            .default(Val::List(Vec::new()))
+            .metavar("'K: V'"),
+    )
+    .arg(Arg::opt("--request-id"));
+    parser
+        .add_parser(
+            "exec",
+            Some("run the connection's supported CLI; arguments follow '--'"),
+            None,
+        )
+        .arg(Arg::opt("--connection").required())
+        .arg(Arg::opt("--request-id"));
+    parser
+        .add_parser(
+            "status",
+            Some("state and captured output of one of your runs"),
+            None,
+        )
+        .arg(Arg::opt("--run").required());
+    parser
+        .add_parser("cancel", Some("cancel one of your runs"), None)
+        .arg(Arg::opt("--run").required());
+    parser
 }
 
 #[derive(Default)]
@@ -51,82 +88,62 @@ impl Args {
             .and_then(|v| v.last())
             .map(String::as_str)
     }
-    fn required(&self, key: &str) -> Result<&str, String> {
-        self.get(key)
-            .ok_or_else(|| format!("the following arguments are required: --{key}"))
-    }
 }
 
-fn parse(argv: &[String]) -> Result<Args, String> {
-    let command = argv
-        .first()
-        .ok_or("the following arguments are required: command")?;
-    let allowed: &[&str] = match command.as_str() {
-        "list-connections" => &[],
-        "request" => &[
-            "connection",
-            "method",
-            "path",
-            "body-file",
-            "body",
-            "header",
-            "request-id",
-        ],
-        "exec" => &["connection", "request-id"],
-        "status" | "cancel" => &["run"],
-        _ => return Err(format!("invalid choice: {command}")),
+/// Why argv did not produce [`Args`]: help printed (exit 0) or argparse's
+/// `error()` (usage and `prog: error: message` on stderr, exit 2).
+#[derive(Debug)]
+enum ParseFail {
+    Help(String),
+    Usage(String),
+}
+
+/// `_split_exec_args` then `build_parser().parse_args(raw_argv)`.
+fn parse(argv: &[String]) -> Result<Args, ParseFail> {
+    let mut raw: Vec<String> = argv.to_vec();
+    let mut extra = Vec::new();
+    if raw.first().is_some_and(|c| c == "exec")
+        && let Some(index) = raw.iter().position(|a| a == "--")
+    {
+        extra = raw.split_off(index + 1);
+        raw.pop();
+    }
+    let parser = build_parser();
+    let (namespace, extras) = match parser.parse_known_args(&raw) {
+        Outcome::Parsed(namespace, extras) => (namespace, extras),
+        Outcome::Help(text) => return Err(ParseFail::Help(text)),
+        Outcome::Error {
+            prog,
+            usage,
+            message,
+        } => {
+            return Err(ParseFail::Usage(format!(
+                "{usage}{prog}: error: {message}\n"
+            )));
+        }
     };
+    if !extras.is_empty() {
+        return Err(ParseFail::Usage(format!(
+            "{}zeropw-agent: error: unrecognized arguments: {}\n",
+            parser.format_usage(),
+            extras.join(" ")
+        )));
+    }
     let mut out = Args {
-        command: command.clone(),
+        extra,
         ..Args::default()
     };
-    let mut i = 1;
-    while i < argv.len() {
-        if command == "exec" && argv[i] == "--" {
-            out.extra.extend_from_slice(&argv[i + 1..]);
-            break;
-        }
-        let arg = &argv[i];
-        let Some(raw) = arg.strip_prefix("--") else {
-            return Err(format!("unrecognized arguments: {arg}"));
+    for (dest, value) in namespace {
+        let values = match value {
+            Val::Str(s) if dest == "command" => {
+                out.command = s;
+                continue;
+            }
+            Val::Str(s) => vec![s],
+            Val::List(items) => items,
+            _ => continue,
         };
-        let (name, inline) = raw
-            .split_once('=')
-            .map_or((raw, None), |(k, v)| (k, Some(v)));
-        if !allowed.contains(&name) {
-            return Err(format!("unrecognized arguments: {arg}"));
-        }
-        let value = if let Some(inline) = inline {
-            inline.to_owned()
-        } else {
-            i += 1;
-            let value = argv
-                .get(i)
-                .ok_or_else(|| format!("argument {arg}: expected one argument"))?;
-            if value.starts_with("--") {
-                return Err(format!("argument {arg}: expected one argument"));
-            }
-            value.clone()
-        };
-        out.options.entry(name.to_owned()).or_default().push(value);
-        i += 1;
-    }
-    match command.as_str() {
-        "request" => {
-            for key in ["connection", "method", "path"] {
-                out.required(key)?;
-            }
-            if out.get("body-file").is_some() && out.get("body").is_some() {
-                return Err("argument --body: not allowed with argument --body-file".to_owned());
-            }
-        }
-        "exec" => {
-            out.required("connection")?;
-        }
-        "status" | "cancel" => {
-            out.required("run")?;
-        }
-        _ => {}
+        out.options.insert(dest.replace('_', "-"), values);
     }
     Ok(out)
 }
@@ -164,7 +181,7 @@ fn payload(args: &Args) -> Result<Value, Value> {
                 v["headers"] = Value::Object(headers);
             }
             if let Some(path) = args.get("body-file") {
-                let raw = std::fs::read(path).map_err(|_| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":"FileNotFoundError"}))?;
+                let raw = std::fs::read(path).map_err(|e| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":crate::pystr::os_error_class(&e)}))?;
                 match String::from_utf8(raw.clone()) {
                     Ok(s) => v["body"] = json!(s),
                     Err(_) => v["body_base64"] = json!(pybase64::b64encode(&raw)),
@@ -190,54 +207,6 @@ fn emit(v: &Value, stderr: bool) {
     }
 }
 
-fn split_url(url: &str) -> Option<(bool, String, u16, String)> {
-    if url.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        return None;
-    }
-    let (scheme, rest) = url.split_once("://")?;
-    let tls = match scheme {
-        "http" => false,
-        "https" => true,
-        _ => return None,
-    };
-    let (authority, path) = rest.split_once('/').map_or((rest, ""), |(a, p)| (a, p));
-    if authority.is_empty()
-        || authority.contains('@')
-        || authority.contains('#')
-        || authority.contains('?')
-    {
-        return None;
-    }
-    let (host, port) = if authority.starts_with('[') {
-        let end = authority.find(']')?;
-        let host = authority.get(1..end)?;
-        let rem = authority.get(end + 1..)?;
-        let port = if rem.is_empty() {
-            if tls { 443 } else { 80 }
-        } else {
-            rem.strip_prefix(':')?.parse().ok()?
-        };
-        (host.to_owned(), port)
-    } else if let Some((h, p)) = authority.rsplit_once(':') {
-        (h.to_owned(), p.parse().ok()?)
-    } else {
-        (authority.to_owned(), if tls { 443 } else { 80 })
-    };
-    if host.is_empty() {
-        return None;
-    }
-    Some((
-        tls,
-        host,
-        port,
-        if path.is_empty() {
-            String::new()
-        } else {
-            format!("/{path}")
-        },
-    ))
-}
-
 fn gateway_unreachable(detail: &str) -> (u16, Value) {
     (
         0,
@@ -245,33 +214,114 @@ fn gateway_unreachable(detail: &str) -> (u16, Value) {
     )
 }
 
+/// `urllib.request.Request(url)`: `(tls, host, selector)` after `_splittag`,
+/// `_splittype` and `_splithost`; `host` is percent-decoded and `None` when
+/// the URL has no `//authority` (urllib's "no host given").
+fn request_target(url: &str) -> Option<(bool, Option<String>, String)> {
+    let url = url.rsplit_once('#').map_or(url, |(u, _)| u);
+    let (scheme, rest) = url.split_once(':')?;
+    let tls = match scheme.to_ascii_lowercase().as_str() {
+        "http" => false,
+        "https" => true,
+        _ => return None,
+    };
+    let Some(rest) = rest.strip_prefix("//") else {
+        return Some((tls, None, rest.to_owned()));
+    };
+    let end = rest.find(['/', '#', '?']).unwrap_or(rest.len());
+    let (host, path) = rest.split_at(end);
+    let path = if !path.is_empty() && !path.starts_with('/') {
+        format!("/{path}")
+    } else {
+        path.to_owned()
+    };
+    let host = (!host.is_empty()).then(|| crate::pystr::unquote(host));
+    Some((tls, host, path))
+}
+
+/// `http.client.HTTPConnection._get_hostport(host, None)` plus the port
+/// range `socket` enforces: `Err` names the exception CPython raises.
+fn host_port(host: &str, default_port: u16) -> Result<(String, u16), &'static str> {
+    let colon = host.rfind(':');
+    let bracket = host.rfind(']');
+    let (host, port) = match colon {
+        Some(i) if bracket.is_none_or(|j| i > j) => {
+            let text = &host[i + 1..];
+            let port = match crate::pystr::int_from_str_checked(text) {
+                Some(port) => port,
+                None if text.is_empty() => i128::from(default_port),
+                None => return Err("InvalidURL"),
+            };
+            (&host[..i], port)
+        }
+        _ => (host, i128::from(default_port)),
+    };
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    let port = u16::try_from(port).map_err(|_| "OverflowError")?;
+    Ok((host.to_owned(), port))
+}
+
+/// `socket.create_connection((host, port), timeout)`: every resolved address
+/// in turn, raising the last error.
+fn create_connection(host: &str, port: u16, timeout: Duration) -> io::Result<TcpStream> {
+    let mut last = io::Error::from(io::ErrorKind::AddrNotAvailable);
+    for address in (host, port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
+
+/// `str(URLError.reason)[:200]`.
+fn url_error(error: &io::Error) -> (u16, Value) {
+    let text: String = crate::pystr::socket_error_text(error)
+        .chars()
+        .take(200)
+        .collect();
+    gateway_unreachable(&text)
+}
+
 /// Port of `agent_cli.call_tool`; refuses redirects and caps the response body.
 pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u16, Value) {
+    let url = format!("{}/v1/tools/{tool}", base_url.trim_end_matches('/'));
+    let Some((tls, host, selector)) = request_target(&url) else {
+        return gateway_unreachable("ValueError");
+    };
+    let Some(host) = host else {
+        return gateway_unreachable("no host given");
+    };
     if token.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
         return gateway_unreachable("ValueError");
     }
-    let Some((tls, host, port, base_path)) = split_url(base_url.trim_end_matches('/')) else {
-        return gateway_unreachable("ValueError");
-    };
-    let address = match (host.as_str(), port)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut a| a.next())
+    // http.client refuses control characters and spaces in the host and
+    // request target (`InvalidURL`, which urllib does not catch).
+    if host
+        .bytes()
+        .chain(selector.bytes())
+        .any(|b| b <= b' ' || b == 0x7f)
     {
-        Some(a) => a,
-        None => return gateway_unreachable("gaierror"),
+        return gateway_unreachable("InvalidURL");
+    }
+    let (connect_host, port) = match host_port(&host, if tls { 443 } else { 80 }) {
+        Ok(target) => target,
+        Err(name) => return gateway_unreachable(name),
     };
     let timeout = Duration::from_secs(120);
-    let stream = match TcpStream::connect_timeout(&address, timeout) {
+    let stream = match create_connection(&connect_host, port, timeout) {
         Ok(s) => s,
-        Err(_) => return gateway_unreachable("ConnectionRefusedError"),
+        Err(error) => return url_error(&error),
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
-    let path = format!("{base_path}/v1/tools/{tool}");
+    // urllib sends the URL's own authority as `Host`.
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {selector} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     if tls {
@@ -284,23 +334,23 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(store)
             .with_no_client_auth();
-        let name = match rustls_pki_types::ServerName::try_from(host.clone()) {
+        let name = match rustls_pki_types::ServerName::try_from(connect_host.clone()) {
             Ok(n) => n,
-            Err(_) => return gateway_unreachable("InvalidDnsNameError"),
+            Err(_) => return gateway_unreachable("InvalidURL"),
         };
         let connection = match rustls::ClientConnection::new(std::sync::Arc::new(config), name) {
             Ok(c) => c,
-            Err(_) => return gateway_unreachable("TLSError"),
+            Err(_) => return gateway_unreachable("SSLError"),
         };
         let mut io = rustls::StreamOwned::new(connection, stream);
-        if io.write_all(request.as_bytes()).is_err() {
-            return gateway_unreachable("OSError");
+        if let Err(error) = io.write_all(request.as_bytes()) {
+            return url_error(&error);
         }
         read_response(&mut io)
     } else {
         let mut io = stream;
-        if io.write_all(request.as_bytes()).is_err() {
-            return gateway_unreachable("OSError");
+        if let Err(error) = io.write_all(request.as_bytes()) {
+            return url_error(&error);
         }
         read_response(&mut io)
     }
@@ -311,7 +361,7 @@ fn read_line(io: &mut impl Read, limit: usize) -> io::Result<Vec<u8>> {
     let mut one = [0u8; 1];
     loop {
         if line.len() >= limit {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "line too long"));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "LineTooLong"));
         }
         io.read_exact(&mut one)?;
         line.push(one[0]);
@@ -324,7 +374,13 @@ fn read_line(io: &mut impl Read, limit: usize) -> io::Result<Vec<u8>> {
 fn response_bytes(io: &mut impl Read) -> io::Result<(u16, Vec<u8>)> {
     let mut interim = 0;
     loop {
-        let status_line = read_line(io, MAX_HEADER_BYTES)?;
+        let status_line = read_line(io, MAX_HEADER_BYTES).map_err(|error| {
+            if error.kind() == io::ErrorKind::UnexpectedEof {
+                io::Error::new(io::ErrorKind::ConnectionAborted, "RemoteDisconnected")
+            } else {
+                error
+            }
+        })?;
         let status_text = std::str::from_utf8(&status_line)
             .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
         let mut fields = status_text.split_whitespace();
@@ -433,12 +489,16 @@ fn read_response(io: &mut impl Read) -> (u16, Value) {
     let (status, body) = match response_bytes(io) {
         Ok(result) => result,
         Err(error) => {
-            let detail = if error.kind() == io::ErrorKind::TimedOut
-                || error.kind() == io::ErrorKind::WouldBlock
-            {
-                "TimeoutError"
-            } else {
-                "OSError"
+            // `type(exc).__name__` of what `getresponse()`/`read()` raises:
+            // an OSError subclass (caught by `call_tool`) or an
+            // `http.client.HTTPException` (which CPython leaves uncaught).
+            let tag = error.get_ref().map(ToString::to_string).unwrap_or_default();
+            let detail = match error.kind() {
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "TimeoutError",
+                _ if tag == "RemoteDisconnected" || tag == "LineTooLong" => tag.as_str(),
+                io::ErrorKind::InvalidData => "BadStatusLine",
+                io::ErrorKind::UnexpectedEof => "IncompleteRead",
+                _ => crate::pystr::os_error_class(&error),
             };
             return gateway_unreachable(detail);
         }
@@ -465,28 +525,37 @@ fn read_response(io: &mut impl Read) -> (u16, Value) {
     }
 }
 
+/// Entry point taking the raw OS arguments. Python keeps a non-UTF-8
+/// argument as a `surrogateescape` string; a Rust `String` cannot hold it
+/// (PORTING.md §3.6), so it is a usage error instead of a panic.
+pub fn main_os(argv: Vec<std::ffi::OsString>) -> i32 {
+    match argv
+        .into_iter()
+        .map(std::ffi::OsString::into_string)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(argv) => main(&argv),
+        Err(_) => {
+            eprintln!(
+                "{}zeropw-agent: error: argument is not valid UTF-8",
+                build_parser().format_usage()
+            );
+            2
+        }
+    }
+}
+
 /// Returns process exit code; caller supplies argv excluding program name.
 pub fn main(argv: &[String]) -> i32 {
-    let is_help = |arg: &String| arg == "-h" || arg == "--help";
-    if argv.first().is_some_and(is_help) {
-        println!("{ROOT_HELP}");
-        return 0;
-    }
-    if let Some(help) = argv.first().and_then(|command| command_help(command))
-        && argv
-            .iter()
-            .skip(1)
-            .take_while(|arg| *arg != "--")
-            .any(is_help)
-    {
-        println!("{help}");
-        return 0;
-    }
     let args = match parse(argv) {
         Ok(a) => a,
-        Err(detail) => {
-            eprintln!("usage: zeropw-agent {{list-connections,request,exec,status,cancel}} ...");
-            eprintln!("zeropw-agent: error: {detail}");
+        Err(ParseFail::Help(text)) => {
+            print!("{text}");
+            let _ = io::stdout().flush();
+            return 0;
+        }
+        Err(ParseFail::Usage(text)) => {
+            eprint!("{text}");
             return 2;
         }
     };
@@ -505,7 +574,9 @@ pub fn main(argv: &[String]) -> i32 {
         );
         return 1;
     }
-    if split_url(&base_url).is_none() {
+    // Python checks only `urlsplit(base_url).scheme`; any other defect in the
+    // URL surfaces as `gateway_unreachable` when the request is attempted.
+    if !crate::pystr::urlsplit(&base_url).is_ok_and(|p| p.scheme == "http" || p.scheme == "https") {
         emit(
             &json!({"error":"ConfigError","reason":"gateway_url_invalid"}),
             true,

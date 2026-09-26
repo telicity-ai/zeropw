@@ -46,6 +46,7 @@ mod smtp;
 
 pub mod admin_cli;
 pub mod agent_cli;
+pub mod argparse;
 pub mod team;
 
 #[cfg(test)]

@@ -121,6 +121,17 @@ impl ZeroPWServer {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    /// Remove and return the recorded request lines (`log_lines.pop(0)`
+    /// until empty), so a long-running `serve` does not accumulate them.
+    pub fn take_log_lines(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .inner
+                .log_lines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        )
+    }
     pub fn set_limits(&self, max_connections: usize, timeout: Duration, read_deadline: Duration) {
         self.inner
             .max_connections

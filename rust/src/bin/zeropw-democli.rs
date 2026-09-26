@@ -233,27 +233,13 @@ fn call(base: &str, method: &str, path: &str, body: Option<&Value>) -> i32 {
     }
 }
 
-/// `type(exc).__name__` for an `OSError` raised by `open`/`read` (PEP 3151).
-fn os_error_class(error: &std::io::Error) -> &'static str {
-    match error.raw_os_error() {
-        Some(libc::EACCES | libc::EPERM) => "PermissionError",
-        Some(libc::ENOENT) => "FileNotFoundError",
-        Some(libc::EISDIR) => "IsADirectoryError",
-        Some(libc::ENOTDIR) => "NotADirectoryError",
-        Some(libc::EINTR) => "InterruptedError",
-        Some(libc::EAGAIN | libc::EALREADY | libc::EINPROGRESS) => "BlockingIOError",
-        Some(libc::ETIMEDOUT) => "TimeoutError",
-        Some(libc::EEXIST) => "FileExistsError",
-        _ => "OSError",
-    }
-}
-
 fn probe(home: &str, name: &str) -> String {
     if home.is_empty() {
         return "no home".to_owned();
     }
     let path = Path::new(home).join(name);
-    let unreadable = |error: &std::io::Error| format!("unreadable ({})", os_error_class(error));
+    let unreadable =
+        |error: &std::io::Error| format!("unreadable ({})", zeropw::pystr::os_error_class(error));
     match File::open(path) {
         Ok(file) => {
             let mut buf = Vec::new();
