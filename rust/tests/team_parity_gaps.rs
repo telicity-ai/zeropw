@@ -158,6 +158,225 @@ fn context(root: &TempDir, name: &str) -> Arc<Context> {
     )
 }
 
+// `share_environment` compares JSON-decoded Python numeric values with
+// integer version keys. This differential uses Python to prepare identical
+// encrypted states so large synthetic version keys have matching AAD in the
+// Rust half too.
+#[test]
+fn share_environment_numeric_version_identity_matches_python() {
+    let root = TempDir::new().unwrap();
+    let rust_states: Vec<_> = (0..5)
+        .map(|index| root.path().join(format!("rust-numeric-{index}")))
+        .collect();
+    let python_states: Vec<_> = (0..5)
+        .map(|index| root.path().join(format!("python-numeric-{index}")))
+        .collect();
+    let rust_paths = serde_json::to_string(&rust_states).unwrap();
+    let python_paths = serde_json::to_string(&python_states).unwrap();
+    let script = format!(
+        r#"
+import json
+from pathlib import Path
+from zeropw import policy as P
+from zeropw.context import Config, Context
+from zeropw.store import iso
+from zeropw.team import membership as M
+
+cases = [
+    ("bool", 1, True, True),
+    ("float", 1, 1.0, 1.0),
+    ("large_exact", 9007199254740993, 9007199254740993, 9007199254740993),
+    ("integer_mismatch", 9007199254740992, 9007199254740993, 9007199254740993),
+    ("rounded_float", 9007199254740992, 9007199254740993.0, 9007199254740993.0),
+]
+
+def prepare(path, key, active, connection_version):
+    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
+    ctx.projects.create("demo", ["dev"])
+    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
+    doc = ctx.state.read_json("vault/secrets.json")
+    record = ctx.vault._encrypt("secret", key, b"synthetic-wide")
+    record.update({{"created_at": iso(), "status": "active", "public": {{}}}})
+    entry = doc["secrets"]["secret"]
+    entry["versions"] = {{str(key): record}}
+    entry["active_version"] = active
+    ctx.state.write_json("vault/secrets.json", doc)
+    ctx.policy.create_connection(P.Connection(
+        id="connection", project="demo", environment="dev", service="synthetic", kind="http",
+        secret_id="secret", secret_version=None, description="",
+        http_target=P.HttpTarget("https", "example.com", 443), http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(), ssh_target=None, cli=None, policy_version=0, status="active",
+        created_at="", updated_at=""))
+    connections = ctx.state.read_json(P.CONNECTIONS)
+    connections["connection"]["secret_version"] = connection_version
+    ctx.state.write_json(P.CONNECTIONS, connections)
+    return ctx
+
+def summary(ctx, env_id):
+    doc = M.load_environment(ctx, env_id).document
+    secret = doc["secrets"]["secret"]
+    connection = doc["connections"]["connection"]
+    active = secret["active_version"]
+    pinned = connection["secret_version"]
+    return {{"active": active is not None, "pinned": pinned is not None,
+             "pin_is_active": pinned is not None and pinned == active}}
+
+rust_paths = {rust_paths}
+python_paths = {python_paths}
+out = []
+for (case, key, active, connection_version), rust_path, python_path in zip(cases, rust_paths, python_paths):
+    prepare(rust_path, key, active, connection_version).close()
+    ctx = prepare(python_path, key, active, connection_version)
+    env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+    out.append({{"case": case, **summary(ctx, env_id)}})
+print(json.dumps(out, sort_keys=True))
+"#,
+    );
+    let expected = python(&script);
+    let mut actual = Vec::new();
+    for (index, state) in rust_states.iter().enumerate() {
+        let ctx = Context::open(state, Config::default(), clock::system()).unwrap();
+        let env_id = membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN)
+            .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let doc = membership::load_environment(&ctx, &env_id)
+            .unwrap()
+            .document;
+        let active = &doc["secrets"]["secret"]["active_version"];
+        let pinned = &doc["connections"]["connection"]["secret_version"];
+        actual.push(json!({
+            "case": expected[index]["case"],
+            "active": !active.is_null(),
+            "pinned": !pinned.is_null(),
+            "pin_is_active": !pinned.is_null() && pinned == active,
+        }));
+    }
+    assert_eq!(json!(actual), expected);
+    assert_eq!(expected[0]["active"], true);
+    assert_eq!(expected[1]["active"], true);
+    assert_eq!(expected[2]["active"], true);
+    assert_eq!(expected[3]["active"], false);
+    assert_eq!(expected[3]["pinned"], false);
+    assert_eq!(expected[4]["active"], true);
+}
+
+#[test]
+fn share_environment_invalid_retired_version_key_fails_before_mutation_like_python() {
+    let root = TempDir::new().unwrap();
+    let rust_state = root.path().join("rust-invalid-key");
+    let python_state = root.path().join("python-invalid-key");
+    let script = format!(
+        r#"
+import json
+from pathlib import Path
+from zeropw.context import Config, Context
+from zeropw.team import membership as M
+
+def prepare(path):
+    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
+    ctx.projects.create("demo", ["dev"])
+    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
+    doc = ctx.state.read_json("vault/secrets.json")
+    doc["secrets"]["secret"]["versions"]["invalid"] = {{"status": "retired"}}
+    ctx.state.write_json("vault/secrets.json", doc)
+    return ctx
+
+prepare({rust_state}).close()
+ctx = prepare({python_state})
+try:
+    M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")
+    result = "ok"
+except Exception as exc:
+    result = type(exc).__name__
+doc = ctx.state.read_json("vault/secrets.json")
+print(json.dumps({{"result": result, "shared_env": doc["secrets"]["secret"].get("shared_env")}}))
+"#,
+        rust_state = serde_json::to_string(&rust_state).unwrap(),
+        python_state = serde_json::to_string(&python_state).unwrap(),
+    );
+    let expected = python(&script);
+    let ctx = Context::open(&rust_state, Config::default(), clock::system()).unwrap();
+    let error =
+        membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap_err();
+    let doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, json!({}))
+        .unwrap();
+    assert_eq!(expected["result"], "ValueError");
+    assert_eq!(expected["shared_env"], Value::Null);
+    assert_eq!(error.reason, "state_corrupt");
+    assert_eq!(doc["secrets"]["secret"]["shared_env"], Value::Null);
+}
+
+#[test]
+fn share_environment_rejects_unhashable_connection_versions_before_mutation() {
+    let root = TempDir::new().unwrap();
+    for (index, raw) in [json!([]), json!({})].into_iter().enumerate() {
+        let rust_state = root.path().join(format!("rust-unhashable-{index}"));
+        let python_state = root.path().join(format!("python-unhashable-{index}"));
+        let script = format!(
+            r#"
+import json
+from pathlib import Path
+from zeropw import policy as P
+from zeropw.context import Config, Context
+from zeropw.team import membership as M
+
+def prepare(path):
+    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
+    ctx.projects.create("demo", ["dev"])
+    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
+    ctx.policy.create_connection(P.Connection(
+        id="connection", project="demo", environment="dev", service="synthetic", kind="http",
+        secret_id="secret", secret_version=None, description="",
+        http_target=P.HttpTarget("https", "example.com", 443), http_auth=P.HttpAuth("bearer"),
+        http_scope=P.HttpScope(), ssh_target=None, cli=None, policy_version=0, status="active",
+        created_at="", updated_at=""))
+    connections = ctx.state.read_json(P.CONNECTIONS)
+    connections["connection"]["secret_version"] = {raw}
+    ctx.state.write_json(P.CONNECTIONS, connections)
+    return ctx
+
+prepare({rust_state}).close()
+ctx = prepare({python_state})
+try:
+    M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")
+    result = "ok"
+except Exception as exc:
+    result = type(exc).__name__
+vault = ctx.state.read_json("vault/secrets.json")
+connections = ctx.state.read_json(P.CONNECTIONS)
+print(json.dumps({{"result": result,
+                  "secret_shared": vault["secrets"]["secret"].get("shared_env"),
+                  "connection_shared": connections["connection"].get("shared_env")}}))
+"#,
+            raw = raw,
+            rust_state = serde_json::to_string(&rust_state).unwrap(),
+            python_state = serde_json::to_string(&python_state).unwrap(),
+        );
+        let expected = python(&script);
+        let ctx = Context::open(&rust_state, Config::default(), clock::system()).unwrap();
+        let error =
+            membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap_err();
+        let vault = ctx
+            .state
+            .read_json(zeropw::vault::VAULT_DOC, json!({}))
+            .unwrap();
+        let connections = ctx
+            .state
+            .read_json(zeropw::policy::CONNECTIONS, json!({}))
+            .unwrap();
+        assert_eq!(expected["result"], "TypeError");
+        assert_eq!(expected["secret_shared"], Value::Null);
+        assert_eq!(expected["connection_shared"], Value::Null);
+        assert_eq!(error.reason, "state_corrupt");
+        assert_eq!(vault["secrets"]["secret"]["shared_env"], Value::Null);
+        assert_eq!(connections["connection"]["shared_env"], Value::Null);
+    }
+}
+
 /// An owner node with one shared environment and a (not started) TeamSync.
 struct Node {
     ctx: Arc<Context>,

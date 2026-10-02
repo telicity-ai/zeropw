@@ -1400,54 +1400,124 @@ fn overwrite_sole_version_field(ctx: &Context, secret_id: &str, key: &str, value
         .unwrap();
 }
 
-/// Reviewer case: `active_version` is the JSON string `"1"`, not the integer `1`. Python's raw
-/// `entry["active_version"]` is not `None`, so `resolve_version`/`secret_for_trusted_use` treat it
-/// as the active version and `str("1") == "1"` still finds the real version record -- Python
-/// *succeeds*, returning the plaintext. `SecretMeta::active_version` is a plain `Option<PyInt>`, which
-/// cannot hold a string, so this port fails closed (`state_corrupt`) instead of reproducing that
-/// success -- a recorded, intentional divergence (`DEVIATIONS.md`, finding E-R4-3), confirmed here
-/// against real `python3.12` rather than assumed.
+/// A raw string active version survives metadata serialization and follows
+/// Python's later `str(version)` record lookup and AAD construction.
 #[test]
-fn list_secrets_active_version_wrong_type_is_state_corrupt_python_still_succeeds() {
+fn raw_string_active_version_round_trips_and_resolves_like_python() {
     let tmp = TempDir::new().unwrap();
     let ctx = setup_single_secret_context(&tmp);
     let state = tmp.path().join("state");
     overwrite_entry_field(&ctx, "gh-token", "active_version", json!("1"));
 
-    assert_eq!(
-        ctx.vault
-            .list_secrets(None, None)
-            .unwrap_err()
-            .reason
-            .to_string(),
-        "state_corrupt"
-    );
-    assert_eq!(
-        ctx.vault
-            .secret_for_trusted_use("gh-token", None)
-            .unwrap_err()
-            .reason
-            .to_string(),
-        "state_corrupt"
-    );
+    let meta = ctx.vault.get_meta("gh-token").unwrap();
+    assert_eq!(json!(meta.active_version), json!("1"));
+    let resolved = ctx.vault.resolve_version("gh-token", None).unwrap();
+    assert_eq!(resolved.value(), json!("1"));
+    let rust_value = ctx.vault.secret_for_trusted_use("gh-token", None).unwrap();
 
     let script = format!(
         r#"
 import hashlib
+import json
 from zeropw.context import Context, Config
 ctx = Context.open({state}, Config(), lambda: {now})
 value = ctx.vault.secret_for_trusted_use("gh-token")
-print(hashlib.sha256(value).hexdigest())
+meta = ctx.vault.get_meta("gh-token")
+print(json.dumps({{"active": meta.active_version, "digest": hashlib.sha256(value).hexdigest()}}))
 "#,
         state = py_str(&state),
         now = FIXED_NOW,
     );
-    let out = run_python(&script);
+    let out: Value = serde_json::from_str(run_python(&script).trim()).unwrap();
+    assert_eq!(out["active"], json!("1"));
     assert_eq!(
-        out.trim(),
-        sha256_hex(b"synthetic-token-0123456789"),
-        "python oracle sanity check: real python must still succeed here"
+        out["digest"],
+        sha256_hex(rust_value.expose()),
+        "both implementations must use the raw string for lookup and AAD"
     );
+}
+
+#[test]
+fn raw_active_version_metadata_shapes_round_trip_like_python() {
+    for raw in [
+        json!(true),
+        json!(false),
+        json!(1.0),
+        json!(0),
+        json!("raw"),
+        json!([]),
+        json!({}),
+        Value::Null,
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let ctx = setup_single_secret_context(&tmp);
+        let state = tmp.path().join("state");
+        overwrite_entry_field(&ctx, "gh-token", "active_version", raw.clone());
+        let meta = ctx.vault.get_meta("gh-token").unwrap();
+        assert_eq!(json!(meta.active_version), raw);
+        let script = format!(
+            r#"
+import json
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+print(json.dumps(ctx.vault.get_meta("gh-token").active_version))
+"#,
+            state = py_str(&state),
+            now = FIXED_NOW,
+        );
+        let python: Value = serde_json::from_str(run_python(&script).trim()).unwrap();
+        assert_eq!(python, raw);
+        if raw.is_null() {
+            assert_eq!(
+                ctx.vault
+                    .resolve_version("gh-token", None)
+                    .unwrap_err()
+                    .reason,
+                "secret_no_active_version"
+            );
+        } else {
+            assert_eq!(
+                ctx.vault.resolve_version("gh-token", None).unwrap().value(),
+                raw
+            );
+        }
+        assert_eq!(
+            sha256_hex(
+                ctx.vault
+                    .secret_for_trusted_use("gh-token", Some(1.into()))
+                    .unwrap()
+                    .expose()
+            ),
+            sha256_hex(b"synthetic-token-0123456789")
+        );
+    }
+}
+
+#[test]
+fn bool_active_version_uses_python_true_key_and_fails_when_absent() {
+    let tmp = TempDir::new().unwrap();
+    let ctx = setup_single_secret_context(&tmp);
+    let state = tmp.path().join("state");
+    overwrite_entry_field(&ctx, "gh-token", "active_version", json!(true));
+    let rust = ctx
+        .vault
+        .secret_for_trusted_use("gh-token", None)
+        .unwrap_err();
+    assert_eq!(rust.reason, "state_corrupt");
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {now})
+try:
+    ctx.vault.secret_for_trusted_use("gh-token")
+    print("ok")
+except KeyError:
+    print("KeyError")
+"#,
+        state = py_str(&state),
+        now = FIXED_NOW,
+    );
+    assert_eq!(run_python(&script).trim(), "KeyError");
 }
 
 /// Reviewer case: the active version's `status` field is the JSON number `5`, not a string.

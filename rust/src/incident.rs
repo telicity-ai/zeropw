@@ -629,7 +629,11 @@ fn new_secret_entry(meta: &crate::vault::SecretMeta, service: Option<&str>) -> V
         entry["fingerprint"] = meta
             .versions
             .iter()
-            .find(|v| meta.active_version.as_ref() == Some(&v.version))
+            .find(|v| {
+                meta.active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&v.version))
+            })
             .and_then(|v| v.public.get("fingerprint"))
             .cloned()
             .unwrap_or(Value::Null);

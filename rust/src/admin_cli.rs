@@ -1347,7 +1347,10 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     let ver = ctx
         .vault
         .resolve_version(&connection.secret_id, connection.secret_version.clone())?;
-    if let Some(version) = meta.versions.iter().find(|v| v.version == ver)
+    if let Some(version) = meta
+        .versions
+        .iter()
+        .find(|v| ver.equals_integer(&v.version))
         && version.status != "active"
         && version.status != "staged"
     {
@@ -1615,7 +1618,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             let meta = ctx.vault.get_meta(id)?;
             let is_retire = a.action == "retire" || a.command == "rotation";
-            if is_retire && meta.active_version.as_ref() == Some(&version) {
+            if is_retire
+                && meta
+                    .active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&version))
+            {
                 return Err(Error::invalid_input("version_is_active")
                     .with_detail("activate another version first (rotation activate)"));
             }
@@ -1634,7 +1642,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     .with_detail(format!("pinned by connections: {}", pinned.join(","))));
             }
             let mut affected = pinned;
-            if !is_retire && meta.active_version.as_ref() == Some(&version) {
+            if !is_retire
+                && meta
+                    .active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&version))
+            {
                 for c in &using {
                     if c.secret_id == id
                         && c.secret_version.is_none()
@@ -1858,11 +1871,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .vault
                 .resolve_version(&stamped.secret_id, stamped.secret_version.clone())
                 .ok();
-            if let Some(v) = meta
-                .versions
-                .iter()
-                .find(|v| resolved.as_ref() == Some(&v.version))
-            {
+            if let Some(v) = meta.versions.iter().find(|v| {
+                resolved
+                    .as_ref()
+                    .is_some_and(|r| r.equals_integer(&v.version))
+            }) {
                 out["public_key"] = v.public.get("public_key").cloned().unwrap_or(Value::Null);
                 out["fingerprint"] = v.public.get("fingerprint").cloned().unwrap_or(Value::Null);
             }

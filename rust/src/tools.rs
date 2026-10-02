@@ -797,7 +797,7 @@ pub fn exec(
             let line = metadata
                 .versions
                 .iter()
-                .find(|v| v.version == version)
+                .find(|v| version.equals_integer(&v.version))
                 .and_then(|v| v.public.get("public_key"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::unsupported("ssh_public_key_unavailable"))?;

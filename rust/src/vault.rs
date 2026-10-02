@@ -38,6 +38,7 @@
 use std::fs;
 use std::path::Path;
 
+use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
 use crate::audit::{Audit, RecordArgs};
@@ -127,17 +128,19 @@ fn require_str_field<'m>(m: &'m Map<String, Value>, key: &str) -> Result<&'m str
     m.get(key).and_then(Value::as_str).ok_or_else(corrupt)
 }
 
-/// `entry["active_version"]`: `None` (JSON `null`) for no active version, an
-/// arbitrary-precision integer version, or -- for a missing key or a present value of any
-/// other JSON type -- `state_corrupt` (finding E-R4-3, same reasoning as
-/// [`require_str_field`]: Python returns the raw value unchecked, but
-/// `SecretMeta::active_version` is a plain `Option<PyInt>`, and every writer in
-/// this crate only ever stores `null` or a plain integer here).
-fn require_active_version(m: &Map<String, Value>) -> Result<Option<PyInt>, Error> {
+/// `entry["active_version"]`: a missing key is corrupt, JSON `null` is no
+/// active version, and every other JSON value is preserved exactly. Python's
+/// dataclass annotation is not enforced at runtime; later consumers apply
+/// numeric equality or `str(version)` according to their own operation.
+fn require_active_version(m: &Map<String, Value>) -> Result<Option<ResolvedVersion>, Error> {
     match m.get("active_version") {
         None => Err(corrupt()),
         Some(Value::Null) => Ok(None),
-        Some(v) => PyInt::from_json_integer(v).map(Some).ok_or_else(corrupt),
+        Some(v) => Ok(Some(
+            PyInt::from_json_integer(v)
+                .map(ResolvedVersion::Integer)
+                .unwrap_or_else(|| ResolvedVersion::Raw(v.clone())),
+        )),
     }
 }
 
@@ -517,6 +520,86 @@ pub struct VersionMeta {
     pub public: Value,
 }
 
+/// A Python version value after `resolve_version`. Stored metadata does not
+/// enforce its `int | None` annotation, so preserve every non-null JSON shape
+/// until Python's later `str(version)` lookup/AAD boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedVersion {
+    Integer(PyInt),
+    Raw(Value),
+}
+
+impl ResolvedVersion {
+    pub fn value(&self) -> Value {
+        match self {
+            Self::Integer(value) => value.value(),
+            Self::Raw(value) => value.clone(),
+        }
+    }
+
+    pub fn equals_integer(&self, integer: &PyInt) -> bool {
+        match self {
+            Self::Integer(value) => value == integer,
+            Self::Raw(value) => {
+                if let Some(value) = PyInt::from_python_int(value) {
+                    &value == integer
+                } else {
+                    match value {
+                        Value::Number(number) => number.as_f64().is_some_and(|float| {
+                            crate::pyint::cmp_bigint_f64(&integer.0, float)
+                                == Some(std::cmp::Ordering::Equal)
+                        }),
+                        _ => false,
+                    }
+                }
+            }
+        }
+    }
+
+    fn key(&self) -> String {
+        match self {
+            Self::Integer(value) => value.to_string(),
+            Self::Raw(value) => python_str_scalar(value),
+        }
+    }
+}
+
+impl std::fmt::Display for ResolvedVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.key())
+    }
+}
+
+impl Serialize for ResolvedVersion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value().serialize(serializer)
+    }
+}
+
+impl From<PyInt> for ResolvedVersion {
+    fn from(value: PyInt) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<i32> for ResolvedVersion {
+    fn from(value: i32) -> Self {
+        Self::Integer(value.into())
+    }
+}
+
+impl From<i64> for ResolvedVersion {
+    fn from(value: i64) -> Self {
+        Self::Integer(value.into())
+    }
+}
+
+impl PartialEq<ResolvedVersion> for PyInt {
+    fn eq(&self, other: &ResolvedVersion) -> bool {
+        other.equals_integer(self)
+    }
+}
+
 /// Port of `vault.SecretMeta`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SecretMeta {
@@ -524,7 +607,7 @@ pub struct SecretMeta {
     pub project: String,
     pub environment: String,
     pub kind: String,
-    pub active_version: Option<PyInt>,
+    pub active_version: Option<ResolvedVersion>,
     pub versions: Vec<VersionMeta>,
 }
 
@@ -679,7 +762,7 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
     }
 
-    fn aad(secret_id: &str, version: &PyInt) -> Vec<u8> {
+    fn aad(secret_id: &str, version: &ResolvedVersion) -> Vec<u8> {
         format!("zeropw-secret:{secret_id}:{version}").into_bytes()
     }
 
@@ -694,7 +777,7 @@ impl<'a> Vault<'a> {
             self.dek.expose(),
             &nonce,
             value,
-            &Self::aad(secret_id, version),
+            &Self::aad(secret_id, &ResolvedVersion::Integer(version.clone())),
         )
         .map_err(|e| Error::state("secret_encrypt_failed").with_detail(e.to_string()))?;
         let mut m = Map::new();
@@ -706,7 +789,7 @@ impl<'a> Vault<'a> {
     fn decrypt(
         &self,
         secret_id: &str,
-        version: &PyInt,
+        version: &ResolvedVersion,
         entry: &Map<String, Value>,
     ) -> Result<SecretBytes, Error> {
         if entry.get("shared_env").is_some_and(|v| !json_falsy(v)) {
@@ -1264,7 +1347,11 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::not_found("secret_not_found"))
     }
 
-    pub fn resolve_version(&self, secret_id: &str, version: Option<PyInt>) -> Result<PyInt, Error> {
+    pub fn resolve_version(
+        &self,
+        secret_id: &str,
+        version: Option<PyInt>,
+    ) -> Result<ResolvedVersion, Error> {
         let meta = self.get_meta(secret_id)?;
         match version {
             None => meta
@@ -1272,7 +1359,7 @@ impl<'a> Vault<'a> {
                 .ok_or_else(|| Error::not_found("secret_no_active_version")),
             Some(v) => {
                 if meta.versions.iter().any(|item| item.version == v) {
-                    Ok(v)
+                    Ok(ResolvedVersion::Integer(v))
                 } else {
                     Err(Error::not_found("secret_version_not_found"))
                 }
@@ -1308,7 +1395,7 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
         let record = as_obj(
             versions_obj
-                .get(&resolved.to_string())
+                .get(&resolved.key())
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
         )?;
         // Python: `if record["status"] not in ("active", "staged"): raise
@@ -1364,7 +1451,7 @@ impl<'a> Vault<'a> {
             vkeys.sort_by(|(a, _), (b, _)| a.cmp(b));
             for (n, k) in vkeys {
                 let record = as_obj(versions_obj.get(k).expect("from keys"))?;
-                values.push(self.decrypt(&secret_id, &n, record)?);
+                values.push(self.decrypt(&secret_id, &ResolvedVersion::Integer(n), record)?);
             }
         }
         Ok(values)
@@ -1416,7 +1503,7 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
         let record = as_obj(
             versions_obj
-                .get(&resolved.to_string())
+                .get(&resolved.key())
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
         )?;
         self.decrypt(secret_id, &resolved, record)

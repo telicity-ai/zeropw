@@ -831,7 +831,7 @@ impl BindingServer {
             .resolve_version(&conn.secret_id, conn.secret_version.clone())?;
         let meta = self.ctx.vault.get_meta(&conn.secret_id)?;
         for item in &meta.versions {
-            if item.version == version {
+            if version.equals_integer(&item.version) {
                 let line = item
                     .public
                     .get("public_key")

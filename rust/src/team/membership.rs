@@ -680,30 +680,36 @@ pub fn share_environment(
             shareable.insert(sid.clone(), entry.clone());
         }
     }
+    fn numeric_value_equals_int(value: &Value, integer: &crate::pyint::PyInt) -> bool {
+        crate::vault::ResolvedVersion::Raw(value.clone()).equals_integer(integer)
+    }
+
     let mut version_ids: BTreeMap<String, BTreeMap<crate::pyint::PyInt, String>> = BTreeMap::new();
     let mut secret_ops: Vec<Value> = Vec::new();
     for (sid, entry) in &shareable {
-        let mut versions = entry["versions"]
+        let versions = entry["versions"]
             .as_object()
             .map(|m| m.iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        versions.sort_by(|(a, _), (b, _)| {
-            let a = crate::pystr::int_from_str_decimal_limited(a)
-                .and_then(|v| v.parse().ok())
-                .map(crate::pyint::PyInt);
-            let b = crate::pystr::int_from_str_decimal_limited(b)
-                .and_then(|v| v.parse().ok())
-                .map(crate::pyint::PyInt);
-            a.cmp(&b)
-        });
-        for (number, v) in versions {
+        // Python evaluates the `int(k)` sort key for every item before the
+        // loop filters retired/revoked records. Parse first so one malformed
+        // key aborts the pure computation phase instead of sorting as `None`
+        // or being hidden by its status.
+        let mut versions = versions
+            .into_iter()
+            .map(|(number, record)| {
+                let parsed = crate::pystr::int_from_str_decimal_limited(number)
+                    .and_then(|v| v.parse().ok())
+                    .map(crate::pyint::PyInt)
+                    .ok_or_else(|| Error::state("state_corrupt"))?;
+                Ok((parsed, number, record))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        versions.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+        for (n, number, v) in versions {
             if v["status"] != "active" && v["status"] != "staged" {
                 continue;
             }
-            let n = crate::pystr::int_from_str_decimal_limited(number)
-                .and_then(|value| value.parse().ok())
-                .map(crate::pyint::PyInt)
-                .ok_or_else(|| Error::state("state_corrupt"))?;
             let value = ctx.vault.secret_for_trusted_use(sid, Some(n.clone()))?;
             let version_id = token(8);
             let ciphertext =
@@ -713,8 +719,7 @@ pub fn share_environment(
                 .entry(sid.clone())
                 .or_default()
                 .insert(n.clone(), version_id.clone());
-            if crate::pyint::PyInt::from_json_integer(&entry["active_version"]).as_ref() == Some(&n)
-            {
+            if numeric_value_equals_int(&entry["active_version"], &n) {
                 secret_ops
                     .push(json!({"op":"secret.activate","secret_id":sid,"version_id":version_id}));
             }
@@ -758,8 +763,19 @@ pub fn share_environment(
                         continue;
                     }
                     let value = if k == "secret_version" && !v.is_null() {
-                        crate::pyint::PyInt::from_json_integer(v)
-                            .and_then(|n| version_ids.get(sid).and_then(|m| m.get(&n)))
+                        if v.is_array() || v.is_object() {
+                            // Python dict lookup hashes the raw key before it
+                            // can miss; list/dict keys raise TypeError.
+                            return Err(Error::state("state_corrupt"));
+                        }
+                        version_ids
+                            .get(sid)
+                            .and_then(|versions| {
+                                versions
+                                    .iter()
+                                    .find(|(number, _)| numeric_value_equals_int(v, number))
+                            })
+                            .map(|(_, id)| id)
                             .map_or(Value::Null, |id| json!(id))
                     } else {
                         v.clone()
