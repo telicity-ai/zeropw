@@ -1,6 +1,7 @@
 //! Exact Python integer values at JSON boundaries. Never serialize `BigInt`
 //! through its limb-based Serde representation: state and public mappings use
 //! ordinary JSON decimal numbers.
+use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
 
@@ -34,6 +35,42 @@ impl PyInt {
     pub fn value(&self) -> Value {
         let number = Number::from_str(&self.0.to_string()).expect("BigInt is a JSON integer");
         Value::Number(number)
+    }
+}
+
+/// Compare a Python `int` with a binary64 Python `float` without converting
+/// the integer to `f64`. CPython's rich comparison keeps the integer exact,
+/// including beyond 2**53. NaN is unordered; infinities sort outside every
+/// finite integer.
+pub fn cmp_bigint_f64(integer: &BigInt, float: f64) -> Option<Ordering> {
+    if float.is_nan() {
+        return None;
+    }
+    if float == f64::INFINITY {
+        return Some(Ordering::Less);
+    }
+    if float == f64::NEG_INFINITY {
+        return Some(Ordering::Greater);
+    }
+
+    let bits = float.to_bits();
+    let negative = bits >> 63 != 0;
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    let (mantissa, exponent) = if exponent_bits == 0 {
+        (fraction, -1074)
+    } else {
+        ((1_u64 << 52) | fraction, exponent_bits - 1023 - 52)
+    };
+    let signed_mantissa = if negative {
+        -BigInt::from(mantissa)
+    } else {
+        BigInt::from(mantissa)
+    };
+    if exponent >= 0 {
+        Some(integer.cmp(&(signed_mantissa << exponent as usize)))
+    } else {
+        Some((integer << (-exponent) as usize).cmp(&signed_mantissa))
     }
 }
 

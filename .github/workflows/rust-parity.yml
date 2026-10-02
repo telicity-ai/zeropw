@@ -78,7 +78,7 @@ jobs:
               'tls':['gateway_tls_parity','gateway_replay_status_parity','gateway'],
               'cli':['runtime_parity_gaps','admin_expanduser_parity','cli_grant_limits_parity','cli_parity','agent_proxy_parity','agent_help','astra_cli_runtime_round2','astra_cleanup_publication_order'],
               'e2e':['response_parity_gaps','native_cli_e2e','fake_upstream'],
-              'data':['ledger_float_parity','team_envelope_parity_edges','team_oracle','team_fold','team_snapshot_version_order_parity','vault_public_parity'],
+              'data':['python_numeric_comparison_parity','ledger_float_parity','team_envelope_parity_edges','team_oracle','team_fold','team_snapshot_version_order_parity','vault_public_parity'],
           }
           all_targets={path.stem for path in Path('rust/tests').glob('*.rs')}
           covered={target for group in groups.values() for target in group}

@@ -2493,10 +2493,9 @@ impl GrantNum {
         }
     }
 
-    /// `None` for [`GrantNum::Str`]/[`GrantNum::Other`]; every numeric
-    /// variant converts (an exact [`GrantNum::BigInt`] is approximated here
-    /// only for the *ordering* fallback in [`grant_num_ge`] -- exact
-    /// arithmetic goes through [`GrantNum::as_bigint`] first).
+    /// `None` for [`GrantNum::Str`]/[`GrantNum::Other`]; used for arithmetic
+    /// whose result is a Python float. Ordering uses `cmp_numeric` so an
+    /// integer is never rounded merely to compare it with a float.
     fn as_f64(&self) -> Option<f64> {
         match self {
             GrantNum::Int(i) => Some(*i as f64),
@@ -2526,6 +2525,15 @@ impl GrantNum {
     /// comparison/operation without raising.
     fn is_non_numeric(&self) -> bool {
         matches!(self, GrantNum::Str(_) | GrantNum::Other(_))
+    }
+}
+
+fn cmp_numeric(a: &GrantNum, b: &GrantNum) -> Option<std::cmp::Ordering> {
+    match (a.as_bigint(), b.as_bigint()) {
+        (Some(x), Some(y)) => Some(x.cmp(&y)),
+        (Some(x), None) => crate::pyint::cmp_bigint_f64(&x, b.as_f64()?),
+        (None, Some(y)) => crate::pyint::cmp_bigint_f64(&y, a.as_f64()?).map(|o| o.reverse()),
+        (None, None) => a.as_f64()?.partial_cmp(&b.as_f64()?),
     }
 }
 
@@ -2589,14 +2597,10 @@ fn grant_num_ge(a: &GrantNum, b: &GrantNum) -> Result<bool, Error> {
         _ if a.is_non_numeric() || b.is_non_numeric() => {
             Err(Error::state("state_corrupt").with_detail("grant"))
         }
-        // Exact integer-vs-integer ordering (covers a `BigInt` beyond `i64`
-        // range) before falling back to the lossy `f64` comparison used for
-        // any pair involving a genuine `Float`.
-        _ if a.as_bigint().is_some() && b.as_bigint().is_some() => {
-            Ok(a.as_bigint().expect("checked above") >= b.as_bigint().expect("checked above"))
-        }
-        _ => Ok(a.as_f64().expect("checked numeric above")
-            >= b.as_f64().expect("checked numeric above")),
+        _ => Ok(matches!(
+            cmp_numeric(a, b),
+            Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
+        )),
     }
 }
 
@@ -2647,11 +2651,7 @@ fn python_value_gt(a: &Value, b: &Value) -> Result<bool, Error> {
         (Value::Array(x), Value::Array(y)) => python_list_gt(x, y),
         (Value::Number(_) | Value::Bool(_), Value::Number(_) | Value::Bool(_)) => {
             let (ga, gb) = (GrantNum::from_value(a), GrantNum::from_value(b));
-            if let (Some(x), Some(y)) = (ga.as_bigint(), gb.as_bigint()) {
-                Ok(x > y)
-            } else {
-                Ok(ga.as_f64().expect("numeric") > gb.as_f64().expect("numeric"))
-            }
+            Ok(cmp_numeric(&ga, &gb) == Some(std::cmp::Ordering::Greater))
         }
         _ => Err(Error::state("state_corrupt").with_detail("grant")),
     }
@@ -3432,7 +3432,7 @@ fn python_numeric_eq(stored: Option<&Value>, resolved: i64) -> bool {
             if number_is_python_int(n) {
                 n.as_i64() == Some(resolved)
             } else {
-                n.as_f64() == Some(resolved as f64)
+                n.as_f64().is_some_and(|f| float_eq_i64_exact(f, resolved))
             }
         }
         _ => false,
@@ -3444,16 +3444,16 @@ fn python_numeric_eq(stored: Option<&Value>, resolved: i64) -> bool {
 /// `i64` range (`credential_versions_changed`'s `resolved_credential_version`,
 /// round 6, once a vault secret's `active_version` is kept exact rather
 /// than collapsing to `None` past `i64`): two integer-shaped values of any
-/// magnitude compare exactly via their canonical decimal digits (a valid
-/// JSON integer literal has no leading zero or `+` sign, so its source text
-/// already canonically identifies the value -- no need to parse into a
-/// fixed-width integer type at all); a pair involving a genuinely
-/// float-shaped value falls back to `f64`, same as `python_numeric_eq`.
+/// magnitude compare as `BigInt`; a mixed integer/float pair uses the exact
+/// binary64 ratio through [`crate::pyint::cmp_bigint_f64`], matching
+/// CPython beyond 2**53 rather than rounding the integer first.
 fn python_numeric_eq_value(stored: Option<&Value>, resolved: &Value) -> bool {
-    fn canonical_int(v: &Value) -> Option<String> {
+    fn integer(v: &Value) -> Option<BigInt> {
         match v {
-            Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-            Value::Number(n) if number_is_python_int(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(BigInt::from(u8::from(*b))),
+            Value::Number(n) if number_is_python_int(n) => {
+                BigInt::parse_bytes(n.as_str().as_bytes(), 10)
+            }
             _ => None,
         }
     }
@@ -3465,8 +3465,14 @@ fn python_numeric_eq_value(stored: Option<&Value>, resolved: &Value) -> bool {
         }
     }
     let Some(stored) = stored else { return false };
-    if let (Some(a), Some(b)) = (canonical_int(stored), canonical_int(resolved)) {
+    if let (Some(a), Some(b)) = (integer(stored), integer(resolved)) {
         return a == b;
+    }
+    if let (Some(a), Some(b)) = (integer(stored), numeric_f64(resolved)) {
+        return crate::pyint::cmp_bigint_f64(&a, b) == Some(std::cmp::Ordering::Equal);
+    }
+    if let (Some(a), Some(b)) = (numeric_f64(stored), integer(resolved)) {
+        return crate::pyint::cmp_bigint_f64(&b, a) == Some(std::cmp::Ordering::Equal);
     }
     matches!((numeric_f64(stored), numeric_f64(resolved)), (Some(a), Some(b)) if a == b)
 }
@@ -8036,6 +8042,33 @@ mod tests {
         let err = policy.check_grant("agent-1", "gh", &grant.id).unwrap_err();
         assert!(err.is(ErrorClass::StateError), "{err:?}");
         assert_eq!(err.reason, "state_corrupt");
+    }
+
+    #[test]
+    fn mixed_integer_float_ordering_keeps_python_integer_precision() {
+        let above = GrantNum::BigInt(BigInt::from(9_007_199_254_740_993_u64));
+        let rounded_down = GrantNum::Float(9_007_199_254_740_992.0);
+        assert!(!grant_num_ge(&rounded_down, &above).unwrap());
+        assert!(grant_num_ge(&above, &rounded_down).unwrap());
+
+        assert!(
+            python_value_gt(
+                &json!(9_007_199_254_740_993_u64),
+                &json!(9_007_199_254_740_992.0)
+            )
+            .unwrap()
+        );
+        assert!(!python_value_eq(
+            &json!(9_007_199_254_740_993_u64),
+            &json!(9_007_199_254_740_992.0)
+        ));
+        assert!(
+            python_list_gt(
+                &[json!(9_007_199_254_740_993_u64)],
+                &[json!(9_007_199_254_740_992.0)]
+            )
+            .unwrap()
+        );
     }
 
     /// Finding D-R7-4: Python's `_approval_mismatch` checks `entry.get(

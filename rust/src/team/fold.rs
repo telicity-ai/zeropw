@@ -1658,10 +1658,13 @@ fn author_seq_is_later(author_seq: i128, floor: Option<&Value>) -> Result<bool> 
         None => Ok(true), // `author_seq` is always >= 1; the implicit floor is 0.
         Some(Value::Bool(b)) => Ok(author_seq > i128::from(*b)),
         Some(Value::Number(n)) => {
-            if let Some(i) = n.as_i128() {
-                Ok(author_seq > i)
+            if let Some(floor) = crate::pyint::PyInt::from_json_integer(&Value::Number(n.clone())) {
+                Ok(num_bigint::BigInt::from(author_seq) > floor.0)
             } else if let Some(f) = n.as_f64() {
-                Ok((author_seq as f64) > f)
+                Ok(
+                    crate::pyint::cmp_bigint_f64(&num_bigint::BigInt::from(author_seq), f)
+                        == Some(std::cmp::Ordering::Greater),
+                )
             } else {
                 Err(corrupt())
             }
@@ -2739,16 +2742,18 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
 
-        let mut base = new_document("env");
-        base.insert("owner".into(), json!("owner-fp"));
-        base.insert(
-            "members".into(),
-            json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
-        );
-        let mut doc_bad_versions = Value::Object(base);
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let mut doc_bad_versions = fold(&env_id, vec![c1], None, None, None, None)
+            .unwrap()
+            .document;
         doc_bad_versions["secrets"]["s1"] =
             json!({"kind": "api_key", "active_version": null, "versions": 5});
-        let err = fold("env", vec![], None, Some(doc_bad_versions), None, None)
+        let op = json!({"op": "secret.put_version", "secret_id": "s1", "version_id": random_hex(8),
+                        "generation_id": GEN0, "kind": "api_key",
+                        "ciphertext": {"nonce": "n", "ciphertext": "c"}});
+        let c2 =
+            commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op]).unwrap();
+        let err = fold(&env_id, vec![c2], None, Some(doc_bad_versions), None, None)
             .expect_err("a non-object secrets.s1.versions must fail closed, not panic");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
@@ -2764,10 +2769,9 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
     /// same document (round-tripped through JSON so both languages parse
     /// byte-identical input), really does raise the claimed exception --
     /// not merely assumed from reading the source; (2) confirm `fold()` now
-    /// returns `state_corrupt` up front (zero commits needed: the malformed
-    /// shape is caught before any op is ever applied, same posture as the
-    /// `malformed_secret_entry_shapes_fail_closed_instead_of_panicking` test
-    /// above).
+    /// returns `state_corrupt` when the corresponding op actually accesses
+    /// that malformed shape. A no-op fold deliberately preserves malformed
+    /// data untouched, matching Python's lazy access semantics.
     #[test]
     fn seven_more_unconditionally_indexed_fields_fail_closed_instead_of_fail_open() {
         fn base_doc() -> Map<String, Value> {
@@ -2934,9 +2938,28 @@ except Exception as e:
                 case.label,
             );
 
-            let err = fold("env", vec![], None, Some(case.doc.clone()), None, None).expect_err(
-                &format!("case {:?} must fail closed, not fold open", case.label),
-            );
+            let commit = Commit {
+                format: "zeropw-team-commit-v1".into(),
+                env_id: "env".into(),
+                author: case.author.into(),
+                author_seq: 1,
+                hlc: "1000-0000".into(),
+                seen: BTreeMap::new(),
+                ops: vec![case.op.clone()],
+                sig: String::new(),
+            };
+            let err = fold(
+                "env",
+                vec![commit],
+                None,
+                Some(case.doc.clone()),
+                None,
+                None,
+            )
+            .expect_err(&format!(
+                "case {:?} must fail closed, not fold open",
+                case.label
+            ));
             assert!(
                 err.is(crate::errors::ErrorClass::StateError),
                 "case {:?}: expected StateError, got {:?}",
@@ -4372,6 +4395,16 @@ with tempfile.TemporaryDirectory() as tmp:
             "ERR AttributeError",
             "real python3.12 must raise an uncaught AttributeError for a non-dict version_order"
         );
+    }
+
+    #[test]
+    fn snapshot_author_sequence_compares_integer_to_float_exactly() {
+        let rounded_down: Value = serde_json::from_str("9007199254740992.0").unwrap();
+        assert!(author_seq_is_later(9_007_199_254_740_993, Some(&rounded_down)).unwrap());
+        let rounded_up: Value = serde_json::from_str("9007199254740994.0").unwrap();
+        assert!(!author_seq_is_later(9_007_199_254_740_993, Some(&rounded_up)).unwrap());
+        let negative_fraction: Value = serde_json::from_str("-1.5").unwrap();
+        assert!(author_seq_is_later(1, Some(&negative_fraction)).unwrap());
     }
 
     /// Finding H-R4-7 (vector entry types): Python's `commit.author_seq >

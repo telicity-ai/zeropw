@@ -614,8 +614,8 @@ fn set_public_url_feeds_the_self_reference_precheck() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
     assert_eq!(f.ctx.policy.get_grant(&grant).unwrap().uses, 0);
     let last = f.ctx.audit.tail(1).unwrap().pop().unwrap();

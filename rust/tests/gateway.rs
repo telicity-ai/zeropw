@@ -326,7 +326,10 @@ fn one_connection_two_operations_placeholder_replaced() {
         ("Transfer-Encoding", "identity"),
     ]);
     let first = t.relay_h("GET", "/repos", &client_headers);
-    assert_eq!((first.status, first.reason.clone()), (200, None));
+    assert_eq!(
+        (first.status.clone(), first.reason.clone()),
+        (200.into(), None)
+    );
     assert_eq!(
         first.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!([{"name": "demo"}, {"name": "tools"}])
@@ -343,7 +346,10 @@ fn one_connection_two_operations_placeholder_replaced() {
         None,
         None,
     );
-    assert_eq!((second.status, second.reason.clone()), (201, None));
+    assert_eq!(
+        (second.status.clone(), second.reason.clone()),
+        (201.into(), None)
+    );
     assert_eq!(
         second.json().expect("test body is valid utf-8 JSON")["title"],
         "from agent"
@@ -482,8 +488,8 @@ fn basic_mode() {
         None,
     );
     assert_eq!(
-        (echoed.status, echoed.reason.as_deref()),
-        (502, Some("credential_reflection_blocked"))
+        (echoed.status.clone(), echoed.reason.as_deref()),
+        (502.into(), Some("credential_reflection_blocked"))
     );
     assert!(!String::from_utf8_lossy(&echoed.body).contains(expected.split(' ').nth(1).unwrap()));
 }
@@ -584,8 +590,8 @@ fn relay_for_caller_without_handle() {
         None,
     );
     assert_eq!(
-        (denied.status, denied.reason.as_deref()),
-        (403, Some("connection_unknown"))
+        (denied.status.clone(), denied.reason.as_deref()),
+        (403.into(), Some("connection_unknown"))
     );
     let ghost = gateway::relay_for_caller(
         &t.ctx,
@@ -598,8 +604,8 @@ fn relay_for_caller_without_handle() {
         None,
     );
     assert_eq!(
-        (ghost.status, ghost.reason.as_deref()),
-        (403, Some("principal_unknown"))
+        (ghost.status.clone(), ghost.reason.as_deref()),
+        (403.into(), Some("principal_unknown"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -625,8 +631,8 @@ fn head_and_no_content_responses() {
     let t = GatewayTest::new();
     let head = t.relay("HEAD", "/repos");
     assert_eq!(
-        (head.status, head.body.clone(), head.reason.clone()),
-        (200, Vec::new(), None)
+        (head.status.clone(), head.body.clone(), head.reason.clone()),
+        (200.into(), Vec::new(), None)
     );
     let digest = t
         .relay("DELETE", "/repos/demo")
@@ -638,8 +644,8 @@ fn head_and_no_content_responses() {
     t.ctx.policy.approve(&digest).unwrap();
     let gone = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (gone.status, gone.body.clone(), gone.reason.clone()),
-        (204, Vec::new(), None)
+        (gone.status.clone(), gone.body.clone(), gone.reason.clone()),
+        (204.into(), Vec::new(), None)
     );
 }
 
@@ -686,7 +692,10 @@ fn response_header_filter_and_upstream_401() {
         .unwrap();
     let handle = t.issue_handle_for("agent-1", "bad", &grant.id, None, 300);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
-    assert_eq!((result.status, result.reason.clone()), (401, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.clone()),
+        (401.into(), None)
+    );
     assert!(!header_names(&result).contains("www-authenticate"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON"),
@@ -737,8 +746,8 @@ fn usage_consumed_only_after_policy_pass() {
     assert_eq!(t.ctx.policy.get_grant(&limited.id).unwrap().uses, 1);
     let exhausted = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (exhausted.status, exhausted.reason.as_deref()),
-        (403, Some("grant_exhausted"))
+        (exhausted.status.clone(), exhausted.reason.as_deref()),
+        (403.into(), Some("grant_exhausted"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -813,16 +822,16 @@ fn path_traversal_and_smuggling_rejected() {
     for path in bad {
         let result = t.relay("GET", path);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (400, Some("invalid_path")),
+            (result.status.clone(), result.reason.as_deref()),
+            (400.into(), Some("invalid_path")),
             "path={path}"
         );
     }
     let long_path = format!("/{}", "a".repeat(9000));
     let result = t.relay("GET", &long_path);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (400, Some("invalid_path"))
+        (result.status.clone(), result.reason.as_deref()),
+        (400.into(), Some("invalid_path"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     for record in t.audit_records() {
@@ -903,8 +912,8 @@ fn scope_method_and_path_denied_with_reason() {
     for (method, path, reason) in cases {
         let result = t.relay_full(method, path, &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some(reason)),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some(reason)),
             "{method} {path}"
         );
         assert_eq!(
@@ -1007,8 +1016,8 @@ fn handle_is_bound_to_its_connection_caller_and_grant() {
     for (handle, reason) in cross {
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some(reason))
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some(reason))
         );
     }
     let result = gateway::relay_for_caller(
@@ -1022,8 +1031,8 @@ fn handle_is_bound_to_its_connection_caller_and_grant() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("no_grant"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("no_grant"))
     );
     assert_eq!((t.fake.requests().len(), fake_b.requests().len()), before);
 }
@@ -1051,8 +1060,8 @@ fn tampered_or_foreign_handles_are_unauthorized() {
     for (token, reason) in cases {
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&token), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (401, Some(reason))
+            (result.status.clone(), result.reason.as_deref()),
+            (401.into(), Some(reason))
         );
         assert_eq!(
             result.json().expect("test body is valid utf-8 JSON")["error"],
@@ -1075,8 +1084,8 @@ fn tampered_or_foreign_handles_are_unauthorized() {
     t.advance(60.0);
     let expired = t.relay_full("GET", "/me", &no_headers(), b"", Some(&short), None);
     assert_eq!(
-        (expired.status, expired.reason.as_deref()),
-        (401, Some("handle_expired"))
+        (expired.status.clone(), expired.reason.as_deref()),
+        (401.into(), Some("handle_expired"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     let denied: Vec<_> = t
@@ -1094,8 +1103,8 @@ fn assert_denied(t: &GatewayTest, reason: &str, handle: Option<&str>) {
     let before = t.fake.requests().len();
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", handle, None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some(reason))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some(reason))
     );
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON"),
@@ -1270,8 +1279,8 @@ fn widening_change_makes_grant_stale_until_regrant() {
     assert!(widened);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("grant_stale"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("grant_stale"))
     );
     let denied = gateway::relay_for_caller(
         &t.ctx,
@@ -1304,8 +1313,8 @@ fn principal_and_connection_disabled() {
 fn assert_blocked(t: &GatewayTest, path: &str, reason: &str) -> RelayResult {
     let result = t.relay("GET", path);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some(reason)),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some(reason)),
         "path={path}"
     );
     assert_eq!(
@@ -1458,8 +1467,8 @@ fn lowercase_percent_encoded_reflection_is_blocked() {
     for path in ["/urlencoded-leak?case=lower", "/urlencoded-leak"] {
         let result = t.relay_full("GET", path, &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("credential_reflection_blocked")),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some("credential_reflection_blocked")),
             "path={path}"
         );
         assert_eq!(
@@ -1539,10 +1548,10 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
         );
         assert_eq!(
             (
-                result.status,
+                result.status.clone(),
                 result.json().expect("test body is valid utf-8 JSON")
             ),
-            (200, serde_json::json!({"login": "synthetic-user"})),
+            (200.into(), serde_json::json!({"login": "synthetic-user"})),
             "{mode}"
         );
         let mut forms: Vec<&str> = zeropw::fake_upstream::ENCODED_LEAK_FORMS.to_vec();
@@ -1559,8 +1568,8 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
                 None,
             );
             assert_eq!(
-                (result.status, result.reason.as_deref()),
-                (502, Some("credential_reflection_blocked")),
+                (result.status.clone(), result.reason.as_deref()),
+                (502.into(), Some("credential_reflection_blocked")),
                 "{mode} {form}"
             );
             assert_eq!(
@@ -1584,11 +1593,15 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
         );
         assert_eq!(
             (
-                result.status,
+                result.status.clone(),
                 result.reason.clone(),
                 result.json().expect("test body is valid utf-8 JSON")
             ),
-            (400, None, serde_json::json!({"error": "unknown_form"}))
+            (
+                400.into(),
+                None,
+                serde_json::json!({"error": "unknown_form"})
+            )
         );
         assert_eq!(fake.requests().len(), forms.len() + 2);
     }
@@ -1643,7 +1656,10 @@ fn chunked_stream_is_buffered() {
     let t = GatewayTest::new();
     let result = t.relay("GET", "/stream");
     let expected: Vec<u8> = zeropw::fake_upstream::STREAM_PARTS.concat();
-    assert_eq!((result.status, result.body.clone()), (200, expected));
+    assert_eq!(
+        (result.status.clone(), result.body.clone()),
+        (200.into(), expected)
+    );
     assert!(!header_names(&result).contains("transfer-encoding"));
 }
 
@@ -1652,8 +1668,8 @@ fn large_ok_and_huge_rejected() {
     let mut t = GatewayTest::new();
     let result = t.relay("GET", "/large");
     assert_eq!(
-        (result.status, result.body.len()),
-        (200, zeropw::fake_upstream::LARGE_BODY_SIZE)
+        (result.status.clone(), result.body.len()),
+        (200.into(), zeropw::fake_upstream::LARGE_BODY_SIZE)
     );
     let huge = assert_blocked(&t, "/huge", "response_too_large");
     assert!(!huge.body.windows(4).any(|w| w == b"yyyy"));
@@ -1678,8 +1694,8 @@ fn upstream_down_and_timeout() {
     t.ctx.config.upstream_timeout = 0.3;
     let slow = t.relay("GET", "/slow?seconds=1");
     assert_eq!(
-        (slow.status, slow.reason.as_deref()),
-        (502, Some("upstream_timeout"))
+        (slow.status.clone(), slow.reason.as_deref()),
+        (502.into(), Some("upstream_timeout"))
     );
     t.assert_result_credential_free(&slow);
     assert_eq!(t.audit_records().last().unwrap()["result"], "error");
@@ -1687,8 +1703,8 @@ fn upstream_down_and_timeout() {
     t.fake.stop();
     let down = t.relay("GET", "/repos");
     assert_eq!(
-        (down.status, down.reason.as_deref()),
-        (502, Some("upstream_unreachable"))
+        (down.status.clone(), down.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable"))
     );
     t.assert_result_credential_free(&down);
     assert_eq!(
@@ -1735,8 +1751,8 @@ fn non_finite_or_negative_upstream_timeout_fails_closed_without_panicking() {
         t.ctx.config.upstream_timeout = timeout;
         let result = t.relay("GET", "/repos");
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("upstream_timeout")),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some("upstream_timeout")),
             "{label}: a non-finite/negative upstream_timeout must fail closed as \
              upstream_timeout without panicking, matching python's own uncaught \
              OverflowError/ValueError there"
@@ -1777,8 +1793,8 @@ fn unsupported_auth_mode_and_unsafe_credential_fail_closed() {
     let handle = t.issue_handle_for("agent-1", "crlf", &grant.id, None, 300);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("credential_header_unsafe"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("credential_header_unsafe"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -1881,8 +1897,8 @@ fn zeropw_authority_is_never_a_business_credential() {
             None,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (501, Some("self_referential_credential")),
+            (result.status.clone(), result.reason.as_deref()),
+            (501.into(), Some("self_referential_credential")),
             "{name}"
         );
     }
@@ -1924,7 +1940,10 @@ fn zeropw_authority_is_never_a_business_credential() {
         b"",
         None,
     );
-    assert_eq!((result.status, result.reason.as_deref()), (401, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.as_deref()),
+        (401.into(), None)
+    );
     t.assert_credential_free(&t.state_text(&["audit/audit.jsonl"]), &[token.as_str()]);
 }
 
@@ -1937,8 +1956,8 @@ fn missing_credential_is_explicit() {
         .unwrap();
     let result = t.relay("GET", "/repos");
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (503, Some("credential_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (503.into(), Some("credential_unavailable"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -1962,8 +1981,8 @@ fn audit_unavailable_refuses_before_credential_use() {
     let result = t.relay("GET", "/repos");
     std::fs::set_permissions(&audit_path, original_perms).unwrap();
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (503, Some("audit_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (503.into(), Some("audit_unavailable"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 0);
@@ -2008,8 +2027,8 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     let t = GatewayTest::new();
     let first = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (first.status, first.reason.as_deref()),
-        (428, Some("approval_required"))
+        (first.status.clone(), first.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let digest = first.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -2042,12 +2061,15 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     );
     assert_eq!(t.fake.requests().len(), 0);
     let done = t.relay("DELETE", "/repos/demo");
-    assert_eq!((done.status, done.reason.clone()), (204, None));
+    assert_eq!(
+        (done.status.clone(), done.reason.clone()),
+        (204.into(), None)
+    );
     assert_eq!(t.fake.requests().last().unwrap().method, "DELETE");
     let again = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (again.status, again.reason.as_deref()),
-        (428, Some("approval_required"))
+        (again.status.clone(), again.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     assert_eq!(t.fake.requests().len(), 1);
     assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 1);
@@ -2158,7 +2180,10 @@ fn pending_approval_shows_what_the_digest_binds() {
         Some(&handle),
         None,
     );
-    assert_eq!((done.status, done.reason.clone()), (201, None));
+    assert_eq!(
+        (done.status.clone(), done.reason.clone()),
+        (201.into(), None)
+    );
     let last = t.fake.requests().last().unwrap().clone();
     assert_eq!(
         (last.path.as_str(), last.body),
@@ -2271,8 +2296,8 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         None,
     );
     assert_eq!(
-        (after_move.status, after_move.reason.as_deref()),
-        (428, Some("approval_required"))
+        (after_move.status.clone(), after_move.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let after_move_digest =
         after_move.json().expect("test body is valid utf-8 JSON")["approval_digest"]
@@ -2302,8 +2327,8 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         None,
     );
     assert_eq!(
-        (renamed.status, renamed.reason.as_deref()),
-        (428, Some("approval_required"))
+        (renamed.status.clone(), renamed.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let renamed_digest = renamed.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -2355,8 +2380,12 @@ fn completed_request_is_replayed_without_upstream_contact() {
     assert_eq!(first.status, 201);
     let replay = issue_ledger(&t, "req-1", "same");
     assert_eq!(
-        (replay.status, replay.body.clone(), replay.reason.clone()),
-        (201, first.body.clone(), None)
+        (
+            replay.status.clone(),
+            replay.body.clone(),
+            replay.reason.clone()
+        ),
+        (201.into(), first.body.clone(), None)
     );
     assert!(
         replay
@@ -2413,11 +2442,11 @@ fn replay_decodes_body_b64_leniently_like_python_b64decode() {
     let replayed = issue_ledger(&t, "req-b64-lenient", "same");
     assert_eq!(
         (
-            replayed.status,
+            replayed.status.clone(),
             replayed.body.clone(),
             replayed.reason.clone()
         ),
-        (200, b"abc".to_vec(), None),
+        (200.into(), b"abc".to_vec(), None),
         "a newline inside the base64 body must be discarded, not rejected, matching \
          Python's lenient b64decode"
     );
@@ -2443,8 +2472,8 @@ fn replay_fails_closed_for_genuinely_undecodable_body_b64() {
     );
     let replayed = issue_ledger(&t, "req-b64-bad", "same");
     assert_eq!(
-        (replayed.status, replayed.reason.as_deref()),
-        (503, Some("state_corrupt"))
+        (replayed.status.clone(), replayed.reason.as_deref()),
+        (503.into(), Some("state_corrupt"))
     );
 }
 
@@ -2467,8 +2496,8 @@ fn replay_fails_closed_for_non_string_body_b64() {
     );
     let replayed = issue_ledger(&t, "req-b64-nonstr", "same");
     assert_eq!(
-        (replayed.status, replayed.reason.as_deref()),
-        (503, Some("state_corrupt"))
+        (replayed.status.clone(), replayed.reason.as_deref()),
+        (503.into(), Some("state_corrupt"))
     );
 }
 
@@ -2495,11 +2524,11 @@ fn replay_treats_a_truthy_non_bool_body_stored_as_stored() {
     let replayed = issue_ledger(&t, "req-stored-truthy", "same");
     assert_eq!(
         (
-            replayed.status,
+            replayed.status.clone(),
             replayed.body.clone(),
             replayed.reason.clone()
         ),
-        (200, b"abc".to_vec(), None),
+        (200.into(), b"abc".to_vec(), None),
         "a truthy non-bool body_stored must still replay the real stored body"
     );
 }
@@ -2606,8 +2635,8 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
         set_ledger_response(&t, "agent-1", &request_id, bad_response);
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
-            (replayed.status, replayed.reason.as_deref()),
-            (503, Some("state_corrupt")),
+            (replayed.status.clone(), replayed.reason.as_deref()),
+            (503.into(), Some("state_corrupt")),
             "a truthy non-mapping response ({label}) must fail closed, not relay a \
              502 replay_body_unavailable"
         );
@@ -2721,8 +2750,8 @@ fn replay_status_preserves_out_of_range_magnitudes_exactly() {
         );
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
-            (replayed.status, replayed.reason.clone()),
-            (expected, None),
+            (replayed.status.clone(), replayed.reason.clone()),
+            (expected.into(), None),
             "{label}: an in-range status must match python's int() exactly, not fail"
         );
     }
@@ -2734,8 +2763,8 @@ fn same_id_different_request_is_rejected() {
     assert_eq!(issue_ledger(&t, "req-2", "same").status, 201);
     let reused = issue_ledger(&t, "req-2", "different");
     assert_eq!(
-        (reused.status, reused.reason.as_deref()),
-        (409, Some("request_id_reused"))
+        (reused.status.clone(), reused.reason.as_deref()),
+        (409.into(), Some("request_id_reused"))
     );
     assert_eq!(t.fake.requests().len(), 1);
     let other_path = t.relay_full("GET", "/repos", &no_headers(), b"", None, Some("req-2"));
@@ -2756,7 +2785,10 @@ fn uncertain_outcome_is_not_retried_blindly() {
     // this file before this fix.
     let mut t = GatewayTest::new();
     let first = issue_ledger(&t, "req-3", "same");
-    assert_eq!((first.status, first.reason.clone()), (201, None));
+    assert_eq!(
+        (first.status.clone(), first.reason.clone()),
+        (201.into(), None)
+    );
     t.ctx.config.upstream_timeout = 0.3;
     let timed_out = t.relay_full(
         "GET",
@@ -2776,8 +2808,8 @@ fn uncertain_outcome_is_not_retried_blindly() {
         Some("slow-2"),
     );
     assert_eq!(
-        (again.status, again.reason.as_deref()),
-        (409, Some("outcome_uncertain"))
+        (again.status.clone(), again.reason.as_deref()),
+        (409.into(), Some("outcome_uncertain"))
     );
     assert_eq!(
         t.fake
@@ -2823,8 +2855,8 @@ fn in_flight_duplicate_is_rejected_then_replayed() {
             Some("in-flight"),
         );
         assert_eq!(
-            (duplicate.status, duplicate.reason.as_deref()),
-            (409, Some("request_in_flight"))
+            (duplicate.status.clone(), duplicate.reason.as_deref()),
+            (409.into(), Some("request_in_flight"))
         );
     });
     let first = first_result.into_inner().unwrap().expect("worker ran");
@@ -2837,7 +2869,10 @@ fn in_flight_duplicate_is_rejected_then_replayed() {
         None,
         Some("in-flight"),
     );
-    assert_eq!((replay.status, replay.body.clone()), (200, first.body));
+    assert_eq!(
+        (replay.status.clone(), replay.body.clone()),
+        (200.into(), first.body)
+    );
     assert_eq!(t.fake.requests().len(), 1);
 }
 
@@ -2960,8 +2995,8 @@ fn large_replay_body_is_not_stored() {
     assert_eq!(first.status, 200);
     let replay = t.relay_full("GET", "/large", &no_headers(), b"", None, Some("big"));
     assert_eq!(
-        (replay.status, replay.reason.as_deref()),
-        (200, Some("replay_body_unavailable"))
+        (replay.status.clone(), replay.reason.as_deref()),
+        (200.into(), Some("replay_body_unavailable"))
     );
     assert_eq!(
         replay.json().expect("test body is valid utf-8 JSON")["reason"],
@@ -3264,8 +3299,8 @@ fn hostname_resolving_to_loopback_is_refused_without_opt_in() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("target_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("target_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     t.assert_result_credential_free(&result);
@@ -3292,8 +3327,8 @@ fn mixed_answer_is_refused_as_a_whole() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("target_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("target_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -3328,8 +3363,8 @@ fn metadata_answer_is_refused_even_for_private_opt_in() {
             resolver,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("metadata_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("metadata_address_not_allowed")),
             "answer={answer}"
         );
     }
@@ -3365,8 +3400,8 @@ fn ipv4_embedded_in_ipv6_answers_are_judged_by_the_ipv4_address() {
             resolver,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("target_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("target_address_not_allowed")),
             "answer={answer}"
         );
     }
@@ -3447,8 +3482,8 @@ fn address_refusal_spends_no_grant_use_approval_or_credential() {
         allowed,
     );
     assert_eq!(
-        (pending.status, pending.reason.as_deref()),
-        (428, Some("approval_required"))
+        (pending.status.clone(), pending.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let digest = pending.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -3471,8 +3506,8 @@ fn address_refusal_spends_no_grant_use_approval_or_credential() {
             refused.clone(),
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("metadata_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("metadata_address_not_allowed")),
             "{method} {path}"
         );
     }
@@ -3576,8 +3611,8 @@ fn stored_metadata_literal_loads_and_is_refused_at_use() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("metadata_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("metadata_address_not_allowed"))
     );
     let record = t.audit_records().last().unwrap().clone();
     assert_eq!(record["connection"], "old-meta");
@@ -3635,7 +3670,10 @@ fn opt_in_connects_to_the_checked_address_and_resolves_once_per_request() {
         None,
         resolver,
     );
-    assert_eq!((first.status, second.status), (200, 200));
+    assert_eq!(
+        (first.status.clone(), second.status),
+        (200.into(), 200.into())
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         t.fake
@@ -3675,8 +3713,8 @@ fn resolution_failure_is_explicit() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable"))
     );
     t.assert_result_credential_free(&result);
 }
@@ -3712,8 +3750,8 @@ fn dns_change_between_requests_takes_effect_on_the_next_request() {
         rebound,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("metadata_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("metadata_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -3782,8 +3820,8 @@ fn self_reference_via_registered_listener() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 
     gateway::unregister_local_listener(&listener);
@@ -3823,8 +3861,8 @@ fn peer_check_catches_a_dns_resolved_self_reference() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
     gateway::unregister_local_listener(&listener);
 }
@@ -3913,10 +3951,10 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let trusted = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
         (
-            trusted.status,
+            trusted.status.clone(),
             trusted.json().expect("test body is valid utf-8 JSON")
         ),
-        (200, serde_json::json!({"login": "synthetic-user"}))
+        (200.into(), serde_json::json!({"login": "synthetic-user"}))
     );
     assert_eq!(
         good.requests()
@@ -3944,8 +3982,8 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-untrusted", &grant.id, None, 300);
     let untrusted = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (untrusted.status, untrusted.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (untrusted.status.clone(), untrusted.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     t.assert_result_credential_free(&untrusted);
     assert_eq!(good.requests().len(), 1);
@@ -3972,8 +4010,8 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-mismatch", &grant.id, None, 300);
     let mismatch = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (mismatch.status, mismatch.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (mismatch.status.clone(), mismatch.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     assert_eq!(wrong_name.requests().len(), 0);
     assert_eq!(t.audit_records().last().unwrap()["result"], "error");
@@ -3996,8 +4034,8 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-missing-ca", &grant.id, None, 300);
     let missing = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (missing.status, missing.reason.as_deref()),
-        (502, Some("ca_file_unavailable"))
+        (missing.status.clone(), missing.reason.as_deref()),
+        (502.into(), Some("ca_file_unavailable"))
     );
 }
 
@@ -4049,8 +4087,8 @@ fn tls_cert_with_ip_cn_but_no_san_is_rejected() {
     let handle = t.issue_handle_for("agent-1", "tls-cn-only", &grant.id, None, 300);
     let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     assert!(good.requests().is_empty());
 }
@@ -4169,10 +4207,10 @@ fn tls_is_verified_against_the_configured_name_not_the_pinned_address() {
         None,
         resolver,
     );
-    assert_eq!((ok.status, ok.reason.clone()), (200, None));
+    assert_eq!((ok.status.clone(), ok.reason.clone()), (200.into(), None));
     assert_eq!(
-        (bad.status, bad.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (bad.status.clone(), bad.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     assert_eq!(fake.requests().len(), 1);
 }
@@ -4245,8 +4283,8 @@ fn credential_reflection_is_caught_via_latin1_bytes_not_utf8() {
     let handle = raw_port_connection(&t, "basic-nonascii", "basic-pw-nonascii", auth, port);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("credential_reflection_blocked"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("credential_reflection_blocked"))
     );
 }
 
@@ -4262,8 +4300,8 @@ fn duplicate_content_encoding_headers_are_joined_before_checking() {
             .to_vec();
     let result = relay_via_raw_response(&t, "dup-content-encoding", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("response_encoding_unsupported"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("response_encoding_unsupported"))
     );
 }
 
@@ -4291,8 +4329,8 @@ fn self_referential_target_via_public_url_is_case_insensitive() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 }
 
@@ -4332,8 +4370,8 @@ fn slow_upstream_read_is_a_timeout_not_connection_lost() {
     let handle = raw_port_connection(&t, "never-answers", "gh-token", HttpAuth::bearer(), port);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_timeout"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_timeout"))
     );
 }
 
@@ -4346,8 +4384,8 @@ fn status_code_outside_100_999_is_a_protocol_error() {
     let too_small =
         relay_via_raw_response(&t, "status-too-small", b"HTTP/1.1 12 Nope\r\n\r\n".to_vec());
     assert_eq!(
-        (too_small.status, too_small.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (too_small.status.clone(), too_small.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
     let too_large = relay_via_raw_response(
         &t,
@@ -4355,8 +4393,8 @@ fn status_code_outside_100_999_is_a_protocol_error() {
         b"HTTP/1.1 1000 Nope\r\n\r\n".to_vec(),
     );
     assert_eq!(
-        (too_large.status, too_large.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (too_large.status.clone(), too_large.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4369,7 +4407,10 @@ fn continue_interim_response_is_skipped_and_the_real_response_relayed() {
     let response =
         b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "continue-then-ok", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4393,7 +4434,10 @@ fn tab_separated_status_line_is_accepted() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1\t200\tOK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "tab-status-line", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4405,7 +4449,10 @@ fn folded_header_continuation_line_does_not_error() {
         b"HTTP/1.1 200 OK\r\nX-Custom: first\r\n second-part\r\nContent-Length: 2\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "folded-continuation", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4421,7 +4468,10 @@ fn header_line_without_colon_ends_recognised_headers_without_erroring() {
         b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nBadHeaderNoColon\r\nX-After: ignored\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "no-colon-header", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4435,8 +4485,8 @@ fn malformed_chunk_size_is_a_protocol_error_not_connection_lost() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZZ\r\nhello\r\n0\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "malformed-chunk-size", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4455,8 +4505,8 @@ fn more_than_max_headers_is_a_protocol_error() {
     response.extend_from_slice(b"\r\nbody");
     let result = relay_via_raw_response(&t, "too-many-headers", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4471,8 +4521,8 @@ fn oversized_header_line_is_a_protocol_error() {
     response.extend_from_slice(b"\r\n\r\nbody");
     let result = relay_via_raw_response(&t, "oversized-header-line", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4484,7 +4534,10 @@ fn header_block_ended_by_eof_is_relayed_normally() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 200 OK\r\nX-Custom: value".to_vec();
     let result = relay_via_raw_response(&t, "headers-end-at-eof", response);
-    assert_eq!((result.status, result.reason.as_deref()), (200, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.as_deref()),
+        (200.into(), None)
+    );
     assert_eq!(result.body, Vec::<u8>::new());
     assert!(
         !header_names(&result).contains("x-custom"),
@@ -4502,8 +4555,12 @@ fn status_line_then_immediate_eof_is_relayed_as_empty_ok() {
     let response = b"HTTP/1.1 200 OK\r\n".to_vec();
     let result = relay_via_raw_response(&t, "status-then-eof", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, Vec::new(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), Vec::new(), None)
     );
 }
 
@@ -4517,8 +4574,12 @@ fn content_length_larger_than_bytes_sent_relays_the_short_body() {
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort".to_vec();
     let result = relay_via_raw_response(&t, "content-length-too-big", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"short".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"short".to_vec(), None)
     );
 }
 
@@ -4532,8 +4593,12 @@ fn chunked_body_ending_at_eof_after_terminal_chunk_is_relayed_normally() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n".to_vec();
     let result = relay_via_raw_response(&t, "chunked-eof-after-terminal", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4549,8 +4614,12 @@ fn chunk_terminator_bytes_are_consumed_without_validation() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXY0\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "chunk-terminator-unchecked", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4569,8 +4638,8 @@ fn chunk_terminator_lf_only_framing_is_a_protocol_error() {
     let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\nhello\n0\n\n".to_vec();
     let result = relay_via_raw_response(&t, "chunk-terminator-lf-only", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4583,8 +4652,12 @@ fn content_length_with_pep515_underscore_is_parsed_like_python_int() {
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1_0\r\n\r\n0123456789tail".to_vec();
     let result = relay_via_raw_response(&t, "content-length-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"0123456789".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"0123456789".to_vec(), None)
     );
 }
 
@@ -4599,8 +4672,12 @@ fn chunk_size_with_pep515_underscore_is_parsed_like_python_int() {
     response.extend_from_slice(b"\r\n0\r\n\r\n");
     let result = relay_via_raw_response(&t, "chunk-size-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, body, None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), body, None)
     );
 }
 
@@ -4611,8 +4688,12 @@ fn status_code_with_pep515_underscore_is_parsed_like_python_int() {
     let response = b"HTTP/1.1 2_00 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "status-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hi".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hi".to_vec(), None)
     );
 }
 
@@ -4633,8 +4714,8 @@ fn only_http_1_x_and_0_9_versions_are_accepted() {
         let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
         let result = relay_via_raw_response(&t, &format!("bad-version-{name}"), response);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("upstream_protocol_error")),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some("upstream_protocol_error")),
             "version {version:?} should have been refused"
         );
     }
@@ -4647,8 +4728,12 @@ fn only_http_1_x_and_0_9_versions_are_accepted() {
         let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
         let result = relay_via_raw_response(&t, &format!("good-version-{name}"), response);
         assert_eq!(
-            (result.status, result.body.clone(), result.reason.as_deref()),
-            (200, b"hi".to_vec(), None),
+            (
+                result.status.clone(),
+                result.body.clone(),
+                result.reason.as_deref()
+            ),
+            (200.into(), b"hi".to_vec(), None),
             "version {version:?} should have been accepted"
         );
     }
@@ -4667,8 +4752,12 @@ fn no_content_status_with_chunked_transfer_encoding_still_decodes_the_body() {
             .to_vec();
     let result = relay_via_raw_response(&t, "204-chunked-has-body", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (204, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (204.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4691,8 +4780,12 @@ fn head_request_still_forces_an_empty_body_even_when_chunked() {
     );
     let result = gateway::relay(&t.ctx, &handle, "HEAD", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, Vec::new(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), Vec::new(), None)
     );
 }
 
@@ -4716,8 +4809,8 @@ fn header_value_ending_in_newline_is_accepted_then_fails_after_transmission() {
         Some("req-header-newline"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_connection_lost"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_connection_lost"))
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -4774,8 +4867,8 @@ fn bearer_credential_ending_in_newline_is_accepted_then_fails_after_transmission
         Some("req-cred-newline"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_connection_lost"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_connection_lost"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -4852,8 +4945,8 @@ fn ca_file_unavailable_takes_priority_over_an_unreachable_target() {
     let handle = t.issue_handle_for("agent-1", "ca-unreachable", &grant.id, None, 300);
     let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("ca_file_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("ca_file_unavailable"))
     );
 }
 
@@ -4934,8 +5027,8 @@ fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
         let handle = t.issue_handle_for("agent-1", &connection_id, &grant.id, None, 300);
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some(expected_reason)),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some(expected_reason)),
             "{suffix}"
         );
     }
@@ -5010,8 +5103,8 @@ fn unbracketed_ipv6_like_public_url_does_not_false_positive_self_referential() {
     let handle = named_connection_port(&t, "v6-unbracketed", "::1", 8443, false);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable")),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable")),
         "must not be refused as self_referential_target (that would be the pre-fix, \
          Python-diverging false positive)"
     );
@@ -5329,8 +5422,8 @@ fn write_request_rejects_agent_controlled_request_line_injection() {
         Some("inject-1"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
     assert!(
         captured.lock().unwrap().is_empty(),
@@ -5393,7 +5486,10 @@ fn content_length_with_information_separator_control_char_is_not_a_valid_int() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: \x1c5\r\n\r\n1234567890".to_vec();
     let result = relay_via_raw_response(&t, "content-length-info-sep", response);
-    assert_eq!((result.status, result.body), (200, b"1234567890".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"1234567890".to_vec())
+    );
 }
 
 #[test]
@@ -5408,8 +5504,8 @@ fn chunk_size_of_only_information_separator_control_chars_is_a_protocol_error() 
             .to_vec();
     let result = relay_via_raw_response(&t, "chunk-size-info-sep", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -5437,8 +5533,8 @@ print(int("2"))
     let response = b"HTTP/1.1 2\x1c00 OK\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "status-info-sep", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -5617,7 +5713,10 @@ fn content_encoding_with_information_separator_prefix_is_still_accepted() {
         b"HTTP/1.1 200 OK\r\nContent-Encoding: \x1cidentity\r\nContent-Length: 2\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "content-encoding-info-sep", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -5643,8 +5742,8 @@ fn self_referential_target_via_scheme_relative_public_url() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 }
 
@@ -5671,8 +5770,8 @@ fn self_referential_target_treats_public_url_port_zero_as_unspecified() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 }
 
@@ -5703,8 +5802,8 @@ fn self_referential_target_via_bracketed_public_url_with_empty_port() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target")),
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target")),
         "a bracketed host with a colon but an empty port must still use the scheme default \
          port and run the self-reference comparison, matching real urlsplit"
     );
@@ -5730,8 +5829,8 @@ fn invalid_bracketed_public_url_does_not_false_positive_self_referential() {
     let handle = named_connection_port(&t, "public-self-v6-invalid", "::1", 80, false);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable")),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable")),
         "must not be refused as self_referential_target (that would be the pre-fix, \
          Python-diverging false positive)"
     );
@@ -6656,8 +6755,8 @@ fn server_target_that_is_zeropw_itself_is_refused_before_use() {
             None,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (501, Some("self_referential_target")),
+            (result.status.clone(), result.reason.as_deref()),
+            (501.into(), Some("self_referential_target")),
             "{cid}"
         );
         assert_eq!(result.json().unwrap()["error"], "Unsupported");
@@ -6721,8 +6820,8 @@ fn server_peer_that_resolves_to_zeropw_is_refused_before_transmission() {
         resolver_answering(vec!["127.0.0.1".parse().unwrap()]),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
     assert!(s.server.log_lines().is_empty());
     let ledger = s
@@ -6788,9 +6887,9 @@ fn server_relayed_request_marker_is_refused_by_the_server() {
         None,
     );
     assert_eq!(
-        (result.status, result.json().unwrap()),
+        (result.status.clone(), result.json().unwrap()),
         (
-            501,
+            501.into(),
             serde_json::json!({"error": "Unsupported", "reason": "self_referential_target"})
         )
     );

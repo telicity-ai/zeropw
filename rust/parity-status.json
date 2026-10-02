@@ -3,21 +3,38 @@
   "baseline_sha": "9d91647afe255d827971a1787c7af89a7b2964b6",
   "inventory_source": "rust/DEVIATIONS.md",
   "inventory_source_sha256": "a93a9eaf57dd132ee99164db5d97488ed22028eff4ca6bc61d83d6b75a7b104e",
-  "candidate_sha": "17416f1ddfbedcdab9826f3ac2465db4bd6bcc8e",
-  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37043238441",
+  "candidate_sha": "949207bb5fa974a775ca3c477f34f2a06e168315",
+  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37044890101",
   "complete": false,
   "entries": [
     {
       "source_line": 16,
       "area": "crypto",
       "row_sha256": "c35534ca902b0f6db3ea342b2ed2b122f198901e5e6e6fd594e7e089164f3f6f",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.1",
+        "sources": [
+          "rust/src/crypto/chacha20poly1305.rs",
+          "rust/src/crypto/ed25519.rs"
+        ],
+        "conclusion": "Audited primitive substitution is explicitly allowed; RFC vector tests remain mandatory.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 17,
       "area": "all",
       "row_sha256": "60ac1384ff91595393ea5d10b060194545af65ca9afcad381aa561952f210255",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.2",
+        "sources": [
+          "rust/src/secret.rs"
+        ],
+        "conclusion": "SecretBytes uses Zeroizing, redacted Debug, and no Display/Serialize; this is the specified representation change, not a behavior waiver.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 18,
@@ -127,7 +144,16 @@
       "source_line": 35,
       "area": "kms",
       "row_sha256": "95d1dba069e6f53f3ca51b3bd13bffbe9de3aad2d0a2b40d2761bb984e84eff6",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/kms.py:75",
+          "rust/src/kms.rs:204"
+        ],
+        "conclusion": "Only escaping OS exceptions are mapped to kms_create_failed; initial existing-path error remains kms_exists. Race-specific evidence still needed at final head.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 36,
@@ -139,7 +165,15 @@
       "source_line": 37,
       "area": "pyjson",
       "row_sha256": "b2c033b5ab85960d6fdb4561beef76ae4bffa5f2ebb0bae40d410ecf75e0b2fb",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.6",
+        "sources": [
+          "rust/src/pyjson.rs"
+        ],
+        "conclusion": "Lone UTF-16 surrogate rejection is explicitly authorized. This does not cover nonfinite JSON or depth limits.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 38,
@@ -151,13 +185,32 @@
       "source_line": 39,
       "area": "handles",
       "row_sha256": "9b5189dd9fb5a723fe77c7e0d9b8165adf1c3041b922f4d0555fcd0725e4c7ed",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/handles.py:58",
+          "zeropw/handles.py:80",
+          "rust/src/handles.rs:604"
+        ],
+        "conclusion": "Non-ASCII signed-body segment raises uncaught UnicodeEncodeError in Python; Rust must fail closed as handle_signature. Targeted unit exists.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 40,
       "area": "handles (`verify`, finding A-R2-4)",
       "row_sha256": "227b1b0a5a499588039125e48fdd54c484e0c8ece12653d687cc23840386507c",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/handles.py:80",
+          "rust/src/handles.rs:626"
+        ],
+        "conclusion": "Non-ASCII signature raises uncaught TypeError at compare_digest; constant-time byte mismatch is the allowed handled failure.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 41,
@@ -169,7 +222,16 @@
       "source_line": 42,
       "area": "handles (`HandleIssuer::issue`, finding X-8/X-12)",
       "row_sha256": "95bc587f776b3477bbee156eb14372ca19b3454570f85bb3996754402aa8e80b",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/handles.py:62",
+          "rust/src/handles.rs"
+        ],
+        "conclusion": "Nonfinite now raises at int(now); Rust rejects handle_clock. This allowance does not cover finite oversized times in row43.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 43,
@@ -187,13 +249,31 @@
       "source_line": 45,
       "area": "audit",
       "row_sha256": "6a65b3d48743fbd9e06a42829d43101376219a6c731f658ff5bc481040834e66",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/audit.py:236",
+          "zeropw/audit.py:254",
+          "rust/src/audit.rs"
+        ],
+        "conclusion": "Malformed JSON raises uncaught JSONDecodeError in capped readers; state_corrupt is allowed. Valid nonfinite JSON remains a separate open representation gap.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 46,
       "area": "crypto/x25519",
       "row_sha256": "6abadc331acb31a62e491d6128363296438b5bd4b75a8b88e97b25d330bba3eb",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.1",
+        "sources": [
+          "rust/src/crypto/x25519.rs:114"
+        ],
+        "conclusion": "x25519-dalek substitution is authorized; RFC vectors and low-order-point behavior still require exact-head test evidence.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 47,
@@ -211,13 +291,30 @@
       "source_line": 49,
       "area": "crypto/x25519",
       "row_sha256": "5a45145f03d5357c6dfc00a6b513aa65af05f915740878c96365483bfa97302c",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.3",
+        "sources": [
+          "rust/src/crypto/x25519.rs:130"
+        ],
+        "conclusion": "The all-zero DH result check must be constant-time; acceptance/rejection remains the same.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 50,
       "area": "sshwire",
       "row_sha256": "5ed97f9cec0b9fcaccaea4f3b5ef4e7600e82a60ebfd8d967b3977aaeb198684",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.3",
+        "sources": [
+          "rust/src/sshwire.rs",
+          "rust/src/secret.rs"
+        ],
+        "conclusion": "Constant-time private seed equality is the explicitly required comparison change.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 51,
@@ -241,7 +338,15 @@
       "source_line": 54,
       "area": "sshwire",
       "row_sha256": "be99bf11c15177556f3761164abc90a6111a93db434ff9b65656c26427c88b14",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.4",
+        "sources": [
+          "rust/src/sshwire.rs"
+        ],
+        "conclusion": "Read/Write traits and RAII replace duck typing/context-manager lifetime; protocol framing and close behavior still require final tests.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 55,
@@ -253,7 +358,15 @@
       "source_line": 56,
       "area": "sshwire",
       "row_sha256": "69ded45e2681ec677b8514b84fe79d7e110a6552e4f8ac8242ca2c27aafd2901",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.4",
+        "sources": [
+          "rust/src/sshwire.rs:1827"
+        ],
+        "conclusion": "MpInt carries arbitrary sign/magnitude without numeric narrowing; large-value byte oracle exists. Representation change preserves value, unlike fixed-width rejection.",
+        "reviewed_base_sha": "949207bb5fa974a775ca3c477f34f2a06e168315"
+      }
     },
     {
       "source_line": 57,

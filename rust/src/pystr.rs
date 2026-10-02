@@ -269,7 +269,9 @@ pub fn int_from_str_decimal(s: &str) -> Option<String> {
 /// The limit counts decimal digits in the original input, including leading
 /// zeroes and Unicode Nd digits, but excludes signs, whitespace and
 /// underscores. `PYTHONINTMAXSTRDIGITS=0` disables it; valid overrides are
-/// at least 640, and an absent/invalid override uses CPython's default 4300.
+/// at least 640, and an absent override uses CPython's default 4300. Rust's
+/// fallback for an invalid override remains a known limitation: CPython
+/// rejects that environment setting during interpreter startup.
 pub fn int_from_str_decimal_limited(s: &str) -> Option<String> {
     let value = int_from_str_decimal(s)?;
     let limit = match std::env::var("PYTHONINTMAXSTRDIGITS") {

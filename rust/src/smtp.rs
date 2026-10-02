@@ -910,7 +910,7 @@ impl Message {
     /// that fails `verify_generated_headers` is `HeaderWriteError`.
     fn flatten(&self, utf8: bool) -> Result<Vec<u8>, SendError> {
         let mut headers = Vec::new();
-        let subject = get_unstructured(&self.subject, false)
+        let subject = get_unstructured(&self.subject, true)
             .and_then(|tree| fold_header("Subject", tree, utf8));
         headers.push(subject.unwrap_or_else(|| format!("Subject: {}{CRLF}", self.subject)));
         for (name, value) in [("From", &self.from), ("To", &self.to)] {
@@ -1298,7 +1298,7 @@ fn get_atext(value: &str) -> Parsed<'_> {
     Ok((Tok::value(&value[..end], "atext"), &value[end..]))
 }
 
-/// `get_atom` (no encoded words).
+/// `get_atom`; an atom may be an RFC 2047 encoded word.
 fn get_atom(mut value: &str) -> Parsed<'_> {
     let mut parts = Vec::new();
     if first(value).is_some_and(is_cfws_leader) {
@@ -1309,10 +1309,15 @@ fn get_atom(mut value: &str) -> Parsed<'_> {
     if first(value).is_some_and(is_atom_end) {
         return Err(PErr::Header);
     }
-    if value.starts_with("=?") {
-        return Err(PErr::Unsupported);
-    }
-    let (token, rest) = get_atext(value)?;
+    let (token, rest) = if value.starts_with("=?") {
+        match get_encoded_word(value) {
+            EwParse::Ok(text, rest) => (Tok::value(text, "encoded-word"), rest),
+            EwParse::Invalid | EwParse::NotEw => get_atext(value)?,
+            EwParse::Unsupported => return Err(PErr::Unsupported),
+        }
+    } else {
+        get_atext(value)?
+    };
     parts.push(token);
     value = rest;
     if first(value).is_some_and(is_cfws_leader) {
@@ -1772,7 +1777,8 @@ enum EwParse<'a> {
     Unsupported,
 }
 
-/// `get_encoded_word` + `_encoded_words.decode` for UTF-8 words.
+/// `get_encoded_word` + `_encoded_words.decode` for the charsets representable
+/// without surrogate code points in Rust strings.
 fn get_encoded_word(value: &str) -> EwParse<'_> {
     let Some(body) = value.strip_prefix("=?") else {
         return EwParse::NotEw;
@@ -1795,9 +1801,6 @@ fn get_encoded_word(value: &str) -> EwParse<'_> {
     let [charset, cte, text] = fields[..] else {
         return EwParse::Invalid;
     };
-    if !charset.eq_ignore_ascii_case("utf-8") {
-        return EwParse::Unsupported;
-    }
     let bytes = match cte.to_ascii_lowercase().as_str() {
         "q" => {
             let raw = text.replace('_', " ").into_bytes();
@@ -1821,16 +1824,42 @@ fn get_encoded_word(value: &str) -> EwParse<'_> {
             }
             out
         }
-        "b" => match crate::pybase64::b64decode_bytes(text.as_bytes()) {
-            Ok(bytes) => bytes,
-            Err(_) => return EwParse::Unsupported,
-        },
+        "b" => {
+            let raw = text.as_bytes();
+            let missing = (4 - raw.len() % 4) % 4;
+            let mut padded = raw.to_vec();
+            if missing != 1 {
+                padded.extend(std::iter::repeat_n(b'=', missing));
+            }
+            crate::pybase64::b64decode_bytes(&padded)
+                .or_else(|_| crate::pybase64::b64decode_bytes(raw))
+                .or_else(|_| {
+                    let mut maximally_padded = raw.to_vec();
+                    maximally_padded.extend_from_slice(b"==");
+                    crate::pybase64::b64decode_bytes(&maximally_padded)
+                })
+                // `_encoded_words.decode_b` returns the encoded bytes for the
+                // irrecoverable length-one-mod-four case.
+                .unwrap_or_else(|_| raw.to_vec())
+        }
         _ => return EwParse::Invalid,
     };
-    match String::from_utf8(bytes) {
-        Ok(decoded) => EwParse::Ok(decoded, remainder),
-        Err(_) => EwParse::Unsupported,
-    }
+    let charset = charset
+        .split_once('*')
+        .map_or(charset, |(charset, _)| charset)
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    let decoded = match charset.as_str() {
+        "utf-8" | "utf8" => String::from_utf8(bytes).ok(),
+        "ascii" | "us-ascii" => bytes.is_ascii().then(|| latin1(&bytes)),
+        "iso-8859-1" | "iso8859-1" | "latin-1" | "latin1" => Some(latin1(&bytes)),
+        // CPython falls back to ASCII with surrogateescape for an unknown
+        // charset.  The ASCII-only case has no surrogate and is exact.
+        _ => bytes.is_ascii().then(|| latin1(&bytes)),
+    };
+    decoded.map_or(EwParse::Unsupported, |decoded| {
+        EwParse::Ok(decoded, remainder)
+    })
 }
 
 /// `BaseHeader.fold`: `Header([HeaderLabel, CFWSList(' '), parse_tree])`
@@ -2439,6 +2468,82 @@ print(json.dumps(out))
         );
     }
 
+    #[test]
+    fn encoded_word_headers_match_python_bytes() {
+        let cases = json!([
+            [
+                "=?utf-8?q?Hello_=E2=9C=93?=",
+                "a@example.com",
+                "b@example.com"
+            ],
+            ["=?UTF-8?B?7ZWc6riA?=", "a@example.com", "b@example.com"],
+            ["=?utf-8?b?SGVsbG8?=", "a@example.com", "b@example.com"],
+            ["=?utf-8?b?SGVsbG8$?=", "a@example.com", "b@example.com"],
+            ["=?utf-8?q?bad=Z1=2?=", "a@example.com", "b@example.com"],
+            [
+                "=?utf-8?q?one?=   =?utf-8?q?two?=",
+                "a@example.com",
+                "b@example.com"
+            ],
+            [
+                "prefix=?utf-8?q?middle?=suffix",
+                "a@example.com",
+                "b@example.com"
+            ],
+            ["=?iso-8859-1?q?caf=E9?=", "a@example.com", "b@example.com"],
+            ["=?x-unknown?q?plain?=", "a@example.com", "b@example.com"],
+            ["=?utf-8?q?unterminated", "a@example.com", "b@example.com"],
+            ["=?utf-8?x?invalid?=", "a@example.com", "b@example.com"],
+            [
+                "subject",
+                "=?utf-8?q?Admin_=E2=9C=93?= <a@example.com>",
+                "b@example.com"
+            ],
+            [
+                "subject",
+                "a@example.com",
+                "=?utf-8?b?7ZWc6riA?= <b@example.com>"
+            ],
+            [
+                "subject",
+                "a@example.com",
+                "=?utf-8?q?one?= \t =?utf-8?q?two?= <b@example.com>"
+            ]
+        ]);
+        let script = format!(
+            r#"
+import base64, email.generator, io, json
+from email.message import EmailMessage
+out=[]
+for subject, sender, recipient in json.loads({cases:?}):
+ m=EmailMessage(); m['Subject']=subject; m['From']=sender; m['To']=recipient; m.set_content('x\n')
+ b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
+ out.append(base64.b64encode(b.getvalue()).decode())
+print(json.dumps(out))
+"#,
+            cases = cases.to_string(),
+        );
+        let expected: Vec<String> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        for (case, expected) in cases.as_array().unwrap().iter().zip(expected) {
+            let sender = case[1].as_str().unwrap();
+            let recipients = [case[2].as_str().unwrap().to_owned()];
+            let actual = Message::new(
+                &config(sender, &recipients),
+                case[0].as_str().unwrap(),
+                "x\n",
+            )
+            .flatten(false)
+            .ok()
+            .expect("headers verify");
+            assert_eq!(
+                actual,
+                crate::pybase64::b64decode(&expected).unwrap(),
+                "case {case}"
+            );
+        }
+    }
+
     /// `set_content(body)`'s transfer-encoding choice and payload (7bit,
     /// 8bit, quoted-printable with soft breaks and trailing whitespace,
     /// base64), for bodies around each heuristic boundary.
@@ -2514,7 +2619,6 @@ print(json.dumps(out))
         for value in [
             "undisclosed-recipients: a@example.com;",
             "a@[127.0.0.1]",
-            "=?utf-8?q?Admin?= <a@example.com>",
             "<@route.example:a@example.com>",
             "<>",
             "admin",
