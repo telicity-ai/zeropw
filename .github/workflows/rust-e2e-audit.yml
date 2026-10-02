@@ -1,4 +1,4 @@
-name: Rust macOS full audit with exact oracle
+name: Rust macOS shebang differential probe
 on:
   push:
     branches: [codex/rust-e2e-audit-20261002]
@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15]
-        shard: [0, 1, 2, 3]
+        shard: [0]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -76,37 +76,13 @@ jobs:
           except subprocess.TimeoutExpired:
               print(json.dumps({'smtp_hostname':'timeout','elapsed':time.monotonic()-started}),flush=True)
           PYCODE
-      - name: Verify every integration target in deterministic shards
+      - name: Add independent test without changing original sources or tests
         shell: bash
         run: |
           python3.12 - <<'PYCODE'
-          import os,pathlib,subprocess,sys
-          shard=int(os.environ['AUDIT_SHARD'])
-          targets=sorted(p.stem for p in pathlib.Path('rust/tests').glob('*.rs'))
-          selected=targets[shard::4]
-          print('AUDIT_TARGETS='+repr(selected),flush=True)
-          failed=[]
-          for target in selected:
-              print('AUDIT_BEGIN='+target,flush=True)
-              result=subprocess.run(['cargo','test','--locked','--manifest-path','rust/Cargo.toml','--test',target,'--','--nocapture'])
-              print('AUDIT_END='+target+' exit='+str(result.returncode),flush=True)
-              if result.returncode: failed.append(target)
-          print('AUDIT_FAILED='+repr(failed),flush=True)
-          sys.exit(bool(failed))
+          import base64,pathlib
+          pathlib.Path('rust/tests/audit_native_shebang.rs').write_bytes(base64.b64decode('Ly8hIFBhcml0eSBnYXBzIGJldHdlZW4gdGhlIG5hdGl2ZSBydW50aW1lIChgcnVuc2AsIGB0b29sc2AsIGBzZXJ2ZXJgLAovLyEgYGdhdGV3YXlgKSBhbmQgdGhlIFB5dGhvbiBzcGVjaWZpY2F0aW9uLCBlYWNoIHBpbm5lZCBieSB0aGUgUHl0aG9uCi8vISBiZWhhdmlvdXIgaXQgcmVwcm9kdWNlcy4gU3ludGhldGljIGNyZWRlbnRpYWxzIGFuZCBsb29wYmFjayBvbmx5Lgp1c2Ugc2VyZGVfanNvbjo6e1ZhbHVlLCBqc29ufTsKdXNlIHN0ZDo6Y29sbGVjdGlvbnM6Okhhc2hNYXA7CnVzZSBzdGQ6Om9zOjp1bml4Ojpmczo6UGVybWlzc2lvbnNFeHQ7CnVzZSBzdGQ6OnBhdGg6OlBhdGg7CnVzZSBzdGQ6OnN5bmM6OkFyYzsKdXNlIHRlbXBmaWxlOjpUZW1wRGlyOwp1c2UgemVyb3B3Ojp7CiAgICBjb250ZXh0Ojp7Q29uZmlnLCBDb250ZXh0fSwKICAgIHJ1bnM6OntSdW4sIFJ1blJlZ2lzdHJ5fSwKfTsKCmZuIGNvbnRleHQoKSAtPiAoVGVtcERpciwgQXJjPENvbnRleHQ+KSB7CiAgICBsZXQgdGVtcCA9IFRlbXBEaXI6Om5ldygpLnVud3JhcCgpOwogICAgbGV0IGN0eCA9IEFyYzo6bmV3KAogICAgICAgIENvbnRleHQ6OmluaXRpYWxpemUoCiAgICAgICAgICAgIHRlbXAucGF0aCgpLmpvaW4oInN0YXRlIiksCiAgICAgICAgICAgICJzeW50aGV0aWMtYWRtaW4tcGFzc3BocmFzZSIsCiAgICAgICAgICAgICJzeW50aGV0aWMtcmVjb3ZlcnktcGFzc3BocmFzZSIsCiAgICAgICAgICAgIENvbmZpZzo6ZGVmYXVsdCgpLAogICAgICAgICAgICB6ZXJvcHc6OmNsb2NrOjpzeXN0ZW0oKSwKICAgICAgICApCiAgICAgICAgLnVud3JhcCgpLAogICAgKTsKICAgICh0ZW1wLCBjdHgpCn0KCmZuIHJlZ2lzdHJ5KCkgLT4gKFRlbXBEaXIsIEFyYzxDb250ZXh0PiwgQXJjPFJ1blJlZ2lzdHJ5PikgewogICAgbGV0ICh0ZW1wLCBjdHgpID0gY29udGV4dCgpOwogICAgbGV0IHJlZ2lzdHJ5ID0gUnVuUmVnaXN0cnk6Om5ldyhjdHguY2xvbmUoKSwgMTAyNCwgMC4wNSk7CiAgICAodGVtcCwgY3R4LCByZWdpc3RyeSkKfQoKZm4gcXVldWVkKHI6ICZSdW5SZWdpc3RyeSwgcHJvZ3JhbTogJnN0cikgLT4gUnVuIHsKICAgIHIuY3JlYXRlKAogICAgICAgICJhbGljZSIsICJjb25uIiwgImdyYW50IiwgImh0dHAiLCBwcm9ncmFtLCBOb25lLCAiZGlnZXN0IiwgTm9uZSwgTm9uZSwKICAgICkKfQoKZm4gZXhlY3V0YWJsZShwYXRoOiAmUGF0aCwgY29udGVudDogJlt1OF0pIHsKICAgIHN0ZDo6ZnM6OndyaXRlKHBhdGgsIGNvbnRlbnQpLnVud3JhcCgpOwogICAgc3RkOjpmczo6c2V0X3Blcm1pc3Npb25zKHBhdGgsIHN0ZDo6ZnM6OlBlcm1pc3Npb25zOjpmcm9tX21vZGUoMG83MDApKS51bndyYXAoKTsKfQoKZm4gbGF1bmNoKHI6ICZBcmM8UnVuUmVnaXN0cnk+LCB0ZW1wOiAmVGVtcERpciwgcHJvZ3JhbTogJlBhdGgpIC0+IFJ1biB7CiAgICBsYXVuY2hfd2l0aF9wYXRoKHIsIHRlbXAsICZwcm9ncmFtLnRvX3N0cmluZ19sb3NzeSgpLCAiL3Vzci9iaW46L2JpbiIpCn0KCmZuIGxhdW5jaF93aXRoX3BhdGgocjogJkFyYzxSdW5SZWdpc3RyeT4sIHRlbXA6ICZUZW1wRGlyLCBwcm9ncmFtOiAmc3RyLCBwYXRoOiAmc3RyKSAtPiBSdW4gewogICAgbGV0IHByb2dyYW0gPSBwcm9ncmFtLnRvX3N0cmluZygpOwogICAgbGV0IHJ1biA9IHF1ZXVlZChyLCAmcHJvZ3JhbSk7CiAgICBsZXQgc3RhcnRlZCA9IHIKICAgICAgICAuc3RhcnQoCiAgICAgICAgICAgICZydW4sCiAgICAgICAgICAgIHN0ZDo6c2xpY2U6OmZyb21fcmVmKCZwcm9ncmFtKSwKICAgICAgICAgICAgJkhhc2hNYXA6OmZyb20oWygiUEFUSCIuaW50bygpLCBwYXRoLmludG8oKSldKSwKICAgICAgICAgICAgdGVtcC5wYXRoKCksCiAgICAgICAgICAgICZbXSwKICAgICAgICAgICAgTm9uZSwKICAgICAgICAgICAgU29tZSg1LjApLAogICAgICAgICkKICAgICAgICAudW53cmFwKCk7CiAgICByLndhaXQoJnN0YXJ0ZWQsIFNvbWUoOC4wKSkKfQoKZm4gcmVwb19yb290KCkgLT4gc3RkOjpwYXRoOjpQYXRoQnVmIHsKICAgIFBhdGg6Om5ldyhlbnYhKCJDQVJHT19NQU5JRkVTVF9ESVIiKSkKICAgICAgICAucGFyZW50KCkKICAgICAgICAuZXhwZWN0KCJyZXBvIHJvb3QiKQogICAgICAgIC50b19wYXRoX2J1ZigpCn0KCi8vLyBUaGUgUHl0aG9uIHByb3RvdHlwZSBhcyB0aGUgb3JhY2xlIChzY3JpcHQgb24gc3RkaW4sIHJlcG9zaXRvcnkgb24KLy8vIGBQWVRIT05QQVRIYCksIGxpa2UgYHplcm9wdzo6b3JhY2xlOjpweXRob25gIGZvciBsaWJyYXJ5IHRlc3RzLgpmbiBweXRob24oc2NyaXB0OiAmc3RyKSAtPiBTdHJpbmcgewogICAgdXNlIHN0ZDo6aW86OldyaXRlOwogICAgbGV0IGludGVycHJldGVyID0gc3RkOjplbnY6OnZhcigiWkVST1BXX1BZVEhPTiIpLnVud3JhcF9vcl9lbHNlKHxffCAicHl0aG9uMy4xMiIuaW50bygpKTsKICAgIGxldCBtdXQgY2hpbGQgPSBzdGQ6OnByb2Nlc3M6OkNvbW1hbmQ6Om5ldygmaW50ZXJwcmV0ZXIpCiAgICAgICAgLmFyZygiLSIpCiAgICAgICAgLmVudigiUFlUSE9OUEFUSCIsIHJlcG9fcm9vdCgpKQogICAgICAgIC5lbnYoIlBZVEhPTkRPTlRXUklURUJZVEVDT0RFIiwgIjEiKQogICAgICAgIC5zdGRpbihzdGQ6OnByb2Nlc3M6OlN0ZGlvOjpwaXBlZCgpKQogICAgICAgIC5zdGRvdXQoc3RkOjpwcm9jZXNzOjpTdGRpbzo6cGlwZWQoKSkKICAgICAgICAuc3RkZXJyKHN0ZDo6cHJvY2Vzczo6U3RkaW86OnBpcGVkKCkpCiAgICAgICAgLnNwYXduKCkKICAgICAgICAudW53cmFwX29yX2Vsc2UofGV8IHBhbmljISgiY2Fubm90IHJ1biB7aW50ZXJwcmV0ZXJ9OiB7ZX0iKSk7CiAgICBjaGlsZAogICAgICAgIC5zdGRpbgogICAgICAgIC50YWtlKCkKICAgICAgICAudW53cmFwKCkKICAgICAgICAud3JpdGVfYWxsKHNjcmlwdC5hc19ieXRlcygpKQogICAgICAgIC51bndyYXAoKTsKICAgIGxldCBvdXRwdXQgPSBjaGlsZC53YWl0X3dpdGhfb3V0cHV0KCkudW53cmFwKCk7CiAgICBhc3NlcnQhKAogICAgICAgIG91dHB1dC5zdGF0dXMuc3VjY2VzcygpLAogICAgICAgICJweXRob24gb3JhY2xlIGZhaWxlZDpcbnt9IiwKICAgICAgICBTdHJpbmc6OmZyb21fdXRmOF9sb3NzeSgmb3V0cHV0LnN0ZGVycikKICAgICk7CiAgICBTdHJpbmc6OmZyb21fdXRmOChvdXRwdXQuc3Rkb3V0KS51bndyYXAoKQp9CgoKI1t0ZXN0XQpmbiBhdWRpdF9ub19uZXdsaW5lX3NjcmlwdF9tYXRjaGVzX3B5dGhvbl9yZWdpc3RyeSgpIHsKICAgIGxldCAodGVtcCwgX2N0eCwgcikgPSByZWdpc3RyeSgpOwogICAgbGV0IGJhcmUgPSB0ZW1wLnBhdGgoKS5qb2luKCJiYXJlLnNoIik7CiAgICBleGVjdXRhYmxlKCZiYXJlLCBiIiMhL2Jpbi9zaCIpOwogICAgbGV0IGRvbmUgPSBsYXVuY2goJnIsICZ0ZW1wLCAmYmFyZSk7CiAgICBsZXQgcnVzdF9yZXN1bHQgPSBqc29uISh7InN0YXRlIjpkb25lLnN0YXRlLCJyZWFzb24iOmRvbmUucmVhc29uLCJleGl0X2NvZGUiOmRvbmUuZXhpdF9jb2RlfSk7CiAgICBsZXQgc2NyaXB0ID0gciMiCmltcG9ydCBqc29uLHBhdGhsaWIsdGVtcGZpbGUKZnJvbSB6ZXJvcHcuY29udGV4dCBpbXBvcnQgQ29udGV4dApmcm9tIHplcm9wdy5ydW5zIGltcG9ydCBSdW5SZWdpc3RyeQp3aXRoIHRlbXBmaWxlLlRlbXBvcmFyeURpcmVjdG9yeShwcmVmaXg9J3plcm9wdy1weXRob24tcHJvYmUtJykgYXMgdG1wOgogICAgcm9vdD1wYXRobGliLlBhdGgodG1wKQogICAgY3R4PUNvbnRleHQuaW5pdGlhbGl6ZShyb290LydzdGF0ZScsJ3N5bnRoZXRpYy1hZG1pbi1wYXNzcGhyYXNlJywnc3ludGhldGljLXJlY292ZXJ5LXBhc3NwaHJhc2UnKQogICAgcmVnPVJ1blJlZ2lzdHJ5KGN0eCwxMDI0LDAuMDUpCiAgICBwYXRoPXJvb3QvJ2JhcmUuc2gnCiAgICBwYXRoLndyaXRlX2J5dGVzKGInIyEvYmluL3NoJykKICAgIHBhdGguY2htb2QoMG83MDApCiAgICBydW49cmVnLmNyZWF0ZSgnYWxpY2UnLCdjb25uJywnZ3JhbnQnLCdodHRwJyxzdHIocGF0aCksaW5wdXRfZGlnZXN0PSdkaWdlc3QnKQogICAgc3RhcnRlZD1yZWcuc3RhcnQocnVuLFtzdHIocGF0aCldLHsnUEFUSCc6Jy91c3IvYmluOi9iaW4nfSxzdHIocm9vdCksdGltZW91dD01KQogICAgZG9uZT1yZWcud2FpdChzdGFydGVkLDgpCiAgICBwcmludChqc29uLmR1bXBzKHsnc3RhdGUnOmRvbmUuc3RhdGUsJ3JlYXNvbic6ZG9uZS5yZWFzb24sJ2V4aXRfY29kZSc6ZG9uZS5leGl0X2NvZGV9KSkKICAgIHJlZy5zaHV0ZG93bigpCiIjOwogICAgbGV0IHB5dGhvbl9yZXN1bHQ6IFZhbHVlID0gc2VyZGVfanNvbjo6ZnJvbV9zdHIocHl0aG9uKHNjcmlwdCkudHJpbSgpKS51bndyYXAoKTsKICAgIGVwcmludGxuISgiQVVESVRfU0hFQkFORz17fSIsanNvbiEoeyJydXN0IjpydXN0X3Jlc3VsdCwicHl0aG9uIjpweXRob25fcmVzdWx0fSkpOwogICAgYXNzZXJ0X2VxIShydXN0X3Jlc3VsdCxweXRob25fcmVzdWx0LCJuZXdsaW5lLWZyZWUgc2hlYmFuZyBtdXN0IG1hdGNoIFB5dGhvbiBSdW5SZWdpc3RyeSBvbiB0aGlzIE9TIik7Cn0K'))
           PYCODE
-      - name: Library and binary unit tests
-        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 0
-        run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
-      - name: Explicit isolated signer resource measurements
-        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 1
-        run: |
-          cargo test --locked --manifest-path rust/Cargo.toml --lib signer::tests:: -- --ignored --test-threads=1 --nocapture
-      - name: Documentation tests
-        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 2
-        run: cargo test --locked --manifest-path rust/Cargo.toml --doc
-      - name: Formatting and strict Clippy
-        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 3
-        shell: bash
-        run: |
-          cargo fmt --manifest-path rust/Cargo.toml -- --check
-          cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+          git diff --exit-code -- rust/src rust/tests/runtime_parity_gaps.rs
+      - name: Compare actual Python and Rust execution registries
+        run: cargo test --locked --manifest-path rust/Cargo.toml --test audit_native_shebang -- --nocapture
