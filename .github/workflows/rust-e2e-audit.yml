@@ -1,4 +1,4 @@
-name: Rust macOS failure diagnosis
+name: Rust macOS full audit with exact oracle
 on:
   push:
     branches: [codex/rust-e2e-audit-20261002]
@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15]
-        shard: [0, 1]
+        shard: [0, 1, 2, 3]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -83,7 +83,7 @@ jobs:
           import os,pathlib,subprocess,sys
           shard=int(os.environ['AUDIT_SHARD'])
           targets=sorted(p.stem for p in pathlib.Path('rust/tests').glob('*.rs'))
-          selected={0: ['gateway_tls_parity', 'native_cli_e2e'], 1: ['admin_sigint_exit', 'runtime_parity_gaps', 'astra_response_final_recheck', 'astra_response_round4', 'astra_response_review']}[shard]
+          selected=targets[shard::4]
           print('AUDIT_TARGETS='+repr(selected),flush=True)
           failed=[]
           for target in selected:
@@ -97,3 +97,16 @@ jobs:
       - name: Library and binary unit tests
         if: always() && steps.oracle.outcome == 'success' && matrix.shard == 0
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
+      - name: Explicit isolated signer resource measurements
+        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 1
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml --lib signer::tests:: -- --ignored --test-threads=1 --nocapture
+      - name: Documentation tests
+        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 2
+        run: cargo test --locked --manifest-path rust/Cargo.toml --doc
+      - name: Formatting and strict Clippy
+        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 3
+        shell: bash
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
