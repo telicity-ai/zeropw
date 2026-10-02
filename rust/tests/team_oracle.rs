@@ -2809,7 +2809,7 @@ except Exception as exc:
     assert_eq!(err.reason, "invalid_cli_profile");
 }
 
-/// Finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
+/// Regression for finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
 /// `eph_pub`/`nonce`/`ciphertext` with `str(wrap[key])`, so a *present*
 /// `null` becomes the text `"None"` -- 4 base64-alphabet characters -- which
 /// decodes cleanly to 3 bytes and reaches the real AEAD call, failing
@@ -2817,19 +2817,11 @@ except Exception as exc:
 /// wrap would get (`dek_wrap_malformed` only if the resulting byte length
 /// is wrong, e.g. `eph_pub`; `dek_unwrap_failed`/`secret_ciphertext_invalid`
 /// for `nonce`/`ciphertext`, which reach `aead.decrypt` at any length and
-/// fail authentication there instead). `envelope.rs`'s exact-`Value::String`
-/// requirement instead rejects a `null` value up front as
-/// `dek_wrap_malformed`/`secret_ciphertext_malformed` for ALL THREE fields --
-/// happens to already match Python for `eph_pub` (both give
-/// `dek_wrap_malformed`, since either path ultimately hits the same length
-/// check) but diverges for `nonce`/`ciphertext`, where Python's outcome is
-/// `dek_unwrap_failed`/`secret_ciphertext_invalid`, not `..._malformed`.
-/// Not literally a §3.5 "uncaught builtin exception" case like (a)/(b)/(c)
-/// above -- Python handles this cleanly via `InvalidInput` on both sides --
-/// but the same "closest handled error substituted for Python's real
-/// behaviour" shape, so recorded the same way.
+/// fail authentication there instead). The port applies the same `str(...)`
+/// coercion before decoding, so the documented reason agrees for every
+/// field.
 #[test]
-fn envelope_null_field_matches_python_reason_only_for_eph_pub() {
+fn envelope_null_field_matches_python_reason() {
     let owner = DeviceKey::generate();
     let record = owner.record().unwrap();
     let dek: Vec<u8> = (0..32u8).collect();
@@ -2870,23 +2862,16 @@ except InvalidInput as exc:
         );
         let py_reason = run_python(&script).trim().to_string();
 
-        if field == "eph_pub" {
-            assert_eq!(rust_reason, "dek_wrap_malformed");
-            assert_eq!(
-                py_reason, "dek_wrap_malformed",
-                "eph_pub=null happens to already match Python"
-            );
+        let expected = if field == "eph_pub" {
+            "dek_wrap_malformed"
         } else {
-            assert_eq!(rust_reason, "dek_wrap_malformed");
-            assert_eq!(
-                py_reason, "dek_unwrap_failed",
-                "python reaches the real AEAD call for a null {field} and fails there instead"
-            );
-            assert_ne!(
-                rust_reason, py_reason,
-                "documented divergence for {field}=null (rust/DEVIATIONS.md)"
-            );
-        }
+            "dek_unwrap_failed"
+        };
+        assert_eq!(py_reason, expected, "Python oracle for {field}=null");
+        assert_eq!(
+            rust_reason, py_reason,
+            "Rust/Python parity for {field}=null"
+        );
     }
 }
 

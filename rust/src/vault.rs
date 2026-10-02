@@ -271,24 +271,51 @@ fn active_version_matches(value: &Value, version: i64) -> bool {
 /// *sequence of pairs* (e.g. `[["a", 1]]` -> `{"a": 1}`); anything else
 /// (a truthy scalar, or a truthy array that isn't a pair sequence) makes
 /// `dict(...)` raise an uncaught `TypeError`/`ValueError` (finding E-R4-3).
-/// This port reproduces the falsy-to-`{}` step and the already-a-mapping
-/// case exactly (both cover every `public` value any writer in this crate
-/// or `zeropw/vault.py` itself ever produces: `Vault::public_metadata`
-/// writes only `{}` or a 3-key SSH object), and folds every other case --
-/// including the pair-sequence coercion `dict()` supports for a JSON array
-/// -- into `state_corrupt` rather than reproducing that coercion exactly,
-/// per PORTING.md's "reproduce the coercion, or error" allowance for this
-/// finding: a hand-edited or bit-rotted `public` field of some other shape
-/// is already outside anything this module's own writers produce, so
-/// failing closed here is preferable to silently exposing a non-object
-/// value to a caller (the previous behaviour: `public: "ab"` was returned
-/// as the bare `Value::String("ab")`, a substituted value PORTING.md §3.5
-/// forbids, in place of Python's own uncaught `ValueError` there).
+/// A pair element may itself be any two-item JSON iterable: an array, a
+/// two-character string, or a two-key object (whose iteration yields its
+/// keys). Duplicate keys keep their first position and last value, as in a
+/// Python dict. A malformed iterable fails closed as `state_corrupt`, matching
+/// this module's mapping for Python's uncaught `TypeError`/`ValueError` on
+/// malformed state. A hashable non-string scalar key is the remaining
+/// representational gap: Python accepts it, while `serde_json::Map` cannot
+/// preserve its type or its collision rules (`true == 1`, but `"true"` is a
+/// distinct key), so this function fails closed instead of stringifying it.
 fn coerce_public_field(v: Option<&Value>) -> Result<Value, Error> {
     match v {
         None => Ok(json!({})),
         Some(val) if json_falsy(val) => Ok(json!({})),
         Some(Value::Object(m)) => Ok(Value::Object(m.clone())),
+        Some(Value::Array(items)) => {
+            let mut result = Map::new();
+            for item in items {
+                let (key, value) = match item {
+                    Value::Array(pair) if pair.len() == 2 => (pair[0].clone(), pair[1].clone()),
+                    Value::String(pair) if pair.chars().count() == 2 => {
+                        let mut chars = pair.chars();
+                        let key = chars.next().expect("checked character count").to_string();
+                        let value = Value::String(
+                            chars.next().expect("checked character count").to_string(),
+                        );
+                        result.insert(key, value);
+                        continue;
+                    }
+                    Value::Object(pair) if pair.len() == 2 => {
+                        let mut keys = pair.keys();
+                        let key =
+                            Value::String(keys.next().expect("checked object length").clone());
+                        let value =
+                            Value::String(keys.next().expect("checked object length").clone());
+                        (key, value)
+                    }
+                    _ => return Err(corrupt()),
+                };
+                let Value::String(key) = key else {
+                    return Err(corrupt());
+                };
+                result.insert(key, value);
+            }
+            Ok(Value::Object(result))
+        }
         Some(_) => Err(corrupt()),
     }
 }

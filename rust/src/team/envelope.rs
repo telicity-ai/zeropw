@@ -41,6 +41,17 @@ fn b64d(text: &str) -> std::result::Result<Vec<u8>, ()> {
     pybase64::b64decode(text).map_err(|_| ())
 }
 
+/// Python's envelope readers apply `str(...)` before their lenient base64
+/// decode. Strings therefore pass through without quotes, while every other
+/// JSON value uses its Python representation (`None`, `True`, exact numeric
+/// rendering, and list/dict repr syntax).
+fn python_str(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        _ => crate::pystr::repr_value(value),
+    }
+}
+
 fn random_bytes(n: usize) -> Vec<u8> {
     use rand::RngCore;
     let mut buf = vec![0u8; n];
@@ -160,8 +171,8 @@ pub fn unwrap_dek(
     let bad = || Error::invalid_input("dek_wrap_malformed");
     let obj = wrap.as_object().ok_or_else(bad)?;
     let field = |key: &str| -> Result<Vec<u8>> {
-        let s = obj.get(key).and_then(Value::as_str).ok_or_else(bad)?;
-        b64d(s).map_err(|_| bad())
+        let value = obj.get(key).ok_or_else(bad)?;
+        b64d(&python_str(value)).map_err(|_| bad())
     };
     let eph_pub = field("eph_pub")?;
     let nonce = field("nonce")?;
@@ -236,8 +247,8 @@ pub fn decrypt_secret(
     let aad = secret_aad(env_id, secret_id, version_id)?;
     let bad = || Error::invalid_input("secret_ciphertext_malformed");
     let field = |key: &str| -> Result<Vec<u8>> {
-        let s = entry.get(key).and_then(Value::as_str).ok_or_else(bad)?;
-        b64d(s).map_err(|_| bad())
+        let value = entry.get(key).ok_or_else(bad)?;
+        b64d(&python_str(value)).map_err(|_| bad())
     };
     let nonce = field("nonce")?;
     let ciphertext = field("ciphertext")?;

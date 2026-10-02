@@ -2689,7 +2689,7 @@ mod tests {
             format!("{}.example", "ü".repeat(57)),
             format!("{}.example", "ü".repeat(58)),
         ];
-        let input = serde_json::to_string(&cases).unwrap();
+        let input = serde_json::to_string(cases.as_slice()).unwrap();
         let input = base64::engine::general_purpose::STANDARD.encode(input);
         let script = format!(
             "import base64,json\nout=[]\nfor value in json.loads(base64.b64decode('{input}')):\n try: out.append(['ok', value.encode('idna').decode('ascii')])\n except UnicodeError: out.append(['error', 'UnicodeError'])\nprint(json.dumps(out))"

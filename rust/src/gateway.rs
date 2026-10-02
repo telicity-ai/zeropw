@@ -1043,11 +1043,9 @@ fn peer_is_local_listener(stream: &TcpStream) -> bool {
 /// `float(False) == 0.0` does (confirmed against live `python3.12` --
 /// Python `bool` is an `int` subclass, so `float()` never raises for one,
 /// unlike the earlier version of this doc comment claimed); a JSON string
-/// is parsed the way `float()` parses one (approximated here with
-/// `str::parse`, which agrees with Python for every plain decimal/exponent
-/// form a legitimately-written `updated_at` could ever contain -- this
-/// crate's own writer only ever stores a plain `f64` timestamp, so a string
-/// here only occurs under deliberate ledger corruption); anything else
+/// is parsed with CPython's `float(str)` grammar, including Unicode decimal
+/// digits and whitespace, PEP 515 underscores between digits, non-finite
+/// spellings and exponent overflow. Anything else
 /// (`null`, an array, an object) has no non-panicking `float()` equivalent
 /// and is treated as unconvertible. Returns `None` exactly where Python's
 /// `float(v)` would raise `TypeError`/`ValueError`.
@@ -1055,9 +1053,49 @@ fn python_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::String(s) => s.trim().parse::<f64>().ok(),
+        Value::String(s) => python_float_str(s),
         _ => None,
     }
+}
+
+/// `PyFloat_FromString` for a Python `str`. CPython first maps Unicode
+/// whitespace to ASCII space and Unicode decimal digits to their ASCII
+/// values, then accepts underscores only between two digits before passing
+/// the resulting literal to its decimal/non-finite parser.
+fn python_float_str(text: &str) -> Option<f64> {
+    let mut ascii = String::new();
+    for c in text.chars() {
+        if u32::from(c) < 127 {
+            ascii.push(c);
+        } else if crate::pystr::is_space(c) {
+            ascii.push(' ');
+        } else {
+            ascii.push(char::from_digit(
+                crate::pystr::unicode_decimal_digit(c)?,
+                10,
+            )?);
+        }
+    }
+
+    let mut plain = String::new();
+    let mut previous = '\0';
+    for c in ascii.chars() {
+        if c == '_' {
+            if !previous.is_ascii_digit() {
+                return None;
+            }
+        } else {
+            if previous == '_' && !c.is_ascii_digit() {
+                return None;
+            }
+            plain.push(c);
+        }
+        previous = c;
+    }
+    if previous == '_' || plain.contains('\0') {
+        return None;
+    }
+    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
 }
 
 /// `int(v)` as applied to a stored `response["status"]` value (finding
