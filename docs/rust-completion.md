@@ -12,6 +12,48 @@ local; it is not described as an always-on cloud worker. Independent review
 will explicitly select `gpt-6-astra` and record the code revision reviewed,
 findings, fixes, and rerun evidence. Earlier PASS results do not approve new code.
 
+## Current full-equivalence continuation (2026-10-03 KST)
+
+Full equivalence remains unproven. The current candidate branch is
+`codex/rust-full-parity`, with `rust/parity-status.json` tracking the historical
+residual inventory and exact revision evidence. The current implementation
+workers are actually `gpt-6-sol`; this local session coordinates and reviews.
+Product code and tests execute only on disposable hosted GitHub Actions
+runners with synthetic credentials. No product builds or tests from this
+continuation execute on the coordinator host. Older local-run reports below
+are historical evidence and do not describe this execution arrangement.
+
+At `f2091e8309cea8cc843020c3ee562bf106db4d7f`, hosted run
+[37041858065](https://github.com/handlecusion/zeropw/actions/runs/37041858065)
+passed the TLS, CLI and native E2E groups on Linux and macOS. Linux library
+results were 531 passed and four ignored. macOS library results were 529
+passed, two failed and four ignored: the remaining failures concern native
+SMTP hostname aliases. Both platforms passed the IDNA boundary and exhaustive
+single-Unicode-scalar comparisons against CPython 3.12.14. These are bounded
+results, not a full-suite or final-head PASS. The overall run failed: it also
+found a Clippy diagnostic and an incorrect ledger NaN test oracle, both
+addressed in the next candidate.
+
+Candidate `17416f1ddfbedcdab9826f3ac2465db4bd6bcc8e` adds macOS system
+proxy support, exact large grant limits, and stored `ca_file` shape handling.
+Its [run 37043238441](https://github.com/handlecusion/zeropw/actions/runs/37043238441)
+passed CLI, data and native E2E on both platforms. Linux library tests passed
+532/four ignored; macOS passed 533 with the same two SMTP alias failures and
+four ignored. The run failed overall: macOS Clippy found an unnecessary lazy
+evaluation, and both TLS jobs exposed a missing repository import path in a
+new Python oracle (not a TLS product decision mismatch). Both are corrected
+in the next candidate. Subsequent validation
+expands to every discovered Rust integration target, library/binary and
+documentation tests, the four explicit signer resource probes, and the full
+Python reference and harness suites on both platforms. A result only supports
+the exact tested SHA; no earlier PASS carries over to later changes.
+
+Open work includes SMTP host aliases, MIME grammar, remaining accepted
+persisted-value representations, snapshot lazy-access semantics, and exact
+replay status propagation. Independent final review and full-platform
+acceptance still apply. Recording a residual never waives the user's full
+rewrite objective.
+
 ## Full scope and acceptance evidence
 
 Latest component checkpoint: the additional offline-fact delivery finding

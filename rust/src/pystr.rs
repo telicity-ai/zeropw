@@ -265,6 +265,28 @@ pub fn int_from_str_decimal(s: &str) -> Option<String> {
     })
 }
 
+/// [`int_from_str_decimal`] plus CPython 3.12's integer-string digit guard.
+/// The limit counts decimal digits in the original input, including leading
+/// zeroes and Unicode Nd digits, but excludes signs, whitespace and
+/// underscores. `PYTHONINTMAXSTRDIGITS=0` disables it; valid overrides are
+/// at least 640, and an absent/invalid override uses CPython's default 4300.
+pub fn int_from_str_decimal_limited(s: &str) -> Option<String> {
+    let value = int_from_str_decimal(s)?;
+    let limit = match std::env::var("PYTHONINTMAXSTRDIGITS") {
+        Ok(raw) => match raw.parse::<usize>() {
+            Ok(0) => 0,
+            Ok(value) if value >= 640 => value,
+            _ => 4300,
+        },
+        Err(_) => 4300,
+    };
+    let digits = s
+        .chars()
+        .filter(|&c| unicode_decimal_digit(c).is_some())
+        .count();
+    (limit == 0 || digits <= limit).then_some(value)
+}
+
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
 /// callers need: `http.client`'s own `int(status)`, `int(length)`, and
 /// `int(chunk_size_text, 16)`), reproducing the exact two-stage grammar

@@ -25,23 +25,16 @@ pub(crate) struct MacProxySettings {
 /// `SCDynamicStoreCopyProxies`. The framework call and CF ownership are
 /// contained by safe dependency APIs; plist serialization preserves the
 /// heterogeneous dictionary without raw-pointer casts in this crate.
-pub(crate) fn load() -> MacProxySettings {
-    let Some(store) = SCDynamicStoreBuilder::new("ZeroPW agent proxy lookup").build() else {
-        return MacProxySettings::default();
-    };
-    let Some(dictionary) = store.get_proxies() else {
-        return MacProxySettings::default();
-    };
+pub(crate) fn load() -> Option<MacProxySettings> {
+    let store = SCDynamicStoreBuilder::new("ZeroPW agent proxy lookup").build()?;
+    let dictionary = store.get_proxies()?;
     let Ok(data) = create_data(dictionary.as_CFTypeRef(), kCFPropertyListBinaryFormat_v1_0) else {
-        return MacProxySettings::default();
+        return None;
     };
     let Ok(value) = Value::from_reader(Cursor::new(data.bytes())) else {
-        return MacProxySettings::default();
+        return None;
     };
-    value
-        .as_dictionary()
-        .map(from_normalized_dictionary)
-        .unwrap_or_default()
+    value.as_dictionary().map(from_normalized_dictionary)
 }
 
 fn int32(value: &Value) -> Option<i32> {
@@ -59,7 +52,7 @@ fn int32(value: &Value) -> Option<i32> {
                 && value.fract() == 0.0
                 && value >= f64::from(i32::MIN)
                 && value <= f64::from(i32::MAX))
-            .then(|| value as i32)
+            .then_some(value as i32)
         })
 }
 
@@ -110,20 +103,7 @@ fn split_port(host: &str) -> &str {
 }
 
 fn decimal_biguint(value: &str) -> Option<BigUint> {
-    let ascii: String = value
-        .chars()
-        .map(|character| {
-            character.to_digit(10).and_then(|digit| {
-                // `regex`'s Unicode `\d` and Python's `int()` agree on Nd;
-                // keep the conversion explicit rather than accepting other
-                // numeric character classes.
-                crate::pystr::unicode_decimal_digit(character)
-                    .or_else(|| character.is_ascii_digit().then_some(digit))
-                    .and_then(|digit| char::from_digit(digit, 10))
-            })
-        })
-        .collect::<Option<_>>()?;
-    ascii.parse().ok()
+    crate::pystr::int_from_str_decimal(value)?.parse().ok()
 }
 
 fn exception_ip(value: &str) -> Option<(&str, Option<BigUint>)> {
@@ -336,6 +316,7 @@ mod tests {
                 "EXACT.example".into(),
                 "10.1".into(),
                 "172.16/12".into(),
+                "١٩٨.٥١.١٠٠/٢٤".into(),
                 "192.0.2.0/33".into(),
                 "host?.example".into(),
                 "node[0-3].example".into(),
@@ -351,6 +332,7 @@ mod tests {
             "exact.example",
             "10.1.2.3",
             "172.31.255.1:443",
+            "198.51.100.42",
             "192.0.2.1",
             "host1.example",
             "node2.example",
@@ -388,7 +370,7 @@ mod tests {
             .trim(),
         )
         .unwrap();
-        let actual = load();
+        let actual = load().expect("SystemConfiguration proxy snapshot");
         assert_eq!(
             json!({
                 "proxies": actual.proxies,

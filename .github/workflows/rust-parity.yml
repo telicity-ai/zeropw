@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-15]
-        suite: [unit, tls, cli, e2e, data]
+        suite: [unit, tls, cli, e2e, data, remaining0, remaining1, signer, python]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -68,17 +68,27 @@ jobs:
         if: (success() || failure()) && matrix.suite == 'unit'
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
       - name: Affected differential tests and native process E2E
-        if: (success() || failure()) && matrix.suite != 'unit'
+        if: (success() || failure()) && matrix.suite != 'unit' && matrix.suite != 'signer' && matrix.suite != 'python'
         shell: bash
         run: |
           python3.12 - <<'PYCODE'
           import os,subprocess,sys
-          targets={
-              'tls':['gateway_tls_parity','gateway'],
+          from pathlib import Path
+          groups={
+              'tls':['gateway_tls_parity','gateway_replay_status_parity','gateway'],
               'cli':['runtime_parity_gaps','admin_expanduser_parity','cli_grant_limits_parity','cli_parity','agent_proxy_parity','agent_help','astra_cli_runtime_round2','astra_cleanup_publication_order'],
-              'e2e':['response_parity_gaps','native_cli_e2e'],
-              'data':['ledger_float_parity','team_envelope_parity_edges','team_oracle','team_fold','vault_public_parity'],
-          }[os.environ['PARITY_SUITE']]
+              'e2e':['response_parity_gaps','native_cli_e2e','fake_upstream'],
+              'data':['ledger_float_parity','team_envelope_parity_edges','team_oracle','team_fold','team_snapshot_version_order_parity','vault_public_parity'],
+          }
+          all_targets={path.stem for path in Path('rust/tests').glob('*.rs')}
+          covered={target for group in groups.values() for target in group}
+          assert covered <= all_targets, sorted(covered-all_targets)
+          remaining=sorted(all_targets-covered)
+          groups['remaining0']=remaining[::2]
+          groups['remaining1']=remaining[1::2]
+          assert sum(map(len,groups.values())) == len(all_targets)
+          print('AUDIT_INTEGRATION_MANIFEST='+repr(groups),flush=True)
+          targets=groups[os.environ['PARITY_SUITE']]
           failed=[]
           for target in targets:
               print('AUDIT_BEGIN='+target,flush=True)
@@ -88,3 +98,20 @@ jobs:
           print('AUDIT_FAILED='+repr(failed),flush=True)
           sys.exit(bool(failed))
           PYCODE
+      - name: Explicit signer resource probes and documentation tests
+        if: matrix.suite == 'signer'
+        shell: bash
+        run: |
+          result=0
+          cargo test --locked --manifest-path rust/Cargo.toml --lib -- --ignored --test-threads=1 --nocapture || result=1
+          cargo test --locked --manifest-path rust/Cargo.toml --doc || result=1
+          exit "$result"
+      - name: Full Python reference and harness suites
+        if: matrix.suite == 'python'
+        shell: bash
+        run: |
+          result=0
+          python3.12 -m compileall -q zeropw tests harness || result=1
+          python3.12 -m unittest discover -s tests -p 'test_*.py' -v || result=1
+          python3.12 -m unittest discover -s harness -p 'test_*.py' -v || result=1
+          exit "$result"

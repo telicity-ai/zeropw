@@ -1221,7 +1221,7 @@ fn request_handling_matches_the_python_fixture() {
     let engine = base64::engine::general_purpose::STANDARD;
     let auth = format!("Authorization: Bearer {SECRET}\r\n");
     let get = |target: &str| format!("GET {target} HTTP/1.1\r\n{auth}\r\n").into_bytes();
-    let cases: Vec<Vec<u8>> = vec![
+    let mut cases: Vec<Vec<u8>> = vec![
         format!("TRACE /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
         format!("PROPFIND /me HTTP/1.1\r\n{auth}Content-Length: 2\r\n\r\n{{}}").into_bytes(),
         get("/base64-embedded-leak?offset=&wrap=60"),
@@ -1238,6 +1238,9 @@ fn request_handling_matches_the_python_fixture() {
         get("//me"),
         get("/me#frag?x=1"),
         get("/encoded-leak?form=raw#frag"),
+        get("http://example.invalid/me?ignored=1"),
+        format!("GET /me HTTP/0.9\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/0.8\r\n{auth}\r\n").into_bytes(),
         format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length: 50\r\n\r\n{{\"title\"").into_bytes(),
         format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length:  1_4 \r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
         format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Folded: a\r\n b\r\n\tc\r\nX-Pad: v  \r\n\r\n").into_bytes(),
@@ -1245,6 +1248,20 @@ fn request_handling_matches_the_python_fixture() {
         format!("GET /echo-headers HTTP/1.1\r\n{auth}:empty-name\r\nX-After: 2\r\n\r\n").into_bytes(),
         format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Last: end").into_bytes(),
     ];
+    cases.extend([
+        b"GET /me extra HTTP/1.1\r\n\r\n".to_vec(),
+        b"GET /me extra NOTHTTP\r\n\r\n".to_vec(),
+        b"GET /me NOTHTTP\r\n\r\n".to_vec(),
+        format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(65_530)).into_bytes(),
+        format!("GET /me HTTP/1.1\r\nX-Long: {}\r\n\r\n", "x".repeat(65_530)).into_bytes(),
+        format!(
+            "GET /me HTTP/1.1\r\n{}\r\n",
+            (0..100)
+                .map(|i| format!("X-{i}: v\r\n"))
+                .collect::<String>()
+        )
+        .into_bytes(),
+    ]);
     let encoded: Vec<String> = cases.iter().map(|c| engine.encode(c)).collect();
     let script = format!(
         "SECRET = {SECRET:?}\nCASES = '{}'\n{PY_FAKE_EXCHANGE}",
@@ -1283,6 +1300,14 @@ fn request_handling_matches_the_python_fixture() {
     let status = |i: usize| status_and_body(&engine.decode(&python_replies[i]).unwrap()).0;
     assert_eq!(status(0), "HTTP/1.1 501 Unsupported method ('TRACE')");
     assert_eq!(status(2), "HTTP/1.1 200 OK");
-    assert_eq!(status(16), "HTTP/1.1 400 Bad Request");
-    assert_eq!(python_recorded.as_array().unwrap().len(), cases.len() - 2);
+    assert_eq!(status(19), "HTTP/1.1 400 Bad Request");
+    assert_eq!(
+        status(cases.len() - 6),
+        "HTTP/1.1 400 Bad request syntax ('GET /me extra HTTP/1.1')"
+    );
+    assert_eq!(status(cases.len() - 5), "<!DOCTYPE HTML>");
+    assert_eq!(status(cases.len() - 3), "HTTP/1.1 414 Request-URI Too Long");
+    assert_eq!(status(cases.len() - 2), "HTTP/1.1 431 Line too long");
+    assert_eq!(status(cases.len() - 1), "HTTP/1.1 431 Too many headers");
+    assert_eq!(python_recorded.as_array().unwrap().len(), cases.len() - 8);
 }

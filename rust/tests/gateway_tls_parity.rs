@@ -143,7 +143,14 @@ impl Gateway {
             None,
             Arc::new(|_, _| Ok(vec!["127.0.0.1".parse().unwrap()])),
         );
-        (result.status, result.reason)
+        (
+            result
+                .status
+                .to_string()
+                .parse()
+                .expect("ordinary TLS status"),
+            result.reason,
+        )
     }
 }
 

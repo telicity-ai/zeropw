@@ -617,7 +617,11 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
             Err(DispatchError::Gone) => break,
             Err(DispatchError::Error(e)) => {
                 mark(inner, id, false);
-                (error_status(&e), json_body(&e.to_dict()), json_type())
+                (
+                    error_status(&e).into(),
+                    json_body(&e.to_dict()),
+                    json_type(),
+                )
             }
         };
         let close = request.close || (!consumed && request.length > 0);
@@ -664,7 +668,7 @@ impl From<Error> for DispatchError {
         Self::Error(e)
     }
 }
-type Reply = (u16, Vec<u8>, gateway::Headers);
+type Reply = (crate::pyint::PyInt, Vec<u8>, gateway::Headers);
 fn json_type() -> gateway::Headers {
     vec![("Content-Type".into(), "application/json".into())]
 }
@@ -676,7 +680,7 @@ fn json_body(value: &Value) -> Vec<u8> {
 }
 fn json_reply(status: u16, value: Value) -> Result<Reply, DispatchError> {
     Ok((
-        status,
+        status.into(),
         pyjson::dumps(&value, DumpOptions::default_sorted())?.into_bytes(),
         json_type(),
     ))
@@ -926,6 +930,15 @@ fn reason_phrase(status: u16) -> &'static str {
         _ => "",
     }
 }
+
+fn exact_reason_phrase(status: &crate::pyint::PyInt) -> &'static str {
+    status
+        .to_string()
+        .parse::<u16>()
+        .ok()
+        .map(reason_phrase)
+        .unwrap_or("")
+}
 /// `BaseHTTPRequestHandler.responses[code][1]` for the codes `send_error`
 /// is used with here.
 fn explanation(code: u16) -> &'static str {
@@ -977,18 +990,27 @@ fn send_error(
         ("Content-Length".into(), body.len().to_string()),
     ];
     log_request(inner, progress);
-    write_response(stream, progress, code, &message, &headers, body.as_bytes())
+    let status = crate::pyint::PyInt::from(code);
+    write_response(
+        stream,
+        progress,
+        &status,
+        &message,
+        &headers,
+        body.as_bytes(),
+    )
 }
 /// `ZeroPWHandler._send`.
 fn send(
     inner: &Inner,
     stream: &mut TcpStream,
     progress: &Progress,
-    status: u16,
+    status: impl Into<crate::pyint::PyInt>,
     body: &[u8],
     headers: &gateway::Headers,
     close: bool,
 ) -> std::io::Result<()> {
+    let status = status.into();
     let mut all = headers.clone();
     all.push(("Content-Length".into(), body.len().to_string()));
     all.push(("Cache-Control".into(), "no-store".into()));
@@ -996,7 +1018,14 @@ fn send(
         all.push(("Connection".into(), "close".into()));
     }
     log_request(inner, progress);
-    write_response(stream, progress, status, reason_phrase(status), &all, body)
+    write_response(
+        stream,
+        progress,
+        &status,
+        exact_reason_phrase(&status),
+        &all,
+        body,
+    )
 }
 /// `send_response` + `send_header`s + `end_headers` + body, latin-1 encoded
 /// like CPython's header buffer. An HTTP/0.9 request gets the body alone;
@@ -1004,7 +1033,7 @@ fn send(
 fn write_response(
     stream: &mut TcpStream,
     progress: &Progress,
-    status: u16,
+    status: &crate::pyint::PyInt,
     phrase: &str,
     headers: &[(String, String)],
     body: &[u8],
@@ -1060,6 +1089,27 @@ mod tests {
     /// Only this module's tests route a request here; production builds do
     /// not contain the branch.
     pub(super) const PANIC_PATH: &str = "/__synthetic_panic__";
+
+    #[test]
+    fn replay_status_line_keeps_unbounded_decimal_value() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let status = crate::pyint::PyInt(
+            "18446744073709551816"
+                .parse()
+                .expect("synthetic bigint status"),
+        );
+        let progress = Progress {
+            version: "HTTP/1.1".to_string(),
+            ..Progress::default()
+        };
+        write_response(&mut server, &progress, &status, "", &[], b"").unwrap();
+        server.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 18446744073709551816 \r\n"));
+    }
 
     fn server() -> (tempfile::TempDir, ZeroPWServer) {
         let (temp, server) = idle_server();

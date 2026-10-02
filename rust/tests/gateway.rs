@@ -1356,7 +1356,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     // `.expect()`-panicked on both failure modes instead of returning an
     // error the caller can handle.
     let non_utf8 = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: vec![0xff, 0xfe, 0xfd],
         reason: None,
@@ -1368,7 +1368,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     );
 
     let non_json = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: b"not json at all {".to_vec(),
         reason: None,
@@ -1380,7 +1380,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     );
 
     let valid = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: b"{\"ok\": true}".to_vec(),
         reason: None,
@@ -2615,7 +2615,7 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
 }
 
 #[test]
-fn replay_status_never_truncates_out_of_range_magnitudes() {
+fn replay_status_preserves_out_of_range_magnitudes_exactly() {
     // Finding X-5: Python's `int(v)` (`RequestLedger.replay`,
     // `status = int(response.get("status", 502))`) has no upper/lower
     // bound -- CPython's arbitrary-precision `int` never raises here, so
@@ -2638,18 +2638,27 @@ fn replay_status_never_truncates_out_of_range_magnitudes() {
     // magnitude Python accepts but this crate's `u16` field cannot hold now
     // fails closed with `state_corrupt` instead.
     let t = GatewayTest::new();
-    let out_of_range: [(&str, serde_json::Value); 6] = [
-        ("65736", serde_json::json!(65736)),
-        ("65536", serde_json::json!(65536)),
-        ("1000000", serde_json::json!(1_000_000)),
-        ("1e300", serde_json::json!(1e300)),
+    let out_of_range: [(&str, serde_json::Value, &str); 6] = [
+        ("65736", serde_json::json!(65736), "65736"),
+        ("65536", serde_json::json!(65536), "65536"),
+        ("1000000", serde_json::json!(1_000_000), "1000000"),
+        (
+            "1e300",
+            serde_json::json!(1e300),
+            "100000000000000005250476025520442024870446858110815915491585411551180245798890819578637137508044786404370444383579700332569032633574492279965573463466567958765612566513757258112742935702887839829934745776124133290447269462892021640232655351912240858992765120482940850837636027176675812314945834608128",
+        ),
         (
             "numeric_string_huge",
             serde_json::json!("18446744073709551816"),
+            "18446744073709551816",
         ),
-        ("numeric_string_underscore", serde_json::json!(" 65736_0 ")),
+        (
+            "numeric_string_underscore",
+            serde_json::json!(" 65736_0 "),
+            "657360",
+        ),
     ];
-    for (label, status) in out_of_range {
+    for (label, status, expected) in out_of_range {
         let request_id = format!("req-status-oor-{label}");
         assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
         set_ledger_response(
@@ -2662,11 +2671,29 @@ fn replay_status_never_truncates_out_of_range_magnitudes() {
             }),
         );
         let replayed = issue_ledger(&t, &request_id, "same");
+        assert_eq!(replayed.status.to_string(), expected, "{label}");
+        assert_eq!(replayed.reason, None, "{label}");
+        let expected_value: Value = serde_json::from_str(expected).unwrap();
         assert_eq!(
-            (replayed.status, replayed.reason.as_deref()),
-            (503, Some("state_corrupt")),
-            "{label}: a status magnitude python accepts but u16 cannot hold must fail \
-             closed, not truncate into a plausible-looking wrong status"
+            t.audit_records().last().unwrap()["status"],
+            expected_value,
+            "{label}: replay audit must retain the exact status"
+        );
+        let body = serde_json::to_vec(&serde_json::json!({"title": "same"})).unwrap();
+        let tool_result = zeropw::tools::request(
+            &t.ctx,
+            "agent-1",
+            "gh",
+            "POST",
+            "/repos/demo/issues",
+            &headers(&[("Content-Type", "application/json")]),
+            &body,
+            Some(&request_id),
+        )
+        .unwrap();
+        assert_eq!(
+            tool_result["status"], expected_value,
+            "{label}: tools.request must retain the exact status"
         );
     }
 
@@ -5896,9 +5923,16 @@ fn run_python_oracle_stdin(script: &str, stdin_data: &str) -> String {
 /// exported).
 fn run_python_oracle(script: &str) -> String {
     let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .to_path_buf();
     let output = std::process::Command::new(interpreter)
         .arg("-c")
         .arg(script)
+        .current_dir(&repo_root)
+        .env("PYTHONPATH", &repo_root)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .output()
         .expect("run python3.12");
     assert!(

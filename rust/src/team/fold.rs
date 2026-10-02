@@ -110,13 +110,11 @@ pub fn new_document(env_id: &str) -> Map<String, Value> {
     m
 }
 
-/// Validates that a document tree (freshly built by [`new_document`], or
-/// supplied as `base_document` to [`fold`]) has the shape every op handler
-/// assumes. Python has no equivalent check -- an unexpected shape there
-/// surfaces as an uncaught `KeyError`/`AttributeError`/`TypeError` partway
-/// through folding (PORTING.md §3.5) -- this port instead fails once, up
-/// front, with a single `state_corrupt` error (`rust/DEVIATIONS.md`), so
-/// every handler below can assume the shape without repeating this check.
+/// Validates only document portions the commits in this fold can touch.
+/// Python has no eager whole-document check: untouched malformed entries
+/// pass through, while an accessed bad shape raises at its handler. Rust
+/// maps the latter built-in exception to `state_corrupt` (PORTING.md §3.5)
+/// without rejecting unrelated entries or a no-op fold.
 ///
 /// Finding H-R3-4: round 1 only checked the TOP-level container types
 /// (`members`/`connections`/`secrets`/`settings`/`dek.generations` are
@@ -195,9 +193,15 @@ pub fn new_document(env_id: &str) -> Map<String, Value> {
 /// own doc comment), the same "closest handled reason for an uncaught
 /// exception" substitution PORTING.md §3.5 already uses throughout this
 /// module.
-fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
+fn validate_document_shape(doc: &Value, commits: &[Commit]) -> Result<Map<String, Value>> {
     let corrupt = || Error::state("state_corrupt").with_detail("team_document");
     let obj = doc.as_object().ok_or_else(corrupt)?.clone();
+    // Python performs no document validation when there is no op to apply.
+    // Preserve an arbitrary object unchanged in that case; `_version_order`
+    // is handled separately by `fold` just as Python's final `pop` is.
+    if commits.iter().all(|commit| commit.ops.is_empty()) {
+        return Ok(obj);
+    }
     for key in [
         "env_id",
         "members",
@@ -214,7 +218,14 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .get("members")
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
-    for entry in members.values() {
+    let authors: HashSet<&str> = commits
+        .iter()
+        .map(|commit| commit.author.as_str())
+        .collect();
+    for (fingerprint, entry) in members {
+        if !authors.contains(fingerprint.as_str()) {
+            continue;
+        }
         // `bool(member) and member["status"] == "active"`: a FALSY entry of
         // ANY JSON type (finding H-R5-6: `null`/`0`/`[]`/`""`, not just an
         // empty object `{}`) never even evaluates the subscript, so only a
@@ -231,7 +242,16 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .get("connections")
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
-    for entry in connections.values() {
+    let connection_targets: HashSet<&str> = commits
+        .iter()
+        .flat_map(|commit| &commit.ops)
+        .filter_map(Value::as_object)
+        .filter_map(|op| op.get("id").and_then(Value::as_str))
+        .collect();
+    for (id, entry) in connections {
+        if !connection_targets.contains(id.as_str()) {
+            continue;
+        }
         // Finding H-R5-6: a connections entry that is not an OBJECT AT ALL
         // (`null`/`0`/...) is tolerated here -- see this function's own doc
         // comment for why this is narrower than the members case above (no
@@ -252,7 +272,16 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .get("secrets")
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
-    for entry in secrets.values() {
+    let secret_targets: HashSet<&str> = commits
+        .iter()
+        .flat_map(|commit| &commit.ops)
+        .filter_map(Value::as_object)
+        .filter_map(|op| op.get("secret_id").and_then(Value::as_str))
+        .collect();
+    for (id, entry) in secrets {
+        if !secret_targets.contains(id.as_str()) {
+            continue;
+        }
         // Finding H-R5-6: same "not an object at all" tolerance as
         // `connections` above (a truthy-but-not-`dict` Python value, e.g. a
         // number or string, still raises its own uncaught exception the
@@ -296,7 +325,14 @@ fn validate_document_shape(doc: &Value) -> Result<Map<String, Value>> {
         .get("generations")
         .and_then(Value::as_object)
         .ok_or_else(corrupt)?;
+    let touches_all_generations = commits
+        .iter()
+        .flat_map(|commit| &commit.ops)
+        .any(|op| op.get("op").and_then(Value::as_str) == Some("member.add"));
     for generation in generations.values() {
+        if !touches_all_generations {
+            continue;
+        }
         let generation_obj = generation.as_object().ok_or_else(corrupt)?;
         // `generation["wraps"][fp] = wrap` (`_op_member_add`): unconditional,
         // not "if present" -- every generation entry needs an object
@@ -315,7 +351,7 @@ pub struct FoldResult {
     pub document: Value,
     /// One entry per skipped op: `(commit_hash, op_index, reason)`.
     pub skipped: Vec<(String, usize, String)>,
-    pub version_order: BTreeMap<String, Vec<String>>,
+    pub version_order: BTreeMap<String, Vec<Value>>,
     /// Widened to `i128` (finding H-R2-6): `commit.author_seq` is `i128`
     /// (see `commit.rs`'s `Commit` and `rust/DEVIATIONS.md`), and Python's
     /// own `vector[commit.author] = max(vector.get(commit.author, 0),
@@ -547,7 +583,7 @@ fn op_connection_create(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -598,7 +634,7 @@ fn op_connection_update(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -669,7 +705,7 @@ fn op_connection_switch_credential(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -732,7 +768,7 @@ fn op_connection_disable(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -774,7 +810,7 @@ fn op_secret_put_version(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    vo: &mut BTreeMap<String, Vec<String>>,
+    vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -875,7 +911,7 @@ fn op_secret_put_version(
             "public": Value::Object(public),
         }),
     );
-    vo.entry(secret_id).or_default().push(version_id);
+    vo.entry(secret_id).or_default().push(json!(version_id));
     Ok(None)
 }
 
@@ -958,7 +994,7 @@ fn op_secret_set_status(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -974,7 +1010,7 @@ fn op_secret_activate(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -992,7 +1028,7 @@ fn op_member_add(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1057,7 +1093,7 @@ fn op_member_set_role(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1090,7 +1126,7 @@ fn op_member_remove(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     let fp = op
@@ -1123,7 +1159,7 @@ fn op_owner_transfer(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_owner(doc, &commit.author) {
@@ -1154,7 +1190,7 @@ fn op_dek_rotate(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1186,7 +1222,7 @@ fn op_settings_update(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1208,7 +1244,7 @@ fn op_env_init(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<String>>,
+    _vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !matches!(doc.get("owner"), None | Some(Value::Null)) {
@@ -1259,7 +1295,7 @@ type OpHandler = fn(
     &mut Map<String, Value>,
     &Commit,
     &mut Facts,
-    &mut BTreeMap<String, Vec<String>>,
+    &mut BTreeMap<String, Vec<Value>>,
     &Map<String, Value>,
 ) -> Result<Option<String>>;
 
@@ -1287,7 +1323,7 @@ fn apply_op(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    vo: &mut BTreeMap<String, Vec<String>>,
+    vo: &mut BTreeMap<String, Vec<Value>>,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     let name = op.get("op").and_then(Value::as_str).unwrap_or("");
@@ -1385,24 +1421,19 @@ fn reapply_facts(doc: &mut Map<String, Value>, facts: &Facts) {
 /// [`fold`]'s own doc comment): every real writer of this key
 /// (`op_secret_put_version`'s `.setdefault(...).setdefault(secret_id,
 /// []).append(version_id)`, the only place across both languages that ever
-/// touches it) only ever produces a JSON object of arrays of strings, so
-/// this requires exactly that shape -- `state_corrupt` (the same fail-closed
-/// posture [`validate_document_shape`]'s neighbouring checks use, PORTING.md
-/// §3.5) for a non-object `stray`, a non-array value, or a non-string
-/// element, rather than reproducing Python's own `TypeError` on
-/// `list(<non-iterable>)`/a hypothetical non-string entry at whatever
-/// specific later point it would surface.
-fn parse_stray_version_order(value: &Value) -> Result<BTreeMap<String, Vec<String>>> {
+/// touches it) normally produces a JSON object of arrays of strings. Arrays
+/// are nevertheless kept as raw JSON values because Python applies no
+/// element-type check to an already-present `_version_order`; a non-string
+/// item survives the fold and its saved snapshot unchanged. Non-object and
+/// non-array container shapes retain the existing fail-closed mapping for
+/// Python's later attribute errors when an op touches them.
+fn parse_stray_version_order(value: &Value) -> Result<BTreeMap<String, Vec<Value>>> {
     let corrupt = || Error::state("state_corrupt").with_detail("team_document");
     let obj = value.as_object().ok_or_else(corrupt)?;
     let mut out = BTreeMap::new();
     for (k, v) in obj {
         let arr = v.as_array().ok_or_else(corrupt)?;
-        let mut list = Vec::with_capacity(arr.len());
-        for item in arr {
-            list.push(item.as_str().ok_or_else(corrupt)?.to_string());
-        }
-        out.insert(k.clone(), list);
+        out.insert(k.clone(), arr.clone());
     }
     Ok(out)
 }
@@ -1443,9 +1474,11 @@ pub fn fold(
     commits: Vec<Commit>,
     facts: Option<&Facts>,
     base_document: Option<Value>,
-    base_version_order: Option<BTreeMap<String, Vec<String>>>,
+    base_version_order: Option<BTreeMap<String, Vec<Value>>>,
     audit: Option<&Audit>,
 ) -> Result<FoldResult> {
+    let relevant: Vec<Commit> = commits.into_iter().filter(|c| c.env_id == env_id).collect();
+    let ordered = sort_total_order(relevant)?;
     // Finding H-R4-7: Python's `copy.deepcopy(base_document) if
     // base_document is not None else new_document(env_id)` is an identity
     // check against Python's `None`, which JSON `null` decodes to -- so a
@@ -1455,7 +1488,7 @@ pub fn fold(
     // `validate_document_shape`'s `.as_object()` check as `state_corrupt`.
     let mut doc = match base_document {
         Some(Value::Null) | None => new_document(env_id),
-        Some(v) => validate_document_shape(&v)?,
+        Some(v) => validate_document_shape(&v, &ordered)?,
     };
     let mut version_order = match doc.remove("_version_order") {
         Some(stray) => parse_stray_version_order(&stray)?,
@@ -1463,8 +1496,6 @@ pub fn fold(
     };
     let mut working_facts = facts.cloned().unwrap_or_default();
     let mut skipped: Vec<(String, usize, String)> = Vec::new();
-    let relevant: Vec<Commit> = commits.into_iter().filter(|c| c.env_id == env_id).collect();
-    let ordered = sort_total_order(relevant)?;
     let mut last_target_author: HashMap<(TargetKind, String), (String, i128, String)> =
         HashMap::new();
     let mut overridden: Vec<Value> = Vec::new();
@@ -1642,27 +1673,20 @@ fn author_seq_is_later(author_seq: i128, floor: Option<&Value>) -> Result<bool> 
 /// `{k: list(v) for k, v in (base_version_order or {}).items()}`, as
 /// `fold_with_snapshot` hands `snapshot.get("version_order")` to `fold()`'s
 /// `base_version_order` parameter (finding H-R4-7). `fold()`'s own Rust
-/// signature requires an already-typed `BTreeMap<String, Vec<String>>` --
-/// there is no raw-`Value` overload for it to defer this check to, unlike
-/// Python's untyped parameter -- so the conversion, and its failure modes,
-/// must live here instead:
+/// signature requires an already-typed `BTreeMap<String, Vec<Value>>`, so
+/// Python's `list(v)` coercion lives here:
 ///
 /// - A FALSY `version_order` (absent, `null`, `0`, `""`, `[]`, `{}`) becomes
 ///   `{}`, matching Python's `(x or {})` short-circuit -- no error.
 /// - A TRUTHY value that is not a JSON object has no Python `.items()`
 ///   equivalent: an uncaught `AttributeError`, `state_corrupt` here.
-/// - Each entry's value must be a JSON array whose every element is a
-///   string: Python's `list(v)` copies whatever `v` already held VERBATIM
-///   -- a non-iterable value (a number, bool, `null`) is `TypeError`, but a
-///   string or object value is a perfectly ordinary (if unlikely) success
-///   in Python, which this crate's `Vec<String>` simply cannot represent
-///   either way -- fails closed instead of silently DROPPING non-string
-///   elements the way this used to, which shifted every later element's
-///   1-based position and so corrupted `derive_vault`'s node-local version
-///   integers silently rather than visibly.
+/// - An array is copied verbatim, including non-string elements; a string
+///   becomes its Unicode scalar strings and an object becomes its insertion-
+///   ordered keys. A number, bool or `null` is non-iterable and fails closed
+///   for Python's uncaught `TypeError`.
 fn parse_snapshot_version_order(
     value: Option<&Value>,
-) -> Result<Option<BTreeMap<String, Vec<String>>>> {
+) -> Result<Option<BTreeMap<String, Vec<Value>>>> {
     let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
     let value = match value {
         None => return Ok(None),
@@ -1672,11 +1696,12 @@ fn parse_snapshot_version_order(
     let obj = value.as_object().ok_or_else(corrupt)?;
     let mut out = BTreeMap::new();
     for (k, v) in obj {
-        let arr = v.as_array().ok_or_else(corrupt)?;
-        let mut list = Vec::with_capacity(arr.len());
-        for item in arr {
-            list.push(item.as_str().ok_or_else(corrupt)?.to_string());
-        }
+        let list = match v {
+            Value::Array(items) => items.clone(),
+            Value::String(text) => text.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => return Err(corrupt()),
+        };
         out.insert(k.clone(), list);
     }
     Ok(Some(out))
@@ -2283,7 +2308,21 @@ pub fn derive_local(
     for (sid, order) in &fold_result.version_order {
         let mut m = BTreeMap::new();
         for (i, vid) in order.iter().enumerate() {
-            m.insert(vid.clone(), (i + 1) as i64);
+            match vid {
+                Value::String(vid) => {
+                    m.insert(vid.clone(), (i + 1) as i64);
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    // Python's dict comprehension uses each item as a key;
+                    // list/dict keys are unhashable and abort derive before
+                    // its state lock or any persisted write.
+                    return Err(Error::state("state_corrupt").with_detail("team_version_order"));
+                }
+                // Numeric/bool/null keys are hashable in Python. Product
+                // version ids are strings, so these entries affect later
+                // indices but can never match a document version id.
+                Value::Null | Value::Bool(_) | Value::Number(_) => {}
+            }
         }
         version_index.insert(sid.clone(), m);
     }
@@ -3025,12 +3064,9 @@ except Exception as e:
     /// per-secret value that isn't an array, is real and load-bearing (a
     /// LATER op that actually appends to that secret id would otherwise hit
     /// `.setdefault`/`.append` on the wrong Python type -- an uncaught
-    /// `AttributeError`, confirmed against real `python3.12` below); this
-    /// pins that fail-closed behaviour and documents the one remaining gap
-    /// this function is narrower than Python for: an array VALUE with
-    /// non-string elements, which Python tolerates (no per-element type
-    /// check once the key is already present) but this function still
-    /// rejects.
+    /// `AttributeError`, confirmed against real `python3.12` below). Arrays
+    /// with non-string elements are now retained verbatim, matching Python;
+    /// the differential snapshot test pins their saved bytes.
     #[test]
     fn parse_stray_version_order_fails_closed_matching_pythons_touched_behaviour() {
         fn base_doc() -> Map<String, Value> {
@@ -3278,8 +3314,8 @@ print(f"written_is_none:{state.written is None}")
         let c2 =
             commit::sign_commit(&owner, &env_id, 2, "2000-0000", &Map2::new(), vec![op]).unwrap();
 
-        let base_version_order_arg: BTreeMap<String, Vec<String>> =
-            [("gh-token".to_string(), vec!["arg-v0".to_string()])]
+        let base_version_order_arg: BTreeMap<String, Vec<Value>> =
+            [("gh-token".to_string(), vec![json!("arg-v0")])]
                 .into_iter()
                 .collect();
 
@@ -3298,10 +3334,7 @@ print(f"written_is_none:{state.written is None}")
         // `["arg-v0", "2222222222222222"]`.
         assert_eq!(
             result.version_order.get("gh-token"),
-            Some(&vec![
-                "stray-v0".to_string(),
-                "2222222222222222".to_string()
-            ])
+            Some(&vec![json!("stray-v0"), json!("2222222222222222")])
         );
         // The returned document must never contain `_version_order`.
         assert!(
@@ -4159,6 +4192,51 @@ with tempfile.TemporaryDirectory() as tmp:
         );
         let py_document_text = crate::oracle::python(&script);
         assert_eq!(py_document_text.trim(), from_snapshot_text);
+    }
+
+    #[test]
+    fn unrelated_op_does_not_eagerly_validate_an_untouched_bad_entry() {
+        let (owner, env_id, _dek, c1) = new_env(None);
+        let base = fold(&env_id, vec![c1], None, None, None, None).unwrap();
+        let mut document = base.document;
+        document["connections"]
+            .as_object_mut()
+            .unwrap()
+            .insert("untouched-bad".into(), json!({}));
+        let c2 = commit::sign_commit(
+            &owner,
+            &env_id,
+            2,
+            "2000-0000",
+            &Map2::new(),
+            vec![json!({"op":"settings.update","sync_interval_seconds":7})],
+        )
+        .unwrap();
+        let rust = fold(
+            &env_id,
+            vec![c2.clone()],
+            None,
+            Some(document.clone()),
+            Some(base.version_order),
+            None,
+        )
+        .unwrap();
+        let script = format!(
+            r#"
+import json
+from zeropw.team import commit as C
+from zeropw.team import fold as F
+doc=json.loads({doc:?})
+commit=C.Commit.from_dict(json.loads({commit:?}))
+result=F.fold({env:?}, [commit], base_document=doc, base_version_order={{}})
+print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
+"#,
+            doc = pyjson::dumps(&document, pyjson::DumpOptions::compact_sorted()).unwrap(),
+            commit = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
+            env = env_id,
+        );
+        let python: Value = serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        assert_eq!(rust.document, python);
     }
 
     /// Finding H-R4-7 (non-object snapshot): Python's `snapshot.get(...)`

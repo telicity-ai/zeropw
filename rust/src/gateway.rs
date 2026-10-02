@@ -169,7 +169,7 @@ fn dict_set(pairs: &mut Headers, key: impl Into<String>, value: impl Into<String
 /// Port of `gateway.RelayResult`.
 #[derive(Clone, Debug)]
 pub struct RelayResult {
-    pub status: u16,
+    pub status: crate::pyint::PyInt,
     pub headers: Headers,
     pub body: Vec<u8>,
     pub reason: Option<String>,
@@ -225,7 +225,7 @@ fn error_result(
         .expect("error payload is representable")
         .into_bytes();
     RelayResult {
-        status,
+        status: status.into(),
         headers: vec![("Content-Type".to_string(), "application/json".to_string())],
         body,
         reason: Some(reason.to_string()),
@@ -1118,54 +1118,52 @@ fn python_float_str(text: &str) -> Option<f64> {
 /// `int("18446744073709551816") == 18446744073709551816`,
 /// `int(" 65736_0 ") == 657360` -- none of these raise.
 ///
-/// [`RelayResult::status`], unlike Python's `RelayResult.status: int`, is a
-/// fixed `u16` -- the same type every OTHER status field in this module
-/// uses for a real HTTP status code. That is a genuine representational gap
-/// (PORTING.md §3d): three lossy steps used to paper over it silently
-/// (a saturating parse, `as i64`, `as u16`), stacking into `65736 -> 200`,
-/// `65536 -> 0`, `1000000 -> 16960`, `1e300 -> 65535`,
-/// `"18446744073709551816" -> 200`, `" 65736_0 " -> 2000` -- a corrupt
-/// ledger entry silently rendering as a plausible-looking, wrong, in-range
-/// status in both the relayed response AND the audit record
-/// (`RequestLedger::replay`'s caller passes `replayed.status` straight to
-/// `self.audit`, so the fix here covers both without a second edit).
-/// Parsing through the checked helper (no saturation) and then requiring
-/// the resulting exact value to fit `u16` turns every one of those six
-/// cases into `state_corrupt("request_ledger_status")` instead -- fails
-/// loud rather than silently lying. The residual `0..=65535` bound this
-/// leaves (a magnitude Python accepts that this crate's `status: u16` field
-/// genuinely cannot represent) is recorded in `DEVIATIONS.md` citing this
-/// finding.
-fn python_int_status(v: &Value) -> Option<u16> {
-    let n: i128 = match v {
+/// [`RelayResult::status`] uses the crate's unbounded [`crate::pyint::PyInt`]
+/// representation. This preserves the exact result through the direct API,
+/// audit JSON, tools JSON, and the local server's decimal status line; fresh
+/// upstream parsing remains bounded to the validated `u16` wire status used
+/// by [`UpstreamResponse`].
+fn python_int_status(v: &Value) -> Option<crate::pyint::PyInt> {
+    use num_bigint::BigInt;
+    use std::str::FromStr as _;
+
+    let n = match v {
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i128::from(i)
-            } else if let Some(u) = n.as_u64() {
-                i128::from(u)
-            } else {
-                // A JSON number that is neither an i64 nor a u64 is a
-                // float (`serde_json`'s arbitrary-precision feature is not
-                // enabled in this crate -- see `pyjson`); `n.as_f64()` is
-                // therefore always `Some` and always finite (a bare JSON
-                // number literal can never spell `inf`/`nan`). `int(f)`
-                // truncates toward zero exactly; only a magnitude this
-                // crate's own `u16` check below rejects anyway can exceed
-                // `i128`'s range, so the bounds check before the cast (not
-                // the cast itself) is what keeps this exact.
+            if crate::pyjson::is_float_literal(n.as_str()) {
                 let f = n.as_f64()?;
-                let truncated = f.trunc();
-                if !(i128::MIN as f64..=i128::MAX as f64).contains(&truncated) {
+                if !f.is_finite() {
                     return None;
                 }
-                truncated as i128
+                let bits = f.to_bits();
+                let negative = bits >> 63 != 0;
+                let exponent = ((bits >> 52) & 0x7ff) as i32;
+                let fraction = bits & ((1u64 << 52) - 1);
+                let mut integer = if exponent == 0 {
+                    BigInt::from(0)
+                } else {
+                    let significand = BigInt::from((1u64 << 52) | fraction);
+                    let shift = exponent - 1023 - 52;
+                    if shift >= 0 {
+                        significand << shift as usize
+                    } else {
+                        significand >> (-shift) as usize
+                    }
+                };
+                if negative {
+                    integer = -integer;
+                }
+                integer
+            } else {
+                BigInt::from_str(n.as_str()).ok()?
             }
         }
-        Value::Bool(b) => i128::from(*b),
-        Value::String(s) => crate::pystr::int_from_str_checked(s)?,
+        Value::Bool(b) => BigInt::from(u8::from(*b)),
+        Value::String(s) => {
+            BigInt::from_str(&crate::pystr::int_from_str_decimal_limited(s)?).ok()?
+        }
         _ => return None,
     };
-    u16::try_from(n).ok()
+    Some(crate::pyint::PyInt(n))
 }
 
 /// `str(x)` for a JSON value already known to be a header name/value
@@ -1531,7 +1529,7 @@ impl<'a> RequestLedger<'a> {
     ) -> Result<(), Error> {
         use base64::Engine as _;
         let mut stored = Map::new();
-        stored.insert("status".into(), json!(result.status));
+        stored.insert("status".into(), result.status.value());
         stored.insert(
             "headers".into(),
             Value::Array(result.headers.iter().map(|(k, v)| json!([k, v])).collect()),
@@ -1611,7 +1609,7 @@ impl<'a> RequestLedger<'a> {
             Some(_) => return Err(corrupt("request_ledger_response")),
         };
         let status = match response.get("status") {
-            None => 502u16,
+            None => crate::pyint::PyInt::from(502i64),
             Some(v) => python_int_status(v).ok_or_else(|| corrupt("request_ledger_status"))?,
         };
         let mut headers: Headers = python_headers_from_json(response.get("headers"))?;
@@ -2722,7 +2720,7 @@ impl<'a> Relay<'a> {
         &self,
         result: &str,
         reason: Option<&str>,
-        status: Option<u16>,
+        status: Option<Value>,
         extra: Vec<(&str, Value)>,
     ) -> Result<(), Error> {
         let mut fields: Vec<(&str, Value)> = vec![
@@ -2734,7 +2732,7 @@ impl<'a> Relay<'a> {
                     Value::String(self.path.clone())
                 },
             ),
-            ("status", status.map(|s| json!(s)).unwrap_or(Value::Null)),
+            ("status", status.unwrap_or(Value::Null)),
         ];
         if let Some(grant) = &self.grant {
             fields.push(("grant", json!(grant.id)));
@@ -2938,11 +2936,13 @@ impl<'a> Relay<'a> {
             self.ledger.complete(&self.caller, &request_id, result)?;
             self.claimed = false;
         }
-        let status = upstream_status.or(Some(result.status));
+        let status = upstream_status
+            .map(|value| json!(value))
+            .or_else(|| Some(result.status.value()));
         if let Err(e) = self.audit(outcome, reason, status, Vec::new())
             && e.is(ErrorClass::AuditUnavailable)
         {
-            result.status = 503;
+            result.status = crate::pyint::PyInt::from(503i64);
             result.headers = vec![("Content-Type".to_string(), "application/json".to_string())];
             result.body = pyjson::dumps(
                 &json!({"error": "AuditUnavailable", "reason": "audit_unavailable"}),
@@ -3083,7 +3083,7 @@ impl<'a> Relay<'a> {
             headers.push((name.clone(), value.clone()));
         }
         RelayResult {
-            status: response.status,
+            status: response.status.into(),
             headers,
             body: response.body,
             reason: None,
@@ -3215,7 +3215,7 @@ impl<'a> Relay<'a> {
                     if let Err(e) = self.audit(
                         result_kind,
                         Some("replayed"),
-                        Some(replayed.status),
+                        Some(replayed.status.value()),
                         Vec::new(),
                     ) && e.is(ErrorClass::AuditUnavailable)
                     {

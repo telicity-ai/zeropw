@@ -87,26 +87,7 @@ const POSITIVE_INT: TypeFn = TypeFn {
 };
 
 fn exact_int_arg(text: &str) -> Result<Val, Option<String>> {
-    let value = crate::pystr::int_from_str_decimal(text).ok_or(None)?;
-    // CPython 3.12's default integer-string conversion guard counts decimal
-    // digits only (not sign, surrounding space, or underscores), including
-    // leading zeroes and Unicode Nd digits. Its documented environment
-    // override accepts 0 (unlimited) or a value >= 640.
-    let limit = match env::var("PYTHONINTMAXSTRDIGITS") {
-        Ok(raw) => match raw.parse::<usize>() {
-            Ok(0) => 0,
-            Ok(value) if value >= 640 => value,
-            _ => 4300,
-        },
-        Err(_) => 4300,
-    };
-    let digits = text
-        .chars()
-        .filter(|&c| crate::pystr::unicode_decimal_digit(c).is_some())
-        .count();
-    if limit != 0 && digits > limit {
-        return Err(None);
-    }
+    let value = crate::pystr::int_from_str_decimal_limited(text).ok_or(None)?;
     Ok(Val::Str(value))
 }
 
