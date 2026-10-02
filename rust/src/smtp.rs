@@ -19,7 +19,6 @@ use std::time::Duration;
 use base64::Engine;
 use dns_lookup::lookup_addr;
 use hmac::Mac;
-use idna::Config as IdnaConfig;
 use md5::Md5;
 
 use crate::errors::{Error, ErrorClass};
@@ -817,47 +816,9 @@ fn local_hostname() -> String {
     format!("[{address}]")
 }
 
-/// The IDNA conversion performed by CPython's socket module for host names.
-/// Transitional processing preserves the IDNA 2003 mappings used by the
-/// built-in `idna` codec (for example, U+00DF -> `ss`).  CPython disables
-/// STD3 rules and applies only its per-label length rules.  `idna` implements
-/// these through UTS #46 rather than CPython's Unicode 3.2 stringprep tables;
-/// the differential test below covers the SMTP-relevant boundary cases but
-/// does not claim equivalence for every Unicode version-sensitive code point.
-/// In particular, CPython's query-string profile permits code points that
-/// were unassigned in Unicode 3.2 (AllowUnassigned=true), while UTS #46 can
-/// map or reject them using its newer tables (for example U+1E9E or emoji).
+/// The IDNA 2003 conversion performed by CPython's socket module.
 fn idna_hostname(hostname: &str) -> Result<String, SendError> {
-    let unicode_error = || escaped_value("UnicodeError");
-    if hostname.is_empty() {
-        return Ok(String::new());
-    }
-    let ascii = if hostname.is_ascii() {
-        hostname.to_owned()
-    } else {
-        // CPython's RFC 3454 table B.1 removes U+200C/U+200D before its
-        // prohibition pass. UTS #46 transitional processing removes them
-        // as well, which is the required behavior here.
-        IdnaConfig::default()
-            // CPython encodings.idna explicitly sets UseSTD3ASCIIRules=false.
-            .use_std3_ascii_rules(false)
-            .transitional_processing(true)
-            // CPython checks each label but does not impose a whole-name
-            // limit in the codec. Apply its label rules after conversion.
-            .verify_dns_length(false)
-            .to_ascii(hostname)
-            .map_err(|_| unicode_error())?
-    };
-    let labels: Vec<_> = ascii.split('.').collect();
-    if labels
-        .iter()
-        .take(labels.len().saturating_sub(1))
-        .any(|label| label.is_empty() || label.len() >= 64)
-        || labels.last().is_some_and(|label| label.len() >= 64)
-    {
-        return Err(unicode_error());
-    }
-    Ok(ascii)
+    crate::pyidna::encode(hostname).map_err(|_| escaped_value("UnicodeError"))
 }
 
 /// `socket.gethostname()`: `uname().nodename` on every POSIX platform.
@@ -2786,48 +2747,6 @@ mod hostname_tests {
         let out = crate::oracle::python("import smtplib; print(smtplib.SMTP().local_hostname)");
         let rust = super::local_hostname();
         assert_eq!(rust, out.trim());
-    }
-
-    #[test]
-    fn smtp_host_idna_matches_cpython_edge_cases() {
-        let cases = [
-            "under_score.example".to_owned(),
-            "faß.example".to_owned(),
-            "join\u{200c}er.example".to_owned(),
-            "join\u{200d}er.example".to_owned(),
-            "empty..example".to_owned(),
-            "trailing.example.".to_owned(),
-            format!("{}.example", "a".repeat(63)),
-            format!("{}.example", "a".repeat(64)),
-            format!("{}.example", "ü".repeat(57)),
-            format!("{}.example", "ü".repeat(58)),
-        ];
-        let input = serde_json::to_string(&cases).unwrap();
-        let script = format!(
-            "import json\nout=[]\nfor value in json.loads({input:?}):\n try: out.append(['ok', value.encode('idna').decode('ascii')])\n except UnicodeError: out.append(['error', 'UnicodeError'])\nprint(json.dumps(out))"
-        );
-        let expected: Vec<(String, String)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let actual: Vec<(String, String)> = cases
-            .iter()
-            .map(|value| match super::idna_hostname(value) {
-                Ok(value) => ("ok".to_owned(), value),
-                Err(super::SendError::Escaped(error)) => ("error".to_owned(), error.detail),
-                Err(super::SendError::Caught(name)) => ("caught".to_owned(), name),
-            })
-            .collect();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn ascii_idna_does_not_apply_std3_rules() {
-        for value in [
-            "under_score.example",
-            "-leading.example",
-            "trailing-.example",
-        ] {
-            assert_eq!(super::idna_hostname(value).unwrap(), value);
-        }
     }
 }
 

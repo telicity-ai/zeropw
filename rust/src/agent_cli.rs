@@ -570,14 +570,17 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
         None => connect_host.clone(),
     };
     let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
-    // urllib sends the URL's own authority as `Host`, and the proxy
-    // credentials only to an HTTP proxy (never through a CONNECT tunnel).
+    // `urllib`'s request processors add Content-Length, Host and User-Agent
+    // as unredirected headers before the Request's three explicit headers.
+    // `http.client.putrequest` emits Accept-Encoding first; `do_open` appends
+    // Connection last.  Keep that wire order as well as the values: header
+    // order and duplicates are observable to an HTTP peer.
     let proxy_header = match (&route.proxy_authorization, &route.tunnel) {
         (Some(value), None) => format!("Proxy-Authorization: {value}\r\n"),
         _ => String::new(),
     };
     let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {host}\r\n{proxy_header}Authorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: {host}\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\n{proxy_header}Connection: close\r\n\r\n{body}",
         route.selector,
         body.len()
     );

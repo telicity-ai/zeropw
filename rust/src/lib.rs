@@ -12,6 +12,7 @@ pub mod errors;
 pub mod secret;
 
 pub mod pybase64;
+mod pyidna;
 pub mod pyint;
 pub mod pyjson;
 pub mod pystr;

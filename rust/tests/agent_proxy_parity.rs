@@ -37,7 +37,15 @@ fn proxy(reply: &'static str) -> (u16, thread::JoinHandle<Vec<String>>) {
             let name = header.split(':').next().unwrap_or("").to_ascii_lowercase();
             if matches!(
                 name.as_str(),
-                "host" | "proxy-authorization" | "authorization" | "content-type" | "accept"
+                "host"
+                    | "proxy-authorization"
+                    | "authorization"
+                    | "content-type"
+                    | "content-length"
+                    | "accept"
+                    | "accept-encoding"
+                    | "user-agent"
+                    | "connection"
             ) {
                 headers.push(format!(
                     "{name}:{}",
@@ -84,6 +92,59 @@ fn run(native: bool, env: &[(&str, String)]) -> (Option<i32>, String, String) {
 
 const OK: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\n\r\n{\"connections\":[]}";
 
+/// Record the complete request line and header block in wire order.
+fn origin() -> (u16, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        let mut lines = Vec::new();
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            let line = line.trim_end_matches(['\r', '\n']).to_owned();
+            if line.is_empty() {
+                break;
+            }
+            lines.push(line);
+        }
+        socket.write_all(OK.as_bytes()).unwrap();
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+        lines
+    });
+    (port, handle)
+}
+
+#[test]
+fn default_request_headers_match_urllib_value_order_and_multiplicity() {
+    let mut results = Vec::new();
+    for native in [false, true] {
+        let (port, seen) = origin();
+        let env = [("ZEROPW_GATEWAY_URL", format!("http://127.0.0.1:{port}"))];
+        let outcome = run(native, &env);
+        results.push((outcome, seen.join().unwrap(), port));
+    }
+    assert_eq!(results[1].0, results[0].0);
+    let expected = |port| {
+        vec![
+            "POST /v1/tools/list_connections HTTP/1.1".to_owned(),
+            "Accept-Encoding: identity".to_owned(),
+            "Content-Length: 2".to_owned(),
+            format!("Host: 127.0.0.1:{port}"),
+            "User-Agent: Python-urllib/3.12".to_owned(),
+            "Authorization: Bearer zpwc_synthetic-caller".to_owned(),
+            "Content-Type: application/json".to_owned(),
+            "Accept: application/json".to_owned(),
+            "Connection: close".to_owned(),
+        ]
+    };
+    assert_eq!(results[0].1, expected(results[0].2));
+    assert_eq!(results[1].1, expected(results[1].2));
+}
+
 #[test]
 fn http_gateway_goes_through_the_http_proxy_like_urllib() {
     let mut results = Vec::new();
@@ -112,6 +173,18 @@ fn http_gateway_goes_through_the_http_proxy_like_urllib() {
         seen.iter()
             .any(|h| h.starts_with("proxy-authorization:Basic "))
     );
+    for exact in [
+        "accept-encoding:identity",
+        "user-agent:Python-urllib/3.12",
+        "connection:close",
+    ] {
+        assert_eq!(
+            seen.iter()
+                .filter(|header| header.as_str() == exact)
+                .count(),
+            1
+        );
+    }
 }
 
 #[test]

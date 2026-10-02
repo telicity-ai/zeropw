@@ -844,22 +844,16 @@ fn pathlib_str(path: &str) -> String {
     }
 }
 
-/// The home directory `pwd` reports for `user` (or the current uid), read
-/// from the local passwd database.
+/// The home directory `pwd` reports for `user` (or the current uid), resolved
+/// through the system's NSS path (`getpwnam`/`getpwuid`).
 fn passwd_home(user: Option<&str>) -> Option<String> {
-    let uid = rustix::process::getuid().as_raw().to_string();
-    let text = fs::read_to_string("/etc/passwd").ok()?;
-    text.lines().find_map(|line| {
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() < 7 {
-            return None;
-        }
-        let matches = match user {
-            Some(name) => fields[0] == name,
-            None => fields[2] == uid,
-        };
-        matches.then(|| fields[5].to_owned())
-    })
+    let record = match user {
+        Some(name) => nix::unistd::User::from_name(name),
+        None => nix::unistd::User::from_uid(nix::unistd::Uid::current()),
+    }
+    .ok()
+    .flatten()?;
+    Some(record.dir.to_string_lossy().into_owned())
 }
 
 /// `str(pathlib.Path(path).expanduser())`; `pathlib` raises
@@ -3017,6 +3011,52 @@ pub fn main(argv: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+
+    #[test]
+    fn user_path_matches_pathlib_expanduser_through_system_nss() {
+        let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+            .expect("current-user NSS lookup failed")
+            .expect("current uid has no NSS user");
+        let named = format!("~{}", current.name);
+        let named_child = format!("~{}//nested/./path/", current.name);
+        let unknown = format!(
+            "~zeropw-user-that-must-not-exist-{}/path",
+            std::process::id()
+        );
+        let paths = [
+            named.as_str(),
+            named_child.as_str(),
+            unknown.as_str(),
+            "relative//nested/./path/",
+            "/absolute//nested/./path/",
+        ];
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&paths).unwrap());
+        let script = format!(
+            r#"
+import base64, json, pathlib
+for path in json.loads(base64.b64decode({encoded:?})):
+    try:
+        print(json.dumps({{"ok": str(pathlib.Path(path).expanduser())}}, sort_keys=True))
+    except Exception as error:
+        print(json.dumps({{"error": type(error).__name__}}, sort_keys=True))
+"#
+        );
+        let expected: Vec<Value> = crate::oracle::python(&script)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let actual: Vec<Value> = paths
+            .iter()
+            .map(|path| match user_path(path) {
+                Ok(path) => json!({"ok": path}),
+                Err(error) => json!({"error": error.name}),
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(actual[2], json!({"error": "RuntimeError"}));
+    }
 
     #[test]
     fn parser_accepts_equals_repeated_values_and_positional_terminator() {

@@ -45,11 +45,10 @@ Native deployments that include `exec` must build and ship the trusted
 agent-controlled `PATH`; if the helper is absent, execution fails closed as
 `spawn_failed`. The helper uses safe `rustix::process::setsid` then `exec`,
 with a close-on-exec acknowledgement socket to preserve synchronous spawn
-failure semantics. Because libc `execvp` retries `ENOEXEC` through
-`/bin/sh` where Python's direct `execve` fails, the helper first picks the
-file `execve` would run (Python's `PATH` walk past refused candidates) and
-reports a file in no kernel-executable format (`#!`, native ELF/Mach-O) as
-the spawn failure; see the `zeropw_session` row in `DEVIATIONS.md`. Its ACK socket lives in a per-run private short-path
+failure semantics. The helper uses the safe `nix::unistd::execve` wrapper directly, trying the
+same ordered PATH candidates as Python. The kernel decides executable formats
+and interpreter rules, including platform-specific shebang handling, without
+libc's `ENOEXEC` shell fallback. Its ACK socket lives in a per-run private short-path
 temporary directory, independent of the configured SSH socket directory.
 Before the final `exec`, `close_fds` 0.3.2 marks every descriptor from 3 upward
 close-on-exec, matching Python's `close_fds=True` for unrelated inheritable

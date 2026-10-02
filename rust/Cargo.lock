@@ -387,16 +387,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "idna"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
-dependencies = [
- "unicode-bidi",
- "unicode-normalization",
-]
-
-[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -661,6 +651,12 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "punycode"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
 
 [[package]]
 name = "quote"
@@ -1053,6 +1049,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "stringprep"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4df3d392d81bd458a8a621b8bffbd2302a12ffe288a9d931670948749463b1"
+dependencies = [
+ "unicode-bidi",
+ "unicode-normalization",
+ "unicode-properties",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1144,6 +1151,12 @@ checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
 dependencies = [
  "tinyvec",
 ]
+
+[[package]]
+name = "unicode-properties"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
 
 [[package]]
 name = "universal-hash"
@@ -1471,7 +1484,6 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "hmac",
- "idna",
  "libc",
  "md-5",
  "mio",
@@ -1480,6 +1492,7 @@ dependencies = [
  "openssl",
  "percent-encoding",
  "poly1305",
+ "punycode",
  "rand",
  "rcgen",
  "regex",
@@ -1495,9 +1508,11 @@ dependencies = [
  "sha2",
  "signal-hook",
  "socket2 0.5.10",
+ "stringprep",
  "subtle",
  "tempfile",
  "typenum",
+ "unicode-normalization",
  "uuid",
  "x25519-dalek",
  "zeroize",

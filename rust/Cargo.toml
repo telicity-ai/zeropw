@@ -31,8 +31,10 @@ libc = "0.2"
 mio = { version = "1", default-features = false, features = ["os-poll", "os-ext"] }
 socket2 = "0.5"
 dns-lookup = "3"
-idna = "0.5"
-nix = { version = "0.30.1", features = ["process"] }
+stringprep = "=0.1.5"
+unicode-normalization = "0.1"
+punycode = "=0.4.1"
+nix = { version = "0.30.1", features = ["process", "user"] }
 openssl = "0.10"
 close_fds = "=0.3.2"
 rustix = { version = "1", features = ["process", "fs", "termios", "system"] }

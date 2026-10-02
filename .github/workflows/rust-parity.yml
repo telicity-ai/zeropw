@@ -68,7 +68,7 @@ jobs:
         run: |
           python3.12 - <<'PYCODE'
           import subprocess,sys
-          targets=['runtime_parity_gaps','agent_help','gateway_tls_parity','gateway','response_parity_gaps','native_cli_e2e','astra_cli_runtime_round2','astra_cleanup_publication_order']
+          targets=['runtime_parity_gaps','admin_expanduser_parity','agent_proxy_parity','agent_help','gateway_tls_parity','gateway','response_parity_gaps','native_cli_e2e','astra_cli_runtime_round2','astra_cleanup_publication_order']
           failed=[]
           for target in targets:
               print('AUDIT_BEGIN='+target,flush=True)
