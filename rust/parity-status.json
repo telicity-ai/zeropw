@@ -3,8 +3,8 @@
   "baseline_sha": "9d91647afe255d827971a1787c7af89a7b2964b6",
   "inventory_source": "rust/DEVIATIONS.md",
   "inventory_source_sha256": "a93a9eaf57dd132ee99164db5d97488ed22028eff4ca6bc61d83d6b75a7b104e",
-  "candidate_sha": "0cd4cb7ff911f1fd4db397180efaf93f888c68ed",
-  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37046717488",
+  "candidate_sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8",
+  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37048435634",
   "complete": false,
   "entries": [
     {
@@ -46,19 +46,49 @@
       "source_line": 19,
       "area": "team/sync truthy non-dict `team/<env>/peers.json` (PORTING.md §3.5)",
       "row_sha256": "2b55be3d6fac6ccc131c4bdf32b31197592ff914c844edc3ed64c3ce1092bf81",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/team/sync.py",
+          "rust/src/team/sync.rs"
+        ],
+        "conclusion": "read_dict_or_empty matches Python falsy replacement; truthy non-mappings and non-iterable per-peer entries map escaping built-ins to state_corrupt. Failure paths preserve no dial/admission and unchanged files; safe session close is explicit.",
+        "test": "rust/tests/team_parity_gaps.rs:non_dict_peers_document_is_never_sent",
+        "reviewed_base_sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8"
+      }
     },
     {
       "source_line": 20,
       "area": "team/sync truthy non-dict `team/<env>/peer_vectors.json`, non-iterable `overridden_alerted.json` (PORTING.md §3.5)",
       "row_sha256": "7e69117f0a3da0e7bae5b86bf1be6aebb10cd96ebc6e24f2357c0ff5468f0e91",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/team/sync.py",
+          "rust/src/team/sync.rs"
+        ],
+        "conclusion": "Loader iterates dictionary keys/string characters for alerted overrides and preserves arbitrary integer peer-vector values; truthy non-mapping vectors and non-iterable alerted values map escaping built-ins. This review does not cover snapshot total numeric width.",
+        "test": "rust/src/team/sync.rs:peer_state_documents_load_like_python",
+        "reviewed_base_sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8"
+      }
     },
     {
       "source_line": 21,
       "area": "team/sync truthy non-dict `team/<env>/rotation_flags.json` in `_apply_incident_rotation_flags` (PORTING.md §3.5)",
       "row_sha256": "f7a777a10b32eea9794533eed4f80d0474458811d219cf68d9fe04bcda723a5a",
-      "status": "needs_source_and_differential_review"
+      "status": "source_reviewed_contract_mapping_requires_final_head_tests",
+      "source_review": {
+        "contract_clause": "3.5",
+        "sources": [
+          "zeropw/team/sync.py",
+          "rust/src/team/sync.rs"
+        ],
+        "conclusion": "Incident target list fields are shape-validated before the private flag helper. Corrupt flags fail only when accessed; empty-id path preserves raw document. Existing differential observes flags, ACK count, record and audit effects.",
+        "test": "rust/src/team/sync.rs:corrupt_rotation_flags_fail_the_incident_like_python",
+        "reviewed_base_sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8"
+      }
     },
     {
       "source_line": 22,
@@ -279,13 +309,23 @@
       "source_line": 47,
       "area": "crypto/x25519",
       "row_sha256": "6d8c638e04c51e303bcbcbe07f7729d4fe8c3a82ed44f951b2785dc0a9f4fd4d",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "implementation_added_requires_remote_validation",
+      "pending_change": {
+        "source": "rust/src/crypto/x25519.rs",
+        "test": "oracle_clamp_scalar_matches_python_for_every_length_boundary",
+        "conclusion": "Accept all input lengths >=32; clamp bytes 0 and 31 and preserve full little-endian scalar in redacted zeroizing SecretBytes. Strict32 cryptographic entrypoints unchanged. Shorter input built-in IndexError maps under 3.5. No runtime test has executed for this change."
+      }
     },
     {
       "source_line": 48,
       "area": "crypto/x25519",
       "row_sha256": "594848e09f54d62305c2fb5c165668ce8734a9e09c1bff0ae33f1228da70d188",
-      "status": "contract_allowance_requires_reachability_review"
+      "status": "implementation_added_requires_remote_validation",
+      "pending_change": {
+        "source": "rust/src/crypto/x25519.rs",
+        "test": "oracle_clamp_scalar_matches_python_for_every_length_boundary",
+        "conclusion": "Accept all input lengths >=32; clamp bytes 0 and 31 and preserve full little-endian scalar in redacted zeroizing SecretBytes. Strict32 cryptographic entrypoints unchanged. Shorter input built-in IndexError maps under 3.5. No runtime test has executed for this change."
+      }
     },
     {
       "source_line": 49,
@@ -1124,6 +1164,15 @@
       "jobs_started": 0,
       "github_annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings",
       "validation": "No formatter, compiler, tests or runtime checks executed in this run."
+    },
+    {
+      "sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8",
+      "run": 37048435634,
+      "conclusion": "infrastructure_blocked",
+      "jobs_started": 0,
+      "jobs_rejected": 18,
+      "github_annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings",
+      "validation": "No product compilation or tests ran. Local cargo fmt and git diff --check passed before commit."
     }
   ],
   "next_candidate_changes": [
@@ -1138,6 +1187,8 @@
     "macOS SMTP native hostent aliases",
     "MIME parser grammar beyond current supported subset",
     "Python dictionary semantics for non-string public metadata keys",
-    "Remaining numeric width, timestamp, fixture and persisted shape differences require source audit"
+    "Remaining numeric width, timestamp, fixture and persisted shape differences require source audit",
+    "Team snapshot total drops numbers outside i64 during load and sums/subtracts in i128; exact Python sum and snapshot scheduling require correction",
+    "Nonfinite JSON values require a lossless value representation migration; see rust/pyjson-nonfinite-plan.md"
   ]
 }

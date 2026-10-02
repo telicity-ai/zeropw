@@ -48,6 +48,23 @@ documentation tests, the four explicit signer resource probes, and the full
 Python reference and harness suites on both platforms. A result only supports
 the exact tested SHA; no earlier PASS carries over to later changes.
 
+Candidate `dd7fdca48d580c88f24b2aabca0618f1a1d074b8` widens vault and
+credential versions and handle timestamps, adds MIME group/domain-literal
+handling, and preserves Python stored-header coercion. Local formatting and
+diff checks passed. Hosted [run 37048435634](https://github.com/handlecusion/zeropw/actions/runs/37048435634)
+rejected all 18 jobs before their first step because GitHub reported failed
+account payments or a spending limit. The preceding `0cd4cb7` run had the
+same infrastructure failure. Neither run provides compilation or runtime
+validation. Payment/Actions availability must be restored before hosted
+verification can resume; no local product execution substitutes for it.
+
+The earlier `949207b` full matrix passed both platforms' Python reference
+(1099), harness (80), explicit signer probes (4), native E2E/fake upstream,
+data group and remaining integration shard 0. That run still failed overall
+on compile errors and retained snapshot/helper/vault expectations, macOS SMTP
+aliases, and a macOS Python serve signal timeout. Later corrections remain
+unverified. These results neither approve `dd7fdca` nor close the full goal.
+
 Open work includes SMTP host aliases, MIME grammar, remaining accepted
 persisted-value representations, snapshot lazy-access semantics, and exact
 replay status propagation. Independent final review and full-platform
