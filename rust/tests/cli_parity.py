@@ -25,7 +25,8 @@ MASKS = [
     (re.compile(r"zpwc_[A-Za-z0-9_\-]+"), "<TOKEN>"),
     (re.compile(r"\b[0-9a-f]{64}\b"), "<HEX64>"),
     (re.compile(r"\b[a-z2-7]{26}-[0-9a-f]{32}\b"), "<ENVID>"),
-    (re.compile(r"ssh-ed25519 AAAA[A-Za-z0-9+/=]+ root@"), "ssh-ed25519 <KEY> root@"),
+    # A generated key: its comment is the invoking user@host, compared as is.
+    (re.compile(r"ssh-ed25519 AAAA[A-Za-z0-9+/=]+ (?=[^\s@\"]+@)"), "ssh-ed25519 <KEY> "),
     (re.compile(r"\b[0-9a-f]{32}\b"), "<HEX32>"),
     (re.compile(r"inc-[0-9TZ]+-[0-9a-f]{8}"), "<INC>"),
     (re.compile(r"g-[0-9a-f]{8,}"), "<GRANT>"),
