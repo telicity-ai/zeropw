@@ -51,6 +51,7 @@ use sha2::{Digest, Sha256};
 use crate::clock::Clock;
 use crate::errors::{Error, ErrorClass};
 use crate::projects::validate_name;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::store::{StateDir, iso};
 
@@ -240,21 +241,6 @@ fn validate_host_value(v: &Value) -> Result<String, Error> {
 /// literal (still integer form, just not representable by `as_i64`).
 fn number_is_python_int(n: &serde_json::Number) -> bool {
     !n.to_string().contains(['.', 'e', 'E'])
-}
-
-/// `isinstance(x, int)` for a JSON value, as used by
-/// `_collect_revocations`'s `isinstance(entry.get("version"), int)` guards
-/// (finding D-R2-4). CPython's `bool` is an `int` subclass, so a JSON `true`/
-/// `false` counts too (`True == 1`, `False == 0`) -- unlike
-/// `python_int_coerce`, a *float*-shaped JSON number (even `3.0`) is not an
-/// `int` in Python and must return `None` here, matching
-/// `isinstance(3.0, int) is False`.
-fn json_isinstance_int(v: &Value) -> Option<i64> {
-    match v {
-        Value::Bool(b) => Some(i64::from(*b)),
-        Value::Number(n) if number_is_python_int(n) => n.as_i64(),
-        _ => None,
-    }
 }
 
 /// `_validate_port(port)`: `isinstance(port, bool) or not isinstance(port,
@@ -1999,7 +1985,7 @@ pub struct Connection {
     /// `"http"` or `"ssh"`.
     pub kind: String,
     pub secret_id: String,
-    pub secret_version: Option<i64>,
+    pub secret_version: Option<PyInt>,
     pub description: String,
     pub http_target: Option<HttpTarget>,
     pub http_auth: Option<HttpAuth>,
@@ -2030,7 +2016,7 @@ pub struct ConnectionChanges {
     pub ssh_target: Option<Option<SshTarget>>,
     pub cli: Option<Option<CliProfile>>,
     pub secret_id: Option<String>,
-    pub secret_version: Option<Option<i64>>,
+    pub secret_version: Option<Option<PyInt>>,
     pub status: Option<String>,
 }
 
@@ -2066,7 +2052,7 @@ impl ConnectionChanges {
         self.secret_id = Some(v.into());
         self
     }
-    pub fn secret_version(mut self, v: Option<i64>) -> Self {
+    pub fn secret_version(mut self, v: Option<PyInt>) -> Self {
         self.secret_version = Some(v);
         self
     }
@@ -2085,7 +2071,7 @@ impl Connection {
         service: impl Into<String>,
         kind: impl Into<String>,
         secret_id: impl Into<String>,
-        secret_version: Option<i64>,
+        secret_version: Option<PyInt>,
         description: impl Into<String>,
         http_target: Option<HttpTarget>,
         http_auth: Option<HttpAuth>,
@@ -2152,7 +2138,10 @@ impl Connection {
                 .secret_id
                 .clone()
                 .unwrap_or_else(|| self.secret_id.clone()),
-            changes.secret_version.unwrap_or(self.secret_version),
+            changes
+                .secret_version
+                .clone()
+                .unwrap_or_else(|| self.secret_version.clone()),
             changes
                 .description
                 .clone()
@@ -2259,7 +2248,7 @@ impl Connection {
         // Python -- see the doc comment above).
         let secret_version = match obj.get("secret_version") {
             None | Some(Value::Null) => None,
-            Some(v) => match v.as_i64() {
+            Some(v) => match PyInt::from_json_integer(v) {
                 Some(n) => Some(n),
                 None => {
                     corrupt = true;
@@ -2790,8 +2779,9 @@ pub struct Grant {
     pub created_at: String,
     pub revoked_at: Option<String>,
     /// The vault version the connection resolved to when last evaluated.
-    pub credential_version: Option<i64>,
-    // The four fields above stay plain `i64`/`Option<i64>` -- this
+    pub credential_version: Option<PyInt>,
+    // `policy_version`, `max_uses`, and `uses` stay plain `i64`/`Option<i64>`;
+    // `credential_version` is an exact `PyInt`. This
     // struct's public shape is relied on outside this file (gateway,
     // signer, vault/context, and their tests, none of which are this
     // round's files to edit) -- but Python applies **no** conversion to
@@ -3039,13 +3029,13 @@ impl Grant {
     /// whatever operation first touches it -- `state_corrupt` at load time,
     /// PORTING.md §3.5.
     ///
-    /// Each of these four fields is stored twice: once as a best-effort
-    /// `i64`/`Option<i64>` via [`python_int_coerce`] (the struct's public
-    /// fields, unchanged from round 4 for a normally-shaped grant -- every
+    /// Each field is stored twice: once as a best-effort public reading
+    /// (`i64`/`Option<i64>` for policy and use counts, exact `PyInt` for an
+    /// integer-shaped credential version), and once as the exact [`GrantNum`]
+    /// shape Python kept. Every
     /// existing caller outside this module, and every grant this crate or
-    /// `zeropw/policy.py` itself ever writes, sees the exact same value as
-    /// before), and once as the exact [`GrantNum`] shape Python kept (the
-    /// private `raw_*` fields), which is what this module's own
+    /// `zeropw/policy.py` itself writes, sees the normal numeric value. The
+    /// private `raw_*` fields are what this module's own
     /// authorization decisions (`grant_state`, `public_view`, `consume`,
     /// `regrant`) actually compare against.
     fn from_value(v: &Value) -> Result<Self, Error> {
@@ -3121,8 +3111,8 @@ impl Grant {
             None | Some(Value::Null) => None,
             Some(v) => Some(v),
         };
-        let credential_version =
-            credential_version_value.map(|v| python_int_coerce(v).unwrap_or(0));
+        let credential_version = credential_version_value
+            .map(|value| PyInt::coerce_from_json(value).unwrap_or_else(|| 0.into()));
         let raw_credential_version = credential_version_value.map(GrantNum::from_value);
         // `status: str` has **no** dataclass default either -- a missing
         // key is still a hard load-time error -- but a present non-string
@@ -3266,7 +3256,7 @@ pub struct Revocations {
     pub grants: HashSet<String>,
     pub principals: HashSet<String>,
     pub connections: HashSet<String>,
-    pub secret_versions: HashSet<(String, i64)>,
+    pub secret_versions: HashSet<(String, PyInt)>,
 }
 
 /// Append one line to the revocation ledger (outside the backup set).
@@ -3337,7 +3327,7 @@ pub fn collect_revocations<'a>(
             }
             Some("secret_version") => {
                 let secret_id = obj.get("secret_id").and_then(Value::as_str);
-                let version = obj.get("version").and_then(json_isinstance_int);
+                let version = obj.get("version").and_then(PyInt::from_python_int);
                 if let (Some(secret_id), Some(version)) = (secret_id, version) {
                     found
                         .secret_versions
@@ -3378,7 +3368,7 @@ pub fn collect_revocations<'a>(
             }
             Some("secret_revoke") => {
                 let secret_id = obj.get("secret_id").and_then(Value::as_str);
-                let version = obj.get("version").and_then(json_isinstance_int);
+                let version = obj.get("version").and_then(PyInt::from_python_int);
                 if let (Some(secret_id), Some(version)) = (secret_id, version) {
                     found
                         .secret_versions
@@ -3739,8 +3729,8 @@ impl<'a> Policy<'a> {
         connection: &Connection,
         vault_doc: Option<&Map<String, Value>>,
     ) -> Result<Option<Value>, Error> {
-        if let Some(v) = connection.secret_version {
-            return Ok(Some(json!(v)));
+        if let Some(v) = &connection.secret_version {
+            return Ok(Some(v.value()));
         }
         let owned;
         let doc = match vault_doc {
@@ -4305,13 +4295,13 @@ impl<'a> Policy<'a> {
         connection_id: &str,
         new_version: i64,
         widened: bool,
-        credential_version: Option<i64>,
+        credential_version: Option<PyInt>,
     ) -> Result<(), Error> {
         self.reevaluate_grants_value(
             connection_id,
             new_version,
             widened,
-            credential_version.map(|v| json!(v)),
+            credential_version.map(|v| v.value()),
         )
     }
 
@@ -4370,7 +4360,7 @@ impl<'a> Policy<'a> {
     pub fn switch_credential(
         &self,
         connection_id: &str,
-        secret_version: Option<i64>,
+        secret_version: Option<PyInt>,
     ) -> Result<Connection, Error> {
         let (connection, _) = self.update_connection(
             connection_id,
@@ -4484,12 +4474,12 @@ impl<'a> Policy<'a> {
         }
         let now = self.now();
         let credential_version_raw = self.resolved_credential_version(&connection, None)?;
-        // Best-effort `i64` reading (see `Grant`'s own doc comment): `None`
-        // when the resolved version is exact but outside `i64` range (a
-        // vault secret's `active_version` beyond `i64`, round 6) rather than
-        // the reason grant creation fails -- the exact value still flows
-        // through `raw_credential_version`.
-        let credential_version = credential_version_raw.as_ref().and_then(Value::as_i64);
+        // Preserve the resolved integer exactly in the public field as well
+        // as in `raw_credential_version`; non-integer raw shapes continue to
+        // drive authorization through the latter.
+        let credential_version = credential_version_raw
+            .as_ref()
+            .and_then(PyInt::from_json_integer);
         let raw_credential_version = credential_version_raw.map(|v| GrantNum::from_value(&v));
         let max_uses = max_uses_raw.as_ref().and_then(python_int_coerce);
         let raw_max_uses = max_uses_raw.as_ref().map(GrantNum::from_value);
@@ -6115,7 +6105,7 @@ mod tests {
             "fake-github",
             "http",
             "gh-token",
-            Some(version),
+            Some(version.into()),
             "demo connection",
             Some(HttpTarget::new("http", "127.0.0.1", 8080, None, false).unwrap()),
             Some(HttpAuth::bearer()),
@@ -6618,8 +6608,8 @@ mod tests {
                 .unwrap()
                 .allowed
         );
-        let conn = policy.switch_credential("gh", Some(2)).unwrap();
-        assert_eq!(conn.secret_version, Some(2));
+        let conn = policy.switch_credential("gh", Some(2.into())).unwrap();
+        assert_eq!(conn.secret_version, Some(2.into()));
         assert!(
             policy
                 .evaluate("agent-1", "gh", &Action::http("GET", "/repos"), None)
@@ -7311,7 +7301,10 @@ mod tests {
         );
         fresh = policy.regrant(&fresh.id).unwrap();
         let (_, widened) = policy
-            .update_connection("gh", ConnectionChanges::new().secret_version(Some(3)))
+            .update_connection(
+                "gh",
+                ConnectionChanges::new().secret_version(Some(3.into())),
+            )
             .unwrap();
         assert!(!widened);
         assert_eq!(policy.get_grant(&fresh.id).unwrap().status, "active");
@@ -7643,8 +7636,8 @@ mod tests {
         let pinned = policy
             .create_grant("agent-1", "pinned", Some(3600), None)
             .unwrap();
-        assert_eq!(grant.credential_version, Some(1));
-        assert_eq!(pinned.credential_version, Some(1));
+        assert_eq!(grant.credential_version, Some(1.into()));
+        assert_eq!(pinned.credential_version, Some(1.into()));
         assert!(
             policy
                 .credential_versions_changed("gh-token")
@@ -7668,7 +7661,7 @@ mod tests {
                 after.policy_version,
                 after.credential_version
             ),
-            ("active", 2, Some(2))
+            ("active", 2, Some(2.into()))
         );
         assert_eq!(policy.get_connection("pinned").unwrap().policy_version, 1);
         let vault3 = json!({"secrets": {"gh-token": {"active_version": null, "versions": {}}}});

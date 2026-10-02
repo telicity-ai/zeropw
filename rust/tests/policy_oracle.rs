@@ -1153,7 +1153,7 @@ probe("secret_version_int", d, lambda c: c.secret_version)
     assert_eq!(want("policy_version_bool"), "OK 1");
     // `secret_version` is stored completely untyped by Python; the int case
     // agrees byte for byte, the string case is the documented residual (see
-    // `DEVIATIONS.md`) that Rust's typed `Option<i64>` cannot represent.
+    // `DEVIATIONS.md`) that Rust's typed `Option<PyInt>` cannot represent.
     assert_eq!(want("secret_version_int"), "OK 5");
     assert_eq!(want("secret_version_str"), "OK 'abc'");
 
@@ -1364,11 +1364,23 @@ probe("secret_version_int", d, lambda c: c.secret_version)
 
     // `secret_version`: stored untyped by Python. The plain-integer case
     // agrees exactly; the string case is the documented residual (Rust's
-    // typed `Option<i64>` cannot hold it, so `state_corrupt` is returned
+    // typed `Option<PyInt>` cannot hold it, so `state_corrupt` is returned
     // where Python would silently succeed -- see `DEVIATIONS.md`).
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!(5);
-    assert_eq!(Connection::from_value(&d).unwrap().secret_version, Some(5));
+    assert_eq!(
+        Connection::from_value(&d).unwrap().secret_version,
+        Some(5.into())
+    );
+
+    let mut d = http_doc();
+    d["secret_version"] = serde_json::from_str("1000000000000000000000000000000").unwrap();
+    let connection = Connection::from_value(&d).unwrap();
+    assert_eq!(
+        connection.secret_version.as_ref().unwrap().to_string(),
+        "1000000000000000000000000000000"
+    );
+    assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
 
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!("abc");
@@ -1732,6 +1744,7 @@ fn secret_version_revocations_treat_json_bool_as_python_int_isinstance() {
         r#"{"kind":"secret_version","secret_id":"s2","version":2}"#,
         r#"{"kind":"secret_version","secret_id":"s3","version":3.0}"#,
         r#"{"kind":"secret_version","secret_id":"s4","version":false}"#,
+        r#"{"kind":"secret_version","secret_id":"s5","version":100000000000000000000}"#,
         r#"{"kind":"grant","id":"g1"}"#,
         r#"{"kind":"connection","id":"c1"}"#,
         r#"{"kind":"connection_enable","id":"c1"}"#,
@@ -1757,20 +1770,28 @@ print(sorted(found.connections))
     let mut py_lines = out.lines();
     assert_eq!(
         py_lines.next().unwrap(),
-        "[('s1', True), ('s2', 2), ('s4', False)]"
+        "[('s1', True), ('s2', 2), ('s4', False), ('s5', 100000000000000000000)]"
     );
     assert_eq!(py_lines.next().unwrap(), "['g1']");
     assert_eq!(py_lines.next().unwrap(), "[]");
 
     let found = policy::collect_revocations(&state, std::iter::empty());
-    let mut secret_versions: Vec<(String, i64)> = found.secret_versions.into_iter().collect();
+    let mut secret_versions: Vec<(String, zeropw::pyint::PyInt)> =
+        found.secret_versions.into_iter().collect();
     secret_versions.sort();
     assert_eq!(
         secret_versions,
         vec![
-            ("s1".to_string(), 1),
-            ("s2".to_string(), 2),
-            ("s4".to_string(), 0),
+            ("s1".to_string(), 1.into()),
+            ("s2".to_string(), 2.into()),
+            ("s4".to_string(), 0.into()),
+            (
+                "s5".to_string(),
+                zeropw::pyint::PyInt::from_json_integer(
+                    &serde_json::from_str("100000000000000000000").unwrap()
+                )
+                .unwrap(),
+            ),
         ]
     );
     assert!(found.grants.contains("g1"));
@@ -3945,7 +3966,7 @@ shutil.rmtree(d, ignore_errors=True)"#;
     assert_eq!(gs[0].policy_version, 3);
     assert_eq!(gs[0].max_uses, Some(3));
     assert_eq!(gs[0].uses, 0);
-    assert_eq!(gs[0].credential_version, Some(2));
+    assert_eq!(gs[0].credential_version, Some(2.into()));
 
     let decision = pol.check_grant("agent-1", "gh", "g-1").unwrap();
     assert!(decision.allowed, "reason={}", decision.reason);

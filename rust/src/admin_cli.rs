@@ -20,6 +20,7 @@ use crate::policy::{
     CliProfile, Connection, ConnectionChanges, HttpAuth, HttpScope, HttpTarget, SshTarget,
 };
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::store::iso;
 use crate::vault::{MAX_SECRET_BYTES, SecretMeta, Vault};
@@ -51,7 +52,7 @@ impl Args {
         self.get(key).unwrap_or("")
     }
     /// An argparse `type=int` value narrowed to `i64` by saturation: a
-    /// version, port or limit beyond the range behaves like the (never
+    /// port or bounded operational limit beyond the range behaves like the (never
     /// existing / always exceeding) value Python's arbitrary-precision int
     /// would have been.
     fn integer(&self, key: &str) -> Result<Option<i64>, Error> {
@@ -60,6 +61,17 @@ impl Args {
                 s.parse::<i128>()
                     .map(|n| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
                     .map_err(|_| Error::invalid_input("invalid_arguments"))
+            })
+            .transpose()
+    }
+    fn version(&self, key: &str) -> Result<Option<PyInt>, Error> {
+        self.get(key)
+            .map(|value| {
+                value
+                    .parse::<serde_json::Number>()
+                    .ok()
+                    .and_then(|number| PyInt::from_json_integer(&Value::Number(number)))
+                    .ok_or_else(|| Error::invalid_input("invalid_arguments"))
             })
             .transpose()
     }
@@ -199,17 +211,17 @@ fn build_parser() -> Parser {
         "reveal ONE secret version (admin re-auth; audited and alerted)",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT));
+    .arg(Arg::opt("--version").ty(EXACT_INT));
     add(secret, "retire", "retire a non-active version")
         .arg(Arg::opt("--id").required())
-        .arg(Arg::opt("--version").ty(INT).required());
+        .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(
         secret,
         "revoke",
         "revoke a version (connections using it fail closed)",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
 
     let connection = group(sub, "connection", "service connections");
     add(
@@ -224,7 +236,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--secret-id").required())
     .arg(
         Arg::opt("--secret-version")
-            .ty(INT)
+            .ty(EXACT_INT)
             .help("pin a version (default: follow the active version)"),
     )
     .arg(
@@ -286,7 +298,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--environment").required())
     .arg(Arg::opt("--service").required())
     .arg(Arg::opt("--secret-id").required())
-    .arg(Arg::opt("--secret-version").ty(INT))
+    .arg(Arg::opt("--secret-version").ty(EXACT_INT))
     .arg(Arg::opt("--host").required())
     .arg(Arg::opt("--port").ty(INT).default(Val::Int(22)))
     .arg(Arg::opt("--username").required())
@@ -323,7 +335,7 @@ fn build_parser() -> Parser {
         "pin the connection to a secret version",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(connection, "disable", "disable a connection").arg(Arg::opt("--id").required());
 
     let principal = group(sub, "principal", "agent identities");
@@ -393,7 +405,7 @@ fn build_parser() -> Parser {
         "activate a version and switch a connection to it",
     )
     .arg(Arg::opt("--connection").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(
         rotation,
         "finish",
@@ -1334,7 +1346,7 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     }
     let ver = ctx
         .vault
-        .resolve_version(&connection.secret_id, connection.secret_version)?;
+        .resolve_version(&connection.secret_id, connection.secret_version.clone())?;
     if let Some(version) = meta.versions.iter().find(|v| v.version == ver)
         && version.status != "active"
         && version.status != "staged"
@@ -1391,7 +1403,7 @@ fn create_connection(
 fn switch_credential(
     ctx: &Context,
     connection_id: &str,
-    version: i64,
+    version: PyInt,
 ) -> Result<Connection, Error> {
     let before = ctx.policy.get_connection(connection_id)?;
     let meta = ctx.vault.get_meta(&before.secret_id)?;
@@ -1404,7 +1416,9 @@ fn switch_credential(
     if status != "active" && status != "staged" {
         return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
     }
-    let after = ctx.policy.switch_credential(connection_id, Some(version))?;
+    let after = ctx
+        .policy
+        .switch_credential(connection_id, Some(version.clone()))?;
     ctx.audit.record(
         "connection_switch_credential",
         RecordArgs {
@@ -1544,8 +1558,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     return Err(error);
                 }
             };
-            let version = a.integer("version")?;
-            let value = ctx.vault.reveal(a.req("id"), version, &auth, None)?;
+            let version = a.version("version")?;
+            let value = ctx
+                .vault
+                .reveal(a.req("id"), version.clone(), &auth, None)?;
             let resolved = ctx.vault.resolve_version(a.req("id"), version)?;
             let mut out = json!({"id":a.req("id"),"version":resolved});
             if let Ok(text) = std::str::from_utf8(value.expose()) {
@@ -1563,10 +1579,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("secret-id")
             };
             let version = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             if let Some(env_id) = secret_shared_env(&ctx, id)? {
-                let version_id = shared_version_id(&ctx, id, version)?;
+                let version_id = shared_version_id(&ctx, id, version.clone())?;
                 let is_retire = a.action == "retire" || a.command == "rotation";
                 let result = if is_retire {
                     team_commit(
@@ -1599,7 +1615,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             let meta = ctx.vault.get_meta(id)?;
             let is_retire = a.action == "retire" || a.command == "rotation";
-            if is_retire && meta.active_version == Some(version) {
+            if is_retire && meta.active_version.as_ref() == Some(&version) {
                 return Err(Error::invalid_input("version_is_active")
                     .with_detail("activate another version first (rotation activate)"));
             }
@@ -1607,7 +1623,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let pinned: Vec<String> = using
                 .iter()
                 .filter(|c| {
-                    c.secret_id == id && c.secret_version == Some(version) && c.status == "active"
+                    c.secret_id == id
+                        && c.secret_version.as_ref() == Some(&version)
+                        && c.status == "active"
                 })
                 .map(|c| c.id.clone())
                 .collect();
@@ -1616,7 +1634,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     .with_detail(format!("pinned by connections: {}", pinned.join(","))));
             }
             let mut affected = pinned;
-            if !is_retire && meta.active_version == Some(version) {
+            if !is_retire && meta.active_version.as_ref() == Some(&version) {
                 for c in &using {
                     if c.secret_id == id
                         && c.secret_version.is_none()
@@ -1630,7 +1648,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             ctx.vault.set_version_status(
                 id,
-                version,
+                &version,
                 if is_retire { "retired" } else { "revoked" },
             )?;
             let mut out = json!({"secret_id":id,"version":version,"status":if is_retire {"retired"} else {"revoked"}});
@@ -1703,7 +1721,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("service"),
                 "http",
                 a.req("secret-id"),
-                a.integer("secret-version")?,
+                a.version("secret-version")?,
                 a.get("description").unwrap_or(""),
                 Some(http_target),
                 Some(http_auth),
@@ -1718,7 +1736,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             if let Some(env_id) = project_shared_env(&ctx, a.req("project"), a.req("environment"))?
             {
                 let version_id = a
-                    .integer("secret-version")?
+                    .version("secret-version")?
                     .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
                     .transpose()?;
                 let result = team_commit(
@@ -1785,7 +1803,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("service"),
                 "ssh",
                 a.req("secret-id"),
-                a.integer("secret-version")?,
+                a.version("secret-version")?,
                 a.get("description").unwrap_or(""),
                 None,
                 None,
@@ -1800,7 +1818,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let shared = project_shared_env(&ctx, a.req("project"), a.req("environment"))?;
             let result = if let Some(env_id) = &shared {
                 let version_id = a
-                    .integer("secret-version")?
+                    .version("secret-version")?
                     .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
                     .transpose()?;
                 Some(team_commit(
@@ -1838,9 +1856,13 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let meta = ctx.vault.get_meta(&stamped.secret_id)?;
             let resolved = ctx
                 .vault
-                .resolve_version(&stamped.secret_id, stamped.secret_version)
+                .resolve_version(&stamped.secret_id, stamped.secret_version.clone())
                 .ok();
-            if let Some(v) = meta.versions.iter().find(|v| Some(v.version) == resolved) {
+            if let Some(v) = meta
+                .versions
+                .iter()
+                .find(|v| resolved.as_ref() == Some(&v.version))
+            {
                 out["public_key"] = v.public.get("public_key").cloned().unwrap_or(Value::Null);
                 out["fingerprint"] = v.public.get("fingerprint").cloned().unwrap_or(Value::Null);
             }
@@ -1898,11 +1920,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("connection", "switch-credential") => {
             let ver = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("id"))?;
             if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
-                let version_id = shared_version_id(&ctx, &before.secret_id, ver)?;
+                let version_id = shared_version_id(&ctx, &before.secret_id, ver.clone())?;
                 let result = team_commit(
                     &ctx,
                     &env_id,
@@ -2143,12 +2165,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("rotation", "activate") => {
             let version = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("connection"))?;
             let previous = ctx.vault.get_meta(&before.secret_id)?.active_version;
             if let Some(env_id) = connection_shared_env(&ctx, &before.id)? {
-                let version_id = shared_version_id(&ctx, &before.secret_id, version)?;
+                let version_id = shared_version_id(&ctx, &before.secret_id, version.clone())?;
                 team_commit(
                     &ctx,
                     &env_id,
@@ -2179,9 +2201,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             // Pin first (one policy-version bump for this connection), then activate:
             // activating re-binds only the other unpinned connections that follow the secret.
-            let after = switch_credential(&ctx, &before.id, version)?;
+            let after = switch_credential(&ctx, &before.id, version.clone())?;
             ctx.vault
-                .set_version_status(&before.secret_id, version, "active")?;
+                .set_version_status(&before.secret_id, &version, "active")?;
             let after = ctx.policy.get_connection(&after.id)?;
             let others = ctx
                 .policy
@@ -2420,7 +2442,7 @@ fn connection_shared_env(ctx: &Context, connection_id: &str) -> Result<Option<St
     let doc = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
     Ok(doc[connection_id]["shared_env"].as_str().map(str::to_owned))
 }
-fn shared_version_id(ctx: &Context, secret_id: &str, version: i64) -> Result<String, Error> {
+fn shared_version_id(ctx: &Context, secret_id: &str, version: PyInt) -> Result<String, Error> {
     let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
     doc["secrets"][secret_id]["versions"][version.to_string()]["version_id"]
         .as_str()

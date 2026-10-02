@@ -9,10 +9,53 @@ use num_bigint::BigInt;
 use serde::{Serialize, Serializer};
 use serde_json::{Number, Value};
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 pub struct PyInt(pub BigInt);
 
 impl PyInt {
+    /// CPython's `int(value)` for values that can arrive through JSON.
+    ///
+    /// This accepts integer and finite-float numbers, booleans, and strings
+    /// accepted by the canonical Python decimal-string parser (including its
+    /// configured digit limit). Other JSON shapes and non-finite floats are
+    /// not coercible.
+    pub fn coerce_from_json(value: &Value) -> Option<Self> {
+        let integer = match value {
+            Value::Number(number) if crate::pyjson::is_float_literal(number.as_str()) => {
+                let float = number.as_f64()?;
+                if !float.is_finite() {
+                    return None;
+                }
+                let bits = float.to_bits();
+                let negative = bits >> 63 != 0;
+                let exponent = ((bits >> 52) & 0x7ff) as i32;
+                let fraction = bits & ((1_u64 << 52) - 1);
+                let mut integer = if exponent == 0 {
+                    BigInt::from(0)
+                } else {
+                    let significand = BigInt::from((1_u64 << 52) | fraction);
+                    let shift = exponent - 1023 - 52;
+                    if shift >= 0 {
+                        significand << shift as usize
+                    } else {
+                        significand >> (-shift) as usize
+                    }
+                };
+                if negative {
+                    integer = -integer;
+                }
+                integer
+            }
+            Value::Number(number) => BigInt::from_str(number.as_str()).ok()?,
+            Value::Bool(boolean) => BigInt::from(u8::from(*boolean)),
+            Value::String(string) => {
+                BigInt::from_str(&crate::pystr::int_from_str_decimal_limited(string)?).ok()?
+            }
+            _ => return None,
+        };
+        Some(Self(integer))
+    }
+
     pub fn from_json_integer(value: &Value) -> Option<Self> {
         match value {
             Value::Number(_) => {

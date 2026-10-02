@@ -1782,7 +1782,7 @@ pub fn fold_with_snapshot(
 // --------------------------------------------------------------------- derive
 fn document_connection_object(
     entry: &Map<String, Value>,
-    secret_version: Option<i64>,
+    secret_version: Option<crate::pyint::PyInt>,
 ) -> Result<policy::Connection> {
     let mut data = entry.clone();
     data.insert("policy_version".into(), json!(0));
@@ -1835,7 +1835,7 @@ fn connection_with(
         c.service.clone(),
         c.kind.clone(),
         c.secret_id.clone(),
-        c.secret_version,
+        c.secret_version.clone(),
         c.description.clone(),
         c.http_target.clone(),
         c.http_auth.clone(),
@@ -1906,7 +1906,8 @@ fn derive_connections(
         // `HttpTarget::from_value` preserves Python's unchecked `ca_file`
         // JSON through `raw_ca_file`, so every connection that folded can
         // now be represented and derived locally byte-for-byte as well.
-        let mut after = document_connection_object(entry, local_version)?;
+        let mut after =
+            document_connection_object(entry, local_version.map(crate::pyint::PyInt::from))?;
         if let Some(existing) = &existing_raw {
             let before = policy::Connection::from_value(&Value::Object(existing.clone()))?;
             if connection_changed(&before, &after) {
@@ -1923,7 +1924,12 @@ fn derive_connections(
                 // changes. `saturating_add` avoids that unconditionally.
                 let new_version = before.policy_version.saturating_add(1);
                 after = connection_with(&after, new_version, None, &before.created_at, &now_iso)?;
-                policy.reevaluate_grants(conn_id, new_version, widened, local_version)?;
+                policy.reevaluate_grants(
+                    conn_id,
+                    new_version,
+                    widened,
+                    local_version.map(crate::pyint::PyInt::from),
+                )?;
                 let reason = if after.status == "disabled" {
                     "connection_disabled"
                 } else {

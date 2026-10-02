@@ -624,12 +624,12 @@ pub fn close_incident(ctx: &Arc<Context>, incident_id: &str) -> Result<Incident>
 }
 
 fn new_secret_entry(meta: &crate::vault::SecretMeta, service: Option<&str>) -> Value {
-    let mut entry = json!({"secret_id":meta.id,"kind":meta.kind,"project":meta.project,"environment":meta.environment,"service":service,"connections":[],"targets":[],"first_used":null,"last_used":null,"use_count":0,"active_version":meta.active_version,"tier":"none"});
+    let mut entry = json!({"secret_id":meta.id,"kind":meta.kind,"project":meta.project,"environment":meta.environment,"service":service,"connections":[],"targets":[],"first_used":null,"last_used":null,"use_count":0,"active_version":meta.active_version.clone(),"tier":"none"});
     if meta.kind == "ssh_private_key" {
         entry["fingerprint"] = meta
             .versions
             .iter()
-            .find(|v| Some(v.version) == meta.active_version)
+            .find(|v| meta.active_version.as_ref() == Some(&v.version))
             .and_then(|v| v.public.get("fingerprint"))
             .cloned()
             .unwrap_or(Value::Null);

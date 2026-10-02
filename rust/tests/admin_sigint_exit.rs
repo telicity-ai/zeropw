@@ -103,8 +103,9 @@ fn administrator_serve_keeps_its_graceful_signal_stop() {
 import json,os,pathlib,select,signal,subprocess,sys,time
 from zeropw.context import Context
 python_serve='''
-import os,signal,sys
+import faulthandler,os,signal,sys
 from zeropw.admin_cli import main
+faulthandler.register(signal.SIGUSR1, all_threads=True)
 ready_fd=int(sys.argv.pop(1))
 original_signal=signal.signal
 installed={}
@@ -142,7 +143,15 @@ for mode in ('python','rust'):
     ready,_,_=select.select([ready_read],[],[],max(0,deadline-time.monotonic()))
     assert ready and os.read(ready_read,1)==b'R',('serve signal readiness timeout',mode,sig)
    os.kill(p.pid,sig)
-   _,stderr=p.communicate(timeout=5)
+   try:
+    _,stderr=p.communicate(timeout=5)
+   except subprocess.TimeoutExpired:
+    if mode=='python':
+     p.send_signal(signal.SIGUSR1)
+     time.sleep(0.1)
+    p.kill()
+    _,diagnostic=p.communicate(timeout=2)
+    raise AssertionError(('serve signal-stop timeout',mode,int(sig),diagnostic.decode())) from None
    results.append({'mode':mode,'signal':int(sig),'code':p.returncode,'stderr':stderr.decode()})
   finally:
    if p.poll() is None:p.kill();p.communicate(timeout=2)

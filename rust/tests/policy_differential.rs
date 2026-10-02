@@ -872,14 +872,17 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
         description: "DEVIATIONS.md row (policy, secret_version): \
             `Connection.secret_version` is stored completely untyped in \
             Python (`data.get(\"secret_version\")`, no validation at all); \
-            `Connection::from_value` requires `null` or a JSON integer that \
-            fits `i64`, `state_corrupt` for anything else (a JSON `null` or \
-            a plain in-range integer still agree in both languages, so only \
-            the other odd values here are exceptions).",
-        applies: |doc, path, missing, _label, _op| {
+            `Connection::from_value` now preserves JSON integers at arbitrary \
+            precision, but still cannot represent Python's successful untyped \
+            non-integer values. JSON `null` and every integer magnitude agree.",
+        applies: |doc, path, missing, label, _op| {
             doc == "connections"
                 && !missing
                 && path.last().map(String::as_str) == Some("secret_version")
+                && !matches!(
+                    label,
+                    "huge_int" | "negative_one" | "i64_max" | "i64_min" | "two_pow_53_plus_1"
+                )
         },
         judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
         skip_doc_compare: true,

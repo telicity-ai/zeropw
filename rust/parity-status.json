@@ -3,8 +3,8 @@
   "baseline_sha": "9d91647afe255d827971a1787c7af89a7b2964b6",
   "inventory_source": "rust/DEVIATIONS.md",
   "inventory_source_sha256": "a93a9eaf57dd132ee99164db5d97488ed22028eff4ca6bc61d83d6b75a7b104e",
-  "candidate_sha": "949207bb5fa974a775ca3c477f34f2a06e168315",
-  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37044890101",
+  "candidate_sha": "0cd4cb7ff911f1fd4db397180efaf93f888c68ed",
+  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37046717488",
   "complete": false,
   "entries": [
     {
@@ -1070,14 +1070,69 @@
         "macOS Clippy unnecessary lazy evaluation",
         "new Python ca_file oracle missing repository import path"
       ]
+    },
+    {
+      "sha": "949207bb5fa974a775ca3c477f34f2a06e168315",
+      "run": 37044890101,
+      "conclusion": "failure",
+      "job_results": {
+        "verify (ubuntu-latest, data)": "success",
+        "verify (ubuntu-latest, tls)": "failure",
+        "verify (macos-15, unit)": "failure",
+        "verify (macos-15, tls)": "failure",
+        "verify (ubuntu-latest, unit)": "failure",
+        "verify (ubuntu-latest, python)": "success",
+        "verify (macos-15, remaining1)": "failure",
+        "verify (ubuntu-latest, cli)": "failure",
+        "verify (ubuntu-latest, signer)": "success",
+        "verify (ubuntu-latest, remaining1)": "failure",
+        "verify (macos-15, signer)": "success",
+        "verify (macos-15, remaining0)": "success",
+        "verify (macos-15, e2e)": "success",
+        "verify (macos-15, cli)": "failure",
+        "verify (macos-15, data)": "success",
+        "verify (ubuntu-latest, e2e)": "success",
+        "verify (ubuntu-latest, remaining0)": "success",
+        "verify (macos-15, python)": "success"
+      },
+      "both_platforms_passed": [
+        "Python reference 1099 and harness80",
+        "four explicit signer probes",
+        "native E2E and fake upstream oracle",
+        "data group including snapshot bytes",
+        "remaining integration shard0"
+      ],
+      "unresolved_at_this_sha": [
+        "PyInt tuple test compilation",
+        "two tests still expecting eager snapshot rejection",
+        "canonical helper stale exemptions and oracle string falsepositive",
+        "old vault public pair test expecting rejection",
+        "macOS SMTPaliases",
+        "macOS Python serve oracle signal timeout"
+      ]
+    },
+    {
+      "sha": "3c452f73594ebcfddfb2e6fb878939bcd2b38e92",
+      "run": 37045936187,
+      "conclusion": "cancelled_after_compile_failure",
+      "failure": "smtp.rs referenced undefined latin1 helper; fixed in 0cd4cb7, not runtime-validated"
+    },
+    {
+      "sha": "0cd4cb7ff911f1fd4db397180efaf93f888c68ed",
+      "run": 37046717488,
+      "conclusion": "infrastructure_blocked",
+      "jobs_started": 0,
+      "github_annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings",
+      "validation": "No formatter, compiler, tests or runtime checks executed in this run."
     }
   ],
   "next_candidate_changes": [
-    "All remaining Rust integration targets discovered and partitioned without omissions",
-    "Explicit serial ignored signer probes and documentation tests",
-    "Full Python reference and harness suites",
-    "Exact persisted replay status through gateway, tools, audit and server",
-    "Snapshot lazy access and non-string version-order parity"
+    "Exact vault and credential versions through metadata, AAD, admin CLI, policy and revocations",
+    "Exact handle issuance and expiration for finite binary64 timestamps",
+    "SMTP encoded words, groups and domain literals with Python differential tests",
+    "Stored HTTP header iterable unpacking and Python string conversion",
+    "Strict canonical helper exemptions refreshed without permitting new bypasses",
+    "Python serve timeout diagnostics without relaxing signal-stop assertions"
   ],
   "known_open_items": [
     "macOS SMTP native hostent aliases",

@@ -596,7 +596,7 @@ impl Client {
     /// `send_message(message)` for `notify._send`'s message.
     fn send_message(&mut self, config: &NotifyConfig, message: &Message) -> Result<(), SendError> {
         self.ehlo_or_helo_if_needed()?;
-        let from = mailbox(&config.sender);
+        let from = envelope_sender(&config.sender);
         let to = envelope_recipients(config);
         let international = !from.is_ascii() || to.iter().any(|r| !r.is_ascii());
         if international && !self.has_extn("smtputf8") {
@@ -717,16 +717,65 @@ impl Client {
 /// comma-separated addresses, which Python's list parse splits.
 fn envelope_recipients(config: &NotifyConfig) -> Vec<String> {
     if let Some(Tok::List(_, parts)) = get_address_list(&config.recipients.join(", ")) {
-        let addresses: Vec<String> = parts
-            .iter()
-            .filter(|part| matches!(part, Tok::List(Kind::Address, _)))
-            .map(|address| mailbox(address.text().trim_start()))
-            .collect();
-        if addresses.len() != config.recipients.len() {
-            return addresses;
-        }
+        let tree = Tok::List(Kind::AddressList, parts);
+        let mut addresses = Vec::new();
+        collect_envelope_mailboxes(&tree, &mut addresses);
+        return addresses;
     }
     config.recipients.iter().map(|r| mailbox(r)).collect()
+}
+
+fn envelope_sender(sender: &str) -> String {
+    let mut addresses = Vec::new();
+    if let Some(tree) = get_address_list(sender) {
+        collect_envelope_mailboxes(&tree, &mut addresses);
+        return addresses.into_iter().next().unwrap_or_default();
+    }
+    mailbox(sender)
+}
+
+fn collect_envelope_mailboxes(token: &Tok, addresses: &mut Vec<String>) {
+    match token {
+        Tok::List(Kind::Mailbox, _) => {
+            let has_domain_literal = contains_kind(token, Kind::DomainLiteral);
+            addresses.push(if has_domain_literal {
+                // `email.utils.getaddresses(..., strict=True)` runs
+                // `_post_parse_validation`, which replaces every legacy
+                // parser result whose address still contains `[` with the
+                // empty tuple.
+                String::new()
+            } else {
+                mailbox(token.text().trim_start())
+            });
+        }
+        Tok::List(Kind::Group, parts) => {
+            let before = addresses.len();
+            for part in parts {
+                collect_envelope_mailboxes(part, addresses);
+            }
+            if addresses.len() == before {
+                // Legacy `_parseaddr.getaddrlist` inserts `('', '')` when
+                // an empty group returns no address, preserving its position
+                // among surrounding comma-separated addresses.
+                addresses.push(String::new());
+            }
+        }
+        Tok::List(_, parts) => {
+            for part in parts {
+                collect_envelope_mailboxes(part, addresses);
+            }
+        }
+        Tok::Term(..) => {}
+    }
+}
+
+fn contains_kind(token: &Tok, wanted: Kind) -> bool {
+    match token {
+        Tok::List(kind, parts) => {
+            *kind == wanted || parts.iter().any(|part| contains_kind(part, wanted))
+        }
+        Tok::Term(..) => false,
+    }
 }
 
 /// `self.file.readline(limit)`: up to `limit` bytes, through `\n`; a short
@@ -1072,8 +1121,8 @@ fn qp_body_encode(data: &[u8]) -> Vec<u8> {
 // module writes (an unstructured Subject; From/To address lists of
 // addr-specs and `display-name <addr-spec>` mailboxes, with atoms, quoted
 // strings, comments and obsolete dots in display names). `None` from a
-// parser means "outside that subset" (groups, encoded words, domain
-// literals, obsolete routes/local parts/domains, invalid mailboxes): the
+// parser means "outside that subset" (obsolete routes/local parts/domains
+// and invalid mailboxes): the
 // caller then writes the configured value unfolded (`DEVIATIONS.md`).
 
 const WSP: [char; 2] = [' ', '\t'];
@@ -1125,12 +1174,16 @@ enum Kind {
     DotAtomText,
     LocalPart,
     Domain,
+    DomainLiteral,
     AddrSpec,
     AngleAddr,
     NameAddr,
     Mailbox,
     Address,
     AddressList,
+    MailboxList,
+    GroupList,
+    Group,
 }
 
 #[derive(Clone, Debug)]
@@ -1553,7 +1606,13 @@ fn get_domain(mut value: &str) -> Parsed<'_> {
     }
     match first(value) {
         None => return Err(PErr::Header),
-        Some('[') => return Err(PErr::Unsupported), // domain literal
+        Some('[') => {
+            let (mut token, rest) = get_domain_literal(value)?;
+            if let Some(leader) = leader {
+                token.prepend(leader);
+            }
+            return Ok((Tok::List(Kind::Domain, vec![token]), rest));
+        }
         Some(_) => {}
     }
     let (mut token, rest) = match get_dot_atom(value) {
@@ -1571,6 +1630,48 @@ fn get_domain(mut value: &str) -> Parsed<'_> {
         return Err(PErr::Unsupported); // obs-domain
     }
     Ok((Tok::List(Kind::Domain, vec![token]), rest))
+}
+
+fn get_domain_literal(mut value: &str) -> Parsed<'_> {
+    let mut parts = Vec::new();
+    let Some(rest) = value.strip_prefix('[') else {
+        return Err(PErr::Header);
+    };
+    parts.push(Tok::value("[", "domain-literal-start"));
+    value = rest;
+    let mut text = String::new();
+    let mut escaped = false;
+    let mut end = None;
+    for (index, character) in value.char_indices() {
+        if escaped {
+            text.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == ']' {
+            end = Some(index);
+            break;
+        } else if character == '[' {
+            return Err(PErr::Header);
+        } else {
+            text.push(character);
+        }
+    }
+    let Some(end) = end else {
+        // CPython repairs the missing terminator in the generated form.
+        parts.push(Tok::value(text, "ptext"));
+        parts.push(Tok::value("]", "domain-literal-end"));
+        return Ok((Tok::List(Kind::DomainLiteral, parts), ""));
+    };
+    parts.push(Tok::value(text, "ptext"));
+    parts.push(Tok::value("]", "domain-literal-end"));
+    value = &value[end + 1..];
+    if first(value).is_some_and(is_cfws_leader) {
+        let (token, rest) = get_cfws(value)?;
+        parts.push(token);
+        value = rest;
+    }
+    Ok((Tok::List(Kind::DomainLiteral, parts), value))
 }
 
 /// `get_addr_spec` (with a domain).
@@ -1679,22 +1780,73 @@ fn get_mailbox(value: &str) -> Parsed<'_> {
     Ok((Tok::List(Kind::Mailbox, vec![token]), rest))
 }
 
-/// `get_address` (a group is outside the subset).
-fn get_address(value: &str) -> Parsed<'_> {
-    match get_display_name(value) {
-        Ok((_, _, rest)) if rest.starts_with(':') => return Err(PErr::Unsupported),
-        Err(PErr::Unsupported) => return Err(PErr::Unsupported),
-        _ => {}
+fn get_group(value: &str) -> Parsed<'_> {
+    let (display, invalid, rest) = get_display_name(value)?;
+    if invalid {
+        return Err(PErr::Unsupported);
     }
-    let (mailbox, rest) = get_mailbox(value)?;
-    Ok((Tok::List(Kind::Address, vec![mailbox]), rest))
+    let Some(mut value) = rest.strip_prefix(':') else {
+        return Err(PErr::Header);
+    };
+    let mut parts = vec![display, Tok::value(":", "group-display-name-terminator")];
+    if let Some(rest) = value.strip_prefix(';') {
+        parts.push(Tok::value(";", "group-terminator"));
+        return Ok((Tok::List(Kind::Group, parts), rest));
+    }
+    let mut mailboxes = Vec::new();
+    if first(value).is_some_and(is_cfws_leader) {
+        let (leader, rest) = get_cfws(value)?;
+        mailboxes.push(leader);
+        value = rest;
+    }
+    while !value.is_empty() && !value.starts_with(';') {
+        let (mailbox, rest) = get_mailbox(value)?;
+        mailboxes.push(mailbox);
+        value = rest;
+        if value.starts_with(';') {
+            break;
+        }
+        let Some(rest) = value.strip_prefix(',') else {
+            return Err(PErr::Header);
+        };
+        mailboxes.push(Tok::Term(",".into(), "list-separator", Space::Value, true));
+        value = rest;
+        if first(value).is_some_and(is_cfws_leader) {
+            let (space, rest) = get_cfws(value)?;
+            mailboxes.push(space);
+            value = rest;
+        }
+    }
+    parts.push(Tok::List(
+        Kind::GroupList,
+        vec![Tok::List(Kind::MailboxList, mailboxes)],
+    ));
+    let Some(rest) = value.strip_prefix(';') else {
+        return Err(PErr::Header);
+    };
+    parts.push(Tok::value(";", "group-terminator"));
+    value = rest;
+    if first(value).is_some_and(is_cfws_leader) {
+        let (space, rest) = get_cfws(value)?;
+        parts.push(space);
+        value = rest;
+    }
+    Ok((Tok::List(Kind::Group, parts), value))
+}
+
+/// `get_address`: mailbox or group.
+fn get_address(value: &str) -> Parsed<'_> {
+    let is_group = matches!(get_display_name(value), Ok((_, _, rest)) if rest.starts_with(':'));
+    let (address, rest) = if is_group {
+        get_group(value)?
+    } else {
+        get_mailbox(value)?
+    };
+    Ok((Tok::List(Kind::Address, vec![address]), rest))
 }
 
 /// `get_address_list` without its error-recovery productions.
 fn get_address_list(mut value: &str) -> Option<Tok> {
-    if value.contains("=?") {
-        return None;
-    }
     let mut parts = Vec::new();
     while !value.is_empty() {
         let (address, rest) = get_address(value).ok()?;
@@ -2548,6 +2700,66 @@ print(json.dumps(out))
         }
     }
 
+    #[test]
+    fn groups_and_domain_literals_match_python_headers_and_envelopes() {
+        let cases = json!([
+            ["a@example.com", "undisclosed-recipients:;"],
+            ["a@example.com", "Empty Team: (no recipients) ;"],
+            [
+                "a@example.com",
+                "Team: Alpha <a@example.com>, b@[127.0.0.1];"
+            ],
+            ["a@example.com", "IPv6 User <v6@[IPv6:2001:db8::1]>"],
+            [
+                "a@example.com",
+                "Literal <x@ (before) [ 127.0.0.1 ] (after)>"
+            ],
+            [
+                "a@example.com",
+                "G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]"
+            ],
+            [
+                "Senders: first@[127.0.0.1], second@example.com;",
+                "b@example.com"
+            ],
+            ["Nobody:;", "b@example.com"],
+            ["a@example.com", "Empty:;, b@example.com"],
+            ["a@example.com", "b@example.com, Empty:;"],
+            ["A. B. <a@example.com>", "C. D. <b@example.com>"]
+        ]);
+        let script = format!(
+            r#"
+import base64, email.generator, email.utils, io, json
+from email.message import EmailMessage
+out=[]
+for sender, recipient in json.loads({cases:?}):
+ m=EmailMessage(); m['Subject']='s'; m['From']=sender; m['To']=recipient; m.set_content('x\n')
+ b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
+ out.append([base64.b64encode(b.getvalue()).decode(), email.utils.getaddresses([m['From']])[0][1], [a[1] for a in email.utils.getaddresses([m['To']])]])
+print(json.dumps(out))
+"#,
+            cases = cases.to_string(),
+        );
+        let expected: Vec<(String, String, Vec<String>)> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        for (case, (flat, from, to)) in cases.as_array().unwrap().iter().zip(expected) {
+            let sender = case[0].as_str().unwrap();
+            let recipients = [case[1].as_str().unwrap().to_owned()];
+            let message = Message::new(&config(sender, &recipients), "s", "x\n");
+            assert_eq!(
+                message.flatten(false).ok().expect("headers verify"),
+                crate::pybase64::b64decode(&flat).unwrap(),
+                "headers {case}"
+            );
+            assert_eq!(envelope_sender(sender), from, "sender {case}");
+            assert_eq!(
+                envelope_recipients(&config(sender, &recipients)),
+                to,
+                "recipients {case}"
+            );
+        }
+    }
+
     /// `set_content(body)`'s transfer-encoding choice and payload (7bit,
     /// 8bit, quoted-printable with soft breaks and trailing whitespace,
     /// base64), for bodies around each heuristic boundary.
@@ -2621,8 +2833,6 @@ print(json.dumps(out))
     #[test]
     fn unsupported_address_shapes_are_written_as_configured() {
         for value in [
-            "undisclosed-recipients: a@example.com;",
-            "a@[127.0.0.1]",
             "<@route.example:a@example.com>",
             "<>",
             "admin",

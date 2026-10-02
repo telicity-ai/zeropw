@@ -680,22 +680,31 @@ pub fn share_environment(
             shareable.insert(sid.clone(), entry.clone());
         }
     }
-    let mut version_ids: BTreeMap<String, BTreeMap<i64, String>> = BTreeMap::new();
+    let mut version_ids: BTreeMap<String, BTreeMap<crate::pyint::PyInt, String>> = BTreeMap::new();
     let mut secret_ops: Vec<Value> = Vec::new();
     for (sid, entry) in &shareable {
         let mut versions = entry["versions"]
             .as_object()
             .map(|m| m.iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        versions.sort_by_key(|(n, _)| n.parse::<i64>().unwrap_or(i64::MAX));
+        versions.sort_by(|(a, _), (b, _)| {
+            let a = crate::pystr::int_from_str_decimal_limited(a)
+                .and_then(|v| v.parse().ok())
+                .map(crate::pyint::PyInt);
+            let b = crate::pystr::int_from_str_decimal_limited(b)
+                .and_then(|v| v.parse().ok())
+                .map(crate::pyint::PyInt);
+            a.cmp(&b)
+        });
         for (number, v) in versions {
             if v["status"] != "active" && v["status"] != "staged" {
                 continue;
             }
-            let n = number
-                .parse::<i64>()
-                .map_err(|_| Error::state("state_corrupt"))?;
-            let value = ctx.vault.secret_for_trusted_use(sid, Some(n))?;
+            let n = crate::pystr::int_from_str_decimal_limited(number)
+                .and_then(|value| value.parse().ok())
+                .map(crate::pyint::PyInt)
+                .ok_or_else(|| Error::state("state_corrupt"))?;
+            let value = ctx.vault.secret_for_trusted_use(sid, Some(n.clone()))?;
             let version_id = token(8);
             let ciphertext =
                 envelope::encrypt_secret(&dek, &env_id, sid, &version_id, value.expose())?;
@@ -703,8 +712,9 @@ pub fn share_environment(
             version_ids
                 .entry(sid.clone())
                 .or_default()
-                .insert(n, version_id.clone());
-            if entry["active_version"].as_i64() == Some(n) {
+                .insert(n.clone(), version_id.clone());
+            if crate::pyint::PyInt::from_json_integer(&entry["active_version"]).as_ref() == Some(&n)
+            {
                 secret_ops
                     .push(json!({"op":"secret.activate","secret_id":sid,"version_id":version_id}));
             }
@@ -748,7 +758,7 @@ pub fn share_environment(
                         continue;
                     }
                     let value = if k == "secret_version" && !v.is_null() {
-                        v.as_i64()
+                        crate::pyint::PyInt::from_json_integer(v)
                             .and_then(|n| version_ids.get(sid).and_then(|m| m.get(&n)))
                             .map_or(Value::Null, |id| json!(id))
                     } else {

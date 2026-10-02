@@ -142,7 +142,7 @@ fn share_leaves_revoked_and_cross_project_secret_connections_local() {
         )
         .unwrap();
     ctx.vault
-        .set_version_status("dead-token", 1, "revoked")
+        .set_version_status("dead-token", &1.into(), "revoked")
         .unwrap();
     ctx.policy
         .create_connection(connection("dead", "dead-token"))
@@ -1434,9 +1434,9 @@ fn removed_member_keeps_old_version_but_cannot_get_new_generation_version() {
             .unwrap()
             .versions
             .iter()
-            .map(|v| v.version)
+            .map(|v| v.version.clone())
             .collect::<Vec<_>>(),
-        vec![1]
+        vec![1.into()]
     );
 }
 

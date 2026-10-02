@@ -1952,7 +1952,7 @@ fn missing_credential_is_explicit() {
     let t = GatewayTest::new();
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap();
     let result = t.relay("GET", "/repos");
     assert_eq!(
@@ -2881,13 +2881,13 @@ fn pre_transmission_failure_releases_claim() {
     let t = GatewayTest::new();
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap();
     let failed = issue_ledger(&t, "req-4", "same");
     assert_eq!(failed.reason.as_deref(), Some("credential_unavailable"));
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "active")
+        .set_version_status("gh-token", &1.into(), "active")
         .unwrap();
     assert_eq!(issue_ledger(&t, "req-4", "same").status, 201);
     let mut fake = FakeUpstream::new(SECRET_A);

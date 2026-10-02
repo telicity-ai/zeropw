@@ -1124,83 +1124,17 @@ fn python_float_str(text: &str) -> Option<f64> {
 /// upstream parsing remains bounded to the validated `u16` wire status used
 /// by [`UpstreamResponse`].
 fn python_int_status(v: &Value) -> Option<crate::pyint::PyInt> {
-    use num_bigint::BigInt;
-    use std::str::FromStr as _;
-
-    let n = match v {
-        Value::Number(n) => {
-            if crate::pyjson::is_float_literal(n.as_str()) {
-                let f = n.as_f64()?;
-                if !f.is_finite() {
-                    return None;
-                }
-                let bits = f.to_bits();
-                let negative = bits >> 63 != 0;
-                let exponent = ((bits >> 52) & 0x7ff) as i32;
-                let fraction = bits & ((1u64 << 52) - 1);
-                let mut integer = if exponent == 0 {
-                    BigInt::from(0)
-                } else {
-                    let significand = BigInt::from((1u64 << 52) | fraction);
-                    let shift = exponent - 1023 - 52;
-                    if shift >= 0 {
-                        significand << shift as usize
-                    } else {
-                        significand >> (-shift) as usize
-                    }
-                };
-                if negative {
-                    integer = -integer;
-                }
-                integer
-            } else {
-                BigInt::from_str(n.as_str()).ok()?
-            }
-        }
-        Value::Bool(b) => BigInt::from(u8::from(*b)),
-        Value::String(s) => {
-            BigInt::from_str(&crate::pystr::int_from_str_decimal_limited(s)?).ok()?
-        }
-        _ => return None,
-    };
-    Some(crate::pyint::PyInt(n))
+    crate::pyint::PyInt::coerce_from_json(v)
 }
 
-/// `str(x)` for a JSON value already known to be a header name/value
-/// element (or, since finding F-R4-4, a stored `reason`), matching the
-/// handful of forms Python's `str()` never raises for. This crate's own
-/// writer always stores plain strings; the other arms only matter for a
-/// deliberately-corrupted ledger.
-///
-/// Finding F-R4-5: a `Value::Number` that was written to the ledger's JSON
-/// as a *float* literal (`n.is_i64()`/`n.is_u64()` both false -- i.e. it had
-/// a `.`/exponent in its source spelling, the same test `policy.rs`'s
-/// `number_is_python_int` uses to tell a Python `int` from a Python
-/// `float`) is rendered through the canonical
-/// [`crate::pyjson::python_float_repr`] (PORTING.md §3b), matching CPython
-/// `repr(float)`/`str(float)` exactly (`str(1e-07) == "1e-07"`,
-/// `str(1.2345678901234568e+29) == "1.2345678901234568e+29"`) -- not
-/// `serde_json::Number`'s own `Display`, which preserves the source
-/// literal's spelling verbatim (`1e-7` stays `"1e-7"`, not `"1e-07"`) and
-/// never renders an overflowing decimal in scientific notation at all. An
-/// integer-valued `Number` (no `.`/exponent in its source spelling, e.g. a
-/// stored `status` echoed back through this helper) still renders as a
-/// plain decimal integer, matching `str(5) == "5"` (not `"5.0"`).
+/// Python `str(x)` for a JSON value used as a stored header component or
+/// replay reason. Strings are already Python strings and remain unquoted;
+/// every other JSON shape uses the canonical recursive Python repr helper
+/// (`str` and `repr` agree for these scalar/container types).
 fn python_str_of(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Null => "None".to_string(),
-        Value::Bool(b) => (if *b { "True" } else { "False" }).to_string(),
-        Value::Number(n) => {
-            if n.is_i64() || n.is_u64() {
-                n.to_string()
-            } else if let Some(f) = n.as_f64() {
-                pyjson::python_float_repr(f)
-            } else {
-                n.to_string()
-            }
-        }
-        other => other.to_string(),
+        other => crate::pystr::repr_value(other),
     }
 }
 
@@ -1223,48 +1157,102 @@ fn is_json_falsy(v: &Value) -> bool {
 /// F-R3-5, `RequestLedger.replay`, corrected by F-R4-4(c)): a missing key
 /// or any JSON-falsy stored value ([`is_json_falsy`]) short-circuits to no
 /// headers, exactly like Python's `or []`. Each *element* of a non-empty
-/// array is then unpacked the way a `for k, v in ...` loop unpacks any
+/// iterable is then unpacked the way a `for k, v in ...` loop unpacks any
 /// 2-item sequence -- not only a 2-element JSON array (`["a", "b"]`), but
 /// also a JSON string of exactly two Unicode characters (`"ab"` unpacks to
 /// `k="a", v="b"`, confirmed directly against live `python3.12`: `for k, v
 /// in ["ab"]` succeeds). A wrong-length array/string, or an element of any
 /// other JSON type, is exactly where Python's own unpacking raises
-/// (`ValueError`/`TypeError`) -- fail-closed with `state_corrupt`
-/// (PORTING.md §3.5) for those, rather than the previous version's
-/// `Value::Array` requirement (whose doc comment wrongly claimed "Python's
-/// unpacking itself raises" for a 2-character string element -- disproved
-/// by the probe above). A dict element with exactly two keys also unpacks
-/// successfully in real Python (iterating a dict yields its keys); that
-/// shape is not reproduced here (it is not part of any finding's evidence
-/// and is exotic enough not to be worth another special case) and remains
-/// a narrow, fail-closed-instead-of-matching gap.
+/// (`ValueError`/`TypeError`) -- fail-closed with `state_corrupt`.
 fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
-    let bad_shape = || Error::state("state_corrupt").with_detail("request_ledger_headers");
-    match v {
-        None => Ok(Headers::new()),
-        Some(value) if is_json_falsy(value) => Ok(Headers::new()),
-        Some(Value::Array(arr)) => {
-            let mut out = Headers::new();
-            for item in arr {
-                match item {
-                    Value::Array(pair) if pair.len() == 2 => {
-                        out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
-                    }
-                    Value::String(s) => {
-                        let mut chars = s.chars();
-                        match (chars.next(), chars.next(), chars.next()) {
-                            (Some(a), Some(b), None) => {
-                                out.push((a.to_string(), b.to_string()));
-                            }
-                            _ => return Err(bad_shape()),
-                        }
-                    }
-                    _ => return Err(bad_shape()),
-                }
-            }
-            Ok(out)
+    fn bad_shape() -> Error {
+        Error::state("state_corrupt").with_detail("request_ledger_headers")
+    }
+    let Some(value) = v else {
+        return Ok(Headers::new());
+    };
+    if is_json_falsy(value) {
+        return Ok(Headers::new());
+    }
+    let iter = |value: &Value| -> Option<Vec<Value>> {
+        match value {
+            Value::Array(items) => Some(items.clone()),
+            Value::Object(map) => Some(map.keys().cloned().map(Value::String).collect()),
+            Value::String(text) => Some(
+                text.chars()
+                    .map(|character| Value::String(character.to_string()))
+                    .collect(),
+            ),
+            _ => None,
         }
-        Some(_) => Err(bad_shape()),
+    };
+    let mut out = Headers::new();
+    for item in iter(value).ok_or_else(bad_shape)? {
+        let pair = iter(&item).ok_or_else(bad_shape)?;
+        if pair.len() != 2 {
+            return Err(bad_shape());
+        }
+        out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod stored_header_oracle_tests {
+    use super::*;
+
+    #[test]
+    fn stored_header_comprehension_matches_python() {
+        let cases = [
+            "null",
+            "false",
+            "0",
+            "\"\"",
+            "[]",
+            "{}",
+            r#"[["X",184467440737095516160000000000000000000]]"#,
+            r#"[[[1,2],{"b":2,"a":1}]]"#,
+            r#"[{"first":0,"second":0}]"#,
+            r#"{"ab":0,"😀x":1}"#,
+            r#""ab""#,
+            r#"["ab","😀x"]"#,
+            r#"[["only-one"],[1,2,3]]"#,
+            "true",
+        ];
+        let script = format!(
+            r#"
+import json
+out=[]
+for value in json.loads({cases:?}):
+ try:
+  out.append([True, [(str(k), str(v)) for k,v in (json.loads(value) or [])]])
+ except Exception as exc:
+  out.append([False, type(exc).__name__])
+print(json.dumps(out, ensure_ascii=False))
+"#,
+            cases = serde_json::to_string(&cases).unwrap(),
+        );
+        let expected: Vec<Value> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        for (source, expected) in cases.iter().zip(expected) {
+            let value = pyjson::loads(source).unwrap();
+            let actual = python_headers_from_json(Some(&value));
+            assert_eq!(actual.is_ok(), expected[0] == true, "{source}");
+            if let Ok(actual) = actual {
+                let expected: Headers = expected[1]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|pair| {
+                        (
+                            pair[0].as_str().unwrap().to_owned(),
+                            pair[1].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect();
+                assert_eq!(actual, expected, "{source}");
+            }
+        }
     }
 }
 
@@ -3342,7 +3330,7 @@ impl<'a> Relay<'a> {
         let secret = match self
             .ctx
             .vault
-            .secret_for_trusted_use(&connection.secret_id, connection.secret_version)
+            .secret_for_trusted_use(&connection.secret_id, connection.secret_version.clone())
         {
             Ok(s) => s,
             Err(e)

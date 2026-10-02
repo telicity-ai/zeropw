@@ -82,20 +82,6 @@ const BASE64_DECODE_ALLOWLIST: &[Allow] = &[
 /// outside `pyjson.rs`.
 const NUMBER_TO_STRING_ALLOWLIST: &[Allow] = &[
     Allow {
-        file: "gateway.rs",
-        marker: "n.is_i64() || n.is_u64()",
-        reason: "python_str_of's `Value::Number` arm (finding F-R4-5): both `n.to_string()` \
-                 occurrences here are reached only inside this `is_i64()/is_u64()` guard's \
-                 if/else (the TRUE-int branch, and a defensive fallback for the \
-                 (unreachable) case `as_f64()` still fails on the float branch) -- Python \
-                 `str(int)` is exactly the decimal digits, and the real float branch \
-                 renders through the canonical `pyjson::python_float_repr`. The marker is \
-                 the guard condition itself, not `n.to_string()` (too generic: it would \
-                 also match a reintroduced, UNGUARDED `Value::Number(n) => n.to_string()` \
-                 elsewhere in this file -- verified by literally reintroducing that exact \
-                 line and confirming this check still fails on it).",
-    },
-    Allow {
         file: "policy.rs",
         marker: "let text = n.to_string();",
         reason: "number_literal_is_zero inspects the literal's own SOURCE TEXT (which \
@@ -344,10 +330,9 @@ fn no_number_to_string_outside_pyjson() {
     let number_to_string = Regex::new(r"\bn\.to_string\(\)").unwrap();
     // Matched against a small window (the flagged line plus up to 6 lines
     // before it), not just the flagged line alone, so an allowlist marker
-    // can require the actual GUARD CONDITION that makes a `n.to_string()`
-    // legitimate (e.g. `n.is_i64() || n.is_u64()`) rather than the
-    // `n.to_string()` text itself -- which would also match a reintroduced,
-    // unguarded copy of the exact bug elsewhere in the same file.
+    // can identify the exact source-inspection context that makes a
+    // `n.to_string()` legitimate rather than the `n.to_string()` text
+    // itself, which could also match a reintroduced output-rendering bug.
     const WINDOW: usize = 6;
     let base = src_dir();
     let mut files = Vec::new();

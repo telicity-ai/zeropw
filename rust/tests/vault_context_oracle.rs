@@ -143,6 +143,111 @@ print(hashlib.sha256(value).hexdigest())
     assert_eq!(out.trim(), sha256_hex(value));
 }
 
+#[test]
+fn oversized_stored_version_matches_python_across_vault_and_admin_cli() {
+    let tmp = TempDir::new().unwrap();
+    let python_state = tmp.path().join("state-python");
+    let rust_state = tmp.path().join("state-rust");
+    let script = format!(
+        r#"
+import json
+import os
+import shutil
+import subprocess
+import sys
+from zeropw.context import Context, Config
+from zeropw.store import iso
+
+state = {python_state}
+rust_state = {rust_state}
+version = 10 ** 80
+ctx = Context.initialize(state, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+ctx.projects.create("demo")
+ctx.vault.put_secret("wide", "api_key", b"synthetic-seed", "demo", "dev")
+doc = ctx.state.read_json("vault/secrets.json")
+entry = doc["secrets"]["wide"]
+record = ctx.vault._encrypt("wide", version, b"synthetic-wide")
+record.update({{"created_at": iso(), "status": "active", "public": {{}}}})
+entry["versions"] = {{str(version): record}}
+entry["active_version"] = version
+ctx.state.write_json("vault/secrets.json", doc)
+ctx.close()
+shutil.copytree(state, rust_state)
+
+env = dict(os.environ, ZEROPW_ADMIN_PASSPHRASE="admin-passphrase-1")
+base = [sys.executable, "-m", "zeropw.admin_cli", "--state-dir", str(state)]
+revealed = subprocess.run(base + ["secret", "reveal", "--id", "wide", "--version", str(version)], env=env, check=True, capture_output=True, text=True)
+reveal_doc = json.loads(revealed.stdout)
+revoked = subprocess.run(base + ["secret", "revoke", "--id", "wide", "--version", str(version)], env=env, check=True, capture_output=True, text=True)
+revoke_doc = json.loads(revoked.stdout)
+
+ctx = Context.open(state, Config(), lambda: {now})
+next_version = ctx.vault.put_secret("wide", "api_key", b"synthetic-next", "demo", "dev")
+meta = ctx.vault.get_meta("wide")
+print(json.dumps({{
+    "revealed_version": str(reveal_doc["version"]),
+    "revealed_value_matches": reveal_doc["value"] == "synthetic-wide",
+    "revoked_version": str(revoke_doc["version"]),
+    "next_version": str(next_version),
+    "active_version": str(meta.active_version),
+    "versions": [str(item.version) for item in meta.versions],
+    "statuses": {{str(item.version): item.status for item in meta.versions}},
+    "next_value_matches": ctx.vault.secret_for_trusted_use("wide") == b"synthetic-next",
+}}, sort_keys=True))
+"#,
+        python_state = py_str(&python_state),
+        rust_state = py_str(&rust_state),
+        now = FIXED_NOW,
+    );
+    let python: Value = serde_json::from_str(run_python(&script).trim()).unwrap();
+    let wide = format!("1{}", "0".repeat(80));
+    let next = format!("1{}1", "0".repeat(79));
+
+    let run_rust_admin = |args: &[&str]| -> Value {
+        let output = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
+            .args(["--state-dir", rust_state.to_str().unwrap()])
+            .args(args)
+            .env("ZEROPW_ADMIN_PASSPHRASE", "admin-passphrase-1")
+            .output()
+            .expect("run Rust administrator CLI");
+        assert!(
+            output.status.success(),
+            "Rust administrator stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("Rust administrator JSON")
+    };
+    let rust_reveal = run_rust_admin(&["secret", "reveal", "--id", "wide", "--version", &wide]);
+    let rust_revoke = run_rust_admin(&["secret", "revoke", "--id", "wide", "--version", &wide]);
+    let rust_ctx = Context::open(&rust_state, Config::default(), clock::fixed(FIXED_NOW)).unwrap();
+    let rust_next = rust_ctx
+        .vault
+        .put_secret("wide", "api_key", b"synthetic-next", "demo", "dev", true)
+        .unwrap();
+    let rust_meta = rust_ctx.vault.get_meta("wide").unwrap();
+    let rust = json!({
+        "revealed_version": rust_reveal["version"].to_string(),
+        "revealed_value_matches": rust_reveal["value"] == "synthetic-wide",
+        "revoked_version": rust_revoke["version"].to_string(),
+        "next_version": rust_next.to_string(),
+        "active_version": rust_meta.active_version.as_ref().unwrap().to_string(),
+        "versions": rust_meta.versions.iter().map(|item| item.version.to_string()).collect::<Vec<_>>(),
+        "statuses": rust_meta.versions.iter().map(|item| (item.version.to_string(), item.status.clone())).collect::<std::collections::BTreeMap<_, _>>(),
+        "next_value_matches": rust_ctx.vault.secret_for_trusted_use("wide", None).unwrap().expose() == b"synthetic-next",
+    });
+
+    assert_eq!(python["revealed_version"], wide);
+    assert_eq!(python["revoked_version"], wide);
+    assert_eq!(python["next_version"], next);
+    assert_eq!(python["active_version"], next);
+    assert_eq!(python["versions"], json!([wide, next]));
+    assert_eq!(python["statuses"][wide.as_str()], "revoked");
+    assert_eq!(python["statuses"][next.as_str()], "active");
+    assert_eq!(python["revealed_value_matches"], true);
+    assert_eq!(python["next_value_matches"], true);
+    assert_eq!(rust, python);
+}
+
 // --------------------------------------------------------- backup / restore
 #[test]
 fn backup_made_by_python_restores_through_rust() {
@@ -925,9 +1030,8 @@ except Exception as exc:
 // ------------------------------------------ version key magnitude (finding E-R4-1)
 /// Reviewer requirement (finding E-R4-1): `python_int_from_str` must accept `i64::MIN` (its
 /// magnitude, one past `i64::MAX`, was previously rejected by a same-width unsigned-then-negate
-/// parse step), and a `versions` key whose magnitude is wider than `i64` altogether -- something
-/// Python's unbounded `int()` has no trouble with -- is a recorded, intentional narrowing
-/// (`DEVIATIONS.md`, finding E-R4-1), not a silent drop.
+/// parse step), and version keys wider than `i64` remain exact like Python's
+/// unbounded `int()`.
 #[test]
 fn list_secrets_version_key_i64_min_matches_python() {
     let tmp = TempDir::new().unwrap();
@@ -952,20 +1056,16 @@ print(metas[0].versions[0].version)
     assert_eq!(out.trim(), i64::MIN.to_string());
 }
 
-/// Reviewer case: a `versions` key magnitude outside `i64` (`10**20`) is a magnitude Python's own
-/// unbounded `int()` parses without complaint, but this port cannot widen `VersionMeta::version`
-/// (an `i64`) to match without rippling into `signer.rs`/`policy.rs` types outside this fix's
-/// scope (`DEVIATIONS.md`, finding E-R4-1) -- pinned here as the intentional, narrower-than-Python
-/// divergence it is, not silently dropped or misparsed.
+/// A `versions` key outside `i64` remains exact in both metadata APIs.
 #[test]
-fn list_secrets_version_key_magnitude_outside_i64_is_state_corrupt_python_still_parses() {
+fn list_secrets_version_key_magnitude_outside_i64_matches_python() {
     let tmp = TempDir::new().unwrap();
     let ctx = setup_single_secret_context(&tmp);
     let state = tmp.path().join("state");
     rename_sole_version_key(&ctx, "gh-token", "100000000000000000000");
 
-    let err = ctx.vault.list_secrets(None, None).unwrap_err();
-    assert_eq!(err.reason.to_string(), "state_corrupt");
+    let rust_version = &ctx.vault.list_secrets(None, None).unwrap()[0].versions[0].version;
+    assert_eq!(rust_version.to_string(), "100000000000000000000");
 
     let script = format!(
         r#"
@@ -985,18 +1085,13 @@ print(metas[0].versions[0].version)
     );
 }
 
-/// Finding E-R7-2: `put_secret`'s `next_version = max(existing keys) + 1` must not overflow (or,
-/// worse, silently wrap in a release build with `overflow-checks` off) where Python's
-/// arbitrary-precision `int()` computes `2**63` without issue. Placing `i64::MAX`
-/// ("9223372036854775807") as the sole existing version key lands the next `put_secret` call's
-/// `+ 1` exactly on the boundary this finding is about; `rename_sole_version_key` is safe here
-/// because `put_secret`'s next-version computation only reads the `versions` object's *keys*, it
-/// never decrypts an existing record.
+/// `put_secret` computes `max(existing keys) + 1` with Python's arbitrary
+/// precision. Both implementations must write and return `2**63` after an
+/// `i64::MAX` key rather than rejecting, panicking, or wrapping.
 #[test]
-fn put_secret_next_version_at_i64_max_is_state_corrupt_python_returns_two_pow_63() {
+fn put_secret_next_version_at_i64_max_matches_python_two_pow_63() {
     let tmp = TempDir::new().unwrap();
     let ctx = setup_single_secret_context(&tmp);
-    let state = tmp.path().join("state");
     rename_sole_version_key(&ctx, "gh-token", "9223372036854775807");
 
     // `activate=false`: `rename_sole_version_key` only renames the `versions` object's key, not
@@ -1006,7 +1101,7 @@ fn put_secret_next_version_at_i64_max_is_state_corrupt_python_returns_two_pow_63
     // and raise its own unrelated `KeyError` in Python before ever reaching the overflow this test
     // pins. `next_version`'s computation (and therefore the overflow) happens unconditionally
     // before the `activate` branch in both languages, so `false` still exercises the finding.
-    let err = ctx
+    let version = ctx
         .vault
         .put_secret(
             "gh-token",
@@ -1016,17 +1111,24 @@ fn put_secret_next_version_at_i64_max_is_state_corrupt_python_returns_two_pow_63
             "dev",
             false,
         )
-        .unwrap_err();
-    assert_eq!(err.reason.to_string(), "state_corrupt");
+        .unwrap();
+    assert_eq!(version.to_string(), "9223372036854775808");
 
+    let py_state = tmp.path().join("state-py");
     let script = format!(
         r#"
 from zeropw.context import Context, Config
-ctx = Context.open({state}, Config(), lambda: {now})
+ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+ctx.projects.create("demo")
+ctx.vault.put_secret("gh-token", "api_key", b"synthetic-token-0123456789", "demo", "dev")
+doc = ctx.state.read_json("vault/secrets.json")
+versions = doc["secrets"]["gh-token"]["versions"]
+versions["9223372036854775807"] = versions.pop("1")
+ctx.state.write_json("vault/secrets.json", doc)
 v = ctx.vault.put_secret("gh-token", "api_key", b"another-synthetic-token-012345", "demo", "dev", False)
 print(v, type(v).__name__)
 "#,
-        state = py_str(&state),
+        state = py_str(&py_state),
         now = FIXED_NOW,
     );
     let out = run_python(&script);
@@ -1234,7 +1336,7 @@ fn set_version_status_treats_explicit_null_secret_entry_as_absent_like_python() 
     let ctx = init_context_with_null_ghost_entry(&rust_state);
     let err = ctx
         .vault
-        .set_version_status("ghost", 1, "revoked")
+        .set_version_status("ghost", &1.into(), "revoked")
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     assert_eq!(err.reason.to_string(), "secret_version_not_found");
@@ -1301,7 +1403,7 @@ fn overwrite_sole_version_field(ctx: &Context, secret_id: &str, key: &str, value
 /// Reviewer case: `active_version` is the JSON string `"1"`, not the integer `1`. Python's raw
 /// `entry["active_version"]` is not `None`, so `resolve_version`/`secret_for_trusted_use` treat it
 /// as the active version and `str("1") == "1"` still finds the real version record -- Python
-/// *succeeds*, returning the plaintext. `SecretMeta::active_version` is a plain `Option<i64>`, which
+/// *succeeds*, returning the plaintext. `SecretMeta::active_version` is a plain `Option<PyInt>`, which
 /// cannot hold a string, so this port fails closed (`state_corrupt`) instead of reproducing that
 /// success -- a recorded, intentional divergence (`DEVIATIONS.md`, finding E-R4-3), confirmed here
 /// against real `python3.12` rather than assumed.
@@ -1386,19 +1488,20 @@ except NotFound as exc:
     assert_eq!(out.trim(), "notfound:secret_version_unusable:5");
 }
 
-/// Reviewer case: `public` is `[["a", 1]]`, a JSON array. Python's `dict(r.get("public") or {})`
-/// coerces a pair-sequence array to a mapping (`{"a": 1}`); this port folds that coercion into
-/// `state_corrupt` instead of reproducing it (`DEVIATIONS.md`, finding E-R4-3, the "or error"
-/// alternative), confirmed here against real `python3.12` rather than assumed.
+/// `public` is `[["a", 1]]`, a JSON array. Python's
+/// `dict(r.get("public") or {})` coerces it to `{"a": 1}`; Rust must return
+/// the same public metadata while retaining the malformed non-pair rejection below.
 #[test]
-fn list_secrets_public_pair_sequence_is_state_corrupt_python_coerces_to_dict() {
+fn list_secrets_public_pair_sequence_matches_python_dict_coercion() {
     let tmp = TempDir::new().unwrap();
     let ctx = setup_single_secret_context(&tmp);
     let state = tmp.path().join("state");
     overwrite_sole_version_field(&ctx, "gh-token", "public", json!([["a", 1]]));
 
-    let err = ctx.vault.list_secrets(None, None).unwrap_err();
-    assert_eq!(err.reason.to_string(), "state_corrupt");
+    let rust_public = ctx.vault.list_secrets(None, None).unwrap()[0].versions[0]
+        .public
+        .clone();
+    assert_eq!(rust_public, json!({"a": 1}));
 
     let script = format!(
         r#"

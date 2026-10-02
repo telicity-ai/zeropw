@@ -46,6 +46,7 @@ use crate::errors::Error;
 use crate::kms::{Kms, WrappedKey};
 use crate::projects::{Projects, validate_name};
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::secret::SecretBytes;
 use crate::store::{StateDir, iso};
@@ -127,20 +128,20 @@ fn require_str_field<'m>(m: &'m Map<String, Value>, key: &str) -> Result<&'m str
 }
 
 /// `entry["active_version"]`: `None` (JSON `null`) for no active version, an
-/// `i64` version number, or -- for a missing key or a present value of any
+/// arbitrary-precision integer version, or -- for a missing key or a present value of any
 /// other JSON type -- `state_corrupt` (finding E-R4-3, same reasoning as
 /// [`require_str_field`]: Python returns the raw value unchecked, but
-/// `SecretMeta::active_version` is a plain `Option<i64>`, and every writer in
+/// `SecretMeta::active_version` is a plain `Option<PyInt>`, and every writer in
 /// this crate only ever stores `null` or a plain integer here).
-fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> {
+fn require_active_version(m: &Map<String, Value>) -> Result<Option<PyInt>, Error> {
     match m.get("active_version") {
         None => Err(corrupt()),
         Some(Value::Null) => Ok(None),
-        Some(v) => v.as_i64().map(Some).ok_or_else(corrupt),
+        Some(v) => PyInt::from_json_integer(v).map(Some).ok_or_else(corrupt),
     }
 }
 
-/// `entry["active_version"]` (or the `version: i64` it's compared against)
+/// `entry["active_version"]` (or the [`PyInt`] version it's compared against)
 /// reduced to Python's own numeric identity: `Int` for anything CPython
 /// treats as an exact integer (a `bool`, or an integer-*shaped* JSON
 /// literal -- no `.`/`e`/`E`, per [`crate::pyjson::is_float_literal`],
@@ -170,7 +171,7 @@ fn require_active_version(m: &Map<String, Value>) -> Result<Option<i64>, Error> 
 /// the largest existing key is `i64::MAX` (a real, reachable value, not a
 /// hypothetical one).
 enum ActiveVersionNumeric {
-    Int(i128),
+    Int(PyInt),
     Float(f64),
 }
 
@@ -189,21 +190,13 @@ enum ActiveVersionNumeric {
 /// trigger).
 fn active_version_numeric(v: &Value) -> Option<ActiveVersionNumeric> {
     match v {
-        Value::Bool(b) => Some(ActiveVersionNumeric::Int(i128::from(*b))),
+        Value::Bool(b) => Some(ActiveVersionNumeric::Int(PyInt::from(i64::from(*b)))),
         Value::Number(n) => {
             let raw = n.as_str();
             if crate::pyjson::is_float_literal(raw) {
                 n.as_f64().map(ActiveVersionNumeric::Float)
             } else {
-                // Canonical JSON integer literal text (`arbitrary_precision`
-                // preserves it verbatim), so a plain decimal `str::parse`
-                // suffices -- same idiom `policy.rs`'s `GrantNum::from_value`
-                // BigInt arm already uses for an integer-shaped literal
-                // this size. `None` here (magnitude beyond `i128`, far past
-                // any real version number or `i64::MAX`) falls back to
-                // structural equality below, same as any other
-                // non-numerically-comparable shape.
-                raw.parse::<i128>().ok().map(ActiveVersionNumeric::Int)
+                PyInt::from_json_integer(v).map(ActiveVersionNumeric::Int)
             }
         }
         _ => None,
@@ -211,21 +204,12 @@ fn active_version_numeric(v: &Value) -> Option<ActiveVersionNumeric> {
 }
 
 /// Exact `int == float` (or `float == int`) the way CPython actually
-/// computes it for the magnitudes this module ever compares: `f` numerically
-/// equals `i` only if `f` is finite, has no fractional part, and converting
-/// it to `i128` and back to `f64` round-trips exactly (i.e. the conversion
-/// itself lost no precision) -- only then is `i128`-exact comparison valid.
-/// A non-integral `f` (`1.5`), a non-finite `f` (`inf`), or an `f` whose
-/// magnitude doesn't round-trip through `i128` cleanly all compare unequal,
-/// matching CPython (which never routes an `int`/`float` comparison through
-/// a lossy `float`-only path either -- see [`ActiveVersionNumeric`]'s doc
-/// comment, finding X-16).
-fn int_equals_float(i: i128, f: f64) -> bool {
-    if !f.is_finite() || f.fract() != 0.0 {
-        return false;
-    }
-    let as_i128 = f as i128; // saturating cast (defined behaviour, no UB)
-    (as_i128 as f64) == f && as_i128 == i
+/// computes it. [`cmp_bigint_f64`] compares the arbitrary-precision integer
+/// directly with the finite binary64 value, including integral floats beyond
+/// `i128`; non-integral and non-finite floats compare unequal, matching
+/// CPython without a lossy float-only conversion.
+fn int_equals_float(i: &PyInt, f: f64) -> bool {
+    crate::pyint::cmp_bigint_f64(&i.0, f) == Some(std::cmp::Ordering::Equal)
 }
 
 /// See [`active_version_numeric`]'s doc comment. When *neither* side is
@@ -248,7 +232,7 @@ fn active_version_values_equal(a: &Value, b: &Value) -> bool {
             (Some(ActiveVersionNumeric::Float(x)), Some(ActiveVersionNumeric::Float(y))) => x == y,
             (Some(ActiveVersionNumeric::Int(i)), Some(ActiveVersionNumeric::Float(f)))
             | (Some(ActiveVersionNumeric::Float(f)), Some(ActiveVersionNumeric::Int(i))) => {
-                int_equals_float(i, f)
+                int_equals_float(&i, f)
             }
             _ => a == b,
         },
@@ -257,12 +241,12 @@ fn active_version_values_equal(a: &Value, b: &Value) -> bool {
 
 /// `value == version` (Python numeric equality, see
 /// [`active_version_values_equal`]) for a stored `active_version` compared
-/// against a plain `version: i64`, e.g. `set_version_status`'s
+/// against a plain [`PyInt`] version, e.g. `set_version_status`'s
 /// `previous != version`/`entry["active_version"] == version` and
 /// `reapply_revocations`'s `entry.get("active_version") == version`
 /// (finding E-R5-4).
-fn active_version_matches(value: &Value, version: i64) -> bool {
-    active_version_values_equal(value, &json!(version))
+fn active_version_matches(value: &Value, version: &PyInt) -> bool {
+    active_version_values_equal(value, &version.value())
 }
 
 /// `dict(r.get("public") or {})`: Python's `or` first replaces any *falsy*
@@ -398,20 +382,14 @@ fn python_str_scalar(v: &Value) -> String {
 /// expects for corrupted state is `StateError("state_corrupt")` (this
 /// module's own top-of-file DEVIATIONS note, PORTING.md §3.5).
 ///
-/// The grammar itself (padding, sign, PEP 515 underscores, any Unicode
-/// decimal digit -- not just ASCII `0`-`9`) is `crate::pystr::int_from_str`,
-/// the one canonical home for CPython's `int(str)` semantics (PORTING.md
-/// §3b); this function's only own job is narrowing that `i128` result to
-/// this module's `i64` (`None` for a magnitude that doesn't fit, same as
-/// before -- finding E-R4-1, `DEVIATIONS.md`). Unlike `handles.rs`'s
-/// deliberately ASCII-only `python_int_coerce` (PORTING.md §3.7 --
-/// reachable only via a payload already authenticated with the HMAC signing
-/// key), a vault `versions` key is state-file content, not signed input, so
-/// this port must accept exactly what Python's own `int()` accepts, not a
-/// stricter subset.
-fn parse_version_key(k: &str) -> Result<i64, Error> {
-    crate::pystr::int_from_str(k)
-        .and_then(|v| i64::try_from(v).ok())
+/// The canonical decimal grammar and CPython digit bound live in
+/// [`crate::pystr::int_from_str_decimal_limited`]. The resulting digits are
+/// parsed into an arbitrary-precision [`PyInt`], so a valid stored version is
+/// never narrowed to a machine integer.
+fn parse_version_key(k: &str) -> Result<PyInt, Error> {
+    crate::pystr::int_from_str_decimal_limited(k)
+        .and_then(|value| value.parse().ok())
+        .map(PyInt)
         .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
 }
 
@@ -531,7 +509,7 @@ impl<'a> AdminCredential<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct VersionMeta {
     pub secret_id: String,
-    pub version: i64,
+    pub version: PyInt,
     pub status: String,
     pub created_at: String,
     /// Non-secret metadata derived from the value (e.g. the SSH public key);
@@ -546,7 +524,7 @@ pub struct SecretMeta {
     pub project: String,
     pub environment: String,
     pub kind: String,
-    pub active_version: Option<i64>,
+    pub active_version: Option<PyInt>,
     pub versions: Vec<VersionMeta>,
 }
 
@@ -701,14 +679,14 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
     }
 
-    fn aad(secret_id: &str, version: i64) -> Vec<u8> {
+    fn aad(secret_id: &str, version: &PyInt) -> Vec<u8> {
         format!("zeropw-secret:{secret_id}:{version}").into_bytes()
     }
 
     fn encrypt(
         &self,
         secret_id: &str,
-        version: i64,
+        version: &PyInt,
         value: &[u8],
     ) -> Result<Map<String, Value>, Error> {
         let nonce = random_bytes(aead::NONCE_SIZE);
@@ -728,7 +706,7 @@ impl<'a> Vault<'a> {
     fn decrypt(
         &self,
         secret_id: &str,
-        version: i64,
+        version: &PyInt,
         entry: &Map<String, Value>,
     ) -> Result<SecretBytes, Error> {
         if entry.get("shared_env").is_some_and(|v| !json_falsy(v)) {
@@ -853,7 +831,7 @@ impl<'a> Vault<'a> {
         project: &str,
         environment: &str,
         activate: bool,
-    ) -> Result<i64, Error> {
+    ) -> Result<PyInt, Error> {
         let secret_id = validate_name(secret_id, "secret_id")?;
         if !SECRET_KINDS.contains(&kind) {
             return Err(Error::invalid_input("invalid_secret_kind"));
@@ -938,27 +916,18 @@ impl<'a> Vault<'a> {
                 .and_then(Value::as_object)
                 .cloned()
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` is arbitrary
-            // precision -- a `versions` key of `i64::MAX` ("9223372036854775807") still yields
-            // `9223372036854775808` and the write proceeds. `parse_version_key` already narrows
-            // each key to `i64` (row 53), so the `+ 1` here is the one remaining site that can
-            // overflow: a debug build panics (`attempt to add with overflow`), and a release
-            // build (this crate's `Cargo.toml` has no `[profile]` override, so
-            // `overflow-checks` is off) wraps silently to `i64::MIN`, writing a colliding
-            // version key that the next `put_secret` would overwrite, destroying the prior
-            // ciphertext (finding E-R7-2). `checked_add` fails closed the same way `parse_version_key`
-            // already does for a magnitude outside `i64` altogether, rather than panicking or
-            // wrapping on untrusted (state-file) input, per PORTING.md §4.
+            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` uses
+            // arbitrary precision. Keep both the parsed keys and the increment exact so even
+            // a key above every machine-integer boundary produces its true successor.
             let next_version = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k))
-                .collect::<Result<Vec<i64>, Error>>()?
+                .collect::<Result<Vec<PyInt>, Error>>()?
                 .into_iter()
                 .max()
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            let mut record = self.encrypt(&secret_id, next_version, value)?;
+                .unwrap_or_else(|| PyInt::from(0_i64));
+            let next_version = PyInt(next_version.0 + 1);
+            let mut record = self.encrypt(&secret_id, &next_version, value)?;
             record.insert("created_at".into(), json!(iso(None)));
             record.insert(
                 "status".into(),
@@ -979,7 +948,7 @@ impl<'a> Vault<'a> {
                 // previous version" and let the write through, leaving two versions marked
                 // `active`.
                 let previous = get_or_null(&entry, "active_version").clone();
-                entry.insert("active_version".into(), json!(next_version));
+                entry.insert("active_version".into(), next_version.value());
                 if !previous.is_null() {
                     let prev_key = python_str_scalar(&previous);
                     let prev_rec = versions_obj
@@ -1016,7 +985,7 @@ impl<'a> Vault<'a> {
                 result: Some("ok"),
                 extra: vec![
                     ("secret_id", json!(secret_id)),
-                    ("version", json!(version)),
+                    ("version", version.value()),
                     ("kind", json!(kind)),
                     ("project", json!(project)),
                     ("environment", json!(environment)),
@@ -1060,7 +1029,7 @@ impl<'a> Vault<'a> {
     pub fn set_version_status(
         &self,
         secret_id: &str,
-        version: i64,
+        version: &PyInt,
         status: &str,
     ) -> Result<(), Error> {
         if !VERSION_STATES.contains(&status) {
@@ -1127,7 +1096,7 @@ impl<'a> Vault<'a> {
             if status == "revoked" {
                 let mut fields = Map::new();
                 fields.insert("secret_id".into(), json!(secret_id));
-                fields.insert("version".into(), json!(version));
+                fields.insert("version".into(), version.value());
                 crate::policy::append_revocation(self.state, "secret_version", fields);
             }
             {
@@ -1201,7 +1170,7 @@ impl<'a> Vault<'a> {
                 result: Some("ok"),
                 extra: vec![
                     ("secret_id", json!(secret_id)),
-                    ("version", json!(version)),
+                    ("version", version.value()),
                     ("state", json!(status)),
                 ],
                 ..Default::default()
@@ -1246,11 +1215,11 @@ impl<'a> Vault<'a> {
                 .get("versions")
                 .and_then(Value::as_object)
                 .ok_or_else(corrupt)?;
-            let mut vkeys: Vec<(i64, &String)> = versions_obj
+            let mut vkeys: Vec<(PyInt, &String)> = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k).map(|n| (n, k)))
                 .collect::<Result<Vec<_>, Error>>()?;
-            vkeys.sort_by_key(|(n, _)| *n);
+            vkeys.sort_by(|(a, _), (b, _)| a.cmp(b));
             let mut versions = Vec::new();
             for (n, k) in vkeys {
                 let r = as_obj(versions_obj.get(k).expect("from keys"))?;
@@ -1295,7 +1264,7 @@ impl<'a> Vault<'a> {
             .ok_or_else(|| Error::not_found("secret_not_found"))
     }
 
-    pub fn resolve_version(&self, secret_id: &str, version: Option<i64>) -> Result<i64, Error> {
+    pub fn resolve_version(&self, secret_id: &str, version: Option<PyInt>) -> Result<PyInt, Error> {
         let meta = self.get_meta(secret_id)?;
         match version {
             None => meta
@@ -1315,7 +1284,7 @@ impl<'a> Vault<'a> {
     pub fn secret_for_trusted_use(
         &self,
         secret_id: &str,
-        version: Option<i64>,
+        version: Option<PyInt>,
     ) -> Result<SecretBytes, Error> {
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
@@ -1370,7 +1339,7 @@ impl<'a> Vault<'a> {
             };
             return Err(Error::not_found("secret_version_unusable").with_detail(detail));
         }
-        self.decrypt(secret_id, resolved, record)
+        self.decrypt(secret_id, &resolved, record)
     }
 
     /// Plaintext of every version of every secret (any status), for
@@ -1388,14 +1357,14 @@ impl<'a> Vault<'a> {
                 .get("versions")
                 .and_then(Value::as_object)
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            let mut vkeys: Vec<(i64, &String)> = versions_obj
+            let mut vkeys: Vec<(PyInt, &String)> = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k).map(|n| (n, k)))
                 .collect::<Result<Vec<_>, Error>>()?;
-            vkeys.sort_by_key(|(n, _)| *n);
+            vkeys.sort_by(|(a, _), (b, _)| a.cmp(b));
             for (n, k) in vkeys {
                 let record = as_obj(versions_obj.get(k).expect("from keys"))?;
-                values.push(self.decrypt(&secret_id, n, record)?);
+                values.push(self.decrypt(&secret_id, &n, record)?);
             }
         }
         Ok(values)
@@ -1406,7 +1375,7 @@ impl<'a> Vault<'a> {
     pub fn reveal(
         &self,
         secret_id: &str,
-        version: Option<i64>,
+        version: Option<PyInt>,
         admin: &AdminAuth,
         now: Option<f64>,
     ) -> Result<SecretBytes, Error> {
@@ -1429,7 +1398,7 @@ impl<'a> Vault<'a> {
                 result: Some("ok"),
                 extra: vec![
                     ("secret_id", json!(secret_id)),
-                    ("version", json!(resolved)),
+                    ("version", resolved.value()),
                 ],
                 ..Default::default()
             },
@@ -1450,7 +1419,7 @@ impl<'a> Vault<'a> {
                 .get(&resolved.to_string())
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
         )?;
-        self.decrypt(secret_id, resolved, record)
+        self.decrypt(secret_id, &resolved, record)
     }
 
     // backup / restore ------------------------------------------------------
@@ -1558,7 +1527,7 @@ impl<'a> Vault<'a> {
             .collect();
         let mut changed = 0usize;
         if let Value::Object(mut doc_obj) = state.read_json(VAULT_DOC, Value::Null)? {
-            let mut secret_versions: Vec<(String, i64)> =
+            let mut secret_versions: Vec<(String, PyInt)> =
                 revocations.secret_versions.iter().cloned().collect();
             secret_versions.sort();
             let mut touched = false;
@@ -1606,7 +1575,7 @@ impl<'a> Vault<'a> {
                         // `true`/`1.0` naming this same revoked version must still be cleared.
                         if entry
                             .get("active_version")
-                            .is_some_and(|v| active_version_matches(v, *version))
+                            .is_some_and(|v| active_version_matches(v, version))
                         {
                             entry.insert("active_version".into(), Value::Null);
                         }
@@ -1910,11 +1879,11 @@ mod tests {
 
         // The exact `set_version_status` non-"active"-branch shape this
         // finding is about: a stored `active_version` of `"abc"` does not
-        // numerically match a plain `version: i64` being retired/revoked
+        // numerically match a plain `PyInt` version being retired/revoked
         // (so it is left untouched, `before_active == after_active ==
         // "abc"`), and comparing that unchanged value against itself must
         // not spuriously read as "changed".
-        assert!(!active_version_matches(&json!("abc"), 1));
+        assert!(!active_version_matches(&json!("abc"), &1.into()));
         assert!(active_version_values_equal(&json!("abc"), &json!("abc")));
     }
 
@@ -1962,7 +1931,7 @@ mod tests {
             "sanity: these two i64s really do collide once cast to f64"
         );
         assert!(!active_version_values_equal(&a, &b));
-        assert!(!active_version_matches(&a, 9007199254740992));
+        assert!(!active_version_matches(&a, &9007199254740992_i64.into()));
 
         let i64_max = json!(i64::MAX);
         let two_pow_63 = Value::Number(serde_json::from_str("9223372036854775808").unwrap());
