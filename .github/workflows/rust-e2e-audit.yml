@@ -57,7 +57,8 @@ jobs:
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
       - name: Explicit isolated signer resource measurements
         if: always() && matrix.shard == 1
-        run: cargo test --locked --manifest-path rust/Cargo.toml --lib signer::tests:: -- --ignored --test-threads=1 --nocapture
+        run: |
+          cargo test --locked --manifest-path rust/Cargo.toml --lib signer::tests:: -- --ignored --test-threads=1 --nocapture
       - name: Documentation tests
         if: always() && matrix.shard == 2
         run: cargo test --locked --manifest-path rust/Cargo.toml --doc
