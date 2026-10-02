@@ -115,3 +115,33 @@ jobs:
           python3.12 -m unittest discover -s tests -p 'test_*.py' -v || result=1
           python3.12 -m unittest discover -s harness -p 'test_*.py' -v || result=1
           exit "$result"
+      - name: Verify canonical guards still catch restored bypasses
+        if: (success() || failure()) && matrix.suite == 'unit'
+        shell: bash
+        run: |
+          python3.12 - <<'PYCODE'
+          import json, pathlib, subprocess
+          build=subprocess.run(['cargo','test','--locked','--manifest-path','rust/Cargo.toml','--test','canonical_helpers','--no-run','--message-format=json'],capture_output=True,text=True)
+          print(build.stderr,flush=True)
+          build.check_returncode()
+          artifacts=[json.loads(line) for line in build.stdout.splitlines() if line.startswith('{')]
+          binary=next(item['executable'] for item in artifacts if item.get('reason')=='compiler-artifact' and item['target']['name']=='canonical_helpers' and item.get('executable'))
+          subprocess.run([binary],check=True)
+          source=pathlib.Path('rust/src/gateway.rs')
+          original=source.read_text()
+          assert 'crate::pybase64::b64decode(s)' in original
+          probes=[
+              ('no_base64_engine_decode_outside_pybase64',original.replace('crate::pybase64::b64decode(s)','base64::engine::general_purpose::STANDARD.decode(s)',1)),
+              ('no_number_to_string_outside_pyjson',original+'\n\nfn restored_float_render_bypass(n: &serde_json::Number) -> String { n.to_string() }\n'),
+          ]
+          try:
+              for name,mutated in probes:
+                  source.write_text(mutated)
+                  result=subprocess.run([binary,'--exact',name,'--nocapture'],capture_output=True,text=True)
+                  output=result.stdout+result.stderr
+                  assert result.returncode != 0 and 'gateway.rs' in output, output
+                  print('AUDIT_GUARD_REJECTED='+name,flush=True)
+          finally:
+              source.write_text(original)
+          assert source.read_text()==original
+          PYCODE

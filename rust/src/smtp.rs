@@ -1777,6 +1777,10 @@ enum EwParse<'a> {
     Unsupported,
 }
 
+fn decode_latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| char::from(*byte)).collect()
+}
+
 /// `get_encoded_word` + `_encoded_words.decode` for the charsets representable
 /// without surrogate code points in Rust strings.
 fn get_encoded_word(value: &str) -> EwParse<'_> {
@@ -1851,11 +1855,11 @@ fn get_encoded_word(value: &str) -> EwParse<'_> {
         .replace('_', "-");
     let decoded = match charset.as_str() {
         "utf-8" | "utf8" => String::from_utf8(bytes).ok(),
-        "ascii" | "us-ascii" => bytes.is_ascii().then(|| latin1(&bytes)),
-        "iso-8859-1" | "iso8859-1" | "latin-1" | "latin1" => Some(latin1(&bytes)),
+        "ascii" | "us-ascii" => bytes.is_ascii().then(|| decode_latin1(&bytes)),
+        "iso-8859-1" | "iso8859-1" | "latin-1" | "latin1" => Some(decode_latin1(&bytes)),
         // CPython falls back to ASCII with surrogateescape for an unknown
         // charset.  The ASCII-only case has no surrogate and is exact.
-        _ => bytes.is_ascii().then(|| latin1(&bytes)),
+        _ => bytes.is_ascii().then(|| decode_latin1(&bytes)),
     };
     decoded.map_or(EwParse::Unsupported, |decoded| {
         EwParse::Ok(decoded, remainder)

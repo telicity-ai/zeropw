@@ -116,21 +116,6 @@ const NUMBER_TO_STRING_ALLOWLIST: &[Allow] = &[
                  int or float *shape*?), not a str()-coercion render",
     },
     Allow {
-        file: "policy.rs",
-        marker: "match n.to_string().parse::<i128>() {",
-        reason: "GrantNum::from_value's BigInt arm: only reached once number_is_python_int \
-                 has confirmed the literal is integer-shaped, so this parses the exact \
-                 decimal digits into i128 (preserving a big-integer exactly), not \
-                 rendering a float",
-    },
-    Allow {
-        file: "policy.rs",
-        marker: "Value::Number(n) if number_is_python_int(n) => Some(n.to_string()),",
-        reason: "python_numeric_eq_value's canonical_int: guarded by number_is_python_int, \
-                 same as the BigInt arm above -- an integer's canonical decimal text, not a \
-                 float render",
-    },
-    Allow {
         file: "team/commit.rs",
         marker: "is_float_literal(n.as_str())",
         reason: "python_str_coerce's Number arm (the canonical str()-for-a-non-string-JSON-\
