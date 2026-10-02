@@ -63,6 +63,15 @@ impl Args {
             })
             .transpose()
     }
+    fn exact_integer(&self, key: &str) -> Result<Option<Value>, Error> {
+        self.get(key)
+            .map(|s| {
+                s.parse::<serde_json::Number>()
+                    .map(Value::Number)
+                    .map_err(|_| Error::invalid_input("invalid_arguments"))
+            })
+            .transpose()
+    }
     fn list(&self, key: &str) -> Vec<String> {
         self.options.get(key).cloned().unwrap_or_default()
     }
@@ -75,6 +84,38 @@ const POSITIVE_INT: TypeFn = TypeFn {
         Some(value) if value >= 1 => Ok(Val::Int(value)),
         _ => Err(Some("must be a positive integer".into())),
     },
+};
+
+fn exact_int_arg(text: &str) -> Result<Val, Option<String>> {
+    let value = crate::pystr::int_from_str_decimal(text).ok_or(None)?;
+    // CPython 3.12's default integer-string conversion guard counts decimal
+    // digits only (not sign, surrounding space, or underscores), including
+    // leading zeroes and Unicode Nd digits. Its documented environment
+    // override accepts 0 (unlimited) or a value >= 640.
+    let limit = match env::var("PYTHONINTMAXSTRDIGITS") {
+        Ok(raw) => match raw.parse::<usize>() {
+            Ok(0) => 0,
+            Ok(value) if value >= 640 => value,
+            _ => 4300,
+        },
+        Err(_) => 4300,
+    };
+    let digits = text
+        .chars()
+        .filter(|&c| crate::pystr::unicode_decimal_digit(c).is_some())
+        .count();
+    if limit != 0 && digits > limit {
+        return Err(None);
+    }
+    Ok(Val::Str(value))
+}
+
+/// `argparse`'s `type=int` grammar without narrowing the resulting Python
+/// integer. The canonical decimal string stays in the namespace until the
+/// grant policy stores it as an arbitrary-precision JSON number.
+const EXACT_INT: TypeFn = TypeFn {
+    name: "int",
+    convert: exact_int_arg,
 };
 
 const ENV_METAVAR: &str = "PROJECT/ENVIRONMENT";
@@ -335,7 +376,7 @@ fn build_parser() -> Parser {
                 .default(Val::Str(DEFAULT_GRANT_TTL.into()))
                 .help("30m, 1h, 3600s, 86400 (default: 1h; max 30d)"),
         )
-        .arg(Arg::opt("--max-uses").ty(INT));
+        .arg(Arg::opt("--max-uses").ty(EXACT_INT));
     add(grant, "list", "list grants").arg(Arg::opt("--principal"));
     add(grant, "revoke", "revoke a grant immediately").arg(Arg::opt("--id").required());
     add(
@@ -1260,7 +1301,7 @@ fn control(ctx: &Context) -> Result<Value, Error> {
 fn grant_view(grant: &crate::policy::Grant) -> Value {
     json!({"id":grant.id,"principal":grant.principal,"connection":grant.connection,
         "policy_version":grant.policy_version,"expires_at":grant.expires_at.map(|t| iso(Some(t))),
-        "max_uses":grant.max_uses,"uses":grant.uses,"status":grant.status,
+        "max_uses":grant.max_uses_value(),"uses":grant.uses,"status":grant.status,
         "created_at":grant.created_at,"revoked_at":grant.revoked_at,
         "credential_version":grant.credential_version})
 }
@@ -1953,8 +1994,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("grant", "create") => {
             let seconds = ttl(a.get("ttl").unwrap_or("1h"))?;
-            let max_uses = a.integer("max-uses")?;
-            let grant = ctx.policy.create_grant(
+            let max_uses = a.exact_integer("max-uses")?;
+            let grant = ctx.policy.create_grant_with_exact_max_uses(
                 a.req("principal"),
                 a.req("connection"),
                 Some(seconds),
@@ -1968,7 +2009,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 vec![
                     ("grant", json!(grant.id)),
                     ("principal", json!(grant.principal)),
-                    ("max_uses", json!(grant.max_uses)),
+                    ("max_uses", grant.max_uses_value()),
                     ("expires_at", json!(grant.expires_at.map(|t| iso(Some(t))))),
                 ],
             )?;

@@ -16,16 +16,25 @@ fn python_float_oracle(cases: &[&str]) -> Vec<Value> {
     let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
     let script = r#"
 import json, os
-from zeropw.gateway import LEDGER_TTL_SECONDS
+from zeropw.gateway import RequestLedger
+
+class State:
+    def write_json(self, _name, value):
+        self.value = value
+
+class Context:
+    state = State()
+    clock = staticmethod(lambda: 100000.0)
 
 out = []
 for text in json.loads(os.environ["CASES"]):
+    doc = {"other": {"probe": {"updated_at": text, "state": "completed"}}}
     try:
-        value = float(text)
+        RequestLedger(Context())._save(doc)
     except (TypeError, ValueError):
         out.append({"accepted": False})
     else:
-        out.append({"accepted": True, "retained": 100000.0 - value <= LEDGER_TTL_SECONDS})
+        out.append({"accepted": True, "retained": "probe" in doc.get("other", {})})
 print(json.dumps(out))
 "#;
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

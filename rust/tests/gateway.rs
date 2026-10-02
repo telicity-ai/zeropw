@@ -4831,6 +4831,132 @@ fn ca_file_unavailable_takes_priority_over_an_unreachable_target() {
 }
 
 #[test]
+fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
+    let t = GatewayTest::new();
+    t.ctx
+        .vault
+        .put_secret(
+            "raw-ca-token",
+            "api_key",
+            SECRET_B.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    let unreachable = FakeUpstream::new("x").start();
+    let port = unreachable.port();
+    drop(unreachable);
+
+    for (suffix, raw_ca_file, expected_reason) in [
+        ("null", serde_json::Value::Null, "upstream_unreachable"),
+        ("false", serde_json::json!(false), "upstream_unreachable"),
+        ("zero", serde_json::json!(0), "upstream_unreachable"),
+        ("empty-list", serde_json::json!([]), "upstream_unreachable"),
+        ("number", serde_json::json!(5), "ca_file_unavailable"),
+        ("true", serde_json::json!(true), "ca_file_unavailable"),
+        (
+            "list",
+            serde_json::json!(["not", "a", "path"]),
+            "ca_file_unavailable",
+        ),
+    ] {
+        let connection_id = format!("raw-ca-{suffix}");
+        let target = HttpTarget::new("https", "127.0.0.1", port as i64, None, false).unwrap();
+        t.ctx
+            .policy
+            .create_connection(
+                Connection::new(
+                    &connection_id,
+                    "demo",
+                    "dev",
+                    "test",
+                    "http",
+                    "raw-ca-token",
+                    None,
+                    "",
+                    Some(target),
+                    Some(HttpAuth::bearer()),
+                    Some(HttpScope::new(None, None, vec![]).unwrap()),
+                    None,
+                    None,
+                    0,
+                    "active",
+                    "",
+                    "",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut connections = t
+            .ctx
+            .state
+            .read_json(P::CONNECTIONS, serde_json::json!({}))
+            .unwrap();
+        connections[&connection_id]["http_target"]["ca_file"] = raw_ca_file;
+        t.ctx
+            .state
+            .write_json(P::CONNECTIONS, &connections)
+            .unwrap();
+
+        let grant = t
+            .ctx
+            .policy
+            .create_grant("agent-1", &connection_id, Some(3600), None)
+            .unwrap();
+        let handle = t.issue_handle_for("agent-1", &connection_id, &grant.id, None, 300);
+        let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
+        assert_eq!(
+            (result.status, result.reason.as_deref()),
+            (502, Some(expected_reason)),
+            "{suffix}"
+        );
+    }
+}
+
+#[test]
+fn python_open_connection_uses_ca_file_truthiness_before_path_type() {
+    let output = run_python_oracle(
+        r#"
+import json
+from zeropw import gateway as G
+from zeropw import policy as P
+
+for value in (None, False, 0, [], {}, 5, True, ["not", "a", "path"], {"x": 1}):
+    target = P.HttpTarget("https", "example.com", 443, value)
+    connection = P.Connection(
+        "c", "demo", "dev", "test", "http", "secret", None, "", target,
+        P.HttpAuth("bearer"), P.HttpScope(), None, None, 0, "active", "", "",
+    )
+    try:
+        G._open_connection(connection, 1.0)
+        result = "ok"
+    except Exception as exc:
+        result = type(exc).__name__
+    print(json.dumps([value, result], sort_keys=True))
+"#,
+    );
+    let observed: Vec<Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        observed,
+        vec![
+            serde_json::json!([null, "ok"]),
+            serde_json::json!([false, "ok"]),
+            serde_json::json!([0, "ok"]),
+            serde_json::json!([[], "ok"]),
+            serde_json::json!([{}, "ok"]),
+            serde_json::json!([5, "TypeError"]),
+            serde_json::json!([true, "TypeError"]),
+            serde_json::json!([["not", "a", "path"], "TypeError"]),
+            serde_json::json!([{"x": 1}, "TypeError"]),
+        ]
+    );
+}
+
+#[test]
 fn unbracketed_ipv6_like_public_url_does_not_false_positive_self_referential() {
     // Finding F-R2-10: `urlsplit`'s `_hostinfo` partitions the unbracketed
     // authority on the *first* colon, not the last, so

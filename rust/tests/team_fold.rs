@@ -1077,33 +1077,19 @@ with tempfile.TemporaryDirectory() as tmp:
 /// `policy/connections.json`.
 ///
 /// A real peer's signed `connection.create` op can therefore put a
-/// non-string `ca_file` into a synced document (`team/commit.rs`'s
-/// `raw_ca_file` passthrough already keeps the FOLDED document
-/// byte-identical to Python's, asserted below). `HttpTarget::from_value`
-/// cannot represent that value in its typed `Option<String>` field
-/// (PORTING.md §3b/§4's representational-gap limit) and fails closed with
-/// `state_corrupt`. Before this fix that error propagated out of
-/// `derive_connections`'s whole loop via `?`, so
-/// `state.write_json(CONNECTIONS, ...)` at the end of the function never
-/// ran -- ONE peer op with a non-string `ca_file` silently discarded the
-/// local derivation of EVERY connection in the fold, not just the
-/// unrepresentable one. The fix narrows the failure to the one connection
-/// that cannot be represented: `derive_local` now succeeds, a sibling
-/// well-formed connection created in the SAME fold still derives
-/// correctly, and the unrepresentable connection is (documented residual,
-/// `DEVIATIONS.md`) simply absent from the local derive rather than taking
-/// every other connection down with it.
+/// non-string `ca_file` into a synced document. Both the folded document and
+/// locally derived connection must retain every JSON shape byte-identically.
 #[test]
-fn derive_connections_skips_unrepresentable_ca_file_and_still_derives_other_connections() {
-    let shapes: [(&str, Value, bool); 6] = [
-        ("number", json!(5), true),
-        ("bool", json!(true), true),
-        ("list", json!(["not", "a", "path"]), true),
-        ("dict", json!({"nested": "object"}), true),
-        ("string", json!("/etc/ssl/certs/ca.pem"), false),
-        ("null", Value::Null, false),
+fn derive_connections_preserves_every_ca_file_shape_like_python() {
+    let shapes: [(&str, Value); 6] = [
+        ("number", json!(5)),
+        ("bool", json!(true)),
+        ("list", json!(["not", "a", "path"])),
+        ("dict", json!({"nested": "object"})),
+        ("string", json!("/etc/ssl/certs/ca.pem")),
+        ("null", Value::Null),
     ];
-    for (label, ca_file, expect_rust_skip) in shapes {
+    for (label, ca_file) in shapes {
         let (_tmp, ctx) = setup();
         let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
         let bad_op = json!({"op": "connection.create", "id": "bad", "project": "demo", "environment": "dev",
@@ -1155,21 +1141,19 @@ fn derive_connections_skips_unrepresentable_ca_file_and_still_derives_other_conn
             local["good"].is_object(),
             "{label}: the sibling well-formed connection must still derive locally"
         );
-        if expect_rust_skip {
-            assert!(
-                local.get("bad").is_none(),
-                "{label}: the unrepresentable connection is documented absent from the local derive (DEVIATIONS.md residual)"
-            );
-        } else {
-            assert_eq!(
-                local["bad"]["http_target"]["ca_file"], ca_file,
-                "{label}: a representable ca_file must derive locally byte-identical"
-            );
-        }
+        assert_eq!(
+            local["bad"]["http_target"]["ca_file"], ca_file,
+            "{label}: local derivation must keep ca_file byte-identical"
+        );
+        let reloaded = ctx.policy.get_connection("bad").unwrap().to_value();
+        assert_eq!(
+            reloaded["http_target"]["ca_file"], ca_file,
+            "{label}: policy load/save must preserve ca_file byte-identically"
+        );
 
         // Cross-check fold()+derive_local() against real python3.12: both
         // must succeed and keep ca_file byte-identical for EVERY shape,
-        // including the ones Rust's typed field cannot represent locally.
+        // including non-string values.
         let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
         let commits_text =
             pyjson::dumps(&json!(commits_json), pyjson::DumpOptions::compact_sorted()).unwrap();
@@ -1209,14 +1193,9 @@ print(json.dumps({{
             json!(true),
             "{label}: python's derive_local must also derive the sibling connection"
         );
-        // Python NEVER fails on ca_file (no `__post_init__` check at all):
-        // it always keeps the value byte-identical locally too, even for
-        // shapes Rust's typed field cannot represent -- this asymmetry is
-        // the documented residual (DEVIATIONS.md), not a bug this test
-        // should paper over.
         assert_eq!(
             py["local_bad_ca_file"], ca_file,
-            "{label}: python must derive the connection locally with ca_file byte-identical, even where rust cannot"
+            "{label}: Python must derive the connection locally with ca_file byte-identical"
         );
     }
 }
@@ -1438,7 +1417,8 @@ fn derive_connections_represents_container_value_prefix_for_every_mode_and_deriv
         local["good"].is_object(),
         "the sibling well-formed connection must derive locally"
     );
-    // Finding X-2's actual point (stronger than the ca_file residual above):
+    // Finding X-2's original point (the same raw-passthrough shape as the
+    // now-resolved ca_file case above):
     // "odd" is NOT a documented-absent residual -- it must derive too, with
     // the real value.
     assert_eq!(

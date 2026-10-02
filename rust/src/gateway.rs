@@ -1922,7 +1922,16 @@ fn open_connection(
     // so a bad `ca_file` for an otherwise-unreachable target still surfaces
     // as `ca_file_unavailable`, not `upstream_unreachable` (finding F-R2-9).
     let tls_connector = if target.scheme == "https" {
-        Some(build_tls_connector(target.ca_file.as_deref())?)
+        let ca_file = match target.raw_ca_file.as_ref() {
+            None => target.ca_file.as_deref(),
+            Some(value) if is_json_falsy(value) => None,
+            // Python reaches `load_verify_locations(cafile=value)` here and
+            // raises an uncaught TypeError for a truthy non-path JSON value.
+            // Fail closed with this path's documented handled refusal; do
+            // not silently fall back to default trust or open a socket.
+            Some(_) => return Err(UpstreamFailure::error("ca_file_unavailable")),
+        };
+        Some(build_tls_connector(ca_file)?)
     } else {
         None
     };

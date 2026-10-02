@@ -34,6 +34,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -585,7 +591,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde_core",
 ]
 
@@ -616,6 +622,19 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "plist"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
+dependencies = [
+ "base64 0.23.1",
+ "indexmap",
+ "quick-xml",
+ "serde",
+ "time",
+]
 
 [[package]]
 name = "poly1305"
@@ -657,6 +676,15 @@ name = "punycode"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
+
+[[package]]
+name = "quick-xml"
+version = "0.42.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "quote"
@@ -1088,6 +1116,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "system-configuration"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "501336eb7ba9e417300a6a0fa985721065467aa83a6dcf0422a8e43e4c0328fa"
+dependencies = [
+ "bitflags",
+ "core-foundation",
+ "system-configuration-sys",
+]
+
+[[package]]
+name = "system-configuration-sys"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1111,6 +1160,7 @@ dependencies = [
  "powerfmt",
  "serde_core",
  "time-core",
+ "time-macros",
 ]
 
 [[package]]
@@ -1118,6 +1168,16 @@ name = "time-core"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
+
+[[package]]
+name = "time-macros"
+version = "0.2.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
+dependencies = [
+ "num-conv",
+ "time-core",
+]
 
 [[package]]
 name = "tinyvec"
@@ -1475,10 +1535,11 @@ dependencies = [
 name = "zeropw"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "chacha20",
  "chacha20poly1305",
  "close_fds",
+ "core-foundation",
  "dns-lookup",
  "ed25519-dalek",
  "getrandom 0.2.17",
@@ -1491,6 +1552,7 @@ dependencies = [
  "num-bigint",
  "openssl",
  "percent-encoding",
+ "plist",
  "poly1305",
  "punycode",
  "rand",
@@ -1510,6 +1572,7 @@ dependencies = [
  "socket2 0.5.10",
  "stringprep",
  "subtle",
+ "system-configuration",
  "tempfile",
  "typenum",
  "unicode-normalization",

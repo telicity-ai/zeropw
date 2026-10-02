@@ -108,6 +108,8 @@ fn non_string_base64_fields_match_python_error_class_and_reason() {
         .map(u8::to_string)
         .collect::<Vec<_>>()
         .join(",");
+    let sign_seed = format!("[{sign_seed}]");
+    let agree_private = format!("[{agree_private}]");
     let script = format!(
         r#"
 import json
@@ -151,8 +153,8 @@ print(json.dumps(out, sort_keys=True))
 "#,
         wrap_json = serde_json::to_string(&wrap_json).unwrap(),
         secret_json = serde_json::to_string(&secret_json).unwrap(),
-        sign_seed = format!("[{sign_seed}]"),
-        agree_private = format!("[{agree_private}]"),
+        sign_seed = sign_seed,
+        agree_private = agree_private,
         env_id = serde_json::to_string(ENV_ID).unwrap(),
         generation_id = serde_json::to_string(GENERATION_ID).unwrap(),
         secret_id = serde_json::to_string(SECRET_ID).unwrap(),

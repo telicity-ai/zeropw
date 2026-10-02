@@ -427,14 +427,36 @@ fn route(
         tunnel: None,
         proxy_authorization: None,
     };
-    let proxies = env_proxies();
+    let environment_proxies = env_proxies();
+    #[cfg(target_os = "macos")]
+    let system_proxies = environment_proxies
+        .is_empty()
+        .then(crate::mac_proxies::load);
+    #[cfg(target_os = "macos")]
+    let proxies = system_proxies
+        .as_ref()
+        .map_or(&environment_proxies, |settings| &settings.proxies);
+    #[cfg(not(target_os = "macos"))]
+    let proxies = &environment_proxies;
     let Some(proxy) = proxies.get(if tls { "https" } else { "http" }) else {
         return Ok(direct());
     };
     let (scheme, user, password, hostport) = parse_proxy(proxy).map_err(gateway_unreachable)?;
     let orig_type = if tls { "https" } else { "http" };
     let proxy_type = scheme.unwrap_or_else(|| orig_type.to_owned());
-    if host.is_some_and(|h| !h.is_empty() && proxy_bypass(h, &proxies)) {
+    let bypass = host.is_some_and(|host| {
+        if host.is_empty() {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        if environment_proxies.is_empty() {
+            // `urllib.proxy_bypass` asks `_scproxy` again rather than reusing
+            // the dictionary returned by `getproxies()`.
+            return crate::mac_proxies::proxy_bypass(host, &crate::mac_proxies::load());
+        }
+        proxy_bypass(host, &environment_proxies)
+    });
+    if bypass {
         return Ok(direct());
     }
     let proxy_authorization = match (user, password) {

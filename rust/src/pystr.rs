@@ -247,6 +247,24 @@ pub fn int_from_str(s: &str) -> Option<i128> {
     int_from_str_radix(s, 10)
 }
 
+/// CPython `int(text)`'s accepted grammar as an arbitrary-precision,
+/// canonical base-10 string. Unlike [`int_from_str`], this never saturates;
+/// callers that persist the integer can pass the result to an
+/// arbitrary-precision JSON number or [`num_bigint::BigInt`] without losing
+/// digits.
+pub fn int_from_str_decimal(s: &str) -> Option<String> {
+    let (negative, digits) = parse_int_grammar(s, 10)?;
+    let magnitude = digits.trim_start_matches('0');
+    if magnitude.is_empty() {
+        return Some("0".to_owned());
+    }
+    Some(if negative {
+        format!("-{magnitude}")
+    } else {
+        magnitude.to_owned()
+    })
+}
+
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
 /// callers need: `http.client`'s own `int(status)`, `int(length)`, and
 /// `int(chunk_size_text, 16)`), reproducing the exact two-stage grammar

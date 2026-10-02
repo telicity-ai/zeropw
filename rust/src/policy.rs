@@ -43,6 +43,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::{self, ThreadId};
 
 use base64::Engine as _;
+use num_bigint::BigInt;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -938,6 +939,11 @@ pub struct HttpTarget {
     pub host: String,
     pub port: i64,
     pub ca_file: Option<String>,
+    /// A stored non-string `ca_file`. Python keeps this field verbatim and
+    /// only interprets its truthiness when opening an HTTPS connection.
+    /// `ca_file` remains the faithful typed value for ordinary constructors;
+    /// this passthrough preserves peer/persisted JSON without substitution.
+    pub raw_ca_file: Option<Value>,
     pub allow_private_network: bool,
 }
 
@@ -986,6 +992,7 @@ impl HttpTarget {
             host,
             port,
             ca_file,
+            raw_ca_file: None,
             allow_private_network,
         };
         if check_address {
@@ -1013,9 +1020,14 @@ impl HttpTarget {
     }
 
     fn to_value(&self) -> Value {
+        let ca_file = self.raw_ca_file.clone().unwrap_or_else(|| {
+            self.ca_file
+                .as_ref()
+                .map_or(Value::Null, |path| Value::String(path.clone()))
+        });
         json!({
             "scheme": self.scheme, "host": self.host, "port": self.port,
-            "ca_file": self.ca_file, "allow_private_network": self.allow_private_network,
+            "ca_file": ca_file, "allow_private_network": self.allow_private_network,
         })
     }
 
@@ -1070,19 +1082,17 @@ impl HttpTarget {
         // flag already uses for its own no-`isinstance`-guard fields.
         let allow_private_network =
             validate_allow_private_network_value(obj.get("allow_private_network"))?;
-        let ca_file = match obj.get("ca_file") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(s)) => Some(s.clone()),
-            // Python's `ca_file: str | None = None` field has no
-            // `__post_init__` check at all: a non-string, non-null stored
-            // value loads successfully and is kept verbatim. Rust's typed
-            // `Option<String>` cannot represent that value; rejecting it is
-            // a genuine, documented residual (see DEVIATIONS.md),
-            // unreachable via any writer in this crate or the matching
-            // Python code path (both only ever store a string or null).
-            Some(_) => return Err(Error::state("state_corrupt").with_detail("http_target")),
+        let (ca_file, raw_ca_file) = match obj.get("ca_file") {
+            None | Some(Value::Null) => (None, None),
+            Some(Value::String(s)) => (Some(s.clone()), None),
+            // Python never validates this annotation. Keep every other JSON
+            // shape verbatim; the gateway applies Python truthiness and
+            // fails closed if a truthy value cannot be passed as a path.
+            Some(value) => (None, Some(value.clone())),
         };
-        Self::from_stored(scheme, host, port, ca_file, allow_private_network)
+        let mut target = Self::from_stored(scheme, host, port, ca_file, allow_private_network)?;
+        target.raw_ca_file = raw_ca_file;
+        Ok(target)
     }
 }
 
@@ -1123,7 +1133,7 @@ impl HttpTarget {
 /// for). A caller that also needs the byte-exact value in an emitted
 /// document (`team::commit::build_http_auth`, receiving a peer-signed op)
 /// carries the raw `serde_json::Value` through separately, the same
-/// raw-passthrough pattern `ca_file`/`value_prefix` already use.
+/// raw-passthrough pattern `ca_file`/`value_prefix` use.
 pub(crate) fn basic_username_decision(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(s) => Some(s.clone()),
@@ -2423,20 +2433,14 @@ pub struct Principal {
 pub enum GrantNum {
     Int(i64),
     /// An integer-shaped JSON literal (no `.`/`e`/`E`) outside `i64` range
-    /// but within `i128` -- Python's `int` is arbitrary-precision, so a
+    /// at any magnitude -- Python's `int` is arbitrary-precision, so a
     /// value like `10**30` stays *exact* there; representing it as
     /// [`GrantNum::Float`] (the previous behaviour, round-5/round-6
     /// differential-harness finding) made every arithmetic operation and
-    /// every persisted byte only an `f64` approximation of it (`remaining_uses`,
-    /// `consume`'s `uses + 1`, ...). `i128` covers every magnitude this
-    /// harness or any real deployment writes exactly; a literal beyond even
-    /// `i128` (astronomically larger than anything this crate or
-    /// `zeropw/policy.py` itself ever produces) falls back to
-    /// [`GrantNum::Other`], which still preserves the exact JSON text for
-    /// round-tripping but -- like `Str`/`Other` generally -- no longer
-    /// participates in arithmetic without raising the closest handled
-    /// error.
-    BigInt(i128),
+    /// every persisted byte only an `f64` approximation of it
+    /// (`remaining_uses`, `consume`'s `uses + 1`, ...). `BigInt` keeps the
+    /// value exact for storage, comparisons and arithmetic.
+    BigInt(BigInt),
     Float(f64),
     Bool(bool),
     Str(String),
@@ -2463,12 +2467,11 @@ impl GrantNum {
                     GrantNum::Int(i)
                 } else if number_is_python_int(n) {
                     // Integer-shaped but outside `i64` -- keep it exact via
-                    // `i128` when possible (see the variant's own doc
-                    // comment) instead of silently approximating via `f64`.
-                    match n.to_string().parse::<i128>() {
-                        Ok(i) => GrantNum::BigInt(i),
-                        Err(_) => GrantNum::Other(v.clone()),
-                    }
+                    // arbitrary precision instead of silently approximating
+                    // it via `f64`.
+                    BigInt::parse_bytes(n.as_str().as_bytes(), 10)
+                        .map(GrantNum::BigInt)
+                        .unwrap_or_else(|| GrantNum::Other(v.clone()))
                 } else if let Some(f) = n.as_f64() {
                     GrantNum::Float(f)
                 } else {
@@ -2482,7 +2485,7 @@ impl GrantNum {
     fn to_value(&self) -> Value {
         match self {
             GrantNum::Int(i) => json!(i),
-            GrantNum::BigInt(i) => json!(*i),
+            GrantNum::BigInt(i) => crate::pyint::PyInt(i.clone()).value(),
             GrantNum::Float(f) => json!(f),
             GrantNum::Bool(b) => json!(b),
             GrantNum::Str(s) => json!(s),
@@ -2493,27 +2496,27 @@ impl GrantNum {
     /// `None` for [`GrantNum::Str`]/[`GrantNum::Other`]; every numeric
     /// variant converts (an exact [`GrantNum::BigInt`] is approximated here
     /// only for the *ordering* fallback in [`grant_num_ge`] -- exact
-    /// arithmetic goes through [`GrantNum::as_i128`] first).
+    /// arithmetic goes through [`GrantNum::as_bigint`] first).
     fn as_f64(&self) -> Option<f64> {
         match self {
             GrantNum::Int(i) => Some(*i as f64),
-            GrantNum::BigInt(i) => Some(*i as f64),
+            GrantNum::BigInt(i) => i.to_string().parse::<f64>().ok(),
             GrantNum::Float(f) => Some(*f),
             GrantNum::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             GrantNum::Str(_) | GrantNum::Other(_) => None,
         }
     }
 
-    /// Exact `i128` value for every integer-or-bool-shaped variant
+    /// Exact arbitrary-precision value for every integer-or-bool-shaped variant
     /// (`Int`/`BigInt`/`Bool`); `None` for `Float`/`Str`/`Other` (a float is
     /// never promoted to an exact integer here, even when integral, since
     /// Python's own `int - int` vs. `float - float` distinction depends on
     /// the stored *type*, not the value).
-    fn as_i128(&self) -> Option<i128> {
+    fn as_bigint(&self) -> Option<BigInt> {
         match self {
-            GrantNum::Int(i) => Some(*i as i128),
-            GrantNum::BigInt(i) => Some(*i),
-            GrantNum::Bool(b) => Some(i128::from(*b)),
+            GrantNum::Int(i) => Some(BigInt::from(*i)),
+            GrantNum::BigInt(i) => Some(i.clone()),
+            GrantNum::Bool(b) => Some(BigInt::from(u8::from(*b))),
             GrantNum::Float(_) | GrantNum::Str(_) | GrantNum::Other(_) => None,
         }
     }
@@ -2589,8 +2592,8 @@ fn grant_num_ge(a: &GrantNum, b: &GrantNum) -> Result<bool, Error> {
         // Exact integer-vs-integer ordering (covers a `BigInt` beyond `i64`
         // range) before falling back to the lossy `f64` comparison used for
         // any pair involving a genuine `Float`.
-        _ if a.as_i128().is_some() && b.as_i128().is_some() => {
-            Ok(a.as_i128().expect("checked above") >= b.as_i128().expect("checked above"))
+        _ if a.as_bigint().is_some() && b.as_bigint().is_some() => {
+            Ok(a.as_bigint().expect("checked above") >= b.as_bigint().expect("checked above"))
         }
         _ => Ok(a.as_f64().expect("checked numeric above")
             >= b.as_f64().expect("checked numeric above")),
@@ -2633,7 +2636,7 @@ fn python_value_eq(a: &Value, b: &Value) -> bool {
 /// reasoning as `grant_num_ge`'s `Str` arm); an array pair recurses via
 /// [`python_list_gt`]; a numeric-or-bool pair compares by value (exact
 /// above 2**53 when both sides are integer-shaped, via [`GrantNum`]'s own
-/// `as_i128`, falling back to `f64` only for a genuine float, mirroring
+/// `as_bigint`, falling back to `f64` only for a genuine float, mirroring
 /// `grant_num_ge`); anything else (a `null`/object operand, or a pair of
 /// mismatched non-numeric shapes, e.g. a string against a number) is a
 /// genuinely uncaught `TypeError` in Python (`'>' not supported between
@@ -2644,7 +2647,7 @@ fn python_value_gt(a: &Value, b: &Value) -> Result<bool, Error> {
         (Value::Array(x), Value::Array(y)) => python_list_gt(x, y),
         (Value::Number(_) | Value::Bool(_), Value::Number(_) | Value::Bool(_)) => {
             let (ga, gb) = (GrantNum::from_value(a), GrantNum::from_value(b));
-            if let (Some(x), Some(y)) = (ga.as_i128(), gb.as_i128()) {
+            if let (Some(x), Some(y)) = (ga.as_bigint(), gb.as_bigint()) {
                 Ok(x > y)
             } else {
                 Ok(ga.as_f64().expect("numeric") > gb.as_f64().expect("numeric"))
@@ -2698,35 +2701,13 @@ fn grant_num_sub(a: &GrantNum, b: &GrantNum) -> Result<Value, Error> {
     // back to `f64` for a pair involving a genuine `Float` -- matching
     // Python's own `int - int -> int` vs. `float`-involved `-> float`.
     //
-    // `checked_sub` (finding D-R7-1, the `i128` boundary): both operands
-    // individually fit `i128` (`GrantNum::BigInt` is only ever constructed
-    // for a magnitude that does, `GrantNum::from_value`), but their
-    // difference can still overflow `i128` at its extreme edge (e.g. `x`
-    // near `i128::MAX`, `y` near `i128::MIN`) where Python's
-    // arbitrary-precision `int` never would. Nothing this crate or
-    // `zeropw/policy.py` itself ever writes approaches `i128::MAX`
-    // (~1.7e38) in the first place -- the same practical ceiling
-    // `DEVIATIONS.md`'s `GrantNum::BigInt` row already documents for a
-    // literal beyond even `i128` -- so failing closed here with the error
-    // every caller of `grant_num_sub` already handles is the same "closest
-    // handled error" choice as that row, not a new class of approximation.
-    if let (Some(x), Some(y)) = (a.as_i128(), b.as_i128()) {
-        return x
-            .checked_sub(y)
-            .map(i128_to_value)
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"));
+    // BigInt subtraction matches Python's unbounded `int - int` exactly.
+    if let (Some(x), Some(y)) = (a.as_bigint(), b.as_bigint()) {
+        return Ok(crate::pyint::PyInt(x - y).value());
     }
     Ok(json!(
         a.as_f64().expect("checked numeric above") - b.as_f64().expect("checked numeric above")
     ))
-}
-
-/// An exact `i128` as a JSON number, preserving full precision via
-/// `serde_json`'s `arbitrary_precision` feature (this crate's own writers
-/// never produce a plain `i64`-fitting result here that this would render
-/// any differently from `json!`).
-fn i128_to_value(i: i128) -> Value {
-    Value::Number(serde_json::Number::from(i))
 }
 
 /// Python's `max(diff, 0)` (`Policy::regrant`'s `remaining_uses`, finding
@@ -2783,17 +2764,9 @@ fn grant_num_add_one(a: &GrantNum) -> Result<Value, Error> {
         GrantNum::Str(_) | GrantNum::Other(_) => {
             Err(Error::state("state_corrupt").with_detail("grant"))
         }
-        GrantNum::Int(x) => Ok(i128_to_value(*x as i128 + 1)),
-        // `x` is `i128`-range by construction (`GrantNum::BigInt` is only
-        // ever built for a magnitude `as_i128`/the source literal fits),
-        // but `x + 1` can still overflow `i128` at its extreme edge (`x ==
-        // i128::MAX`) -- see `grant_num_sub`'s matching comment for why
-        // `checked_add` failing closed there is the right "closest handled
-        // error" choice rather than a new approximation.
-        GrantNum::BigInt(x) => x
-            .checked_add(1)
-            .map(i128_to_value)
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("grant")),
+        GrantNum::Int(x) => Ok(crate::pyint::PyInt(BigInt::from(*x) + 1).value()),
+        // BigInt addition matches Python's unbounded `int + 1` exactly.
+        GrantNum::BigInt(x) => Ok(crate::pyint::PyInt(x + 1).value()),
         // `bool` is `0`/`1`; `+ 1` is `1`/`2` and can never overflow `i64`.
         GrantNum::Bool(x) => Ok(json!(i64::from(*x) + 1)),
         // Float arithmetic saturates to `f64::INFINITY` rather than
@@ -2982,6 +2955,13 @@ fn now_at_least_exact(now: f64, exp: &Value) -> Option<bool> {
 }
 
 impl Grant {
+    pub fn max_uses_value(&self) -> Value {
+        self.raw_max_uses
+            .as_ref()
+            .map(GrantNum::to_value)
+            .unwrap_or(Value::Null)
+    }
+
     /// Python `==`/`!=` for `self.status` against a literal: see
     /// [`value_eq_str`].
     fn status_is(&self, s: &str) -> bool {
@@ -4249,7 +4229,7 @@ impl<'a> Policy<'a> {
             }
             // A different TLS trust anchor (another CA file, or the system
             // store) can authenticate servers the old one did not.
-            if bt.ca_file != at.ca_file {
+            if bt.ca_file != at.ca_file || bt.raw_ca_file != at.raw_ca_file {
                 return true;
             }
             // Opening private networks lets the credential reach addresses
@@ -4418,6 +4398,19 @@ impl<'a> Policy<'a> {
         )
     }
 
+    /// CLI-facing form of `create_grant` that retains Python's unbounded
+    /// `int` value. The ordinary typed API remains available to Rust callers
+    /// whose limits already fit `i64`.
+    pub(crate) fn create_grant_with_exact_max_uses(
+        &self,
+        principal_id: &str,
+        connection_id: &str,
+        ttl_seconds: Option<i64>,
+        max_uses: Option<Value>,
+    ) -> Result<Grant, Error> {
+        self.create_grant_exact(principal_id, connection_id, ttl_seconds, max_uses)
+    }
+
     /// Shared grant-construction core for [`Policy::create_grant`] (always
     /// a plain `i64`-or-`None` `max_uses`) and [`Policy::regrant`] (finding
     /// D-R7-3): `regrant`'s `max_uses_raw` is [`grant_num_sub`]'s *exact*
@@ -4462,10 +4455,17 @@ impl<'a> Policy<'a> {
         // same sign-only comparison `grant_num_max_with_zero` already
         // uses elsewhere -- exactness only matters near the `i64`/`f64`
         // boundary, never near zero.
-        if let Some(m) = &max_uses_raw
-            && numeric_value_as_f64(m).is_some_and(|f| f <= 0.0)
-        {
-            return Err(Error::invalid_input("invalid_max_uses"));
+        if let Some(m) = &max_uses_raw {
+            if matches!(m, Value::Bool(_)) {
+                return Err(Error::invalid_input("invalid_max_uses"));
+            }
+            if let Some(integer) = crate::pyint::PyInt::from_json_integer(m) {
+                if integer.0 <= BigInt::from(0) {
+                    return Err(Error::invalid_input("invalid_max_uses"));
+                }
+            } else if numeric_value_as_f64(m).is_some_and(|f| f <= 0.0) {
+                return Err(Error::invalid_input("invalid_max_uses"));
+            }
         }
         let _lock = self.state.lock()?;
         let principal = self.get_principal(principal_id)?;
@@ -6903,6 +6903,30 @@ mod tests {
     }
 
     #[test]
+    fn exact_grant_limit_rejects_bool_and_nonpositive_but_keeps_huge_integer() {
+        let (_tmp, state, clock_val, _token) = setup();
+        let policy = Policy::new(&state, make_clock(&clock_val));
+        for invalid in [json!(true), json!(false), json!(0), json!(-1)] {
+            assert_invalid_input(policy.create_grant_exact(
+                "agent-1",
+                "gh",
+                Some(3600),
+                Some(invalid),
+            ));
+        }
+        let huge = Value::Number(
+            "100000000000000000000000000000000000000000000000001"
+                .parse()
+                .unwrap(),
+        );
+        let grant = policy
+            .create_grant_exact("agent-1", "gh", Some(3600), Some(huge.clone()))
+            .unwrap();
+        assert_eq!(grant.max_uses_value(), huge);
+        assert_eq!(grant.public_view().unwrap()["remaining_uses"], huge);
+    }
+
+    #[test]
     fn revoke_all_marks_everything() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
@@ -7905,10 +7929,8 @@ mod tests {
     /// (`attempt to add with overflow`, debug profile) or silently wrapped
     /// to `i64::MIN` (release profile, since `Cargo.toml` has no
     /// `overflow-checks` override) right here, while holding the state
-    /// lock. Widening the addition to `i128` (nothing this crate's own
-    /// `GrantNum::BigInt`/`i128_to_value` machinery couldn't already
-    /// represent exactly) reproduces Python's actual success instead of
-    /// erroring or corrupting the counter.
+    /// lock. Widening through `GrantNum::BigInt` reproduces Python's actual
+    /// success instead of erroring or corrupting the counter.
     #[test]
     fn consume_at_i64_max_uses_widens_exactly_matching_pythons_success() {
         let (_tmp, state, clock_val, _token) = setup();

@@ -1875,62 +1875,10 @@ fn derive_connections(
                 .and_then(|m| m.get(v))
                 .copied()
         });
-        // H-R6-1: `entry` already passed `commit::build_connection_fields`
-        // once, at fold() op-application time, before it was ever written
-        // into `document["connections"]` -- exactly like Python's own
-        // `_connection_entry`/`build_connection_fields`. Python's
-        // `Connection.from_dict` (called here by `_document_connection_object`,
-        // unguarded, just like `document_connection_object` below) never
-        // fails on that same entry a second time: every field it
-        // reconstructs uses the identical tuple/dict coercion
-        // `build_connection_fields` already used, so a value that built
-        // once always rebuilds -- confirmed against real `python3.12` (see
-        // `rust/tests/team_fold.rs`'s
-        // `derive_connections_skips_unrepresentable_ca_file_and_still_derives_other_connections`,
-        // finding H-R6-1): for a `ca_file` that is a number, bool, list,
-        // dict or null, `fold()` and `derive_local()` both succeed and keep
-        // the value byte-identical.
-        //
-        // `policy::Connection::from_value` (via `HttpTarget::from_value`)
-        // is stricter than Python here: `ca_file` is typed `Option<String>`
-        // (PORTING.md §3b/§4's representational-gap limit) and
-        // `HttpTarget::from_value` hard-rejects a non-string, non-null
-        // `ca_file` with `state_corrupt` even though `commit::
-        // build_http_target` (via its `raw_ca_file` passthrough, finding
-        // H-4) already accepted the very same value into this document
-        // entry. Before this fix that `?` propagated out of this whole
-        // loop, so `state.write_json(CONNECTIONS, ...)` at the end of this
-        // function never ran -- ONE peer's `connection.create`/
-        // `connection.update` op with a non-string `ca_file` silently
-        // discarded every OTHER connection's derivation on this fold too
-        // (DEVIATIONS.md's `ca_file` row, corrected under H-R6-1). Since
-        // this failure can only be this representational gap (nothing else
-        // can still be malformed here -- see above), the fix narrows its
-        // scope to the one connection that cannot be represented: skip it
-        // (`conn_id` is already in `seen_ids`, so the stale-cleanup pass
-        // below leaves any prior locally-derived entry for it untouched
-        // rather than treating it as vanished-and-disabled) and keep
-        // deriving every other connection normally, the same "skip one
-        // item, keep going" scoping `fold()`'s own op handlers and this
-        // function's `local_id_conflict`/`generation_unavailable` skips
-        // already use.
-        let mut after = match document_connection_object(entry, local_version) {
-            Ok(v) => v,
-            Err(_) => {
-                if let Some(audit) = audit {
-                    audit.record(
-                        "team_op_skipped",
-                        RecordArgs {
-                            result: Some("skipped"),
-                            reason: Some("connection_unrepresentable"),
-                            extra: vec![("env_id", json!(env_id)), ("detail", json!("connection"))],
-                            ..Default::default()
-                        },
-                    )?;
-                }
-                continue;
-            }
-        };
+        // `HttpTarget::from_value` preserves Python's unchecked `ca_file`
+        // JSON through `raw_ca_file`, so every connection that folded can
+        // now be represented and derived locally byte-for-byte as well.
+        let mut after = document_connection_object(entry, local_version)?;
         if let Some(existing) = &existing_raw {
             let before = policy::Connection::from_value(&Value::Object(existing.clone()))?;
             if connection_changed(&before, &after) {
