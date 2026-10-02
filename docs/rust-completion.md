@@ -610,6 +610,21 @@ Validation of that commit with CPython 3.12.14 as the oracle:
 - the eight root-sensitive cases passed when re-run as non-root, and
   `native_cli_e2e` passed 10/10 without skips.
 
+The next hosted run, at `b6087dc`, found two more failures.
+
+- `rust-tests`: the `cli_parity` key mask matched only a generated key
+  whose comment began with `root@`. It had been validated as root, and CI
+  runs as `runner`. The mask now covers any invoking user.
+- `product-tests`: the original Python test
+  `test_removed_peer_session_is_receive_only_during_drain` failed. It
+  races: both nodes dial each other, and the spied session can be replaced.
+  The unchanged test also fails locally 2 of 25 times. It was left
+  unchanged, and a test-only patch was proposed on the PR.
+
+After these, every integration test binary was run as a non-root user with
+CPython 3.12.14, which is CI's setting, and all 67 targets passed. The
+library suite also passed as non-root: 527 tests.
+
 `rust/PORTING.md` now asks for the latest 3.12 patch release as the oracle.
 `rust/DEVIATIONS.md` records the 3.12.11 difference. Against 3.12.11 the
 header oracle reports 69 mismatches and the `header_write_refused` session
