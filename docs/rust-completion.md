@@ -583,3 +583,34 @@ The 25 ms bound and the workload are unchanged. The assertion now applies to
 the fastest of up to three runs. A fixed poll interval raises the floor of
 every run, so it still fails. Sustained external CPU saturation can still
 fail the test; it is a wall-clock latency pin by design.
+
+### Hosted CI on CPython 3.12.14 (2026-10-02)
+
+The owner chose to merge PR #6 on local Linux validation. The branch was
+fast-forwarded to `9a0d203`, and that push triggered hosted run
+`36951471833`. Its harness and Python product jobs passed. The Rust job
+failed in `smtp::message_tests::generated_header_shapes_match_python_bytes`.
+
+The cause is the oracle version. `setup-python` installs the latest 3.12,
+which is 3.12.14, while the local oracle was 3.12.11. In 3.12.14, CPython's
+`email` package:
+
+- keeps a comment's parentheses when it refolds the comment;
+- narrows `WhiteSpaceTerminal.startswith_fws`;
+- makes `BytesGenerator` raise `HeaderWriteError` for a fold that leaves a
+  line without leading whitespace.
+
+Older 3.12 releases send such a header instead. `378925e` ports all three
+changes and adds session and CLI cases for the refusal.
+
+Validation of that commit with CPython 3.12.14 as the oracle:
+
+- library: 527 passed, twice, as a non-root user;
+- every integration target, `policy_differential` included, passed;
+- the eight root-sensitive cases passed when re-run as non-root, and
+  `native_cli_e2e` passed 10/10 without skips.
+
+`rust/PORTING.md` now asks for the latest 3.12 patch release as the oracle.
+`rust/DEVIATIONS.md` records the 3.12.11 difference. Against 3.12.11 the
+header oracle reports 69 mismatches and the `header_write_refused` session
+differs, by design.
