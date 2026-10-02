@@ -1,4 +1,4 @@
-name: Rust exact-revision E2E audit
+name: Rust macOS failure diagnosis
 on:
   push:
     branches: [codex/rust-e2e-audit-20261002]
@@ -9,8 +9,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15]
-        shard: [0, 1, 2, 3]
+        os: [macos-15]
+        shard: [0, 1]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -24,7 +24,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: '3.12'
+          python-version: '3.12.14'
+          check-latest: true
       - name: Record exact source and tools
         shell: bash
         run: |
@@ -34,6 +35,34 @@ jobs:
           cargo --version
           python3.12 --version
           ssh -V
+      - name: Record macOS host and kernel execution behavior
+        shell: bash
+        run: |
+          python3.12 - <<'PYCODE'
+          import os,pathlib,platform,socket,subprocess,tempfile,time,json
+          print(json.dumps({'python':platform.python_version(),'gethostname':socket.gethostname(),'uname_nodename':os.uname().nodename}),flush=True)
+          with tempfile.TemporaryDirectory(prefix='zeropw-audit-') as tmp:
+              root=pathlib.Path(tmp)
+              spaced=root/'spaced.sh'
+              chained=root/'chained.sh'
+              bare=root/'bare.sh'
+              spaced.write_bytes(b'#! \t/bin/sh -e\nprintf spaced\n')
+              chained.write_bytes(('#!'+str(spaced)+'\nprintf chained-text-never-read\n').encode())
+              bare.write_bytes(b'#!/bin/sh')
+              for path in (spaced,chained,bare):
+                  path.chmod(0o700)
+                  try:
+                      r=subprocess.run([str(path)],capture_output=True,timeout=5)
+                      result={'returncode':r.returncode,'stdout':r.stdout.decode(),'stderr':r.stderr.decode()}
+                  except OSError as e:result={'errno':e.errno,'error':type(e).__name__}
+                  print(json.dumps({'kernel_probe':path.name,'result':result}),flush=True)
+          started=time.monotonic()
+          try:
+              r=subprocess.run(['python3.12','-c','import smtplib;print(smtplib.SMTP().local_hostname)'],capture_output=True,text=True,timeout=90)
+              print(json.dumps({'smtp_hostname':r.stdout.strip(),'returncode':r.returncode,'elapsed':time.monotonic()-started}),flush=True)
+          except subprocess.TimeoutExpired:
+              print(json.dumps({'smtp_hostname':'timeout','elapsed':time.monotonic()-started}),flush=True)
+          PYCODE
       - name: Verify every integration target in deterministic shards
         shell: bash
         run: |
@@ -41,7 +70,7 @@ jobs:
           import os,pathlib,subprocess,sys
           shard=int(os.environ['AUDIT_SHARD'])
           targets=sorted(p.stem for p in pathlib.Path('rust/tests').glob('*.rs'))
-          selected=targets[shard::4]
+          selected={0: ['gateway_tls_parity', 'native_cli_e2e'], 1: ['admin_sigint_exit', 'runtime_parity_gaps', 'astra_response_final_recheck', 'astra_response_round4', 'astra_response_review']}[shard]
           print('AUDIT_TARGETS='+repr(selected),flush=True)
           failed=[]
           for target in selected:
@@ -55,16 +84,3 @@ jobs:
       - name: Library and binary unit tests
         if: always() && matrix.shard == 0
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
-      - name: Explicit isolated signer resource measurements
-        if: always() && matrix.shard == 1
-        run: |
-          cargo test --locked --manifest-path rust/Cargo.toml --lib signer::tests:: -- --ignored --test-threads=1 --nocapture
-      - name: Documentation tests
-        if: always() && matrix.shard == 2
-        run: cargo test --locked --manifest-path rust/Cargo.toml --doc
-      - name: Formatting and strict Clippy
-        if: always() && matrix.shard == 3
-        shell: bash
-        run: |
-          cargo fmt --manifest-path rust/Cargo.toml -- --check
-          cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
