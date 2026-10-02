@@ -72,3 +72,39 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           awk '/^(FAIL|ERROR): /{p=1} p' product-tests.log | head -n 200 >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  rust-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12 for differential tests
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust library tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml --lib
+
+      - name: Run Rust integration tests
+        shell: bash
+        run: |
+          for test_file in rust/tests/*.rs; do
+            test_name="$(basename "$test_file" .rs)"
+            if [[ "$test_name" != "policy_differential" ]]; then
+              cargo test --locked --manifest-path rust/Cargo.toml --test "$test_name"
+            fi
+          done
+
+      - name: Run the long policy differential test
+        run: cargo test --locked --manifest-path rust/Cargo.toml --test policy_differential

@@ -1,0 +1,55 @@
+//! ZeroPW trusted process, ported from the Python prototype in `zeropw/`.
+//!
+//! Each module mirrors the Python module of the same name; `PORTING.md` holds
+//! the equivalence contract. Runtime, response, team networking and native
+//! CLI modules are implemented; complete acceptance is tracked separately
+//! in `docs/rust-completion.md` and requires independent review.
+
+#![deny(unsafe_code)]
+
+pub mod clock;
+pub mod errors;
+pub mod secret;
+
+pub mod pybase64;
+pub mod pyint;
+pub mod pyjson;
+pub mod pystr;
+pub mod store;
+
+pub mod crypto;
+pub mod kms;
+
+pub mod audit;
+pub mod handles;
+pub mod projects;
+
+pub mod policy;
+pub mod vault;
+
+pub mod context;
+pub mod runs;
+pub mod server;
+pub mod tools;
+
+pub mod gateway;
+pub mod signer;
+pub mod sshwire;
+
+pub mod fake_upstream;
+
+pub mod demo;
+pub mod incident;
+pub mod intrusion;
+pub mod notify;
+mod smtp;
+
+pub mod admin_cli;
+pub mod agent_cli;
+pub mod argparse;
+pub mod team;
+
+#[cfg(test)]
+pub(crate) mod oracle;
+
+pub use errors::{Error, ErrorClass, Result};
