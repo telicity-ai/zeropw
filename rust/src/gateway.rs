@@ -1818,6 +1818,12 @@ fn classify_openssl_handshake_error(
             match error.code() {
                 ErrorCode::SSL | ErrorCode::ZERO_RETURN => "upstream_tls_failed",
                 ErrorCode::WANT_READ | ErrorCode::WANT_WRITE => "upstream_timeout",
+                // OpenSSL reports a peer that closes without sending any TLS
+                // record as SYSCALL with no underlying I/O error.  A real
+                // reset retains its ConnectionReset `io_error` and returned
+                // above as `upstream_unreachable`; the error-less form is
+                // Python's `SSLEOFError` / `upstream_tls_failed` case.
+                ErrorCode::SYSCALL => "upstream_tls_failed",
                 _ => "upstream_unreachable",
             }
         }

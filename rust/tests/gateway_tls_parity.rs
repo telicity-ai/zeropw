@@ -283,31 +283,39 @@ fn pin(dir: &TempDir, name: &str, pems: &[&str]) -> PathBuf {
     path
 }
 
-/// `TlsTests`' certificates are `openssl req -x509` CA certificates pinned
-/// through `ca_file`: OpenSSL accepts them as the server's own certificate.
-/// Hostname, validity and a different pinned CA still refuse.
+/// Compare every rcgen self-signed CA decision with the Python gateway on the
+/// same host. OpenSSL provider policy differs across supported CI platforms,
+/// so the basic good/bundle acceptance is oracle-derived; security refusals
+/// and the explicit TLS-server-purpose acceptance remain fixed regressions.
 #[test]
-fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
+fn pinned_self_signed_ca_certificate_decisions_match_python() {
     let g = Gateway::new();
     let dir = TempDir::new().unwrap();
+    let same = |id: &str, port: u16, ca: Option<&Path>| {
+        let cases = vec![(format!("python-{id}"), port, ca.map(Path::to_path_buf))];
+        let python = python_relays(&cases).remove(0);
+        let rust = g.relay(id, port, ca);
+        eprintln!("rcgen pinned-CA {id}: python={python:?} rust={rust:?}");
+        assert_eq!(rust, python, "rcgen pinned-CA case {id}");
+        rust
+    };
     let good = ca_certificate(&["127.0.0.1"], None, |_| ());
     let fake = serve(&good);
     let pinned = pin(&dir, "good.pem", &[&good.pem]);
-    assert_eq!(g.relay("good", fake.port(), Some(&pinned)), (200, None));
-    assert_eq!(fake.requests().len(), 1);
+    same("good", fake.port(), Some(&pinned));
     // A bundle holding the certificate among others is still a pin.
     let other = ca_certificate(&["127.0.0.1"], None, |_| ());
     let bundle = pin(&dir, "bundle.pem", &[&other.pem, &good.pem]);
-    assert_eq!(g.relay("bundle", fake.port(), Some(&bundle)), (200, None));
+    same("bundle", fake.port(), Some(&bundle));
     // A different CA:TRUE certificate with the same names is not the pin.
     let wrong_pin = pin(&dir, "other.pem", &[&other.pem]);
     assert_eq!(
-        g.relay("other-pin", fake.port(), Some(&wrong_pin)),
+        same("other-pin", fake.port(), Some(&wrong_pin)),
         (502, Some("upstream_tls_failed".into()))
     );
     // Not pinned at all: the OS store does not know it.
     assert_eq!(
-        g.relay("unpinned", fake.port(), None),
+        same("unpinned", fake.port(), None),
         (502, Some("upstream_tls_failed".into()))
     );
     // Hostname: the pinned certificate names another host.
@@ -315,7 +323,7 @@ fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
     let named_fake = serve(&named);
     let named_pin = pin(&dir, "named.pem", &[&named.pem]);
     assert_eq!(
-        g.relay("mismatch", named_fake.port(), Some(&named_pin)),
+        same("mismatch", named_fake.port(), Some(&named_pin)),
         (502, Some("upstream_tls_failed".into()))
     );
     // Validity: expired.
@@ -323,7 +331,7 @@ fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
     let expired_fake = serve(&expired);
     let expired_pin = pin(&dir, "expired.pem", &[&expired.pem]);
     assert_eq!(
-        g.relay("expired", expired_fake.port(), Some(&expired_pin)),
+        same("expired", expired_fake.port(), Some(&expired_pin)),
         (502, Some("upstream_tls_failed".into()))
     );
     // Purpose: an EKU without serverAuth, or a key usage without a TLS bit.
@@ -333,7 +341,7 @@ fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
     let client_fake = serve(&client_only);
     let client_pin = pin(&dir, "client.pem", &[&client_only.pem]);
     assert_eq!(
-        g.relay("client-eku", client_fake.port(), Some(&client_pin)),
+        same("client-eku", client_fake.port(), Some(&client_pin)),
         (502, Some("upstream_tls_failed".into()))
     );
     let sign_only = ca_certificate(&["127.0.0.1"], None, |p| {
@@ -345,7 +353,7 @@ fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
     let sign_fake = serve(&sign_only);
     let sign_pin = pin(&dir, "sign.pem", &[&sign_only.pem]);
     assert_eq!(
-        g.relay("sign-ku", sign_fake.port(), Some(&sign_pin)),
+        same("sign-ku", sign_fake.port(), Some(&sign_pin)),
         (502, Some("upstream_tls_failed".into()))
     );
     let server_eku = ca_certificate(&["127.0.0.1"], None, |p| {
@@ -358,7 +366,7 @@ fn pinned_self_signed_ca_certificate_is_accepted_with_checks() {
     let server_fake = serve(&server_eku);
     let server_pin = pin(&dir, "server.pem", &[&server_eku.pem]);
     assert_eq!(
-        g.relay("server-eku", server_fake.port(), Some(&server_pin)),
+        same("server-eku", server_fake.port(), Some(&server_pin)),
         (200, None)
     );
     // No refused handshake ever carried the credential upstream.
@@ -374,9 +382,23 @@ fn openssl(args: &[&str]) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// A self-signed certificate made by the `openssl` binary the way
-/// `tests/test_gateway.py` makes them (`x509 -req -days N`, so an expired
-/// one can be made with OpenSSL 3.0 too).
+fn assert_openssl(args: &[&str]) {
+    let output = std::process::Command::new("openssl")
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("cannot execute openssl: {error}"));
+    assert!(
+        output.status.success(),
+        "openssl {:?} failed: {}",
+        args.first().unwrap_or(&""),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A self-signed certificate made by the `openssl` binary.  Normal variants
+/// use `x509 -req` like `tests/test_gateway.py`; the expired variant uses
+/// `ca -selfsign` because current OpenSSL releases reject non-positive
+/// `x509 -days` values.
 fn openssl_certificate(dir: &TempDir, name: &str, ext: &str, days: &str) -> (PathBuf, Issued) {
     openssl_certificate_with_cn(dir, name, "127.0.0.1", ext, days)
 }
@@ -389,10 +411,25 @@ fn openssl_certificate_with_cn(
     days: &str,
 ) -> (PathBuf, Issued) {
     let cnf = dir.path().join(format!("{name}.cnf"));
+    let database = dir.path().join(format!("{name}.index"));
+    let serial = dir.path().join(format!("{name}.serial"));
+    let new_certs = dir.path().join(format!("{name}.newcerts"));
+    std::fs::write(&database, "").unwrap();
+    std::fs::write(&serial, "01\n").unwrap();
+    std::fs::create_dir(&new_certs).unwrap();
     std::fs::write(
         &cnf,
         format!(
-            "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = {common_name}\n[ext]\n{ext}\n"
+            "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = {common_name}\n\
+             [ext]\n{ext}\n\
+             [ca]\ndefault_ca = CA_default\n\
+             [CA_default]\ndatabase = {}\nnew_certs_dir = {}\nserial = {}\n\
+             default_md = sha256\ndefault_days = 1\npolicy = policy_any\n\
+             x509_extensions = ext\nunique_subject = no\n\
+             [policy_any]\ncommonName = supplied\n",
+            database.display(),
+            new_certs.display(),
+            serial.display(),
         ),
     )
     .unwrap();
@@ -405,26 +442,47 @@ fn openssl_certificate_with_cn(
         crt.to_str().unwrap(),
         cnf.to_str().unwrap(),
     );
-    assert!(openssl(&["genpkey", "-algorithm", "RSA", "-out", k]));
-    assert!(openssl(&[
-        "req", "-new", "-key", k, "-out", c, "-config", f
-    ]));
-    assert!(openssl(&[
-        "x509",
-        "-req",
-        "-in",
-        c,
-        "-signkey",
-        k,
-        "-out",
-        r,
-        "-days",
-        days,
-        "-extfile",
-        f,
-        "-extensions",
-        "ext"
-    ]));
+    assert_openssl(&["genpkey", "-algorithm", "RSA", "-out", k]);
+    assert_openssl(&["req", "-new", "-key", k, "-out", c, "-config", f]);
+    if days.parse::<i64>().unwrap() > 0 {
+        assert_openssl(&[
+            "x509",
+            "-req",
+            "-in",
+            c,
+            "-signkey",
+            k,
+            "-out",
+            r,
+            "-days",
+            days,
+            "-extfile",
+            f,
+            "-extensions",
+            "ext",
+        ]);
+    } else {
+        assert_openssl(&[
+            "ca",
+            "-selfsign",
+            "-batch",
+            "-notext",
+            "-config",
+            f,
+            "-in",
+            c,
+            "-keyfile",
+            k,
+            "-out",
+            r,
+            "-startdate",
+            "20200101000000Z",
+            "-enddate",
+            "20210101000000Z",
+            "-extensions",
+            "ext",
+        ]);
+    }
     let pem = std::fs::read_to_string(&crt).unwrap();
     let der = rustls_pemfile::certs(&mut pem.as_bytes())
         .next()

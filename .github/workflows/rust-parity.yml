@@ -10,11 +10,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-15]
+        suite: [unit, tls, cli, e2e]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
+      PARITY_SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -54,21 +56,28 @@ jobs:
           rustc --version
           cargo --version
           python3.12 --version
+          python3.12 -c 'import ssl,unicodedata; print(ssl.OPENSSL_VERSION); print(unicodedata.unidata_version)'
+          openssl version
           ssh -V
       - name: Formatting and strict Clippy
+        if: matrix.suite == 'unit'
         run: |
           cargo fmt --manifest-path rust/Cargo.toml -- --check
           cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
       - name: Library and binary tests
-        if: success() || failure()
+        if: (success() || failure()) && matrix.suite == 'unit'
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
       - name: Affected differential tests and native process E2E
-        if: success() || failure()
+        if: (success() || failure()) && matrix.suite != 'unit'
         shell: bash
         run: |
           python3.12 - <<'PYCODE'
-          import subprocess,sys
-          targets=['runtime_parity_gaps','admin_expanduser_parity','agent_proxy_parity','agent_help','gateway_tls_parity','gateway','response_parity_gaps','native_cli_e2e','astra_cli_runtime_round2','astra_cleanup_publication_order']
+          import os,subprocess,sys
+          targets={
+              'tls':['gateway_tls_parity','gateway'],
+              'cli':['runtime_parity_gaps','admin_expanduser_parity','agent_proxy_parity','agent_help','astra_cli_runtime_round2','astra_cleanup_publication_order'],
+              'e2e':['response_parity_gaps','native_cli_e2e'],
+          }[os.environ['PARITY_SUITE']]
           failed=[]
           for target in targets:
               print('AUDIT_BEGIN='+target,flush=True)

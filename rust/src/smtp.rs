@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use base64::Engine;
-use dns_lookup::lookup_addr;
+use dns_lookup::{AddrFamily, AddrInfoHints, getaddrinfo, lookup_addr};
 use hmac::Mac;
 use md5::Md5;
 
@@ -808,10 +808,7 @@ fn local_hostname() -> String {
         return fqdn;
     }
     let lookup_name = idna_hostname(&hostname).unwrap_or(hostname);
-    let address = (lookup_name.as_str(), 0)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addresses| addresses.find(std::net::SocketAddr::is_ipv4))
+    let address = first_resolved_address(&lookup_name, Some(AddrFamily::Inet))
         .map_or_else(|| "127.0.0.1".to_owned(), |a| a.ip().to_string());
     format!("[{address}]")
 }
@@ -835,11 +832,7 @@ fn gethostname() -> String {
 /// platforms where the canonical name itself has no dot.
 fn getfqdn(hostname: &str) -> String {
     let lookup_name = idna_hostname(hostname).unwrap_or_else(|_| hostname.to_owned());
-    let Some(address) = (lookup_name.as_str(), 0)
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addresses| addresses.next())
-    else {
+    let Some(address) = first_resolved_address(&lookup_name, None) else {
         return hostname.to_owned();
     };
     let canonical = lookup_addr(&address.ip()).ok();
@@ -853,6 +846,25 @@ fn getfqdn(hostname: &str) -> String {
         .find(|name| name.contains('.'))
         .unwrap_or(&canonical)
         .clone()
+}
+
+/// CPython `setipaddr`: `getaddrinfo(name, NULL)` with an otherwise-zeroed
+/// hints struct. `gethostbyaddr` uses `AF_UNSPEC`; `gethostbyname` uses
+/// `AF_INET`. In particular, no socket type is requested, so libc's native
+/// IPv4/IPv6 ordering is preserved instead of `ToSocketAddrs`' stream order.
+fn first_resolved_address(
+    hostname: &str,
+    family: Option<AddrFamily>,
+) -> Option<std::net::SocketAddr> {
+    let hints = AddrInfoHints {
+        address: family.map_or(0, i32::from),
+        ..AddrInfoHints::default()
+    };
+    getaddrinfo(Some(hostname), None, Some(hints))
+        .ok()?
+        .next()?
+        .ok()
+        .map(|info| info.sockaddr)
 }
 
 fn hosts_entry(address: IpAddr) -> Option<(String, Vec<String>)> {
@@ -2738,6 +2750,8 @@ print(json.dumps(out))
 
 #[cfg(test)]
 mod hostname_tests {
+    use serde_json::{Value, json};
+
     /// `smtplib.SMTP().local_hostname` (`socket.getfqdn()` or the `[ip]`
     /// literal) is what EHLO/HELO send.  Both implementations use the host
     /// platform's configured resolver, including DNS PTR and macOS Directory
@@ -2747,6 +2761,50 @@ mod hostname_tests {
         let out = crate::oracle::python("import smtplib; print(smtplib.SMTP().local_hostname)");
         let rust = super::local_hostname();
         assert_eq!(rust, out.trim());
+    }
+
+    /// Keep the resolver stages visible in hosted diagnostics: CPython's
+    /// `gethostbyaddr(hostname)` first calls zero-hint `getaddrinfo(AF_UNSPEC)`
+    /// and then reverses that first address.
+    #[test]
+    fn getfqdn_forward_and_reverse_steps_match_socketmodule() {
+        let script = r#"
+import json, socket
+host = socket.gethostname()
+out = {"hostname": host, "first_address": None, "getnameinfo": None, "gethostbyaddr": None}
+try:
+    first = socket.getaddrinfo(host, None, socket.AF_UNSPEC, 0, 0, 0)[0][4]
+    out["first_address"] = first[0]
+    out["getnameinfo"] = socket.getnameinfo(first, socket.NI_NAMEREQD | socket.NI_NUMERICSERV)[0]
+except Exception:
+    pass
+try:
+    out["gethostbyaddr"] = socket.gethostbyaddr(host)[0]
+except Exception:
+    pass
+out["getfqdn"] = socket.getfqdn(host)
+print(json.dumps(out, sort_keys=True))
+"#;
+        let expected: Value = serde_json::from_str(crate::oracle::python(script).trim()).unwrap();
+        let hostname = super::gethostname();
+        let mut actual = json!({
+            "hostname": hostname,
+            "first_address": null,
+            "getnameinfo": null
+        });
+        if let Some(address) = super::first_resolved_address(&hostname, None) {
+            actual["first_address"] = json!(address.ip().to_string());
+            if let Ok(name) = dns_lookup::lookup_addr(&address.ip()) {
+                actual["getnameinfo"] = json!(name);
+            }
+        }
+        actual["getfqdn"] = json!(super::getfqdn(&hostname));
+        for field in ["hostname", "first_address", "getnameinfo", "getfqdn"] {
+            assert_eq!(
+                actual[field], expected[field],
+                "resolver stage {field} differed; Python socket diagnostics: {expected}; Rust diagnostics: {actual}"
+            );
+        }
     }
 }
 

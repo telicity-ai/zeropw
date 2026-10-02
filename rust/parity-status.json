@@ -859,5 +859,46 @@
       "row_sha256": "d3cf67a61bef0bfbbd1bba2f53d2d4a08ad2cd2723b6fdfdf9d465ea39a65f2e",
       "status": "needs_source_and_differential_review"
     }
+  ],
+  "validation_history": [
+    {
+      "sha": "b8bec32dc71a08822c59b2e25f69de14c3b4edd7",
+      "run": 37038191117,
+      "conclusion": "cancelled after failures; macOS job completed",
+      "macos_passed_targets": {
+        "runtime_parity_gaps": 15,
+        "agent_help": 2,
+        "gateway": 149,
+        "response_parity_gaps": 11,
+        "native_cli_e2e": 10,
+        "astra_cli_runtime_round2": 3,
+        "astra_cleanup_publication_order": 1
+      },
+      "failures": [
+        "library test SendError Debug compilation requirement",
+        "TLS handshake EOF identity",
+        "macOS expired certificate fixture generation",
+        "Linux rcgen pinned-CA acceptance assumption"
+      ]
+    },
+    {
+      "sha": "79faf08fefd1159f6b12a35648d5f598cbb59de0",
+      "run": 37039325357,
+      "conclusion": "cancelled after completed library failures to collect diagnostics; not a complete E2E result",
+      "both_platforms_fmt_clippy": "pass",
+      "library_failures": [
+        "IDNA boundary oracle string escaping",
+        "IDNA exhaustive scalar differences in 8 of 272 chunks"
+      ],
+      "macos_additional_failure": "SMTP getfqdn first-address selection",
+      "known_tls_failures": "still present; fixes in next candidate"
+    }
+  ],
+  "next_candidate_changes": [
+    "OpenSSL errorless SYSCALL EOF identity",
+    "portable expired certificate fixture and live pinned-CA oracle",
+    "CPython zero-hint address resolution",
+    "CPython exact B2 mapping with verified provenance",
+    "separate unit/TLS/CLI/E2E CI jobs"
   ]
 }
