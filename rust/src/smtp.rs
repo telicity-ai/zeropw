@@ -596,7 +596,7 @@ impl Client {
         if international && !self.has_extn("smtputf8") {
             return Err(caught("SMTPNotSupportedError"));
         }
-        let flat = message.flatten(international);
+        let flat = message.flatten(international)?;
         let options: &[&str] = if international {
             &["SMTPUTF8", "BODY=8BITMIME"]
         } else {
@@ -877,29 +877,51 @@ impl Message {
     }
 
     /// `BytesGenerator(policy).flatten(msg, linesep="\r\n")`, with
-    /// `policy.utf8` for an internationalized envelope.
-    fn flatten(&self, utf8: bool) -> Vec<u8> {
-        let mut out = String::new();
+    /// `policy.utf8` for an internationalized envelope. A folded header
+    /// that fails `verify_generated_headers` is `HeaderWriteError`.
+    fn flatten(&self, utf8: bool) -> Result<Vec<u8>, SendError> {
+        let mut headers = Vec::new();
         let subject = get_unstructured(&self.subject, false)
             .and_then(|tree| fold_header("Subject", tree, utf8));
-        out.push_str(&subject.unwrap_or_else(|| format!("Subject: {}{CRLF}", self.subject)));
+        headers.push(subject.unwrap_or_else(|| format!("Subject: {}{CRLF}", self.subject)));
         for (name, value) in [("From", &self.from), ("To", &self.to)] {
             let folded = get_address_list(value)
                 .and_then(|tree| fold_header(name, tree, utf8))
                 .filter(|folded| utf8 || folded.is_ascii());
-            out.push_str(&folded.unwrap_or_else(|| format!("{name}: {value}{CRLF}")));
+            headers.push(folded.unwrap_or_else(|| format!("{name}: {value}{CRLF}")));
         }
-        out.push_str("Content-Type: text/plain; charset=\"utf-8\"\r\n");
-        out.push_str(&format!("Content-Transfer-Encoding: {}{CRLF}", self.cte));
-        out.push_str("MIME-Version: 1.0\r\n\r\n");
-        let mut bytes = out.into_bytes();
+        headers.push("Content-Type: text/plain; charset=\"utf-8\"\r\n".to_owned());
+        headers.push(format!("Content-Transfer-Encoding: {}{CRLF}", self.cte));
+        headers.push("MIME-Version: 1.0\r\n".to_owned());
+        if !headers.iter().all(|h| verified_header(h)) {
+            return Err(escaped_other("HeaderWriteError"));
+        }
+        let mut bytes = (headers.concat() + CRLF).into_bytes();
         // `_write_lines`: every `\n`-terminated payload line ends in CRLF.
         for line in self.payload.split_inclusive(|b| *b == b'\n') {
             bytes.extend_from_slice(line.strip_suffix(b"\n").unwrap_or(line));
             bytes.extend_from_slice(CRLF.as_bytes());
         }
-        bytes
+        Ok(bytes)
     }
+}
+
+/// `BytesGenerator._write_headers`' `verify_generated_headers` check
+/// (CPython 3.12.14): the folded header ends with the line separator and
+/// has no other line break that is not followed by `WSP`
+/// (`NEWLINE_WITHOUT_FWSP_BYTES`).
+fn verified_header(folded: &str) -> bool {
+    let Some(body) = folded.strip_suffix(CRLF) else {
+        return false;
+    };
+    let body = body.as_bytes();
+    let wsp = |at: usize| matches!(body.get(at), Some(b' ' | b'\t'));
+    !body.iter().enumerate().any(|(i, byte)| match byte {
+        b'\r' if body.get(i + 1) == Some(&b'\n') => i + 2 < body.len() && !wsp(i + 2),
+        b'\r' => i + 1 < body.len() && !wsp(i + 1),
+        b'\n' => i + 1 < body.len() && !wsp(i + 1),
+        _ => false,
+    })
 }
 
 /// `email.contentmanager._encode_text(body, "utf-8", None, policy.default)`.
@@ -1111,11 +1133,7 @@ impl Tok {
                     .iter()
                     .map(|part| match part {
                         Tok::List(Kind::Comment, _) => part.text(),
-                        _ => part
-                            .text()
-                            .replace('\\', "\\\\")
-                            .replace('(', "\\(")
-                            .replace(')', "\\)"),
+                        _ => make_parenthesis_pairs(&part.text()),
                     })
                     .collect();
                 format!("({inner})")
@@ -1146,9 +1164,11 @@ impl Tok {
     fn ew_combine_allowed(&self) -> bool {
         !matches!(self, Tok::List(Kind::DisplayName, _))
     }
+    /// `ValueTerminal` is never FWS; `WhiteSpaceTerminal` (including a
+    /// comment's ctext) is when its own text starts with `WSP`.
     fn startswith_fws(&self) -> bool {
         match self {
-            Tok::Term(_, _, space, _) => *space != Space::Value,
+            Tok::Term(text, _, space, _) => *space != Space::Value && text.starts_with(WSP),
             Tok::List(_, parts) => parts.first().is_some_and(Tok::startswith_fws),
         }
     }
@@ -1165,6 +1185,14 @@ fn quote_string(value: &str) -> String {
 }
 fn make_quoted_pairs(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// `make_parenthesis_pairs`: escape `\`, `(` and `)` inside a comment.
+fn make_parenthesis_pairs(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
 }
 
 /// A parse failure: `Header` is Python's `HeaderParseError` (the caller may
@@ -1925,6 +1953,20 @@ fn refold(tree: Tok, utf8: bool) -> Option<String> {
                     .chain(std::iter::once(Tok::value("\"", "ptext")))
                     .map(Item::Tok)
                     .collect()
+            } else if *kind == Kind::Comment {
+                // A comment keeps its parentheses, and its ctext its
+                // quoted pairs, when split across lines.
+                std::iter::once(Tok::value("(", "ptext"))
+                    .chain(children.iter().map(|p| {
+                        if p.token_type() == "ptext" {
+                            Tok::value(make_parenthesis_pairs(&p.text()), "ptext")
+                        } else {
+                            p.clone()
+                        }
+                    }))
+                    .chain(std::iter::once(Tok::value(")", "ptext")))
+                    .map(Item::Tok)
+                    .collect()
             } else {
                 children.iter().cloned().map(Item::Tok).collect()
             };
@@ -2301,7 +2343,7 @@ mod message_tests {
         }
         let script = format!(
             r#"
-import base64, email.generator, email.utils, io, json
+import base64, email.errors, email.generator, email.utils, io, json
 from email.message import EmailMessage
 out = []
 for subject, sender, recipients in json.loads({cases:?}):
@@ -2320,13 +2362,17 @@ for subject, sender, recipients in json.loads({cases:?}):
     b = io.BytesIO()
     policy = m.policy.clone(utf8=True) if intl else None
     g = email.generator.BytesGenerator(b, policy=policy) if intl else email.generator.BytesGenerator(b)
-    g.flatten(m, linesep="\r\n")
+    try:
+        g.flatten(m, linesep="\r\n")
+    except email.errors.HeaderWriteError:
+        out.append([intl, None])
+        continue
     out.append([intl, base64.b64encode(b.getvalue()).decode()])
 print(json.dumps(out))
 "#,
             cases = Value::Array(cases.clone()).to_string(),
         );
-        let expected: Vec<(bool, String)> =
+        let expected: Vec<(bool, Option<String>)> =
             serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
         let mut mismatches = vec![];
         for (case, (intl, flat)) in cases.iter().zip(expected) {
@@ -2341,13 +2387,18 @@ print(json.dumps(out))
             let rust_intl =
                 !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
             let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl);
-            let expected = crate::pybase64::b64decode(&flat).unwrap();
+            let actual = message.flatten(rust_intl).ok();
+            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
             if rust_intl != intl || actual != expected {
+                let shown = |bytes: &Option<Vec<u8>>| {
+                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
+                        format!("{:?}", String::from_utf8_lossy(b))
+                    })
+                };
                 mismatches.push(format!(
-                    "case {case}\n python: {:?}\n rust:   {:?}",
-                    String::from_utf8_lossy(&expected),
-                    String::from_utf8_lossy(&actual)
+                    "case {case}\n python: {}\n rust:   {}",
+                    shown(&expected),
+                    shown(&actual)
                 ));
             }
         }
@@ -2413,7 +2464,7 @@ print(json.dumps(out))
         for (body, flat) in bodies.iter().zip(expected) {
             let message = Message::new(&config("a@example.com", &recipients), "s", body);
             ctes.insert(message.cte);
-            let actual = message.flatten(false);
+            let actual = message.flatten(false).ok().expect("headers verify");
             let expected = crate::pybase64::b64decode(&flat).unwrap();
             assert_eq!(
                 String::from_utf8_lossy(&actual),
@@ -2447,7 +2498,7 @@ print(json.dumps(out))
             let recipients = [value.to_owned()];
             let flat =
                 Message::new(&config("a@example.com", &recipients), "s", "x\n").flatten(false);
-            let text = String::from_utf8(flat).unwrap();
+            let text = String::from_utf8(flat.ok().expect("headers verify")).unwrap();
             assert!(text.contains(&format!("\r\nTo: {value}\r\n")), "{text}");
         }
     }
@@ -2581,7 +2632,7 @@ print(json.dumps(out))
         let body = "짧은 본문\n";
         let script = format!(
             r#"
-import base64, email.generator, email.utils, io, json
+import base64, email.errors, email.generator, email.utils, io, json
 from email.message import EmailMessage
 out = []
 for subject, sender, recipients in json.loads({cases:?}):
@@ -2599,16 +2650,21 @@ for subject, sender, recipients in json.loads({cases:?}):
         intl = True
     b = io.BytesIO()
     g = email.generator.BytesGenerator(b, policy=m.policy.clone(utf8=True)) if intl else email.generator.BytesGenerator(b)
-    g.flatten(m, linesep="\r\n")
+    try:
+        g.flatten(m, linesep="\r\n")
+    except email.errors.HeaderWriteError:
+        out.append([intl, None])
+        continue
     out.append([intl, base64.b64encode(b.getvalue()).decode()])
 print(json.dumps(out))
 "#,
             cases = Value::Array(cases.clone()).to_string(),
         );
-        let expected: Vec<(bool, String)> =
+        let expected: Vec<(bool, Option<String>)> =
             serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
         let mut mismatches = vec![];
         let mut unsupported = 0;
+        let mut refused = 0;
         for (case, (intl, flat)) in cases.iter().zip(expected) {
             let subject = case[0].as_str().unwrap();
             let sender = case[1].as_str().unwrap();
@@ -2626,19 +2682,33 @@ print(json.dumps(out))
             let rust_intl =
                 !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
             let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl);
-            let expected = crate::pybase64::b64decode(&flat).unwrap();
+            let actual = message.flatten(rust_intl).ok();
+            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
+            refused += usize::from(expected.is_none());
             if rust_intl != intl || actual != expected {
+                let shown = |bytes: &Option<Vec<u8>>| {
+                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
+                        format!("{:?}", String::from_utf8_lossy(b))
+                    })
+                };
                 mismatches.push(format!(
-                    "case {case}\n python: {:?}\n rust:   {:?}",
-                    String::from_utf8_lossy(&expected),
-                    String::from_utf8_lossy(&actual)
+                    "case {case}\n python: {}\n rust:   {}",
+                    shown(&expected),
+                    shown(&actual)
                 ));
             }
         }
         assert_eq!(
             unsupported, 0,
             "generated shapes left the supported grammar"
+        );
+        // CPython 3.12.14 (the 3.12 release CI installs) refuses some of
+        // these folds with `HeaderWriteError`; an older 3.12 writes them.
+        assert!(
+            refused > 0 && refused < cases.len(),
+            "{refused} of {} cases refused: the oracle predates CPython 3.12.14's \
+             verify_generated_headers in BytesGenerator",
+            cases.len()
         );
         assert!(
             mismatches.is_empty(),

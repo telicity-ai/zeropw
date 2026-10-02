@@ -396,6 +396,11 @@ fn email_rendering_follows_python_truthiness_for_loaded_incidents() {
 // is compared separately by `smtp::tests`, since Python may answer it from
 // DNS).
 
+/// A recipient whose `To` fold CPython 3.12.14 refuses with
+/// `HeaderWriteError` (older 3.12 releases write a line without leading
+/// whitespace).
+const LONG_DOMAIN_COMMENT_RECIPIENT: &str = "Admin <a (보안팀)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>";
+
 const EHLO_BASE: &str = "250-fake.example\r\n250-SIZE 1000000\r\n250-8BITMIME\r\n";
 
 fn ehlo_reply(scenario: &str) -> String {
@@ -744,6 +749,20 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
             json!({"recipients": ["a@example.com, b@example.com", "c@example.com"]}),
             Password::None,
         ),
+        // CPython 3.12.14 keeps a comment's parentheses when it folds the
+        // comment onto its own line, and refuses (`HeaderWriteError`,
+        // after EHLO, before MAIL) a fold that leaves a line without
+        // leading whitespace.
+        (
+            "comment_refold",
+            json!({"recipients": ["ops@example.com (a very long comment that goes on and on and on and on and on and on and on)"]}),
+            Password::None,
+        ),
+        (
+            "header_write_refused",
+            json!({"recipients": [LONG_DOMAIN_COMMENT_RECIPIENT]}),
+            Password::None,
+        ),
         (
             "timeout_overflow",
             json!({"timeout_seconds": 1e10}),
@@ -926,11 +945,16 @@ fn incident_delivery_failures_record_what_python_records() {
 /// administrator CLIs report the same error object and exit status
 /// (`OverflowError` from the socket timeout, `UnicodeDecodeError` from a
 /// non-UTF-8 password file, which the CLI prints as Python's
-/// `state_corrupt` handler does).
+/// `state_corrupt` handler does, and CPython 3.12.14's `HeaderWriteError`
+/// for a header fold it refuses).
 #[test]
 fn notify_test_cli_reports_escaping_errors_like_python() {
     let tmp = TempDir::new().unwrap();
-    for case in ["timeout_overflow", "password_non_utf8"] {
+    for case in [
+        "timeout_overflow",
+        "password_non_utf8",
+        "header_write_refused",
+    ] {
         let mut results = vec![];
         for language in ["python", "rust"] {
             let state = tmp.path().join(format!("{case}-{language}"));
@@ -938,7 +962,14 @@ fn notify_test_cli_reports_escaping_errors_like_python() {
             assert_eq!(code, 0, "{language} init");
             let mut config = json!({"host": "127.0.0.1", "port": 9, "mode": "plain",
                 "sender": "zeropw@example.com", "recipients": ["admin@example.com"]});
-            if case == "password_non_utf8" {
+            let mut server = None;
+            if case == "header_write_refused" {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                config["port"] = json!(listener.local_addr().unwrap().port());
+                config["recipients"] = json!([LONG_DOMAIN_COMMENT_RECIPIENT]);
+                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                server = Some((scripted_server(case, listener, Arc::clone(&stop)), stop));
+            } else if case == "password_non_utf8" {
                 let password = tmp.path().join(format!("{case}-{language}.pass"));
                 fs::write(&password, b"synthetic-\xff").unwrap();
                 use std::os::unix::fs::PermissionsExt;
@@ -952,6 +983,10 @@ fn notify_test_cli_reports_escaping_errors_like_python() {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
             results.push(admin_cli(language, &state, &["incident", "notify-test"]));
+            if let Some((server, stop)) = server {
+                stop.store(true, Ordering::SeqCst);
+                server.join().unwrap();
+            }
         }
         assert_ne!(results[0].0, 0, "{case}");
         assert_eq!(results[1], results[0], "{case}");

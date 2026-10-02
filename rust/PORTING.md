@@ -217,7 +217,9 @@ identity, and reproduce that scope.
   differential tests with `crate::oracle::python(...)` for every cross-language format you own
   (JSON bytes, digests, wire bytes, state directory round trips in both directions).
 - Build and test offline: `~/.cargo/bin/cargo test --offline`, `~/.cargo/bin/cargo clippy --offline
-  --all-targets -- -D warnings`, `~/.cargo/bin/cargo fmt`. Use `python3.12` (plain `python3` is 3.9).
+  --all-targets -- -D warnings`, `~/.cargo/bin/cargo fmt`. Use `python3.12` (plain `python3` is 3.9)
+  at the latest 3.12 patch release, which is what CI installs: stdlib behaviour changes between 3.12
+  patch releases (see the `notify header folding (CPython patch level)` row in `DEVIATIONS.md`).
 - Only edit the files of your work unit (plus `DEVIATIONS.md` and new test files). If you truly need a
   new crate, add it to `Cargo.toml` and say so in your report. Do not change `errors.rs`, `secret.rs`,
   `clock.rs`, `oracle.rs`, `lib.rs` — ask the coordinator.
