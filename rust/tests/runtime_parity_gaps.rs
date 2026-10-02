@@ -101,6 +101,49 @@ fn python(script: &str) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn run_shape(run: &Run) -> Value {
+    json!({"state": run.state, "reason": run.reason, "exit_code": run.exit_code})
+}
+
+/// Run script-format fixtures through the original registry so platform
+/// loader rules come from the same Python oracle as the product contract.
+fn python_shebang_shapes() -> Vec<Value> {
+    let output = python(
+        r##"
+import json, tempfile
+from pathlib import Path
+from zeropw.context import Context
+from zeropw.runs import RunRegistry
+
+with tempfile.TemporaryDirectory(prefix="zeropw-shebang-oracle-") as tmp:
+    root = Path(tmp)
+    ctx = Context.initialize(root / "state", "synthetic-admin-passphrase", "synthetic-recovery-passphrase")
+    registry = RunRegistry(ctx, 1024, 0.05)
+    spaced = root / "spaced.sh"
+    spaced.write_bytes(b"#! \t/bin/sh -e\nprintf spaced\n")
+    spaced.chmod(0o700)
+    fixtures = [
+        ("chained.sh", ("#!" + str(spaced) + "\nprintf chained-text-never-read\n").encode()),
+        ("bare.sh", b"#!/bin/sh"),
+        ("bare-spaced.sh", b"#! /bin/sh"),
+        ("bare-argument.sh", b"#!/bin/sh -e"),
+    ]
+    results = []
+    for name, content in fixtures:
+        path = root / name
+        path.write_bytes(content)
+        path.chmod(0o700)
+        run = registry.create("alice", "conn", "grant", "http", str(path), input_digest="digest")
+        started = registry.start(run, [str(path)], {"PATH": "/usr/bin:/bin"}, str(root), timeout=5)
+        done = registry.wait(started, 8)
+        results.append({"state": done.state, "reason": done.reason, "exit_code": done.exit_code})
+    print(json.dumps(results))
+    registry.shutdown()
+"##,
+    );
+    serde_json::from_str(&output).unwrap()
+}
+
 const SECRET: &str = "synthetic-parity-secret-0123456789";
 
 /// An initialised context holding one bearer HTTP connection (`service`) to
@@ -373,6 +416,7 @@ fn path_search_skips_candidates_the_kernel_refuses() {
 #[test]
 fn shebang_scripts_and_native_programs_still_run() {
     let (temp, _ctx, r) = registry();
+    let expected = python_shebang_shapes();
     let marker = temp.path().join("marker-shebang");
     let script = temp.path().join("tool.sh");
     executable(
@@ -400,21 +444,31 @@ fn shebang_scripts_and_native_programs_still_run() {
         (done.state.as_str(), done.stdout.as_slice()),
         ("completed", b"spaced".as_slice())
     );
-    // The kernel runs `/bin/sh -e spaced.sh chained.sh`: nested interpreters work.
+    // Linux accepts a script as an interpreter; macOS rejects the second
+    // script level. Pin the original registry's result on the current OS.
     let done = launch(&r, &temp, &chained);
-    assert_eq!(
-        (done.state.as_str(), done.stdout.as_slice()),
-        ("completed", b"spaced".as_slice())
-    );
-    // A short `#!/bin/sh` with no newline: the kernel's zero padding ends
-    // the name, so it runs (measured with python3.12: exit 0).
-    let bare = temp.path().join("bare.sh");
-    executable(&bare, b"#!/bin/sh");
-    let done = launch(&r, &temp, &bare);
-    assert_eq!(
-        (done.state.as_str(), done.exit_code),
-        ("completed", Some(0))
-    );
+    assert_eq!(run_shape(&done), expected[0]);
+    if done.state == "completed" {
+        assert_eq!(done.stdout, b"spaced");
+    } else {
+        assert!(done.stdout.is_empty() && done.stderr.is_empty());
+    }
+    // XNU rejects newline-free interpreter directives that Linux accepts.
+    // Exercise several shapes so this remains a loader-class comparison,
+    // rather than a special case for the exact bytes in QA-MACOS-EXEC-01.
+    for (index, (name, content)) in [
+        ("bare.sh", b"#!/bin/sh".as_slice()),
+        ("bare-spaced.sh", b"#! /bin/sh".as_slice()),
+        ("bare-argument.sh", b"#!/bin/sh -e".as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let script = temp.path().join(name);
+        executable(&script, content);
+        let done = launch(&r, &temp, &script);
+        assert_eq!(run_shape(&done), expected[index + 1], "{name}");
+    }
     let run = queued(&r, "/bin/sh");
     let started = r
         .start(

@@ -1,8 +1,27 @@
 //! Agent CLI help stays offline and matches the original argparse surface.
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::Command;
+
+fn python_oracle() -> PathBuf {
+    let configured = std::env::var_os("ZEROPW_PYTHON").unwrap_or_else(|| "python3.12".into());
+    let candidate = PathBuf::from(&configured);
+    if candidate.components().count() > 1 {
+        return candidate;
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(&candidate))
+        .find(|path| {
+            path.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+            })
+        })
+        .unwrap_or_else(|| panic!("cannot resolve Python oracle {configured:?} before env_clear"))
+}
 
 #[test]
 fn root_and_each_subcommand_help_match_python_without_gateway_config() {
+    let python_oracle = python_oracle();
     for args in [
         vec!["-h"],
         vec!["--help"],
@@ -12,11 +31,11 @@ fn root_and_each_subcommand_help_match_python_without_gateway_config() {
         vec!["status", "--help"],
         vec!["cancel", "--help"],
     ] {
-        let python = Command::new("python3.12")
+        let python = Command::new(&python_oracle)
             .args(["-m", "zeropw.agent_cli"])
             .args(&args)
             .env_clear()
-            .env("PATH", "/Users/ys/.local/bin:/usr/bin:/bin")
+            .env("PATH", "/usr/bin:/bin")
             .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
             .output()
             .unwrap();

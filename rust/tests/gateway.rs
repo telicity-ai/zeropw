@@ -3974,15 +3974,10 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     );
 }
 
-/// Confirms the CN-fallback difference recorded in `DEVIATIONS.md`'s
-/// "gateway (TLS stack)" row (finding F-19): OpenSSL (Python's `ssl` module,
-/// what `zeropw/gateway.py` actually runs on) accepts a certificate whose
-/// Common Name matches the requested hostname even when the certificate
-/// carries no Subject Alternative Name at all (a legacy fallback OpenSSL
-/// still honours); `rustls`/`webpki` is SAN-only per RFC 6125 and always
-/// rejects such a certificate, even though the CN is exactly right.
+/// OpenSSL's legacy Common Name fallback is DNS-only.  A CN spelling an IP
+/// address does not satisfy IP identity verification when SAN is absent.
 #[test]
-fn tls_cert_with_matching_cn_but_no_san_is_rejected() {
+fn tls_cert_with_ip_cn_but_no_san_is_rejected() {
     let t = GatewayTest::new();
     t.ctx
         .vault
@@ -4030,7 +4025,7 @@ fn tls_cert_with_matching_cn_but_no_san_is_rejected() {
         (result.status, result.reason.as_deref()),
         (502, Some("upstream_tls_failed"))
     );
-    assert_eq!(good.requests().len(), 0);
+    assert!(good.requests().is_empty());
 }
 
 #[test]

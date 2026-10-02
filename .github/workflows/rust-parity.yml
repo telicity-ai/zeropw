@@ -1,0 +1,80 @@
+name: Rust parity candidate verification
+on:
+  push:
+    branches: [codex/rust-full-parity]
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        if: runner.os == 'Linux'
+        with:
+          python-version: '3.12.14'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: runner.os == 'macOS'
+        with:
+          repository: python/cpython
+          ref: 2abcf904b8dac8c999d2b3aac76681abb333798a
+          path: audit-cpython
+          persist-credentials: false
+      - name: Build exact CPython 3.12.14 oracle on macOS ARM
+        if: runner.os == 'macOS'
+        id: oracle
+        shell: bash
+        run: |
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+          cd audit-cpython
+          test "$(git rev-parse HEAD)" = 2abcf904b8dac8c999d2b3aac76681abb333798a
+          ./configure --prefix="$RUNNER_TEMP/zeropw-python31214" --without-ensurepip --with-openssl="$(brew --prefix openssl@3)" --with-openssl-rpath=auto
+          make -j3
+          make install
+          echo "$RUNNER_TEMP/zeropw-python31214/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zeropw-python31214/bin/python3.12" -c 'import sys, ssl; assert sys.version_info[:3] == (3,12,14); print(sys.version); print(ssl.OPENSSL_VERSION)'
+      - name: Record exact source and tools
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git rev-parse HEAD
+          git status --porcelain
+          rustc --version
+          cargo --version
+          python3.12 --version
+          ssh -V
+      - name: Formatting and strict Clippy
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - name: Library and binary tests
+        if: success() || failure()
+        run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
+      - name: Affected differential tests and native process E2E
+        if: success() || failure()
+        shell: bash
+        run: |
+          python3.12 - <<'PYCODE'
+          import subprocess,sys
+          targets=['runtime_parity_gaps','agent_help','gateway_tls_parity','gateway','response_parity_gaps','native_cli_e2e','astra_cli_runtime_round2','astra_cleanup_publication_order']
+          failed=[]
+          for target in targets:
+              print('AUDIT_BEGIN='+target,flush=True)
+              r=subprocess.run(['cargo','test','--locked','--manifest-path','rust/Cargo.toml','--test',target,'--','--nocapture'])
+              print('AUDIT_END='+target+' exit='+str(r.returncode),flush=True)
+              if r.returncode: failed.append(target)
+          print('AUDIT_FAILED='+repr(failed),flush=True)
+          sys.exit(bool(failed))
+          PYCODE

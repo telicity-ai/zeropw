@@ -4,7 +4,8 @@
 //! See `zeropw/gateway.py`'s module docstring for the security scope and
 //! documented limitations (docs/security-design.md §2, §4, §5, §6); this
 //! port reproduces the same behaviour with blocking `std` I/O and threads
-//! (no async runtime) and `rustls` for TLS, per `rust/PORTING.md`.
+//! (no async runtime) and OpenSSL for the gateway TLS path, matching
+//! Python's `ssl` provider and verification policy.
 //!
 //! ## Seams (PORTING.md §3.4)
 //!
@@ -1720,23 +1721,16 @@ fn host_header(connection: &Connection) -> String {
 
 // ---------------------------------------------------------- HTTP transport
 
-static PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
-fn ensure_crypto_provider() {
-    PROVIDER_INIT.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
 enum UpstreamStream {
     Plain(TcpStream),
-    Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
+    Tls(Box<openssl::ssl::SslStream<TcpStream>>),
 }
 
 impl UpstreamStream {
     fn raw(&self) -> &TcpStream {
         match self {
             UpstreamStream::Plain(s) => s,
-            UpstreamStream::Tls(s) => &s.sock,
+            UpstreamStream::Tls(s) => s.get_ref(),
         }
     }
     fn set_timeouts(&self, dur: Option<Duration>) {
@@ -1805,281 +1799,70 @@ fn classify_handshake_error(e: &std::io::Error) -> &'static str {
     }
 }
 
-/// OpenSSL (Python's `ssl`) accepts a self-signed CA certificate from
-/// `ca_file` presented as the server's own certificate (`openssl req -x509`
-/// sets `CA:TRUE` by default); webpki refuses any CA certificate as an end
-/// entity (`CaUsedAsEndEntity`). Only for that refusal, and only when the
-/// presented certificate is byte-identical to one pinned in the connection's
-/// `ca_file`, the checks OpenSSL applies to a trusted self-signed leaf are
-/// made here instead: subject-alternative-name match (no CN fallback, see
-/// the F-19 row), validity period, and the TLS server purpose (extended key
-/// usage and key usage). The handshake signature is always verified.
-#[derive(Debug)]
-struct PinnedCaVerifier {
-    inner: Arc<rustls::client::WebPkiServerVerifier>,
-    pinned: Vec<rustls_pki_types::CertificateDer<'static>>,
-}
-
-impl rustls::client::danger::ServerCertVerifier for PinnedCaVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &rustls_pki_types::CertificateDer<'_>,
-        intermediates: &[rustls_pki_types::CertificateDer<'_>],
-        server_name: &rustls_pki_types::ServerName<'_>,
-        ocsp_response: &[u8],
-        now: rustls_pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        let error = match self.inner.verify_server_cert(
-            end_entity,
-            intermediates,
-            server_name,
-            ocsp_response,
-            now,
-        ) {
-            Ok(verified) => return Ok(verified),
-            Err(error) => error,
-        };
-        let ca_as_end_entity = matches!(
-            &error,
-            rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other))
-                if other.0.to_string() == "CaUsedAsEndEntity"
-        );
-        if !ca_as_end_entity
-            || !self
-                .pinned
-                .iter()
-                .any(|c| c.as_ref() == end_entity.as_ref())
-        {
-            return Err(error);
-        }
-        let parsed = rustls::server::ParsedCertificate::try_from(end_entity)?;
-        rustls::client::verify_server_name(&parsed, server_name)?;
-        pinned_leaf_usable(end_entity.as_ref(), now.as_secs())
-            .map_err(rustls::Error::InvalidCertificate)?;
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.inner.verify_tls12_signature(message, cert, dss)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &rustls_pki_types::CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.inner.verify_tls13_signature(message, cert, dss)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.inner.supported_verify_schemes()
-    }
-}
-
-/// One DER TLV: `(tag, contents)`, advancing `input` (definite lengths only).
-fn der_read<'a>(input: &mut &'a [u8]) -> Option<(u8, &'a [u8])> {
-    let (&tag, rest) = input.split_first()?;
-    let (&first, rest) = rest.split_first()?;
-    let (length, rest) = if first < 0x80 {
-        (usize::from(first), rest)
-    } else {
-        let count = usize::from(first & 0x7f);
-        if count == 0 || count > 4 {
-            return None;
-        }
-        let (bytes, rest) = rest.split_at_checked(count)?;
-        let length = bytes
-            .iter()
-            .fold(0usize, |acc, b| (acc << 8) | usize::from(*b));
-        (length, rest)
-    };
-    let (contents, rest) = rest.split_at_checked(length)?;
-    *input = rest;
-    Some((tag, contents))
-}
-
-/// `UTCTime`/`GeneralizedTime` (`...Z`) as seconds since the Unix epoch.
-fn der_time(tag: u8, value: &[u8]) -> Option<i64> {
-    let digits = |range: std::ops::Range<usize>| -> Option<i64> {
-        let text = std::str::from_utf8(value.get(range)?).ok()?;
-        text.bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| text.parse().ok())
-            .flatten()
-    };
-    let (year, rest) = match (tag, value.len()) {
-        (0x17, 13) => {
-            let year = digits(0..2)?;
-            (if year >= 50 { 1900 + year } else { 2000 + year }, 2)
-        }
-        (0x18, 15) => (digits(0..4)?, 4),
-        _ => return None,
-    };
-    if value.last() != Some(&b'Z') {
-        return None;
-    }
-    let field = |i: usize| digits(rest + 2 * i..rest + 2 * i + 2);
-    let (month, day, hour, minute, second) =
-        (field(0)?, field(1)?, field(2)?, field(3)?, field(4)?);
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 59
-    {
-        return None;
-    }
-    // Days from the civil date (proleptic Gregorian).
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
-    Some(days * 86400 + hour * 3600 + minute * 60 + second)
-}
-
-/// The checks OpenSSL's `X509_verify_cert` makes on a trusted self-signed
-/// server certificate that webpki does not reach for a CA end entity:
-/// `check_cert_time` and `X509_PURPOSE_SSL_SERVER` (`xku_reject(XKU_SSL_SERVER
-/// | XKU_SGC)`, `ku_reject(digitalSignature | keyEncipherment | keyAgreement)`).
-fn pinned_leaf_usable(der: &[u8], now: u64) -> Result<(), rustls::CertificateError> {
-    use rustls::CertificateError as E;
-    const EKU: &[u8] = &[0x55, 0x1d, 0x25];
-    const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
-    const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
-    // serverAuth, Netscape SGC, Microsoft SGC.
-    const SERVER_PURPOSES: &[&[u8]] = &[
-        &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01],
-        &[0x60, 0x86, 0x48, 0x01, 0x86, 0xf8, 0x42, 0x04, 0x01],
-        &[0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x0a, 0x03, 0x03],
-    ];
-    let bad = || E::BadEncoding;
-    let mut outer = der;
-    let (0x30, mut certificate) = der_read(&mut outer).ok_or_else(bad)? else {
-        return Err(bad());
-    };
-    let (0x30, mut tbs) = der_read(&mut certificate).ok_or_else(bad)? else {
-        return Err(bad());
-    };
-    // [0] version (optional), then serialNumber.
-    if der_read(&mut tbs).ok_or_else(bad)?.0 == 0xa0 {
-        der_read(&mut tbs).ok_or_else(bad)?;
-    }
-    for _ in 0..2 {
-        der_read(&mut tbs).ok_or_else(bad)?; // signature, issuer
-    }
-    let (0x30, mut validity) = der_read(&mut tbs).ok_or_else(bad)? else {
-        return Err(bad());
-    };
-    let mut time = || {
-        let (tag, value) = der_read(&mut validity)?;
-        der_time(tag, value)
-    };
-    let (not_before, not_after) = (time().ok_or_else(bad)?, time().ok_or_else(bad)?);
-    let now = i64::try_from(now).unwrap_or(i64::MAX);
-    if now < not_before {
-        return Err(E::NotValidYet);
-    }
-    if now > not_after {
-        return Err(E::Expired);
-    }
-    let mut extensions: &[u8] = &[];
-    while let Some((tag, value)) = der_read(&mut tbs) {
-        if tag == 0xa3 {
-            let mut wrapped = value;
-            let (0x30, list) = der_read(&mut wrapped).ok_or_else(bad)? else {
-                return Err(bad());
-            };
-            extensions = list;
-        }
-    }
-    let mut is_ca = false;
-    while !extensions.is_empty() {
-        let (0x30, mut extension) = der_read(&mut extensions).ok_or_else(bad)? else {
-            return Err(bad());
-        };
-        let (0x06, oid) = der_read(&mut extension).ok_or_else(bad)? else {
-            return Err(bad());
-        };
-        let mut next = der_read(&mut extension).ok_or_else(bad)?;
-        if next.0 == 0x01 {
-            next = der_read(&mut extension).ok_or_else(bad)?; // critical
-        }
-        let (0x04, mut value) = next else {
-            return Err(bad());
-        };
-        if oid == EKU {
-            let (0x30, mut purposes) = der_read(&mut value).ok_or_else(bad)? else {
-                return Err(bad());
-            };
-            let mut allowed = false;
-            while let Some((tag, purpose)) = der_read(&mut purposes) {
-                allowed |= tag == 0x06 && SERVER_PURPOSES.contains(&purpose);
+/// Map OpenSSL's blocking handshake failures to the same public identities as
+/// Python's eager `SSLContext.wrap_socket`.  Certificate/protocol failures and
+/// an orderly EOF are SSL failures; socket timeouts and transport failures
+/// retain the identities used by `_open_connection`.
+fn classify_openssl_handshake_error(
+    error: &openssl::ssl::HandshakeError<TcpStream>,
+) -> &'static str {
+    use openssl::ssl::{ErrorCode, HandshakeError};
+    match error {
+        HandshakeError::WouldBlock(_) => "upstream_timeout",
+        HandshakeError::SetupFailure(_) => "upstream_tls_failed",
+        HandshakeError::Failure(mid) => {
+            let error = mid.error();
+            if let Some(io) = error.io_error() {
+                return classify_handshake_error(io);
             }
-            if !allowed {
-                return Err(E::InvalidPurpose);
+            match error.code() {
+                ErrorCode::SSL | ErrorCode::ZERO_RETURN => "upstream_tls_failed",
+                ErrorCode::WANT_READ | ErrorCode::WANT_WRITE => "upstream_timeout",
+                _ => "upstream_unreachable",
             }
-        } else if oid == KEY_USAGE {
-            let (0x03, bits) = der_read(&mut value).ok_or_else(bad)? else {
-                return Err(bad());
-            };
-            // digitalSignature (0x80), keyEncipherment (0x20), keyAgreement (0x08).
-            if bits.get(1).is_none_or(|first| first & 0xa8 == 0) {
-                return Err(E::InvalidPurpose);
-            }
-        } else if oid == BASIC_CONSTRAINTS {
-            let (0x30, mut constraints) = der_read(&mut value).ok_or_else(bad)? else {
-                return Err(bad());
-            };
-            is_ca = matches!(der_read(&mut constraints), Some((0x01, [0xff])));
         }
     }
-    // Reached only for webpki's `CaUsedAsEndEntity`: anything else is not
-    // the case this exception exists for.
-    if is_ca { Ok(()) } else { Err(bad()) }
 }
 
-fn build_tls_config(ca_file: Option<&str>) -> Result<Arc<rustls::ClientConfig>, UpstreamFailure> {
-    ensure_crypto_provider();
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs().certs {
-        let _ = roots.add(cert);
-    }
-    let mut pinned = Vec::new();
+fn build_tls_connector(
+    ca_file: Option<&str>,
+) -> Result<openssl::ssl::SslConnector, UpstreamFailure> {
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+    use openssl::x509::verify::X509VerifyFlags;
+
+    // CPython 3.12's `_DEFAULT_CIPHERS` used by `create_default_context`.
+    // TLS 1.3 ciphers are provider defaults on both paths and are not
+    // controlled by this pre-1.3 cipher-list API.
+    const PYTHON_DEFAULT_CIPHERS: &str = "@SECLEVEL=2:ECDH+AESGCM:ECDH+CHACHA20:\
+        ECDH+AES:ECDH+CAMELLIA:DHE+AESGCM:DHE+CHACHA20:DHE+AES:\
+        DHE+CAMELLIA:!aNULL:!eNULL:!MD5:!DSS";
+
+    let mut builder = SslConnector::builder(SslMethod::tls_client())
+        .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
+    builder.set_verify(SslVerifyMode::PEER);
+    builder
+        .set_min_proto_version(Some(SslVersion::TLS1_2))
+        .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
+    builder
+        .set_cipher_list(PYTHON_DEFAULT_CIPHERS)
+        .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
+    builder
+        .verify_param_mut()
+        .set_flags(X509VerifyFlags::TRUSTED_FIRST)
+        .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
+    // `ssl.create_default_context()` first loads OpenSSL's default trust
+    // paths, then `load_verify_locations(cafile=...)` adds the connection's
+    // anchors.  Use the same provider and operations instead of duplicating
+    // X.509 purpose, hostname, algorithm and trust-store policy in Rust.
+    builder
+        .set_default_verify_paths()
+        .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
     if let Some(path) = ca_file {
-        let file =
-            std::fs::File::open(path).map_err(|_| UpstreamFailure::error("ca_file_unavailable"))?;
-        let mut reader = std::io::BufReader::new(file);
-        let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
-            .collect::<Result<Vec<_>, _>>()
+        builder
+            .set_ca_file(path)
             .map_err(|_| UpstreamFailure::error("ca_file_unavailable"))?;
-        if certs.is_empty() {
-            return Err(UpstreamFailure::error("ca_file_unavailable"));
-        }
-        for cert in certs {
-            roots
-                .add(cert.clone())
-                .map_err(|_| UpstreamFailure::error("ca_file_unavailable"))?;
-            pinned.push(cert);
-        }
     }
-    let roots = Arc::new(roots);
-    let builder = rustls::ClientConfig::builder();
-    let config = match rustls::client::WebPkiServerVerifier::builder(roots.clone()).build() {
-        Ok(inner) if !pinned.is_empty() => builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(PinnedCaVerifier { inner, pinned }))
-            .with_no_client_auth(),
-        _ => builder.with_root_certificates(roots).with_no_client_auth(),
-    };
-    Ok(Arc::new(config))
+    Ok(builder.build())
 }
 
 fn open_connection(
@@ -2094,8 +1877,8 @@ fn open_connection(
     // `conn.connect()`; build the TLS config here, before the TCP connect,
     // so a bad `ca_file` for an otherwise-unreachable target still surfaces
     // as `ca_file_unavailable`, not `upstream_unreachable` (finding F-R2-9).
-    let tls_config = if target.scheme == "https" {
-        Some(build_tls_config(target.ca_file.as_deref())?)
+    let tls_connector = if target.scheme == "https" {
+        Some(build_tls_connector(target.ca_file.as_deref())?)
     } else {
         None
     };
@@ -2106,22 +1889,15 @@ fn open_connection(
     let tcp = TcpStream::connect_timeout(&sockaddr, timeout)
         .map_err(|e| UpstreamFailure::error(classify_connect_error(&e)))?;
     let _ = tcp.set_nodelay(true);
-    if let Some(config) = tls_config {
-        let server_name = rustls_pki_types::ServerName::try_from(target.host.clone())
-            .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
-        let conn = rustls::ClientConnection::new(config, server_name)
-            .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
-        let mut stream = rustls::StreamOwned::new(conn, tcp);
-        stream.sock.set_read_timeout(Some(timeout)).ok();
-        stream.sock.set_write_timeout(Some(timeout)).ok();
-        // Force the handshake now (Python's `wrap_socket` is eager), so the
-        // self-referential peer check that follows sees the same state
-        // Python does: TLS established, HTTP request not yet written.
-        while stream.conn.is_handshaking() {
-            if let Err(e) = stream.conn.complete_io(&mut stream.sock) {
-                return Err(UpstreamFailure::error(classify_handshake_error(&e)));
-            }
-        }
+    if let Some(connector) = tls_connector {
+        tcp.set_read_timeout(Some(timeout)).ok();
+        tcp.set_write_timeout(Some(timeout)).ok();
+        // `connect` performs the handshake eagerly and configures OpenSSL's
+        // DNS/IP identity verification for the configured host while the
+        // socket itself remains pinned to the address already authorised.
+        let stream = connector
+            .connect(&target.host, tcp)
+            .map_err(|e| UpstreamFailure::error(classify_openssl_handshake_error(&e)))?;
         return Ok(UpstreamStream::Tls(Box::new(stream)));
     }
     tcp.set_read_timeout(Some(timeout)).ok();

@@ -88,12 +88,23 @@ impl Gateway {
 
     /// `GET /me` over HTTPS to `127.0.0.1:port` as `alice`.
     fn relay(&self, id: &str, port: u16, ca_file: Option<&Path>) -> (u16, Option<String>) {
+        self.relay_host(id, "127.0.0.1", port, ca_file, false)
+    }
+
+    fn relay_host(
+        &self,
+        id: &str,
+        host: &str,
+        port: u16,
+        ca_file: Option<&Path>,
+        allow_private_network: bool,
+    ) -> (u16, Option<String>) {
         let target = HttpTarget::new(
             "https",
-            "127.0.0.1",
+            host,
             i64::from(port),
             ca_file.map(|p| p.display().to_string()),
-            false,
+            allow_private_network,
         )
         .unwrap();
         let connection = Connection::new(
@@ -121,7 +132,7 @@ impl Gateway {
             .policy
             .create_grant("alice", id, Some(3600), None)
             .unwrap();
-        let result = gateway::relay_for_caller(
+        let result = gateway::relay_for_caller_with_resolver(
             &self.ctx,
             "alice",
             id,
@@ -130,6 +141,7 @@ impl Gateway {
             &Headers::new(),
             b"",
             None,
+            Arc::new(|_, _| Ok(vec!["127.0.0.1".parse().unwrap()])),
         );
         (result.status, result.reason)
     }
@@ -169,6 +181,47 @@ fn python_relays(cases: &[(String, u16, Option<PathBuf>)]) -> Vec<(u16, Option<S
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+fn python_relay_host(host: &str, port: u16, ca_file: &Path) -> (u16, Option<String>) {
+    let script = format!(
+        r#"
+import tempfile
+from pathlib import Path
+from zeropw import gateway, policy as P
+from zeropw.context import Config, Context
+tmp = tempfile.TemporaryDirectory()
+ctx = Context.initialize(Path(tmp.name) / "state", "synthetic-admin-passphrase",
+    "synthetic-recovery-passphrase", Config(upstream_timeout=1.0))
+ctx.projects.create("demo")
+ctx.vault.put_secret("key", "api_key", {secret:?}.encode(), "demo", "dev")
+ctx.policy.create_principal("alice")
+target = P.HttpTarget("https", {host:?}, {port}, {ca:?}, True)
+conn = P.Connection(id="host-case", project="demo", environment="dev", service="api", kind="http",
+    secret_id="key", secret_version=None, description="", http_target=target,
+    http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(), ssh_target=None, cli=None,
+    policy_version=0, status="active", created_at="", updated_at="")
+ctx.policy.create_connection(conn)
+ctx.policy.create_grant("alice", "host-case", 3600, None)
+old = gateway._getaddrinfo
+gateway._getaddrinfo = lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", {port}))]
+try:
+    result = gateway.relay_for_caller(ctx, "alice", "host-case", "GET", "/me", {{}}, b"")
+finally:
+    gateway._getaddrinfo = old
+print(result.status)
+print(result.reason or "")
+"#,
+        secret = SECRET,
+        host = host,
+        port = port,
+        ca = ca_file.display().to_string(),
+    );
+    let output = python(&script);
+    let mut lines = output.lines();
+    let status = lines.next().unwrap().parse().unwrap();
+    let reason = lines.next().filter(|s| !s.is_empty()).map(str::to_string);
+    (status, reason)
 }
 
 fn server_config(cert_der: Vec<u8>, key_der: Vec<u8>) -> Arc<rustls::ServerConfig> {
@@ -325,11 +378,21 @@ fn openssl(args: &[&str]) -> bool {
 /// `tests/test_gateway.py` makes them (`x509 -req -days N`, so an expired
 /// one can be made with OpenSSL 3.0 too).
 fn openssl_certificate(dir: &TempDir, name: &str, ext: &str, days: &str) -> (PathBuf, Issued) {
+    openssl_certificate_with_cn(dir, name, "127.0.0.1", ext, days)
+}
+
+fn openssl_certificate_with_cn(
+    dir: &TempDir,
+    name: &str,
+    common_name: &str,
+    ext: &str,
+    days: &str,
+) -> (PathBuf, Issued) {
     let cnf = dir.path().join(format!("{name}.cnf"));
     std::fs::write(
         &cnf,
         format!(
-            "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = 127.0.0.1\n[ext]\n{ext}\n"
+            "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = {common_name}\n[ext]\n{ext}\n"
         ),
     )
     .unwrap();
@@ -619,12 +682,10 @@ fn handshake_failures_map_like_python() {
     assert_eq!(actual, expected);
 }
 
-/// The residual recorded in `DEVIATIONS.md` (TLS pinned-CA row, (b)): for an
-/// ordinary `CA:FALSE` leaf webpki ignores key usage and accepts only
-/// serverAuth in an extended key usage, where OpenSSL refuses a leaf without
-/// a TLS key-usage bit and accepts an SGC purpose. Measured, not assumed.
+/// Ordinary `CA:FALSE` leaves receive OpenSSL's own SSL-server purpose
+/// checks, including key usage and the legacy SGC EKU accepted by Python.
 #[test]
-fn non_ca_leaf_purpose_differences_are_the_recorded_residual() {
+fn non_ca_leaf_purpose_decisions_match_python() {
     if !openssl(&["version"]) {
         panic!("openssl binary not available: the measurement cannot run");
     }
@@ -650,5 +711,124 @@ fn non_ca_leaf_purpose_differences_are_the_recorded_residual() {
         .collect();
     let refused = (502, Some("upstream_tls_failed".to_string()));
     assert_eq!(python, vec![refused.clone(), (200, None)]);
-    assert_eq!(rust, vec![(200, None), refused]);
+    assert_eq!(rust, python);
+    assert!(fakes[0].requests().is_empty());
+    assert_eq!(fakes[1].requests().len(), 2);
+}
+
+/// Python enables OpenSSL's common-name fallback for a DNS hostname when SAN
+/// is absent, but does not apply that legacy fallback to an IP address.
+#[test]
+fn common_name_fallback_matches_python() {
+    if !openssl(&["version"]) {
+        panic!("openssl binary not available: the differential cannot run");
+    }
+    let dir = TempDir::new().unwrap();
+    let (dns_crt, dns_issued) = openssl_certificate_with_cn(
+        &dir,
+        "cn-dns",
+        "upstream.synthetic",
+        "basicConstraints = CA:FALSE\nkeyUsage = digitalSignature",
+        "2",
+    );
+    let dns_fake = serve(&dns_issued);
+    let python_dns = python_relay_host("upstream.synthetic", dns_fake.port(), &dns_crt);
+    let g = Gateway::new();
+    let rust_dns = g.relay_host(
+        "cn-dns",
+        "upstream.synthetic",
+        dns_fake.port(),
+        Some(&dns_crt),
+        true,
+    );
+    assert_eq!(python_dns, (200, None));
+    assert_eq!(rust_dns, python_dns);
+    assert_eq!(dns_fake.requests().len(), 2);
+
+    let (ip_crt, ip_issued) = openssl_certificate(
+        &dir,
+        "cn-ip",
+        "basicConstraints = CA:FALSE\nkeyUsage = digitalSignature",
+        "2",
+    );
+    let ip_fake = serve(&ip_issued);
+    let cases = vec![("cn-ip".to_string(), ip_fake.port(), Some(ip_crt))];
+    let python_ip = python_relays(&cases);
+    let rust_ip = vec![g.relay("cn-ip", ip_fake.port(), cases[0].2.as_deref())];
+    let refused = (502, Some("upstream_tls_failed".to_string()));
+    assert_eq!(python_ip, vec![refused]);
+    assert_eq!(rust_ip, python_ip);
+    assert!(ip_fake.requests().is_empty());
+}
+
+/// The gateway uses the same OpenSSL signature algorithms as Python, so a
+/// P-521 server certificate is verified instead of being rejected merely
+/// because rustls' ring provider does not implement that curve.
+#[test]
+fn p521_server_certificate_matches_python() {
+    if !openssl(&["version"]) {
+        panic!("openssl binary not available: the differential cannot run");
+    }
+    let dir = TempDir::new().unwrap();
+    let name = "p521";
+    let cnf = dir.path().join(format!("{name}.cnf"));
+    std::fs::write(
+        &cnf,
+        "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = 127.0.0.1\n[ext]\nsubjectAltName = IP:127.0.0.1\nbasicConstraints = CA:FALSE\nkeyUsage = digitalSignature\nextendedKeyUsage = serverAuth\n",
+    )
+    .unwrap();
+    let key = dir.path().join(format!("{name}.key"));
+    let csr = dir.path().join(format!("{name}.csr"));
+    let crt = dir.path().join(format!("{name}.crt"));
+    assert!(openssl(&[
+        "genpkey",
+        "-algorithm",
+        "EC",
+        "-pkeyopt",
+        "ec_paramgen_curve:P-521",
+        "-out",
+        key.to_str().unwrap(),
+    ]));
+    assert!(openssl(&[
+        "req",
+        "-new",
+        "-key",
+        key.to_str().unwrap(),
+        "-out",
+        csr.to_str().unwrap(),
+        "-config",
+        cnf.to_str().unwrap(),
+    ]));
+    assert!(openssl(&[
+        "x509",
+        "-req",
+        "-in",
+        csr.to_str().unwrap(),
+        "-signkey",
+        key.to_str().unwrap(),
+        "-out",
+        crt.to_str().unwrap(),
+        "-days",
+        "2",
+        "-extfile",
+        cnf.to_str().unwrap(),
+        "-extensions",
+        "ext",
+    ]));
+
+    // Each gateway gets its own controlled server because this helper is a
+    // separate process and the test deliberately tears it down explicitly.
+    let (mut python_server, python_port) = openssl_upstream(&crt, &key);
+    let python_cases = vec![("p521-python".to_string(), python_port, Some(crt.clone()))];
+    let python = python_relays(&python_cases);
+    let _ = python_server.kill();
+    let _ = python_server.wait();
+
+    let (mut rust_server, rust_port) = openssl_upstream(&crt, &key);
+    let g = Gateway::new();
+    let rust = vec![g.relay("p521-rust", rust_port, Some(&crt))];
+    let _ = rust_server.kill();
+    let _ = rust_server.wait();
+    assert_eq!(python, vec![(200, None)]);
+    assert_eq!(rust, python);
 }

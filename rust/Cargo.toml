@@ -30,6 +30,10 @@ subtle = "2"
 libc = "0.2"
 mio = { version = "1", default-features = false, features = ["os-poll", "os-ext"] }
 socket2 = "0.5"
+dns-lookup = "3"
+idna = "0.5"
+nix = { version = "0.30.1", features = ["process"] }
+openssl = "0.10"
 close_fds = "=0.3.2"
 rustix = { version = "1", features = ["process", "fs", "termios", "system"] }
 tempfile = "3"
