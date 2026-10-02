@@ -29,12 +29,14 @@ pub const POINT_SIZE: usize = 32;
 /// little-endian over 32 bytes.
 pub const BASE_POINT: [u8; POINT_SIZE] = X25519_BASEPOINT_BYTES;
 
-/// A wrong-length scalar or point passed to [`clamp_scalar`] or
-/// [`scalarmult`]. Mirrors the `ValueError` raised by Python's `_as_bytes`
-/// helper (`"{name} must be exactly {SCALAR_SIZE} bytes, got {len}"`); the
-/// message never contains the key material itself. Python additionally
-/// raises `TypeError` for a non-bytes-like argument (e.g. a `str`); that
-/// case cannot arise here, since every argument is already `&[u8]`.
+/// A scalar or point that is too short for [`clamp_scalar`] or has the wrong
+/// length for [`scalarmult`]. The message never contains the key material
+/// itself. Python's `_as_bytes` gives `scalarmult` an exact-length
+/// `ValueError`, while `clamp_scalar` lets an `IndexError` escape for fewer
+/// than 32 bytes; PORTING.md section 3.5 permits Rust to return this closest
+/// handled error for that built-in exception. Python additionally raises
+/// `TypeError` for a non-bytes-like argument (e.g. a `str`); that case cannot
+/// arise here, since every argument is already `&[u8]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizeError(String);
 
@@ -84,24 +86,29 @@ fn check_len(name: &str, data: &[u8]) -> Result<[u8; SCALAR_SIZE], SizeError> {
     })
 }
 
-/// Port of `clamp_scalar`: apply the RFC 7748 section 5 clamping to a
-/// 32-byte scalar.
+/// Port of `clamp_scalar`: apply the RFC 7748 section 5 clamping to bytes 0
+/// and 31, then represent Python's `int.from_bytes(k, "little")` result as
+/// secret, little-endian bytes.
 ///
-/// Python's `clamp_scalar` returns the clamped value as an `int` (there is
-/// no size-agnostic bignum in Rust's `std`); this returns the same 255-bit
-/// value's little-endian byte encoding instead, which every caller in this
-/// module and its tests treats identically to Python's `int.from_bytes(...,
-/// "little")` (see `DEVIATIONS.md`). Python's own `clamp_scalar` has no
-/// length check (a non-32-byte `raw` either `IndexError`s or silently
-/// mis-clamps); this rejects a wrong-length input with [`SizeError`] instead,
-/// per this crate's rule against panicking or silently misbehaving on
-/// untrusted input.
-pub fn clamp_scalar(raw: &[u8]) -> Result<[u8; SCALAR_SIZE], SizeError> {
-    let mut k = check_len("raw", raw)?;
+/// Python accepts every input of at least 32 bytes and includes bytes beyond
+/// index 31 in the arbitrary-precision integer. Keeping the full byte string
+/// encodes the same integer while retaining its input width (including
+/// harmless zero bytes at the most-significant end), and avoids exposing
+/// scalar material through a public `Vec<u8>`. Inputs shorter than 32 bytes
+/// return [`SizeError`] rather than allowing Python's built-in `IndexError`
+/// to escape, as permitted by PORTING.md section 3.5.
+pub fn clamp_scalar(raw: &[u8]) -> Result<SecretBytes, SizeError> {
+    if raw.len() < SCALAR_SIZE {
+        return Err(SizeError(format!(
+            "raw must be at least {SCALAR_SIZE} bytes, got {}",
+            raw.len()
+        )));
+    }
+    let mut k = raw.to_vec();
     k[0] &= 248;
     k[31] &= 127;
     k[31] |= 64;
-    Ok(k)
+    Ok(SecretBytes::new(k))
 }
 
 /// Port of `scalarmult`: `X25519(k, u)`, the Diffie-Hellman function of RFC
@@ -326,17 +333,80 @@ mod tests {
     fn clamp_scalar_matches_generate_private_clamping() {
         let raw = [0xffu8; 32];
         let clamped = clamp_scalar(&raw).unwrap();
-        assert_eq!(clamped[0] & 0x07, 0);
-        assert_eq!(clamped[31] & 0x80, 0);
-        assert_eq!(clamped[31] & 0x40, 0x40);
-        // Idempotent, like Python's docstring claims.
-        assert_eq!(clamp_scalar(&clamped).unwrap(), clamped);
+        assert_eq!(clamped.expose()[0] & 0x07, 0);
+        assert_eq!(clamped.expose()[31] & 0x80, 0);
+        assert_eq!(clamped.expose()[31] & 0x40, 0x40);
+        // Applying the same bit masks again is idempotent.
+        let reclamped = clamp_scalar(clamped.expose()).unwrap();
+        assert!(reclamped.ct_eq(clamped.expose()));
     }
 
     #[test]
-    fn clamp_scalar_rejects_wrong_length() {
-        assert!(clamp_scalar(b"short").is_err());
-        assert!(clamp_scalar(&[0u8; 33]).is_err());
+    fn clamp_scalar_short_errors_and_crypto_entrypoints_remain_strict() {
+        for len in [0, 1, 31] {
+            assert!(clamp_scalar(&vec![0u8; len]).is_err());
+        }
+
+        let long = [0u8; 33];
+        assert!(clamp_scalar(&long).is_ok());
+        assert!(scalarmult(&long, &BASE_POINT).is_err());
+        assert!(scalarmult(&BASE_POINT, &long).is_err());
+        assert!(public_key(&long).is_err());
+        assert!(matches!(
+            shared_secret(&long, &BASE_POINT),
+            Err(SharedSecretError::Size(_))
+        ));
+        assert!(matches!(
+            shared_secret(&BASE_POINT, &long),
+            Err(SharedSecretError::Size(_))
+        ));
+    }
+
+    #[test]
+    fn oracle_clamp_scalar_matches_python_for_every_length_boundary() {
+        let mut cases = vec![
+            Vec::new(),
+            vec![0xa5],
+            vec![0xa5; 31],
+            vec![0xff; 32],
+            vec![0xff; 33],
+            vec![0xff; 64],
+            vec![0xff; 257],
+        ];
+        let mut high_tail_zero = vec![0xff; 64];
+        high_tail_zero[32..].fill(0);
+        cases.push(high_tail_zero);
+
+        let encoded = cases
+            .iter()
+            .map(hex::encode)
+            .map(|value| format!("'{value}'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let script = format!(
+            "from zeropw.crypto import x25519\n\
+             for encoded in [{encoded}]:\n\
+             \traw = bytes.fromhex(encoded)\n\
+             \ttry:\n\
+             \t\tvalue = x25519.clamp_scalar(raw)\n\
+             \t\tprint(value.to_bytes(len(raw), 'little').hex())\n\
+             \texcept Exception as exc:\n\
+             \t\tprint(type(exc).__name__)"
+        );
+        let python = crate::oracle::python(&script);
+        let python_results = python.lines().collect::<Vec<_>>();
+        assert_eq!(python_results.len(), cases.len());
+
+        for (raw, python_result) in cases.iter().zip(python_results) {
+            match clamp_scalar(raw) {
+                Ok(rust) => {
+                    assert_eq!(hex::encode(rust.expose()), python_result);
+                    let reclamped = clamp_scalar(rust.expose()).unwrap();
+                    assert!(reclamped.ct_eq(rust.expose()));
+                }
+                Err(_) => assert_eq!(python_result, "IndexError"),
+            }
+        }
     }
 
     #[test]
