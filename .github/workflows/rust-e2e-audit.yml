@@ -22,10 +22,23 @@ jobs:
         with:
           ref: 9d91647afe255d827971a1787c7af89a7b2964b6
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          python-version: '3.12.14'
-          check-latest: true
+          repository: python/cpython
+          ref: 2abcf904b8dac8c999d2b3aac76681abb333798a
+          path: audit-cpython
+          persist-credentials: false
+      - name: Build exact CPython 3.12.14 oracle on macOS ARM
+        id: oracle
+        shell: bash
+        run: |
+          cd audit-cpython
+          test "$(git rev-parse HEAD)" = 2abcf904b8dac8c999d2b3aac76681abb333798a
+          ./configure --prefix="$RUNNER_TEMP/zeropw-python31214" --without-ensurepip --with-openssl="$(brew --prefix openssl@3)" --with-openssl-rpath=auto
+          make -j3
+          make install
+          echo "$RUNNER_TEMP/zeropw-python31214/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zeropw-python31214/bin/python3.12" -c 'import sys, ssl; assert sys.version_info[:3] == (3,12,14); print(sys.version); print(ssl.OPENSSL_VERSION)'
       - name: Record exact source and tools
         shell: bash
         run: |
@@ -82,5 +95,5 @@ jobs:
           sys.exit(bool(failed))
           PYCODE
       - name: Library and binary unit tests
-        if: always() && matrix.shard == 0
+        if: always() && steps.oracle.outcome == 'success' && matrix.shard == 0
         run: cargo test --locked --manifest-path rust/Cargo.toml --lib --bins
