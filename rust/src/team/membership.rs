@@ -211,9 +211,9 @@ pub fn author_commit(
     let store = CommitStore::new(ctx.state, env_id);
     let _lock = ctx.state.lock()?;
     let mut hlc = Hlc::new(0, 0);
-    let seq = store.last_seq(&device.fingerprint()?)? + 1;
+    let seq = &store.last_seq(&device.fingerprint()?)? + 1;
     if seq > 1
-        && let Some(previous) = store.get(&device.fingerprint()?, seq - 1)?
+        && let Some(previous) = store.get(&device.fingerprint()?, &seq - 1)?
     {
         hlc.observe(&previous.hlc)?;
     }

@@ -417,12 +417,12 @@ impl Node {
         let fp = self.key.fingerprint().unwrap();
         let last = store.last_seq(&fp).unwrap();
         let mut hlc = Hlc::new(0, 0);
-        hlc.observe(&store.get(&fp, last).unwrap().unwrap().hlc)
+        hlc.observe(&store.get(&fp, &last).unwrap().unwrap().hlc)
             .unwrap();
         commit::sign_commit(
             &self.key,
             &self.env,
-            last + 1,
+            &last + 1,
             &hlc.tick(None),
             &store.vector().unwrap(),
             ops,

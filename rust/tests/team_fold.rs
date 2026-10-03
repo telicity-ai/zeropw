@@ -18,6 +18,7 @@ use zeropw::context::{Config, Context};
 use zeropw::errors::ErrorClass;
 use zeropw::policy::{CONNECTIONS, Connection, HttpAuth, HttpScope, HttpTarget};
 use zeropw::projects;
+use zeropw::pyint::PyInt;
 use zeropw::team::commit::{self as C, Commit};
 use zeropw::team::envelope;
 use zeropw::team::fold::{self as F};
@@ -590,7 +591,11 @@ fn count_is_commits_folded_not_ops_skipped() {
     .unwrap();
     let result = F::fold(&env_id, vec![c1, c2, bad], None, None, None, None).unwrap();
     assert_eq!(result.skipped.len(), 2);
-    let total: i128 = result.vector.values().sum();
+    let total: i128 = result
+        .vector
+        .values()
+        .map(|v| i128::try_from(&v.0).unwrap())
+        .sum();
     assert_eq!(total, 3);
     F::derive_local(
         &result,
@@ -787,7 +792,7 @@ fn no_leak_across_commits_documents_snapshots_state() {
     let commits = vec![c1, c2, c3];
 
     let result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
-    F::save_snapshot(ctx.state, &env_id, 1, &result).unwrap();
+    F::save_snapshot(ctx.state, &env_id, &PyInt::from(1), &result).unwrap();
     F::derive_local(
         &result,
         ctx.state,
@@ -904,10 +909,10 @@ fn derive_local_does_not_panic_with_two_large_author_seq_totals() {
     // whose SUM does not -- the round-2 fix's own shape, still valid.
     result
         .vector
-        .insert("author-a".to_string(), i64::MAX as i128);
+        .insert("author-a".to_string(), PyInt::from(i64::MAX));
     result
         .vector
-        .insert("author-b".to_string(), i64::MAX as i128);
+        .insert("author-b".to_string(), PyInt::from(i64::MAX));
     // Must not panic (the actual assertion): a plain `.unwrap()` propagates
     // any real error as a normal test failure, but a panic inside
     // `derive_local` would abort the test process instead.
@@ -940,21 +945,21 @@ fn derive_local_does_not_panic_with_two_large_author_seq_totals() {
     );
 }
 
-/// Finding H-R3-7's actual reachable boundary: two authors EACH at
-/// `author_seq == i128::MAX` -- unlike the sibling test above (`i64::MAX`,
-/// which fits comfortably inside `i128` and never overflows when summed),
-/// adding two `i128::MAX` values together overflows `i128` itself. This is
-/// exactly the case the round-2 DEVIATIONS.md row wrongly claimed was
-/// already fixed. Must not panic, and the audited `count` must saturate at
-/// `i128::MAX` (the closest representable value to the true,
-/// arbitrary-precision Python sum) rather than wrapping or panicking.
+/// Finding H-R3-7, closed: `derive_local`'s audited `count` is Python's
+/// `sum(fold_result.vector.values())`, an exact int sum at any magnitude --
+/// two authors far beyond `i128` are neither saturated nor wrapped.
 #[test]
-fn derive_local_saturates_instead_of_panicking_at_the_real_i128_max_boundary() {
+fn derive_local_count_is_the_exact_python_sum_beyond_any_fixed_width() {
     let (_tmp, ctx) = setup();
     let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
     let mut result = F::fold(&env_id, vec![c1], None, None, None, None).unwrap();
-    result.vector.insert("author-a".to_string(), i128::MAX);
-    result.vector.insert("author-b".to_string(), i128::MAX);
+    let huge: num_bigint::BigInt = num_bigint::BigInt::from(1) << 200usize;
+    result
+        .vector
+        .insert("author-a".to_string(), PyInt(huge.clone()));
+    result
+        .vector
+        .insert("author-b".to_string(), PyInt(huge.clone()));
     F::derive_local(
         &result,
         ctx.state,
@@ -974,11 +979,8 @@ fn derive_local_saturates_instead_of_panicking_at_the_real_i128_max_boundary() {
         .filter(|r| r.get("event").and_then(Value::as_str) == Some("team_commit_apply"))
         .collect();
     assert_eq!(applies.len(), 1);
-    assert_eq!(
-        applies[0]["count"],
-        json!(i128::MAX),
-        "count must saturate at i128::MAX rather than panic or wrap"
-    );
+    let expected = huge * 2 + 1;
+    assert_eq!(applies[0]["count"], PyInt(expected).value());
 }
 
 // -------------------------------------------------------- DeriveVaultCorrupt

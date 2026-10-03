@@ -2658,7 +2658,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                         .count()
                 })
                 .unwrap_or(0);
-            json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().sum::<i128>(),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
+            json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().fold(crate::pyint::PyInt::zero(),|acc,v|crate::pyint::PyInt(acc.0+&v.0)),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
         }
         "log" => {
             let store = CommitStore::new(ctx.state, &env_id);

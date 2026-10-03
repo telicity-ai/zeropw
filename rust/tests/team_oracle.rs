@@ -34,6 +34,7 @@ use std::process::Command;
 use serde_json::{Map, Value, json};
 use tempfile::{NamedTempFile, TempDir};
 
+use zeropw::pyint::PyInt;
 use zeropw::pyjson::{self, DumpOptions};
 use zeropw::secret::SecretBytes;
 use zeropw::store::StateDir;
@@ -520,7 +521,7 @@ fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
     state.create().unwrap();
 
     let result1 = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
-    F::save_snapshot(&state, &env_id, 1, &result1).unwrap();
+    F::save_snapshot(&state, &env_id, &PyInt::from(1), &result1).unwrap();
 
     let owner = fixed_device(0x10, 0x20); // same fixed seed `build_history()` uses for owner
     let c8 = C::sign_commit(
@@ -688,7 +689,8 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     let record = owner.record().unwrap();
     let env_id = C::new_env_id(&record.fingerprint()).unwrap();
     let gen0 = "0".repeat(16);
-    let huge: i128 = 1_000_000_000_000_000_000_000_000_000_000; // 10**30, far outside i64
+    // 10**60: beyond i64 and i128 alike.
+    let huge = PyInt(format!("1{}", "0".repeat(60)).parse().unwrap());
     let c1 = C::sign_commit(
         &owner,
         &env_id,
@@ -701,7 +703,7 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     let c2 = C::sign_commit(
         &owner,
         &env_id,
-        huge,
+        &huge,
         "2000-0000",
         &BTreeMap::new(),
         vec![json!({"op": "settings.update", "sync_interval_seconds": 1})],
@@ -717,11 +719,6 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     )
     .unwrap();
     assert_eq!(rust_result.vector.get(&record.fingerprint()), Some(&huge));
-    assert_ne!(
-        rust_result.vector.get(&record.fingerprint()),
-        Some(&(i64::MAX as i128)),
-        "must not be clamped to i64::MAX"
-    );
 
     let commits_json = vec![c1.to_dict(), c2.to_dict()];
     let temp = write_json_temp(&json!(commits_json));
@@ -2255,9 +2252,14 @@ except Exception as e:
         "real python3.12 must raise an uncaught TypeError canonicalizing this op"
     );
 
-    let err = Commit::from_dict(&data)
-        .expect_err("Rust must reject the whole commit as malformed, not silently drop the key");
-    assert_eq!(err.reason, "commit_malformed");
+    // Python's `Commit.from_dict` itself succeeds; the uncaught
+    // `TypeError` comes from canonicalization. Rust reports that later
+    // failure as the non-`InvalidInput` uncaught-builtin error, so callers
+    // do not treat it as an ordinary malformed (ignored) message.
+    let err = Commit::from_dict(&data).expect_err("Rust cannot hold a non-string op key");
+    assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+    assert_eq!(err.reason, "team_uncaught_exception");
+    assert_eq!(err.detail, "TypeError");
 }
 
 /// Finding H-6 (`Commit::from_dict`'s `seen` arm vs `zeropw/team/commit.py`
@@ -2290,7 +2292,7 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
     // `seen`), not the wire shape, so this is transparent to a lenient
     // parser and must be ACCEPTED, not `commit_malformed`.
     let mut seen_map = BTreeMap::new();
-    seen_map.insert(record.fingerprint(), 3i128);
+    seen_map.insert(record.fingerprint(), PyInt::from(3));
     let c2 = C::sign_commit(
         &owner,
         &env_id,
@@ -2312,7 +2314,10 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
             "accepted"
         );
         let rust_c2 = Commit::from_dict(&c2_reshaped).expect("seen-as-pairs must parse");
-        assert_eq!(rust_c2.seen.get(&record.fingerprint()), Some(&3));
+        assert_eq!(
+            rust_c2.seen.get(&record.fingerprint()),
+            Some(&PyInt::from(3))
+        );
         let rust_result = C::receive_commit(&store, &rust_c2, 1_000_000, None).unwrap();
         assert_eq!(rust_result, "accepted");
 
@@ -2432,7 +2437,7 @@ fn commit_from_dict_seen_pair_key_hashability_and_collisions_match_python() {
         });
         match Commit::from_dict(&data) {
             Ok(c) => {
-                let mut entries: Vec<(String, i128)> = c.seen.into_iter().collect();
+                let mut entries: Vec<(String, PyInt)> = c.seen.into_iter().collect();
                 entries.sort();
                 format!(
                     "OK {}",
@@ -2573,7 +2578,9 @@ except Exception as exc:
               "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}})
     };
     let err = C::validate_op(&http_base()).unwrap_err();
-    assert_eq!(err.reason, "invalid_path_prefix");
+    assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+    assert_eq!(err.reason, "team_uncaught_exception");
+    assert_eq!(err.detail, "AttributeError");
 }
 
 /// Finding H-R2-9(b), corrected by finding H-R5-3: `HttpAuth.__post_init__`'s
@@ -2600,6 +2607,10 @@ fn header_name_and_basic_username_truthy_non_string_is_pythons_uncaught_typeerro
         (json!({"mode": "header", "header_name": 5}), "header_name"),
         (
             json!({"mode": "header", "header_name": true}),
+            "header_name",
+        ),
+        (
+            json!({"mode": "header", "header_name": ["X-Foo"]}),
             "header_name",
         ),
         (
@@ -2637,14 +2648,16 @@ except Exception as exc:
               "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
               "http_auth": auth, "http_scope": {"methods": ["GET"]}})
     };
-    let err =
-        C::validate_op(&http_auth_base(json!({"mode": "header", "header_name": 5}))).unwrap_err();
-    assert_eq!(err.reason, "invalid_header_name");
-    let err = C::validate_op(&http_auth_base(
+    for auth in [
+        json!({"mode": "header", "header_name": 5}),
+        json!({"mode": "header", "header_name": ["X-Foo"]}),
         json!({"mode": "basic", "basic_username": 5}),
-    ))
-    .unwrap_err();
-    assert_eq!(err.reason, "invalid_basic_username");
+    ] {
+        let err = C::validate_op(&http_auth_base(auth)).unwrap_err();
+        assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "team_uncaught_exception");
+        assert_eq!(err.detail, "TypeError");
+    }
 }
 
 /// Finding H-R5-3 (`build_http_auth`'s `basic_username` check vs
@@ -2806,7 +2819,9 @@ except Exception as exc:
           "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"]},
           "cli": {"program": "gh", "kind": "http", "extra_env": "ab"}});
     let err = C::validate_op(&full_op).unwrap_err();
-    assert_eq!(err.reason, "invalid_cli_profile");
+    assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+    assert_eq!(err.reason, "team_uncaught_exception");
+    assert_eq!(err.detail, "ValueError");
 }
 
 /// Regression for finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
