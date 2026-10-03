@@ -743,7 +743,7 @@ impl BindingServer {
     }
 
     // --------------------------------------------------------------- audit
-    fn connection_labels(&self) -> (String, Option<i64>) {
+    fn connection_labels(&self) -> (String, Option<crate::pyint::PyInt>) {
         match self.ctx.policy.get_connection(&self.binding.connection_id) {
             Ok(conn) => {
                 let target = match &conn.ssh_target {
@@ -764,7 +764,7 @@ impl BindingServer {
         event: &str,
         result: &str,
         reason: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<crate::pyint::PyInt>,
         extra: Vec<(&'static str, Value)>,
     ) -> Result<(), Error> {
         let (target, current_version) = self.connection_labels();
@@ -799,7 +799,7 @@ impl BindingServer {
         event: &str,
         result: &str,
         reason: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<crate::pyint::PyInt>,
         extra: Vec<(&'static str, Value)>,
     ) -> Result<bool, Error> {
         match self.audit(event, result, reason, policy_version, extra) {
@@ -828,7 +828,7 @@ impl BindingServer {
         let version = self
             .ctx
             .vault
-            .resolve_version(&conn.secret_id, conn.secret_version.clone())?;
+            .resolve_version(&conn.secret_id, conn.secret_version_for_resolve()?)?;
         let meta = self.ctx.vault.get_meta(&conn.secret_id)?;
         for item in &meta.versions {
             if version.equals_integer(&item.version) {
@@ -1153,7 +1153,7 @@ impl BindingServer {
                 "ssh_sign",
                 "denied",
                 Some(decision.reason),
-                pv,
+                pv.clone(),
                 vec![("username", json!(auth.username))],
             );
             return Ok(sshwire::build_failure().to_vec());
@@ -1163,7 +1163,7 @@ impl BindingServer {
             "ssh_sign",
             "ok",
             None,
-            pv,
+            pv.clone(),
             vec![
                 ("username", json!(auth.username)),
                 ("fingerprint", json!(our_key.fingerprint())),
@@ -1184,7 +1184,7 @@ impl BindingServer {
                     "ssh_sign",
                     "denied",
                     Some(&reason),
-                    pv,
+                    pv.clone(),
                     vec![("username", json!(auth.username))],
                 );
                 return Ok(sshwire::build_failure().to_vec());
@@ -1194,11 +1194,17 @@ impl BindingServer {
         let pem = match self
             .ctx
             .vault
-            .secret_for_trusted_use(&conn.secret_id, conn.secret_version.clone())
+            .secret_for_trusted_use(&conn.secret_id, conn.secret_version_for_trusted_use()?)
         {
             Ok(v) => v,
             Err(_) => {
-                let _ = self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), pv, vec![]);
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some("key_unavailable"),
+                    pv.clone(),
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };
@@ -1206,7 +1212,13 @@ impl BindingServer {
         let private = match sshwire::parse_openssh_private_key(pem.expose()) {
             Ok(p) => p,
             Err(_) => {
-                let _ = self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), pv, vec![]);
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some("key_unavailable"),
+                    pv.clone(),
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };

@@ -294,6 +294,8 @@ fn issue_handle(
             .get_connection(connection)
             .unwrap()
             .policy_version
+            .to_i64()
+            .unwrap()
     });
     ctx.handles
         .issue(caller, connection, grant, pv, ttl, Some(now))
@@ -6832,7 +6834,13 @@ fn server_peer_that_resolves_to_zeropw_is_refused_before_transmission() {
             "agent-1",
             "alias",
             &grant,
-            s.ctx.policy.get_connection("alias").unwrap().policy_version,
+            s.ctx
+                .policy
+                .get_connection("alias")
+                .unwrap()
+                .policy_version
+                .to_i64()
+                .unwrap(),
             300,
             Some(s.now),
         )

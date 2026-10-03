@@ -795,7 +795,7 @@ fn admin_record_for(
     ctx: &Context,
     event: &str,
     connection: Option<&str>,
-    policy_version: Option<i64>,
+    policy_version: Option<crate::pyint::PyInt>,
     extra: Vec<(&str, Value)>,
 ) -> Result<(), Error> {
     ctx.audit.record(
@@ -1433,12 +1433,12 @@ fn control(ctx: &Context) -> Result<Value, Error> {
     )
 }
 
-fn grant_view(grant: &crate::policy::Grant) -> Value {
-    json!({"id":grant.id,"principal":grant.principal,"connection":grant.connection,
-        "policy_version":grant.policy_version,"expires_at":grant.expires_at.map(|t| iso(Some(t))),
-        "max_uses":grant.max_uses_value(),"uses":grant.uses,"status":grant.status,
-        "created_at":grant.created_at,"revoked_at":grant.revoked_at,
-        "credential_version":grant.credential_version})
+/// `_grant_view`: `asdict(grant)` with `expires_at` rendered through `iso()`
+/// when it is not `None`.
+fn grant_view(grant: &crate::policy::Grant) -> Result<Value, Error> {
+    let mut view = grant.to_value();
+    view["expires_at"] = grant.expires_at_iso()?;
+    Ok(view)
 }
 
 /// `ctx.admin.verify(passphrase)` with `except AuthFailed`: only an
@@ -1472,9 +1472,10 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     if !meta.kind.as_str().is_some_and(|kind| kinds.contains(&kind)) {
         return Err(Error::invalid_input("secret_kind_mismatch"));
     }
-    let ver = ctx
-        .vault
-        .resolve_version(&connection.secret_id, connection.secret_version.clone())?;
+    let ver = ctx.vault.resolve_version(
+        &connection.secret_id,
+        connection.secret_version_for_resolve()?,
+    )?;
     // Python: `status = next((v.status for v in meta.versions if v.version == resolved), None)`;
     // an unmatched resolved version (an `active_version` naming no stored version) is `None`,
     // which is not usable either; the detail is `str(status)`.
@@ -1523,7 +1524,7 @@ fn create_connection(
             connection: Some(&stamped.id),
             target: Some(target),
             result: Some("ok"),
-            policy_version: Some(stamped.policy_version),
+            policy_version: Some(stamped.policy_version.clone()),
             extra: fields,
             ..Default::default()
         },
@@ -1568,7 +1569,7 @@ fn switch_credential(
             caller: Some("admin"),
             connection: Some(&after.id),
             result: Some("ok"),
-            policy_version: Some(after.policy_version),
+            policy_version: Some(after.policy_version.clone()),
             extra: vec![
                 ("secret_id", json!(after.secret_id)),
                 ("version", json!(version)),
@@ -1775,7 +1776,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .iter()
                 .filter(|c| {
                     c.secret_id == id
-                        && c.secret_version.as_ref() == Some(&version)
+                        && c.secret_version
+                            .as_ref()
+                            .is_some_and(|v| v.eq_int(&version))
                         && c.status == "active"
                 })
                 .map(|c| c.id.clone())
@@ -2016,7 +2019,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let meta = ctx.vault.get_meta(&stamped.secret_id)?;
             let resolved = ctx
                 .vault
-                .resolve_version(&stamped.secret_id, stamped.secret_version.clone())
+                .resolve_version(&stamped.secret_id, stamped.secret_version_for_resolve()?)
                 .ok();
             if let Some(v) = meta.versions.iter().find(|v| {
                 resolved
@@ -2068,7 +2071,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "connection_update",
                 Some(&after.id),
-                Some(after.policy_version),
+                Some(after.policy_version.clone()),
                 vec![
                     ("detail", json!("scope")),
                     ("state", json!(if widened { "widened" } else { "narrowed" })),
@@ -2122,7 +2125,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     caller: Some("admin"),
                     connection: Some(&c.id),
                     result: Some("ok"),
-                    policy_version: Some(c.policy_version),
+                    policy_version: Some(c.policy_version.clone()),
                     ..Default::default()
                 },
             )?;
@@ -2144,7 +2147,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("principal", "list") => Ok(
-            json!({"principals":ctx.policy.list_principals()?.into_iter().map(|p|json!({"id":p.id,"status":p.status,"created_at":p.created_at,"runtime":p.runtime})).collect::<Vec<_>>()}),
+            json!({"principals":ctx.policy.list_principals()?.iter().map(crate::policy::Principal::view).collect::<Vec<_>>()}),
         ),
         ("principal", "disable") => {
             ctx.policy.disable_principal(a.req("id"), true)?;
@@ -2168,7 +2171,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_create",
                 Some(&grant.connection),
-                Some(grant.policy_version),
+                Some(grant.policy_version.clone()),
                 vec![
                     ("grant", json!(grant.id)),
                     ("principal", json!(grant.principal)),
@@ -2176,10 +2179,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     ("expires_at", json!(grant.expires_at.map(|t| iso(Some(t))))),
                 ],
             )?;
-            Ok(grant_view(&grant))
+            grant_view(&grant)
         }
         ("grant", "list") => Ok(
-            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Vec<_>>()}),
+            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Result<Vec<_>, Error>>()?}),
         ),
         ("grant", "revoke") => {
             let g = ctx.policy.revoke_grant(a.req("id"))?;
@@ -2188,9 +2191,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 "grant_revoke",
                 Some(&g.connection),
                 None,
-                vec![("grant", json!(g.id)), ("principal", json!(g.principal))],
+                vec![
+                    ("grant", g.id_value().clone()),
+                    ("principal", g.principal_value().clone()),
+                ],
             )?;
-            Ok(grant_view(&g))
+            grant_view(&g)
         }
         ("grant", "regrant") => {
             let g = ctx.policy.regrant(a.req("id"))?;
@@ -2198,14 +2204,14 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_regrant",
                 Some(&g.connection),
-                Some(g.policy_version),
+                Some(g.policy_version.clone()),
                 vec![
                     ("grant", json!(g.id)),
                     ("principal", json!(g.principal)),
                     ("detail", json!(a.req("id"))),
                 ],
             )?;
-            let mut v = grant_view(&g);
+            let mut v = grant_view(&g)?;
             v["replaces"] = json!(a.req("id"));
             Ok(v)
         }
@@ -2226,20 +2232,24 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(v)
         }
         ("approvals", "list") => {
-            let approvals = ctx.policy.list_approvals()?;
-            let mut entries: Vec<Value> = approvals
-                .into_iter()
-                .map(|(digest, value)| {
-                    let mut v = json!({"digest":digest});
-                    if let Some(obj) = value.as_object() {
-                        for (k, val) in obj {
-                            v[k] = val.clone();
-                        }
-                    }
-                    v
-                })
-                .collect();
-            entries.sort_by(|a, b| a["digest"].as_str().cmp(&b["digest"].as_str()));
+            // `[{"digest": digest, **entry} for digest, entry in
+            // sorted(ctx.policy.list_approvals().items())]`: keys keep
+            // Python's objects and order; `**entry` needs a mapping (an
+            // uncaught `TypeError` otherwise, PORTING.md §3.5).
+            let mut approvals = ctx.policy.list_approvals_items()?;
+            crate::policy::python_sort_dict_items(&mut approvals)?;
+            let mut entries: Vec<Value> = Vec::with_capacity(approvals.len());
+            for (digest, value) in approvals {
+                let obj = value.as_object().ok_or_else(|| {
+                    Error::state("state_corrupt").with_detail("policy/control.json")
+                })?;
+                let mut v = serde_json::Map::new();
+                v.insert("digest".into(), digest);
+                for (k, val) in obj {
+                    v.insert(k.clone(), val.clone());
+                }
+                entries.push(Value::Object(v));
+            }
             Ok(json!({"approvals":entries,"history":ctx.policy.approval_history()?}))
         }
         ("approvals", "approve") => {

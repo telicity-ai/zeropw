@@ -1786,7 +1786,7 @@ fn handle_issued_by_rust_verifies_in_python() {
                 "agent-1",
                 "gh",
                 &grant.id,
-                grant.policy_version,
+                grant.policy_version.to_i64().unwrap(),
                 300,
                 Some(FIXED_NOW),
             )

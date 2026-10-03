@@ -625,7 +625,7 @@ impl Detector {
                 .policy
                 .list_principals()?
                 .into_iter()
-                .filter(|p| p.status == "active")
+                .filter(|p| p.status_is("active"))
                 .map(|p| p.id)
                 .collect();
             if active.is_empty() {

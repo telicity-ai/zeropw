@@ -1362,10 +1362,8 @@ probe("secret_version_int", d, lambda c: c.secret_version)
             .is(zeropw::errors::ErrorClass::StateError)
     );
 
-    // `secret_version`: stored untyped by Python. The plain-integer case
-    // agrees exactly; the string case is the documented residual (Rust's
-    // typed `Option<PyInt>` cannot hold it, so `state_corrupt` is returned
-    // where Python would silently succeed -- see `DEVIATIONS.md`).
+    // `secret_version`: stored untyped by Python, kept verbatim for every
+    // shape (the differential form is `rust/tests/policy_parity_close.rs`).
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!(5);
     assert_eq!(
@@ -1377,18 +1375,20 @@ probe("secret_version_int", d, lambda c: c.secret_version)
     d["secret_version"] = serde_json::from_str("1000000000000000000000000000000").unwrap();
     let connection = Connection::from_value(&d).unwrap();
     assert_eq!(
-        connection.secret_version.as_ref().unwrap().to_string(),
+        connection
+            .secret_version
+            .as_ref()
+            .unwrap()
+            .value()
+            .to_string(),
         "1000000000000000000000000000000"
     );
     assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
 
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!("abc");
-    assert!(
-        Connection::from_value(&d)
-            .unwrap_err()
-            .is(zeropw::errors::ErrorClass::StateError)
-    );
+    let connection = Connection::from_value(&d).unwrap();
+    assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
 }
 
 #[test]
@@ -2066,16 +2066,14 @@ probe("valid", lambda d: None)
     assert!(Connection::from_value(&base()).is_ok());
 }
 
-// D-R2-7: `Connection::from_value`'s `description` and `principal_from_entry`'s
-// `runtime` silently replaced a stored *non-string* value with the default
-// (`""`/`"default"`) instead of `state_corrupt`. Python keeps the stored
-// value completely verbatim (`public_view()["description"] == 5`, and a
-// principal with a corrupt `runtime` does not match
-// `principals_in_runtime("default")`, which incident/intrusion scoping
-// relies on) -- inconsistent with every sibling field's exact-type-or-
-// `state_corrupt` treatment.
+// D-R2-7 (closed by keeping the value verbatim): Python keeps a stored
+// non-string `description`/`runtime` completely verbatim
+// (`public_view()["description"] == 5`, and a principal with a non-string
+// `runtime` does not match `principals_in_runtime("default")`, which
+// incident/intrusion scoping relies on). Rust now does the same instead of
+// failing the whole record with `state_corrupt`.
 #[test]
-fn description_and_runtime_reject_non_string_values_like_sibling_fields() {
+fn description_and_runtime_non_string_values_load_verbatim_like_python() {
     let script = r#"
 from zeropw.store import StateDir
 from zeropw import policy as P
@@ -2127,18 +2125,27 @@ with tempfile.TemporaryDirectory() as d:
         .unwrap();
     doc["gh"]["description"] = serde_json::json!(5);
     state.write_json(policy::CONNECTIONS, &doc).unwrap();
-    let err = policy.get_connection("gh").unwrap_err();
-    assert!(err.is(zeropw::errors::ErrorClass::StateError));
-    assert_eq!(err.reason, "state_corrupt");
+    let connection = policy.get_connection("gh").unwrap();
+    assert_eq!(
+        connection.public_view()["description"],
+        serde_json::json!(5)
+    );
+    assert_eq!(connection.to_value()["description"], serde_json::json!(5));
 
     let mut doc = state
         .read_json(policy::PRINCIPALS, serde_json::json!({}))
         .unwrap();
     doc["agent-1"]["runtime"] = serde_json::json!(5);
     state.write_json(policy::PRINCIPALS, &doc).unwrap();
-    let err = policy.get_principal("agent-1").unwrap_err();
-    assert!(err.is(zeropw::errors::ErrorClass::StateError));
-    assert_eq!(err.reason, "state_corrupt");
+    let principal = policy.get_principal("agent-1").unwrap();
+    assert_eq!(principal.runtime_value(), &serde_json::json!(5));
+    assert!(
+        !policy
+            .principals_in_runtime("default")
+            .unwrap()
+            .iter()
+            .any(|p| p.id == "agent-1")
+    );
 }
 
 // D-R2-8: `Policy::request_approval`'s `cycle` computation used
@@ -4062,7 +4069,7 @@ shutil.rmtree(d, ignore_errors=True)"#;
             Some("agent-1"),
             Some("gh"),
             Some(Action::http("GET", "/repos")),
-            Some(3),
+            Some(3.into()),
         )
         .unwrap();
     assert_eq!(consumed.uses, 1);

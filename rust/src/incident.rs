@@ -355,8 +355,8 @@ fn runtime_covers_all_active(ctx: &Context, runtime: Option<&str>) -> bool {
         .list_principals()
         .map(|ps| {
             ps.iter()
-                .filter(|p| p.status == "active")
-                .all(|p| Some(p.runtime.as_str()) == runtime)
+                .filter(|p| p.status_is("active"))
+                .all(|p| p.runtime_eq(runtime))
         })
         // A corrupt/unreadable principal document cannot safely prove that any
         // active principal lies outside this runtime. Over-stop in that case.
@@ -409,7 +409,7 @@ pub fn apply_lockdown(
         let active = ctx
             .policy
             .get_principal(pid)
-            .is_ok_and(|p| p.status == "active");
+            .is_ok_and(|p| p.status_is("active"));
         match ctx.policy.disable_principal(pid, false) {
             Ok(()) if active => disabled += 1,
             Ok(()) => (),
@@ -661,7 +661,7 @@ pub fn assess(ctx: &Context, principals: &[String], scope: &str, since: &str) ->
             Ok(p) => {
                 starts.insert(pid.clone(), p.created_at.clone());
                 principal_views
-                    .push(json!({"id":p.id,"created_at":p.created_at,"runtime":p.runtime}));
+                    .push(json!({"id":p.id,"created_at":p.created_at_value(),"runtime":p.runtime_value()}));
             }
             Err(e) if e.is(ErrorClass::NotFound) => (),
             Err(e) => return Err(e),

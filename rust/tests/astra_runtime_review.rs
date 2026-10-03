@@ -201,7 +201,7 @@ fn relay_filters_non_ascii_headers_before_server_serialization() {
             "alice",
             "service",
             &grant.id,
-            connection.policy_version,
+            connection.policy_version.to_i64().unwrap(),
             300,
             None,
         )

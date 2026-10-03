@@ -79,7 +79,35 @@ impl PyInt {
         let number = Number::from_str(&self.0.to_string()).expect("BigInt is a JSON integer");
         Value::Number(number)
     }
+
+    /// The value as an `i64`, or `None` when it lies outside that range.
+    pub fn to_i64(&self) -> Option<i64> {
+        i64::try_from(&self.0).ok()
+    }
 }
+
+/// Python `int + int` / `int - int`: unbounded, never overflows.
+macro_rules! int_arithmetic {
+    ($($trait:ident $method:ident),+ $(,)?) => {
+        $(
+            impl std::ops::$trait<i64> for PyInt {
+                type Output = PyInt;
+                fn $method(self, rhs: i64) -> PyInt {
+                    PyInt(std::ops::$trait::$method(self.0, BigInt::from(rhs)))
+                }
+            }
+
+            impl std::ops::$trait<i64> for &PyInt {
+                type Output = PyInt;
+                fn $method(self, rhs: i64) -> PyInt {
+                    PyInt(std::ops::$trait::$method(&self.0, BigInt::from(rhs)))
+                }
+            }
+        )+
+    };
+}
+
+int_arithmetic!(Add add, Sub sub);
 
 /// Compare a Python `int` with a binary64 Python `float` without converting
 /// the integer to `f64`. CPython's rich comparison keeps the integer exact,
@@ -220,20 +248,6 @@ impl PartialOrd<i128> for PyInt {
 impl PartialOrd<i32> for PyInt {
     fn partial_cmp(&self, other: &i32) -> Option<Ordering> {
         Some(self.0.cmp(&BigInt::from(*other)))
-    }
-}
-
-impl std::ops::Add<i64> for &PyInt {
-    type Output = PyInt;
-    fn add(self, rhs: i64) -> PyInt {
-        PyInt(&self.0 + rhs)
-    }
-}
-
-impl std::ops::Sub<i64> for &PyInt {
-    type Output = PyInt;
-    fn sub(self, rhs: i64) -> PyInt {
-        PyInt(&self.0 - rhs)
     }
 }
 

@@ -366,7 +366,7 @@ pub fn request(
                 None
             },
             request_id,
-            policy_version: Some(known.policy_version),
+            policy_version: Some(known.policy_version.clone()),
             extra: if mismatch {
                 vec![("method", json!(method)), ("path", json!(path))]
             } else {
@@ -577,7 +577,7 @@ fn refuse_exec(
             result: Some(result),
             reason: Some(reason),
             request_id: req,
-            policy_version: c.map(|c| c.policy_version),
+            policy_version: c.map(|c| c.policy_version.clone()),
             ..Default::default()
         },
     )?;
@@ -684,7 +684,7 @@ pub fn exec(
         req,
         &digest,
         target.as_deref(),
-        Some(known.policy_version),
+        Some(known.policy_version.clone()),
     )?;
     if !created {
         return Ok(exec_view(&registry, &run));
@@ -702,7 +702,7 @@ pub fn exec(
                 action: Some("exec"),
                 result: Some("ok"),
                 request_id: req,
-                policy_version: Some(known.policy_version),
+                policy_version: Some(known.policy_version.clone()),
                 extra: vec![
                     ("program", json!(program_text)),
                     ("kind", json!(known.kind)),
@@ -714,7 +714,7 @@ pub fn exec(
         )?;
         let credential = ctx
             .vault
-            .secret_for_trusted_use(&known.secret_id, known.secret_version.clone())
+            .secret_for_trusted_use(&known.secret_id, known.secret_version_for_trusted_use()?)
             .map_err(|_| Error::state("credential_unavailable"))?;
         if profile_env_carries_vault_value(ctx, &known)? {
             refuse_exec(
@@ -749,7 +749,7 @@ pub fn exec(
                     target: target.as_deref(),
                     run_id: Some(&run.id),
                     request_id: req,
-                    policy_version: Some(known.policy_version),
+                    policy_version: Some(known.policy_version.clone()),
                     result: Some("ok"),
                     extra: vec![
                         ("grant", json!(grant.id)),
@@ -761,9 +761,14 @@ pub fn exec(
                     ..Default::default()
                 },
             )?;
-            let handle =
-                ctx.handles
-                    .issue(caller, id, &grant.id, known.policy_version, ttl, None)?;
+            let handle = ctx.handles.issue(
+                caller,
+                id,
+                &grant.id,
+                known.policy_version.clone(),
+                ttl,
+                None,
+            )?;
             sensitive.push(handle.as_bytes().to_vec());
             let env = child_env(
                 &path,
@@ -788,7 +793,7 @@ pub fn exec(
                 .ok_or_else(|| Error::unsupported("ssh_signer_unavailable"))?;
             let version = ctx
                 .vault
-                .resolve_version(&known.secret_id, known.secret_version.clone())
+                .resolve_version(&known.secret_id, known.secret_version_for_resolve()?)
                 .map_err(|_| Error::state("credential_unavailable"))?;
             let metadata = ctx
                 .vault
@@ -923,7 +928,7 @@ pub fn status(ctx: &Context, caller: &str, id: &str) -> Result<Value, Error> {
             run_id: Some(id),
             action: Some("status"),
             result: Some("ok"),
-            policy_version: run.policy_version,
+            policy_version: run.policy_version.clone(),
             extra: vec![("run_state", json!(run.state))],
             ..Default::default()
         },
@@ -942,7 +947,7 @@ pub fn cancel(ctx: &Context, caller: &str, id: &str) -> Result<Value, Error> {
             run_id: Some(id),
             action: Some("cancel"),
             result: Some("ok"),
-            policy_version: run.policy_version,
+            policy_version: run.policy_version.clone(),
             extra: vec![("run_state", json!(run.state))],
             ..Default::default()
         },

@@ -185,7 +185,7 @@ fn peer_op_basic_container_username_folds_derives_and_refuses_to_relay_without_t
             "agent-1",
             "gh",
             &grant.id,
-            connection.policy_version,
+            connection.policy_version.to_i64().unwrap(),
             300,
             None,
         )

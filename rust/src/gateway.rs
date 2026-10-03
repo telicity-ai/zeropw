@@ -2735,7 +2735,7 @@ impl<'a> Relay<'a> {
                 action: Some(&self.method),
                 result: Some(result),
                 reason,
-                policy_version: self.connection.as_ref().map(|c| c.policy_version),
+                policy_version: self.connection.as_ref().map(|c| c.policy_version.clone()),
                 request_id: self.request_id.as_deref(),
                 extra: fields,
                 ..Default::default()
@@ -3327,11 +3327,10 @@ impl<'a> Relay<'a> {
             Err(e) => return Err(e),
         }
 
-        let secret = match self
-            .ctx
-            .vault
-            .secret_for_trusted_use(&connection.secret_id, connection.secret_version.clone())
-        {
+        let secret = match self.ctx.vault.secret_for_trusted_use(
+            &connection.secret_id,
+            connection.secret_version_for_trusted_use()?,
+        ) {
             Ok(s) => s,
             Err(e)
                 if e.is(ErrorClass::NotFound)

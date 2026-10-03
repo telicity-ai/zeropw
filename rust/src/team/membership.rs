@@ -831,10 +831,7 @@ pub fn share_environment(
             let version = &current + 1;
             entry.insert("policy_version".into(), version.value());
             ctx.state.write_json(crate::policy::CONNECTIONS, &updated)?;
-            // `Policy::reevaluate_grants` (policy.rs) still takes an `i64`
-            // policy version.
-            let version = i64::try_from(&version.0).map_err(|_| corrupt())?;
-            ctx.policy.reevaluate_grants(cid, version, true, None)?;
+            ctx.policy.reevaluate_grants(cid, &version, true, None)?;
             ctx.policy.invalidate_approvals(
                 |e| e.get("connection").and_then(Value::as_str) == Some(cid),
                 "policy_changed",

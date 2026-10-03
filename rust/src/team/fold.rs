@@ -1524,19 +1524,7 @@ fn document_connection_object(
 }
 
 fn connection_changed(before: &policy::Connection, after: &policy::Connection) -> bool {
-    before.project != after.project
-        || before.environment != after.environment
-        || before.service != after.service
-        || before.kind != after.kind
-        || before.secret_id != after.secret_id
-        || before.secret_version != after.secret_version
-        || before.description != after.description
-        || before.http_target != after.http_target
-        || before.http_auth != after.http_auth
-        || before.http_scope != after.http_scope
-        || before.ssh_target != after.ssh_target
-        || before.cli != after.cli
-        || before.status != after.status
+    before.derive_fields_differ(after)
 }
 
 /// A copy of `c` with `policy_version`/`status`/`created_at`/`updated_at`
@@ -1550,30 +1538,12 @@ fn connection_changed(before: &policy::Connection, after: &policy::Connection) -
 #[allow(clippy::too_many_arguments)]
 fn connection_with(
     c: &policy::Connection,
-    policy_version: i64,
+    policy_version: crate::pyint::PyInt,
     status: Option<&str>,
-    created_at: &str,
-    updated_at: &str,
+    created_at: Value,
+    updated_at: Value,
 ) -> Result<policy::Connection> {
-    policy::Connection::new(
-        c.id.clone(),
-        c.project.clone(),
-        c.environment.clone(),
-        c.service.clone(),
-        c.kind.clone(),
-        c.secret_id.clone(),
-        c.secret_version.clone(),
-        c.description.clone(),
-        c.http_target.clone(),
-        c.http_auth.clone(),
-        c.http_scope.clone(),
-        c.ssh_target.clone(),
-        c.cli.clone(),
-        policy_version,
-        status.unwrap_or(&c.status).to_string(),
-        created_at.to_string(),
-        updated_at.to_string(),
-    )
+    c.replaced_bookkeeping(policy_version, status, created_at, updated_at)
 }
 
 fn derive_connections(
@@ -1654,20 +1624,18 @@ fn derive_connections(
             if connection_changed(&before, &after) {
                 let widened = policy::Policy::widens(&before, &after)
                     || (after.status == "disabled" && before.status == "active");
-                // Panic sweep: `before.policy_version` is read straight back
-                // off `policy/connections.json` (`policy::Connection::
-                // from_value`, a local STATE FILE this crate must treat as
-                // untrusted per PORTING.md §4), not something this crate's
-                // own writers ever push near `i64::MAX` in practice -- but a
-                // hand-edited/bit-rotted file claiming exactly that value
-                // would otherwise panic here (`attempt to add with
-                // overflow`) the next time this connection's definition
-                // changes. `saturating_add` avoids that unconditionally.
-                let new_version = before.policy_version.saturating_add(1);
-                after = connection_with(&after, new_version, None, &before.created_at, &now_iso)?;
+                // `before.policy_version + 1`: an unbounded Python `int`.
+                let new_version = crate::pyint::PyInt(&before.policy_version.0 + 1);
+                after = connection_with(
+                    &after,
+                    new_version.clone(),
+                    None,
+                    before.text_value("created_at"),
+                    json!(now_iso),
+                )?;
                 policy.reevaluate_grants(
                     conn_id,
-                    new_version,
+                    &new_version,
                     widened,
                     local_version.map(crate::pyint::PyInt::from),
                 )?;
@@ -1684,19 +1652,19 @@ fn derive_connections(
             } else {
                 after = connection_with(
                     &after,
-                    before.policy_version,
+                    before.policy_version.clone(),
                     None,
-                    &before.created_at,
-                    &before.updated_at,
+                    before.text_value("created_at"),
+                    before.text_value("updated_at"),
                 )?;
             }
         } else {
+            // `entry.get("created_at", now_iso)`, verbatim.
             let created_at = entry
                 .get("created_at")
-                .and_then(Value::as_str)
-                .unwrap_or(&now_iso)
-                .to_string();
-            after = connection_with(&after, 1, None, &created_at, &now_iso)?;
+                .cloned()
+                .unwrap_or_else(|| json!(now_iso));
+            after = connection_with(&after, 1.into(), None, created_at, json!(now_iso))?;
         }
         let mut raw = after.to_value();
         if let Value::Object(o) = &mut raw {
@@ -1730,14 +1698,12 @@ fn derive_connections(
         let before = policy::Connection::from_value(existing_raw)?;
         let after = connection_with(
             &before,
-            // Panic sweep: a state-file-supplied `policy_version` near
-            // `i64::MAX` must not panic.
-            before.policy_version.saturating_add(1),
+            crate::pyint::PyInt(&before.policy_version.0 + 1),
             Some("disabled"),
-            &before.created_at,
-            &now_iso,
+            before.text_value("created_at"),
+            json!(now_iso),
         )?;
-        policy.reevaluate_grants(&conn_id, after.policy_version, true, None)?;
+        policy.reevaluate_grants(&conn_id, &after.policy_version, true, None)?;
         let cid = conn_id.clone();
         policy.invalidate_approvals(
             move |e| e.get("connection").and_then(Value::as_str) == Some(cid.as_str()),
