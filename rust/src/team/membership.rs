@@ -21,6 +21,7 @@ use crate::context::Context;
 use crate::errors::{Error, Result};
 use crate::kms::WrappedKey;
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::secret::SecretBytes;
 use crate::store::iso;
@@ -803,10 +804,36 @@ pub fn share_environment(
         }
         ctx.state.write_json(crate::policy::CONNECTIONS, &doc)?;
         for cid in &converted {
+            // `_force_grant_reevaluation_for_share`: `doc = read_json(...)
+            // or {}`; `entry = doc.get(conn_id)` (skipped when `None`);
+            // `entry["policy_version"] = int(entry.get("policy_version", 0))
+            // + 1` -- CPython's `int()` at unbounded precision. A value
+            // `int()` rejects, or a non-dict document/entry, raises there
+            // (after the retag writes) and aborts the share.
+            let corrupt = || Error::state("state_corrupt").with_detail("policy_connections");
             let mut updated = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
-            let version = updated[cid]["policy_version"].as_i64().unwrap_or(0) + 1;
-            updated[cid]["policy_version"] = json!(version);
+            if super::json_falsy(&updated) {
+                updated = json!({});
+            }
+            let Some(entry) = updated
+                .as_object_mut()
+                .ok_or_else(corrupt)?
+                .get_mut(cid.as_str())
+                .filter(|entry| !entry.is_null())
+            else {
+                continue;
+            };
+            let entry = entry.as_object_mut().ok_or_else(corrupt)?;
+            let current = match entry.get("policy_version") {
+                None => PyInt::zero(),
+                Some(value) => PyInt::coerce_from_json(value).ok_or_else(corrupt)?,
+            };
+            let version = &current + 1;
+            entry.insert("policy_version".into(), version.value());
             ctx.state.write_json(crate::policy::CONNECTIONS, &updated)?;
+            // `Policy::reevaluate_grants` (policy.rs) still takes an `i64`
+            // policy version.
+            let version = i64::try_from(&version.0).map_err(|_| corrupt())?;
             ctx.policy.reevaluate_grants(cid, version, true, None)?;
             ctx.policy.invalidate_approvals(
                 |e| e.get("connection").and_then(Value::as_str) == Some(cid),
