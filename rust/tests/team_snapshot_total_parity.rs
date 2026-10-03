@@ -151,7 +151,7 @@ fn builtin_sum_matches_python_over_random_json_values() {
             .map(|_| match rng.next() % 7 {
                 0 => json!((rng.next() % 2000) as i64 - 1000),
                 1 => json!((rng.next() as f64) / 3.0e9 - 1000.0),
-                2 => json!(rng.next() % 2 == 0),
+                2 => json!(rng.next().is_multiple_of(2)),
                 3 => PyInt(BigInt::from(rng.next()) << (rng.next() % 90) as usize).value(),
                 4 => json!(((rng.next() % 100000) as f64) * 1e-3),
                 5 => json!(-((rng.next() as f64) * 1e10)),
