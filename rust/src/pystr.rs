@@ -54,6 +54,46 @@ fn in_ranges(cp: u32, ranges: &[(u32, u32)]) -> bool {
         .is_ok()
 }
 
+mod lower_table;
+
+/// CPython 3.12 `str.lower()`: the full lowercase mapping of the Unicode
+/// Character Database CPython bundles (15.0.0, which differs from the
+/// version Rust's own `str::to_lowercase` follows), including multi-code-
+/// point results (`"\u{130}"` -> `"i\u{307}"`) and CPython's
+/// `handle_capital_sigma` context rule for U+03A3: it becomes final sigma
+/// U+03C2 only when the nearest preceding non-case-ignorable character is
+/// cased and the nearest following one is absent or not cased, U+03C3
+/// otherwise. Pinned per code point by
+/// `oracle_lower_matches_python_for_every_codepoint`.
+pub fn lower(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if c == '\u{3a3}' {
+            out.push(capital_sigma(&chars, i));
+            continue;
+        }
+        match lower_table::LOWER.binary_search_by(|(k, _)| k.cmp(&c)) {
+            Ok(idx) => out.push_str(lower_table::LOWER[idx].1),
+            Err(_) => out.push(c),
+        }
+    }
+    out
+}
+
+/// CPython's `handle_capital_sigma(kind, data, length, i)`.
+fn capital_sigma(chars: &[char], i: usize) -> char {
+    let ignorable = |c: char| in_ranges(c as u32, lower_table::CASE_IGNORABLE);
+    let cased = |c: char| in_ranges(c as u32, lower_table::CASED);
+    let before = chars[..i].iter().rev().copied().find(|&c| !ignorable(c));
+    let mut final_sigma = before.is_some_and(cased);
+    if final_sigma {
+        let after = chars[i + 1..].iter().copied().find(|&c| !ignorable(c));
+        final_sigma = after.is_none_or(|c| !cased(c));
+    }
+    if final_sigma { '\u{3c2}' } else { '\u{3c3}' }
+}
+
 /// Emulate Python's `repr()` for a `str`: pick the quote character the way
 /// CPython does (`'` unless the string contains `'` and not `"`, in which
 /// case `"`), then escape backslash, the chosen quote, `\n`/`\r`/`\t`, and
@@ -1607,6 +1647,67 @@ print(hs.hexdigest())
             "is_printable digest mismatch"
         );
         assert_eq!(our_space, their_space, "is_space digest mismatch");
+    }
+
+    /// Full-enumeration differential test for [`lower`]: for every `char`
+    /// it hashes `lower(c)` plus three U+03A3 context probes that exercise
+    /// `c` as the preceding (`"A" + c + "\u{3a3}"`, `"1" + c +
+    /// "\u{3a3}"`) and following (`"A\u{3a3}" + c`) neighbour, and
+    /// compares with the same computation in the pinned `python3.12`.
+    #[test]
+    fn oracle_lower_matches_python_for_every_codepoint() {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        let mut rust_std_differs = 0usize;
+        for cp in 0u32..=0x10FFFF {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            for probe in [
+                c.to_string(),
+                format!("A{c}\u{3a3}"),
+                format!("1{c}\u{3a3}"),
+                format!("A\u{3a3}{c}"),
+            ] {
+                let lowered = lower(&probe);
+                hasher.update((lowered.len() as u32).to_be_bytes());
+                hasher.update(lowered.as_bytes());
+            }
+            if lower(&c.to_string()) != c.to_string().to_lowercase() {
+                rust_std_differs += 1;
+            }
+        }
+        let ours = hex::encode(hasher.finalize());
+        let script = r#"
+import hashlib
+h = hashlib.sha256()
+for cp in range(0, 0x110000):
+    if 0xD800 <= cp <= 0xDFFF:
+        continue
+    c = chr(cp)
+    for probe in (c, "A" + c + "\u03a3", "1" + c + "\u03a3", "A\u03a3" + c):
+        lowered = probe.lower().encode("utf-8")
+        h.update(len(lowered).to_bytes(4, "big"))
+        h.update(lowered)
+print(h.hexdigest())
+"#;
+        let theirs = python(script);
+        assert_eq!(ours, theirs.trim(), "str.lower() digest mismatch");
+        // Measured, not asserted: how many single code points Rust's own
+        // `to_lowercase` (a newer UCD) lowers differently from CPython 3.12.
+        eprintln!("code points where str::to_lowercase differs from CPython: {rust_std_differs}");
+    }
+
+    #[test]
+    fn lower_examples() {
+        assert_eq!(lower("EXAMPLE.COM"), "example.com");
+        assert_eq!(lower("\u{130}"), "i\u{307}");
+        assert_eq!(lower("\u{212a}"), "k");
+        assert_eq!(lower("\u{3a3}"), "\u{3c3}");
+        assert_eq!(lower("A\u{3a3}"), "a\u{3c2}");
+        assert_eq!(lower("A\u{3a3}B"), "a\u{3c3}b");
+        assert_eq!(lower("A\u{3a3}\u{301}"), "a\u{3c2}\u{301}");
     }
 
     #[test]

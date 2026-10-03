@@ -459,3 +459,48 @@ for text in json.loads({versions_json:?}):
     }
     assert!(divergences.is_empty(), "{}", divergences.join("\n"));
 }
+
+/// `_validate_host`'s `host.strip().lower()` is CPython's `str.lower()`
+/// (Unicode 15.0.0), observable through the stored host of an IPv6 literal
+/// whose `%zone` suffix may hold any text. U+A7CB and U+10D50 gained
+/// lowercase mappings after Unicode 15.0.0, so Rust's own `to_lowercase`
+/// lowers them where CPython 3.12 does not.
+#[test]
+fn validate_host_lowers_like_cpython_str_lower() {
+    const HOSTS: &[&str] = &[
+        "EXAMPLE.COM",
+        " Example.Com\u{85}",
+        "FE80::1%ETH0",
+        "fe80::1%\u{c9}TH0",
+        "fe80::1%\u{130}",
+        "fe80::1%A\u{3a3}",
+        "fe80::1%A\u{3a3}B",
+        "fe80::1%\u{a7cb}",
+        "fe80::1%\u{10d50}",
+        "fe80::1%\u{1e921}",
+        "\u{212a}EY.example",
+        "EXAMPLE.\u{a7cb}",
+    ];
+    // `ensure_ascii` JSON text, spliced into a raw Python string literal.
+    let hosts_json =
+        zeropw::pyjson::dumps(&json!(HOSTS), zeropw::pyjson::DumpOptions::plain()).unwrap();
+    let script = format!(
+        r#"import json
+from zeropw import policy as P
+for host in json.loads(r'''{hosts_json}'''):
+    try:
+        print(json.dumps({{"ok": P._validate_host(host)}}))
+    except Exception as e:
+        print(json.dumps({{"err": [type(e).__name__, getattr(e, "reason", None)]}}))
+"#
+    );
+    let python = run_python(&script);
+    assert_eq!(python.lines().count(), HOSTS.len());
+    for (line, host) in python.lines().zip(HOSTS) {
+        let py: Value = serde_json::from_str(line).unwrap();
+        let rust = rust_outcome(
+            policy::HttpTarget::from_stored("http", *host, 80, None, false).map(|t| json!(t.host)),
+        );
+        assert_eq!(py, rust, "{host:?}");
+    }
+}
