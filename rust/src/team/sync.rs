@@ -20,7 +20,7 @@ use crate::context::Context;
 use crate::crypto::ed25519;
 use crate::errors::{Error, Result};
 use crate::pybase64;
-use crate::pyint::PyInt;
+use crate::pyint::{PyInt, PyNumber};
 use crate::pyjson::{self, DumpOptions};
 use crate::store::{StateDir, iso};
 
@@ -1786,9 +1786,12 @@ struct EnvState {
     backoff: HashMap<String, Duration>,
     next_attempt: HashMap<String, Instant>,
     hlc: Hlc,
-    last_known_vector: BTreeMap<String, i128>,
+    last_known_vector: BTreeMap<String, PyInt>,
     known_fact_lines: usize,
-    last_snapshot_total: i128,
+    /// `_EnvState.last_snapshot_total`: a Python number -- the exact `int`
+    /// sum of a saved snapshot's vector, or whatever `sum()` of a loaded
+    /// snapshot's raw vector values produced (a `float` when it held one).
+    last_snapshot_total: PyNumber,
     last_vector_sent: HashMap<String, Instant>,
     synced_at: Option<f64>,
     incident_outbox: HashMap<String, Fact>,
@@ -1797,7 +1800,7 @@ struct EnvState {
     pending_invites: HashMap<String, (String, String)>,
     alerted_overrides: HashSet<String>,
     /// `_EnvState.relaxed_cache`: (store vector, relaxed document).
-    relaxed_cache: Option<(BTreeMap<String, i128>, Arc<Value>)>,
+    relaxed_cache: Option<(BTreeMap<String, PyInt>, Arc<Value>)>,
     /// Bumped wherever Python clears `relaxed_cache` (`_refold`), so a fold
     /// computed concurrently with that invalidation is never cached.
     relaxed_generation: u64,
@@ -1823,7 +1826,7 @@ impl EnvState {
             hlc: Hlc::new(0, 0),
             last_known_vector: BTreeMap::new(),
             known_fact_lines: 0,
-            last_snapshot_total: 0,
+            last_snapshot_total: PyNumber::Int(0.into()),
             last_vector_sent: HashMap::new(),
             synced_at: None,
             incident_outbox: HashMap::new(),
@@ -2030,12 +2033,26 @@ impl TeamSync {
             .state
             .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
             .len();
-        env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
-        if let Some(snapshot) = fold::load_latest_snapshot(self.ctx.state, env_id)? {
-            env.last_snapshot_total = snapshot["vector"]
-                .as_object()
-                .map(|v| v.values().filter_map(Value::as_i64).map(i128::from).sum())
-                .unwrap_or(0);
+        // `snapshot = F.load_latest_snapshot(...)`; `if snapshot is not
+        // None: env.last_snapshot_total = sum((snapshot.get("vector") or
+        // {}).values())`. A non-dict snapshot (even a falsy one) or a truthy
+        // non-dict vector has no `.get`/`.values` (`AttributeError`), and
+        // `sum()` raises for a non-number value (`TypeError`) or an int too
+        // large for a float it must be added to (`OverflowError`); all are
+        // `state_corrupt` from this step (§3.5).
+        if let Some(snapshot) = fold::load_latest_snapshot(self.ctx.state, env_id)?
+            && !snapshot.is_null()
+        {
+            let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
+            let vector = snapshot.as_object().ok_or_else(corrupt)?.get("vector");
+            env.last_snapshot_total = match vector {
+                None => PyNumber::Int(0.into()),
+                Some(v) if super::json_falsy(v) => PyNumber::Int(0.into()),
+                Some(Value::Object(v)) => {
+                    crate::pyint::python_sum(v.values()).ok_or_else(corrupt)?
+                }
+                Some(_) => return Err(corrupt()),
+            };
         }
         for line in self
             .ctx
@@ -2072,6 +2089,18 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .insert(env_id.into(), env);
         self.refold(env_id)?;
+        // `env.last_known_vector = dict(env.store.vector())` runs after
+        // `_refold`, so a failing refold leaves the registered environment
+        // with the empty baseline.
+        let vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.last_known_vector = vector;
+        }
         Ok(())
     }
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
@@ -2104,7 +2133,11 @@ impl TeamSync {
             project.as_deref(),
             environment.as_deref(),
         )?;
-        let total: i128 = result.vector.values().sum();
+        // `total = sum(result.vector.values())`: exact Python ints.
+        let total = result
+            .vector
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -2112,14 +2145,16 @@ impl TeamSync {
         env.document = result.document.clone();
         env.relaxed_cache = None;
         env.relaxed_generation = env.relaxed_generation.wrapping_add(1);
-        if total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS {
-            fold::save_snapshot(
-                self.ctx.state,
-                env_id,
-                total.try_into().unwrap_or(i64::MAX),
-                &result,
-            )?;
-            env.last_snapshot_total = total;
+        // `total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS`,
+        // with Python's int/float arithmetic (an `OverflowError` converting
+        // a huge int for a float operand escapes `_refold`).
+        let due = PyNumber::Int(total.0.clone())
+            .sub(&env.last_snapshot_total)
+            .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
+            .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
+        if due {
+            fold::save_snapshot(self.ctx.state, env_id, &total, &result)?;
+            env.last_snapshot_total = PyNumber::Int(total.0);
         }
         drop(envs);
         self.record_overrides(env_id, &result.overridden)?;
@@ -2507,7 +2542,7 @@ impl TeamSync {
         }
         let store = CommitStore::new(self.ctx.state, env_id);
         let fp = self.device.fingerprint()?;
-        let seq = store.last_seq(&fp)? + 1;
+        let seq = &store.last_seq(&fp)? + 1;
         let hlc = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get_mut(env_id)
@@ -2725,15 +2760,14 @@ impl TeamSync {
                 .get(&author)
                 .and_then(PyInt::from_json_integer)
                 .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
-            let first = match their {
-                None => 1,
-                Some(n) => match i128::try_from(&n.0).ok().and_then(|t| t.checked_add(1)) {
-                    Some(first) => first,
-                    None => continue,
-                },
+            let mut seq = match their {
+                None => PyInt::from(1),
+                Some(n) => &n + 1,
             };
-            for seq in first..=last {
-                if let Some(commit) = store.get(&author, seq)? {
+            while seq <= last {
+                let found = store.get(&author, &seq)?;
+                seq = &seq + 1;
+                if let Some(commit) = found {
                     if session
                         .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
                         .is_err()
@@ -2855,8 +2889,24 @@ impl TeamSync {
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
-        let Ok(commit) = Commit::from_dict(&message["commit"]) else {
-            return Ok(());
+        let commit = match Commit::from_dict(&message["commit"]) {
+            Ok(commit) => commit,
+            Err(error) if error.is(crate::errors::ErrorClass::InvalidInput) => return Ok(()),
+            Err(error) => {
+                // A built-in exception escaping `Commit.from_dict` (an
+                // infinite `author_seq`/`seen` value) ends the receive loop
+                // at once. For an op with a non-string key, Python's
+                // `from_dict` succeeded: another environment's commit is
+                // ignored, and for this one `receive_commit` raises while
+                // hashing or verifying it -- before any rejected record or
+                // audit -- which ends the receive loop.
+                if commit::raises_only_when_canonicalized(&error)
+                    && commit::python_str_coerce(&message["commit"]["env_id"]) != env_id
+                {
+                    return Ok(());
+                }
+                return Err(error);
+            }
         };
         if commit.env_id != env_id {
             return Ok(());
@@ -3507,11 +3557,16 @@ impl TeamSync {
         };
         let mut added = Vec::new();
         for (fp, hi) in &current {
-            let lo = baseline.get(fp).copied().unwrap_or(0);
-            for seq in lo + 1..=*hi {
-                if let Some(commit) = store.get(fp, seq)? {
+            // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
+            let mut seq = match baseline.get(fp) {
+                Some(lo) => lo + 1,
+                None => PyInt::from(1),
+            };
+            while seq <= *hi {
+                if let Some(commit) = store.get(fp, &seq)? {
                     added.push(commit);
                 }
+                seq = &seq + 1;
             }
         }
         if let Some(env) = self
@@ -3726,11 +3781,11 @@ impl TeamSync {
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
-        let now = i128::from(commit::now_ms());
+        let now = PyInt::from(commit::now_ms());
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
             let (wall, _) = Hlc::parse(&entry.hlc)?;
-            if now - wall < i128::from(COMPACT_MIN_AGE_MS) {
+            if PyInt(&now.0 - wall.0) < COMPACT_MIN_AGE_MS {
                 break;
             }
             cutoff = Some(i);
@@ -3740,12 +3795,16 @@ impl TeamSync {
                 json!({"env_id":env_id,"removed":0,"blocked_by":[],"reason":"no_commit_old_enough"}),
             );
         };
-        let mut candidate = BTreeMap::<String, i128>::new();
+        // `candidate_vector[author] = max(candidate_vector.get(author, 0),
+        // author_seq)`.
+        let mut candidate = BTreeMap::<String, PyInt>::new();
         for entry in &commits[..=cutoff] {
-            candidate
+            let seq = candidate
                 .entry(entry.author.clone())
-                .and_modify(|seq| *seq = (*seq).max(entry.author_seq))
-                .or_insert(entry.author_seq);
+                .or_insert_with(PyInt::zero);
+            if entry.author_seq > *seq {
+                *seq = entry.author_seq.clone();
+            }
         }
         let mine = self.device.fingerprint()?;
         let mut blocked = Vec::new();
@@ -3758,7 +3817,7 @@ impl TeamSync {
                     peer_vectors
                         .get(fp)
                         .and_then(|v| v.get(author))
-                        .map_or(0 < *seq, |known| known.0 < num_bigint::BigInt::from(*seq))
+                        .map_or(*seq > 0, |known| known < seq)
                 }) {
                     blocked.push(fp.clone());
                 }
@@ -3776,13 +3835,10 @@ impl TeamSync {
             None,
             Some(self.ctx.audit),
         )?;
-        let total: i128 = candidate.values().sum();
-        fold::save_snapshot(
-            self.ctx.state,
-            env_id,
-            total.try_into().unwrap_or(i64::MAX),
-            &snapshot,
-        )?;
+        let total = candidate
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
         let mut removed = 0;
         {
             let _lock = self.ctx.state.lock()?;
@@ -3815,7 +3871,7 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .get_mut(env_id)
         {
-            env.last_snapshot_total = total;
+            env.last_snapshot_total = PyNumber::Int(total.0);
         }
         self.refold(env_id)?;
         let _ = self.ctx.audit.record(

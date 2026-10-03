@@ -56,7 +56,13 @@ fn snapshot_version_order_successes_and_saved_bytes_match_python() {
             .write_json("team/env/snapshots/1.json", &snapshot)
             .unwrap();
         let rust_result = fold::fold_with_snapshot("env", vec![], &rust_state, None, None).unwrap();
-        fold::save_snapshot(&rust_state, "env", 2, &rust_result).unwrap();
+        fold::save_snapshot(
+            &rust_state,
+            "env",
+            &zeropw::pyint::PyInt::from(2),
+            &rust_result,
+        )
+        .unwrap();
         let rust_bytes = fs::read(rust_path.join("team/env/snapshots/2.json")).unwrap();
 
         let snapshot_text = pyjson::dumps(&snapshot, DumpOptions::compact_sorted()).unwrap();
@@ -156,7 +162,7 @@ fn snapshot_categories_are_validated_only_when_an_operation_reaches_them() {
             format: commit::COMMIT_FORMAT.to_owned(),
             env_id: "env".to_owned(),
             author: fingerprint.clone(),
-            author_seq: 1,
+            author_seq: zeropw::pyint::PyInt::from(1),
             hlc: "1000-0000".to_owned(),
             seen: BTreeMap::new(),
             ops: vec![op],

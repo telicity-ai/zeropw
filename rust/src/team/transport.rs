@@ -483,7 +483,12 @@ fn respond(
 ) -> std::result::Result<Arc<EncryptedSession>, HandshakeFailed> {
     let deadline = Instant::now() + Duration::from_secs(HANDSHAKE_TIMEOUT_SECONDS);
     let (msg1_raw, msg1) = recv_plain(channel.as_ref(), deadline)?;
-    if msg1.get("version").and_then(Value::as_i64) != Some(PROTOCOL_VERSION) {
+    // `msg1.get("version") != PROTOCOL_VERSION`: Python equality, so `1.0`
+    // and `true` are the protocol version too.
+    if !msg1
+        .get("version")
+        .is_some_and(|v| super::commit::dict_keys_equal(v, &json!(PROTOCOL_VERSION)))
+    {
         return Err(HandshakeFailed::new("version_mismatch"));
     }
     let env_id = msg1
@@ -1052,5 +1057,70 @@ mod deadline_tests {
         assert!(started.elapsed() < Duration::from_millis(200));
         drop(reader);
         writer.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    struct OneMessage(Mutex<Option<Vec<u8>>>);
+    impl ByteChannel for OneMessage {
+        fn send(&self, _bytes: &[u8]) -> std::result::Result<(), SessionClosed> {
+            Ok(())
+        }
+        fn recv(&self, _timeout: Duration) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+            Ok(self.0.lock().unwrap_or_else(|e| e.into_inner()).take())
+        }
+        fn close(&self) {}
+    }
+
+    /// `_respond`'s first check is Python `!=`: `1`, `1.0` and `true` pass
+    /// it (the handshake then fails at the next field here), every other
+    /// value is `version_mismatch` -- compared with CPython's `_respond`.
+    #[test]
+    fn handshake_version_uses_python_equality() {
+        let versions = [
+            "1", "1.0", "true", "2", "0", "\"1\"", "null", "[1]", "1e0", "false",
+        ];
+        let script = format!(
+            r#"
+import json, time
+from zeropw.team import transport as T
+from zeropw.team.identity import DeviceKey
+class Channel:
+    def __init__(self, raw): self.raw = raw
+    def recv(self, timeout):
+        raw, self.raw = self.raw, None
+        return raw
+    def send(self, data): pass
+    def close(self): pass
+out = []
+for version in json.loads({versions}):
+    raw = ('{{"env_id": 5, "version": ' + version + '}}').encode()
+    try:
+        T._respond(Channel(raw), DeviceKey.generate(), lambda e, f: None, None)
+        out.append("ok")
+    except T.HandshakeFailed as exc:
+        out.append(exc.reason)
+print(json.dumps(out))
+"#,
+            versions = crate::pystr::repr_str(&serde_json::to_string(&versions).unwrap())
+        );
+        let python: Vec<String> =
+            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let device = DeviceKey::generate();
+        let membership: MembershipCheck = Arc::new(|_: &str, _: &str| None);
+        for (version, expected) in versions.iter().zip(&python) {
+            let raw = format!("{{\"env_id\": 5, \"version\": {version}}}").into_bytes();
+            let channel: Arc<dyn ByteChannel> = Arc::new(OneMessage(Mutex::new(Some(raw))));
+            let reason = match respond(channel, &device, &membership, None) {
+                Ok(_) => "ok",
+                Err(error) => error.reason,
+            };
+            assert_eq!(reason, expected, "version {version}");
+        }
+        assert_eq!(python[1], "invalid_env_id");
+        assert_eq!(python[3], "version_mismatch");
     }
 }
