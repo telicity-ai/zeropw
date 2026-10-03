@@ -579,8 +579,10 @@ fn latin1(bytes: &[u8]) -> String {
 /// `BaseHTTPRequestHandler.parse_request` for the requests this fixture
 /// answers (three words; `//` paths reduced to one slash), then
 /// `http.client.parse_headers`' header block as the `email` parser reads it
-/// (see [`parse_header_block`]) and `_Handler._read_body`.
-fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, ReadRequestError> {
+/// (see [`crate::gateway::parse_header_blob`]) and `_Handler._read_body`.
+fn read_request(
+    reader: &mut BufReader<IncomingStream>,
+) -> Result<Option<IncomingRequest>, ReadRequestError> {
     let Some(line) = read_line(reader)? else {
         return Ok(None);
     };
@@ -666,7 +668,7 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
         raw_path.to_string()
     };
     // `_read_headers`: lines up to a blank one or the end of the stream.
-    let mut block = Vec::new();
+    let mut block = String::new();
     let mut header_count = 0usize;
     while let Some(header_line) = read_line(reader)? {
         header_count += 1;
@@ -688,12 +690,28 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
                 method == "HEAD",
             ));
         }
+        block.push_str(&latin1(&header_line));
         if header_line == b"\r\n" || header_line == b"\n" {
             break;
         }
-        block.push(latin1(&header_line));
     }
-    let headers = parse_header_block(&block);
+    // `http.client.parse_headers`: the joined block through the `email`
+    // parser, shared with the gateway's own response-header parsing.
+    let headers = crate::gateway::parse_header_blob(&block);
+    // `parse_request`'s `Expect: 100-continue` handling (`protocol_version`
+    // is "HTTP/1.1"; `request_version >= "HTTP/1.1"` is a plain string
+    // comparison, so "HTTP/1.10" qualifies and "HTTP/01.1" does not):
+    // `handle_expect_100` answers `100 Continue` before the method is even
+    // looked up or the body read.
+    if words.len() == 3
+        && words[2] >= "HTTP/1.1"
+        && header_get(&headers, "Expect").is_some_and(|v| v.to_lowercase() == "100-continue")
+    {
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+        reader.get_mut().flush()?;
+    }
     // An unsupported method is answered 501 before `_read_body` runs.
     let handled = HANDLED_METHODS.contains(&method.as_str());
     let body = match header_get(&headers, "Content-Length").map(crate::pystr::int_from_str) {
@@ -715,54 +733,6 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
         body,
         response_headers,
     }))
-}
-
-/// The `email` parser's (compat32) view of a header block: a line is a
-/// field when it matches `^[\041-\071\073-\176]*:` (an empty name is a
-/// skipped defect); a line starting with a space or tab continues the
-/// previous field; a `From ` envelope line is not a field; any other line
-/// starts the body, so the fields after it are not headers. A field's value
-/// is its first line after the colon with leading blanks removed, plus each
-/// continuation line as sent, with trailing CR/LF removed.
-fn parse_header_block(lines: &[String]) -> Vec<(String, String)> {
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut last: Option<usize> = None;
-    for line in lines {
-        if line.starts_with([' ', '\t']) {
-            if let Some(index) = last
-                && let Some((_, value)) = headers.get_mut(index)
-            {
-                value.push_str(line);
-            }
-            continue;
-        }
-        if line.starts_with("From ") {
-            last = None;
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            break;
-        };
-        let (name, value) = line.split_at(colon);
-        if !name.chars().all(|c| ('\x21'..='\x7e').contains(&c)) {
-            break;
-        }
-        if name.is_empty() {
-            last = None;
-            continue;
-        }
-        let value = value.get(1..).unwrap_or_default();
-        headers.push((
-            name.to_string(),
-            value.trim_start_matches([' ', '\t']).to_string(),
-        ));
-        last = Some(headers.len() - 1);
-    }
-    for (_, value) in &mut headers {
-        let trimmed = value.trim_end_matches(['\r', '\n']).len();
-        value.truncate(trimmed);
-    }
-    headers
 }
 
 fn header_get<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {

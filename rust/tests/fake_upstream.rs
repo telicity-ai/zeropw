@@ -1311,3 +1311,150 @@ fn request_handling_matches_the_python_fixture() {
     assert_eq!(status(cases.len() - 1), "HTTP/1.1 431 Too many headers");
     assert_eq!(python_recorded.as_array().unwrap().len(), cases.len() - 8);
 }
+
+/// `reply` with the `Date` header's value (the only per-call value
+/// `BaseHTTPRequestHandler` sends) replaced by `<date>`, after checking it is
+/// an IMF-fixdate (`email.utils.formatdate(usegmt=True)`).
+fn without_date_value(reply: &[u8]) -> Vec<u8> {
+    let Some(start) = find(reply, b"\r\nDate: ") else {
+        return reply.to_vec();
+    };
+    let value_start = start + b"\r\nDate: ".len();
+    let value_end = value_start + find(&reply[value_start..], b"\r\n").unwrap();
+    let value = String::from_utf8_lossy(&reply[value_start..value_end]).into_owned();
+    let fields: Vec<&str> = value.split(' ').collect();
+    assert_eq!(fields.len(), 6, "Date {value:?}");
+    assert!(
+        ["Mon,", "Tue,", "Wed,", "Thu,", "Fri,", "Sat,", "Sun,"].contains(&fields[0]),
+        "Date {value:?}"
+    );
+    assert!(fields[1].len() == 2 && fields[1].bytes().all(|b| b.is_ascii_digit()));
+    assert!(
+        [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+        ]
+        .contains(&fields[2])
+    );
+    assert!(fields[3].len() == 4 && fields[4].len() == 8 && fields[5] == "GMT");
+    let mut out = reply[..value_start].to_vec();
+    out.extend_from_slice(b"<date>");
+    out.extend_from_slice(&reply[value_end..]);
+    out
+}
+
+/// Every reply byte -- status line, `Server: fake-upstream ` and `Date`
+/// boilerplate, header order, `send_error` pages for 400/414/431/501/505
+/// (with and without a status line, depending on how far
+/// `parse_request` got), the `Expect: 100-continue` interim response,
+/// HTTP/0.9 bodies, absolute-form targets and email-parser header quirks --
+/// is identical to Python's `BaseHTTPRequestHandler`-based fixture, and so
+/// are the recorded requests.
+#[test]
+fn raw_replies_match_the_python_fixture_byte_for_byte() {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let auth = format!("Authorization: Bearer {SECRET}\r\n");
+    let get = |target: &str| format!("GET {target} HTTP/1.1\r\n{auth}\r\n").into_bytes();
+    let mut cases: Vec<Vec<u8>> = vec![
+        get("/me"),
+        get("/repos"),
+        get("http://example.invalid/me?ignored=1"),
+        get("https://example.invalid:8443/repos"),
+        get("*"),
+        get("http://[::1/me"),
+        get("/stream"),
+        get("/redirect"),
+        get("/set-cookie"),
+        format!("HEAD /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("DELETE /repos/demo HTTP/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/1.1\r\n\r\n").into_bytes(),
+        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-continue\r\nContent-Length: 14\r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
+        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-Continue\r\nContent-Length: 1\r\n\r\nx").into_bytes(),
+        format!("POST /repos/demo/issues HTTP/1.0\r\n{auth}Expect: 100-continue\r\nContent-Length: 2\r\n\r\n{{}}").into_bytes(),
+        format!("GET /me HTTP/01.1\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
+        format!("GET /me HTTP/1.10\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
+        format!("TRACE /me HTTP/1.1\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-A: a\rX-B: b\r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Empty:\r\n folded\r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Tab:\t\tv\r\nX-Latin: \u{e9}\r\n\r\n").into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\nFrom nobody\r\n{auth}\r\n").into_bytes(),
+        format!("GET\u{1c}/me\u{1c}HTTP/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me http/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/1.1.1\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/2.0\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/12345678901.0\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/1.\u{b2}\r\n{auth}\r\n").into_bytes(),
+        b"POST /me\r\n\r\n".to_vec(),
+        b"GET /me\r\n\r\n".to_vec(),
+        format!("GET /me\r\n{auth}\r\n").into_bytes(),
+        b"\r\n".to_vec(),
+        b"GET\r\n\r\n".to_vec(),
+        b"GET /me extra words HTTP/1.1\r\n\r\n".to_vec(),
+        format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(65_540)).into_bytes(),
+        format!("HEAD /me HTTP/1.1\r\nX-Long: {}\r\n\r\n", "x".repeat(65_540)).into_bytes(),
+        format!(
+            "HEAD /me HTTP/1.1\r\n{}\r\n",
+            (0..100)
+                .map(|i| format!("X-{i}: v\r\n"))
+                .collect::<String>()
+        )
+        .into_bytes(),
+        format!(
+            "GET /me HTTP/1.1\r\n{}",
+            (0..99)
+                .map(|i| format!("X-{i}: v\r\n"))
+                .collect::<String>()
+        )
+        .into_bytes(),
+    ];
+    cases.push(
+        format!(
+            "GET /me HTTP/1.1\r\n{auth}Connection: keep-alive\r\n\r\nGET /me HTTP/1.1\r\n{auth}\r\n"
+        )
+        .into_bytes(),
+    );
+    let encoded: Vec<String> = cases.iter().map(|c| engine.encode(c)).collect();
+    let script = format!(
+        "SECRET = {SECRET:?}\nCASES = '{}'\n{PY_FAKE_EXCHANGE}",
+        engine.encode(serde_json::to_string(&encoded).unwrap())
+    );
+    let out = python(&script);
+    let mut lines = out.lines();
+    let python_replies: Vec<String> = serde_json::from_str(lines.next().unwrap()).unwrap();
+    let python_recorded: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+
+    let fake = FakeUpstream::new(SECRET).start();
+    let mut mismatches = Vec::new();
+    for (case, python) in cases.iter().zip(&python_replies) {
+        let python = without_date_value(&engine.decode(python).unwrap());
+        let rust = without_date_value(&raw_exchange(fake.port(), case));
+        if rust != python {
+            mismatches.push(format!(
+                "request {:?}\n  rust:   {:?}\n  python: {:?}",
+                String::from_utf8_lossy(&case[..case.len().min(120)]),
+                String::from_utf8_lossy(&rust[..rust.len().min(400)]),
+                String::from_utf8_lossy(&python[..python.len().min(400)])
+            ));
+        }
+    }
+    let rust_recorded: Vec<serde_json::Value> = fake
+        .requests()
+        .into_iter()
+        .map(|r| {
+            let headers: serde_json::Map<String, serde_json::Value> = r
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            serde_json::json!([r.method, r.path, headers, engine.encode(&r.body)])
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    assert_eq!(serde_json::Value::from(rust_recorded), python_recorded);
+    // Shapes the comparison pins, on Python's own replies.
+    let reply = |i: usize| {
+        String::from_utf8_lossy(&engine.decode(&python_replies[i]).unwrap()).into_owned()
+    };
+    assert!(reply(12).starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\n"));
+    assert!(reply(0).contains("\r\nServer: fake-upstream \r\nDate: "));
+}

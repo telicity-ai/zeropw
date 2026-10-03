@@ -2580,12 +2580,21 @@ fn read_headers_block(reader: &mut impl BufRead) -> Result<Headers, UpstreamFail
             break;
         }
     }
-    let logical_lines = split_keep_terminators(&blob);
+    Ok(parse_header_blob(&blob))
+}
+
+/// Steps 2-4 of [`read_headers_block`]: `email.parser.Parser().parsestr`'s
+/// (compat32) header fields for the latin-1 text of a header block that
+/// `http.client._read_headers` already read line by line. Shared with
+/// `fake_upstream.rs`, whose `BaseHTTPRequestHandler` reads request headers
+/// through the same `http.client.parse_headers`.
+pub(crate) fn parse_header_blob(blob: &str) -> Headers {
+    let logical_lines = split_keep_terminators(blob);
     let recognized: Vec<String> = logical_lines
         .into_iter()
         .take_while(|line| header_re_matches(line))
         .collect();
-    Ok(parse_recognized_header_lines(&recognized))
+    parse_recognized_header_lines(&recognized)
 }
 
 enum BodyMode {
