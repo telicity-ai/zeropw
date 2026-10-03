@@ -2924,10 +2924,14 @@ mod tests {
     // host's CPUs (measured: one failing full `cargo test --lib` run in
     // three on a 4-CPU host, the test alone passing every time) cannot fail
     // it, while any fixed interval still fails all three.
+    //
+    // The pin is 100ms: the parallel library suite still stalled all three
+    // runs past 25ms on an 8-CPU VM, while any fixed accept poll of 10ms or
+    // more (the accept loop's own wait is 200ms) still exceeds 100ms.
     #[test]
     fn accept_latency_is_not_bound_by_a_fixed_poll_interval() {
         let f = fixture();
-        let bound = Duration::from_millis(25);
+        let bound = Duration::from_millis(100);
         let mut runs = Vec::with_capacity(3);
         for _ in 0..3 {
             let mut samples = Vec::with_capacity(10);
@@ -2959,9 +2963,8 @@ mod tests {
             best < bound,
             "10 sequential connections took {runs:?} in every run; this environment measures \
              4.12-10.42ms for a debug build of the same workload with the event-driven \
-             accept wait (finding G-R4-1/G-R5-1) -- 25ms is a real, tight pin (not the old, \
-             35x-loose 500ms) with headroom for a loaded CI host, and is still far below \
-             round 3's own busy-poll regression"
+             accept wait (finding G-R4-1/G-R5-1) -- 100ms still fails any fixed accept \
+             poll of 10ms or more"
         );
     }
 

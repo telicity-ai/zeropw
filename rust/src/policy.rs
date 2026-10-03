@@ -644,12 +644,12 @@ fn python_strip(s: &str) -> &str {
     s.trim_matches(is_python_whitespace)
 }
 
-/// `policy._validate_host`: `host.strip().lower()` with CPython's own
-/// `str.isspace()` and `str.lower()` ([`crate::pystr::lower`], Unicode
-/// 15.0.0) -- the lowered text is the stored host, and an IPv6 literal's
-/// `%zone` suffix may hold any non-ASCII text.
+/// `policy._validate_host`: `host.strip().lower()` -- the lowered text is
+/// the stored host. Lowercasing uses Rust's Unicode tables; CPython 3.12's
+/// differ only for code points outside every host name `HOST_RE` accepts
+/// (they can appear only in an IPv6 literal's `%zone` text).
 fn validate_host(host: &str) -> Result<String, Error> {
-    let lowered = crate::pystr::lower(python_strip(host));
+    let lowered = python_strip(host).to_lowercase();
     if parse_ip_literal(&lowered).is_some() {
         return Ok(lowered);
     }
@@ -1325,7 +1325,7 @@ impl HttpAuth {
                 return Err(Error::invalid_input("invalid_header_name"));
             }
             if FORBIDDEN_CUSTOM_HEADERS
-                .contains(crate::pystr::lower(header_name.as_deref().unwrap()).as_str())
+                .contains(header_name.as_deref().unwrap().to_lowercase().as_str())
             {
                 return Err(Error::invalid_input("invalid_header_name"));
             }
