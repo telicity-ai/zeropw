@@ -17,13 +17,7 @@
 //! encoded word produces lone surrogates, which Python carries through to the
 //! fold (`unknown-8bit` encoded words) and the decoded header value.
 
-mod cjk;
-mod cjk_tables;
-#[cfg(test)]
-mod codec_tests;
 mod codecs;
-mod unicode_tables;
-mod unicodec;
 
 use crate::pystr;
 
@@ -51,9 +45,10 @@ type R<T> = Result<T, Ex>;
 const ATTR: Ex = Ex::Builtin("AttributeError");
 const INDEX: Ex = Ex::Builtin("IndexError");
 const UNICODE_ENCODE: Ex = Ex::Builtin("UnicodeEncodeError");
-/// `RuntimeError("internal codec error")` from a `_multibytecodec` decoder
-/// (`MBERR_INTERNAL`), which `get_encoded_word` does not catch.
-const RUNTIME: Ex = Ex::Builtin("RuntimeError");
+/// An encoded word in a charset CPython decodes with a codec this port does
+/// not implement (multi-byte CJK codecs, UTF-16/32, UTF-7, the escape and
+/// IDNA codecs).  The send fails closed instead of guessing the text.
+const UNSUPPORTED_CHARSET: Ex = Ex::Builtin("UnsupportedCharset");
 
 /// Comment nesting at which CPython's recursion limit (1000 frames) stops
 /// the header parse (`message[...] = value`: `get_comment` recursion, then
@@ -222,24 +217,19 @@ fn to_string(value: &[u32]) -> Option<String> {
     value.iter().map(|c| char::from_u32(*c)).collect()
 }
 
-/// `utils._sanitize` (which `BaseHeader.__new__` applies when the decoded
-/// value has surrogates): surrogate-escaped bytes back to UTF-8, invalid
-/// sequences as U+FFFD.  `string.encode('utf-8', 'surrogateescape')`
-/// raises `UnicodeEncodeError` for any other lone surrogate, which an
-/// encoded word in a charset such as `unicode_escape`, `utf-7` or
-/// `punycode` can decode to.
-fn sanitize(value: &[u32]) -> R<String> {
+/// `utils._sanitize`: surrogate-escaped bytes back to UTF-8, invalid
+/// sequences as U+FFFD.
+fn sanitize(value: &[u32]) -> String {
     let mut bytes = Vec::with_capacity(value.len());
     for &c in value {
         if (0xDC80..=0xDCFF).contains(&c) {
             bytes.push((c - 0xDC00) as u8);
-        } else {
-            let c = char::from_u32(c).ok_or(UNICODE_ENCODE)?;
+        } else if let Some(c) = char::from_u32(c) {
             let mut buf = [0u8; 4];
             bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 // ------------------------------------------------------------- the tokens
@@ -2059,66 +2049,8 @@ enum Codec {
     Undefined,
     /// A bytes-to-bytes codec: `bytes.decode` raises `LookupError`.
     NonText,
-    /// A `_multibytecodec` CJK codec (`cjk.rs`).
-    Cjk(cjk::Cjk),
-    Utf16(unicodec::Endian),
-    Utf32(unicodec::Endian),
-    Utf7,
-    UnicodeEscape,
-    RawUnicodeEscape,
-    Punycode,
-    Idna,
-}
-
-/// The `errors` argument `_encoded_words.decode` passes to `bytes.decode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Errors {
-    Strict,
-    SurrogateEscape,
-}
-
-/// Why a `bytes.decode` call raised.
-#[derive(Debug, PartialEq, Eq)]
-enum DecodeFail {
-    /// `UnicodeDecodeError`.
-    Decode,
-    /// Another `ValueError`: the `UnicodeError` a Python codec raises.
-    Value,
-    /// `RuntimeError("internal codec error")`.
-    Runtime,
-}
-
-/// The error handler for a `UnicodeDecodeError` over `input[start..end]`
-/// (`unicode_decode_call_errorhandler_writer`, `multibytecodec_decerror`):
-/// `strict` raises it; `surrogateescape` (`PyCodec_SurrogateEscapeErrors`)
-/// writes U+DC80..U+DCFF for up to four leading non-ASCII bytes of the
-/// range and resumes after them, or re-raises when the range starts with
-/// an ASCII byte.  Returns the position decoding resumes at.
-fn decode_error(
-    errors: Errors,
-    input: &[u8],
-    start: usize,
-    end: usize,
-    out: &mut Text,
-) -> Result<usize, DecodeFail> {
-    if errors == Errors::Strict {
-        return Err(DecodeFail::Decode);
-    }
-    let mut consumed = 0;
-    while consumed < 4 && start + consumed < end {
-        match input.get(start + consumed) {
-            Some(&byte) if byte >= 0x80 => {
-                out.push(surrogate_byte(byte));
-                consumed += 1;
-            }
-            _ => break,
-        }
-    }
-    if consumed == 0 {
-        // codec complained about ASCII byte.
-        return Err(DecodeFail::Decode);
-    }
-    Ok(start + consumed)
+    /// A text codec this port does not implement.
+    Unimplemented,
 }
 
 /// `codecs.lookup(name)` for `bytes.decode`: `None` is `LookupError`.
@@ -2217,7 +2149,7 @@ fn decode_with(codec: Codec, bytes: &[u8], escape: bool) -> R<Decoded> {
         }
         Codec::Latin1 => Decoded::Ok(bytes.iter().map(|b| u32::from(*b)).collect()),
         Codec::Charmap(index) => {
-            let table = codecs::CHARMAPS.get(index).ok_or(Ex::InvalidEw)?;
+            let table = codecs::CHARMAPS.get(index).ok_or(UNSUPPORTED_CHARSET)?;
             let mut out = Vec::with_capacity(bytes.len());
             for &b in bytes {
                 let c = table[usize::from(b)];
@@ -2235,40 +2167,7 @@ fn decode_with(codec: Codec, bytes: &[u8], escape: bool) -> R<Decoded> {
         }
         // `UnicodeError("undefined encoding")`: a `ValueError`.
         Codec::Undefined => return Err(Ex::InvalidEw),
-        // `lookup_codec` never returns a non-text codec.
-        Codec::NonText => return Err(Ex::InvalidEw),
-        Codec::Cjk(..)
-        | Codec::Utf16(..)
-        | Codec::Utf32(..)
-        | Codec::Utf7
-        | Codec::UnicodeEscape
-        | Codec::RawUnicodeEscape
-        | Codec::Punycode
-        | Codec::Idna => {
-            let errors = if escape {
-                Errors::SurrogateEscape
-            } else {
-                Errors::Strict
-            };
-            let decoded = match codec {
-                Codec::Cjk(cjk) => cjk::decode(cjk, bytes, errors),
-                Codec::Utf16(endian) => unicodec::decode_utf16(bytes, endian, errors),
-                Codec::Utf32(endian) => unicodec::decode_utf32(bytes, endian, errors),
-                Codec::Utf7 => unicodec::decode_utf7(bytes, errors),
-                Codec::UnicodeEscape => unicodec::decode_unicode_escape(bytes, errors),
-                Codec::RawUnicodeEscape => unicodec::decode_raw_unicode_escape(bytes, errors),
-                Codec::Punycode => unicodec::decode_punycode(bytes, errors),
-                _ => unicodec::decode_idna(bytes, errors),
-            };
-            match decoded {
-                Ok(text) => Decoded::Ok(text),
-                Err(DecodeFail::Decode) => Decoded::DecodeError,
-                // `ValueError`: `get_encoded_word` turns it into
-                // `_InvalidEwError`.
-                Err(DecodeFail::Value) => return Err(Ex::InvalidEw),
-                Err(DecodeFail::Runtime) => return Err(RUNTIME),
-            }
-        }
+        Codec::NonText | Codec::Unimplemented => return Err(UNSUPPORTED_CHARSET),
     })
 }
 
@@ -2312,18 +2211,7 @@ fn ew_decode(tok: &[u32]) -> R<(Text, Vec<Defect>)> {
         // `bytes.decode`: "embedded null character" (`ValueError`).
         return Err(Ex::InvalidEw);
     }
-    // `bytes.decode(charset)`: the `encoding` argument is converted to a C
-    // string first (a lone surrogate raises `UnicodeEncodeError`, handled
-    // like `LookupError`), then empty bytes decode to '' without a codec
-    // lookup (`PyUnicode_FromEncodedObject`).
-    let codec = if charset.iter().any(|c| is_surrogate(*c)) {
-        None
-    } else if bytes.is_empty() {
-        return Ok((Text::new(), defects));
-    } else {
-        lookup_codec(charset)
-    };
-    let text = match codec {
+    let text = match lookup_codec(charset) {
         None => {
             // `LookupError`: ASCII with surrogateescape.
             let lower: Option<String> = to_string(charset).map(|s| s.to_lowercase());
@@ -2743,7 +2631,7 @@ pub(super) struct Header {
 /// `UnstructuredHeader` (`Subject`).
 pub(super) fn unstructured_header(name: &'static str, value: &str) -> R<Header> {
     let parse_tree = get_unstructured(&text(value))?;
-    let decoded = sanitize(&parse_tree.to_str())?;
+    let decoded = sanitize(&parse_tree.to_str());
     Ok(Header {
         name,
         parse_tree,
@@ -2843,7 +2731,7 @@ pub(super) fn address_header(name: &'static str, value: &str) -> R<Header> {
     Ok(Header {
         name,
         parse_tree,
-        decoded: sanitize(&decoded)?,
+        decoded: sanitize(&decoded),
     })
 }
 
