@@ -1392,6 +1392,8 @@ print(json.dumps(out))
     /// errors that make the word invalid, and the `RuntimeError` an
     /// ISO-2022-JP-2 single shift into a G2 set it cannot use raises, in the
     /// subject and in display names, compared byte for byte with Python.
+    /// Also empty payloads, which `bytes.decode` turns into '' without a
+    /// codec lookup (no `CharsetError` defect, no `undefined` error).
     #[test]
     fn multibyte_charset_encoded_words_match_python_bytes() {
         fn q(bytes: &[u8]) -> String {
@@ -1456,6 +1458,10 @@ print(json.dumps(out))
             ("punycode", b"mnchen-3y\x80"),
             ("idna", b"xn--mnchen-3ya.de"),
             ("idna", b"xn--mnchen-3yb"),
+            // Empty payloads decode to '' before any codec lookup.
+            ("undefined", b""),
+            ("x-nonexistent", b""),
+            ("utf-16", b""),
         ];
         let mut cases = vec![];
         for (charset, bytes) in words {
