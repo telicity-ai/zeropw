@@ -3544,7 +3544,13 @@ pub fn relay_with_resolver(
 ) -> RelayResult {
     let handle = match ctx.handles.verify(handle_token, Some((ctx.clock)())) {
         Ok(h) => h,
-        Err(e) => return refuse_unauthenticated(ctx, &e.reason, method, path, request_id),
+        Err(e) if e.is(ErrorClass::AuthFailed) => {
+            return refuse_unauthenticated(ctx, &e.reason, method, path, request_id);
+        }
+        // `relay` only catches `AuthFailed`; the built-in exception a
+        // non-ASCII token raises inside `verify` reaches the server's
+        // catch-all, which answers this fixed 500 and writes no audit record.
+        Err(_) => return error_result(500, "internal_error", Some("InternalError"), None),
     };
     Relay::new(
         ctx,
