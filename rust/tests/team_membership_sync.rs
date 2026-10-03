@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -233,39 +231,21 @@ fn live_emergency_facts_each_record_one_apply_audit() {
     }
 }
 
+/// A fact's signed canonical bytes and hash, byte-identical to what the
+/// Python prototype's `Fact.canonical_json(True)`/`Fact.hash` produced for
+/// the same fact (non-ASCII target text included).
 #[test]
 fn fact_canonical_bytes_and_hash_match_python() {
-    let source = json!({"format":"zeropw-team-fact-v1","env_id":"owner-0123456789abcdef0123456789abcdef","kind":"connection_disabled","target":{"connection_id":"café-1"},"author":"aaaaaaaaaaaaaaaaaaaaaaaaaa","hlc":"123-0001","sig":"AA=="});
-    let rust = sync::Fact::from_dict(&source).unwrap();
-    let script = "import base64,json,sys\nfrom zeropw.team.sync import Fact\nf=Fact.from_dict(json.load(sys.stdin))\nprint(json.dumps({'canonical':base64.b64encode(f.canonical_json(True)).decode(),'hash':f.hash}))";
-    let mut child = Command::new("python3.12")
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(source.to_string().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    use base64::Engine;
+    let source = json!({"format":"zeropw-team-fact-v1","env_id":"owner-0123456789abcdef0123456789abcdef","kind":"connection_disabled","target":{"connection_id":"caf\u{e9}-1"},"author":"aaaaaaaaaaaaaaaaaaaaaaaaaa","hlc":"123-0001","sig":"AA=="});
+    let fact = sync::Fact::from_dict(&source).unwrap();
     assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(rust.canonical_json(true).unwrap()),
-        result["canonical"]
+        String::from_utf8(fact.canonical_json(true).unwrap()).unwrap(),
+        r#"{"author":"aaaaaaaaaaaaaaaaaaaaaaaaaa","env_id":"owner-0123456789abcdef0123456789abcdef","format":"zeropw-team-fact-v1","hlc":"123-0001","kind":"connection_disabled","sig":"AA==","target":{"connection_id":"caf\u00e9-1"}}"#
     );
-    assert_eq!(rust.hash().unwrap(), result["hash"]);
+    assert_eq!(
+        fact.hash().unwrap(),
+        "a957fdc833c02071d3519b54ee640da68b19c7cc158508d2f7c70f7583ef110e"
+    );
 }
 
 #[test]
