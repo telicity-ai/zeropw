@@ -26,8 +26,11 @@ not remove any test or acceptance requirement.
 Verification now uses the dedicated `zeropw-parity` Lima Linux VM, with no
 host-directory mounts, SSH-agent forwarding, proxy environment propagation,
 or automatic application-port forwarding. An unprivileged `parity` user
-receives a committed source archive, with its SHA and archive digest recorded
-outside the guest. Guest firewall rules reject that user's connections to
+receives committed source through an archive or credential-free Git bundle,
+with its SHA and transfer digest recorded outside the guest. The manual
+matrix uses a clean Git checkout from the bundle so it can verify unchanged
+HEAD and a clean working tree before and after execution. Guest firewall
+rules reject that user's connections to
 private/link-local networks; loopback synthetic endpoints remain available.
 No repository, model, vault, gateway or signer administrator credentials are
 provided to the guest. Product builds and tests execute there, never directly
@@ -36,6 +39,21 @@ on the coordinator host. Rust 1.98.1 and CPython 3.12.14 (source commit
 This ARM64 Linux environment does not replace required macOS platform tests.
 Older local-run reports below are historical evidence and do not describe
 this execution arrangement.
+
+Inside this isolated environment, `python3.12 rust/verify.py --suite all`
+runs the preserved nine-suite workflow matrix, including dynamically
+discovered integration targets, canonical-guard mutation checks, explicit
+signer probes and Python reference tests. `--list` displays the manifest;
+`--suite NAME` selects one group. Preflight failures stop dependent tests,
+and each command has a 60-minute timeout. This command must not run on the
+credential-bearing coordinator host.
+
+Initial VM execution at `5a9b912` passed all 1099 Python reference tests and
+80 harness tests. Rust library execution passed 539 tests, failed one SMTP
+encoded-word byte comparison, and left four explicit signer probes ignored
+in the default run. Strict all-target compilation exposed test-only type
+errors in large vault-version literals and a team-version vector assertion.
+These are concrete failures being corrected, not a full-equivalence PASS.
 
 At `f2091e8309cea8cc843020c3ee562bf106db4d7f`, hosted run
 [37041858065](https://github.com/handlecusion/zeropw/actions/runs/37041858065)

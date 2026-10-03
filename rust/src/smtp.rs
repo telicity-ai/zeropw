@@ -1165,6 +1165,7 @@ enum Kind {
     HeaderLabel,
     Cfws,
     Unstructured,
+    EncodedWord,
     Comment,
     DisplayName,
     Atom,
@@ -1227,6 +1228,7 @@ impl Tok {
         match self {
             Tok::Term(_, token_type, ..) => token_type,
             Tok::List(Kind::BareQuotedString, _) => "bare-quoted-string",
+            Tok::List(Kind::EncodedWord, _) => "encoded-word",
             Tok::List(..) => "",
         }
     }
@@ -1363,8 +1365,8 @@ fn get_atom(mut value: &str) -> Parsed<'_> {
         return Err(PErr::Header);
     }
     let (token, rest) = if value.starts_with("=?") {
-        match get_encoded_word(value) {
-            EwParse::Ok(text, rest) => (Tok::value(text, "encoded-word"), rest),
+        match get_encoded_word(value, "vtext") {
+            EwParse::Ok(token, rest) => (token, rest),
             EwParse::Invalid | EwParse::NotEw => get_atext(value)?,
             EwParse::Unsupported => return Err(PErr::Unsupported),
         }
@@ -1875,8 +1877,8 @@ fn get_unstructured(mut value: &str, decode_ew: bool) -> Option<Tok> {
         }
         let mut valid_ew = true;
         if decode_ew && value.starts_with("=?") {
-            match get_encoded_word(value) {
-                EwParse::Ok(text, rest) => {
+            match get_encoded_word(value, "utext") {
+                EwParse::Ok(token, rest) => {
                     let have_ws = parts.last().is_none_or(|last| last.token_type() == "fws");
                     let len = parts.len();
                     if have_ws
@@ -1886,7 +1888,7 @@ fn get_unstructured(mut value: &str, decode_ew: bool) -> Option<Tok> {
                     {
                         *space = Space::EwFws;
                     }
-                    parts.push(Tok::value(text, "encoded-word"));
+                    parts.push(token);
                     kinds.push(true);
                     value = rest;
                     continue;
@@ -1920,7 +1922,7 @@ fn rfc2047_matcher() -> &'static regex::Regex {
 }
 
 enum EwParse<'a> {
-    Ok(String, &'a str),
+    Ok(Tok, &'a str),
     /// `_InvalidEwError`.
     Invalid,
     /// `HeaderParseError`: not an encoded word.
@@ -1935,7 +1937,7 @@ fn decode_latin1(bytes: &[u8]) -> String {
 
 /// `get_encoded_word` + `_encoded_words.decode` for the charsets representable
 /// without surrogate code points in Rust strings.
-fn get_encoded_word(value: &str) -> EwParse<'_> {
+fn get_encoded_word<'a>(value: &'a str, terminal_type: &'static str) -> EwParse<'a> {
     let Some(body) = value.strip_prefix("=?") else {
         return EwParse::NotEw;
     };
@@ -2014,7 +2016,26 @@ fn get_encoded_word(value: &str) -> EwParse<'_> {
         _ => bytes.is_ascii().then(|| decode_latin1(&bytes)),
     };
     decoded.map_or(EwParse::Unsupported, |decoded| {
-        EwParse::Ok(decoded, remainder)
+        // CPython's EncodedWord is a TokenList, not a single terminal.  It
+        // splits the decoded text at each FWS run before refolding.  Keeping
+        // that shape matters when an encoded word mixes ASCII and non-ASCII:
+        // `Hello ✓` is emitted as plain `Hello ` plus an encoded word for ✓,
+        // rather than re-encoding the whole input word verbatim.
+        let mut parts = Vec::new();
+        let mut rest = decoded.as_str();
+        while !rest.is_empty() {
+            if first(rest).is_some_and(is_wsp) {
+                let (token, after) = get_fws(rest);
+                parts.push(token);
+                rest = after;
+            } else {
+                let split = rest.find(WSP).unwrap_or(rest.len());
+                let (text, after) = rest.split_at(split);
+                parts.push(Tok::value(text, terminal_type));
+                rest = after;
+            }
+        }
+        EwParse::Ok(Tok::List(Kind::EncodedWord, parts), remainder)
     })
 }
 

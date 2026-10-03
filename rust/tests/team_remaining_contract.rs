@@ -1436,7 +1436,7 @@ fn removed_member_keeps_old_version_but_cannot_get_new_generation_version() {
             .iter()
             .map(|v| v.version.clone())
             .collect::<Vec<_>>(),
-        vec![1.into()]
+        vec![zeropw::pyint::PyInt::from(1_i64)]
     );
 }
 
