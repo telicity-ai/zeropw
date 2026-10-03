@@ -206,7 +206,11 @@ identity, and reproduce that scope.
 
 ## 4. Engineering rules
 
-- No `unsafe` except the `libc::flock` call in `store.rs`. No `unwrap`/`expect`/indexing panics on
+- No `unsafe` except the `libc::flock` call in `store.rs` and, by coordinator ruling (2026-10-03), the
+  resolver FFI in `sys_hostent.rs`: no safe crate exposes the `hostent` alias list that CPython's
+  `socket.gethostbyaddr`/`getfqdn` return, and `smtplib` picks the EHLO name from those aliases. That module
+  confines every `unsafe` block (each with a `// SAFETY:` comment), copies all data out before releasing
+  CPython's lock/buffer, and exposes only a safe function. No `unwrap`/`expect`/indexing panics on
   untrusted input (files, sockets, agent-supplied data): return an error as Python would.
 - Rust naming, but keep Python names recognisable (`read_json`, `write_json`, `Policy::grant_create`...)
   so a reviewer can map each item back. Each public item's doc comment names the Python function if the
