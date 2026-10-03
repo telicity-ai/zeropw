@@ -1299,30 +1299,16 @@ fn grant_view(grant: &crate::policy::Grant) -> Value {
         "credential_version":grant.credential_version})
 }
 
-fn check_admin_document(ctx: &Context) -> Result<(), Error> {
-    let doc = ctx.state.read_json(crate::vault::ADMIN_DOC, Value::Null)?;
-    if doc.is_null() {
-        return Ok(()); // Preserve AdminCredential's own admin_missing reason.
-    }
-    let object = doc
-        .as_object()
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("TypeError"))?;
-    for key in ["salt", "hash"] {
-        if !object.contains_key(key) {
-            return Err(Error::state("state_corrupt").with_detail("KeyError"));
-        }
-        if !object[key].is_string() {
-            return Err(Error::state("state_corrupt").with_detail("TypeError"));
-        }
-    }
-    Ok(())
-}
-
+/// `ctx.admin.verify(passphrase)` with `except AuthFailed`: only an
+/// authentication failure is recorded; `admin_missing` and a malformed
+/// `admin.json` (`AdminCredential::verify`'s escaped built-ins) propagate
+/// unrecorded, as in Python.
 fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
-    check_admin_document(ctx)?;
     let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
     if let Err(error) = ctx.admin.verify(&pass, None) {
-        record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        if error.is(crate::errors::ErrorClass::AuthFailed) {
+            record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        }
         return Err(error);
     }
     Ok(())
@@ -1548,16 +1534,17 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
         ("secret", "reveal") => {
-            check_admin_document(&ctx)?;
             let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
             let auth = match ctx.admin.verify(&pass, None) {
                 Ok(auth) => auth,
                 Err(error) => {
-                    record_auth_failure(
-                        &ctx,
-                        &error.reason,
-                        vec![("secret_id", json!(a.req("id")))],
-                    );
+                    if error.is(crate::errors::ErrorClass::AuthFailed) {
+                        record_auth_failure(
+                            &ctx,
+                            &error.reason,
+                            vec![("secret_id", json!(a.req("id")))],
+                        );
+                    }
                     return Err(error);
                 }
             };

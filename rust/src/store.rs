@@ -560,6 +560,24 @@ fn path_str(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// One name from `tempfile._RandomNameSequence`: eight characters drawn
+/// uniformly from `"abcdefghijklmnopqrstuvwxyz0123456789_"`, the suffix
+/// alphabet and length of every `tempfile.mkstemp`/`mkdtemp` name.
+pub fn tempfile_random_name() -> String {
+    use rand::RngCore;
+    const CHARACTERS: &[u8; 37] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut name = String::with_capacity(8);
+    while name.len() < 8 {
+        let mut byte = [0u8; 1];
+        rand::rngs::OsRng.fill_bytes(&mut byte);
+        // Rejection sampling keeps the choice uniform (`37 * 6 == 222`).
+        if byte[0] < 222 {
+            name.push(char::from(CHARACTERS[usize::from(byte[0] % 37)]));
+        }
+    }
+    name
+}
+
 /// `store.now()`: seconds since the Unix epoch, like `time.time()`.
 pub fn now() -> f64 {
     SystemTime::now()

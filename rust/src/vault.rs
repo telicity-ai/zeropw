@@ -476,35 +476,55 @@ impl<'a> AdminCredential<'a> {
         )
     }
 
-    /// `AdminCredential.verify`. A malformed `admin.json` (missing/invalid
-    /// `salt`/`hash`) makes Python's `_b64d(doc["salt"])` raise an uncaught
-    /// `KeyError`/`binascii.Error` -- outside the `except InvalidInput` that
-    /// only guards the short-passphrase case in `derive_key`. Per §3.5 the
-    /// closest handled error is this method's own `AuthFailed`
-    /// (`admin_reauth_failed`); `AdminCredential::initialize` never writes a
-    /// document that could trigger this.
+    /// `AdminCredential.verify`. Only `derive_key`'s `InvalidInput` and the
+    /// hash comparison become `AuthFailed("admin_reauth_failed")`. A
+    /// truthy but malformed `admin.json` makes `doc["salt"]`/`doc["hash"]`
+    /// or `_b64d(...)` raise a built-in (`KeyError`, `TypeError`,
+    /// `ValueError` or `binascii.Error`) that escapes `verify`; callers only
+    /// record an authentication failure for `AuthFailed`, and the
+    /// administrator CLI prints `StateError`/`state_corrupt` with the class
+    /// name. That is reproduced as `StateError("state_corrupt", <class>)`,
+    /// evaluated in Python's order (the salt before the passphrase check).
     pub fn verify(&self, passphrase: &str, now: Option<f64>) -> Result<AdminAuth, Error> {
         let doc = self.state.read_json(ADMIN_DOC, Value::Null)?;
         if json_falsy(&doc) {
             return Err(Error::state("admin_missing"));
         }
         let reauth_failed = || Error::auth_failed("admin_reauth_failed");
-        let salt = doc
-            .get("salt")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(reauth_failed)?;
+        let salt = admin_b64d(admin_field(&doc, "salt")?)?;
         let key = derive_key(passphrase, &salt).map_err(|_| reauth_failed())?;
-        let expected_hash = doc
-            .get("hash")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(reauth_failed)?;
-        if !constant_time_eq(&sha256(key.expose()), &expected_hash) {
+        let actual_hash = sha256(key.expose());
+        let expected_hash = admin_b64d(admin_field(&doc, "hash")?)?;
+        if !constant_time_eq(&actual_hash, &expected_hash) {
             return Err(reauth_failed());
         }
         Ok(AdminAuth::new(now.unwrap_or_else(crate::store::now)))
     }
+}
+
+/// The built-in exception `name` escaping a `vault.py` method, in the
+/// `StateError("state_corrupt", <class>)` shape the administrator CLI's
+/// `except (KeyError, TypeError, AttributeError, ValueError)` prints.
+fn escaped_builtin(name: &str) -> Error {
+    Error::state("state_corrupt").with_detail(name)
+}
+
+/// `doc[key]` on a truthy `json.load` result: `KeyError` for a missing key,
+/// `TypeError` when `doc` is a list, string, number or `true`.
+fn admin_field<'v>(doc: &'v Value, key: &str) -> Result<&'v Value, Error> {
+    match doc {
+        Value::Object(map) => map.get(key).ok_or_else(|| escaped_builtin("KeyError")),
+        _ => Err(escaped_builtin("TypeError")),
+    }
+}
+
+/// `vault._b64d` (`base64.b64decode`) on a JSON value: a non-`str` is a
+/// `TypeError`; a `str` fails with the class `pybase64` reports.
+fn admin_b64d(value: &Value) -> Result<Vec<u8>, Error> {
+    let Value::String(text) = value else {
+        return Err(escaped_builtin("TypeError"));
+    };
+    pybase64::b64decode(text).map_err(|e| escaped_builtin(e.python_class()))
 }
 
 // ------------------------------------------------------------------------ vault
@@ -889,12 +909,21 @@ impl<'a> Vault<'a> {
     /// `put_secret` (the only caller of this metadata step) already handles.
     pub fn public_metadata(kind: &str, value: &[u8]) -> Result<Value, Error> {
         if kind == "ssh_private_key" {
+            // Only the parse sits inside `except sshwire.WireError`; the
+            // bare `ValueError` `to_authorized_key` raises for a comment with
+            // a line break or NUL (and anything else that is not a
+            // `WireError`) escapes `put_secret` before anything is written.
             let key = crate::sshwire::parse_openssh_private_key(value).map_err(|e| {
-                Error::invalid_input("ssh_private_key_invalid").with_detail(e.class_name())
+                if e.is_wire_error() {
+                    Error::invalid_input("ssh_private_key_invalid").with_detail(e.class_name())
+                } else {
+                    escaped_builtin(e.class_name())
+                }
             })?;
-            let public_key = key.public.to_authorized_key(&key.comment).map_err(|e| {
-                Error::invalid_input("ssh_private_key_invalid").with_detail(e.class_name())
-            })?;
+            let public_key = key
+                .public
+                .to_authorized_key(&key.comment)
+                .map_err(|e| escaped_builtin(e.class_name()))?;
             return Ok(json!({
                 "public_key": public_key,
                 "fingerprint": key.public.fingerprint(),
@@ -1742,6 +1771,11 @@ impl<'a> Vault<'a> {
             manifest.as_object().expect("checked"),
             "sha256",
         ));
+        // `hmac.compare_digest(str, str)` raises `TypeError` for a non-ASCII
+        // `str`; it escapes `restore` (the CLI prints `state_corrupt`).
+        if !manifest_digest.is_ascii() {
+            return Err(escaped_builtin("TypeError"));
+        }
         if !constant_time_eq(digest.as_bytes(), manifest_digest.as_bytes()) {
             return Err(Error::state("backup_digest_mismatch"));
         }
@@ -1885,8 +1919,9 @@ impl<'a> Vault<'a> {
 /// a PID+thread-based name and a different JSON format) do not apply here.
 ///
 /// Python's failure path here (`except BaseException: os.unlink(tmp); raise`)
-/// re-raises the *original*, uncaught `OSError` -- per §3.5, the closest
-/// handled error is `StateError`.
+/// re-raises the *original*, uncaught `OSError`, which the administrator CLI
+/// prints by class and `strerror`; [`crate::store::uncaught_os_error`]
+/// reproduces it (the temp file is removed first, as in Python).
 fn write_backup_atomic(out_path: &Path, contents: &str) -> Result<(), Error> {
     use std::fs::OpenOptions;
     use std::io::Write as _;
@@ -1898,22 +1933,42 @@ fn write_backup_atomic(out_path: &Path, contents: &str) -> Result<(), Error> {
         .unwrap_or_else(|| Path::new("."));
     let file_name = out_path
         .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("backup");
-    let mut tmp_path = parent.join(format!(".{file_name}.tmp"));
-    for _ in 0..64 {
-        let suffix = hex::encode(random_bytes(8));
-        tmp_path = parent.join(format!(".{file_name}.{suffix}.tmp"));
-        if !tmp_path.exists() {
-            break;
-        }
-    }
-    let result = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    // `tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=parent)`:
+    // `O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW`, retrying only on `FileExistsError`
+    // (`TMP_MAX` times); any other `os.open` failure is raised as is.
+    let mut opened = None;
+    for _ in 0..TMP_MAX {
+        let tmp_path = parent.join(format!(
+            ".{file_name}.{}.tmp",
+            crate::store::tempfile_random_name()
+        ));
+        match OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
             .mode(0o600)
-            .open(&tmp_path)?;
+            .open(&tmp_path)
+        {
+            Ok(file) => {
+                opened = Some((file, tmp_path));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(crate::store::uncaught_os_error(&e)),
+        }
+    }
+    let Some((mut file, tmp_path)) = opened else {
+        return Err(Error::subclass(
+            crate::errors::ErrorClass::ZeroPW,
+            "FileExistsError",
+            "io_error",
+            "No usable temporary file name found",
+        ));
+    };
+    let result = (|| -> std::io::Result<()> {
         file.write_all(contents.as_bytes())?;
         file.flush()?;
         file.sync_all()?;
@@ -1921,14 +1976,18 @@ fn write_backup_atomic(out_path: &Path, contents: &str) -> Result<(), Error> {
         fs::rename(&tmp_path, out_path)?;
         Ok(())
     })();
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = fs::remove_file(&tmp_path);
-            Err(Error::state("backup_write_failed").with_detail(e.to_string()))
-        }
-    }
+    result.map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        crate::store::uncaught_os_error(&e)
+    })
 }
+
+/// `os.TMP_MAX`: the number of names `tempfile.mkstemp`/`mkdtemp` try
+/// before giving up (glibc's value; Darwin's `<stdio.h>` says 308915776).
+#[cfg(target_os = "linux")]
+pub(crate) const TMP_MAX: u32 = 238_328;
+#[cfg(not(target_os = "linux"))]
+pub(crate) const TMP_MAX: u32 = 308_915_776;
 
 #[cfg(test)]
 mod tests {

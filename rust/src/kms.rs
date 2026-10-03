@@ -12,7 +12,7 @@
 
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Number, Value};
@@ -211,22 +211,26 @@ impl LocalFileKms {
         let master = SecretBytes::from_slice(&master_bytes);
         master_bytes.iter_mut().for_each(|b| *b = 0);
 
+        // `path.parent.mkdir(...)`, `os.open(..., O_EXCL)` and the write are
+        // not guarded in `kms.py`: each `OSError` (a lost creation race is
+        // `FileExistsError`) escapes `create` and reaches the administrator
+        // CLI unchanged, so it is reported as that raw error.
         ensure_dir_mode_0700(path.parent().unwrap_or_else(|| Path::new(".")))
-            .map_err(|e| kms_error("kms_create_failed", e.to_string()))?;
+            .map_err(|e| crate::store::uncaught_os_error(&e))?;
 
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(path)
-            .map_err(|e| kms_error("kms_create_failed", e.to_string()))?;
+            .map_err(|e| crate::store::uncaught_os_error(&e))?;
         let mut contents = Vec::with_capacity(key_id.len() + 1 + 44 + 1);
         contents.extend_from_slice(key_id.as_bytes());
         contents.push(b'\n');
         contents.extend_from_slice(pybase64::b64encode(master.expose()).as_bytes());
         contents.push(b'\n');
         file.write_all(&contents)
-            .map_err(|e| kms_error("kms_create_failed", e.to_string()))?;
+            .map_err(|e| crate::store::uncaught_os_error(&e))?;
 
         LocalFileKms::new(path.to_path_buf(), key_id.to_string(), master)
     }
@@ -317,27 +321,18 @@ impl Kms for LocalFileKms {
     }
 }
 
-/// `path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)`: Python's
-/// pathlib applies `mode` only to the directory being created, not to any
-/// missing ancestors created along the way (those get default permissions),
-/// and does nothing (leaving existing permissions alone) if it already
-/// exists. Mirrors that exactly rather than using a single recursive mkdir
-/// with a uniform mode.
+/// `path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)`, through
+/// the crate's one port of `pathlib.Path.mkdir` (missing ancestors get the
+/// default mode, an existing directory is left alone, and the raw `OSError`
+/// is the one pathlib raises).
 fn ensure_dir_mode_0700(dir: &Path) -> std::io::Result<()> {
-    if dir.as_os_str().is_empty() || dir.is_dir() {
-        return Ok(());
-    }
-    if let Some(parent) = dir.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.is_dir()
-    {
-        fs::create_dir_all(parent)?;
-    }
-    match fs::DirBuilder::new().mode(0o700).create(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
-        Err(e) => Err(e),
-    }
+    // `Path("master.key").parent` is `Path(".")`.
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    crate::store::path_mkdir(dir, 0o700, true, true)
 }
 
 #[cfg(test)]
@@ -408,6 +403,55 @@ mod tests {
         let err = LocalFileKms::create_default(&path).unwrap_err();
         assert_eq!(err.name, "KmsError");
         assert_eq!(err.reason, "kms_exists");
+    }
+
+    /// Row 35: `LocalFileKms.create`'s `mkdir`, `os.open(O_EXCL)` and write
+    /// are unguarded, so their `OSError` escapes to the administrator CLI.
+    /// Compared with the real `create` through the CLI's rendering.
+    #[test]
+    fn create_os_failures_render_like_python() {
+        use std::os::unix::fs::PermissionsExt;
+        let script = r#"
+import json, os, tempfile
+from pathlib import Path
+from zeropw.kms import LocalFileKms
+def render(exc):
+    if isinstance(exc, FileNotFoundError):
+        return {"error": "FileNotFoundError", "reason": "file_not_found"}
+    if isinstance(exc, OSError):
+        return {"error": type(exc).__name__, "reason": "io_error", "detail": exc.strerror or ""}
+    return {"error": type(exc).__name__}
+for case in ("file_parent", "readonly_parent"):
+    with tempfile.TemporaryDirectory() as d:
+        if case == "file_parent":
+            open(os.path.join(d, "f"), "w").close()
+            path = Path(d) / "f" / "kms" / "master.key"
+        else:
+            os.mkdir(os.path.join(d, "ro"), 0o500)
+            path = Path(d) / "ro" / "master.key"
+        try:
+            LocalFileKms.create(path)
+            print(json.dumps("ok"))
+        except Exception as exc:
+            print(json.dumps(render(exc), sort_keys=True))
+        os.chmod(d, 0o700)
+        if case == "readonly_parent":
+            os.chmod(os.path.join(d, "ro"), 0o700)
+"#;
+        let python: Vec<Value> = crate::oracle::python(script)
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let dir = tempdir();
+        fs::write(dir.path().join("f"), b"").unwrap();
+        let file_parent = LocalFileKms::create_default(&dir.path().join("f/kms/master.key"))
+            .unwrap_err()
+            .to_dict();
+        fs::create_dir(dir.path().join("ro")).unwrap();
+        fs::set_permissions(dir.path().join("ro"), fs::Permissions::from_mode(0o500)).unwrap();
+        let readonly = LocalFileKms::create_default(&dir.path().join("ro/master.key"));
+        fs::set_permissions(dir.path().join("ro"), fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(python, vec![file_parent, readonly.unwrap_err().to_dict()]);
     }
 
     #[test]
