@@ -1,0 +1,2250 @@
+[
+ {
+  "kind": "admin",
+  "argv": [],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"the following arguments are required: --state-dir, COMMAND\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG [-h] --state-dir DIR COMMAND ...\n\nZeroPW administrator CLI (trusted; JSON output).\n\npositional arguments:\n  COMMAND\n    init           create a new state directory (passphrases from env or\n                   prompt)\n    project        projects and environments\n    secret         vault secrets (metadata only, except reveal)\n    connection     service connections\n    principal      agent identities\n    grant          grants (principal x connection, expiry, usage)\n    stop-all       refuse every relay, signature and execution until resume\n    resume         lift the global stop\n    approvals      one-shot approvals for risky methods\n    rotation       credential rotation: start -> activate -> finish\n    backup         write an encrypted backup archive\n    restore        restore an archive; leaves restore_pending set\n    restore-ack    clear restore_pending after re-applying revocations (admin\n                   re-auth)\n    recover        disaster recovery: new KMS key, grants revoked, handles\n                   rotated\n    incident       compromise-response incidents: lockdown and exposure\n                   assessment\n    audit          audit log (administrator only)\n    alerts         print the last alerts\n    team           team sync: environment sharing between teammate nodes\n                   (docs/team-sync.md)\n    serve          run the trusted server (tools API, relay, signer) until\n                   SIGINT/SIGTERM\n\noptions:\n  -h, --help       show this help message and exit\n  --state-dir DIR  trusted state directory (0700)\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"the following arguments are required: COMMAND\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "bogus"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"argument COMMAND: invalid choice: 'bogus' (choose from init, project, secret, connection, principal, grant, stop-all, resume, approvals, rotation, backup, restore, restore-ack, recover, incident, audit, alerts, team, serve)\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret [-h] SUBCOMMAND ...\n{\"detail\": \"the following arguments are required: SUBCOMMAND\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG secret [-h] SUBCOMMAND ...\n\nvault secrets (metadata only, except reveal)\n\npositional arguments:\n  SUBCOMMAND\n    put       store a new secret version; value via --value-file or --stdin\n              only\n    list      list secrets (metadata only)\n    versions  list the versions of one secret (metadata only)\n    reveal    reveal ONE secret version (admin re-auth; audited and alerted)\n    retire    retire a non-active version\n    revoke    revoke a version (connections using it fail closed)\n\noptions:\n  -h, --help  show this help message and exit\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG secret put [-h] --id ID --kind\n                               {api_key,password,env_var,ssh_private_key}\n                               --project PROJECT --environment ENVIRONMENT\n                               [--staged] (--value-file PATH | --stdin)\n\nstore a new secret version; value via --value-file or --stdin only\n\noptions:\n  -h, --help            show this help message and exit\n  --id ID\n  --kind {api_key,password,env_var,ssh_private_key}\n  --project PROJECT\n  --environment ENVIRONMENT\n  --staged              store without activating\n  --value-file PATH     read the secret value from this file (delete it\n                        afterwards)\n  --stdin               read the secret value from standard input\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret put [-h] --id ID --kind\n                               {api_key,password,env_var,ssh_private_key}\n                               --project PROJECT --environment ENVIRONMENT\n                               [--staged] (--value-file PATH | --stdin)\n{\"detail\": \"the following arguments are required: --id, --kind, --project, --environment\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "nope",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret put [-h] --id ID --kind\n                               {api_key,password,env_var,ssh_private_key}\n                               --project PROJECT --environment ENVIRONMENT\n                               [--staged] (--value-file PATH | --stdin)\n{\"detail\": \"argument --kind: invalid choice: 'nope' (choose from api_key, password, env_var, ssh_private_key)\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret put [-h] --id ID --kind\n                               {api_key,password,env_var,ssh_private_key}\n                               --project PROJECT --environment ENVIRONMENT\n                               [--staged] (--value-file PATH | --stdin)\n{\"detail\": \"one of the arguments --value-file --stdin is required\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin",
+   "--value-file",
+   "f"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret put [-h] --id ID --kind\n                               {api_key,password,env_var,ssh_private_key}\n                               --project PROJECT --environment ENVIRONMENT\n                               [--staged] (--value-file PATH | --stdin)\n{\"detail\": \"argument --value-file: not allowed with argument --stdin\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "x",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "e",
+   "--stdin",
+   "--value",
+   "hunter2"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"unrecognized arguments: 2 (not accepted: --value); values are not echoed\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "reveal",
+   "--id",
+   "x",
+   "--version",
+   "abc"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret reveal [-h] --id ID [--version VERSION]\n{\"detail\": \"argument --version: invalid int value: 'abc'\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "audit",
+   "tail",
+   "--limit",
+   "0"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG audit tail [-h] [--limit N]\n{\"detail\": \"argument --limit: must be a positive integer\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "audit",
+   "tail",
+   "--limit",
+   "x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG audit tail [-h] [--limit N]\n{\"detail\": \"argument --limit: must be a positive integer\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "principal",
+   "list",
+   "--runtime",
+   "r"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"unrecognized arguments: 2 (not accepted: --runtime); values are not echoed\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "-x",
+   "--connection",
+   "c"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG grant create [-h] --principal PRINCIPAL --connection\n                                 CONNECTION [--ttl TTL] [--max-uses MAX_USES]\n{\"detail\": \"argument --principal: expected one argument\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG project create [-h] [--environments A,B] name\n{\"detail\": \"the following arguments are required: name\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create",
+   "a",
+   "b"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"unrecognized arguments: 1; values are not echoed\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "diff",
+   "--env",
+   "a/b",
+   "x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG team diff [-h] --env PROJECT/ENVIRONMENT\n                              COMMIT-HASH-PREFIX COMMIT-HASH-PREFIX\n{\"detail\": \"the following arguments are required: COMMIT-HASH-PREFIX\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "incident",
+   "declare",
+   "--scope",
+   "bad"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG incident declare [-h] --scope {principal,runtime,all}\n                                     [--principal PRINCIPAL]\n                                     [--runtime RUNTIME] [--reason REASON]\n{\"detail\": \"argument --scope: invalid choice: 'bad' (choose from principal, runtime, all)\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "serve",
+   "--help"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG serve [-h] [--listen HOST:PORT] [--team-listen HOST:PORT]\n                          [--quiet]\n\nrun the trusted server (tools API, relay, signer) until SIGINT/SIGTERM\n\noptions:\n  -h, --help            show this help message and exit\n  --listen HOST:PORT    IPv4 loopback only (127.0.0.1 or localhost); port 0 =\n                        ephemeral\n  --team-listen HOST:PORT\n                        start team sync on a separate LAN/VPN-facing socket\n                        (default: team sync off)\n  --quiet               no request log lines on stderr\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG connection create-http [-h] --id ID --project PROJECT\n                                           --environment ENVIRONMENT --service\n                                           SERVICE --secret-id SECRET_ID\n                                           [--secret-version SECRET_VERSION]\n                                           --target URL --auth\n                                           {bearer,basic,header}\n                                           [--header-name HEADER_NAME]\n                                           [--value-prefix VALUE_PREFIX]\n                                           [--basic-username BASIC_USERNAME]\n                                           [--methods GET,POST|all]\n                                           [--path-prefixes /a,/b|all]\n                                           [--confirm-methods DELETE]\n                                           [--ca-file CA_FILE]\n                                           [--allow-private-network]\n                                           [--cli-program PATH]\n                                           [--cli-env K=V]\n                                           [--description DESCRIPTION]\n\ncreate an HTTP connection (gateway-injected auth)\n\noptions:\n  -h, --help            show this help message and exit\n  --id ID\n  --project PROJECT\n  --environment ENVIRONMENT\n  --service SERVICE\n  --secret-id SECRET_ID\n  --secret-version SECRET_VERSION\n                        pin a version (default: follow the active version)\n  --target URL          scheme://host[:port]; port defaults to 80/443\n  --auth {bearer,basic,header}\n  --header-name HEADER_NAME\n                        header for --auth header\n  --value-prefix VALUE_PREFIX\n                        e.g. \"token \" placed before the credential\n  --basic-username BASIC_USERNAME\n                        username for --auth basic (the vault value is the\n                        password)\n  --methods GET,POST|all\n                        default: GET,HEAD\n  --path-prefixes /a,/b|all\n                        default: all\n  --confirm-methods DELETE\n                        methods needing a one-shot approval\n  --ca-file CA_FILE     CA bundle for TLS verification (tests)\n  --allow-private-network\n                        allow a host-name target to resolve to\n                        loopback/private addresses (internal services);\n                        metadata and link-local addresses stay refused\n  --cli-program PATH    supported CLI executable for exec\n  --cli-env K=V         non-secret env for the CLI (repeatable)\n  --description DESCRIPTION\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "show",
+   "--env",
+   "a/b",
+   "--format",
+   "xml"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG team show [-h] --env PROJECT/ENVIRONMENT\n                              [--format {json,yaml}]\n{\"detail\": \"argument --format: invalid choice: 'xml' (choose from json, yaml)\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init",
+   "extra"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"unrecognized arguments: 1; values are not echoed\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init",
+   "--",
+   "x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"unrecognized arguments: 2; values are not echoed\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"argument --state-dir: expected one argument\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "init"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] --state-dir DIR COMMAND ...\n{\"detail\": \"the following arguments are required: --state-dir\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "list",
+   "--project"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret list [-h] [--project PROJECT]\n                                [--environment ENVIRONMENT]\n{\"detail\": \"argument --project: expected one argument\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "list",
+   "--project",
+   "--environment",
+   "e"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG secret list [-h] [--project PROJECT]\n                                [--environment ENVIRONMENT]\n{\"detail\": \"argument --project: expected one argument\", \"error\": \"UsageError\", \"reason\": \"usage\"}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\nPROG: error: the following arguments are required: command\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\n\nZeroPW agent tools client (JSON output)\n\npositional arguments:\n  {list-connections,request,exec,status,cancel}\n    list-connections    connections usable by this caller\n    request             relay one HTTP request through the gateway\n    exec                run the connection's supported CLI; arguments follow\n                        '--'\n    status              state and captured output of one of your runs\n    cancel              cancel one of your runs\n\noptions:\n  -h, --help            show this help message and exit\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --method METHOD\n  --path PATH\n  --body-file BODY_FILE\n                        file whose bytes form the request body\n  --body BODY           request body text (UTF-8)\n  --header 'K: V'\n  --request-id REQUEST_ID\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "-h"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "usage: PROG exec [-h] --connection CONNECTION\n                         [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --request-id REQUEST_ID\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "bogus"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\nPROG: error: argument command: invalid choice: 'bogus' (choose from list-connections, request, exec, status, cancel)\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\nPROG request: error: the following arguments are required: --method, --path\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--conn",
+   "c",
+   "--meth",
+   "get",
+   "--pa",
+   "/x"
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"set ZEROPW_GATEWAY_URL\",\n  \"error\": \"ConfigError\",\n  \"reason\": \"gateway_url_unset\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "--bo",
+   "x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\nPROG request: error: ambiguous option: --bo could match --body-file, --body\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "--body",
+   "a",
+   "--body-file",
+   "f"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\nPROG request: error: argument --body-file: not allowed with argument --body\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/x",
+   "extra",
+   "more"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\nPROG: error: unrecognized arguments: extra more\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "--connection",
+   "c",
+   "--",
+   "-h",
+   "--x"
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"set ZEROPW_GATEWAY_URL\",\n  \"error\": \"ConfigError\",\n  \"reason\": \"gateway_url_unset\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "exec",
+   "--connection",
+   "c",
+   "stray"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\nPROG: error: unrecognized arguments: stray\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "status"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG status [-h] --run RUN\nPROG status: error: the following arguments are required: --run\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "status",
+   "--run",
+   "-x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG status [-h] --run RUN\nPROG status: error: argument --run: expected one argument\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections",
+   "--",
+   "x"
+  ],
+  "expected": {
+   "code": 2,
+   "stdout": "",
+   "stderr": "usage: PROG [-h] {list-connections,request,exec,status,cancel} ...\nPROG: error: unrecognized arguments: -- x\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "ftp://x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"error\": \"ConfigError\",\n  \"reason\": \"gateway_url_invalid\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"[Errno <N>] <MSG>\",\n  \"error\": \"ConnectionError\",\n  \"reason\": \"gateway_unreachable\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://nonexistent.invalid:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"[Errno <N>] <MSG>\",\n  \"error\": \"ConnectionError\",\n  \"reason\": \"gateway_unreachable\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "list-connections"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://user@127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"[Errno <N>] <MSG>\",\n  \"error\": \"ConnectionError\",\n  \"reason\": \"gateway_unreachable\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--body-file",
+   "/nonexistent"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"FileNotFoundError\",\n  \"error\": \"InvalidInput\",\n  \"reason\": \"invalid_arguments\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--body-file",
+   "/tmp"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"IsADirectoryError\",\n  \"error\": \"InvalidInput\",\n  \"reason\": \"invalid_arguments\"\n}\n"
+  }
+ },
+ {
+  "kind": "agent",
+  "argv": [
+   "request",
+   "--connection",
+   "c",
+   "--method",
+   "get",
+   "--path",
+   "/",
+   "--header",
+   "nocolon"
+  ],
+  "env_extra": {
+   "ZEROPW_GATEWAY_URL": "http://127.0.0.1:1",
+   "ZEROPW_CALLER_TOKEN": "zpwc_x"
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\n  \"detail\": \"ValueError\",\n  \"error\": \"InvalidInput\",\n  \"reason\": \"invalid_arguments\"\n}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "2"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "!stdin=tok-two-bbbbbbbb",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "retire",
+    "--id",
+    "s",
+    "--version",
+    "1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "versions",
+    "--id",
+    "s"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"connection\": \"c1\",\n  \"next\": \"verify the new credential works, then: rotation finish --secret-id s --version 2\",\n  \"other_connections\": [],\n  \"policy_version\": 2,\n  \"previous_active\": 2,\n  \"secret_id\": \"s\",\n  \"version\": 2\n}\n\n#after: {\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"api.example.com\",\n    \"port\": 443,\n    \"scheme\": \"https\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 2,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": 2,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n\n#after: {\n  \"active_version\": 2,\n  \"environment\": \"dev\",\n  \"id\": \"s\",\n  \"kind\": \"api_key\",\n  \"project\": \"p\",\n  \"versions\": [\n    {\n      \"created_at\": \"<TS>\",\n      \"public\": {},\n      \"status\": \"retired\",\n      \"version\": 1\n    },\n    {\n      \"created_at\": \"<TS>\",\n      \"public\": {},\n      \"status\": \"active\",\n      \"version\": 2\n    }\n  ]\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "1"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "!stdin=tok-two-bbbbbbbb",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "retire",
+    "--id",
+    "s",
+    "--version",
+    "1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "versions",
+    "--id",
+    "s"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "3"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "\n#after: {\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"api.example.com\",\n    \"port\": 443,\n    \"scheme\": \"https\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n\n#after: {\n  \"active_version\": 2,\n  \"environment\": \"dev\",\n  \"id\": \"s\",\n  \"kind\": \"api_key\",\n  \"project\": \"p\",\n  \"versions\": [\n    {\n      \"created_at\": \"<TS>\",\n      \"public\": {},\n      \"status\": \"retired\",\n      \"version\": 1\n    },\n    {\n      \"created_at\": \"<TS>\",\n      \"public\": {},\n      \"status\": \"active\",\n      \"version\": 2\n    }\n  ]\n}\n\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": null,\n      \"connection\": null,\n      \"environment\": \"dev\",\n      \"event\": \"secret_put\",\n      \"kind\": \"api_key\",\n      \"policy_version\": null,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"secret_id\": \"s\",\n      \"target\": null,\n      \"ts\": \"<TS>\",\n      \"version\": 2\n    },\n    {\n      \"action\": null,\n      \"caller\": null,\n      \"connection\": null,\n      \"event\": \"secret_retire\",\n      \"policy_version\": null,\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"secret_id\": \"s\",\n      \"state\": \"retired\",\n      \"target\": null,\n      \"ts\": \"<TS>\",\n      \"version\": 1\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c1\",\n      \"environment\": \"dev\",\n      \"event\": \"connection_create\",\n      \"host\": \"api.example.com\",\n      \"kind\": \"http\",\n      \"method\": \"bearer\",\n      \"policy_version\": 1,\n      \"port\": 443,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"scheme\": \"https\",\n      \"secret_id\": \"s\",\n      \"service\": \"x\",\n      \"target\": \"https://api.example.com:443\",\n      \"ts\": \"<TS>\",\n      \"version\": null\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": "{\"detail\": \"retired\", \"error\": \"InvalidInput\", \"reason\": \"secret_version_unusable\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "rotation",
+   "activate",
+   "--connection",
+   "c1",
+   "--version",
+   "9"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "show",
+    "--id",
+    "c1"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "2"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "\n#after: {\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"api.example.com\",\n    \"port\": 443,\n    \"scheme\": \"https\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": null,\n      \"connection\": null,\n      \"environment\": \"dev\",\n      \"event\": \"secret_put\",\n      \"kind\": \"api_key\",\n      \"policy_version\": null,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"secret_id\": \"s\",\n      \"target\": null,\n      \"ts\": \"<TS>\",\n      \"version\": 1\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c1\",\n      \"environment\": \"dev\",\n      \"event\": \"connection_create\",\n      \"host\": \"api.example.com\",\n      \"kind\": \"http\",\n      \"method\": \"bearer\",\n      \"policy_version\": 1,\n      \"port\": 443,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"scheme\": \"https\",\n      \"secret_id\": \"s\",\n      \"service\": \"x\",\n      \"target\": \"https://api.example.com:443\",\n      \"ts\": \"<TS>\",\n      \"version\": null\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": "{\"error\": \"NotFound\", \"reason\": \"secret_version_not_found\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "team",
+   "share",
+   "--project",
+   "p",
+   "--environment",
+   "dev"
+  ],
+  "env_extra": {
+   "ZEROPW_ADMIN_PASSPHRASE": "wrong-passphrase"
+  },
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "team",
+    "init"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": null,\n      \"environment\": \"dev\",\n      \"event\": \"auth_failed\",\n      \"policy_version\": null,\n      \"project\": \"p\",\n      \"reason\": \"admin_reauth_failed\",\n      \"request_id\": null,\n      \"result\": \"denied\",\n      \"run_id\": null,\n      \"target\": null,\n      \"ts\": \"<TS>\"\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": "{\"error\": \"AuthFailed\", \"reason\": \"admin_reauth_failed\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "a",
+   "--connection",
+   "c1"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://API.example.com:8443",
+    "--auth",
+    "bearer",
+    "--methods",
+    "GET,POST"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "principal",
+    "create",
+    "--id",
+    "a"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "6"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"connection\": \"c1\",\n  \"created_at\": \"<TS>\",\n  \"credential_version\": 1,\n  \"expires_at\": \"<TS>\",\n  \"id\": \"<GRANT>\",\n  \"max_uses\": null,\n  \"policy_version\": 1,\n  \"principal\": \"a\",\n  \"revoked_at\": null,\n  \"status\": \"active\",\n  \"uses\": 0\n}\n\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": null,\n      \"connection\": null,\n      \"event\": \"init\",\n      \"kind\": \"state_initialized\",\n      \"policy_version\": null,\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"target\": null,\n      \"ts\": \"<TS>\"\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": null,\n      \"count\": 3,\n      \"event\": \"project_create\",\n      \"policy_version\": null,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"target\": null,\n      \"ts\": \"<TS>\"\n    },\n    {\n      \"action\": null,\n      \"caller\": null,\n      \"connection\": null,\n      \"environment\": \"dev\",\n      \"event\": \"secret_put\",\n      \"kind\": \"api_key\",\n      \"policy_version\": null,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"secret_id\": \"s\",\n      \"target\": null,\n      \"ts\": \"<TS>\",\n      \"version\": 1\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c1\",\n      \"environment\": \"dev\",\n      \"event\": \"connection_create\",\n      \"host\": \"api.example.com\",\n      \"kind\": \"http\",\n      \"method\": \"bearer\",\n      \"policy_version\": 1,\n      \"port\": 8443,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"scheme\": \"https\",\n      \"secret_id\": \"s\",\n      \"service\": \"x\",\n      \"target\": \"https://api.example.com:8443\",\n      \"ts\": \"<TS>\",\n      \"version\": null\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": null,\n      \"event\": \"principal_create\",\n      \"policy_version\": null,\n      \"principal\": \"a\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"runtime\": \"default\",\n      \"target\": null,\n      \"ts\": \"<TS>\"\n    },\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c1\",\n      \"event\": \"grant_create\",\n      \"expires_at\": \"<TS>\",\n      \"grant\": \"<GRANT>\",\n      \"max_uses\": null,\n      \"policy_version\": 1,\n      \"principal\": \"a\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"target\": null,\n      \"ts\": \"<TS>\"\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-ssh",
+   "--id",
+   "c2",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "k",
+   "--host",
+   "Box.Example",
+   "--username",
+   "deploy",
+   "--host-key",
+   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl box"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!sh",
+    "ssh-keygen -q -t ed25519 -N '' -f {tmp}/k >/dev/null"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "k",
+    "--kind",
+    "ssh_private_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--value-file",
+    "{tmp}/k"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"fingerprint\": \"<FP>\",\n  \"http_auth\": null,\n  \"http_scope\": null,\n  \"http_target\": null,\n  \"id\": \"c2\",\n  \"kind\": \"ssh\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"public_key\": \"ssh-ed25519 <KEY> <USER@HOST>\",\n  \"secret_id\": \"k\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": {\n    \"host\": \"box.example\",\n    \"host_keys\": [\n      \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl box\"\n    ],\n    \"port\": 22,\n    \"username\": \"deploy\"\n  },\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c2\",\n      \"environment\": \"dev\",\n      \"event\": \"connection_create\",\n      \"host\": \"box.example\",\n      \"kind\": \"ssh\",\n      \"policy_version\": 1,\n      \"port\": 22,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"secret_id\": \"k\",\n      \"service\": \"x\",\n      \"target\": \"box.example:22\",\n      \"ts\": \"<TS>\",\n      \"username\": \"deploy\",\n      \"version\": null\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "revoke",
+   "--id",
+   "PLACEHOLDER"
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"{tmp}/state\", \"error\": \"StateError\", \"reason\": \"state_missing\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "~/state",
+   "init"
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"kms_key_id\": \"local-dev-kms-1\",\n  \"state_dir\": \"{tmp}/state\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "init"
+  ],
+  "env_extra": {
+   "ZEROPW_ADMIN_PASSPHRASE": "short",
+   "ZEROPW_RECOVERY_PASSPHRASE": ""
+  },
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"administrator passphrase needs at least 8 characters\", \"error\": \"InvalidInput\", \"reason\": \"passphrase_too_short\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "project",
+   "create",
+   "p",
+   "--environments",
+   ""
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"created_at\": \"<TS>\",\n  \"environments\": [\n    \"dev\",\n    \"staging\",\n    \"prod\"\n  ],\n  \"name\": \"p\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{tmp}"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"Is a directory\", \"error\": \"IsADirectoryError\", \"reason\": \"io_error\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{tmp}/nope"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"FileNotFoundError\", \"reason\": \"file_not_found\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "put",
+   "--id",
+   "s",
+   "--kind",
+   "api_key",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--value-file",
+   "{state}/admin.json/x"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"Not a directory\", \"error\": \"NotADirectoryError\", \"reason\": \"io_error\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host:",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"host\",\n    \"port\": 80,\n    \"scheme\": \"http\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host:+80",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"InvalidInput\", \"reason\": \"invalid_port\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host/?",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"host\",\n    \"port\": 80,\n    \"scheme\": \"http\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://host#",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"host\",\n    \"port\": 80,\n    \"scheme\": \"http\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http:/host",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"target is scheme://host[:port] only\", \"error\": \"InvalidInput\", \"reason\": \"target_must_be_origin\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "http://[::1",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"InvalidInput\", \"reason\": \"invalid_host\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "HTTPS://Host.Example:0443/",
+   "--auth",
+   "bearer"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "after": [
+   [
+    "--state-dir",
+    "{state}",
+    "audit",
+    "tail",
+    "--limit",
+    "1"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": null,\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"host.example\",\n    \"port\": 443,\n    \"scheme\": \"https\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n\n#after: {\n  \"records\": [\n    {\n      \"action\": null,\n      \"caller\": \"admin\",\n      \"connection\": \"c1\",\n      \"environment\": \"dev\",\n      \"event\": \"connection_create\",\n      \"host\": \"host.example\",\n      \"kind\": \"http\",\n      \"method\": \"bearer\",\n      \"policy_version\": 1,\n      \"port\": 443,\n      \"project\": \"p\",\n      \"reason\": null,\n      \"request_id\": null,\n      \"result\": \"ok\",\n      \"run_id\": null,\n      \"scheme\": \"https\",\n      \"secret_id\": \"s\",\n      \"service\": \"x\",\n      \"target\": \"https://host.example:443\",\n      \"ts\": \"<TS>\",\n      \"version\": null\n    }\n  ],\n  \"unparseable_lines\": 0\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "a",
+   "--connection",
+   "c1",
+   "--max-uses",
+   "10000000000"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "connection",
+    "create-http",
+    "--id",
+    "c1",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--service",
+    "x",
+    "--secret-id",
+    "s",
+    "--target",
+    "https://api.example.com",
+    "--auth",
+    "bearer"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "principal",
+    "create",
+    "--id",
+    "a"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"connection\": \"c1\",\n  \"created_at\": \"<TS>\",\n  \"credential_version\": 1,\n  \"expires_at\": \"<TS>\",\n  \"id\": \"<GRANT>\",\n  \"max_uses\": 10000000000,\n  \"policy_version\": 1,\n  \"principal\": \"a\",\n  \"revoked_at\": null,\n  \"status\": \"active\",\n  \"uses\": 0\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "secret",
+   "retire",
+   "--id",
+   "s",
+   "--version",
+   "99999999999"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"NotFound\", \"reason\": \"secret_version_not_found\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "https://api.example.com",
+   "--auth",
+   "bearer",
+   "--cli-program",
+   "/bin/true",
+   "--cli-env",
+   "zz=x",
+   "--cli-env",
+   "AA=\u0001"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"InvalidInput\", \"reason\": \"invalid_env_name\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "connection",
+   "create-http",
+   "--id",
+   "c1",
+   "--project",
+   "p",
+   "--environment",
+   "dev",
+   "--service",
+   "x",
+   "--secret-id",
+   "s",
+   "--target",
+   "https://api.example.com",
+   "--auth",
+   "bearer",
+   "--cli-program",
+   "/bin/true",
+   "--cli-env",
+   "B_X=1",
+   "--cli-env",
+   "A_Y=2",
+   "--cli-env",
+   "B_X=3"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ],
+   [
+    "--state-dir",
+    "{state}",
+    "project",
+    "create",
+    "p"
+   ],
+   [
+    "!stdin=tok-one-aaaaaaaa",
+    "--state-dir",
+    "{state}",
+    "secret",
+    "put",
+    "--id",
+    "s",
+    "--kind",
+    "api_key",
+    "--project",
+    "p",
+    "--environment",
+    "dev",
+    "--stdin"
+   ]
+  ],
+  "expected": {
+   "code": 0,
+   "stdout": "{\n  \"cli\": {\n    \"base_url_env\": \"ZEROPW_API_BASE_URL\",\n    \"extra_env\": {\n      \"A_Y\": \"2\",\n      \"B_X\": \"3\"\n    },\n    \"kind\": \"http\",\n    \"program\": \"/bin/true\"\n  },\n  \"created_at\": \"<TS>\",\n  \"description\": \"\",\n  \"environment\": \"dev\",\n  \"http_auth\": {\n    \"basic_username\": null,\n    \"header_name\": null,\n    \"mode\": \"bearer\",\n    \"value_prefix\": null\n  },\n  \"http_scope\": {\n    \"confirm_methods\": [],\n    \"methods\": [\n      \"GET\",\n      \"HEAD\"\n    ],\n    \"path_prefixes\": null\n  },\n  \"http_target\": {\n    \"allow_private_network\": false,\n    \"ca_file\": null,\n    \"host\": \"api.example.com\",\n    \"port\": 443,\n    \"scheme\": \"https\"\n  },\n  \"id\": \"c1\",\n  \"kind\": \"http\",\n  \"policy_version\": 1,\n  \"project\": \"p\",\n  \"secret_id\": \"s\",\n  \"secret_version\": null,\n  \"service\": \"x\",\n  \"ssh_target\": null,\n  \"status\": \"active\",\n  \"updated_at\": \"<TS>\"\n}\n",
+   "stderr": ""
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "grant",
+   "create",
+   "--principal",
+   "p",
+   "--connection",
+   "c",
+   "--ttl",
+   "\u001c1h"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"error\": \"NotFound\", \"reason\": \"principal_not_found\"}\n"
+  }
+ },
+ {
+  "kind": "admin",
+  "argv": [
+   "--state-dir",
+   "{state}",
+   "serve",
+   "--listen",
+   "127.0.0.1:65536"
+  ],
+  "setup": [
+   [
+    "--state-dir",
+    "{state}",
+    "init"
+   ]
+  ],
+  "expected": {
+   "code": 1,
+   "stdout": "",
+   "stderr": "{\"detail\": \"port must be 0-65535\", \"error\": \"InvalidInput\", \"reason\": \"invalid_listen\"}\n"
+  }
+ }
+]

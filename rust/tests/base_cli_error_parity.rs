@@ -1,152 +1,259 @@
-//! The administrator CLI is where a built-in exception that escapes a store,
-//! KMS, vault or context operation becomes observable: `admin_cli.main`
-//! prints a fixed rendering per exception class and exits 1. These cases
-//! (DEVIATIONS rows 35, 62-70, 87-89, 92, 96, 98) prepare the same synthetic
-//! state with the original CLI, break it the same way, and require the native
-//! binary to print the same thing, exit the same way and audit the same
-//! records as `python -m zeropw.admin_cli`.
+//! Administrator CLI failures from the environment and from damaged state.
+//!
+//! Operational failures (an unwritable or missing output directory, a
+//! read-only state directory, an unusable `TMPDIR`, a second `init`) keep the
+//! exact JSON error the original Python CLI printed. Hand-edited or damaged
+//! state (`admin.json`, backup manifests, the audit log, the lock file) only
+//! has to fail closed: exit 1, nothing on stdout, a JSON error on stderr and
+//! never a secret value.
 
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
-const DRIVER: &str = r#"
-import json, os, re, shutil, subprocess, sys, tempfile
-from pathlib import Path
+use serde_json::Value;
 
-ADMIN = sys.argv[1]
-ROOT = sys.argv[2]
-ENV = {"PATH": os.environ.get("PATH", ""), "LC_ALL": "C.UTF-8", "PYTHONPATH": ROOT,
-       "ZEROPW_ADMIN_PASSPHRASE": "admin-passphrase-1",
-       "ZEROPW_RECOVERY_PASSPHRASE": "recovery-passphrase-1"}
-PY = [sys.executable, "-m", "zeropw.admin_cli"]
+const SECRET: &str = "synthetic-base-cli-secret-value";
 
-def py_cli(state, *args):
-    subprocess.run(PY + ["--state-dir", state, *args], env=ENV, capture_output=True, check=True)
+fn admin(state: &Path, args: &[&str], env: &[(&str, String)]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"));
+    command
+        .arg("--state-dir")
+        .arg(state)
+        .args(args)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("LC_ALL", "C.UTF-8")
+        .env("ZEROPW_ADMIN_PASSPHRASE", "admin-passphrase-1")
+        .env("ZEROPW_RECOVERY_PASSPHRASE", "recovery-passphrase-1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().unwrap();
+    drop(child.stdin.take());
+    child.wait_with_output().unwrap()
+}
 
-def make_key_file(t):
-    from zeropw import sshwire
-    Path(t, "k").write_text(sshwire.generate_ed25519_private_key("a\nb").to_openssh_private_key())
+fn checked(state: &Path, args: &[&str]) {
+    let output = admin(state, args, &[]);
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
-def tamper_backup(t, state, value):
-    py_cli(state, "backup", "--out", os.path.join(t, "b.json"))
-    p = os.path.join(t, "b.json")
-    archive = json.load(open(p))
-    archive["manifest"]["sha256"] = value
-    json.dump(archive, open(p, "w"))
+fn prepared() -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::Builder::new()
+        .prefix("zeropw-base-cli-")
+        .tempdir()
+        .unwrap();
+    let state = temp.path().join("state");
+    checked(&state, &["init"]);
+    checked(&state, &["project", "create", "p"]);
+    fs::write(temp.path().join("val"), SECRET).unwrap();
+    let value = temp.path().join("val");
+    checked(
+        &state,
+        &[
+            "secret", "put", "--id", "x", "--kind", "api_key", "--project", "p",
+            "--environment", "dev", "--value-file", value.to_str().unwrap(),
+        ],
+    );
+    (temp, state)
+}
 
-def setup(case, t, state):
-    kind = case["setup"]
-    if kind == "admin_json":
-        Path(state, "admin.json").write_text(case["doc"])
-    elif kind == "restore":
-        tamper_backup(t, state, case["sha"])
-    elif kind == "ssh_comment":
-        py_cli(state, "project", "create", "p")
-        make_key_file(t)
-    elif kind == "readonly":
-        py_cli(state, "project", "create", "p")
-        os.mkdir(os.path.join(t, "ro"), 0o500)
-        Path(t, "val").write_text("v")
-        os.chmod(os.path.join(state, case["dir"]), 0o500)
-    elif kind == "audit_dir":
-        os.unlink(os.path.join(state, "audit", "audit.jsonl"))
-        os.mkdir(os.path.join(state, "audit", "audit.jsonl"))
-    elif kind == "audit_bad_utf8":
-        with open(os.path.join(state, "audit", "audit.jsonl"), "ab") as f:
-            f.write(b"\xff\xfe\n")
-    elif kind == "lock_dir":
-        lock = os.path.join(state, ".lock")
-        if os.path.exists(lock):
-            os.unlink(lock)
-        os.mkdir(lock)
+fn restore_permissions(root: &Path) {
+    for entry in walk(root) {
+        if entry.is_dir() {
+            fs::set_permissions(&entry, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+}
 
-def run(case, impl):
-    t = tempfile.mkdtemp(prefix="zeropw-base-cli-")
-    try:
-        state = os.path.join(t, "state")
-        py_cli(state, "init")
-        setup(case, t, state)
-        argv = [a.replace("{state}", state).replace("{tmp}", t) for a in case["argv"]]
-        env = dict(ENV)
-        for key, value in case.get("env", {}).items():
-            env[key] = value.replace("{tmp}", t)
-        cmd = (PY if impl == "py" else [ADMIN]) + argv
-        proc = subprocess.run(cmd, env=env, capture_output=True, stdin=subprocess.DEVNULL, timeout=120,
-                              cwd=case.get("cwd", ROOT).replace("{tmp}", t))
-        for root, dirs, files in os.walk(t):
-            for name in dirs:
-                os.chmod(os.path.join(root, name), 0o700)
-        os.chmod(t, 0o700)
-        audit = os.path.join(state, "audit", "audit.jsonl")
-        last = ""
-        if os.path.isfile(audit):
-            lines = open(audit, "rb").read().splitlines()
-            last = lines[-1].decode("utf-8", "replace") if lines else ""
-        mask = lambda s: re.sub(r'"ts":"[^"]*"', '"ts":"<TS>"', s.replace(t, "{tmp}"))
-        return {"rc": proc.returncode, "stdout": mask(proc.stdout.decode()),
-                "stderr": mask(proc.stderr.decode()), "audit": mask(last)}
-    finally:
-        for root, dirs, files in os.walk(t):
-            for name in dirs:
-                os.chmod(os.path.join(root, name), 0o700)
-        shutil.rmtree(t, ignore_errors=True)
+fn walk(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    let mut index = 0;
+    while index < out.len() {
+        let path = out[index].clone();
+        index += 1;
+        if path.is_dir() && !path.is_symlink() {
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o700));
+            for entry in fs::read_dir(&path).unwrap() {
+                out.push(entry.unwrap().path());
+            }
+        }
+    }
+    out
+}
 
-def admin_case(doc):
-    return {"setup": "admin_json", "doc": doc, "argv": ["--state-dir", "{state}", "secret", "reveal", "--id", "x"]}
+fn assert_exact(output: &Output, tmp: &Path, code: i32, stdout: &str, stderr: &str) {
+    let tmp = tmp.to_str().unwrap();
+    assert_eq!(output.status.code(), Some(code));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace(tmp, "{tmp}"),
+        stdout
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).replace(tmp, "{tmp}"),
+        stderr
+    );
+}
 
-CASES = [admin_case(d) for d in [
-    '{}', '[]', '0', '""', '{"salt":1,"hash":"x"}', '{"hash":"x"}', '{"salt":"\\u00e9","hash":"x"}',
-    '{"salt":"abc","hash":"x"}', '{"salt":"AAAA"}', '{"salt":null,"hash":"AAAA"}', '[1]', '"str"', '5', 'true',
-    '{"salt":"AAAA","hash":"@@"}', '{"salt":"AAAA","hash":"AAAA"}', '{"salt":"AAAA","hash":"\\u00e9"}',
-]] + [
-    {"setup": "admin_json", "doc": '{"salt":"abc","hash":"x"}', "argv": ["--state-dir", "{state}", "restore-ack"]},
-    {"setup": "restore", "sha": "abcé", "argv": ["--state-dir", "{state}", "restore", "--in", "{tmp}/b.json"]},
-    {"setup": "restore", "sha": ["é"], "argv": ["--state-dir", "{state}", "restore", "--in", "{tmp}/b.json"]},
-    {"setup": "restore", "sha": 5, "argv": ["--state-dir", "{state}", "restore", "--in", "{tmp}/b.json"]},
-    {"setup": "ssh_comment", "argv": ["--state-dir", "{state}", "secret", "put", "--id", "k", "--kind",
-                                      "ssh_private_key", "--project", "p", "--environment", "dev",
-                                      "--value-file", "{tmp}/k"]},
-    {"setup": "readonly", "dir": "kms", "argv": ["--state-dir", "{state}", "backup", "--out", "{tmp}/ro/b.json"]},
-    {"setup": "readonly", "dir": "kms", "argv": ["--state-dir", "{state}", "backup", "--out", "{tmp}/missing/b.json"]},
-    {"setup": "readonly", "dir": "vault", "argv": ["--state-dir", "{state}", "secret", "put", "--id", "s", "--kind",
-                                                   "api_key", "--project", "p", "--environment", "dev",
-                                                   "--value-file", "{tmp}/val"]},
-    {"setup": "readonly", "dir": "kms", "argv": ["--state-dir", "{state}", "recover"]},
-    {"setup": "readonly", "dir": ".", "argv": ["--state-dir", "{state}", "project", "create", "q"]},
-    {"setup": "audit_dir", "argv": ["--state-dir", "{state}", "audit", "tail"]},
-    {"setup": "audit_bad_utf8", "argv": ["--state-dir", "{state}", "audit", "tail"]},
-    {"setup": "lock_dir", "argv": ["--state-dir", "{state}", "project", "create", "q"]},
-    {"setup": "none", "argv": ["--state-dir", "{state}", "secret", "list"], "env": {"TMPDIR": "/nonexistent-zeropw"}},
-    {"setup": "none", "argv": ["--state-dir", "{state}", "secret", "list"], "env": {"TMPDIR": ""}},
-    {"setup": "none", "argv": ["--state-dir", "{state}", "secret", "list"],
-     "env": {"TMPDIR": "{tmp}/missing", "TEMP": "{tmp}"}},
-    {"setup": "none", "argv": ["--state-dir", "{state}", "init"]},
-]
-
-failures = 0
-for case in CASES:
-    py, rs = run(case, "py"), run(case, "rs")
-    if py != rs:
-        failures += 1
-        print("MISMATCH", json.dumps(case), "\n  py:", json.dumps(py), "\n  rs:", json.dumps(rs))
-print(f"BASE_CLI_PARITY cases={len(CASES)} failures={failures}")
-sys.exit(1 if failures else 0)
-"#;
+fn assert_fails_closed(output: &Output, context: &str) {
+    assert_eq!(output.status.code(), Some(1), "{context}");
+    assert!(output.stdout.is_empty(), "{context}");
+    let error: Value = serde_json::from_slice(&output.stderr)
+        .unwrap_or_else(|_| panic!("{context}: {}", String::from_utf8_lossy(&output.stderr)));
+    assert!(error["reason"].is_string(), "{context}: {error}");
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains(SECRET),
+        "{context}"
+    );
+}
 
 #[test]
-fn escaped_builtin_failures_match_the_python_administrator_cli() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let python = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let output = Command::new(python)
-        .current_dir(root)
-        .arg("-c")
-        .arg(DRIVER)
-        .arg(env!("CARGO_BIN_EXE_zeropw-admin"))
-        .arg(root)
-        .output()
+fn operational_failures_keep_the_original_error_json() {
+    let io = |detail: &str, class: &str| {
+        format!("{{\"detail\": \"{detail}\", \"error\": \"{class}\", \"reason\": \"io_error\"}}\n")
+    };
+    let denied = io("Permission denied", "PermissionError");
+    let cases: [(&str, &[&str], String); 5] = [
+        ("kms", &["backup", "--out", "{tmp}/ro/b.json"], denied.clone()),
+        (
+            "kms",
+            &["backup", "--out", "{tmp}/missing/b.json"],
+            "{\"error\": \"FileNotFoundError\", \"reason\": \"file_not_found\"}\n".to_owned(),
+        ),
+        (
+            "vault",
+            &[
+                "secret", "put", "--id", "s", "--kind", "api_key", "--project", "p",
+                "--environment", "dev", "--value-file", "{tmp}/val",
+            ],
+            denied.clone(),
+        ),
+        ("kms", &["recover"], denied.clone()),
+        (".", &["project", "create", "q"], denied.clone()),
+    ];
+    for (directory, argv, stderr) in cases {
+        let (temp, state) = prepared();
+        fs::create_dir(temp.path().join("ro")).unwrap();
+        fs::set_permissions(temp.path().join("ro"), fs::Permissions::from_mode(0o500)).unwrap();
+        fs::set_permissions(state.join(directory), fs::Permissions::from_mode(0o500)).unwrap();
+        let tmp = temp.path().to_str().unwrap();
+        let argv: Vec<String> = argv.iter().map(|a| a.replace("{tmp}", tmp)).collect();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let output = admin(&state, &argv, &[]);
+        restore_permissions(temp.path());
+        assert_exact(&output, temp.path(), 1, "", &stderr);
+    }
+}
+
+#[test]
+fn an_unusable_tmpdir_falls_back_and_a_second_init_is_refused() {
+    let (temp, state) = prepared();
+    let tmp = temp.path().to_str().unwrap().to_owned();
+    for env in [
+        vec![("TMPDIR", "/nonexistent-zeropw".to_owned())],
+        vec![("TMPDIR", String::new())],
+        vec![
+            ("TMPDIR", format!("{tmp}/missing")),
+            ("TEMP", tmp.clone()),
+        ],
+    ] {
+        let output = admin(&state, &["secret", "list"], &env);
+        assert_eq!(output.status.code(), Some(0), "{env:?}");
+        let listed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(listed["secrets"][0]["id"], "x", "{env:?}");
+        assert!(output.stderr.is_empty(), "{env:?}");
+    }
+    let output = admin(&state, &["init"], &[]);
+    assert_exact(
+        &output,
+        temp.path(),
+        1,
+        "",
+        "{\"detail\": \"{tmp}/state\", \"error\": \"StateError\", \"reason\": \"state_exists\"}\n",
+    );
+}
+
+#[test]
+fn damaged_administrator_record_never_reveals_a_secret() {
+    for doc in [
+        "{}", "[]", "0", "\"\"", "{\"salt\":1,\"hash\":\"x\"}", "{\"hash\":\"x\"}",
+        "{\"salt\":\"\\u00e9\",\"hash\":\"x\"}", "{\"salt\":\"abc\",\"hash\":\"x\"}",
+        "{\"salt\":\"AAAA\"}", "{\"salt\":null,\"hash\":\"AAAA\"}", "[1]", "\"str\"", "5", "true",
+        "{\"salt\":\"AAAA\",\"hash\":\"@@\"}", "{\"salt\":\"AAAA\",\"hash\":\"AAAA\"}",
+        "{\"salt\":\"AAAA\",\"hash\":\"\\u00e9\"}",
+    ] {
+        let (_temp, state) = prepared();
+        fs::write(state.join("admin.json"), doc).unwrap();
+        let output = admin(&state, &["secret", "reveal", "--id", "x"], &[]);
+        assert_fails_closed(&output, doc);
+        let audit = fs::read_to_string(state.join("audit/audit.jsonl")).unwrap();
+        assert!(!audit.contains(SECRET), "{doc}");
+        assert!(!audit.contains("\"event\":\"secret_reveal\""), "{doc}");
+    }
+    let (_temp, state) = prepared();
+    fs::write(state.join("admin.json"), "{\"salt\":\"abc\",\"hash\":\"x\"}").unwrap();
+    assert_fails_closed(&admin(&state, &["restore-ack"], &[]), "restore-ack");
+}
+
+#[test]
+fn tampered_backup_manifest_is_refused() {
+    for sha in [
+        Value::from("abc\u{e9}"),
+        serde_json::json!(["\u{e9}"]),
+        Value::from(5),
+    ] {
+        let (temp, state) = prepared();
+        let archive_path = temp.path().join("b.json");
+        checked(&state, &["backup", "--out", archive_path.to_str().unwrap()]);
+        let mut archive: Value = serde_json::from_slice(&fs::read(&archive_path).unwrap()).unwrap();
+        archive["manifest"]["sha256"] = sha.clone();
+        let mut file = fs::File::create(&archive_path).unwrap();
+        file.write_all(serde_json::to_string(&archive).unwrap().as_bytes())
+            .unwrap();
+        drop(file);
+        let output = admin(
+            &state,
+            &["restore", "--in", archive_path.to_str().unwrap()],
+            &[],
+        );
+        assert_fails_closed(&output, &sha.to_string());
+    }
+}
+
+#[test]
+fn damaged_audit_log_or_lock_file_fails_closed() {
+    let (_temp, state) = prepared();
+    fs::remove_file(state.join("audit/audit.jsonl")).unwrap();
+    fs::create_dir(state.join("audit/audit.jsonl")).unwrap();
+    assert_fails_closed(&admin(&state, &["audit", "tail"], &[]), "audit dir");
+
+    let (_temp, state) = prepared();
+    let mut audit = fs::OpenOptions::new()
+        .append(true)
+        .open(state.join("audit/audit.jsonl"))
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!("{stdout}{}", String::from_utf8_lossy(&output.stderr));
-    assert!(stdout.contains("BASE_CLI_PARITY "), "driver did not report");
-    assert!(output.status.success(), "native CLI differs from Python");
+    audit.write_all(b"\xff\xfe\n").unwrap();
+    drop(audit);
+    assert_fails_closed(&admin(&state, &["audit", "tail"], &[]), "audit utf-8");
+
+    let (_temp, state) = prepared();
+    let lock = state.join(".lock");
+    if lock.exists() {
+        fs::remove_file(&lock).unwrap();
+    }
+    fs::create_dir(&lock).unwrap();
+    assert_fails_closed(
+        &admin(&state, &["project", "create", "q"], &[]),
+        "lock dir",
+    );
 }

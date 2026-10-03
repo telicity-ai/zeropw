@@ -1,12 +1,16 @@
-//! Differential contract for the sample business CLI: the native
-//! `zeropw-democli` must print the same bytes and exit with the same status as
-//! the original `examples/democli.py` for the same arguments, environment and
-//! upstream replies. Python is only the oracle; both run as separate processes.
+//! Contract for the sample business CLI: the native `zeropw-democli` prints
+//! the bytes, exits with the status and sends the upstream request recorded
+//! from the original `examples/democli.py` for the same arguments,
+//! environment and upstream replies (`fixtures/python/cli/democli.json`,
+//! see its `GENERATE.md`).
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
+
+use regex::Regex;
+use serde_json::{Value, json};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -15,76 +19,57 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn python() -> String {
-    std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into())
+fn fixture() -> Value {
+    serde_json::from_str(include_str!("fixtures/python/cli/democli.json")).unwrap()
 }
 
-/// One recorded request: request line, lower-cased header names, body.
-#[derive(Debug, PartialEq)]
-struct Seen {
-    line: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
-/// Serve `count` connections, answering each with `reply`; return what was received.
-fn serve(count: usize, reply: Vec<u8>) -> (u16, thread::JoinHandle<Vec<Seen>>) {
+/// Serve one connection answering with `reply`; return the request line,
+/// sorted lower-cased headers (without library framing) and body.
+fn serve(reply: Vec<u8>) -> (u16, thread::JoinHandle<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
-        let mut seen = Vec::new();
-        for _ in 0..count {
-            let (socket, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(socket.try_clone().unwrap());
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let mut headers = Vec::new();
-            let mut length = 0usize;
-            loop {
-                let mut header = String::new();
-                reader.read_line(&mut header).unwrap();
-                let header = header.trim_end().to_owned();
-                if header.is_empty() {
-                    break;
-                }
-                let (name, value) = header.split_once(':').unwrap();
-                let name = name.trim().to_ascii_lowercase();
-                let value = value.trim().to_owned();
-                if name == "content-length" {
-                    length = value.parse().unwrap();
-                }
-                headers.push((name, value));
+        let (socket, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let mut headers = Vec::new();
+        let mut length = 0usize;
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            let header = header.trim_end().to_owned();
+            if header.is_empty() {
+                break;
             }
-            let mut body = vec![0u8; length];
-            reader.read_exact(&mut body).unwrap();
-            let mut socket = socket;
-            socket.write_all(&reply).unwrap();
-            let _ = socket.shutdown(std::net::Shutdown::Both);
-            headers.retain(|(name, _)| {
-                // Library-specific framing headers are not part of the CLI contract.
-                !matches!(name.as_str(), "accept-encoding" | "connection" | "host")
-            });
-            headers.sort();
-            seen.push(Seen {
-                line: line.trim_end().to_owned(),
-                headers,
-                body,
-            });
+            let (name, value) = header.split_once(':').unwrap();
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim().to_owned();
+            if name == "content-length" {
+                length = value.parse().unwrap();
+            }
+            headers.push((name, value));
         }
-        seen
+        let mut body = vec![0u8; length];
+        reader.read_exact(&mut body).unwrap();
+        let mut socket = socket;
+        socket.write_all(&reply).unwrap();
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+        // Library-specific framing headers are not part of the CLI contract.
+        headers.retain(|(name, _)| !matches!(name.as_str(), "accept-encoding" | "connection" | "host"));
+        headers.sort();
+        json!([{
+            "line": line.trim_end(),
+            "headers": headers.into_iter().map(|(n, v)| json!([n, v])).collect::<Vec<_>>(),
+            "body": String::from_utf8(body).unwrap(),
+        }])
     });
     (port, handle)
 }
 
-struct Outcome {
-    code: Option<i32>,
-    stdout: String,
-}
-
-fn run(program: &[String], args: &[&str], env: &[(&str, String)]) -> Outcome {
-    let mut command = Command::new(&program[0]);
+fn run(args: &[&str], env: &[(&str, String)]) -> (Option<i32>, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zeropw-democli"));
     command
-        .args(&program[1..])
         .args(args)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
@@ -94,101 +79,70 @@ fn run(program: &[String], args: &[&str], env: &[(&str, String)]) -> Outcome {
         command.env(name, value);
     }
     let out = command.output().unwrap();
-    Outcome {
-        code: out.status.code(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-    }
+    (out.status.code(), String::from_utf8(out.stdout).unwrap())
 }
 
-fn programs() -> [Vec<String>; 2] {
-    [
-        vec![
-            python(),
-            repo_root()
-                .join("examples/democli.py")
-                .to_string_lossy()
-                .into(),
-        ],
-        vec![env!("CARGO_BIN_EXE_zeropw-democli").to_owned()],
-    ]
+fn args(case: &Value) -> Vec<&str> {
+    case["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap())
+        .collect()
 }
 
-/// Run the same case against both programs, each with a fresh upstream, and
-/// require identical output, status and upstream request.
-/// An HTTP/1.1 reply with a correct Content-Length.
-fn reply(status: &str, body: &[u8]) -> Vec<u8> {
-    let mut out = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    out.extend_from_slice(body);
-    out
-}
-
-fn same_with_upstream(args: &[&str], reply: Vec<u8>, base_suffix: &str) {
-    let mut results = Vec::new();
-    for program in programs() {
-        let (port, server) = serve(1, reply.clone());
-        let env = [(
-            "ZEROPW_API_BASE_URL",
-            format!("http://127.0.0.1:{port}{base_suffix}"),
-        )];
-        let outcome = run(&program, args, &env);
-        let seen = server.join().unwrap();
-        results.push((outcome.code, outcome.stdout, seen));
-    }
-    let (native, original) = (results.pop().unwrap(), results.pop().unwrap());
-    assert_eq!(native.0, original.0, "exit status for {args:?}");
-    assert_eq!(native.1, original.1, "stdout for {args:?}");
-    assert_eq!(native.2, original.2, "upstream request for {args:?}");
-}
-
-fn same_without_upstream(args: &[&str], env: &[(&str, String)]) -> String {
-    let [original, native] = programs();
-    let expected = run(&original, args, env);
-    let actual = run(&native, args, env);
-    assert_eq!(actual.code, expected.code, "exit status for {args:?}");
-    assert_eq!(actual.stdout, expected.stdout, "stdout for {args:?}");
-    actual.stdout
+fn code(case: &Value) -> Option<i32> {
+    case["code"].as_i64().map(|c| c as i32)
 }
 
 #[test]
-fn business_output_is_byte_identical_to_the_original_cli() {
-    // Nested, unsorted keys and non-ASCII text exercise `sort_keys` and `ensure_ascii`.
-    same_with_upstream(
-        &["whoami"],
-        reply(
-            "200 OK",
-            "{\"z\": 1, \"login\": \"synthetic\", \"a\": {\"y\": [1.5, \"\u{e9}\"]}}".as_bytes(),
-        ),
-        "",
-    );
-    same_with_upstream(&["list-repos"], reply("200 OK", b"not json!"), "/h/opaque");
-    same_with_upstream(
-        &["create-issue", "demo", "Hello \u{c774}\u{c288}"],
-        reply("201 Created", b"{\"number\": 7.0e0}"),
-        "",
-    );
-    // A non-2xx business status is still printed, with exit status 1.
-    same_with_upstream(
-        &["whoami"],
-        reply("404 Not Found", b"{\"error\": \"missing\"}"),
-        "",
-    );
+fn business_output_and_upstream_request_match_the_original_cli() {
+    // Nested, unsorted keys and non-ASCII text exercise `sort_keys` and
+    // `ensure_ascii`; a non-2xx business status is printed with exit 1.
+    let fixture = fixture();
+    let cases = fixture["upstream"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let body = case["reply_body"].as_str().unwrap().as_bytes();
+        let mut reply = format!(
+            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            case["status"].as_str().unwrap(),
+            body.len()
+        )
+        .into_bytes();
+        reply.extend_from_slice(body);
+        let (port, server) = serve(reply);
+        let base = format!(
+            "http://127.0.0.1:{port}{}",
+            case["base_suffix"].as_str().unwrap()
+        );
+        let args = args(case);
+        let (status, stdout) = run(&args, &[("ZEROPW_API_BASE_URL", base)]);
+        let seen = server.join().unwrap();
+        assert_eq!(status, code(case), "exit status for {args:?}");
+        assert_eq!(stdout, case["stdout"].as_str().unwrap(), "stdout for {args:?}");
+        assert_eq!(seen, case["requests"], "upstream request for {args:?}");
+    }
 }
 
 #[test]
 fn usage_and_validation_errors_match_the_original_cli() {
-    let base = [("ZEROPW_API_BASE_URL", "http://127.0.0.1:9".to_owned())];
-    same_without_upstream(&[], &base);
-    same_without_upstream(&["delete-everything"], &base);
-    same_without_upstream(&["create-issue", "demo"], &base);
-    same_without_upstream(&["create-issue", "../x", "t"], &base);
     // The repository is validated before the base URL is read.
-    same_without_upstream(&["create-issue", "a/b", "t"], &[]);
-    same_without_upstream(&["whoami"], &[]);
-    same_without_upstream(&["whoami"], &[("ZEROPW_API_BASE_URL", "   ".into())]);
+    let fixture = fixture();
+    let cases = fixture["plain"].as_array().unwrap();
+    assert_eq!(cases.len(), 7);
+    for case in cases {
+        let env: Vec<(&str, String)> = case["env"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str().unwrap().to_owned()))
+            .collect();
+        let args = args(case);
+        let (status, stdout) = run(&args, &env);
+        assert_eq!(status, code(case), "exit status for {args:?}");
+        assert_eq!(stdout, case["stdout"].as_str().unwrap(), "stdout for {args:?}");
+    }
 }
 
 #[test]
@@ -197,12 +151,21 @@ fn unreachable_gateway_reports_the_socket_error_like_urllib() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.local_addr().unwrap().port()
     };
-    let out = same_without_upstream(
-        &["list-repos"],
+    let fixture = fixture();
+    let case = &fixture["unreachable"];
+    let (status, stdout) = run(
+        &args(case),
         &[("ZEROPW_API_BASE_URL", format!("http://127.0.0.1:{port}"))],
     );
-    assert!(out.contains("\"error\": \"unreachable\""), "{out}");
-    assert!(out.contains("[Errno "), "{out}");
+    assert_eq!(status, code(case));
+    assert!(stdout.contains("\"error\": \"unreachable\""), "{stdout}");
+    // The socket error text is the platform's own.
+    let errno = Regex::new(r#"\[Errno -?\d+\] [^"\\]*"#).unwrap();
+    assert!(errno.is_match(&stdout), "{stdout}");
+    assert_eq!(
+        errno.replace_all(&stdout, "[Errno <N>] <MSG>"),
+        case["stdout"].as_str().unwrap()
+    );
 }
 
 #[test]
@@ -213,18 +176,27 @@ fn steal_report_matches_the_original_cli() {
     std::fs::write(home.path().join(".ssh"), b"x").unwrap();
     std::fs::create_dir_all(home.path().join(".config/zeropw")).unwrap();
     let home_text = home.path().to_string_lossy().to_string();
-    for base in [
-        "http://127.0.0.1:1/h/opaque-synthetic-handle".to_owned(),
-        "http://127.0.0.1:1/other".to_owned(),
-        String::new(),
-    ] {
-        let mut env = vec![("HOME", home_text.clone())];
-        if !base.is_empty() {
-            env.push(("ZEROPW_API_BASE_URL", base));
+    let fixture = fixture();
+    let cases = fixture["steal"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    for case in cases {
+        let mut env = Vec::new();
+        if let Some(base) = case["base"].as_str() {
+            env.push(("HOME", home_text.clone()));
+            if !base.is_empty() {
+                env.push(("ZEROPW_API_BASE_URL", base.to_owned()));
+            }
         }
-        let out = same_without_upstream(&["steal", "--please"], &env);
-        assert!(!out.contains("opaque-synthetic-handle"), "{out}");
+        let args = args(case);
+        let (status, stdout) = run(&args, &env);
+        assert_eq!(status, code(case), "exit status for {args:?}");
+        assert_eq!(
+            stdout.replace(&home_text, "{home}"),
+            case["stdout"].as_str().unwrap(),
+            "stdout for {args:?}"
+        );
+        assert!(!stdout.contains("opaque-synthetic-handle"), "{stdout}");
     }
-    let out = same_without_upstream(&["steal"], &[]);
-    assert!(out.contains("\"no home\""), "{out}");
+    let last = cases.last().unwrap()["stdout"].as_str().unwrap();
+    assert!(last.contains("\"no home\""), "{last}");
 }

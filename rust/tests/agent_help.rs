@@ -1,53 +1,33 @@
-//! Agent CLI help stays offline and matches the original argparse surface.
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+//! Agent CLI help stays offline and keeps the original argparse surface: the
+//! exact help text the original CLI printed is recorded in
+//! `fixtures/python/cli/agent_help.json` (see its `GENERATE.md`).
 use std::process::Command;
 
-fn python_oracle() -> PathBuf {
-    let configured = std::env::var_os("ZEROPW_PYTHON").unwrap_or_else(|| "python3.12".into());
-    let candidate = PathBuf::from(&configured);
-    if candidate.components().count() > 1 {
-        return candidate;
-    }
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join(&candidate))
-        .find(|path| {
-            path.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
-        .unwrap_or_else(|| panic!("cannot resolve Python oracle {configured:?} before env_clear"))
-}
+use serde_json::Value;
 
 #[test]
-fn root_and_each_subcommand_help_match_python_without_gateway_config() {
-    let python_oracle = python_oracle();
-    for args in [
-        vec!["-h"],
-        vec!["--help"],
-        vec!["list-connections", "--help"],
-        vec!["request", "-h"],
-        vec!["exec", "--help"],
-        vec!["status", "--help"],
-        vec!["cancel", "--help"],
-    ] {
-        let python = Command::new(&python_oracle)
-            .args(["-m", "zeropw.agent_cli"])
-            .args(&args)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-            .output()
-            .unwrap();
+fn root_and_each_subcommand_help_match_the_recorded_text_without_gateway_config() {
+    let cases: Vec<Value> =
+        serde_json::from_str(include_str!("fixtures/python/cli/agent_help.json")).unwrap();
+    assert_eq!(cases.len(), 7);
+    for case in cases {
+        let args: Vec<&str> = case["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
         let rust = Command::new(env!("CARGO_BIN_EXE_zeropw-agent"))
             .args(&args)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .output()
             .unwrap();
-        assert_eq!(rust.status.code(), python.status.code(), "{args:?}");
-        assert_eq!(rust.stdout, python.stdout, "{args:?}");
-        assert_eq!(rust.stderr, python.stderr, "{args:?}");
+        let expected_stdout = case["stdout"].as_str().unwrap();
+        let expected_stderr = case["stderr"].as_str().unwrap();
+        assert_eq!(rust.status.code(), case["code"].as_i64().map(|c| c as i32), "{args:?}");
+        assert_eq!(String::from_utf8_lossy(&rust.stdout), expected_stdout, "{args:?}");
+        assert_eq!(String::from_utf8_lossy(&rust.stderr), expected_stderr, "{args:?}");
     }
 }
 

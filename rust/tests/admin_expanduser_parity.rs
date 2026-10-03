@@ -1,61 +1,59 @@
-//! Administrator path expansion follows pathlib/pwd through the system NSS.
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+//! Administrator `--state-dir` expansion: `~` and `~user` resolve through the
+//! system user database (no `HOME` in the environment), other paths are used
+//! as given, and an unknown user fails closed before any state is touched.
+use std::path::Path;
 use std::process::Command;
 
-fn python_oracle() -> PathBuf {
-    let configured = std::env::var_os("ZEROPW_PYTHON").unwrap_or_else(|| "python3.12".into());
-    let candidate = PathBuf::from(&configured);
-    if candidate.components().count() > 1 {
-        return candidate;
-    }
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|directory| directory.join(&candidate))
-        .find(|path| {
-            path.metadata().is_ok_and(|metadata| {
-                metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-            })
-        })
-        .unwrap_or_else(|| panic!("cannot resolve Python oracle {configured:?} before env_clear"))
-}
+use serde_json::{Value, json};
 
-fn run(program: &Path, module: Option<&str>, state_dir: &str) -> std::process::Output {
-    let mut command = Command::new(program);
-    if let Some(module) = module {
-        command.args(["-m", module]);
-    }
-    command
+fn run(state_dir: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
         .args(["--state-dir", state_dir, "project", "list"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
         .output()
         .unwrap()
 }
 
+fn missing(detail: &str) -> Value {
+    json!({"detail": detail, "error": "StateError", "reason": "state_missing"})
+}
+
 #[test]
-fn home_user_unknown_user_and_non_home_paths_match_python() {
-    let python = python_oracle();
-    let rust = Path::new(env!("CARGO_BIN_EXE_zeropw-admin"));
+fn home_user_unknown_user_and_non_home_paths_expand_like_the_original_cli() {
     let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
         .expect("current-user NSS lookup failed")
         .expect("current uid has no NSS user");
+    let home = current.dir.to_string_lossy().into_owned();
+    let expanded = format!("{}/zeropw-expanduser-missing", home.trim_end_matches('/'));
     let named = format!("~{}/zeropw-expanduser-missing", current.name);
+    for (state_dir, detail) in [
+        ("~/zeropw-expanduser-missing", expanded.as_str()),
+        (named.as_str(), expanded.as_str()),
+        (
+            "relative/zeropw-expanduser-missing",
+            "relative/zeropw-expanduser-missing",
+        ),
+        ("/zeropw-expanduser-missing", "/zeropw-expanduser-missing"),
+    ] {
+        let output = run(state_dir);
+        assert_eq!(output.status.code(), Some(1), "{state_dir}");
+        assert!(output.stdout.is_empty(), "{state_dir}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error, missing(detail), "{state_dir}");
+        assert_eq!(output.stderr.last(), Some(&b'\n'));
+    }
+
+    // An unknown `~user` cannot be expanded: the command fails closed with a
+    // JSON error and never treats the literal text as a relative path.
     let unknown = format!(
         "~zeropw-user-that-must-not-exist-{}/state",
         std::process::id()
     );
-    for state_dir in [
-        "~/zeropw-expanduser-missing",
-        named.as_str(),
-        unknown.as_str(),
-        "relative/zeropw-expanduser-missing",
-        "/zeropw-expanduser-missing",
-    ] {
-        let expected = run(&python, Some("zeropw.admin_cli"), state_dir);
-        let actual = run(rust, None, state_dir);
-        assert_eq!(actual.status.code(), expected.status.code(), "{state_dir}");
-        assert_eq!(actual.stdout, expected.stdout, "{state_dir}");
-        assert_eq!(actual.stderr, expected.stderr, "{state_dir}");
-    }
+    let output = run(&unknown);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["reason"], "internal_error", "{error}");
+    assert!(!Path::new(&unknown).exists());
 }
