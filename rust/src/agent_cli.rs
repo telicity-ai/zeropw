@@ -152,54 +152,126 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
     Ok(out)
 }
 
-fn payload(args: &Args) -> Result<Value, Value> {
+/// A `build_payload` value: argument text (which may hold
+/// `surrogateescape`d bytes) or file text, a list, or the header dict.
+enum Field {
+    Arg(String),
+    File(String),
+    Args(Vec<String>),
+    Headers(Vec<(String, String)>),
+}
+
+/// `json.dumps(build_payload(args, extra_argv))`: default separators,
+/// `ensure_ascii`, insertion order, and each escaped argument byte written
+/// as the lone surrogate escape CPython writes.
+fn dumps_payload(fields: &[(&str, Field)], esc: &crate::pystr::SurrogateEscape) -> String {
+    let text = |value: &str, argument: bool| {
+        let dumped = pyjson::dumps(&Value::String(value.to_owned()), DumpOptions::plain())
+            .unwrap_or_default();
+        if argument {
+            esc.json_text(&dumped)
+        } else {
+            dumped
+        }
+    };
+    let entries: Vec<String> = fields
+        .iter()
+        .map(|(key, field)| {
+            let value = match field {
+                Field::Arg(value) => text(value, true),
+                Field::File(value) => text(value, false),
+                Field::Args(items) => format!(
+                    "[{}]",
+                    items
+                        .iter()
+                        .map(|item| text(item, true))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Field::Headers(pairs) => format!(
+                    "{{{}}}",
+                    pairs
+                        .iter()
+                        .map(|(name, value)| format!("{}: {}", text(name, true), text(value, true)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            format!("{}: {value}", text(key, false))
+        })
+        .collect();
+    format!("{{{}}}", entries.join(", "))
+}
+
+/// `build_payload(args, extra_argv)`; `Err` is `main`'s `invalid_arguments`
+/// report for the `OSError`/`ValueError` it raises.
+fn payload(
+    args: &Args,
+    esc: &crate::pystr::SurrogateEscape,
+) -> Result<Vec<(&'static str, Field)>, Value> {
+    let arg = |key: &str| Field::Arg(args.get(key).unwrap_or_default().to_owned());
+    let invalid =
+        |detail: &str| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":detail});
+    let mut fields = Vec::new();
     match args.command.as_str() {
-        "list-connections" => Ok(json!({})),
-        "status" | "cancel" => Ok(json!({"run_id": args.get("run")})),
+        "status" | "cancel" => fields.push(("run_id", arg("run"))),
         "exec" => {
-            let mut v = json!({"connection": args.get("connection"), "argv": args.extra});
-            if let Some(id) = args.get("request-id").filter(|s| !s.is_empty()) {
-                v["request_id"] = json!(id);
+            fields.push(("connection", arg("connection")));
+            fields.push(("argv", Field::Args(args.extra.clone())));
+            if args.get("request-id").is_some_and(|s| !s.is_empty()) {
+                fields.push(("request_id", arg("request-id")));
             }
-            Ok(v)
         }
         "request" => {
-            let mut v = json!({"connection": args.get("connection"), "method": args.get("method").unwrap_or("").to_uppercase(), "path": args.get("path")});
-            let mut headers = serde_json::Map::new();
-            if let Some(items) = args.options.get("header") {
-                for item in items {
-                    let Some((name, value)) = item.split_once(':') else {
-                        return Err(
-                            json!({"error":"InvalidInput","reason":"invalid_arguments","detail":"ValueError"}),
-                        );
-                    };
-                    if name.trim().is_empty() {
-                        return Err(
-                            json!({"error":"InvalidInput","reason":"invalid_arguments","detail":"ValueError"}),
-                        );
-                    }
-                    headers.insert(name.trim().to_owned(), json!(value.trim()));
+            fields.push(("connection", arg("connection")));
+            fields.push((
+                "method",
+                Field::Arg(args.get("method").unwrap_or_default().to_uppercase()),
+            ));
+            fields.push(("path", arg("path")));
+            // `_parse_header`: `partition(":")`, then `str.strip()`; a later
+            // duplicate name replaces the value in the first one's place.
+            let mut headers: Vec<(String, String)> = Vec::new();
+            for item in args.options.get("header").into_iter().flatten() {
+                let Some((name, value)) = item.split_once(':') else {
+                    return Err(invalid("ValueError"));
+                };
+                let name = name.trim_matches(crate::pystr::is_space);
+                if name.is_empty() {
+                    return Err(invalid("ValueError"));
+                }
+                let value = value.trim_matches(crate::pystr::is_space).to_owned();
+                match headers.iter_mut().find(|(n, _)| n == name) {
+                    Some(entry) => entry.1 = value,
+                    None => headers.push((name.to_owned(), value)),
                 }
             }
             if !headers.is_empty() {
-                v["headers"] = Value::Object(headers);
+                fields.push(("headers", Field::Headers(headers)));
             }
             if let Some(path) = args.get("body-file") {
-                let raw = std::fs::read(path).map_err(|e| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":crate::pystr::os_error_class(&e)}))?;
-                match String::from_utf8(raw.clone()) {
-                    Ok(s) => v["body"] = json!(s),
-                    Err(_) => v["body_base64"] = json!(pybase64::b64encode(&raw)),
+                // `open(path, "rb")`: the path's original bytes.
+                use std::os::unix::ffi::OsStrExt;
+                let path = std::ffi::OsStr::from_bytes(&esc.encode(path)).to_owned();
+                let raw =
+                    std::fs::read(&path).map_err(|e| invalid(crate::pystr::os_error_class(&e)))?;
+                match String::from_utf8(raw) {
+                    Ok(text) => fields.push(("body", Field::File(text))),
+                    Err(error) => fields.push((
+                        "body_base64",
+                        Field::File(pybase64::b64encode(error.as_bytes())),
+                    )),
                 }
-            } else if let Some(body) = args.get("body") {
-                v["body"] = json!(body);
+            } else if args.get("body").is_some() {
+                fields.push(("body", arg("body")));
             }
-            if let Some(id) = args.get("request-id").filter(|s| !s.is_empty()) {
-                v["request_id"] = json!(id);
+            if args.get("request-id").is_some_and(|s| !s.is_empty()) {
+                fields.push(("request_id", arg("request-id")));
             }
-            Ok(v)
         }
-        _ => unreachable!(),
+        _ => {}
     }
+    Ok(fields)
 }
 
 fn emit(v: &Value, stderr: bool) {
@@ -558,7 +630,13 @@ fn tunnel(
 /// (a traceback, exit status 1) is reported as `gateway_unreachable` with
 /// the exception's class name (PORTING.md §3.5).
 pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u16, Value) {
-    match call_tool_outcome(base_url, token, tool, payload) {
+    let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
+    call_tool_body(base_url, token, tool, &body)
+}
+
+/// [`call_tool`] with the request body already serialized.
+fn call_tool_body(base_url: &str, token: &str, tool: &str, body: &str) -> (u16, Value) {
+    match call_tool_outcome(base_url, token, tool, body) {
         Ok(result) => result,
         Err(Failure::Caught(result)) => result,
         Err(Failure::Escaped(name)) => gateway_unreachable(name),
@@ -578,61 +656,90 @@ fn call_tool_outcome(
     base_url: &str,
     token: &str,
     tool: &str,
-    payload: &Value,
+    body: &str,
 ) -> Result<(u16, Value), Failure> {
+    let unreachable = |detail: &str| Failure::Caught(gateway_unreachable(detail));
     let url = format!("{}/v1/tools/{tool}", base_url.trim_end_matches('/'));
     let Some((tls, host, selector)) = request_target(&url) else {
-        return Err(Failure::Caught(gateway_unreachable("ValueError")));
+        return Err(unreachable("ValueError"));
     };
     let Some(host) = host else {
-        return Err(Failure::Caught(gateway_unreachable("no host given")));
+        return Err(unreachable("no host given"));
     };
-    if token.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
-        return Err(Failure::Caught(gateway_unreachable("ValueError")));
-    }
-    // http.client refuses control characters and spaces in the host and
-    // request target (`InvalidURL`, a `ValueError`).
-    if host
-        .bytes()
-        .chain(selector.bytes())
-        .any(|b| b <= b' ' || b == 0x7f)
-    {
-        return Err(Failure::Caught(gateway_unreachable("InvalidURL")));
-    }
     let url_without_fragment = url.rsplit_once('#').map_or(url.as_str(), |(u, _)| u);
     let route =
         route(url_without_fragment, tls, Some(&host), &selector).map_err(Failure::Caught)?;
-    let (connect_host, port) = host_port(&route.connect, if route.tls { 443 } else { 80 })
-        .map_err(|name| Failure::Caught(gateway_unreachable(name)))?;
+    // `HTTPConnection(host)`: `_get_hostport` and `_validate_host`
+    // (`InvalidURL`, a `ValueError`).
+    let (connect_host, port) =
+        host_port(&route.connect, if route.tls { 443 } else { 80 }).map_err(unreachable)?;
+    let disallowed = |text: &str| text.chars().any(|c| c <= ' ' || c == '\x7f');
+    if disallowed(&connect_host) {
+        return Err(unreachable("InvalidURL"));
+    }
+    // `putrequest`: `_validate_path`, then the ASCII request line.
+    if disallowed(&route.selector) {
+        return Err(unreachable("InvalidURL"));
+    }
+    if !route.selector.is_ascii() {
+        return Err(unreachable("UnicodeEncodeError"));
+    }
+    // `putheader`: each value encoded as Latin-1 (`UnicodeEncodeError`), then
+    // `_is_illegal_header_value` (`ValueError`), in the order urllib sends
+    // them, all before the connection is opened.
+    let latin1_value = |value: &str| -> Result<Vec<u8>, Failure> {
+        let bytes: Vec<u8> = value
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).map_err(|_| unreachable("UnicodeEncodeError")))
+            .collect::<Result<_, _>>()?;
+        let illegal = bytes.iter().enumerate().any(|(i, b)| match b {
+            b'\n' => !matches!(bytes.get(i + 1), Some(b' ' | b'\t')),
+            b'\r' => !matches!(bytes.get(i + 1), Some(b' ' | b'\t' | b'\n')),
+            _ => false,
+        });
+        if illegal {
+            return Err(unreachable("ValueError"));
+        }
+        Ok(bytes)
+    };
+    let host_header = latin1_value(&host)?;
+    let authorization = latin1_value(&format!("Bearer {token}"))?;
+    // `socket.create_connection` resolves the IDNA-encoded host.
+    let resolve_host =
+        crate::pyidna::encode(&connect_host).map_err(|_| unreachable("UnicodeError"))?;
     let timeout = Duration::from_secs(120);
-    let mut stream = create_connection(&connect_host, port, timeout)
+    let mut stream = create_connection(&resolve_host, port, timeout)
         .map_err(|error| Failure::Caught(url_error(&error)))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     let server_name = match &route.tunnel {
         Some(target) => {
             tunnel(&mut stream, target, route.proxy_authorization.as_deref())?;
-            host_port(target, 443)
-                .map_err(|name| Failure::Caught(gateway_unreachable(name)))?
-                .0
+            host_port(target, 443).map_err(unreachable)?.0
         }
         None => connect_host.clone(),
     };
-    let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
     // `urllib`'s request processors add Content-Length, Host and User-Agent
     // as unredirected headers before the Request's three explicit headers.
     // `http.client.putrequest` emits Accept-Encoding first; `do_open` appends
     // Connection last.  Keep that wire order as well as the values: header
     // order and duplicates are observable to an HTTP peer.
-    let proxy_header = match (&route.proxy_authorization, &route.tunnel) {
-        (Some(value), None) => format!("Proxy-Authorization: {value}\r\n"),
-        _ => String::new(),
-    };
-    let request = format!(
-        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: {host}\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\n{proxy_header}Connection: close\r\n\r\n{body}",
+    let mut request = format!(
+        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: ",
         route.selector,
         body.len()
-    );
+    )
+    .into_bytes();
+    request.extend_from_slice(&host_header);
+    request.extend_from_slice(b"\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: ");
+    request.extend_from_slice(&authorization);
+    request
+        .extend_from_slice(b"\r\nContent-Type: application/json\r\nAccept: application/json\r\n");
+    if let (Some(value), None) = (&route.proxy_authorization, &route.tunnel) {
+        request.extend_from_slice(format!("Proxy-Authorization: {value}\r\n").as_bytes());
+    }
+    request.extend_from_slice(b"Connection: close\r\n\r\n");
+    request.extend_from_slice(body.as_bytes());
     if route.tls {
         // TLS validation is supplied by rustls and the host's certificate store.
         let roots = rustls_native_certs::load_native_certs();
@@ -644,16 +751,16 @@ fn call_tool_outcome(
             .with_root_certificates(store)
             .with_no_client_auth();
         let name = rustls_pki_types::ServerName::try_from(server_name)
-            .map_err(|_| Failure::Caught(gateway_unreachable("InvalidURL")))?;
+            .map_err(|_| unreachable("InvalidURL"))?;
         let connection = rustls::ClientConnection::new(std::sync::Arc::new(config), name)
-            .map_err(|_| Failure::Caught(gateway_unreachable("SSLError")))?;
+            .map_err(|_| unreachable("SSLError"))?;
         let mut io = rustls::StreamOwned::new(connection, stream);
-        io.write_all(request.as_bytes())
+        io.write_all(&request)
             .map_err(|error| Failure::Caught(url_error(&error)))?;
         read_response(&mut BufReader::new(RaggedEof(io)), &url)
     } else {
         let mut io = stream;
-        io.write_all(request.as_bytes())
+        io.write_all(&request)
             .map_err(|error| Failure::Caught(url_error(&error)))?;
         read_response(&mut BufReader::new(io), &url)
     }
@@ -1030,28 +1137,40 @@ fn read_response(reader: &mut impl BufRead, full_url: &str) -> Result<(u16, Valu
     Ok((status, body))
 }
 
-/// Entry point taking the raw OS arguments. Python keeps a non-UTF-8
-/// argument as a `surrogateescape` string; a Rust `String` cannot hold it
-/// (PORTING.md §3.6), so it is a usage error instead of a panic.
+/// Entry point taking the raw OS arguments.  CPython decodes argv and the
+/// environment with `surrogateescape`; undecodable bytes are carried as
+/// [`crate::pystr::SurrogateEscape`] code points, sent as the lone
+/// surrogate escapes `json.dumps` writes, opened as their original bytes,
+/// and printed to stderr as `backslashreplace` does.
 pub fn main_os(argv: Vec<std::ffi::OsString>) -> i32 {
-    match argv
-        .into_iter()
-        .map(std::ffi::OsString::into_string)
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(argv) => main(&argv),
-        Err(_) => {
-            eprintln!(
-                "{}zeropw-agent: error: argument is not valid UTF-8",
-                build_parser().format_usage()
-            );
-            2
-        }
-    }
+    use std::os::unix::ffi::OsStrExt;
+    let url = env::var_os("ZEROPW_GATEWAY_URL");
+    let token = env::var_os("ZEROPW_CALLER_TOKEN");
+    let inputs = argv
+        .iter()
+        .map(|a| a.as_bytes())
+        .chain(url.iter().map(|v| v.as_bytes()))
+        .chain(token.iter().map(|v| v.as_bytes()));
+    let Some(esc) = crate::pystr::SurrogateEscape::avoiding(inputs) else {
+        eprintln!(
+            "{}zeropw-agent: error: argument is not valid UTF-8",
+            build_parser().format_usage()
+        );
+        return 2;
+    };
+    let argv: Vec<String> = argv.iter().map(|a| esc.decode(a.as_bytes())).collect();
+    let decode = |value: Option<std::ffi::OsString>| {
+        value.map(|v| esc.decode(v.as_bytes())).unwrap_or_default()
+    };
+    run(&argv, &esc, &decode(url), &decode(token))
 }
 
 /// Returns process exit code; caller supplies argv excluding program name.
 pub fn main(argv: &[String]) -> i32 {
+    main_os(argv.iter().map(std::ffi::OsString::from).collect())
+}
+
+fn run(argv: &[String], esc: &crate::pystr::SurrogateEscape, url: &str, token: &str) -> i32 {
     let args = match parse(argv) {
         Ok(a) => a,
         Err(ParseFail::Help(text)) => {
@@ -1060,19 +1179,13 @@ pub fn main(argv: &[String]) -> i32 {
             return 0;
         }
         Err(ParseFail::Usage(text)) => {
-            eprint!("{text}");
+            eprint!("{}", esc.stderr_text(&text));
             return 2;
         }
     };
     // `os.environ.get(name, "").strip()`: `str.strip()` whitespace.
-    let base_url = env::var("ZEROPW_GATEWAY_URL")
-        .unwrap_or_default()
-        .trim_matches(crate::pystr::is_space)
-        .to_owned();
-    let token = env::var("ZEROPW_CALLER_TOKEN")
-        .unwrap_or_default()
-        .trim_matches(crate::pystr::is_space)
-        .to_owned();
+    let base_url = url.trim_matches(crate::pystr::is_space).to_owned();
+    let token = token.trim_matches(crate::pystr::is_space).to_owned();
     if base_url.is_empty() {
         emit(
             &json!({"error":"ConfigError","reason":"gateway_url_unset","detail":"set ZEROPW_GATEWAY_URL"}),
@@ -1096,8 +1209,8 @@ pub fn main(argv: &[String]) -> i32 {
         );
         return 1;
     }
-    let payload = match payload(&args) {
-        Ok(v) => v,
+    let body = match payload(&args, esc) {
+        Ok(fields) => dumps_payload(&fields, esc),
         Err(e) => {
             emit(&e, true);
             return 1;
@@ -1107,7 +1220,7 @@ pub fn main(argv: &[String]) -> i32 {
         "list-connections" => "list_connections",
         other => other,
     };
-    let (status, mut body) = call_tool(&base_url, &token, tool, &payload);
+    let (status, mut body) = call_tool_body(&base_url, &token, tool, &body);
     if status == 200 && (args.command != "request" || body.get("reason").is_none_or(Value::is_null))
     {
         emit(&body, false);
@@ -1187,8 +1300,7 @@ for _ in range({count}):
         let rust: Vec<Value> = responses
             .iter()
             .map(|_| {
-                match call_tool_outcome(&url, "zpwc_synthetic", "status", &json!({"run_id": "r-1"}))
-                {
+                match call_tool_outcome(&url, "zpwc_synthetic", "status", r#"{"run_id": "r-1"}"#) {
                     Ok((status, body)) | Err(Failure::Caught((status, body))) => {
                         json!({"result": [status, body]})
                     }
@@ -1278,6 +1390,11 @@ for _ in range({count}):
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
 
+    fn dumped(args: &Args) -> Value {
+        let esc = crate::pystr::SurrogateEscape::avoiding([]).unwrap();
+        serde_json::from_str(&dumps_payload(&payload(args, &esc).unwrap(), &esc)).unwrap()
+    }
+
     #[test]
     fn payloads_and_bad_args() {
         let req = parse(
@@ -1295,12 +1412,12 @@ for _ in range({count}):
             .map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(payload(&req).unwrap()["method"], "POST");
-        assert_eq!(payload(&req).unwrap()["headers"]["Accept"], "json");
+        assert_eq!(dumped(&req)["method"], "POST");
+        assert_eq!(dumped(&req)["headers"]["Accept"], "json");
         assert!(parse(&["request", "--connection", "gh"].map(str::to_owned)).is_err());
         let ex = parse(&["exec", "--connection", "gh", "--", "--flag", "-x"].map(str::to_owned))
             .unwrap();
-        assert_eq!(payload(&ex).unwrap()["argv"], json!(["--flag", "-x"]));
+        assert_eq!(dumped(&ex)["argv"], json!(["--flag", "-x"]));
         let equals = parse(
             &[
                 "request",
@@ -1313,6 +1430,6 @@ for _ in range({count}):
             .map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(payload(&equals).unwrap()["headers"]["B"], "2");
+        assert_eq!(dumped(&equals)["headers"]["B"], "2");
     }
 }
