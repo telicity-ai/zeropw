@@ -2,6 +2,8 @@
 
 작성일: 2026-09-14 · 갱신 2026-09-16 (침해 대응: 자동 봉쇄·노출 판정·교체 안내 이메일 구현 반영) · 구현 기준 · 합성 자격증명과 통제된 시험용 서버만 사용
 
+> 2026-10-03: Python 프로토타입(`zeropw/`, `tests/`, `examples/democli.py`)은 제거했고 제품은 `rust/`의 Rust 구현이다. 아래 모듈 표와 시험 이름은 프로토타입 시기의 기록이며, 같은 구성 요소가 `rust/src/`의 같은 이름 모듈로 옮겨져 있다. 실행 명령(§1, §10)은 Rust 바이너리 기준으로 고쳤다.
+
 이 문서는 [제품 정의](product-intent.md)와 [인증 중계와 보안 경계](security-design.md)에 적힌 첫 버전 요구사항을 실제로 어디까지 실행 가능한 코드로 옮겼는지 기록한다. 제품 문서와 보안 기준 자체는 바꾸지 않았다. 여기 적힌 내용은 코드가 통과한 시험의 범위이며 보안 인증, Opus 리뷰 통과, 배포 준비 완료를 뜻하지 않는다.
 
 ## 1. 요약
@@ -9,11 +11,12 @@
 `zeropw/` 패키지는 Python 3.11 이상 표준 라이브러리만으로 금고·정책·감사·HTTP 인증 중계기·SSH 서명기·에이전트 네이티브 도구·관리 CLI를 구현한다. 하나의 연결로 서로 다른 API 요청과 CLI 실행이 개별 등록 없이 동작하고, 원본 비밀은 신뢰 프로세스 밖으로 나가지 않는다. 에이전트 도구 `exec`가 실제 OpenSSH `ssh`를 띄워 서명기만으로 실제 `sshd`에 인증하는 종단 시험과, 관리 CLI·`serve`·에이전트 CLI를 각각 별도 OS 프로세스로 띄워 문서의 사용 흐름 전체를 도는 종단 시험(`tests/test_cli_e2e.py`)을 포함한다.
 
 ```sh
-python3.12 -m unittest discover -s tests -p 'test_*.py' -v   # 전체 시험
-python3.12 -m zeropw.demo                                       # 원커맨드 데모 (종료 코드 0 = 모든 확인 통과)
+cargo build --locked --manifest-path rust/Cargo.toml --bins
+cargo test --locked --manifest-path rust/Cargo.toml --all-targets   # 전체 시험
+rust/target/debug/zeropw-demo                                         # 원커맨드 데모 (종료 코드 0 = 모든 확인 통과)
 ```
 
-기존 CI의 "Run product tests when present" 단계가 `tests/`를 자동으로 실행한다. `sshd`를 일반 사용자로 띄울 수 없는 환경에서는 SSH 종단 시험을 건너뛰며 통과로 표시하지 않는다.
+`sshd`를 일반 사용자로 띄울 수 없는 환경에서는 SSH 종단 시험이 건너뛰었음을 출력한다.
 
 ## 2. 구성 요소와 신뢰 영역
 
@@ -160,20 +163,19 @@ session-bind를 보내지 않는 클라이언트(OpenSSH 8.9 미만, 대부분�
 
 ## 10. 실행 예시
 
-모든 명령은 저장소 루트에서 실행한다. `zeropw.fake_upstream`에는 명령행 진입점이 없고 127.0.0.1의 임시 포트에만 뜬다. 아래 첫 줄은 합성 토큰 `synthetic-token-1`만 받는 시험용 외부 API를 백그라운드로 띄우고 `http://127.0.0.1:<포트>`를 출력한다. 포트는 실행마다 달라지므로 출력된 url을 `--target`에 준다. 이 프로세스는 한 시간 뒤 스스로 끝난다.
+모든 명령은 저장소 루트에서 `cargo build --manifest-path rust/Cargo.toml --bins` 뒤에 실행하며, `rust/target/debug`가 `PATH`에 있다고 가정한다. 합성 토큰 `synthetic-token-1`만 받는 시험용 외부 API를 127.0.0.1에 준비하고 그 url을 `--target`에 준다(시험용 서버 `zeropw::fake_upstream::FakeUpstream`은 라이브러리로만 제공되며, 전체 흐름은 `zeropw-demo`가 내장 시험 서버로 한 번에 보여 준다).
 
 관리자 쪽:
 
 ```sh
-python3.12 -c 'import time; from zeropw.fake_upstream import FakeUpstream; f = FakeUpstream("synthetic-token-1").start(); print(f.url, flush=True); time.sleep(3600)' &
 export ZEROPW_ADMIN_PASSPHRASE='admin-passphrase-1' ZEROPW_RECOVERY_PASSPHRASE='recovery-passphrase-1'
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw init
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw project create demo
-printf 'synthetic-token-1' | python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw secret put --id gh --kind api_key --project demo --environment dev --stdin
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw connection create-http --id gh --project demo --environment dev --service fake --secret-id gh --target '<시험용 외부 API가 출력한 url>' --auth bearer --methods GET,POST --path-prefixes /repos,/me --cli-program "$PWD/examples/democli.py"
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-1
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw grant create --principal agent-1 --connection gh --ttl 1h --max-uses 100
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw serve
+zeropw-admin --state-dir /tmp/zpw init
+zeropw-admin --state-dir /tmp/zpw project create demo
+printf 'synthetic-token-1' | zeropw-admin --state-dir /tmp/zpw secret put --id gh --kind api_key --project demo --environment dev --stdin
+zeropw-admin --state-dir /tmp/zpw connection create-http --id gh --project demo --environment dev --service fake --secret-id gh --target '<시험용 외부 API가 출력한 url>' --auth bearer --methods GET,POST --path-prefixes /repos,/me --cli-program "$PWD/rust/target/debug/zeropw-democli"
+zeropw-admin --state-dir /tmp/zpw principal create --id agent-1
+zeropw-admin --state-dir /tmp/zpw grant create --principal agent-1 --connection gh --ttl 1h --max-uses 100
+zeropw-admin --state-dir /tmp/zpw serve
 ```
 
 `principal create`는 호출 토큰을 `token` 필드로 한 번만 출력한다. `serve`는 첫 줄에 `url`이 든 JSON을 출력하고 SIGINT·SIGTERM에 종료한다. `--cli-program`에는 절대 경로를 준다. 이 예시의 대상은 127.0.0.1 IP 주소라 그대로 동작한다. 호스트 이름 대상이 사설 주소로 해석되어야 하는 내부 서비스라면 `connection create-http`에 `--allow-private-network`를 더한다. `--cli-env`에는 비밀이 아닌 값만 주며, 자격증명과 일치하면 거부된다.
@@ -181,7 +183,7 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw serve
 침해 대응(§7) 관련 예시. 실행 환경마다 다른 `--runtime`으로 호출 주체를 만든다:
 
 ```sh
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-2 --runtime box-1
+zeropw-admin --state-dir /tmp/zpw principal create --id agent-2 --runtime box-1
 ```
 
 자동 봉쇄가 교체 안내 이메일을 보내게 하려면 관리자가 `<상태 디렉터리>/notify.json`(0600, 현재 사용자 소유)과 비밀번호 파일(0600)을 직접 만든다 — 이 자격증명은 금고 비밀이나 업무용 연결로 등록하지 않는다:
@@ -197,9 +199,9 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-
 사건을 수동으로 선언·확인·닫는 예시:
 
 ```sh
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident declare --scope principal --principal agent-2 --reason "토큰 유출 의심"
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident show --id <위 명령이 출력한 id>
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident close --id <id>
+zeropw-admin --state-dir /tmp/zpw incident declare --scope principal --principal agent-2 --reason "토큰 유출 의심"
+zeropw-admin --state-dir /tmp/zpw incident show --id <위 명령이 출력한 id>
+zeropw-admin --state-dir /tmp/zpw incident close --id <id>
 ```
 
 `incident close`(그리고 `--scope all`인 `incident declare`)는 `ZEROPW_ADMIN_PASSPHRASE`로 관리자 패스프레이즈 재인증을 한다. 자동 탐지기가 스스로 여는 사건은 이 명령 없이 `serve` 안에서 만들어지며, `incident list`·`incident show`로 같은 방식으로 조회한다.
@@ -208,16 +210,16 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident close --id <id>
 
 ```sh
 export ZEROPW_GATEWAY_URL='<serve가 출력한 url>' ZEROPW_CALLER_TOKEN='<principal create가 출력한 token>'
-python3.12 -m zeropw.agent_cli list-connections
-python3.12 -m zeropw.agent_cli request --connection gh --method GET --path /repos
-python3.12 -m zeropw.agent_cli exec --connection gh -- list-repos
-python3.12 -m zeropw.agent_cli status --run '<exec가 출력한 run_id>'
+zeropw-agent list-connections
+zeropw-agent request --connection gh --method GET --path /repos
+zeropw-agent exec --connection gh -- list-repos
+zeropw-agent status --run '<exec가 출력한 run_id>'
 ```
 
 사건이 열려 있는 동안(자동이든 수동이든) 같은 호출 주체의 모든 호출이 거부된다. 에이전트 쪽에서는 다음처럼 보인다(종료 코드 1):
 
 ```sh
-$ python3.12 -m zeropw.agent_cli list-connections
+$ zeropw-agent list-connections
 {
   "error": "AuthFailed",
   "reason": "principal_disabled",
@@ -225,7 +227,7 @@ $ python3.12 -m zeropw.agent_cli list-connections
 }
 ```
 
-위 흐름은 2026-09-14에 이 절의 명령을 그대로 쓰고 자리표시자와 상태 디렉터리 경로만 실제 값으로 바꿔 실행해 확인했고, 같은 흐름을 `tests/test_cli_e2e.py`가 별도 프로세스로 자동 시험한다. 전체 흐름을 한 번에 보려면 `python3.12 -m zeropw.demo`를 실행한다.
+같은 흐름을 `rust/tests/native_cli_e2e.rs`가 별도 프로세스로 자동 시험한다. 전체 흐름을 한 번에 보려면 `zeropw-demo`를 실행한다.
 
 ## 10. 팀 공유 (docs/team-sync.md)
 
