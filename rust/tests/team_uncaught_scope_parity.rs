@@ -347,3 +347,242 @@ with tempfile.TemporaryDirectory() as tmp:
         ("team_uncaught_exception", "TypeError")
     );
 }
+
+// ------------------------------------------------------------- session scope
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
+
+use zeropw::clock;
+use zeropw::context::{Config, Context};
+use zeropw::team::identity::DeviceRecord;
+use zeropw::team::transport::{InProcessTransport, MembershipCheck, Session, SessionClosed};
+use zeropw::team::{membership, sync};
+
+/// A session fed by the test: frames pushed on the channel are received.
+struct Scripted {
+    peer: DeviceRecord,
+    env_id: String,
+    inbox: Mutex<mpsc::Receiver<Value>>,
+    closed: AtomicBool,
+    created: Instant,
+}
+impl Session for Scripted {
+    fn peer(&self) -> DeviceRecord {
+        self.peer.clone()
+    }
+    fn env_id(&self) -> &str {
+        &self.env_id
+    }
+    fn send(&self, _message: &Value) -> zeropw::errors::Result<()> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(zeropw::errors::Error::state("session_closed"));
+        }
+        Ok(())
+    }
+    fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(SessionClosed("session_closed"));
+        }
+        match self.inbox.lock().unwrap().recv_timeout(timeout) {
+            Ok(message) => Ok(Some(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(SessionClosed("peer_closed")),
+        }
+    }
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+    fn created_at(&self) -> Instant {
+        self.created
+    }
+}
+
+const ADMIN: &str = "synthetic-admin";
+
+const PY_SESSION: &str = r#"
+import json, pathlib, tempfile, time
+from zeropw.context import Config, Context
+from zeropw.team import commit as C, membership as M, sync as S, transport as T
+from zeropw.team.identity import DeviceKey
+
+out = {}
+for name in ["non_string_key", "escaping_validation", "malformed", "other_env"]:
+    root = pathlib.Path(tempfile.mkdtemp())
+    ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
+    ctx.projects.create("demo", ["dev"])
+    env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
+    device = DeviceKey.load_or_create(ctx.state, ctx.kms)
+    team = S.TeamSync(ctx, T.InProcessTransport(device), device)
+    team.register_env(env_id)
+    store = C.CommitStore(ctx.state, env_id)
+    last = store.last_seq(device.fingerprint)
+    if name == "escaping_validation":
+        ops = [{"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+                "service": "github", "kind": "http", "secret_id": "s", "description": "",
+                "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+                "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}}]
+    else:
+        ops = [{"op": "settings.update", "sync_interval_seconds": 5}]
+    unsigned = C.Commit(C.COMMIT_FORMAT, env_id, device.fingerprint, last + 1, f"{C.now_ms()}-0000", {},
+                        tuple(ops), "")
+    import base64
+    raw = C.replace(unsigned, sig=base64.b64encode(device.sign(unsigned.canonical_json(False))).decode()).to_dict()
+    if name in ("non_string_key", "other_env"):
+        raw["ops"] = [[["op", "settings.update"], ["sync_interval_seconds", 5], [1, "x"]]]
+    if name == "other_env":
+        raw["env_id"] = "elsewhere"
+    if name == "malformed":
+        del raw["sig"]
+    peer = DeviceKey.generate()
+    frames = [{"type": "COMMIT", "commit": raw}]
+    class Scripted:
+        def __init__(self):
+            self.peer, self.env_id, self.closed = peer.record, env_id, False
+            self.created_at = time.monotonic()
+        def send(self, m):
+            if self.closed:
+                raise T.SessionClosed("closed")
+        def recv(self, timeout):
+            if self.closed:
+                raise T.SessionClosed("closed")
+            if frames:
+                return frames.pop(0)
+            time.sleep(0.05)
+            return None
+        def close(self):
+            self.closed = True
+    session = Scripted()
+    team.adopt_outbound_session(env_id, session, "scripted")
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and (frames or peer.fingerprint in team._envs[env_id].sessions):
+        time.sleep(0.05)
+    time.sleep(0.3)
+    rejected = ctx.state.path / "team" / env_id / "rejected"
+    out[name] = {"session_open": peer.fingerprint in team._envs[env_id].sessions,
+                 "rejected": rejected.is_dir() and any(rejected.iterdir()),
+                 "audited": any(r["event"] == "team_commit_rejected" for r in ctx.audit.tail(200))}
+    team.stop()
+print(json.dumps(out))
+"#;
+
+fn rust_session_case(name: &str) -> Value {
+    let root = TempDir::new().unwrap();
+    let ctx = Arc::new(
+        Context::initialize(
+            root.path().join("a"),
+            ADMIN,
+            "synthetic-recovery",
+            Config {
+                team_sync_interval_seconds: Some(3600.0),
+                ..Config::default()
+            },
+            clock::system(),
+        )
+        .unwrap(),
+    );
+    ctx.projects.create("demo", &["dev"]).unwrap();
+    let env_id = membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap()
+        ["env_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let key = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let members: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(key.clone(), members));
+    let team = sync::TeamSync::new(ctx.clone(), transport, key.clone());
+    team.register_env(&env_id).unwrap();
+    let store = C::CommitStore::new(ctx.state, &env_id);
+    let last = store.last_seq(&key.fingerprint().unwrap()).unwrap();
+    let op = if name == "escaping_validation" {
+        json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+            "service": "github", "kind": "http", "secret_id": "s", "description": "",
+            "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
+            "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}})
+    } else {
+        json!({"op": "settings.update", "sync_interval_seconds": 5})
+    };
+    let mut c = Commit {
+        format: C::COMMIT_FORMAT.into(),
+        env_id: env_id.clone(),
+        author: key.fingerprint().unwrap(),
+        author_seq: &last + 1,
+        hlc: format!("{}-0000", C::now_ms()),
+        seen: BTreeMap::new(),
+        ops: vec![op],
+        sig: String::new(),
+    };
+    c.sig = pybase64::b64encode(&key.sign(&c.canonical_json(false).unwrap()).unwrap());
+    let mut raw = c.to_dict();
+    if name == "non_string_key" || name == "other_env" {
+        raw["ops"] = json!([[
+            ["op", "settings.update"],
+            ["sync_interval_seconds", 5],
+            [1, "x"]
+        ]]);
+    }
+    if name == "other_env" {
+        raw["env_id"] = json!("elsewhere");
+    }
+    if name == "malformed" {
+        raw.as_object_mut().unwrap().remove("sig");
+    }
+    let (tx, rx) = mpsc::channel();
+    let peer = DeviceKey::generate().record().unwrap();
+    let fp = peer.fingerprint();
+    let session = Arc::new(Scripted {
+        peer,
+        env_id: env_id.clone(),
+        inbox: Mutex::new(rx),
+        closed: AtomicBool::new(false),
+        created: Instant::now(),
+    });
+    team.adopt_outbound_session(&env_id, session.clone(), "scripted");
+    tx.send(json!({"type": "COMMIT", "commit": raw})).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let open = |team: &sync::TeamSync| {
+        team.status(&env_id).unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(fp))
+    };
+    while Instant::now() < deadline && open(&team) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+    let rejected = ctx.state.path.join("team").join(&env_id).join("rejected");
+    let result = json!({
+        "session_open": open(&team),
+        "rejected": std::fs::read_dir(&rejected).map(|mut d| d.next().is_some()).unwrap_or(false),
+        "audited": ctx.audit.tail(200).unwrap().iter().any(|r| r["event"] == "team_commit_rejected"),
+    });
+    team.stop();
+    drop(tx);
+    result
+}
+
+/// `TeamSync._handle_commit` over a live session: a commit whose
+/// canonicalization or validation raises a built-in exception ends the
+/// receive loop (session dropped, nothing recorded), while a malformed
+/// (`InvalidInput`) commit or another environment's commit is ignored and
+/// the session stays open -- measured against CPython's `TeamSync`.
+#[test]
+fn escaping_receive_exceptions_drop_the_session_like_python() {
+    let python = python(PY_SESSION);
+    for name in [
+        "non_string_key",
+        "escaping_validation",
+        "malformed",
+        "other_env",
+    ] {
+        assert_eq!(rust_session_case(name), python[name], "{name}");
+    }
+    assert_eq!(python["non_string_key"]["session_open"], json!(false));
+    assert_eq!(python["escaping_validation"]["session_open"], json!(false));
+    assert_eq!(python["malformed"]["session_open"], json!(true));
+    assert_eq!(python["other_env"]["session_open"], json!(true));
+}

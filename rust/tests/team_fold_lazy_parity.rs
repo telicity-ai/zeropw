@@ -104,19 +104,46 @@ fn mutations(owner: &str, m2: &str) -> Vec<Mutation> {
             Some(json!(true)),
         ]
     };
-    put(&["owner"], vec![None, Some(Value::Null), Some(json!(5)), Some(json!(m2))]);
+    put(
+        &["owner"],
+        vec![None, Some(Value::Null), Some(json!(5)), Some(json!(m2))],
+    );
     put(&["members"], falsy_and_shapes());
     put(&["members", owner], falsy_and_shapes());
-    put(&["members", owner, "status"], vec![None, Some(json!(5)), Some(json!("removed"))]);
-    put(&["members", owner, "role"], vec![None, Some(json!(5)), Some(json!("user"))]);
-    put(&["members", m2], vec![None, Some(json!(7)), Some(json!({}))]);
-    put(&["members", m2, "status"], vec![None, Some(json!("removed"))]);
+    put(
+        &["members", owner, "status"],
+        vec![None, Some(json!(5)), Some(json!("removed"))],
+    );
+    put(
+        &["members", owner, "role"],
+        vec![None, Some(json!(5)), Some(json!("user"))],
+    );
+    put(
+        &["members", m2],
+        vec![None, Some(json!(7)), Some(json!({}))],
+    );
+    put(
+        &["members", m2, "status"],
+        vec![None, Some(json!("removed"))],
+    );
     put(&["connections"], falsy_and_shapes());
-    put(&["connections"], vec![Some(json!(["gh"])), Some(json!("ghx"))]);
+    put(
+        &["connections"],
+        vec![Some(json!(["gh"])), Some(json!("ghx"))],
+    );
     put(&["connections", "gh"], falsy_and_shapes());
-    put(&["connections", "gh", "status"], vec![None, Some(json!("disabled")), Some(json!(5))]);
-    put(&["connections", "gh", "created_at"], vec![None, Some(json!("")), Some(json!(5))]);
-    put(&["connections", "gh", "secret_id"], vec![None, Some(json!(5)), Some(json!(["s1"]))]);
+    put(
+        &["connections", "gh", "status"],
+        vec![None, Some(json!("disabled")), Some(json!(5))],
+    );
+    put(
+        &["connections", "gh", "created_at"],
+        vec![None, Some(json!("")), Some(json!(5))],
+    );
+    put(
+        &["connections", "gh", "secret_id"],
+        vec![None, Some(json!(5)), Some(json!(["s1"]))],
+    );
     put(
         &["connections", "gh", "http_scope"],
         vec![
@@ -127,18 +154,36 @@ fn mutations(owner: &str, m2: &str) -> Vec<Mutation> {
     put(&["secrets"], falsy_and_shapes());
     put(&["secrets"], vec![Some(json!(["s1"])), Some(json!("s1"))]);
     put(&["secrets", "s1"], falsy_and_shapes());
-    put(&["secrets", "s1", "kind"], vec![None, Some(json!(5)), Some(json!("password"))]);
+    put(
+        &["secrets", "s1", "kind"],
+        vec![None, Some(json!(5)), Some(json!("password"))],
+    );
     put(
         &["secrets", "s1", "active_version"],
-        vec![None, Some(json!([V1])), Some(json!(5)), Some(json!(V1)), Some(json!("zz"))],
+        vec![
+            None,
+            Some(json!([V1])),
+            Some(json!(5)),
+            Some(json!(V1)),
+            Some(json!("zz")),
+        ],
     );
     put(&["secrets", "s1", "versions"], falsy_and_shapes());
-    put(&["secrets", "s1", "versions"], vec![Some(json!([V1])), Some(json!(V1))]);
+    put(
+        &["secrets", "s1", "versions"],
+        vec![Some(json!([V1])), Some(json!(V1))],
+    );
     put(&["secrets", "s1", "versions", V1], falsy_and_shapes());
-    put(&["secrets", "s1", "versions", V1, "status"], vec![None, Some(json!("revoked")), Some(json!("active"))]);
+    put(
+        &["secrets", "s1", "versions", V1, "status"],
+        vec![None, Some(json!("revoked")), Some(json!("active"))],
+    );
     put(&["dek"], falsy_and_shapes());
     put(&["dek", "generations"], falsy_and_shapes());
-    put(&["dek", "generations"], vec![Some(json!([GEN])), Some(json!(GEN))]);
+    put(
+        &["dek", "generations"],
+        vec![Some(json!([GEN])), Some(json!(GEN))],
+    );
     put(&["dek", "generations", GEN], falsy_and_shapes());
     put(&["dek", "generations", GEN, "wraps"], falsy_and_shapes());
     put(&["dek", "current"], vec![None]);
@@ -183,7 +228,14 @@ fn digest(value: &Value) -> String {
 }
 
 fn rust_outcome(env_id: &str, commits: &[Commit], doc: &Value, facts: Option<&Facts>) -> Value {
-    match F::fold(env_id, commits.to_vec(), facts, Some(doc.clone()), None, None) {
+    match F::fold(
+        env_id,
+        commits.to_vec(),
+        facts,
+        Some(doc.clone()),
+        None,
+        None,
+    ) {
         Err(_) => json!("ERR"),
         Ok(result) => {
             let skipped: Vec<Value> = result
@@ -345,7 +397,13 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
     let mut rust_commits: Vec<(String, Vec<Commit>)> = Vec::new();
     let mut order = Vec::new();
     for (name, seq, op) in &ops {
-        let c = commit(&owner, &env_id, *seq, &format!("{}-0000", 1000 * seq), op.clone());
+        let c = commit(
+            &owner,
+            &env_id,
+            *seq,
+            &format!("{}-0000", 1000 * seq),
+            op.clone(),
+        );
         commits.insert((*name).into(), json!([c.to_dict()]));
         rust_commits.push(((*name).into(), vec![c]));
         order.push(json!(name));
@@ -433,5 +491,8 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
         mismatches[..mismatches.len().min(15)].join("\n")
     );
     // The sweep exercises both outcomes heavily.
-    assert!(errors > 200 && successes > 1000, "{errors} errors, {successes} successes");
+    assert!(
+        errors > 200 && successes > 1000,
+        "{errors} errors, {successes} successes"
+    );
 }
