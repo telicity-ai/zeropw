@@ -352,25 +352,36 @@ fn dispatch_validation_refuses_wrong_shapes_before_business_work() {
     assert_eq!(f.fake.requests().len(), 0);
     assert_eq!(f.call("unknown-vault-export", json!({})).0, 404);
 }
+/// `body_base64` is decoded strictly (the prototype's
+/// `base64.b64decode(s, validate=True)`; expected values measured there):
+/// canonical padding only, no whitespace, no data after padding.
 #[test]
-fn strict_base64_matches_python_validate_true() {
-    let cases = [
-        "", "AA==", "AB==", "AAA=", "AAB=", "AAAA", "AAAA=", "AAAA====", "=", "=AAA", "A=AA",
-        "AA=", "AA===", "AAA==", "AA==AA==", "AA A", "é",
+fn strict_base64_decodes_only_canonical_input() {
+    let cases: [(&str, Option<&[u8]>); 17] = [
+        ("", Some(b"")),
+        ("AA==", Some(&[0])),
+        ("AB==", Some(&[0])),
+        ("AAA=", Some(&[0, 0])),
+        ("AAB=", Some(&[0, 0])),
+        ("AAAA", Some(&[0, 0, 0])),
+        ("AAAA=", None),
+        ("AAAA====", None),
+        ("=", None),
+        ("=AAA", None),
+        ("A=AA", None),
+        ("AA=", None),
+        ("AA===", None),
+        ("AAA==", None),
+        ("AA==AA==", None),
+        ("AA A", None),
+        ("\u{e9}", None),
     ];
-    let script = format!(
-        "import base64,json\nout=[]\nfor s in {}:\n try: out.append(list(base64.b64decode(s,validate=True)))\n except (ValueError,TypeError): out.append(None)\nprint(json.dumps(out))",
-        serde_json::to_string(&cases).unwrap()
-    );
-    let out = std::process::Command::new("python3.12")
-        .arg("-c")
-        .arg(script)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let expected: Vec<Option<Vec<u8>>> = serde_json::from_slice(&out.stdout).unwrap();
-    for (s, want) in cases.iter().zip(expected) {
-        assert_eq!(zeropw::pybase64::b64decode_strict(s).ok(), want, "{s:?}");
+    for (s, want) in cases {
+        assert_eq!(
+            zeropw::pybase64::b64decode_strict(s).ok(),
+            want.map(<[u8]>::to_vec),
+            "{s:?}"
+        );
     }
 }
 

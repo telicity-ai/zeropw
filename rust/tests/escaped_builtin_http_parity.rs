@@ -1,19 +1,16 @@
-//! Built-in exceptions that escape to the HTTP server (PORTING.md §3c/§3d).
+//! Built-in errors that escape to the HTTP server fail closed with the fixed
+//! reply (`PORTING.md` §0 boundary 4).
 //!
-//! DEVIATIONS rows 39/40, measured end to end: a handle
-//! whose payload or signature segment holds a non-ASCII character makes
-//! Python's `HandleIssuer.verify` raise a built-in exception
-//! (`UnicodeEncodeError` from `_sign`, `TypeError` from
-//! `hmac.compare_digest`). `gateway.relay` only catches `AuthFailed`, so the
-//! HTTP server's catch-all answers a fixed 500 `internal_error` and no
-//! `http_relay` denial is audited. An agent controls the token (URL prefix or
-//! `X-ZeroPW-Handle` header, both decoded as latin-1), so the native server
-//! must answer the same bytes and write the same audit records.
+//! A handle whose payload or signature segment holds a non-ASCII character
+//! is refused with a fixed `500 internal_error` and no `http_relay` denial
+//! is audited; an ordinary forged ASCII signature is an audited
+//! `401 handle_signature`. An agent controls the token (URL prefix or
+//! `X-ZeroPW-Handle` header, both decoded as latin-1), so the reply must
+//! never echo it. The expected bytes are the ones the prototype's server
+//! answered (measured once; only the `Date` header varies).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,29 +18,8 @@ use tempfile::TempDir;
 use zeropw::context::{Config, Context};
 use zeropw::server::ZeroPWServer;
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
-}
-
-fn run_python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let output = Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python3.12");
-    assert!(
-        output.status.success(),
-        "python failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf-8 stdout")
-}
+const INTERNAL_ERROR: &str = "HTTP/1.1 500 Internal Server Error\r\nServer: zeropw-prototype \r\nContent-Type: application/json\r\nContent-Length: 54\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{\"error\": \"InternalError\", \"reason\": \"internal_error\"}";
+const HANDLE_SIGNATURE: &str = "HTTP/1.1 401 Unauthorized\r\nServer: zeropw-prototype \r\nContent-Type: application/json\r\nContent-Length: 53\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{\"error\": \"AuthFailed\", \"reason\": \"handle_signature\"}";
 
 /// Raw request bytes for each token, once in the URL prefix and once in the
 /// handle header; the last token is ASCII (an ordinary forged signature).
@@ -73,38 +49,7 @@ fn normalise(response: &[u8]) -> String {
 }
 
 #[test]
-fn non_ascii_handle_segments_answer_like_the_python_server() {
-    let hex: Vec<String> = requests().iter().map(hex::encode).collect();
-    let script = format!(
-        r#"
-import json, socket, tempfile
-from pathlib import Path
-from zeropw.context import Context
-from zeropw.server import ZeroPWServer
-tmp = tempfile.mkdtemp()
-ctx = Context.initialize(Path(tmp) / "state", "admin-passphrase-123456", "recovery-passphrase-123456")
-srv = ZeroPWServer(ctx).serve_in_thread()
-host, port = srv.server_address[:2]
-before = len(ctx.audit.tail(10000))
-out = []
-for raw in {hex:?}:
-    s = socket.create_connection((host, port))
-    s.sendall(bytes.fromhex(raw))
-    data = b""
-    while True:
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        data += chunk
-    s.close()
-    out.append(data.hex())
-events = [[r["event"], r.get("reason")] for r in ctx.audit.tail(10000)[before:]]
-print(json.dumps({{"responses": out, "events": events}}))
-srv.shutdown(); srv.server_close(); ctx.close()
-"#
-    );
-    let python: serde_json::Value = serde_json::from_str(run_python(&script).trim()).unwrap();
-
+fn non_ascii_handle_segments_answer_the_fixed_500() {
     let temp = TempDir::new().unwrap();
     let ctx = Arc::new(
         Context::initialize(
@@ -136,17 +81,25 @@ srv.shutdown(); srv.server_close(); ctx.close()
         .collect();
     server.stop();
 
-    let python_responses = python["responses"].as_array().unwrap();
-    assert_eq!(python_responses.len(), responses.len());
-    for (index, (rust, python)) in responses.iter().zip(python_responses).enumerate() {
-        let python = hex::decode(python.as_str().unwrap()).unwrap();
-        assert_eq!(normalise(rust), normalise(&python), "request {index}");
-    }
-    // Python itself: four 500s (no audit) and two audited AuthFailed 401s.
-    assert!(normalise(&responses[0]).starts_with("HTTP/1.1 500 "));
+    let normalised: Vec<String> = responses.iter().map(|r| normalise(r)).collect();
+    assert_eq!(
+        normalised,
+        [
+            INTERNAL_ERROR,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR,
+            INTERNAL_ERROR,
+            HANDLE_SIGNATURE,
+            HANDLE_SIGNATURE
+        ]
+    );
+    // Only the two ASCII forgeries are audited denials.
     assert_eq!(
         serde_json::Value::Array(events),
-        python["events"],
+        serde_json::json!([
+            ["http_relay", "handle_signature"],
+            ["http_relay", "handle_signature"]
+        ]),
         "audit records written by the requests"
     );
 }
@@ -158,34 +111,6 @@ srv.shutdown(); srv.server_close(); ctx.close()
 /// `os.open` raises `IsADirectoryError` inside `list_connections`.
 #[test]
 fn escaped_os_error_in_a_tool_call_answers_the_fixed_500() {
-    let script = r#"
-import os, socket, tempfile
-from pathlib import Path
-from zeropw.context import Context
-from zeropw.server import ZeroPWServer
-tmp = tempfile.mkdtemp()
-ctx = Context.initialize(Path(tmp) / "state", "admin-passphrase-123456", "recovery-passphrase-123456")
-token = ctx.policy.create_principal("alice", "cli")
-srv = ZeroPWServer(ctx).serve_in_thread()
-host, port = srv.server_address[:2]
-lock = Path(tmp) / "state" / ".lock"
-if lock.exists():
-    lock.unlink()
-lock.mkdir()
-s = socket.create_connection((host, port))
-s.sendall(("POST /v1/tools/list_connections HTTP/1.1\r\nHost: a\r\nAuthorization: Bearer %s\r\n"
-           "Content-Length: 2\r\nConnection: close\r\n\r\n{}" % token).encode())
-data = b""
-while True:
-    chunk = s.recv(65536)
-    if not chunk:
-        break
-    data += chunk
-print(data.hex())
-srv.shutdown(); srv.server_close()
-"#;
-    let python = hex::decode(run_python(script).trim()).unwrap();
-
     let temp = TempDir::new().unwrap();
     let ctx = Arc::new(
         Context::initialize(
@@ -221,6 +146,5 @@ srv.shutdown(); srv.server_close()
     socket.read_to_end(&mut response).unwrap();
     std::fs::remove_dir(&lock).unwrap();
     server.stop();
-    assert!(normalise(&python).starts_with("HTTP/1.1 500 "));
-    assert_eq!(normalise(&response), normalise(&python));
+    assert_eq!(normalise(&response), INTERNAL_ERROR);
 }

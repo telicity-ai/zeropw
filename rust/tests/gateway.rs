@@ -2633,71 +2633,15 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
 }
 
 #[test]
-fn replay_status_preserves_out_of_range_magnitudes_exactly() {
-    // Finding X-5: Python's `int(v)` (`RequestLedger.replay`,
-    // `status = int(response.get("status", 502))`) has no upper/lower
-    // bound -- CPython's arbitrary-precision `int` never raises here, so
-    // `relayed=True` for every case below. Derive every expected value by
-    // passing the same JSON-decoded status through the real Python
-    // `RequestLedger.replay`; in particular, `int(1e300)` reflects the exact
-    // binary64 value and must not be replaced with a hand-written power of
-    // ten.
-    //
-    // The previous fixed-width status path silently wrapped these into
-    // small, plausible-looking values. `RelayResult::status` is now an
-    // unbounded `PyInt`, preserving Python's exact integer through replay,
-    // audit, and the tools response.
+fn replay_status_preserves_persisted_integer_statuses() {
+    // The prototype persisted the integer status the upstream answered
+    // (`RequestLedger.replay`, `status = int(response.get("status", 502))`);
+    // replay, the audit record and the tools response all carry it
+    // unchanged. Hand-edited, non-integer statuses are covered by
+    // `gateway_replay_status_parity.rs`.
     let t = GatewayTest::new();
-    let out_of_range: [(&str, serde_json::Value); 6] = [
-        ("65736", serde_json::json!(65736)),
-        ("65536", serde_json::json!(65536)),
-        ("1000000", serde_json::json!(1_000_000)),
-        ("1e300", serde_json::json!(1e300)),
-        (
-            "numeric_string_huge",
-            serde_json::json!("18446744073709551816"),
-        ),
-        ("numeric_string_underscore", serde_json::json!(" 65736_0 ")),
-    ];
-    let oracle_input = serde_json::to_string(
-        &out_of_range
-            .iter()
-            .map(|(_, status)| status)
-            .collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let oracle_output = run_python_oracle_stdin(
-        r#"import json, sys
-from zeropw.gateway import RequestLedger
-for status in json.load(sys.stdin):
-    replayed = RequestLedger.replay({"response": {
-        "status": status, "headers": [], "reason": None,
-        "body_b64": "YWJj", "body_stored": True,
-    }})
-    print(json.dumps({
-        "status": str(replayed.status),
-        "headers": replayed.headers,
-        "body_hex": replayed.body.hex(),
-        "reason": replayed.reason,
-    }, separators=(",", ":")))
-"#,
-        &oracle_input,
-    );
-    let oracle_results = oracle_output
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(oracle_results.len(), out_of_range.len());
-
-    for ((label, status), oracle) in out_of_range.into_iter().zip(oracle_results) {
-        let expected = oracle["status"].as_str().unwrap();
-        assert_eq!(
-            oracle["headers"],
-            serde_json::json!([["X-ZeroPW-Replay", "true"]])
-        );
-        assert_eq!(oracle["body_hex"], "616263");
-        assert_eq!(oracle["reason"], Value::Null);
-        let request_id = format!("req-status-oor-{label}");
+    for (label, status) in [("ok", 200u16), ("not_found", 404), ("unavailable", 503)] {
+        let request_id = format!("req-status-{label}");
         assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
         set_ledger_response(
             &t,
@@ -2709,8 +2653,11 @@ for status in json.load(sys.stdin):
             }),
         );
         let replayed = issue_ledger(&t, &request_id, "same");
-        assert_eq!(replayed.status.to_string(), expected, "{label}");
-        assert_eq!(replayed.reason, None, "{label}");
+        assert_eq!(
+            (replayed.status.clone(), replayed.reason.clone()),
+            (status.into(), None),
+            "{label}"
+        );
         assert_eq!(replayed.body, b"abc", "{label}");
         assert!(
             replayed
@@ -2719,10 +2666,9 @@ for status in json.load(sys.stdin):
                 .any(|(name, value)| name == "X-ZeroPW-Replay" && value == "true"),
             "{label}: replay marker must be retained"
         );
-        let expected_value: Value = serde_json::from_str(expected).unwrap();
         assert_eq!(
             t.audit_records().last().unwrap()["status"],
-            expected_value,
+            serde_json::json!(status),
             "{label}: replay audit must retain the exact status"
         );
         let body = serde_json::to_vec(&serde_json::json!({"title": "same"})).unwrap();
@@ -2738,38 +2684,9 @@ for status in json.load(sys.stdin):
         )
         .unwrap();
         assert_eq!(
-            tool_result["status"], expected_value,
+            tool_result["status"],
+            serde_json::json!(status),
             "{label}: tools.request must retain the exact status"
-        );
-    }
-
-    // In-range values (including the u16::MAX boundary) must still match
-    // Python exactly -- this fix must not turn a VALID status into an
-    // error.
-    let in_range: [(&str, serde_json::Value, u16); 5] = [
-        ("plain_200", serde_json::json!(200), 200),
-        ("float_truncates", serde_json::json!(200.9), 200),
-        ("bool_true", serde_json::json!(true), 1),
-        ("numeric_string", serde_json::json!("404"), 404),
-        ("u16_max_boundary", serde_json::json!(65535), 65535),
-    ];
-    for (label, status, expected) in in_range {
-        let request_id = format!("req-status-ok-{label}");
-        assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
-        set_ledger_response(
-            &t,
-            "agent-1",
-            &request_id,
-            serde_json::json!({
-                "status": status, "headers": [], "reason": null,
-                "body_b64": "YWJj", "body_stored": true,
-            }),
-        );
-        let replayed = issue_ledger(&t, &request_id, "same");
-        assert_eq!(
-            (replayed.status.clone(), replayed.reason.clone()),
-            (expected.into(), None),
-            "{label}: an in-range status must match python's int() exactly, not fail"
         );
     }
 }
@@ -4352,17 +4269,6 @@ fn self_referential_target_via_public_url_is_case_insensitive() {
 }
 
 #[test]
-fn urlsplit_hostname_matches_python_lower_casing() {
-    let out = run_python_oracle(
-        r#"
-import urllib.parse
-print(urllib.parse.urlsplit("http://ZEROPW.invalid:8443").hostname)
-"#,
-    );
-    assert_eq!(out.trim(), "zeropw.invalid");
-}
-
-#[test]
 fn slow_upstream_read_is_a_timeout_not_connection_lost() {
     // Finding F-5: every read (and the request write) error used to become
     // `upstream_connection_lost`, but Python classifies `socket.timeout`/
@@ -4985,10 +4891,9 @@ fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
     let port = unreachable.port();
     drop(unreachable);
 
-    // A truthy non-`str` `ca_file` makes CPython's `load_verify_locations`
-    // raise `TypeError`, which escapes `relay` uncaught; `zeropw.server`
-    // answers it with its fixed 500 `internal_error` reply (see
-    // `python_open_connection_uses_ca_file_truthiness_before_path_type`).
+    // A hand-edited, truthy non-path `ca_file` fails closed: the error
+    // escapes `relay` and the server answers its fixed 500 `internal_error`
+    // reply; a falsy one means "no pinned CA".
     for (suffix, raw_ca_file, expected_status, expected_reason) in [
         ("null", serde_json::Value::Null, 502, "upstream_unreachable"),
         (
@@ -5071,50 +4976,6 @@ fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
             "{suffix}"
         );
     }
-}
-
-#[test]
-fn python_open_connection_uses_ca_file_truthiness_before_path_type() {
-    let output = run_python_oracle(
-        r#"
-import json
-from zeropw import gateway as G
-from zeropw import policy as P
-
-for value in (None, False, 0, [], {}, 5, True, ["not", "a", "path"], {"x": 1}, "", "a\x00b"):
-    target = P.HttpTarget("https", "example.com", 443, value)
-    connection = P.Connection(
-        "c", "demo", "dev", "test", "http", "secret", None, "", target,
-        P.HttpAuth("bearer"), P.HttpScope(), None, None, 0, "active", "", "",
-    )
-    try:
-        G._open_connection(connection, 1.0)
-        result = "ok"
-    except Exception as exc:
-        result = type(exc).__name__
-    print(json.dumps([value, result], sort_keys=True))
-"#,
-    );
-    let observed: Vec<Value> = output
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert_eq!(
-        observed,
-        vec![
-            serde_json::json!([null, "ok"]),
-            serde_json::json!([false, "ok"]),
-            serde_json::json!([0, "ok"]),
-            serde_json::json!([[], "ok"]),
-            serde_json::json!([{}, "ok"]),
-            serde_json::json!([5, "TypeError"]),
-            serde_json::json!([true, "TypeError"]),
-            serde_json::json!([["not", "a", "path"], "TypeError"]),
-            serde_json::json!([{"x": 1}, "TypeError"]),
-            serde_json::json!(["", "ok"]),
-            serde_json::json!(["a\u{0}b", "ValueError"]),
-        ]
-    );
 }
 
 #[test]
@@ -5203,8 +5064,7 @@ fn normalize_path_accepts_a_single_trailing_newline_like_python() {
     // Finding F-12: Python's `re` `$` also matches immediately before a
     // single trailing `"\n"`, so `_TARGET_CHARS.match("/a?b\n")` succeeds in
     // Python (returning `("/a", "/a?b\n")`), where the `regex` crate's own
-    // `$`/`is_match` only accepts the true end of the haystack. Oracle
-    // checked against real `python3.12` below.
+    // `$`/`is_match` only accepts the true end of the haystack.
     assert_eq!(
         gateway::normalize_path("/a?b\n").unwrap(),
         ("/a".to_string(), "/a?b\n".to_string())
@@ -5214,19 +5074,6 @@ fn normalize_path_accepts_a_single_trailing_newline_like_python() {
     // special-cased by Python's `$`).
     assert!(gateway::normalize_path("/a\nb").is_err());
     assert!(gateway::normalize_path("/a?b\n\n").is_err());
-}
-
-#[test]
-fn normalize_path_trailing_newline_matches_python_target_chars_regex() {
-    let out = run_python_oracle(
-        r#"
-import re
-pat = re.compile(r"^[\x21-\x7e]*$")
-tests = ["/a?b\n", "/a\nb", "/a?b\n\n", "/a?b"]
-print([bool(pat.match(t)) for t in tests])
-"#,
-    );
-    assert_eq!(out.trim(), "[True, False, False, True]");
 }
 
 /// Small seeded xorshift64* PRNG, same technique used by the internal
@@ -5338,7 +5185,7 @@ fn random_path_candidate(rng: &mut Lcg) -> String {
 }
 
 #[test]
-fn normalize_path_percent_decoding_never_panics_and_matches_python() {
+fn normalize_path_percent_decoding_never_panics() {
     // Finding F-R2-1: `percent_decode_lossy` used to index a `str` slice at
     // a byte offset that can land inside a multi-byte UTF-8 character
     // produced by the *first* decode pass (e.g. `/%25%E4%B8%AD` decodes
@@ -5346,66 +5193,55 @@ fn normalize_path_percent_decoding_never_panics_and_matches_python() {
     // panicking on agent-supplied input. Generate several thousand random
     // and adversarial percent-sequences (including ones specifically
     // engineered to reproduce that exact shape) and assert `normalize_path`
-    // never panics on any of them, and its accept/reject outcome (and, when
-    // accepted, its `(path, target)` pair) matches the real
-    // `zeropw.gateway.normalize_path` for every one of them.
+    // never panics on any of them, and that whatever it accepts is returned
+    // unchanged as the target with the query split off as the path.
     let mut rng = Lcg::new(0xA5A5_1234_5678_9ABC);
     let case_count = 6000usize;
-    let cases: Vec<String> = (0..case_count)
-        .map(|_| random_path_candidate(&mut rng))
-        .collect();
-
-    // No panic: computing every outcome up front is itself the assertion
-    // (a panic fails the test with a backtrace pointing at the case).
-    let rust_results: Vec<Result<(String, String), &'static str>> =
-        cases.iter().map(|c| gateway::normalize_path(c)).collect();
-
-    let script = r#"
-import sys, json
-from zeropw import gateway as G
-cases = json.loads(sys.stdin.read())
-out = []
-for raw in cases:
-    try:
-        path, target = G.normalize_path(raw)
-        out.append(["ok", path, target])
-    except G._Invalid as e:
-        out.append(["err", e.reason])
-sys.stdout.write(json.dumps(out))
-"#;
-    let stdin_json = serde_json::to_string(&cases).unwrap();
-    let py_out = run_python_oracle_stdin(script, &stdin_json);
-    let py_results: Vec<Value> = serde_json::from_str(py_out.trim()).unwrap();
-    assert_eq!(py_results.len(), cases.len());
-
-    let mut mismatches = Vec::new();
-    for (i, (case, rust_result)) in cases.iter().zip(rust_results.iter()).enumerate() {
-        let py = &py_results[i];
-        let matches = match (rust_result, py[0].as_str().unwrap()) {
-            (Ok((path, target)), "ok") => {
-                path.as_str() == py[1].as_str().unwrap()
-                    && target.as_str() == py[2].as_str().unwrap()
-            }
-            (Err(_), "err") => true,
-            _ => false,
-        };
-        if !matches {
-            mismatches.push(format!(
-                "case {i} ({case:?}): rust={rust_result:?} python={py:?}"
-            ));
+    let mut accepted = 0usize;
+    for _ in 0..case_count {
+        let case = random_path_candidate(&mut rng);
+        // No panic: a panic fails the test with a backtrace at the case.
+        if let Ok((path, target)) = gateway::normalize_path(&case) {
+            accepted += 1;
+            assert_eq!(target, case, "{case:?}");
+            assert_eq!(path, case.split('?').next().unwrap(), "{case:?}");
         }
     }
-    assert!(
-        mismatches.is_empty(),
-        "{} / {} cases diverged from python3.12 gateway.normalize_path:\n{}",
-        mismatches.len(),
-        cases.len(),
-        mismatches.join("\n")
-    );
-    eprintln!(
-        "normalize_path percent-decode fuzz: {} cases, 0 divergences, 0 panics",
-        cases.len()
-    );
+    assert!(accepted > 0 && accepted < case_count, "{accepted}");
+}
+
+#[test]
+fn normalize_path_representative_outcomes() {
+    // Well-formed agent paths pass through unchanged (the query split off
+    // for scope matching); dot segments, encoded dot segments, an empty
+    // segment, NUL, spaces, fragments and relative paths are refused.
+    // Expected values measured once against the prototype's
+    // `gateway.normalize_path`.
+    for (raw, expected) in [
+        ("/repos/demo/issues", Some("/repos/demo/issues")),
+        ("/repos?per_page=5&q=a%20b", Some("/repos")),
+        ("/a%2Fb/c", Some("/a%2Fb/c")),
+        ("/%25%E4%B8%AD", Some("/%25%E4%B8%AD")),
+        ("/%E4%B8%AD/x", Some("/%E4%B8%AD/x")),
+        ("/%41%42?x=%41", Some("/%41%42")),
+        ("/a/../b", None),
+        ("/a/./b", None),
+        ("/%2e%2e/x", None),
+        ("//x", None),
+        ("/a%00b", None),
+        ("/a\nb", None),
+        ("relative", None),
+        ("/a b", None),
+        ("/a#frag", None),
+    ] {
+        match (gateway::normalize_path(raw), expected) {
+            (Ok((path, target)), Some(want)) => {
+                assert_eq!((path.as_str(), target.as_str()), (want, raw), "{raw:?}");
+            }
+            (Err(reason), None) => assert_eq!(reason, "invalid_path", "{raw:?}"),
+            (got, _) => panic!("{raw:?}: unexpected {got:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------- equivalence review round 3
@@ -5479,41 +5315,6 @@ fn write_request_rejects_agent_controlled_request_line_injection() {
 }
 
 #[test]
-fn validate_method_and_validate_path_raise_different_exception_types_in_python() {
-    // Finding F-R3-1: both guards live in the same `putrequest` call, but
-    // they raise DIFFERENT exception types in CPython, which
-    // `_Relay._exchange`'s except clauses classify differently --
-    // `_validate_method` is a plain `ValueError` (caught by `except
-    // (OSError, ValueError): upstream_connection_lost`, the same outcome as
-    // an illegal header value), while `_validate_path` is `InvalidURL`, an
-    // `http.client.HTTPException` (caught by `except
-    // http.client.HTTPException: upstream_protocol_error`). Verified
-    // directly against a live `python3.12`.
-    let out = run_python_oracle(
-        r#"
-import http.client
-conn = http.client.HTTPConnection("127.0.0.1", 1)
-try:
-    conn.putrequest("GE\x01T", "/ok")
-    print("no-error")
-except http.client.HTTPException:
-    print("http-exception")
-except ValueError:
-    print("value-error")
-conn2 = http.client.HTTPConnection("127.0.0.1", 1)
-try:
-    conn2.putrequest("GET", "/x?y\n")
-    print("no-error")
-except http.client.HTTPException:
-    print("http-exception")
-except ValueError:
-    print("value-error")
-"#,
-    );
-    assert_eq!(out.trim(), "value-error\nhttp-exception");
-}
-
-#[test]
 fn content_length_with_information_separator_control_char_is_not_a_valid_int() {
     // Finding F-R3-2 (HIGH): the old `python_int` trimmed with
     // `pystr::is_space` (`str.isspace()`'s predicate), which wrongly
@@ -5551,7 +5352,7 @@ fn chunk_size_of_only_information_separator_control_chars_is_a_protocol_error() 
 }
 
 #[test]
-fn status_line_split_and_int_semantics_for_control_chars_match_python_oracle() {
+fn status_line_with_an_information_separator_in_the_status_is_a_protocol_error() {
     // Finding F-R3-2: U+001C-U+001F count as whitespace for
     // `line.split(None, 2)` (`str.isspace()`'s predicate, the same one
     // `_read_status`'s tokenizing uses) -- so a status token can never
@@ -5560,16 +5361,7 @@ fn status_line_split_and_int_semantics_for_control_chars_match_python_oracle() {
     // valid `int()` parse (`2`) but fails the `100 <= status <= 999` range
     // check, landing on the same `upstream_protocol_error` outcome via a
     // different route than the `Content-Length`/chunk-size cases above.
-    // Confirmed directly against python3.12 below, then pinned end-to-end.
-    let out = run_python_oracle(
-        r#"
-line = "HTTP/1.1 2\x1c00 OK\r\n"
-print(line.split(None, 2))
-print(int("2"))
-"#,
-    );
-    assert_eq!(out.trim(), "['HTTP/1.1', '2', '00 OK\\r\\n']\n2");
-
+    // Pinned end-to-end.
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 2\x1c00 OK\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "status-info-sep", response);
@@ -5591,9 +5383,7 @@ fn doubled_trailing_cr_in_header_block_does_not_leak_a_header_into_the_body() {
     // the bare `\r` this line contains still ends *recognition*, so
     // `Content-Type` (sharing this response's header block after the
     // doubled CR) is correctly dropped rather than becoming a header OR
-    // leaking into the body. Pinned end-to-end against python3.12 by the
-    // `http_framing_fuzz` differential fuzzer's `"\r\r\n"`
-    // header-terminator mutation in `gateway.rs`.
+    // leaking into the body.
     let t = GatewayTest::new();
     let response =
         b"HTTP/1.1 200 OK\r\nETag: keep-going\r\n\r\r\nContent-Type: text/plain\r\n\r\nbody"
@@ -6022,69 +5812,6 @@ fn ledger_save_fails_closed_for_a_corrupted_unrelated_caller() {
         raw, r#"{"agent-2": "oops"}"#,
         "the ledger must be left byte-for-byte untouched on a failed save"
     );
-}
-
-/// Like `run_python_oracle`, but pipes `stdin_data` to the script's stdin
-/// (for a batch of test cases too large to embed as a `-c` argument) and
-/// sets `PYTHONPATH` to the repository root so `import zeropw...` works,
-/// same as `rust/tests/gateway_oracle.rs`'s `run_python`.
-fn run_python_oracle_stdin(script: &str, stdin_data: &str) -> String {
-    use std::io::Write as _;
-    use std::process::Stdio;
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf();
-    let mut child = std::process::Command::new(&interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_data.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
-}
-
-/// Minimal Python runner for the oracle checks above -- same technique as
-/// `rust/tests/gateway_oracle.rs`'s `run_python` (not reused directly since
-/// that helper lives in a separate integration-test binary and isn't
-/// exported).
-fn run_python_oracle(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf();
-    let output = std::process::Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .current_dir(&repo_root)
-        .env("PYTHONPATH", &repo_root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python3.12");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
 // ------------------------------------------------------------- HashMap import

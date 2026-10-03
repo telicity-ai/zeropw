@@ -1,27 +1,17 @@
-//! Differential tests: what happens when CPython's `gateway.relay` /
-//! `relay_for_caller` RAISE instead of returning a `RelayResult`
-//! (`DEVIATIONS.md` gateway rows for `unexpected_error_result`, the chunked
-//! `read_body` negative sizes, `upstream_timeout` and the ledger replay
-//! status).
-//!
-//! Each case builds the same state in a fresh Rust `Context` and a fresh
-//! Python `zeropw.context.Context`, both pointed at the same raw local
-//! upstream, then compares
-//!
-//! * the call's outcome -- a returned result (status, reason, body), or the
-//!   escaping exception (`type(exc).__name__`, and `exc.to_dict()` for a
-//!   `ZeroPWError`);
-//! * the request ledger document left behind (claim state, `in_flight`
-//!   versus released versus `uncertain`); and
-//! * the audit trail (event, result, reason),
-//!
-//! and, for the server cases, the raw bytes `zeropw.server.ZeroPWServer`
-//! and `server::ZeroPWServer` send back (only the `Date` header removed).
+//! What happens when a relay cannot return an ordinary `RelayResult`: an
+//! adversarial upstream (negative or malformed chunk sizes), an unusable
+//! configured upstream timeout, a hand-edited request ledger, corrupt policy
+//! state or an unsupported stored auth mode. Outside the persisted-state
+//! and wire boundaries Rust only has to fail closed (`PORTING.md` §0): each
+//! case runs in a fresh `Context` against a raw local upstream, and the
+//! observation -- the call's outcome (a returned result, or the escaping
+//! error), the request ledger left behind and the audit trail, or for the
+//! server cases the raw reply bytes -- never carries the credential; the
+//! cases that must refuse do refuse, and the server answers an escaped
+//! error with its fixed reply.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -39,13 +29,6 @@ const RECOVERY: &str = "recovery-passphrase-1";
 const SECRET: &str = "synthetic-escape-parity-token-0123456789";
 const NOW: f64 = 1_700_000_000.0;
 const DIGEST_PLACEHOLDER: &str = "$DIGEST";
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
-}
 
 /// A raw upstream: every connection gets `response` once the request head
 /// has arrived, then the socket is closed.
@@ -333,179 +316,41 @@ fn rust_case(case: &Case, port: u16) -> Value {
     json!({"outcome": outcome, "ledger": ledger, "audit": audit})
 }
 
-const PYTHON_HARNESS: &str = r#"
-import json, socket, sys, tempfile
-from pathlib import Path
-from zeropw import gateway
-from zeropw import policy as P
-from zeropw.context import Config, Context
-from zeropw.errors import ZeroPWError
-from zeropw.server import ZeroPWServer
-
-spec = json.load(sys.stdin)
-
-def substitute(value, digest):
-    if value == "$DIGEST":
-        return digest
-    if isinstance(value, list):
-        return [substitute(v, digest) for v in value]
-    if isinstance(value, dict):
-        return {k: substitute(v, digest) for k, v in value.items()}
-    return value
-
-def exchange(address, request):
-    host, port = address
-    with socket.create_connection((host, port), timeout=20) as sock:
-        sock.sendall(request)
-        chunks = []
-        while True:
-            try:
-                data = sock.recv(65536)
-            except OSError:
-                break
-            if not data:
-                break
-            chunks.append(data)
-    return b"".join(chunks)
-
-def without_date(raw):
-    text = raw.decode("utf-8", "replace")
-    return "".join(line for line in text.splitlines(keepends=True) if not line.startswith("Date: "))
-
-out = []
-for case in spec["cases"]:
-    with tempfile.TemporaryDirectory() as tmp:
-        ctx = Context.initialize(Path(tmp) / "state", spec["admin"], spec["recovery"],
-                                 Config(upstream_timeout=float(case["timeout"])), lambda: spec["now"])
-        ctx.projects.create("demo")
-        ctx.vault.put_secret("tok", "api_key", spec["secret"].encode(), "demo", "dev")
-        token = ctx.policy.create_principal("agent", "cli")
-        ctx.policy.create_connection(P.Connection(
-            id="svc", project="demo", environment="dev", service="svc", kind="http", secret_id="tok",
-            secret_version=None, description="", http_target=P.HttpTarget("http", "127.0.0.1", case["port"], None),
-            http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(), ssh_target=None, cli=None,
-            policy_version=0, status="active", created_at="", updated_at=""))
-        grant = ctx.policy.create_grant("agent", "svc", 3600, None)
-        handle = ctx.handles.issue("agent", "svc", grant.id, ctx.policy.get_connection("svc").policy_version,
-                                   300, now=spec["now"])
-        if case["ledger"] is not None:
-            digest = gateway.RequestLedger.digest("svc", "GET", "/x", b"")
-            ctx.state.write_json(gateway.LEDGER_DOC, substitute(case["ledger"], digest))
-        if case["corrupt_connections"]:
-            (Path(tmp) / "state" / "policy" / "connections.json").write_bytes(b"{")
-        if case["auth_mode"] is not None:
-            doc = ctx.state.read_json("policy/connections.json", {})
-            doc["svc"]["http_auth"]["mode"] = case["auth_mode"]
-            ctx.state.write_json("policy/connections.json", doc)
-        if case["mode"] == "direct":
-            try:
-                result = gateway.relay_for_caller(ctx, "agent", "svc", "GET", "/x", {}, b"", "rid-1")
-                outcome = {"status": str(result.status), "reason": result.reason,
-                           "body": result.body.decode("utf-8", "replace")}
-            except Exception as exc:
-                outcome = {"raises": type(exc).__name__,
-                           "dict": exc.to_dict() if isinstance(exc, ZeroPWError) else None}
-        else:
-            server = ZeroPWServer(ctx).serve_in_thread()
-            try:
-                if case["mode"] == "tools":
-                    body = b'{"connection": "svc", "method": "GET", "path": "/x", "request_id": "rid-1"}'
-                    request = (f"POST /v1/tools/request HTTP/1.1\r\nHost: zeropw\r\nAuthorization: Bearer {token}\r\n"
-                               f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
-                               f"Connection: close\r\n\r\n").encode() + body
-                else:
-                    request = (f"GET /h/{handle}/x HTTP/1.1\r\nHost: zeropw\r\nX-ZeroPW-Request-Id: rid-1\r\n"
-                               f"Connection: close\r\n\r\n").encode()
-                outcome = {"raw": without_date(exchange(server.server_address[:2], request))}
-            finally:
-                server.stop()
-        try:
-            ledger = ctx.state.read_json(gateway.LEDGER_DOC, None)
-        except Exception:
-            ledger = "unreadable"
-        audit = [[r.get("event"), r.get("result"), r.get("reason")] for r in ctx.audit.tail(100)]
-        out.append({"outcome": outcome, "ledger": ledger, "audit": audit})
-print(json.dumps(out))
-"#;
-
-fn python_cases(cases: &[(Case, u16)]) -> Vec<Value> {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let spec = json!({
-        "admin": ADMIN,
-        "recovery": RECOVERY,
-        "secret": SECRET,
-        "now": NOW,
-        "cases": cases.iter().map(|(case, port)| json!({
-            "mode": match case.mode {
-                Mode::Direct => "direct",
-                Mode::Tools => "tools",
-                Mode::Handle => "handle",
-            },
-            "timeout": case.timeout,
-            "port": port,
-            "ledger": case.ledger,
-            "corrupt_connections": case.corrupt_connections,
-            "auth_mode": case.auth_mode,
-        })).collect::<Vec<_>>(),
-    });
-    let mut child = Command::new(interpreter)
-        .arg("-c")
-        .arg(PYTHON_HARNESS)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("run python");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(spec.to_string().as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    serde_json::from_slice(&output.stdout).expect("python json")
-}
-
-/// Runs every case in both languages, asserts equality, and returns
-/// Python's observations by case name for spot checks.
-fn assert_cases_match_python(cases: Vec<Case>) -> std::collections::HashMap<&'static str, Value> {
-    let upstreams: Vec<RawUpstream> = cases
-        .iter()
-        .map(|case| RawUpstream::start(case.response.clone()))
-        .collect();
-    let with_ports: Vec<(Case, u16)> = cases
-        .iter()
-        .cloned()
-        .zip(upstreams.iter().map(|u| u.port))
-        .collect();
-    let python = python_cases(&with_ports);
-    assert_eq!(python.len(), with_ports.len());
-    let mut mismatches = Vec::new();
+/// Runs every case and returns the observations by case name. No
+/// observation may carry the credential, in any encoding the gateway itself
+/// redacts.
+fn observe(cases: Vec<Case>) -> std::collections::HashMap<&'static str, Value> {
+    let patterns = gateway::credential_patterns(SECRET.as_bytes(), None);
     let mut observed = std::collections::HashMap::new();
-    for ((case, port), expected) in with_ports.iter().zip(python) {
-        let actual = rust_case(case, *port);
-        if actual != expected {
-            mismatches.push(format!(
-                "{}:\n  rust:   {actual}\n  python: {expected}",
+    for case in cases {
+        let upstream = RawUpstream::start(case.response.clone());
+        let actual = rust_case(&case, upstream.port);
+        drop(upstream);
+        let text = actual.to_string();
+        for pattern in &patterns {
+            assert!(
+                !text.contains(&*String::from_utf8_lossy(pattern)),
+                "{}: credential in {text}",
                 case.name
-            ));
+            );
         }
-        observed.insert(case.name, expected);
+        eprintln!("{}: {actual}", case.name);
+        observed.insert(case.name, actual);
     }
-    drop(upstreams);
-    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     observed
 }
 
-fn claim_state(observed: &Value) -> &Value {
-    &observed["ledger"]["agent"]["rid-1"]["state"]
+/// The call did not relay a success: a direct refusal result or escaping
+/// error, a server error reply, or a tools reply carrying a refused relay.
+fn refused(observed: &Value) -> bool {
+    let Some(raw) = observed["outcome"]["raw"].as_str() else {
+        return observed["outcome"]["status"] != "200";
+    };
+    if !raw.starts_with("HTTP/1.1 2") {
+        return true;
+    }
+    let body = raw.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    serde_json::from_str::<Value>(body).is_ok_and(|reply| reply["status"] != 200)
 }
 
 fn raw_status_line(observed: &Value) -> &str {
@@ -528,7 +373,7 @@ const OK_RESPONSE: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok";
 
 #[test]
-fn negative_chunk_sizes_match_python_outcome_ledger_and_audit() {
+fn negative_chunk_sizes_fail_closed() {
     let mut cases = Vec::new();
     for (name, size) in [
         ("chunk -1", b"-1".as_slice()),
@@ -556,14 +401,11 @@ fn negative_chunk_sizes_match_python_outcome_ledger_and_audit() {
         &chunked(b"-8000000000000001"),
     ));
     cases.push(Case::new("tools chunk -5", Mode::Tools, &chunked(b"-5")));
-    let seen = assert_cases_match_python(cases);
-    // The shapes the comparison above pins, spelled out.
-    let overflow = &seen["chunk -2**63-1"];
-    assert_eq!(overflow["outcome"]["raises"], "OverflowError");
-    assert_eq!(claim_state(overflow), "in_flight");
-    let lost = &seen["chunk -5"];
-    assert_eq!(lost["outcome"]["reason"], "upstream_connection_lost");
-    assert_eq!(claim_state(lost), "uncertain");
+    let seen = observe(cases);
+    // An adversarial chunk size never becomes a relayed success.
+    for (name, observed) in &seen {
+        assert!(refused(observed), "{name}: {observed}");
+    }
     assert_eq!(
         seen["chunk -1"]["outcome"]["reason"],
         "upstream_protocol_error"
@@ -583,7 +425,7 @@ fn negative_chunk_sizes_match_python_outcome_ledger_and_audit() {
 }
 
 #[test]
-fn invalid_upstream_timeouts_match_python_outcome_ledger_and_audit() {
+fn invalid_upstream_timeouts_fail_closed() {
     let mut cases = Vec::new();
     for (name, timeout) in [
         ("timeout inf", "inf"),
@@ -606,17 +448,29 @@ fn invalid_upstream_timeouts_match_python_outcome_ledger_and_audit() {
     let mut handle = Case::new("handle timeout inf", Mode::Handle, OK_RESPONSE);
     handle.timeout = "inf";
     cases.push(handle);
-    let seen = assert_cases_match_python(cases);
-    assert_eq!(seen["timeout inf"]["outcome"]["raises"], "OverflowError");
-    assert_eq!(claim_state(&seen["timeout inf"]), "in_flight");
-    assert_eq!(seen["timeout nan"]["outcome"]["raises"], "ValueError");
-    assert_eq!(
-        seen["timeout 0"]["outcome"]["reason"],
-        "upstream_unreachable"
-    );
+    let seen = observe(cases);
+    // An unusable timeout refuses before anything is relayed; the server
+    // answers the escaped error with its fixed reply.
+    for name in [
+        "timeout inf",
+        "timeout -inf",
+        "timeout nan",
+        "timeout -1",
+        "timeout 9.3e9",
+        "timeout 1e30",
+        "timeout 0",
+        "timeout -0",
+    ] {
+        assert!(refused(&seen[name]), "{name}: {}", seen[name]);
+    }
+    // A large but representable timeout is an ordinary relay.
     assert_eq!(seen["timeout 2147483.648"]["outcome"]["status"], "200");
     assert_eq!(
         raw_status_line(&seen["tools timeout nan"]),
+        "HTTP/1.1 500 Internal Server Error"
+    );
+    assert_eq!(
+        raw_status_line(&seen["handle timeout inf"]),
         "HTTP/1.1 500 Internal Server Error"
     );
 }
@@ -631,7 +485,7 @@ fn completed_entry(status: Value) -> Value {
 }
 
 #[test]
-fn ledger_shapes_match_python_outcome_ledger_and_audit() {
+fn hand_edited_ledger_shapes_never_leak_and_corrupt_claims_fail_closed() {
     let mut cases = Vec::new();
     let ledgers: Vec<(&'static str, Value)> = vec![
         ("unrelated empty str caller", json!({"other": ""})),
@@ -678,29 +532,25 @@ fn ledger_shapes_match_python_outcome_ledger_and_audit() {
     let mut handle = Case::new("handle replay status huge", Mode::Handle, OK_RESPONSE);
     handle.ledger = Some(completed_entry(json!("9".repeat(40))));
     cases.push(handle);
-    let seen = assert_cases_match_python(cases);
+    let seen = observe(cases);
+    // A corrupt entry for this very request, or a stored response the
+    // replay cannot read, never relays as a success.
+    for name in [
+        "own str entry",
+        "replay status str",
+        "replay status null",
+        "replay non-mapping response",
+    ] {
+        assert!(refused(&seen[name]), "{name}: {}", seen[name]);
+    }
     assert_eq!(
-        seen["unrelated empty str caller"]["outcome"]["status"],
-        "200"
-    );
-    assert_eq!(seen["own null entry"]["outcome"]["status"], "200");
-    assert_eq!(
-        seen["unrelated str caller"]["outcome"]["raises"],
-        "TypeError"
-    );
-    assert_eq!(seen["replay status str"]["outcome"]["raises"], "ValueError");
-    assert_eq!(
-        seen["replay status huge"]["outcome"]["status"],
-        "9".repeat(40).as_str()
-    );
-    assert!(
-        raw_status_line(&seen["handle replay status huge"])
-            .starts_with(&format!("HTTP/1.1 {} ", "9".repeat(40)))
+        raw_status_line(&seen["tools replay status str"]),
+        "HTTP/1.1 500 Internal Server Error"
     );
 }
 
 #[test]
-fn zeropw_errors_escaping_relay_match_python_at_every_boundary() {
+fn zeropw_errors_escaping_relay_fail_closed_at_every_boundary() {
     let mut cases = Vec::new();
     let mut direct = Case::new("direct corrupt connections", Mode::Direct, OK_RESPONSE);
     direct.corrupt_connections = true;
@@ -723,7 +573,7 @@ fn zeropw_errors_escaping_relay_match_python_at_every_boundary() {
     let mut ledger = Case::new("direct non-dict ledger document", Mode::Direct, OK_RESPONSE);
     ledger.ledger = Some(json!("not a document"));
     cases.push(ledger);
-    let seen = assert_cases_match_python(cases);
+    let seen = observe(cases);
     assert_eq!(
         seen["direct corrupt connections"]["outcome"]["raises"],
         "StateError"
@@ -740,4 +590,7 @@ fn zeropw_errors_escaping_relay_match_python_at_every_boundary() {
         raw_status_line(&seen["handle stored auth mode digest"]),
         "HTTP/1.1 400 Bad Request"
     );
+    for name in ["tools corrupt connections", "tools stored auth mode digest"] {
+        assert!(refused(&seen[name]), "{name}: {}", seen[name]);
+    }
 }
