@@ -371,7 +371,7 @@ fn python_tuple_iter(v: &Value, on_not_iterable: impl Fn() -> Error) -> Result<V
 /// the value) becomes one entry per element, a later element overwriting
 /// an earlier one with the same key (ordinary `dict` construction
 /// semantics -- last value wins, but the key keeps its *first* insertion
-/// position, exactly like [`python_dict_coerce`]'s `serde_json::Map` does);
+/// position, exactly like [`python_dict_items`] does);
 /// a plain (non-empty) string is iterated by individual character, each of
 /// length 1, so it always fails; anything else (a bare number/bool, an
 /// array holding a non-pair element) is a genuinely uncaught
@@ -3402,6 +3402,16 @@ impl Grant {
         }
     }
 
+    /// The stored `id` value, verbatim (Python's `grant.id`).
+    pub fn id_value(&self) -> &Value {
+        &self.raw_id
+    }
+
+    /// The stored `principal` value, verbatim (Python's `grant.principal`).
+    pub fn principal_value(&self) -> &Value {
+        &self.raw_principal
+    }
+
     /// Python `grant.principal == s`.
     pub fn principal_is(&self, s: &str) -> bool {
         value_eq_str(&self.raw_principal, s)
@@ -5276,60 +5286,71 @@ fn setdefault_arr<'m>(
 }
 
 /// `dict(self._control().get("approvals", {}))`: CPython's `dict(x)`
-/// coercion, not the falsy/truthy split `control()` itself applies (finding
-/// D-R3-2). Besides an already-dict value, `dict()` also succeeds for an
-/// empty array or empty string (both give `{}`, same as the absent-key
-/// default) and for an array of two-element `[key, value]` pairs (a later
-/// pair overwrites an earlier one with an *equal* key, ordinary `dict`
-/// construction); an array element that isn't a two-element pair, or a pair
-/// whose first element is itself unhashable (a JSON array or object,
-/// `list`/`dict` in Python) is a genuinely uncaught `TypeError`/
-/// `ValueError` in Python (PORTING.md §3.5), so it fails closed as
-/// `state_corrupt` here.
-///
-/// **Round-7 correction (finding D-R7-5):** a pair whose first element is a
-/// hashable *non-string* (a JSON number, bool or `null`) used to be folded
-/// into that same `state_corrupt` case, with a doc comment (since corrected
-/// above) that called it "a genuinely uncaught TypeError/ValueError in
-/// Python (§3.5)". That was false, and measured false: `python3.12`
-/// confirms `dict([[1, "a"]]) == {1: 'a'}` -- CPython's `dict()` accepts
-/// any hashable key, not just strings, and returns a value, it never
-/// raises. This crate's `Map<String, Value>` genuinely cannot represent a
-/// non-string key, though, and stringifying it (as `json.dumps` would if
-/// the result were ever re-serialised, e.g. key `1` -> `"1"`) is not a safe
-/// substitute: Python keeps `1` (`int`) and `"1"` (`str`) as two distinct
-/// dict keys (`dict([[1, "a"], ["1", "b"]]) == {1: 'a', '1': 'b'}`), so
-/// stringifying would silently collide two real, distinct entries into
-/// one. This is therefore a genuine representational gap (the same shape
-/// as the `ca_file`/`secret_version` rows in `DEVIATIONS.md`), not a
-/// §3.5 uncaught-exception substitution -- recorded there under `policy
-/// (python_dict_coerce non-string pair key, finding D-R7-5)`, with the
-/// existing fail-closed `state_corrupt` kept deliberately (over a
-/// collision-prone stringify) and pinned by
-/// `list_approvals_with_non_string_pair_key_is_a_recorded_representational_gap`.
-fn python_dict_coerce(value: Option<&Value>) -> Result<Map<String, Value>, Error> {
+/// coercion, keeping Python's key objects. An absent key uses the `{}`
+/// default; a JSON object copies; an empty string gives `{}`; an array's
+/// elements must each be a length-2 iterable (a 2-element array, a
+/// 2-character string, a 2-key object -- see [`python_dict_from_pairs`])
+/// whose first item is the key. A key may be any *hashable* JSON value
+/// (finding D-R7-5: `dict([[1, "a"]]) == {1: 'a'}`), and keys that are
+/// Python-equal (`1`, `1.0`, `true`) collapse into the first one with the
+/// last value, exactly like `dict` construction; an unhashable key (a list
+/// or dict), a malformed element, a non-empty string or a bare scalar
+/// (including an explicit `null`) is an uncaught `TypeError`/`ValueError`
+/// (PORTING.md §3.5).
+fn python_dict_items(value: Option<&Value>) -> Result<Vec<(Value, Value)>, Error> {
     let corrupt = || Error::state("state_corrupt").with_detail(CONTROL);
     match value {
-        None => Ok(Map::new()),
-        Some(Value::Object(m)) => Ok(m.clone()),
-        Some(Value::Array(a)) => {
-            let mut m = Map::new();
-            for item in a {
-                match item {
-                    Value::Array(pair) if pair.len() == 2 => match &pair[0] {
-                        Value::String(k) => {
-                            m.insert(k.clone(), pair[1].clone());
-                        }
-                        _ => return Err(corrupt()),
-                    },
-                    _ => return Err(corrupt()),
+        None => Ok(Vec::new()),
+        Some(Value::Object(m)) => Ok(m
+            .iter()
+            .map(|(k, v)| (Value::String(k.clone()), v.clone()))
+            .collect()),
+        Some(v @ Value::Array(_)) => {
+            let mut items: Vec<(Value, Value)> = Vec::new();
+            for (key, val) in python_dict_from_pairs(v, corrupt)? {
+                if matches!(key, Value::Array(_) | Value::Object(_)) {
+                    return Err(corrupt());
+                }
+                match items.iter_mut().find(|(k, _)| python_value_eq(k, &key)) {
+                    Some(existing) => existing.1 = val,
+                    None => items.push((key, val)),
                 }
             }
-            Ok(m)
+            Ok(items)
         }
-        Some(Value::String(s)) if s.is_empty() => Ok(Map::new()),
+        Some(Value::String(s)) if s.is_empty() => Ok(Vec::new()),
         Some(_) => Err(corrupt()),
     }
+}
+
+/// `sorted(items)` for `(key, value)` pairs whose keys are distinct
+/// hashable JSON scalars (a `dict`'s items): Python compares the keys
+/// first and never needs the values. Numbers and bools order numerically
+/// (exactly), strings by code point; a key of one of those kinds meeting a
+/// key of another (or `None` meeting anything) is an uncaught `TypeError`
+/// (PORTING.md §3.5) -- with two or more keys of different kinds, sorting
+/// must compare across them.
+pub(crate) fn python_sort_dict_items(items: &mut [(Value, Value)]) -> Result<(), Error> {
+    fn kind(v: &Value) -> u8 {
+        match v {
+            Value::Bool(_) | Value::Number(_) => 0,
+            Value::String(_) => 1,
+            _ => 2,
+        }
+    }
+    if items.len() < 2 {
+        return Ok(());
+    }
+    let first = kind(&items[0].0);
+    if first == 2 || items.iter().any(|(k, _)| kind(k) != first) {
+        return Err(Error::state("state_corrupt").with_detail(CONTROL));
+    }
+    items.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        _ => cmp_numeric(&GrantNum::from_value(a), &GrantNum::from_value(b))
+            .unwrap_or(std::cmp::Ordering::Equal),
+    });
+    Ok(())
 }
 
 /// `list(self._control().get("approval_history", []))`: CPython's `list(x)`
@@ -5858,9 +5879,29 @@ impl<'a> Policy<'a> {
         Ok(None)
     }
 
-    pub fn list_approvals(&self) -> Result<Map<String, Value>, Error> {
+    /// `list_approvals()` as `(key, approval)` pairs in `dict` order,
+    /// keeping Python's key objects (see [`python_dict_items`]).
+    pub fn list_approvals_items(&self) -> Result<Vec<(Value, Value)>, Error> {
         let control = self.control()?;
-        python_dict_coerce(control.get("approvals"))
+        python_dict_items(control.get("approvals"))
+    }
+
+    /// `list_approvals()` for callers that index it by a `str` digest: the
+    /// same result as [`Policy::list_approvals_items`], as a string-keyed
+    /// map. Every production caller (the administrator CLI) uses the items
+    /// form; a non-string key, which this map cannot hold, is refused here
+    /// rather than collided with a string key.
+    pub fn list_approvals(&self) -> Result<Map<String, Value>, Error> {
+        let mut out = Map::new();
+        for (key, value) in self.list_approvals_items()? {
+            match key {
+                Value::String(k) => {
+                    out.insert(k, value);
+                }
+                _ => return Err(Error::state("state_corrupt").with_detail(CONTROL)),
+            }
+        }
+        Ok(out)
     }
 
     pub fn approval_history(&self) -> Result<Vec<Value>, Error> {
@@ -8484,28 +8525,30 @@ mod tests {
         );
     }
 
-    /// Finding D-R7-5 / `DEVIATIONS.md`'s `python_dict_coerce` row: CPython's
-    /// `dict([[1, "a"]])` is `{1: 'a'}` -- a *success*, not an exception --
-    /// verified directly against `python3.12`. This crate's `Map<String,
-    /// Value>` cannot represent the non-string key `1`, so `list_approvals`
-    /// deliberately stays fail-closed (`state_corrupt`) here rather than
-    /// risking a silent key collision from stringifying (`dict([[1, "a"],
-    /// ["1", "b"]])` keeps `1` and `"1"` as two distinct entries in
-    /// Python) -- a recorded representational gap, not a §3.5 uncaught-
-    /// exception substitution (the doc comment on `python_dict_coerce`
-    /// used to claim the latter, falsely).
+    /// Finding D-R7-5, now closed: `dict([[1, "a"], ["1", "b"], [1.0,
+    /// "c"]]) == {1: 'c', '1': 'b'}` in CPython (any hashable key; `1` and
+    /// `1.0` are one key, `"1"` another). `list_approvals_items` keeps
+    /// those key objects; the string-keyed `list_approvals` refuses them
+    /// rather than colliding `1` with `"1"`.
     #[test]
-    fn list_approvals_with_non_string_pair_key_is_a_recorded_representational_gap() {
+    fn list_approvals_items_keep_python_dict_keys() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         let mut control = state.read_json(CONTROL, json!({})).unwrap();
-        control
-            .as_object_mut()
-            .unwrap()
-            .insert("approvals".to_string(), json!([[1, "a"]]));
+        control.as_object_mut().unwrap().insert(
+            "approvals".to_string(),
+            json!([[1, "a"], ["1", "b"], [1.0, "c"], "xy"]),
+        );
         state.write_json(CONTROL, &control).unwrap();
+        assert_eq!(
+            policy.list_approvals_items().unwrap(),
+            vec![
+                (json!(1), json!("c")),
+                (json!("1"), json!("b")),
+                (json!("x"), json!("y")),
+            ]
+        );
         let err = policy.list_approvals().unwrap_err();
-        assert!(err.is(ErrorClass::StateError), "{err:?}");
         assert_eq!(err.reason, "state_corrupt");
     }
 }

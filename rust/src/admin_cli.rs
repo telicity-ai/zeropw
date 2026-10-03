@@ -2041,7 +2041,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 "grant_revoke",
                 Some(&g.connection),
                 None,
-                vec![("grant", json!(g.id)), ("principal", json!(g.principal))],
+                vec![
+                    ("grant", g.id_value().clone()),
+                    ("principal", g.principal_value().clone()),
+                ],
             )?;
             grant_view(&g)
         }
@@ -2079,20 +2082,24 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(v)
         }
         ("approvals", "list") => {
-            let approvals = ctx.policy.list_approvals()?;
-            let mut entries: Vec<Value> = approvals
-                .into_iter()
-                .map(|(digest, value)| {
-                    let mut v = json!({"digest":digest});
-                    if let Some(obj) = value.as_object() {
-                        for (k, val) in obj {
-                            v[k] = val.clone();
-                        }
-                    }
-                    v
-                })
-                .collect();
-            entries.sort_by(|a, b| a["digest"].as_str().cmp(&b["digest"].as_str()));
+            // `[{"digest": digest, **entry} for digest, entry in
+            // sorted(ctx.policy.list_approvals().items())]`: keys keep
+            // Python's objects and order; `**entry` needs a mapping (an
+            // uncaught `TypeError` otherwise, PORTING.md §3.5).
+            let mut approvals = ctx.policy.list_approvals_items()?;
+            crate::policy::python_sort_dict_items(&mut approvals)?;
+            let mut entries: Vec<Value> = Vec::with_capacity(approvals.len());
+            for (digest, value) in approvals {
+                let obj = value
+                    .as_object()
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("policy/control.json"))?;
+                let mut v = serde_json::Map::new();
+                v.insert("digest".into(), digest);
+                for (k, val) in obj {
+                    v.insert(k.clone(), val.clone());
+                }
+                entries.push(Value::Object(v));
+            }
             Ok(json!({"approvals":entries,"history":ctx.policy.approval_history()?}))
         }
         ("approvals", "approve") => {
