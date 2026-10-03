@@ -292,25 +292,79 @@ pub fn int_from_str_decimal(s: &str) -> Option<String> {
 /// [`int_from_str_decimal`] plus CPython 3.12's integer-string digit guard.
 /// The limit counts decimal digits in the original input, including leading
 /// zeroes and Unicode Nd digits, but excludes signs, whitespace and
-/// underscores. `PYTHONINTMAXSTRDIGITS=0` disables it; valid overrides are
-/// at least 640, and an absent override uses CPython's default 4300. Rust's
-/// fallback for an invalid override remains a known limitation: CPython
-/// rejects that environment setting during interpreter startup.
+/// underscores. The limit is [`int_max_str_digits`]; a `PYTHONINTMAXSTRDIGITS`
+/// value CPython refuses to start with never reaches this point in a native
+/// binary ([`python_startup_check`]), and library callers fall back to the
+/// default 4300 for it.
 pub fn int_from_str_decimal_limited(s: &str) -> Option<String> {
     let value = int_from_str_decimal(s)?;
-    let limit = match std::env::var("PYTHONINTMAXSTRDIGITS") {
-        Ok(raw) => match raw.parse::<usize>() {
-            Ok(0) => 0,
-            Ok(value) if value >= 640 => value,
-            _ => 4300,
-        },
-        Err(_) => 4300,
-    };
+    let limit = int_max_str_digits().unwrap_or(DEFAULT_INT_MAX_STR_DIGITS);
     let digits = s
         .chars()
         .filter(|&c| unicode_decimal_digit(c).is_some())
         .count();
     (limit == 0 || digits <= limit).then_some(value)
+}
+
+/// `sys.int_info.default_max_str_digits`.
+pub const DEFAULT_INT_MAX_STR_DIGITS: usize = 4300;
+
+/// The fatal start-up error CPython 3.12 prints to stderr (then exits with
+/// status 1) for an invalid `PYTHONINTMAXSTRDIGITS`.
+pub const INT_MAX_STR_DIGITS_FATAL: &str = "Fatal Python error: config_init_int_max_str_digits: PYTHONINTMAXSTRDIGITS: invalid limit; must be >= 640 or 0 for unlimited.\nPython runtime state: preinitialized\n\n";
+
+/// This process's integer-string digit limit, from `PYTHONINTMAXSTRDIGITS`
+/// exactly as CPython start-up reads it ([`parse_int_max_str_digits`]).
+/// `Err(())` is a setting CPython refuses to start with.
+pub fn int_max_str_digits() -> Result<usize, ()> {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::env::var_os("PYTHONINTMAXSTRDIGITS");
+    parse_int_max_str_digits(raw.as_deref().map(std::ffi::OsStr::as_bytes))
+}
+
+/// CPython 3.12 `config_init_int_max_str_digits`: an unset or empty variable
+/// is the default; otherwise `_Py_str_to_int` (C `strtol` base 10 -- leading
+/// C-locale whitespace, an optional sign, at least one ASCII digit, nothing
+/// after it, no `long` overflow -- within C `int` range) must give 0
+/// (unlimited) or at least 640.
+pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Result<usize, ()> {
+    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+        return Ok(DEFAULT_INT_MAX_STR_DIGITS);
+    };
+    let mut rest = raw;
+    while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r', tail @ ..] = rest {
+        rest = tail;
+    }
+    let negative = matches!(rest.first(), Some(b'-'));
+    if matches!(rest.first(), Some(b'+' | b'-')) {
+        rest = &rest[1..];
+    }
+    if rest.is_empty() || !rest.iter().all(u8::is_ascii_digit) {
+        return Err(());
+    }
+    let mut value: i64 = 0;
+    for digit in rest {
+        value = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i64::from(digit - b'0')))
+            .ok_or(())?;
+    }
+    let value = if negative { -value } else { value };
+    let value = i32::try_from(value).map_err(|_| ())?;
+    match usize::try_from(value) {
+        Ok(0) => Ok(0),
+        Ok(value) if value >= 640 => Ok(value),
+        _ => Err(()),
+    }
+}
+
+/// What a native entry point must do before anything else to behave like the
+/// CPython interpreter that ran the original program: `Err` carries the
+/// stderr text of a refused start-up (exit status 1).
+pub fn python_startup_check() -> Result<(), &'static str> {
+    int_max_str_digits()
+        .map(|_| ())
+        .map_err(|_| INT_MAX_STR_DIGITS_FATAL)
 }
 
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
@@ -1862,6 +1916,64 @@ print(h.hexdigest())
 "#;
         let theirs = python(script).trim().to_string();
         assert_eq!(ours, theirs, "unicode_decimal_digit digest mismatch");
+    }
+
+    #[test]
+    fn int_max_str_digits_env_parsing_matches_cpython_startup() {
+        let values: [&[u8]; 24] = [
+            b"",
+            b"abc",
+            b"5",
+            b"-1",
+            b"639",
+            b"640",
+            b" 640",
+            b"640 ",
+            b"+640",
+            b"0",
+            b"00",
+            b"-0",
+            b"+0",
+            b"\t0",
+            b"0x280",
+            b"1_000",
+            "\u{666}\u{664}\u{660}".as_bytes(),
+            b"2147483647",
+            b"2147483648",
+            b"9223372036854775808",
+            b" ",
+            b"4300",
+            b"\xff",
+            b"99999999999999999999",
+        ];
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        for raw in values {
+            let output = std::process::Command::new(&interpreter)
+                .args(["-c", "import sys; print(sys.get_int_max_str_digits())"])
+                .env(
+                    "PYTHONINTMAXSTRDIGITS",
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(raw),
+                )
+                .output()
+                .unwrap();
+            let python = if output.status.success() {
+                Ok(String::from_utf8(output.stdout)
+                    .unwrap()
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap())
+            } else {
+                assert_eq!(output.status.code(), Some(1), "{raw:?}");
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr),
+                    INT_MAX_STR_DIGITS_FATAL,
+                    "{raw:?}"
+                );
+                Err(())
+            };
+            assert_eq!(parse_int_max_str_digits(Some(raw)), python, "{raw:?}");
+        }
     }
 
     #[test]
