@@ -1142,7 +1142,7 @@ fn set_version_status_retire_does_not_clear_active_version_on_f64_collision() {
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
 
     ctx.vault
-        .set_version_status("gh-token", &9007199254740992.into(), "retired")
+        .set_version_status("gh-token", &9007199254740992_i64.into(), "retired")
         .unwrap();
 
     let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
@@ -1185,7 +1185,7 @@ fn set_version_status_activate_does_not_silently_skip_retire_on_f64_collision() 
 
     let err = ctx
         .vault
-        .set_version_status("gh-token", &9007199254740992.into(), "active")
+        .set_version_status("gh-token", &9007199254740992_i64.into(), "active")
         .expect_err("Python raises KeyError here, mapped to state_corrupt");
     assert!(err.is(ErrorClass::StateError), "{err:?}");
     assert_eq!(err.reason.to_string(), "state_corrupt");
