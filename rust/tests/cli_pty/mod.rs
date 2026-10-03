@@ -104,8 +104,9 @@ pub fn open_pty() -> Pty {
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            // `*mut` on macOS, `*const` on Linux; null `*mut` fits both.
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     assert_eq!(rc, 0, "openpty");

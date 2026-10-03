@@ -931,11 +931,17 @@ fn client_hello_matches_the_python_fixture() {
     assert_eq!(hellos.len(), hosts.len());
     for (host, rust) in hosts.iter().zip(&hellos) {
         let python = hex::decode(fixture["hellos"][host].as_str().unwrap()).unwrap();
-        assert_eq!(
-            client_hello_suites(rust),
-            client_hello_suites(&python),
-            "{host}: cipher suites"
-        );
+        // TLS_EMPTY_RENEGOTIATION_INFO_SCSV (0x00ff) is a signal, not a
+        // cipher; whether OpenSSL sends it depends on the library version.
+        let real = |hello: &[u8]| {
+            client_hello_suites(hello)
+                .chunks(2)
+                .filter(|suite| *suite != [0x00, 0xff])
+                .flatten()
+                .copied()
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(real(rust), real(&python), "{host}: cipher suites");
         // SNI (extension 0) carries the DNS name and is absent for an IP.
         let sni = String::from_utf8_lossy(rust).contains("upstream.example.test");
         assert_eq!(sni, *host == "upstream.example.test", "{host}: SNI");

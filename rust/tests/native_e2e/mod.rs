@@ -924,6 +924,9 @@ impl FakeSmtp {
             while !stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((client, _)) => {
+                        // BSD/macOS accepted sockets inherit the listener's
+                        // O_NONBLOCK; the session reads with blocking I/O.
+                        let _ = client.set_nonblocking(false);
                         let state = Arc::clone(&state);
                         thread::spawn(move || serve_smtp(client, &state));
                     }

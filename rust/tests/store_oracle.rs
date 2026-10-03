@@ -9,6 +9,21 @@ use zeropw::store::iso;
 
 #[test]
 fn iso_formats_a_timestamp_table() {
+    // `strftime("%Y")` pads to four characters on macOS and not with glibc;
+    // the prototype printed whatever its platform's C library did.
+    const SMALL_YEARS: [&str; 3] = if cfg!(target_os = "macos") {
+        [
+            "0001-01-01T00:00:00Z",
+            "0000-01-01T00:00:00Z",
+            "-001-12-31T23:59:59Z",
+        ]
+    } else {
+        [
+            "1-01-01T00:00:00Z",
+            "0-01-01T00:00:00Z",
+            "-1-12-31T23:59:59Z",
+        ]
+    };
     let cases: &[(f64, &str)] = &[
         (0.0, "1970-01-01T00:00:00Z"),                // epoch
         (-1.0, "1969-12-31T23:59:59Z"),               // one second before the epoch
@@ -17,15 +32,15 @@ fn iso_formats_a_timestamp_table() {
         (-0.5, "1969-12-31T23:59:59Z"),               // fractional, negative
         (1_700_000_000.75, "2023-11-14T22:13:20Z"),   // realistic current-era timestamp
         (951_782_400.0, "2000-02-29T00:00:00Z"),      // leap day
-        (-62_135_596_800.0, "1-01-01T00:00:00Z"),     // year 1
+        (-62_135_596_800.0, SMALL_YEARS[0]),          // year 1
         (253_402_300_799.0, "9999-12-31T23:59:59Z"),  // last 4-digit year
         (253_402_300_800.0, "10000-01-01T00:00:00Z"), // rolls into 5 digits
         (2_147_483_647.0, "2038-01-19T03:14:07Z"),    // i32::MAX (Y2038)
         (2_147_483_648.0, "2038-01-19T03:14:08Z"),    // one past it
         (-2_147_483_648.0, "1901-12-13T20:45:52Z"),   // i32::MIN
         (-2_147_483_649.0, "1901-12-13T20:45:51Z"),   // one past it
-        (-62_167_219_200.0, "0-01-01T00:00:00Z"),     // year 0
-        (-62_167_219_201.0, "-1-12-31T23:59:59Z"),    // year -1
+        (-62_167_219_200.0, SMALL_YEARS[1]),          // year 0
+        (-62_167_219_201.0, SMALL_YEARS[2]),          // year -1
         (1e15, "31690708-07-05T01:46:40Z"),           // an 8-digit year
     ];
     for (ts, want) in cases {

@@ -200,6 +200,9 @@ fn steal_report_matches_the_original_cli() {
         let args = args(case);
         let (status, stdout) = run(&args, &env);
         assert_eq!(status, code(case), "exit status for {args:?}");
+        // macOS's CoreFoundation adds `__CF_USER_TEXT_ENCODING` to every
+        // child environment; it is not something the CLI was given.
+        let stdout = stdout.replace(", \"__CF_USER_TEXT_ENCODING\"", "");
         assert_eq!(
             stdout.replace(&home_text, "{home}"),
             case["stdout"].as_str().unwrap(),

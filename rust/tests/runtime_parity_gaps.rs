@@ -74,7 +74,14 @@ fn run_shape(run: &Run) -> Value {
 /// completion (exit 0): a chained interpreter that is itself a script, and
 /// `#!` lines without a trailing newline or body.
 fn python_shebang_shapes() -> Vec<Value> {
-    vec![json!({"state": "completed", "reason": null, "exit_code": 0}); 4]
+    // A script used as an interpreter and a newline-free `#!` line: Linux
+    // runs all four; XNU refuses them at exec, so the run fails to spawn.
+    let shape = if cfg!(target_os = "macos") {
+        json!({"state": "failed", "reason": "spawn_failed", "exit_code": null})
+    } else {
+        json!({"state": "completed", "reason": null, "exit_code": 0})
+    };
+    vec![shape; 4]
 }
 
 const SECRET: &str = "synthetic-parity-secret-0123456789";
@@ -965,7 +972,13 @@ fn resolve_program_matches_python() {
         (
             "sh".to_string(),
             "/usr/bin/../bin".to_string(),
-            json!("/usr/bin/sh"),
+            // `/usr/bin/../bin` is `/usr/bin`: merged-/usr Linux has `sh`
+            // there, macOS keeps it only in `/bin`.
+            if std::path::Path::new("/usr/bin/sh").is_file() {
+                json!("/usr/bin/sh")
+            } else {
+                json!(null)
+            },
         ),
         (
             "missing-zeropw-tool".to_string(),
