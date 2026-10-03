@@ -1375,7 +1375,12 @@ probe("secret_version_int", d, lambda c: c.secret_version)
     d["secret_version"] = serde_json::from_str("1000000000000000000000000000000").unwrap();
     let connection = Connection::from_value(&d).unwrap();
     assert_eq!(
-        connection.secret_version.as_ref().unwrap().value().to_string(),
+        connection
+            .secret_version
+            .as_ref()
+            .unwrap()
+            .value()
+            .to_string(),
         "1000000000000000000000000000000"
     );
     assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
@@ -2121,7 +2126,10 @@ with tempfile.TemporaryDirectory() as d:
     doc["gh"]["description"] = serde_json::json!(5);
     state.write_json(policy::CONNECTIONS, &doc).unwrap();
     let connection = policy.get_connection("gh").unwrap();
-    assert_eq!(connection.public_view()["description"], serde_json::json!(5));
+    assert_eq!(
+        connection.public_view()["description"],
+        serde_json::json!(5)
+    );
     assert_eq!(connection.to_value()["description"], serde_json::json!(5));
 
     let mut doc = state

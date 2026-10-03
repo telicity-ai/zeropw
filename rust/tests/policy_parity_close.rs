@@ -144,7 +144,12 @@ fn connection_doc(secret_version: Value, policy_version: Value) -> Value {
     })
 }
 
-fn rust_state(tmp: &TempDir, connections: Value, grants: Value, control: Option<Value>) -> StateDir {
+fn rust_state(
+    tmp: &TempDir,
+    connections: Value,
+    grants: Value,
+    control: Option<Value>,
+) -> StateDir {
     let state = StateDir::new(tmp.path().join("s"));
     state.create().unwrap();
     state
@@ -229,13 +234,7 @@ for text in json.loads({shapes_json:?}):
         );
         let grant = rust_outcome(pol.create_grant("agent-1", "gh", None, None).map(|_| {
             let grants = state.read_json(policy::GRANTS, json!({})).unwrap();
-            grants
-                .as_object()
-                .unwrap()
-                .values()
-                .next()
-                .unwrap()["credential_version"]
-                .clone()
+            grants.as_object().unwrap().values().next().unwrap()["credential_version"].clone()
         }));
         let update = rust_outcome(
             pol.update_connection("gh", ConnectionChanges::new().description("x"))
@@ -604,7 +603,11 @@ fn connection_text_cases() -> Vec<Value> {
 }
 
 fn grant_and_principal_cases() -> Vec<Value> {
-    let mut cases = field_cases("grants", "g-1", &["id", "principal", "connection", "created_at"]);
+    let mut cases = field_cases(
+        "grants",
+        "g-1",
+        &["id", "principal", "connection", "created_at"],
+    );
     cases.extend(field_cases(
         "principals",
         "agent-1",
@@ -637,7 +640,10 @@ fn misc_cases() -> Vec<Value> {
         cases.push(json!([[["control"], control]]));
     }
     cases.push(json!([[["connections", "gh", "http_target", "bogus"], 1]]));
-    cases.push(json!([[["connections", "gh", "http_target", "check_address"], false]]));
+    cases.push(json!([[
+        ["connections", "gh", "http_target", "check_address"],
+        false
+    ]]));
     cases.push(json!([[["connections", "gh", "http_auth", "bogus"], 1]]));
     // `HttpScope.__post_init__` order: an invalid method is reported before
     // a non-string path prefix is ever reached.
@@ -645,8 +651,14 @@ fn misc_cases() -> Vec<Value> {
         [["connections", "gh", "http_scope", "methods"], ["BREW"]],
         [["connections", "gh", "http_scope", "path_prefixes"], [5]],
     ]));
-    cases.push(json!([[["connections", "gh", "http_scope", "path_prefixes"], ["/a", 5]]]));
-    cases.push(json!([[["connections", "gh", "http_scope", "path_prefixes"], []]]));
+    cases.push(json!([[
+        ["connections", "gh", "http_scope", "path_prefixes"],
+        ["/a", 5]
+    ]]));
+    cases.push(json!([[
+        ["connections", "gh", "http_scope", "path_prefixes"],
+        []
+    ]]));
     // `dict(control["approvals"])` keys of any hashable shape (row 130).
     for approvals in [
         json!([[1, {"status": "x"}]]),
@@ -840,7 +852,11 @@ fn rust_matrix_op(pol: &Policy, state: &StateDir, op: &str) -> Result<Value, Err
             .map(|ps| Value::Array(ps.iter().map(|p| json!(p.id)).collect())),
         "authenticate" => pol.authenticate("zpwc_abc").map(principal_view),
         "evaluate" => pol.evaluate("agent-1", "gh", &action, None).map(|d| {
-            json!([d.allowed, d.reason, d.grant.as_ref().map(|g| g.id_value().clone())])
+            json!([
+                d.allowed,
+                d.reason,
+                d.grant.as_ref().map(|g| g.id_value().clone())
+            ])
         }),
         "check_grant" => pol
             .check_grant("agent-1", "gh", "g-1")
@@ -888,9 +904,9 @@ fn rust_matrix_op(pol: &Policy, state: &StateDir, op: &str) -> Result<Value, Err
         "consume_approval" => pol
             .consume_approval("dg2", "agent-1", "gh", None, None)
             .map(|b| json!(b)),
-        "list_approvals" => pol.list_approvals_items().map(|items| {
-            Value::Array(items.into_iter().map(|(k, v)| json!([k, v])).collect())
-        }),
+        "list_approvals" => pol
+            .list_approvals_items()
+            .map(|items| Value::Array(items.into_iter().map(|(k, v)| json!([k, v])).collect())),
         "stop_all" => pol.stop_all().map(|_| Value::Null),
         "resume" => pol.resume().map(|_| Value::Null),
         _ => unreachable!("{op}"),
@@ -996,7 +1012,8 @@ fn run_matrix(cases: Vec<Value>) {
                 // A fresh grant's random id decides its key position under
                 // `sort_keys`; compare `grants.json` structurally there.
                 let differs = if i == 2 && matches!(*op, "create_grant" | "regrant") {
-                    let a: Value = serde_json::from_str(py_op["docs"][i].as_str().unwrap()).unwrap();
+                    let a: Value =
+                        serde_json::from_str(py_op["docs"][i].as_str().unwrap()).unwrap();
                     let b: Value = serde_json::from_str(rust_doc).unwrap();
                     a != b
                 } else {
@@ -1024,4 +1041,80 @@ fn run_matrix(cases: Vec<Value>) {
         divergences.len(),
         divergences.join("\n")
     );
+}
+
+/// Row 78: the "last allowed evaluate" memo is scoped per `(Policy
+/// instance, thread)`. Observable through `consume` without an explicit
+/// policy version: after `evaluate`, a narrowing `update_connection` bumps
+/// the policy version (grants re-evaluated in place), so the memo's stale
+/// version refuses with `grant_stale`, while an instance or thread without
+/// the memo consumes normally.
+#[test]
+fn evaluated_memo_is_scoped_per_instance_and_thread_like_python() {
+    let script = format!(
+        r#"{PY_PRELUDE}
+import threading
+grant = {{"id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+         "expires_at": None, "max_uses": None, "uses": 0, "status": "active", "created_at": "",
+         "revoked_at": None, "credential_version": 1}}
+out = {{}}
+for case in ("same", "other_instance", "other_thread"):
+    with tempfile.TemporaryDirectory() as tmp:
+        st = state_with(tmp, {{"gh": connection()}}, {{"g-1": grant}})
+        p1 = P.Policy(st, clock=lambda: CLOCK)
+        p2 = P.Policy(st, clock=lambda: CLOCK)
+        p1.evaluate("agent-1", "gh", P.Action("http", "GET", "/repos"))
+        p2.update_connection("gh", description="x")
+        if case == "same":
+            r = outcome(lambda: p1.consume("g-1").uses)
+        elif case == "other_instance":
+            r = outcome(lambda: p2.consume("g-1").uses)
+        else:
+            box = []
+            t = threading.Thread(target=lambda: box.append(outcome(lambda: p1.consume("g-1").uses)))
+            t.start(); t.join()
+            r = box[0]
+        out[case] = r
+print(json.dumps(out, sort_keys=True))
+"#
+    );
+    let py: Value = serde_json::from_str(run_python(&script).trim()).unwrap();
+    assert_eq!(py["same"], json!({"err": ["PolicyDenied", "grant_stale"]}));
+    assert_eq!(py["other_instance"], json!({"ok": 1}));
+    assert_eq!(py["other_thread"], json!({"ok": 1}));
+    let grant = json!({"id": "g-1", "principal": "agent-1", "connection": "gh", "policy_version": 1,
+        "expires_at": null, "max_uses": null, "uses": 0, "status": "active", "created_at": "",
+        "revoked_at": null, "credential_version": 1});
+    for case in ["same", "other_instance", "other_thread"] {
+        let tmp = TempDir::new().unwrap();
+        let state = rust_state(
+            &tmp,
+            json!({"gh": connection_doc(Value::Null, json!(1))}),
+            json!({"g-1": grant.clone()}),
+            None,
+        );
+        let p1 = Policy::new(&state, clock::fixed(CLOCK));
+        let p2 = Policy::new(&state, clock::fixed(CLOCK));
+        p1.evaluate(
+            "agent-1",
+            "gh",
+            &policy::Action::http("GET", "/repos"),
+            None,
+        )
+        .unwrap();
+        p2.update_connection("gh", ConnectionChanges::new().description("x"))
+            .unwrap();
+        let consume = |p: &Policy| {
+            rust_outcome(
+                p.consume("g-1", None, None, None, None)
+                    .map(|g| json!(g.uses)),
+            )
+        };
+        let rust = match case {
+            "same" => consume(&p1),
+            "other_instance" => consume(&p2),
+            _ => std::thread::scope(|s| s.spawn(|| consume(&p1)).join().unwrap()),
+        };
+        assert_eq!(py[case], rust, "{case}");
+    }
 }

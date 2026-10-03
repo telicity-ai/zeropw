@@ -766,14 +766,9 @@ pub fn exec(
             // embedding a truncated one.
             let handle_policy_version = i64::try_from(&known.policy_version.0)
                 .map_err(|_| Error::state("state_corrupt").with_detail("policy_version"))?;
-            let handle = ctx.handles.issue(
-                caller,
-                id,
-                &grant.id,
-                handle_policy_version,
-                ttl,
-                None,
-            )?;
+            let handle =
+                ctx.handles
+                    .issue(caller, id, &grant.id, handle_policy_version, ttl, None)?;
             sensitive.push(handle.as_bytes().to_vec());
             let env = child_env(
                 &path,

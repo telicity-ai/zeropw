@@ -1198,7 +1198,13 @@ impl BindingServer {
         {
             Ok(v) => v,
             Err(_) => {
-                let _ = self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), pv.clone(), vec![]);
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some("key_unavailable"),
+                    pv.clone(),
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };
@@ -1206,7 +1212,13 @@ impl BindingServer {
         let private = match sshwire::parse_openssh_private_key(pem.expose()) {
             Ok(p) => p,
             Err(_) => {
-                let _ = self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), pv.clone(), vec![]);
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some("key_unavailable"),
+                    pv.clone(),
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };

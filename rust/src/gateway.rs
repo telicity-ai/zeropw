@@ -3327,14 +3327,10 @@ impl<'a> Relay<'a> {
             Err(e) => return Err(e),
         }
 
-        let secret = match self
-            .ctx
-            .vault
-            .secret_for_trusted_use(
-                &connection.secret_id,
-                connection.secret_version_for_trusted_use()?,
-            )
-        {
+        let secret = match self.ctx.vault.secret_for_trusted_use(
+            &connection.secret_id,
+            connection.secret_version_for_trusted_use()?,
+        ) {
             Ok(s) => s,
             Err(e)
                 if e.is(ErrorClass::NotFound)

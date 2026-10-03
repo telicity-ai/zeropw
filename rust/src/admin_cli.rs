@@ -1344,9 +1344,10 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     if !kinds.contains(&meta.kind.as_str()) {
         return Err(Error::invalid_input("secret_kind_mismatch"));
     }
-    let ver = ctx
-        .vault
-        .resolve_version(&connection.secret_id, connection.secret_version_for_resolve()?)?;
+    let ver = ctx.vault.resolve_version(
+        &connection.secret_id,
+        connection.secret_version_for_resolve()?,
+    )?;
     if let Some(version) = meta
         .versions
         .iter()
@@ -1632,7 +1633,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .iter()
                 .filter(|c| {
                     c.secret_id == id
-                        && c.secret_version.as_ref().is_some_and(|v| v.eq_int(&version))
+                        && c.secret_version
+                            .as_ref()
+                            .is_some_and(|v| v.eq_int(&version))
                         && c.status == "active"
                 })
                 .map(|c| c.id.clone())
@@ -2090,9 +2093,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             crate::policy::python_sort_dict_items(&mut approvals)?;
             let mut entries: Vec<Value> = Vec::with_capacity(approvals.len());
             for (digest, value) in approvals {
-                let obj = value
-                    .as_object()
-                    .ok_or_else(|| Error::state("state_corrupt").with_detail("policy/control.json"))?;
+                let obj = value.as_object().ok_or_else(|| {
+                    Error::state("state_corrupt").with_detail("policy/control.json")
+                })?;
                 let mut v = serde_json::Map::new();
                 v.insert("digest".into(), digest);
                 for (k, val) in obj {

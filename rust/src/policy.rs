@@ -2361,9 +2361,15 @@ impl Connection {
     /// secret_version, description, http_target, http_auth, http_scope,
     /// ssh_target, cli, status)`.
     pub(crate) fn derive_fields_differ(&self, other: &Connection) -> bool {
-        let text_differs = ["project", "environment", "service", "secret_id", "description"]
-            .iter()
-            .any(|k| !python_value_eq(&self.text_value(k), &other.text_value(k)));
+        let text_differs = [
+            "project",
+            "environment",
+            "service",
+            "secret_id",
+            "description",
+        ]
+        .iter()
+        .any(|k| !python_value_eq(&self.text_value(k), &other.text_value(k)));
         text_differs
             || self.kind != other.kind
             || self.secret_version != other.secret_version
@@ -2550,7 +2556,8 @@ impl Connection {
         let obj = v.as_object().ok_or_else(bad)?;
         // `data[key]` for an unvalidated text field: a missing key is an
         // uncaught `KeyError` right here (§3.5); any present value is kept.
-        let required = |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
+        let required =
+            |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
 
         // Kwarg order 1-4: id, project, environment, service.
         let id_raw = obj.get("id").ok_or_else(bad)?.clone();
@@ -2563,7 +2570,9 @@ impl Connection {
         // Kwarg order 7-8: secret_version, description (both untyped in
         // Python -- see the doc comment above).
         // `data.get("secret_version")`: any JSON shape, kept verbatim.
-        let secret_version = obj.get("secret_version").and_then(SecretVersion::from_value);
+        let secret_version = obj
+            .get("secret_version")
+            .and_then(SecretVersion::from_value);
         // `data.get("description", "")`.
         let description = obj.get("description").cloned().unwrap_or_else(|| json!(""));
         // Kwarg order 9-13: the nested `build()` calls, each with its own
@@ -3479,7 +3488,8 @@ impl Grant {
         }
         // `id`/`principal`/`connection`/`created_at`: required keys (no
         // dataclass default), any JSON shape kept verbatim.
-        let raw_text = |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
+        let raw_text =
+            |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
         let raw_id = raw_text("id")?;
         let raw_principal = raw_text("principal")?;
         let raw_connection = raw_text("connection")?;
@@ -4454,7 +4464,10 @@ fn principal_from_entry(id: &str, entry: &Value) -> Result<Principal, Error> {
     let raw_token_hash = required("token_hash")?;
     let raw_status = required("status")?;
     let raw_created_at = required("created_at")?;
-    let raw_runtime = obj.get("runtime").cloned().unwrap_or_else(|| json!("default"));
+    let raw_runtime = obj
+        .get("runtime")
+        .cloned()
+        .unwrap_or_else(|| json!("default"));
     let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
     Ok(Principal {
         id: id.to_string(),
@@ -4601,7 +4614,10 @@ impl<'a> Policy<'a> {
         // Another secret is another credential (possibly with broader
         // rights); only a version switch within the same secret is
         // re-evaluated in place.
-        if !python_value_eq(&before.text_value("secret_id"), &after.text_value("secret_id")) {
+        if !python_value_eq(
+            &before.text_value("secret_id"),
+            &after.text_value("secret_id"),
+        ) {
             return true;
         }
         if before.kind == "http" {
@@ -4998,7 +5014,8 @@ impl<'a> Policy<'a> {
         grant_id: &str,
     ) -> impl Fn(&Map<String, Value>) -> bool + '_ {
         move |entry: &Map<String, Value>| {
-            let get = |m: &Map<String, Value>, key: &str| m.get(key).cloned().unwrap_or(Value::Null);
+            let get =
+                |m: &Map<String, Value>, key: &str| m.get(key).cloned().unwrap_or(Value::Null);
             match entry.get("grant") {
                 Some(Value::Null) | None => {
                     python_value_eq(
@@ -7332,7 +7349,12 @@ mod tests {
                 .unwrap(),
         );
         let grant = policy
-            .create_grant_exact(&json!("agent-1"), &json!("gh"), Some(3600), Some(huge.clone()))
+            .create_grant_exact(
+                &json!("agent-1"),
+                &json!("gh"),
+                Some(3600),
+                Some(huge.clone()),
+            )
             .unwrap();
         assert_eq!(grant.max_uses_value(), huge);
         assert_eq!(grant.public_view().unwrap()["remaining_uses"], huge);
@@ -8364,7 +8386,10 @@ mod tests {
             .unwrap();
         assert_eq!(after.policy_version.to_string(), "9223372036854775808");
         let raw = state.read_json(CONNECTIONS, json!({})).unwrap();
-        assert_eq!(raw["gh"]["policy_version"].to_string(), "9223372036854775808");
+        assert_eq!(
+            raw["gh"]["policy_version"].to_string(),
+            "9223372036854775808"
+        );
     }
 
     /// Same as above for `request_approval`'s `cycle = int(...) + 1`.
