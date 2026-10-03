@@ -315,8 +315,8 @@ pub const INT_MAX_STR_DIGITS_FATAL: &str = "Fatal Python error: config_init_int_
 
 /// This process's integer-string digit limit, from `PYTHONINTMAXSTRDIGITS`
 /// exactly as CPython start-up reads it ([`parse_int_max_str_digits`]).
-/// `Err(())` is a setting CPython refuses to start with.
-pub fn int_max_str_digits() -> Result<usize, ()> {
+/// `None` is a setting CPython refuses to start with.
+pub fn int_max_str_digits() -> Option<usize> {
     use std::os::unix::ffi::OsStrExt;
     let raw = std::env::var_os("PYTHONINTMAXSTRDIGITS");
     parse_int_max_str_digits(raw.as_deref().map(std::ffi::OsStr::as_bytes))
@@ -327,9 +327,9 @@ pub fn int_max_str_digits() -> Result<usize, ()> {
 /// C-locale whitespace, an optional sign, at least one ASCII digit, nothing
 /// after it, no `long` overflow -- within C `int` range) must give 0
 /// (unlimited) or at least 640.
-pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Result<usize, ()> {
+pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Option<usize> {
     let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
-        return Ok(DEFAULT_INT_MAX_STR_DIGITS);
+        return Some(DEFAULT_INT_MAX_STR_DIGITS);
     };
     let mut rest = raw;
     while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r', tail @ ..] = rest {
@@ -340,21 +340,20 @@ pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Result<usize, ()> {
         rest = &rest[1..];
     }
     if rest.is_empty() || !rest.iter().all(u8::is_ascii_digit) {
-        return Err(());
+        return None;
     }
     let mut value: i64 = 0;
     for digit in rest {
         value = value
             .checked_mul(10)
-            .and_then(|value| value.checked_add(i64::from(digit - b'0')))
-            .ok_or(())?;
+            .and_then(|value| value.checked_add(i64::from(digit - b'0')))?;
     }
     let value = if negative { -value } else { value };
-    let value = i32::try_from(value).map_err(|_| ())?;
+    let value = i32::try_from(value).ok()?;
     match usize::try_from(value) {
-        Ok(0) => Ok(0),
-        Ok(value) if value >= 640 => Ok(value),
-        _ => Err(()),
+        Ok(0) => Some(0),
+        Ok(value) if value >= 640 => Some(value),
+        _ => None,
     }
 }
 
@@ -364,7 +363,7 @@ pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Result<usize, ()> {
 pub fn python_startup_check() -> Result<(), &'static str> {
     int_max_str_digits()
         .map(|_| ())
-        .map_err(|_| INT_MAX_STR_DIGITS_FATAL)
+        .ok_or(INT_MAX_STR_DIGITS_FATAL)
 }
 
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
@@ -1958,11 +1957,13 @@ print(h.hexdigest())
                 .output()
                 .unwrap();
             let python = if output.status.success() {
-                Ok(String::from_utf8(output.stdout)
-                    .unwrap()
-                    .trim()
-                    .parse::<usize>()
-                    .unwrap())
+                Some(
+                    String::from_utf8(output.stdout)
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap(),
+                )
             } else {
                 assert_eq!(output.status.code(), Some(1), "{raw:?}");
                 assert_eq!(
@@ -1970,7 +1971,7 @@ print(h.hexdigest())
                     INT_MAX_STR_DIGITS_FATAL,
                     "{raw:?}"
                 );
-                Err(())
+                None
             };
             assert_eq!(parse_int_max_str_digits(Some(raw)), python, "{raw:?}");
         }

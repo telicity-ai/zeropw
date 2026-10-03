@@ -398,7 +398,7 @@ fn python_key_equal(a: &Value, b: &Value) -> bool {
 /// with their own class: a non-iterable value or element, or an unhashable
 /// (array/object) key, is `TypeError`; an element of the wrong length is
 /// `ValueError` -- including every character of a non-empty string value.
-fn coerce_public_field(v: Option<&Value>) -> Result<PublicMetadata, Error> {
+pub(crate) fn coerce_public_field(v: Option<&Value>) -> Result<PublicMetadata, Error> {
     let mut result = PublicMetadata::default();
     match v {
         None => Ok(result),
