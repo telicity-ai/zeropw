@@ -824,11 +824,12 @@ fn refuse_cli_env<T>(
 /// Built-in exceptions that a module ports as `StateError("state_corrupt",
 /// <class name>)` because Python lets them escape (PORTING.md §3.5); the CLI
 /// prints that class name as Python's handler does.
-const ESCAPED_BUILTIN_ERRORS: [&str; 8] = [
+const ESCAPED_BUILTIN_ERRORS: [&str; 9] = [
     "KeyError",
     "TypeError",
     "AttributeError",
     "ValueError",
+    "UnicodeError",
     "UnicodeDecodeError",
     "UnicodeEncodeError",
     "JSONDecodeError",

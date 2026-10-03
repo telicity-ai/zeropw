@@ -801,20 +801,24 @@ fn gethostname() -> String {
 }
 
 /// `socket.getfqdn(hostname)`: `gethostbyaddr` of the host name's first
-/// address through the platform resolver/NSS.  `getnameinfo` exposes the
-/// canonical reverse name; the hosts-file fallback supplies aliases on
-/// platforms where the canonical name itself has no dot.
+/// address through the platform resolver/NSS.  `getnameinfo(NI_NAMEREQD)`
+/// runs the same reverse lookup (`gethostbyaddr_r` in glibc, Libinfo on
+/// macOS) and gives its canonical name; when it fails, so does Python's
+/// `gethostbyaddr`, and `getfqdn` returns the name unchanged.  No safe API
+/// exposes the `hostent` alias list, so aliases are taken from the hosts
+/// file only when its entry for the address names the same canonical host
+/// (`DEVIATIONS.md`).
 fn getfqdn(hostname: &str) -> String {
     let lookup_name = idna_hostname(hostname).unwrap_or_else(|_| hostname.to_owned());
     let Some(address) = first_resolved_address(&lookup_name, None) else {
         return hostname.to_owned();
     };
-    let canonical = lookup_addr(&address.ip()).ok();
-    let hosts = hosts_entry(address.ip());
-    let Some(canonical) = canonical.or_else(|| hosts.as_ref().map(|entry| entry.0.clone())) else {
+    let Ok(canonical) = lookup_addr(&address.ip()) else {
         return hostname.to_owned();
     };
-    let aliases = hosts.map_or_else(Vec::new, |entry| entry.1);
+    let aliases = hosts_entry(address.ip())
+        .filter(|(name, _)| *name == canonical)
+        .map_or_else(Vec::new, |entry| entry.1);
     std::iter::once(&canonical)
         .chain(aliases.iter())
         .find(|name| name.contains('.'))

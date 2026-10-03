@@ -1053,3 +1053,40 @@ fn notify_test_cli_reports_email_package_errors_like_python() {
         }
     }
 }
+
+/// `socket.getaddrinfo` applies CPython's IDNA 2003 codec to a non-ASCII
+/// SMTP host before resolving: a label longer than 63 characters escapes
+/// `_send` as `UnicodeError` (reported as `StateError`/`state_corrupt` by
+/// the administrator CLI), a valid one resolves as its A-label (`gaierror`
+/// for an `.invalid` name), and an empty label is `UnicodeError` too.
+#[test]
+fn notify_test_cli_resolves_non_ascii_smtp_hosts_like_python() {
+    let tmp = TempDir::new().unwrap();
+    let long_label = format!("{}.invalid", "ü".repeat(70));
+    for (index, (mode, host)) in [
+        ("starttls", long_label.as_str()),
+        ("smtps", long_label.as_str()),
+        ("starttls", "bücher.invalid"),
+        ("smtps", "ü..invalid"),
+        ("starttls", "xn--bcher-kva.invalid"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut results = vec![];
+        for language in ["python", "rust"] {
+            let state = tmp.path().join(format!("idna-{index}-{language}"));
+            let (code, _) = admin_cli(language, &state, &["init"]);
+            assert_eq!(code, 0, "{language} init");
+            let config = json!({"host": host, "port": 25, "mode": mode,
+                "sender": "zeropw@example.com", "recipients": ["admin@example.com"],
+                "timeout_seconds": 5});
+            let path = state.join("notify.json");
+            fs::write(&path, config.to_string()).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            results.push(admin_cli(language, &state, &["incident", "notify-test"]));
+        }
+        assert_eq!(results[1], results[0], "{mode} {host}");
+    }
+}
