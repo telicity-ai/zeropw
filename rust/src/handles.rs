@@ -54,7 +54,7 @@ pub struct Handle {
     pub caller: String,
     pub connection: String,
     pub grant: String,
-    pub policy_version: i64,
+    pub policy_version: crate::pyint::PyInt,
     pub issued_at: crate::pyint::PyInt,
     pub expires_at: crate::pyint::PyInt,
     pub handle_id: String,
@@ -103,12 +103,14 @@ impl HandleIssuer {
     /// `HandleIssuer.issue`. Python applies unbounded `int(now)` and then
     /// adds the bounded TTL. `PyInt::coerce_from_json` reproduces the exact
     /// finite binary64 truncation, including values far beyond `i64`.
+    /// `int(policy_version)` is unbounded too: the payload carries the exact
+    /// integer the caller's grant holds, whatever its magnitude.
     pub fn issue(
         &self,
         caller: &str,
         connection: &str,
         grant: &str,
-        policy_version: i64,
+        policy_version: impl Into<crate::pyint::PyInt>,
         ttl_seconds: i64,
         now: Option<f64>,
     ) -> Result<String, Error> {
@@ -122,6 +124,7 @@ impl HandleIssuer {
         let issued = crate::pyint::PyInt::coerce_from_json(&json!(now))
             .ok_or_else(|| Error::invalid_input("handle_clock"))?;
         let exp = crate::pyint::PyInt(&issued.0 + num_bigint::BigInt::from(ttl_seconds));
+        let policy_version: crate::pyint::PyInt = policy_version.into();
         let mut jti_raw = [0u8; 12];
         OsRng.fill_bytes(&mut jti_raw);
         let payload = json!({
@@ -129,7 +132,7 @@ impl HandleIssuer {
             "c": caller,
             "n": connection,
             "g": grant,
-            "pv": policy_version,
+            "pv": policy_version.value(),
             "iat": issued.value(),
             "exp": exp.value(),
             "jti": b64e(&jti_raw),
@@ -187,24 +190,24 @@ fn python_str_coerce(value: &Value) -> String {
 }
 
 /// Python `int(value)` coercion, as `HandleIssuer.verify` applies via
-/// `int(payload["pv"])` etc. `Err` covers every case Python's `int()` would
-/// raise `TypeError`/`ValueError` for (both caught by `verify`'s
-/// `except (KeyError, TypeError, ValueError)` and mapped to
-/// `handle_malformed`) -- `None`, a list/dict, or a non-numeric string.
+/// `int(payload["pv"])`/`int(payload["iat"])`/`int(payload["exp"])`. `None`
+/// covers every case Python's `int()` would raise `TypeError`/`ValueError`
+/// for (both caught by `verify`'s `except (KeyError, TypeError, ValueError)`
+/// and mapped to `handle_malformed`) -- `None`, a list/dict, a non-numeric
+/// string, or a decimal string beyond CPython's integer-string digit limit.
+/// Every accepted value is kept exact and unbounded ([`crate::pyint::PyInt`]),
+/// including Unicode `Nd` digit strings and magnitudes far beyond `i64`.
 ///
-/// `policy_version` remains `i64`, so an out-of-range forged `pv` is the
-/// narrow residual allowed by PORTING.md §3.7. Issuance never emits one.
-/// Timestamp fields use unbounded `PyInt` separately below. A float that is
-/// `inf`/`-inf` makes Python's `int()` raise `OverflowError`, which is *not*
-/// one of `TypeError`/`ValueError`/`KeyError` and so escapes `verify`
-/// uncaught -- PORTING.md §3.5 applies and this is folded into the same
-/// `handle_malformed` result as the other coercion failures. In practice a
-/// non-finite float payload cannot even reach this function: [`pyjson::loads`]
-/// already rejects the bare `Infinity`/`-Infinity` JSON tokens Python's
-/// decoder would have accepted (`rust/DEVIATIONS.md`, pyjson row).
-fn python_int_coerce(value: &Value) -> Result<i64, ()> {
-    let integer = crate::pyint::PyInt::coerce_from_json(value).ok_or(())?;
-    i64::try_from(integer.0).map_err(|_| ())
+/// A float that is `inf`/`-inf` makes Python's `int()` raise `OverflowError`,
+/// which is *not* one of `TypeError`/`ValueError`/`KeyError` and so escapes
+/// `verify` uncaught -- PORTING.md §3.5 applies and this is folded into the
+/// same `handle_malformed` result as the other coercion failures. In practice
+/// a non-finite float payload cannot even reach this function:
+/// [`pyjson::loads`] already rejects the bare `Infinity`/`-Infinity` JSON
+/// tokens Python's decoder would have accepted (`rust/DEVIATIONS.md`, pyjson
+/// row).
+fn python_int_coerce(value: &Value) -> Option<crate::pyint::PyInt> {
+    crate::pyint::PyInt::coerce_from_json(value)
 }
 
 /// Parses and validates the handle payload (the `parts[1]` base64 segment),
@@ -225,21 +228,17 @@ fn parse_payload(encoded: &str) -> Result<Handle, Error> {
         // `handle_malformed`. Present: `str()` never fails.
         obj.get(name).map(python_str_coerce).ok_or_else(malformed)
     };
-    let int_field = |name: &str| -> Result<i64, Error> {
+    let int_field = |name: &str| -> Result<crate::pyint::PyInt, Error> {
         let v = obj.get(name).ok_or_else(malformed)?;
-        python_int_coerce(v).map_err(|_| malformed())
-    };
-    let timestamp_field = |name: &str| -> Result<crate::pyint::PyInt, Error> {
-        let v = obj.get(name).ok_or_else(malformed)?;
-        crate::pyint::PyInt::coerce_from_json(v).ok_or_else(malformed)
+        python_int_coerce(v).ok_or_else(malformed)
     };
 
     let caller = str_field("c")?;
     let connection = str_field("n")?;
     let grant = str_field("g")?;
     let policy_version = int_field("pv")?;
-    let issued_at = timestamp_field("iat")?;
-    let expires_at = timestamp_field("exp")?;
+    let issued_at = int_field("iat")?;
+    let expires_at = int_field("exp")?;
     let handle_id = str_field("jti")?;
 
     // Python: `payload.get("v") != 1` -- equality, not identity, so
@@ -309,10 +308,10 @@ mod tests {
                 handle.caller.as_str(),
                 handle.connection.as_str(),
                 handle.grant.as_str(),
-                handle.policy_version
             ),
-            ("agent-1", "gh", "g-1", 4)
+            ("agent-1", "gh", "g-1")
         );
+        assert_eq!(handle.policy_version, 4);
         assert_eq!(handle.expires_at, now as i64 + 300);
     }
 
@@ -517,16 +516,26 @@ mod tests {
         assert_eq!(err.reason, "handle_signature");
     }
 
-    // `policy_version` remains i64, so only an oversized forged `pv` retains
-    // the §3.7 narrowing. Timestamp integers are unbounded.
+    // Python's `int(payload["pv"])` is unbounded and accepts every Unicode
+    // `Nd` digit string, so a signed payload carrying such a `pv` verifies
+    // with the exact integer (oracle-confirmed in
+    // `oracle_tests::payload_coercion_matches_python_for_crafted_tokens`).
     #[test]
-    fn forged_payload_with_oversized_policy_version_is_rejected() {
+    fn signed_payload_with_unbounded_policy_version_keeps_the_exact_integer() {
         let key = HandleIssuer::generate_key();
         let issuer = HandleIssuer::new(key.expose()).unwrap();
         let now = 1_700_000_000.0;
-        for pv in [
-            &"9".repeat(25),                     // fits Python int, overflows i64
-            "999999999999999999999999999999999", // 33 nines, well past i64::MAX
+        for (pv, expected) in [
+            (json!("9".repeat(25)), "9".repeat(25)),
+            (
+                json!("999999999999999999999999999999999"),
+                "999999999999999999999999999999999".to_owned(),
+            ),
+            (json!("\u{664}\u{662}"), "42".to_owned()),
+            (
+                json!("-9223372036854775809"),
+                "-9223372036854775809".to_owned(),
+            ),
         ] {
             let payload = json!({
                 "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": pv,
@@ -536,11 +545,29 @@ mod tests {
             let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
             let sig = issuer.sign(&body);
             let token = format!("{body}.{sig}");
-            let err = issuer
-                .verify(&token, Some(now))
-                .expect_err("non-ASCII-digit / oversized pv must be rejected");
-            assert_eq!(err.reason, "handle_malformed", "pv={pv:?}");
+            let handle = issuer.verify(&token, Some(now)).unwrap();
+            assert_eq!(handle.policy_version.to_string(), expected);
         }
+    }
+
+    // `issue` emits `int(policy_version)` exactly, beyond every machine width.
+    #[test]
+    fn issue_round_trips_an_unbounded_policy_version() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let pv = crate::pyint::PyInt("1".repeat(40).parse().unwrap());
+        let token = issuer
+            .issue(
+                "agent-1",
+                "gh",
+                "g-1",
+                pv.clone(),
+                300,
+                Some(1_700_000_000.0),
+            )
+            .unwrap();
+        let handle = issuer.verify(&token, Some(1_700_000_001.0)).unwrap();
+        assert_eq!(handle.policy_version, pv);
     }
 
     // `int(2**63 as float)` and an integer JSON literal at 2**63 produce
@@ -816,6 +843,15 @@ cases = [
     variant(pv="abc"),
     variant(pv=None),
     variant(pv=[1]),
+    variant(pv="9" * 25),
+    variant(pv=10 ** 30),
+    variant(pv=-(2 ** 63) - 1),
+    variant(pv="\u0664\u0662"),
+    variant(pv="\uff14\uff12"),
+    variant(pv="1" * 4301),
+    variant(iat=10 ** 30),
+    variant(exp="9" * 40),
+    variant(exp=float(2 ** 80)),
     variant(v=True),
     variant(v=1.0),
     variant(v=2),
@@ -893,6 +929,6 @@ for payload in cases:
             }
             checked += 1;
         }
-        assert_eq!(checked, 29, "expected exactly 29 crafted-token cases");
+        assert_eq!(checked, 38, "expected exactly 38 crafted-token cases");
     }
 }

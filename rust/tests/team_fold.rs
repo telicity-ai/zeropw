@@ -636,12 +636,16 @@ fn placeholder_names_are_valid_and_listable() {
     )
     .unwrap();
     let meta = ctx.vault.get_meta("gh-token").unwrap();
-    projects::validate_name(&meta.project, "project").unwrap();
-    projects::validate_name(&meta.environment, "environment").unwrap();
-    assert!(!meta.project.contains(':'));
+    let (project, environment) = (
+        meta.project.as_str().unwrap(),
+        meta.environment.as_str().unwrap(),
+    );
+    projects::validate_name(project, "project").unwrap();
+    projects::validate_name(environment, "environment").unwrap();
+    assert!(!project.contains(':'));
     let listed = ctx
         .vault
-        .list_secrets(Some(&meta.project), Some(&meta.environment))
+        .list_secrets(Some(project), Some(environment))
         .unwrap();
     assert!(listed.iter().any(|m| m.id == "gh-token"));
 }

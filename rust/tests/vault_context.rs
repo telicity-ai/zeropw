@@ -282,7 +282,7 @@ fn versioning_and_status_transitions() {
             .iter()
             .map(|v| v.status.as_str())
             .collect::<Vec<_>>(),
-        vec!["active", "staged"]
+        vec![Some("active"), Some("staged")]
     );
     assert_eq!(
         ctx.vault
@@ -308,7 +308,7 @@ fn versioning_and_status_transitions() {
             .iter()
             .map(|v| v.status.as_str())
             .collect::<Vec<_>>(),
-        vec!["retired", "active"]
+        vec![Some("retired"), Some("active")]
     );
     let err = ctx
         .vault

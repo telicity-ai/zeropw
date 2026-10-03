@@ -101,7 +101,7 @@ impl<'a> Projects<'a> {
     fn load(&self) -> Result<Map<String, Value>, Error> {
         match self.load_raw()? {
             LoadedDoc::Object(map) => Ok(map),
-            LoadedDoc::NonObject(_) => Err(state_corrupt()),
+            LoadedDoc::NonObject(_) => Err(escaped("AttributeError")),
         }
     }
 
@@ -147,7 +147,7 @@ impl<'a> Projects<'a> {
                 if s.contains(name.as_str()) {
                     return Err(Error::invalid_input("project_exists"));
                 }
-                return Err(state_corrupt());
+                return Err(escaped("TypeError"));
             }
             LoadedDoc::NonObject(Value::Array(items)) => {
                 let contained = items.iter().any(|item| match item {
@@ -157,13 +157,13 @@ impl<'a> Projects<'a> {
                 if contained {
                     return Err(Error::invalid_input("project_exists"));
                 }
-                return Err(state_corrupt());
+                return Err(escaped("TypeError"));
             }
             // `bool`/number documents: Python's `in` itself raises
             // `TypeError` ("argument of type 'bool'/'int' is not
             // iterable"), unconditionally -- no substring/membership test
             // is even attempted.
-            LoadedDoc::NonObject(_) => return Err(state_corrupt()),
+            LoadedDoc::NonObject(_) => return Err(escaped("TypeError")),
         };
         if doc.contains_key(&name) {
             return Err(Error::invalid_input("project_exists"));
@@ -198,11 +198,34 @@ impl<'a> Projects<'a> {
 
     /// `Projects.require_environment`.
     pub fn require_environment(&self, project: &str, environment: &str) -> Result<(), Error> {
-        let entry = self.get(project)?;
+        self.require_environment_value(&json!(project), &json!(environment))
+    }
+
+    /// `Projects.require_environment` for stored JSON arguments (a vault
+    /// entry's raw `project`/`environment`). `doc.get(project)` finds only a
+    /// `str` key, raises `TypeError` for an unhashable list/dict, and returns
+    /// `None` (`project_not_found`) for any other value; `environment not in
+    /// entry.environments` is tuple membership with Python `==`.
+    pub fn require_environment_value(
+        &self,
+        project: &Value,
+        environment: &Value,
+    ) -> Result<(), Error> {
+        let entry = match project {
+            Value::String(name) => self.get(name)?,
+            Value::Array(_) | Value::Object(_) => {
+                self.load()?;
+                return Err(escaped("TypeError"));
+            }
+            _ => {
+                self.load()?;
+                return Err(Error::not_found("project_not_found"));
+            }
+        };
         if !entry
             .environments
             .iter()
-            .any(|e| e == &Value::String(environment.to_owned()))
+            .any(|e| crate::vault::python_eq(e, environment))
         {
             return Err(Error::not_found("environment_not_found"));
         }
@@ -221,10 +244,12 @@ impl<'a> Projects<'a> {
     }
 }
 
-/// `state_corrupt` for a malformed `projects.json` document/entry, shared by
-/// [`Projects::load`], [`Projects::get`], and [`project_from_entry`].
-fn state_corrupt() -> Error {
-    Error::state("state_corrupt").with_detail(DOC)
+/// A built-in exception `projects.py` lets escape on a malformed
+/// `projects.json` (PORTING.md §3.5): `StateError("state_corrupt")` carrying
+/// the Python exception class name, which is what the administrator CLI's
+/// handler prints for it.
+fn escaped(class: &'static str) -> Error {
+    Error::state("state_corrupt").with_detail(class)
 }
 
 /// Python truthiness (`bool(value)`) for a JSON-decoded value, as
@@ -258,13 +283,23 @@ fn is_falsy(value: &Value) -> bool {
 /// including for native admin listing. Missing/non-iterable fields use the
 /// existing fail-closed `state_corrupt` boundary (PORTING.md §3.5).
 fn project_from_entry(name: &str, entry: &Value) -> Result<Project, Error> {
-    let environments = match entry.get("environments").ok_or_else(state_corrupt)? {
+    // `entry["environments"]`: a non-dict entry cannot be subscripted (`TypeError`).
+    let Value::Object(entry) = entry else {
+        return Err(escaped("TypeError"));
+    };
+    let environments = match entry
+        .get("environments")
+        .ok_or_else(|| escaped("KeyError"))?
+    {
         Value::Array(items) => items.clone(),
         Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
         Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
-        _ => return Err(state_corrupt()),
+        _ => return Err(escaped("TypeError")),
     };
-    let created_at = entry.get("created_at").ok_or_else(state_corrupt)?.clone();
+    let created_at = entry
+        .get("created_at")
+        .ok_or_else(|| escaped("KeyError"))?
+        .clone();
     Ok(Project {
         name: name.to_string(),
         environments,

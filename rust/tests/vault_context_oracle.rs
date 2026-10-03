@@ -2353,3 +2353,84 @@ except TypeError:
         ]
     );
 }
+
+// ------------------------------------------- Context::recover's int(clock())
+/// `Context.recover` names the retired master key and the new KMS key id with
+/// `int(self.clock())`, CPython's unbounded integer: a finite clock far beyond
+/// `i64` yields the exact many-digit integer in both names. Both languages
+/// recover a copy of the same Python-initialized state with that clock; the
+/// resulting `kms/` file names, the new key id line and the outcome must match.
+#[test]
+fn recover_names_files_with_pythons_unbounded_int_clock() {
+    let tmp = TempDir::new().unwrap();
+    let base = tmp.path().join("base");
+    let script = format!(
+        r#"
+from zeropw.context import Context, Config
+Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: {now})
+"#,
+        state = py_str(&base),
+        now = FIXED_NOW,
+    );
+    run_python(&script);
+
+    for clock_value in [1e30_f64, 9.223372036854776e18, 1_700_000_123.75] {
+        let rust_state = tmp.path().join(format!("rust-{clock_value}"));
+        let python_state = tmp.path().join(format!("python-{clock_value}"));
+        for target in [&rust_state, &python_state] {
+            let status = Command::new("cp")
+                .arg("-Rp")
+                .arg(&base)
+                .arg(target)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let summarize = |state: &Path| -> Value {
+            let mut names: Vec<String> = fs::read_dir(state.join("kms"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            let key_id = fs::read_to_string(state.join("kms/master.key"))
+                .ok()
+                .and_then(|text| text.lines().next().map(str::to_owned));
+            json!({"names": names, "key_id": key_id})
+        };
+
+        let mut ctx =
+            Context::open(&rust_state, Config::default(), clock::fixed(clock_value)).unwrap();
+        let rust_outcome = match ctx.recover("recovery-passphrase-1") {
+            Ok(_) => json!("ok"),
+            Err(error) => json!(error.class == ErrorClass::StateError),
+        };
+        drop(ctx);
+        let rust = json!({"files": summarize(&rust_state), "ok": rust_outcome == json!("ok")});
+
+        let script = format!(
+            r#"
+import json
+from zeropw.context import Context, Config
+ctx = Context.open({state}, Config(), lambda: {clock:?})
+try:
+    ctx.recover("recovery-passphrase-1")
+    ok = True
+except Exception:
+    ok = False
+print(json.dumps(ok))
+"#,
+            state = py_str(&python_state),
+            clock = clock_value,
+        );
+        let python_ok: Value = serde_json::from_str(run_python(&script).trim()).unwrap();
+        let python = json!({"files": summarize(&python_state), "ok": python_ok});
+        assert_eq!(rust["files"], python["files"], "clock {clock_value}");
+        // Beyond the platform `time_t`, Python's closing audit record then fails in
+        // `store.iso` (`OverflowError`); that timestamp-rendering boundary is the `store`
+        // `iso` row's, not this filename's, so the outcome is compared at a real clock only.
+        if clock_value < 1e10 {
+            assert_eq!(rust["ok"], python["ok"], "clock {clock_value}");
+            assert_eq!(rust["ok"], json!(true));
+        }
+    }
+}

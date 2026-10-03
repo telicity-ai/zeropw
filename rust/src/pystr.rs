@@ -241,6 +241,30 @@ pub(crate) fn unicode_decimal_digit(c: char) -> Option<u32> {
         .map(|idx| cp - DIGIT_BLOCK_STARTS[idx])
 }
 
+/// CPython `str.isdigit()` for one character: true for every Unicode
+/// decimal digit ([`unicode_decimal_digit`]) and for the `Numeric_Type=Digit`
+/// characters that are not decimal digits (superscripts, circled and
+/// parenthesized digits, ...), listed in [`NON_DECIMAL_DIGIT_RANGES`]. Such a
+/// character passes `str.isdigit()` but makes `int()` raise `ValueError`.
+/// Pinned per-codepoint by `oracle_is_digit_matches_python_for_every_codepoint`.
+pub fn is_digit(c: char) -> bool {
+    if unicode_decimal_digit(c).is_some() {
+        return true;
+    }
+    let cp = c as u32;
+    NON_DECIMAL_DIGIT_RANGES
+        .binary_search_by(|&(start, end)| {
+            if cp < start {
+                std::cmp::Ordering::Greater
+            } else if cp > end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
 /// `int(s)` (base 10): shorthand for [`int_from_str_radix`] with `base =
 /// 10`.
 pub fn int_from_str(s: &str) -> Option<i128> {
@@ -268,25 +292,78 @@ pub fn int_from_str_decimal(s: &str) -> Option<String> {
 /// [`int_from_str_decimal`] plus CPython 3.12's integer-string digit guard.
 /// The limit counts decimal digits in the original input, including leading
 /// zeroes and Unicode Nd digits, but excludes signs, whitespace and
-/// underscores. `PYTHONINTMAXSTRDIGITS=0` disables it; valid overrides are
-/// at least 640, and an absent override uses CPython's default 4300. Rust's
-/// fallback for an invalid override remains a known limitation: CPython
-/// rejects that environment setting during interpreter startup.
+/// underscores. The limit is [`int_max_str_digits`]; a `PYTHONINTMAXSTRDIGITS`
+/// value CPython refuses to start with never reaches this point in a native
+/// binary ([`python_startup_check`]), and library callers fall back to the
+/// default 4300 for it.
 pub fn int_from_str_decimal_limited(s: &str) -> Option<String> {
     let value = int_from_str_decimal(s)?;
-    let limit = match std::env::var("PYTHONINTMAXSTRDIGITS") {
-        Ok(raw) => match raw.parse::<usize>() {
-            Ok(0) => 0,
-            Ok(value) if value >= 640 => value,
-            _ => 4300,
-        },
-        Err(_) => 4300,
-    };
+    let limit = int_max_str_digits().unwrap_or(DEFAULT_INT_MAX_STR_DIGITS);
     let digits = s
         .chars()
         .filter(|&c| unicode_decimal_digit(c).is_some())
         .count();
     (limit == 0 || digits <= limit).then_some(value)
+}
+
+/// `sys.int_info.default_max_str_digits`.
+pub const DEFAULT_INT_MAX_STR_DIGITS: usize = 4300;
+
+/// The fatal start-up error CPython 3.12 prints to stderr (then exits with
+/// status 1) for an invalid `PYTHONINTMAXSTRDIGITS`.
+pub const INT_MAX_STR_DIGITS_FATAL: &str = "Fatal Python error: config_init_int_max_str_digits: PYTHONINTMAXSTRDIGITS: invalid limit; must be >= 640 or 0 for unlimited.\nPython runtime state: preinitialized\n\n";
+
+/// This process's integer-string digit limit, from `PYTHONINTMAXSTRDIGITS`
+/// exactly as CPython start-up reads it ([`parse_int_max_str_digits`]).
+/// `None` is a setting CPython refuses to start with.
+pub fn int_max_str_digits() -> Option<usize> {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = std::env::var_os("PYTHONINTMAXSTRDIGITS");
+    parse_int_max_str_digits(raw.as_deref().map(std::ffi::OsStr::as_bytes))
+}
+
+/// CPython 3.12 `config_init_int_max_str_digits`: an unset or empty variable
+/// is the default; otherwise `_Py_str_to_int` (C `strtol` base 10 -- leading
+/// C-locale whitespace, an optional sign, at least one ASCII digit, nothing
+/// after it, no `long` overflow -- within C `int` range) must give 0
+/// (unlimited) or at least 640.
+pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Option<usize> {
+    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
+        return Some(DEFAULT_INT_MAX_STR_DIGITS);
+    };
+    let mut rest = raw;
+    while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r', tail @ ..] = rest {
+        rest = tail;
+    }
+    let negative = matches!(rest.first(), Some(b'-'));
+    if matches!(rest.first(), Some(b'+' | b'-')) {
+        rest = &rest[1..];
+    }
+    if rest.is_empty() || !rest.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut value: i64 = 0;
+    for digit in rest {
+        value = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(i64::from(digit - b'0')))?;
+    }
+    let value = if negative { -value } else { value };
+    let value = i32::try_from(value).ok()?;
+    match usize::try_from(value) {
+        Ok(0) => Some(0),
+        Ok(value) if value >= 640 => Some(value),
+        _ => None,
+    }
+}
+
+/// What a native entry point must do before anything else to behave like the
+/// CPython interpreter that ran the original program: `Err` carries the
+/// stderr text of a refused start-up (exit status 1).
+pub fn python_startup_check() -> Result<(), &'static str> {
+    int_max_str_digits()
+        .map(|_| ())
+        .ok_or(INT_MAX_STR_DIGITS_FATAL)
 }
 
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
@@ -1174,6 +1251,33 @@ pub(crate) static SPACE_RANGES: &[(u32, u32)] = &[
     (0x3000, 0x3000),
 ];
 
+/// Inclusive ranges of the characters for which CPython 3.12 (UCD 15.0.0)
+/// `str.isdigit()` is true but `unicodedata.decimal()` has no value -- see
+/// [`is_digit`]. Generated by brute force over every codepoint with
+/// `chr(cp).isdigit() and unicodedata.decimal(chr(cp), None) is None`.
+pub(crate) static NON_DECIMAL_DIGIT_RANGES: &[(u32, u32)] = &[
+    (0xB2, 0xB3),
+    (0xB9, 0xB9),
+    (0x1369, 0x1371),
+    (0x19DA, 0x19DA),
+    (0x2070, 0x2070),
+    (0x2074, 0x2079),
+    (0x2080, 0x2089),
+    (0x2460, 0x2468),
+    (0x2474, 0x247C),
+    (0x2488, 0x2490),
+    (0x24EA, 0x24EA),
+    (0x24F5, 0x24FD),
+    (0x24FF, 0x24FF),
+    (0x2776, 0x277E),
+    (0x2780, 0x2788),
+    (0x278A, 0x2792),
+    (0x10A40, 0x10A43),
+    (0x10E60, 0x10E68),
+    (0x11052, 0x1105A),
+    (0x1F100, 0x1F10A),
+];
+
 /// 68 blocks of 10 consecutive codepoints each, values `0..=9` in order --
 /// see [`unicode_decimal_digit`]'s doc comment.
 pub(crate) static DIGIT_BLOCK_STARTS: &[u32] = &[
@@ -1811,6 +1915,92 @@ print(h.hexdigest())
 "#;
         let theirs = python(script).trim().to_string();
         assert_eq!(ours, theirs, "unicode_decimal_digit digest mismatch");
+    }
+
+    #[test]
+    fn int_max_str_digits_env_parsing_matches_cpython_startup() {
+        let values: [&[u8]; 24] = [
+            b"",
+            b"abc",
+            b"5",
+            b"-1",
+            b"639",
+            b"640",
+            b" 640",
+            b"640 ",
+            b"+640",
+            b"0",
+            b"00",
+            b"-0",
+            b"+0",
+            b"\t0",
+            b"0x280",
+            b"1_000",
+            "\u{666}\u{664}\u{660}".as_bytes(),
+            b"2147483647",
+            b"2147483648",
+            b"9223372036854775808",
+            b" ",
+            b"4300",
+            b"\xff",
+            b"99999999999999999999",
+        ];
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        for raw in values {
+            let output = std::process::Command::new(&interpreter)
+                .args(["-c", "import sys; print(sys.get_int_max_str_digits())"])
+                .env(
+                    "PYTHONINTMAXSTRDIGITS",
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(raw),
+                )
+                .output()
+                .unwrap();
+            let python = if output.status.success() {
+                Some(
+                    String::from_utf8(output.stdout)
+                        .unwrap()
+                        .trim()
+                        .parse::<usize>()
+                        .unwrap(),
+                )
+            } else {
+                assert_eq!(output.status.code(), Some(1), "{raw:?}");
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr),
+                    INT_MAX_STR_DIGITS_FATAL,
+                    "{raw:?}"
+                );
+                None
+            };
+            assert_eq!(parse_int_max_str_digits(Some(raw)), python, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn oracle_is_digit_matches_python_for_every_codepoint() {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        for cp in 0u32..=0x10FFFF {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            hasher.update([u8::from(is_digit(c))]);
+        }
+        let ours = hex::encode(hasher.finalize());
+
+        let script = r#"
+import hashlib
+h = hashlib.sha256()
+for cp in range(0, 0x110000):
+    if 0xD800 <= cp <= 0xDFFF:
+        continue
+    h.update(bytes([int(chr(cp).isdigit())]))
+print(h.hexdigest())
+"#;
+        let theirs = python(script).trim().to_string();
+        assert_eq!(ours, theirs, "is_digit digest mismatch");
     }
 
     #[test]

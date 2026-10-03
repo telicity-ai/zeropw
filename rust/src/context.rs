@@ -499,7 +499,7 @@ impl Context {
         let old = self.state.path.join(KMS_FILE);
         let rotated = self.state.path.join("kms").join(format!(
             "master.key.retired-{}",
-            clock_now_i64(&self.clock)?
+            clock_now_int(&self.clock)?
         ));
         fs::rename(&old, &rotated)
             .map_err(|e| Error::state("state_write_failed").with_detail(e.to_string()))?;
@@ -508,7 +508,7 @@ impl Context {
             let new_kms: &'static (dyn Kms + Send + Sync) =
                 Box::leak(Box::new(LocalFileKms::create(
                     &old,
-                    &format!("local-dev-kms-{}", clock_now_i64(&self.clock)?),
+                    &format!("local-dev-kms-{}", clock_now_int(&self.clock)?),
                 )?));
             let vault = Vault::recover(
                 self.state,
@@ -565,12 +565,17 @@ impl Context {
 /// `0`) and let `recover` rename the live master key aside on a broken clock (finding E-R7-6).
 /// Only reachable via a caller-injected `Clock` returning a non-finite value -- trusted in-process
 /// code, not any untrusted input.
-fn clock_now_i64(clock: &Clock) -> Result<i64, Error> {
+///
+/// A finite value is CPython's unbounded `int(float)`: the exact truncated integer, however far
+/// outside every machine width (`int(1e300)` is a 301-digit integer), rendered in decimal for the
+/// filename suffix and key id exactly as Python's f-string does.
+fn clock_now_int(clock: &Clock) -> Result<crate::pyint::PyInt, Error> {
     let now = clock();
     if !now.is_finite() {
         return Err(Error::state("state_write_failed").with_detail("clock_not_finite"));
     }
-    Ok(now as i64)
+    crate::pyint::PyInt::coerce_from_json(&json!(now))
+        .ok_or_else(|| Error::state("state_write_failed").with_detail("clock_not_finite"))
 }
 
 impl Drop for Context {

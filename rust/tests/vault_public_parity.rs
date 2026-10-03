@@ -165,3 +165,92 @@ fn public_pair_sequence_coercion_matches_python_without_mutating_state() {
         }
     }
 }
+
+/// `dict(...)` admits every hashable JSON key, not only strings: Python keeps
+/// the first spelling and position of `==`-equal keys (`1`, `1.0`, `True`) and
+/// the last value, and never equates a string key with a non-string one.
+/// Rust's `PublicMetadata` must hold the same `(key, value)` sequence, and its
+/// `str`-keyed lookups (the only ones product code performs) must agree.
+#[test]
+fn public_non_string_keys_match_python_dict_identity_rules() {
+    let public = json!([
+        [1, "a"],
+        [true, "b"],
+        [1.0, "c"],
+        ["1", "d"],
+        [null, "e"],
+        [0, "f"],
+        [false, "g"],
+        [2.5, "h"],
+        ["public_key", "k"],
+        ["fingerprint", 3],
+        [9007199254740993_u64, "big"],
+        [9007199254740992.0, "float"],
+        "xy",
+        {"first": 0, "second": 0}
+    ]);
+    let tmp = TempDir::new().unwrap();
+    let state = tmp.path().join("state");
+    let config = Config {
+        socket_dir: Some(tmp.path().join("sockets")),
+        run_dir: Some(tmp.path().join("run")),
+        ..Config::default()
+    };
+    let ctx = Context::initialize(
+        &state,
+        "admin-passphrase-1",
+        "recovery-passphrase-1",
+        config,
+        clock::fixed(NOW),
+    )
+    .unwrap();
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    ctx.vault
+        .put_secret("key", "api_key", b"synthetic", "demo", "dev", true)
+        .unwrap();
+    let mut document = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    document["secrets"]["key"]["versions"]["1"]["public"] = public;
+    ctx.state.write_json(VAULT_DOC, &document).unwrap();
+
+    let script = format!(
+        r#"
+import json
+from zeropw.context import Config, Context
+ctx = Context.open({state}, Config(), lambda: {now})
+public = ctx.vault.get_meta("key").versions[0].public
+print(json.dumps([[[k, v] for k, v in public.items()],
+                  [public.get(k) for k in ("public_key", "fingerprint", "1", "x", "first")]]))
+"#,
+        state = py_str(&state),
+        now = NOW,
+    );
+    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
+    let output = Command::new(interpreter)
+        .arg("-c")
+        .arg(script)
+        .env("PYTHONPATH", repo_root())
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .expect("run Python oracle");
+    assert!(
+        output.status.success(),
+        "Python stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let python: Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    let meta = ctx.vault.get_meta("key").unwrap();
+    let rust_public = &meta.versions[0].public;
+    let entries: Vec<Value> = rust_public
+        .entries()
+        .iter()
+        .map(|(key, value)| json!([key, value]))
+        .collect();
+    let lookups: Vec<Value> = ["public_key", "fingerprint", "1", "x", "first"]
+        .iter()
+        .map(|key| rust_public.get(key).cloned().unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(json!([entries, lookups]), python);
+}
