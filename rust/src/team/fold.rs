@@ -1584,24 +1584,33 @@ fn derive_connections(
     policy: &policy::Policy,
     audit: Option<&Audit>,
 ) -> Result<()> {
+    // `local = state.read_json(P.CONNECTIONS, {}) or {}`: a truthy non-dict
+    // has no `.get`/`.items` -- an `AttributeError` before anything is
+    // audited or written (both loops below reach it).
     let mut local: Map<String, Value> = match state.read_json(policy::CONNECTIONS, json!({}))? {
         Value::Object(m) => m,
-        _ => Map::new(),
+        v if json_falsy(&v) => Map::new(),
+        _ => return Err(Error::state("state_corrupt").with_detail("policy_connections")),
     };
     let now_iso = crate::store::iso(None);
     let mut seen_ids: HashSet<String> = HashSet::new();
-    let connections = document
-        .get("connections")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    // `for conn_id, entry in document["connections"].items()`.
+    let connections = py_getitem_map(document, "connections")?
+        .as_object()
+        .ok_or_else(doc_corrupt)?
+        .clone();
     for (conn_id, entry_val) in &connections {
         seen_ids.insert(conn_id.clone());
-        let entry = match entry_val.as_object() {
-            Some(e) => e,
-            None => continue,
-        };
-        let existing_raw = local.get(conn_id).and_then(Value::as_object).cloned();
+        // `existing_raw = local.get(conn_id)`; `if existing_raw and
+        // existing_raw.get("shared_env") != env_id` (a truthy non-dict has
+        // no `.get`).
+        let existing_raw =
+            match local.get(conn_id) {
+                Some(v) if !json_falsy(v) => Some(v.as_object().cloned().ok_or_else(|| {
+                    Error::state("state_corrupt").with_detail("policy_connections")
+                })?),
+                _ => None,
+            };
         if let Some(existing) = &existing_raw
             && existing.get("shared_env").and_then(Value::as_str) != Some(env_id)
         {
@@ -1618,18 +1627,23 @@ fn derive_connections(
             }
             continue;
         }
-        let secret_id = entry
-            .get("secret_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let raw_version = entry.get("secret_version").and_then(Value::as_str);
-        let local_version = raw_version.and_then(|v| {
-            version_index
-                .get(&secret_id)
-                .and_then(|m| m.get(v))
-                .copied()
-        });
+        // `secret_id = entry["secret_id"]`; `raw_version =
+        // entry.get("secret_version")`; `version_index.get(secret_id,
+        // {}).get(raw_version) if raw_version is not None else None` (both
+        // lookups hash their key: an unhashable one raises `TypeError`).
+        let secret_id = py_getitem(entry_val, "secret_id")?;
+        let entry = entry_val.as_object().ok_or_else(doc_corrupt)?;
+        let local_version = match entry.get("secret_version") {
+            None | Some(Value::Null) => None,
+            Some(raw_version) => {
+                let versions = py_key(secret_id)?.and_then(|sid| version_index.get(sid));
+                let raw_version = py_key(raw_version)?;
+                match (versions, raw_version) {
+                    (Some(versions), Some(v)) => versions.get(v).copied(),
+                    _ => None,
+                }
+            }
+        };
         // `HttpTarget::from_value` preserves Python's unchecked `ca_file`
         // JSON through `raw_ca_file`, so every connection that folded can
         // now be represented and derived locally byte-for-byte as well.
@@ -1694,31 +1708,30 @@ fn derive_connections(
     // vanish from the folded document on a later fold even though nothing
     // removed it directly (an out-of-band `connection_disabled` FACT):
     // treat that exactly like an ordinary disable.
-    let stale_ids: Vec<String> = local
-        .iter()
-        .filter(|(conn_id, existing_raw)| {
-            let obj = match existing_raw.as_object() {
-                Some(o) => o,
-                None => return false,
-            };
-            obj.get("shared_env").and_then(Value::as_str) == Some(env_id)
-                && !seen_ids.contains(conn_id.as_str())
-                && obj.get("status").and_then(Value::as_str) != Some("disabled")
-        })
-        .map(|(k, _)| k.clone())
-        .collect();
-    for conn_id in stale_ids {
-        let existing_raw = local
-            .get(&conn_id)
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let before = policy::Connection::from_value(&Value::Object(existing_raw))?;
+    // `for conn_id, existing_raw in local.items(): if
+    // existing_raw.get("shared_env") != env_id or conn_id in seen_ids or
+    // existing_raw.get("status") == "disabled": continue` -- in order, so a
+    // non-dict entry raises after every earlier stale entry was already
+    // disabled (and its grants re-evaluated).
+    let keys: Vec<String> = local.keys().cloned().collect();
+    for conn_id in keys {
+        let Some(existing_raw) = local.get(&conn_id) else {
+            continue;
+        };
+        let obj = existing_raw
+            .as_object()
+            .ok_or_else(|| Error::state("state_corrupt").with_detail("policy_connections"))?;
+        if obj.get("shared_env").and_then(Value::as_str) != Some(env_id)
+            || seen_ids.contains(conn_id.as_str())
+            || obj.get("status").and_then(Value::as_str) == Some("disabled")
+        {
+            continue;
+        }
+        let before = policy::Connection::from_value(existing_raw)?;
         let after = connection_with(
             &before,
-            // Panic sweep: same `saturating_add` reasoning as the sibling
-            // call above (a state-file-supplied `policy_version` near
-            // `i64::MAX` must not panic).
+            // Panic sweep: a state-file-supplied `policy_version` near
+            // `i64::MAX` must not panic.
             before.policy_version.saturating_add(1),
             Some("disabled"),
             &before.created_at,
@@ -1740,6 +1753,60 @@ fn derive_connections(
     Ok(())
 }
 
+/// `container.get(key)` returning a present JSON `null` as `Some`
+/// (Python's stored `None`, distinct from the `.get(key, default)`
+/// default); `AttributeError` for a non-dict container.
+fn py_dict_get_raw<'a>(container: &'a Value, key: &str) -> Result<Option<&'a Value>> {
+    Ok(container.as_object().ok_or_else(doc_corrupt)?.get(key))
+}
+
+/// `document[key]` for the folded document's top level.
+fn py_getitem_map<'a>(document: &'a Map<String, Value>, key: &str) -> Result<&'a Value> {
+    document.get(key).ok_or_else(doc_corrupt)
+}
+
+/// `secrets_doc.get(secret_id, {})` (then `.get("versions", {}).get(n,
+/// {})` for a version) then `.get("created_at", iso())`, each `.get`
+/// raising for a non-dict receiver exactly as Python's does.
+fn local_created_at(secrets_doc: &Value, secret_id: &str, version: Option<&str>) -> Result<Value> {
+    let empty = json!({});
+    let mut cursor = py_dict_get_raw(secrets_doc, secret_id)?.unwrap_or(&empty);
+    if let Some(number) = version {
+        cursor = py_dict_get_raw(cursor, "versions")?.unwrap_or(&empty);
+        cursor = py_dict_get_raw(cursor, number)?.unwrap_or(&empty);
+    }
+    Ok(py_dict_get_raw(cursor, "created_at")?
+        .cloned()
+        .unwrap_or_else(|| json!(crate::store::iso(None))))
+}
+
+/// `dict(record.get("public") or {})`, as a JSON object. `validate_op`
+/// only admits a dict; another shape reaches here only from a hand-edited
+/// snapshot, and every `dict()` failure escapes `derive_local` (a
+/// non-string key cannot be persisted as JSON at all).
+fn python_dict_object(value: Option<&Value>) -> Result<Map<String, Value>> {
+    let value = match value {
+        None => return Ok(Map::new()),
+        Some(v) if json_falsy(v) => return Ok(Map::new()),
+        Some(v) => v,
+    };
+    let pairs = commit::python_dict_pairs_checked(value).map_err(|_| doc_corrupt())?;
+    let mut out = Map::new();
+    for (k, v) in pairs {
+        match k {
+            Value::String(k) => {
+                out.insert(k, v);
+            }
+            _ => return Err(doc_corrupt()),
+        }
+    }
+    Ok(out)
+}
+
+/// Port of `_derive_vault`. Every subscript and `.get` reproduces Python's
+/// (an uncaught built-in exception aborts `derive_local` before this
+/// function's own `write_json`, after the DEK files `derive_dek_generations`
+/// already wrote).
 fn derive_vault(
     document: &Map<String, Value>,
     state: &StateDir,
@@ -1749,13 +1816,15 @@ fn derive_vault(
     project: Option<&str>,
     environment: Option<&str>,
 ) -> Result<()> {
+    let vault_corrupt = || Error::state("state_corrupt").with_detail("vault_secrets");
     let doc_val = state.read_json(vault::VAULT_DOC, Value::Null)?;
     if json_falsy(&doc_val) {
         return Ok(()); // local vault not initialized; nothing to derive into
     }
+    // `doc.setdefault("secrets", {})`: only a dict has `setdefault`.
     let mut doc = match doc_val {
         Value::Object(m) => m,
-        _ => return Ok(()),
+        _ => return Err(vault_corrupt()),
     };
     // F7: must satisfy projects.NAME_RE (no ":") so `secret list --project`
     // and friends work on derived entries.
@@ -1769,107 +1838,60 @@ fn derive_vault(
         .filter(|p| !p.is_empty())
         .unwrap_or(&default_project);
     let environment = environment.filter(|e| !e.is_empty()).unwrap_or("shared");
-    // Finding H-R4-8: Python's `secrets_doc = doc.setdefault("secrets", {})`
-    // only installs the `{}` default when the key is ABSENT -- a PRESENT
-    // but non-dict value (a corrupt `vault/secrets.json`'s "secrets" field:
-    // a string, number, bool, array or null) is returned AS-IS, and the
-    // very next line's `secrets_doc.get(secret_id)` then raises an
-    // uncaught `AttributeError` (only a dict has `.get`) BEFORE this
-    // function ever reaches its `state.write_json` call at the end -- the
-    // local vault file is left completely untouched. This used to
-    // silently substitute an empty `Map` for ANY non-object value
-    // (present-and-wrong-typed included, not just genuinely absent), so
-    // `doc.insert("secrets", ...)` at the end OVERWROTE the corrupt field
-    // with a fresh object built from only THIS environment's secrets --
-    // destroying whatever the field held instead of leaving it alone the
-    // way Python's uncaught exception does.
-    let secrets = document
-        .get("secrets")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    // Finding H-R5-7: `secrets_doc.get(secret_id)` (the line that actually
-    // dereferences `secrets_doc` and so is where Python's uncaught
-    // `AttributeError` from the row above really fires) is the FIRST
-    // statement inside `for secret_id, entry in document["secrets"].items
-    // ():` -- for an EMPTY `document["secrets"]` (this fold's own document
-    // currently has no secrets at all), that loop body never runs, so a
-    // pre-existing non-dict `doc["secrets"]` in the LOCAL vault file is
-    // never touched, and Python's `derive_local` succeeds, writing `doc`
-    // back completely unchanged. The check below used to run
-    // unconditionally, before ever looking at whether `secrets` (computed
-    // above) had anything to iterate, so it aborted `derive_local` -- and
-    // so the WHOLE fold-and-derive call, since `derive_local` is the last
-    // step -- for a shape Python's real control flow never even reaches
-    // when there is nothing to derive. Skipping the check entirely for
-    // that case is exact, not approximate: when `secrets` is non-empty,
-    // the loop's first iteration always reaches `secrets_doc.get(...)`
-    // immediately, so raising here up front is equivalent to raising
-    // lazily inside the loop (no other exception can fire first).
-    // `secrets_was_absent` distinguishes the two ways `secrets.is_empty()`
-    // can leave `doc["secrets"]` unwritten-to below: Python's `setdefault`
-    // still MUTATES `doc` by inserting the literal `{}` default when the
-    // key was genuinely absent (even though nothing further ever reads or
-    // writes through that `{}`), but leaves a PRESENT value -- of any
-    // shape, well-formed or not -- completely untouched, since `setdefault`
-    // just returns the existing reference and the loop that would mutate
-    // it never runs.
-    let secrets_was_absent = !doc.contains_key("secrets");
-    let mut secrets_doc: Map<String, Value> = if secrets.is_empty() {
-        Map::new()
-    } else {
-        match doc.get("secrets") {
-            None => Map::new(),
-            Some(Value::Object(m)) => m.clone(),
-            Some(_) => return Err(Error::state("state_corrupt").with_detail("vault_secrets")),
-        }
-    };
-    for (secret_id, entry_val) in &secrets {
-        let entry = match entry_val.as_object() {
-            Some(e) => e,
-            None => continue,
-        };
-        let existing = secrets_doc
-            .get(secret_id)
-            .and_then(Value::as_object)
+    // Finding H-R4-8/H-R5-7: `setdefault` inserts `{}` only for an ABSENT
+    // key; a present value of any shape is used (and written back) as-is,
+    // and only fails once the loop below calls `.get` on it.
+    let mut secrets_doc = doc
+        .entry("secrets".to_string())
+        .or_insert_with(|| json!({}))
+        .clone();
+    // `for secret_id, entry in document["secrets"].items()`.
+    let secrets = py_getitem_map(document, "secrets")?
+        .as_object()
+        .ok_or_else(doc_corrupt)?;
+    for (secret_id, entry) in secrets {
+        // `existing = secrets_doc.get(secret_id)`; `if existing and
+        // existing.get("shared_env") != env_id`.
+        let existing = py_dict_get_raw(&secrets_doc, secret_id)
+            .map_err(|_| vault_corrupt())?
             .cloned();
-        if let Some(existing) = &existing
-            && existing.get("shared_env").and_then(Value::as_str) != Some(env_id)
-        {
-            if let Some(audit) = audit {
-                audit.record(
-                    "team_op_skipped",
-                    RecordArgs {
-                        result: Some("skipped"),
-                        reason: Some("local_id_conflict"),
-                        extra: vec![("env_id", json!(env_id)), ("secret_id", json!(secret_id))],
-                        ..Default::default()
-                    },
-                )?;
+        if let Some(existing) = existing.filter(|v| !json_falsy(v)) {
+            let shared_env = existing
+                .as_object()
+                .ok_or_else(vault_corrupt)?
+                .get("shared_env");
+            if shared_env.and_then(Value::as_str) != Some(env_id) {
+                if let Some(audit) = audit {
+                    audit.record(
+                        "team_op_skipped",
+                        RecordArgs {
+                            result: Some("skipped"),
+                            reason: Some("local_id_conflict"),
+                            extra: vec![("env_id", json!(env_id)), ("secret_id", json!(secret_id))],
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                continue;
             }
-            continue;
         }
         let vindex = version_index.get(secret_id).cloned().unwrap_or_default();
         let mut local_versions: Map<String, Value> = Map::new();
-        let versions = entry
-            .get("versions")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        for (version_id, record_val) in &versions {
-            let record = match record_val.as_object() {
-                Some(r) => r,
-                None => continue,
+        // `for version_id, record in entry["versions"].items()`.
+        let versions = py_getitem(entry, "versions")?
+            .as_object()
+            .ok_or_else(doc_corrupt)?;
+        for (version_id, record) in versions {
+            let Some(local_number) = vindex.get(version_id).copied() else {
+                continue;
             };
-            let local_number = match vindex.get(version_id) {
-                Some(n) => *n,
-                None => continue,
-            };
-            let generation = record
-                .get("generation")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !state.exists(&format!("team/{env_id}/dek/{generation}.json")) {
+            // `f"team/{env_id}/dek/{record['generation']}.json"`.
+            let generation = py_getitem(record, "generation")?.clone();
+            let dek_path = format!(
+                "team/{env_id}/dek/{}.json",
+                commit::python_str_coerce(&generation)
+            );
+            if !state.exists(&dek_path) {
                 if let Some(audit) = audit {
                     audit.record(
                         "team_op_skipped",
@@ -1883,66 +1905,40 @@ fn derive_vault(
                 }
                 continue;
             }
-            let existing_created_at = existing
-                .as_ref()
-                .and_then(|e| e.get("versions"))
-                .and_then(Value::as_object)
-                .and_then(|v| v.get(&local_number.to_string()))
-                .and_then(Value::as_object)
-                .and_then(|v| v.get("created_at"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| crate::store::iso(None));
+            let number = local_number.to_string();
+            let nonce = py_getitem(record, "nonce")?.clone();
+            let ciphertext = py_getitem(record, "ciphertext")?.clone();
+            let created_at = local_created_at(&secrets_doc, secret_id, Some(&number))?;
+            let status = py_getitem(record, "status")?.clone();
+            let public = python_dict_object(record.as_object().and_then(|r| r.get("public")))?;
             local_versions.insert(
-                local_number.to_string(),
+                number,
                 json!({
-                    "nonce": record.get("nonce").cloned().unwrap_or(Value::Null),
-                    "ciphertext": record.get("ciphertext").cloned().unwrap_or(Value::Null),
-                    "created_at": existing_created_at,
-                    "status": record.get("status").cloned().unwrap_or(Value::Null),
-                    "public": record.get("public").and_then(Value::as_object).cloned().unwrap_or_default(),
-                    "shared_env": env_id, "generation": generation, "version_id": version_id,
+                    "nonce": nonce, "ciphertext": ciphertext, "created_at": created_at,
+                    "status": status, "public": public, "shared_env": env_id,
+                    "generation": generation, "version_id": version_id,
                 }),
             );
         }
-        let active_version_id = entry.get("active_version").and_then(Value::as_str);
-        let mut active_number = active_version_id.and_then(|v| vindex.get(v).copied());
+        // `active_version_id = entry.get("active_version")`;
+        // `vindex.get(active_version_id) if active_version_id else None`.
+        let active_version_id = entry.as_object().and_then(|e| e.get("active_version"));
+        let mut active_number = match active_version_id {
+            Some(v) if !json_falsy(v) => py_key(v)?.and_then(|k| vindex.get(k).copied()),
+            _ => None,
+        };
         if let Some(n) = active_number
             && !local_versions.contains_key(&n.to_string())
         {
             active_number = None;
         }
-        let created_at = existing
-            .as_ref()
-            .and_then(|e| e.get("created_at"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| crate::store::iso(None));
-        // X-15 (equivalence review, round 8): Python's `secrets_doc[secret_id] = {..., "kind":
-        // entry["kind"], ...}` is direct indexing -- a `document["secrets"]` entry with no `kind`
-        // key raises an uncaught `KeyError` from INSIDE this same `for secret_id, entry in
-        // document["secrets"].items():` loop, which is the whole function's own body: nothing
-        // after the loop ever runs, so `state.write_json(VAULT_DOC, doc)` (the very last
-        // statement) never fires and the local `vault/secrets.json` is left completely untouched
-        // -- not merely this one secret. A previous version substituted `Value::Null` here
-        // instead of failing, which `Vault::list_secrets`'s `require_str_field(entry, "kind")`
-        // then turned into `state_corrupt` for the WHOLE `list_secrets` call, making every OTHER
-        // secret on the node unreadable too (a `?`-through-`get_meta`/`resolve_version`/
-        // `secret_for_trusted_use`/`values_for_trusted_scan` blast radius, not just the one
-        // malformed entry) -- the same "representational failure widens the blast radius" mistake
-        // PORTING.md §3d exists to name, just discovered on the WRITE side instead of a read-side
-        // per-item loop. Propagating the error here, before any `secrets_doc.insert` for this
-        // entry and before the function's own trailing `state.write_json`, reproduces Python's
-        // exact scope: the whole derive aborts and commits nothing, matching a real `KeyError`.
-        // Reachable only through a corrupted `team/<env>/snapshots/N.json` (a state file, untrusted
-        // per PORTING.md §4) -- NOT through a signed peer op, since `_validate_secret_put_version`
-        // (`team/commit.py`) pins `op["kind"]` to `SECRET_KINDS` before any commit can carry one.
-        let kind = entry
-            .get("kind")
-            .cloned()
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("team_derive_vault_kind"))?;
-        secrets_doc.insert(
-            secret_id.clone(),
+        // X-15: `entry["kind"]` is a direct subscript; a missing one aborts
+        // the whole derive before anything is written.
+        let kind = py_getitem(entry, "kind")?.clone();
+        let created_at = local_created_at(&secrets_doc, secret_id, None)?;
+        py_setitem(
+            &mut secrets_doc,
+            &json!(secret_id),
             json!({
                 "project": project, "environment": environment,
                 "kind": kind,
@@ -1951,23 +1947,16 @@ fn derive_vault(
                 "versions": local_versions,
                 "shared_env": env_id,
             }),
-        );
+        )?;
     }
-    // Finding H-R5-7 (continued): only write `secrets_doc` back when the
-    // loop above actually ran (`!secrets.is_empty()`, matching every real
-    // mutation Python's own loop could have made), or when `doc["secrets"]`
-    // was genuinely absent to begin with (matching `setdefault`'s own
-    // `{}`-insertion side effect even with an empty loop) -- otherwise a
-    // PRESENT `doc["secrets"]` (well-formed or not) is left completely
-    // untouched, exactly like Python's `setdefault` returning the existing
-    // reference and nothing ever mutating it.
-    if !secrets.is_empty() || secrets_was_absent {
-        doc.insert("secrets".into(), Value::Object(secrets_doc));
-    }
+    doc.insert("secrets".into(), secrets_doc);
     state.write_json(vault::VAULT_DOC, &Value::Object(doc))?;
     Ok(())
 }
 
+/// Port of `_derive_dek_generations`: `document["dek"]["generations"]
+/// .items()`, `generation.get("wraps", {})`, `wraps.get(fp)` -- each with
+/// Python's own failure for a wrong shape.
 fn derive_dek_generations(
     document: &Map<String, Value>,
     state: &StateDir,
@@ -1976,21 +1965,14 @@ fn derive_dek_generations(
     env_id: &str,
 ) -> Result<()> {
     let fp = device.fingerprint()?;
-    let generations = document
-        .get("dek")
-        .and_then(Value::as_object)
-        .and_then(|d| d.get("generations"))
-        .and_then(Value::as_object);
-    let generations = match generations {
-        Some(g) => g,
-        None => return Ok(()),
-    };
+    let generations = py_getitem(py_getitem_map(document, "dek")?, "generations")?
+        .as_object()
+        .ok_or_else(doc_corrupt)?;
     for (gen_id, generation) in generations {
-        let my_wrap = generation
-            .as_object()
-            .and_then(|g| g.get("wraps"))
-            .and_then(Value::as_object)
-            .and_then(|w| w.get(&fp));
+        let my_wrap = match py_dict_get_raw(generation, "wraps")? {
+            None => None,
+            Some(wraps) => py_dict_get_raw(wraps, &fp)?.filter(|w| !w.is_null()),
+        };
         let my_wrap = match my_wrap {
             Some(w) => w,
             None => continue,
@@ -2001,7 +1983,8 @@ fn derive_dek_generations(
         }
         let dek = match envelope::unwrap_dek(my_wrap, env_id, gen_id, device) {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(error) if error.is(ErrorClass::InvalidInput) => continue,
+            Err(error) => return Err(error),
         };
         let wrapped = kms.wrap(&dek)?;
         state.write_json(&local_path, &wrapped.to_dict())?;
@@ -2035,10 +2018,12 @@ pub fn derive_local(
         .document
         .as_object()
         .ok_or_else(|| Error::state("state_corrupt").with_detail("team_document"))?;
-    let env_id = document
-        .get("env_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
+    // `env_id = document["env_id"]`. A non-string value (reachable only from
+    // a hand-edited snapshot `document`) is not representable in the
+    // string paths below and is refused here.
+    let env_id = py_getitem_map(document, "env_id")?
+        .as_str()
+        .ok_or_else(doc_corrupt)?
         .to_string();
     let version_index = version_index_from_order(&fold_result.version_order)?;
     {
