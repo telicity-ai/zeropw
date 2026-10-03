@@ -1941,12 +1941,16 @@ fn build_tls_connector(
     use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
     use openssl::x509::verify::X509VerifyFlags;
 
-    // CPython 3.12's `_DEFAULT_CIPHERS` used by `create_default_context`.
-    // TLS 1.3 ciphers are provider defaults on both paths and are not
-    // controlled by this pre-1.3 cipher-list API.
+    // CPython 3.12's `PY_SSL_DEFAULT_CIPHER_STRING` (`Modules/_ssl.c`), which
+    // every `SSLContext` -- and so `create_default_context` -- starts with.
+    // Measured against CPython 3.12.14 / OpenSSL 3.0.13: `set_ciphers` with
+    // this string yields exactly `create_default_context().get_ciphers()`
+    // (17 suites, same order). The previous string here (the pre-3.10
+    // `_DEFAULT_CIPHERS`) also offered 23 suites CPython does not (SHA-1
+    // CBC, CCM, CAMELLIA, DHE-CHACHA20). TLS 1.3 ciphers are provider
+    // defaults on both paths and are not controlled by this list.
     const PYTHON_DEFAULT_CIPHERS: &str = "@SECLEVEL=2:ECDH+AESGCM:ECDH+CHACHA20:\
-        ECDH+AES:ECDH+CAMELLIA:DHE+AESGCM:DHE+CHACHA20:DHE+AES:\
-        DHE+CAMELLIA:!aNULL:!eNULL:!MD5:!DSS";
+        ECDH+AES:DHE+AES:!aNULL:!eNULL:!aDSS:!SHA1:!AESCCM";
 
     let mut builder = SslConnector::builder(SslMethod::tls_client())
         .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
