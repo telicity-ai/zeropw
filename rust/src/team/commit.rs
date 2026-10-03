@@ -179,6 +179,29 @@ pub(crate) fn uncaught_builtin(exception: &'static str) -> Error {
     Error::state("team_uncaught_exception").with_detail(exception)
 }
 
+/// Whether a [`Commit::from_dict`] error stands for Python's LATER
+/// `canonical_json` `TypeError` (an op with a non-string key): Python's
+/// `from_dict` itself succeeded, so a caller that inspects the commit before
+/// hashing it (`_handle_commit`'s env-id check) still runs first.
+pub(crate) fn raises_only_when_canonicalized(error: &Error) -> bool {
+    error.reason == "team_uncaught_exception" && error.detail == "TypeError"
+}
+
+/// `int(value)` for a decoded commit field (`author_seq`, a `seen` value):
+/// CPython's grammar and unbounded precision ([`PyInt::coerce_from_json`]);
+/// `ValueError`/`TypeError` are `commit_malformed` (caught by `from_dict`),
+/// while `int(float("inf"))`'s `OverflowError` -- a JSON literal such as
+/// `1e400` decodes to infinity -- escapes `from_dict` uncaught.
+fn python_int_field(value: &Value) -> Result<PyInt> {
+    if let Value::Number(n) = value
+        && pyjson::is_float_literal(n.as_str())
+        && n.as_str().parse::<f64>().is_ok_and(f64::is_infinite)
+    {
+        return Err(uncaught_builtin("OverflowError"));
+    }
+    PyInt::coerce_from_json(value).ok_or_else(|| Error::invalid_input("commit_malformed"))
+}
+
 /// CPython 3.12 `int(str)` for one `Hlc` half: the canonical grammar
 /// (`crate::pystr::int_from_str_decimal_limited`, PORTING.md §3b --
 /// `int()`-specific whitespace, sign, `_` separators, Unicode `Nd` digits and
@@ -390,15 +413,45 @@ impl Commit {
     pub fn from_dict(data: &Value) -> Result<Commit> {
         let bad = || Error::invalid_input("commit_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
+        // `ops = tuple(dict(op) for op in data["ops"])` runs before every
+        // other field. `data["ops"]` may be any iterable (a string yields
+        // its characters, a dict its keys -- so `""`/`{}` are an empty
+        // tuple), and each element goes through `dict(...)`; every failure
+        // there is a caught `TypeError`/`ValueError`.
+        //
+        // Finding H-R3-3: a hashable non-string pair key is kept by
+        // `dict()`, so `from_dict` still succeeds in Python once the other
+        // fields parse; the `TypeError` comes later, from every
+        // `canonical_json`/`hash` of the commit. It is reported after the
+        // remaining fields as [`uncaught_builtin`] (see
+        // [`raises_only_when_canonicalized`]) rather than `commit_malformed`.
+        let raw_ops: Vec<Value> = match obj.get("ops").ok_or_else(bad)? {
+            Value::Array(items) => items.clone(),
+            Value::String(text) => text.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => return Err(bad()),
+        };
+        let mut non_string_op_key = false;
+        let mut ops: Vec<Value> = Vec::with_capacity(raw_ops.len());
+        for op in &raw_ops {
+            let pairs = python_dict_pairs_checked(op).map_err(|_| bad())?;
+            let mut out = Map::new();
+            for (k, v) in pairs {
+                match k {
+                    Value::String(s) => {
+                        out.insert(s, v);
+                    }
+                    _ => non_string_op_key = true,
+                }
+            }
+            ops.push(Value::Object(out));
+        }
         let str_field =
             |key: &str| -> Result<String> { obj.get(key).map(python_str_coerce).ok_or_else(bad) };
         let format = str_field("format")?;
         let env_id = str_field("env_id")?;
         let author = str_field("author")?;
-        let author_seq = obj
-            .get("author_seq")
-            .and_then(PyInt::coerce_from_json)
-            .ok_or_else(bad)?;
+        let author_seq = python_int_field(obj.get("author_seq").ok_or_else(bad)?)?;
         let hlc = str_field("hlc")?;
         // `dict(data.get("seen") or {})`: a *falsy* `seen` (absent, `null`,
         // `0`, `""`, `[]`, `{}`, `false`) is treated as `{}` with no error;
@@ -443,70 +496,12 @@ impl Commit {
                 let mut out = BTreeMap::new();
                 for (k, v) in merged {
                     let key = python_str_coerce(&k);
-                    let n = PyInt::coerce_from_json(&v).ok_or_else(bad)?;
+                    let n = python_int_field(&v)?;
                     out.insert(key, n);
                 }
                 out
             }
         };
-        // `tuple(dict(op) for op in data["ops"])`: each element of `ops`
-        // goes through `dict(op)`, which accepts a mapping directly OR any
-        // iterable of two-element pairs (e.g. an on-disk op reshaped as
-        // `[["op", "settings.update"], ["sync_interval_seconds", 1]]`) --
-        // the same normalisation `seen` already gets, via
-        // [`python_dict_pairs`], rather than requiring every element
-        // already be a literal JSON object (finding H-R2-5).
-        //
-        // Finding H-R3-3 (correcting H-R2-5's own reasoning): a pair whose
-        // key is not a JSON string, e.g.
-        // `[["op", "settings.update"], [1, "x"]]`, is NOT actually inert in
-        // Python just because no op handler looks it up by name --
-        // `dict()` keeps the `1` key exactly like any other, and
-        // `Commit.canonical_json`'s `json.dumps(..., sort_keys=True)` (the
-        // exact bytes that get signed/hashed) recurses into `ops` and, to
-        // sort THIS op's dict keys, compares `1 < "op"` -- an uncaught
-        // `TypeError: '<' not supported between instances of 'int' and
-        // 'str'` that propagates out of `canonical_json`, `hash`,
-        // `sign_commit` and `receive_commit` entirely. A commit whose `ops`
-        // holds such an entry can therefore never actually be signed,
-        // hashed, or accepted by any real Python caller -- the previous
-        // round's "drop the bad-keyed pair and keep the rest of the op"
-        // fix was itself wrong: it made this port ACCEPT and FOLD a signed
-        // commit Python can never even construct, let alone verify. Reject
-        // the whole commit as malformed here instead, matching "every real
-        // caller's canonicalization step raises" (PORTING.md §3.5; see
-        // `rust/DEVIATIONS.md`).
-        //
-        // `dict(op)` itself accepts a hashable non-string key, so
-        // `from_dict` still succeeds in Python once every other field
-        // parses; the `TypeError` comes later, from every `canonical_json`/
-        // `hash` of the commit. That later failure is reported here, after
-        // the remaining fields, as [`uncaught_builtin`] rather than
-        // `commit_malformed`, so a receiver drops the session the way
-        // Python's escaping `receive_commit` does instead of ignoring the
-        // message. An unhashable (list/dict) key is `dict()`'s own
-        // `TypeError`, caught as `commit_malformed`.
-        let mut non_string_op_key = false;
-        let ops: Vec<Value> = obj
-            .get("ops")
-            .and_then(Value::as_array)
-            .ok_or_else(bad)?
-            .iter()
-            .map(|op| {
-                let pairs = python_dict_pairs(op).ok_or_else(bad)?;
-                let mut out = Map::new();
-                for (k, v) in pairs {
-                    match k {
-                        Value::String(s) => {
-                            out.insert(s, v);
-                        }
-                        k if dict_key_is_hashable(&k) => non_string_op_key = true,
-                        _ => return Err(bad()),
-                    }
-                }
-                Ok(Value::Object(out))
-            })
-            .collect::<Result<_>>()?;
         let sig = str_field("sig")?;
         if non_string_op_key {
             return Err(uncaught_builtin("TypeError"));

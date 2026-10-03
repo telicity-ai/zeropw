@@ -2893,12 +2893,16 @@ impl TeamSync {
             Ok(commit) => commit,
             Err(error) if error.is(crate::errors::ErrorClass::InvalidInput) => return Ok(()),
             Err(error) => {
-                // Python's `Commit.from_dict` accepted this commit (an op
-                // with a non-string key); another environment's commit is
+                // A built-in exception escaping `Commit.from_dict` (an
+                // infinite `author_seq`/`seen` value) ends the receive loop
+                // at once. For an op with a non-string key, Python's
+                // `from_dict` succeeded: another environment's commit is
                 // ignored, and for this one `receive_commit` raises while
                 // hashing or verifying it -- before any rejected record or
                 // audit -- which ends the receive loop.
-                if commit::python_str_coerce(&message["commit"]["env_id"]) != env_id {
+                if commit::raises_only_when_canonicalized(&error)
+                    && commit::python_str_coerce(&message["commit"]["env_id"]) != env_id
+                {
                     return Ok(());
                 }
                 return Err(error);

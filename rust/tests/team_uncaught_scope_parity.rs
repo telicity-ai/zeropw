@@ -411,7 +411,8 @@ from zeropw.team import commit as C, membership as M, sync as S, transport as T
 from zeropw.team.identity import DeviceKey
 
 out = {}
-for name in ["non_string_key", "escaping_validation", "malformed", "other_env"]:
+for name in ["non_string_key", "escaping_validation", "malformed", "other_env",
+             "overflow_other_env", "empty_ops_dict"]:
     root = pathlib.Path(tempfile.mkdtemp())
     ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
     ctx.projects.create("demo", ["dev"])
@@ -438,6 +439,11 @@ for name in ["non_string_key", "escaping_validation", "malformed", "other_env"]:
         raw["env_id"] = "elsewhere"
     if name == "malformed":
         del raw["sig"]
+    if name == "overflow_other_env":
+        raw["author_seq"] = json.loads("1e400")
+        raw["env_id"] = "elsewhere"
+    if name == "empty_ops_dict":
+        raw["ops"] = {}
     peer = DeviceKey.generate()
     frames = [{"type": "COMMIT", "commit": raw}]
     class Scripted:
@@ -531,6 +537,13 @@ fn rust_session_case(name: &str) -> Value {
     if name == "malformed" {
         raw.as_object_mut().unwrap().remove("sig");
     }
+    if name == "overflow_other_env" {
+        raw["author_seq"] = serde_json::from_str("1e400").unwrap();
+        raw["env_id"] = json!("elsewhere");
+    }
+    if name == "empty_ops_dict" {
+        raw["ops"] = json!({});
+    }
     let (tx, rx) = mpsc::channel();
     let peer = DeviceKey::generate().record().unwrap();
     let fp = peer.fingerprint();
@@ -578,6 +591,8 @@ fn escaping_receive_exceptions_drop_the_session_like_python() {
         "escaping_validation",
         "malformed",
         "other_env",
+        "overflow_other_env",
+        "empty_ops_dict",
     ] {
         assert_eq!(rust_session_case(name), python[name], "{name}");
     }
@@ -585,4 +600,9 @@ fn escaping_receive_exceptions_drop_the_session_like_python() {
     assert_eq!(python["escaping_validation"]["session_open"], json!(false));
     assert_eq!(python["malformed"]["session_open"], json!(true));
     assert_eq!(python["other_env"]["session_open"], json!(true));
+    assert_eq!(python["overflow_other_env"]["session_open"], json!(false));
+    assert_eq!(
+        python["empty_ops_dict"],
+        json!({"session_open": true, "rejected": true, "audited": true})
+    );
 }
