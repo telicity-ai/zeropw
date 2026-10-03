@@ -328,6 +328,30 @@ fn random_bytes_and_bad_interpreters_fail_spawn_without_running() {
             programs.push(path);
         }
     }
+    // CPython's own spawn (`subprocess.Popen` as `RunRegistry.start` calls
+    // it) refuses every one of these files before running any text.
+    let listed: Vec<String> = programs
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let refused = python(&format!(
+        r#"
+import json, subprocess
+for path in json.loads({listed:?}):
+    try:
+        proc = subprocess.Popen([path], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, close_fds=True, start_new_session=True)
+        proc.communicate()
+        print("ran")
+    except OSError as exc:
+        print(type(exc).__name__)
+"#,
+        listed = serde_json::to_string(&listed).unwrap(),
+    ));
+    assert!(
+        refused.lines().all(|line| line != "ran") && refused.lines().count() == programs.len(),
+        "{refused}"
+    );
     for program in &programs {
         let done = launch(&r, &temp, program);
         assert_eq!(

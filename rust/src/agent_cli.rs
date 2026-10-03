@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -13,8 +13,12 @@ use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_HEADER_BYTES: usize = 64 * 1024;
-const MAX_CHUNK_LINE_BYTES: usize = 8192;
+/// `http.client._MAXLINE`.
+const MAX_LINE: usize = 65536;
+/// `http.client._MAXHEADERS`.
+const MAX_HEADERS: usize = 100;
+/// `http.client._MAXINTERIMRESPONSES`.
+const MAX_INTERIM_RESPONSES: usize = 100;
 
 /// `build_parser()`: plain `argparse` (abbreviations allowed, standard
 /// `prog: error:` reporting), with the same tree and help text as
@@ -148,54 +152,126 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
     Ok(out)
 }
 
-fn payload(args: &Args) -> Result<Value, Value> {
+/// A `build_payload` value: argument text (which may hold
+/// `surrogateescape`d bytes) or file text, a list, or the header dict.
+enum Field {
+    Arg(String),
+    File(String),
+    Args(Vec<String>),
+    Headers(Vec<(String, String)>),
+}
+
+/// `json.dumps(build_payload(args, extra_argv))`: default separators,
+/// `ensure_ascii`, insertion order, and each escaped argument byte written
+/// as the lone surrogate escape CPython writes.
+fn dumps_payload(fields: &[(&str, Field)], esc: &crate::pystr::SurrogateEscape) -> String {
+    let text = |value: &str, argument: bool| {
+        let dumped = pyjson::dumps(&Value::String(value.to_owned()), DumpOptions::plain())
+            .unwrap_or_default();
+        if argument {
+            esc.json_text(&dumped)
+        } else {
+            dumped
+        }
+    };
+    let entries: Vec<String> = fields
+        .iter()
+        .map(|(key, field)| {
+            let value = match field {
+                Field::Arg(value) => text(value, true),
+                Field::File(value) => text(value, false),
+                Field::Args(items) => format!(
+                    "[{}]",
+                    items
+                        .iter()
+                        .map(|item| text(item, true))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Field::Headers(pairs) => format!(
+                    "{{{}}}",
+                    pairs
+                        .iter()
+                        .map(|(name, value)| format!("{}: {}", text(name, true), text(value, true)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            format!("{}: {value}", text(key, false))
+        })
+        .collect();
+    format!("{{{}}}", entries.join(", "))
+}
+
+/// `build_payload(args, extra_argv)`; `Err` is `main`'s `invalid_arguments`
+/// report for the `OSError`/`ValueError` it raises.
+fn payload(
+    args: &Args,
+    esc: &crate::pystr::SurrogateEscape,
+) -> Result<Vec<(&'static str, Field)>, Value> {
+    let arg = |key: &str| Field::Arg(args.get(key).unwrap_or_default().to_owned());
+    let invalid =
+        |detail: &str| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":detail});
+    let mut fields = Vec::new();
     match args.command.as_str() {
-        "list-connections" => Ok(json!({})),
-        "status" | "cancel" => Ok(json!({"run_id": args.get("run")})),
+        "status" | "cancel" => fields.push(("run_id", arg("run"))),
         "exec" => {
-            let mut v = json!({"connection": args.get("connection"), "argv": args.extra});
-            if let Some(id) = args.get("request-id").filter(|s| !s.is_empty()) {
-                v["request_id"] = json!(id);
+            fields.push(("connection", arg("connection")));
+            fields.push(("argv", Field::Args(args.extra.clone())));
+            if args.get("request-id").is_some_and(|s| !s.is_empty()) {
+                fields.push(("request_id", arg("request-id")));
             }
-            Ok(v)
         }
         "request" => {
-            let mut v = json!({"connection": args.get("connection"), "method": args.get("method").unwrap_or("").to_uppercase(), "path": args.get("path")});
-            let mut headers = serde_json::Map::new();
-            if let Some(items) = args.options.get("header") {
-                for item in items {
-                    let Some((name, value)) = item.split_once(':') else {
-                        return Err(
-                            json!({"error":"InvalidInput","reason":"invalid_arguments","detail":"ValueError"}),
-                        );
-                    };
-                    if name.trim().is_empty() {
-                        return Err(
-                            json!({"error":"InvalidInput","reason":"invalid_arguments","detail":"ValueError"}),
-                        );
-                    }
-                    headers.insert(name.trim().to_owned(), json!(value.trim()));
+            fields.push(("connection", arg("connection")));
+            fields.push((
+                "method",
+                Field::Arg(args.get("method").unwrap_or_default().to_uppercase()),
+            ));
+            fields.push(("path", arg("path")));
+            // `_parse_header`: `partition(":")`, then `str.strip()`; a later
+            // duplicate name replaces the value in the first one's place.
+            let mut headers: Vec<(String, String)> = Vec::new();
+            for item in args.options.get("header").into_iter().flatten() {
+                let Some((name, value)) = item.split_once(':') else {
+                    return Err(invalid("ValueError"));
+                };
+                let name = name.trim_matches(crate::pystr::is_space);
+                if name.is_empty() {
+                    return Err(invalid("ValueError"));
+                }
+                let value = value.trim_matches(crate::pystr::is_space).to_owned();
+                match headers.iter_mut().find(|(n, _)| n == name) {
+                    Some(entry) => entry.1 = value,
+                    None => headers.push((name.to_owned(), value)),
                 }
             }
             if !headers.is_empty() {
-                v["headers"] = Value::Object(headers);
+                fields.push(("headers", Field::Headers(headers)));
             }
             if let Some(path) = args.get("body-file") {
-                let raw = std::fs::read(path).map_err(|e| json!({"error":"InvalidInput","reason":"invalid_arguments","detail":crate::pystr::os_error_class(&e)}))?;
-                match String::from_utf8(raw.clone()) {
-                    Ok(s) => v["body"] = json!(s),
-                    Err(_) => v["body_base64"] = json!(pybase64::b64encode(&raw)),
+                // `open(path, "rb")`: the path's original bytes.
+                use std::os::unix::ffi::OsStrExt;
+                let path = std::ffi::OsStr::from_bytes(&esc.encode(path)).to_owned();
+                let raw =
+                    std::fs::read(&path).map_err(|e| invalid(crate::pystr::os_error_class(&e)))?;
+                match String::from_utf8(raw) {
+                    Ok(text) => fields.push(("body", Field::File(text))),
+                    Err(error) => fields.push((
+                        "body_base64",
+                        Field::File(pybase64::b64encode(error.as_bytes())),
+                    )),
                 }
-            } else if let Some(body) = args.get("body") {
-                v["body"] = json!(body);
+            } else if args.get("body").is_some() {
+                fields.push(("body", arg("body")));
             }
-            if let Some(id) = args.get("request-id").filter(|s| !s.is_empty()) {
-                v["request_id"] = json!(id);
+            if args.get("request-id").is_some_and(|s| !s.is_empty()) {
+                fields.push(("request_id", arg("request-id")));
             }
-            Ok(v)
         }
-        _ => unreachable!(),
+        _ => {}
     }
+    Ok(fields)
 }
 
 fn emit(v: &Value, stderr: bool) {
@@ -503,13 +579,16 @@ fn route(
     }
 }
 
-/// `HTTPConnection._tunnel`: `CONNECT` and a `200` answer before TLS.
+/// `HTTPConnection._tunnel`: `CONNECT` and a `200` answer before TLS.  It
+/// runs inside `h.request`, so an `OSError` is `URLError(err)` (`detail` is
+/// `str(err)`), while an `http.client.HTTPException` escapes `call_tool`.
 fn tunnel(
     stream: &mut TcpStream,
     target: &str,
     proxy_authorization: Option<&str>,
-) -> Result<(), (u16, Value)> {
-    let (host, port) = host_port(target, 443).map_err(gateway_unreachable)?;
+) -> Result<(), Failure> {
+    let (host, port) =
+        host_port(target, 443).map_err(|name| Failure::Caught(gateway_unreachable(name)))?;
     let wrapped = if host.contains(':') {
         format!("[{host}]")
     } else {
@@ -522,97 +601,145 @@ fn tunnel(
     request.push_str(&format!("Host: {host}:{port}\r\n\r\n"));
     stream
         .write_all(request.as_bytes())
-        .map_err(|e| url_error(&e))?;
-    let status_line = read_line(stream, MAX_HEADER_BYTES)
-        .map_err(|_| gateway_unreachable("RemoteDisconnected"))?;
-    let status_text = String::from_utf8_lossy(&status_line);
-    let mut fields = status_text.trim_end().splitn(3, ' ');
-    let _version = fields.next();
-    let code = fields.next().unwrap_or("");
-    let message = fields.next().unwrap_or("").trim();
-    loop {
-        let line = read_line(stream, MAX_HEADER_BYTES)
-            .map_err(|_| gateway_unreachable("RemoteDisconnected"))?;
-        if line == b"\r\n" {
-            break;
-        }
-    }
-    if code != "200" {
-        return Err(gateway_unreachable(
+        .map_err(|e| Failure::Caught(url_error(&e)))?;
+    let mut reader = BufReader::new(stream);
+    let url_error_of = |failure: HttpFailure| match failure {
+        HttpFailure::Os(error) => Failure::Caught(url_error(&error)),
+        HttpFailure::Disconnected => Failure::Caught(gateway_unreachable(
+            "Remote end closed connection without response",
+        )),
+        HttpFailure::Value => Failure::Caught(gateway_unreachable("ValueError")),
+        HttpFailure::Http(name) => Failure::Escaped(name),
+    };
+    let (_, code, message) = read_status(&mut reader).map_err(url_error_of)?;
+    read_header_lines(&mut reader).map_err(url_error_of)?;
+    if code != 200 {
+        let message = message.trim_matches(crate::pystr::is_space);
+        return Err(Failure::Caught(gateway_unreachable(
             &format!("Tunnel connection failed: {code} {message}")
                 .chars()
                 .take(200)
                 .collect::<String>(),
-        ));
+        )));
     }
     Ok(())
 }
 
 /// Port of `agent_cli.call_tool`; refuses redirects and caps the response body.
+/// An `http.client.HTTPException` that CPython lets escape `call_tool`
+/// (a traceback, exit status 1) is reported as `gateway_unreachable` with
+/// the exception's class name (PORTING.md §3.5).
 pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u16, Value) {
+    let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
+    call_tool_body(base_url, token, tool, &body)
+}
+
+/// [`call_tool`] with the request body already serialized.
+fn call_tool_body(base_url: &str, token: &str, tool: &str, body: &str) -> (u16, Value) {
+    match call_tool_outcome(base_url, token, tool, body) {
+        Ok(result) => result,
+        Err(Failure::Caught(result)) => result,
+        Err(Failure::Escaped(name)) => gateway_unreachable(name),
+    }
+}
+
+/// How `call_tool` ends without a response: a value it returns (an
+/// `OSError`/`ValueError`/`URLError` it catches) or an exception it lets
+/// escape.
+#[derive(Debug)]
+enum Failure {
+    Caught((u16, Value)),
+    Escaped(&'static str),
+}
+
+fn call_tool_outcome(
+    base_url: &str,
+    token: &str,
+    tool: &str,
+    body: &str,
+) -> Result<(u16, Value), Failure> {
+    let unreachable = |detail: &str| Failure::Caught(gateway_unreachable(detail));
     let url = format!("{}/v1/tools/{tool}", base_url.trim_end_matches('/'));
     let Some((tls, host, selector)) = request_target(&url) else {
-        return gateway_unreachable("ValueError");
+        return Err(unreachable("ValueError"));
     };
     let Some(host) = host else {
-        return gateway_unreachable("no host given");
+        return Err(unreachable("no host given"));
     };
-    if token.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
-        return gateway_unreachable("ValueError");
-    }
-    // http.client refuses control characters and spaces in the host and
-    // request target (`InvalidURL`, which urllib does not catch).
-    if host
-        .bytes()
-        .chain(selector.bytes())
-        .any(|b| b <= b' ' || b == 0x7f)
-    {
-        return gateway_unreachable("InvalidURL");
-    }
     let url_without_fragment = url.rsplit_once('#').map_or(url.as_str(), |(u, _)| u);
-    let route = match route(url_without_fragment, tls, Some(&host), &selector) {
-        Ok(route) => route,
-        Err(failure) => return failure,
+    let route =
+        route(url_without_fragment, tls, Some(&host), &selector).map_err(Failure::Caught)?;
+    // `HTTPConnection(host)`: `_get_hostport` and `_validate_host`
+    // (`InvalidURL`, a `ValueError`).
+    let (connect_host, port) =
+        host_port(&route.connect, if route.tls { 443 } else { 80 }).map_err(unreachable)?;
+    let disallowed = |text: &str| text.chars().any(|c| c <= ' ' || c == '\x7f');
+    if disallowed(&connect_host) {
+        return Err(unreachable("InvalidURL"));
+    }
+    // `putrequest`: `_validate_path`, then the ASCII request line.
+    if disallowed(&route.selector) {
+        return Err(unreachable("InvalidURL"));
+    }
+    if !route.selector.is_ascii() {
+        return Err(unreachable("UnicodeEncodeError"));
+    }
+    // `putheader`: each value encoded as Latin-1 (`UnicodeEncodeError`), then
+    // `_is_illegal_header_value` (`ValueError`), in the order urllib sends
+    // them, all before the connection is opened.
+    let latin1_value = |value: &str| -> Result<Vec<u8>, Failure> {
+        let bytes: Vec<u8> = value
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).map_err(|_| unreachable("UnicodeEncodeError")))
+            .collect::<Result<_, _>>()?;
+        let illegal = bytes.iter().enumerate().any(|(i, b)| match b {
+            b'\n' => !matches!(bytes.get(i + 1), Some(b' ' | b'\t')),
+            b'\r' => !matches!(bytes.get(i + 1), Some(b' ' | b'\t' | b'\n')),
+            _ => false,
+        });
+        if illegal {
+            return Err(unreachable("ValueError"));
+        }
+        Ok(bytes)
     };
-    let (connect_host, port) = match host_port(&route.connect, if route.tls { 443 } else { 80 }) {
-        Ok(target) => target,
-        Err(name) => return gateway_unreachable(name),
-    };
+    let host_header = latin1_value(&host)?;
+    let authorization = latin1_value(&format!("Bearer {token}"))?;
+    // `socket.create_connection` resolves the IDNA-encoded host.
+    let resolve_host =
+        crate::pyidna::encode(&connect_host).map_err(|_| unreachable("UnicodeError"))?;
     let timeout = Duration::from_secs(120);
-    let mut stream = match create_connection(&connect_host, port, timeout) {
-        Ok(s) => s,
-        Err(error) => return url_error(&error),
-    };
+    let mut stream = create_connection(&resolve_host, port, timeout)
+        .map_err(|error| Failure::Caught(url_error(&error)))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     let server_name = match &route.tunnel {
         Some(target) => {
-            if let Err(failure) = tunnel(&mut stream, target, route.proxy_authorization.as_deref())
-            {
-                return failure;
-            }
-            match host_port(target, 443) {
-                Ok((name, _)) => name,
-                Err(name) => return gateway_unreachable(name),
-            }
+            tunnel(&mut stream, target, route.proxy_authorization.as_deref())?;
+            host_port(target, 443).map_err(unreachable)?.0
         }
         None => connect_host.clone(),
     };
-    let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
     // `urllib`'s request processors add Content-Length, Host and User-Agent
     // as unredirected headers before the Request's three explicit headers.
     // `http.client.putrequest` emits Accept-Encoding first; `do_open` appends
     // Connection last.  Keep that wire order as well as the values: header
     // order and duplicates are observable to an HTTP peer.
-    let proxy_header = match (&route.proxy_authorization, &route.tunnel) {
-        (Some(value), None) => format!("Proxy-Authorization: {value}\r\n"),
-        _ => String::new(),
-    };
-    let request = format!(
-        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: {host}\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\n{proxy_header}Connection: close\r\n\r\n{body}",
+    let mut request = format!(
+        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: ",
         route.selector,
         body.len()
-    );
+    )
+    .into_bytes();
+    request.extend_from_slice(&host_header);
+    request.extend_from_slice(b"\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: ");
+    request.extend_from_slice(&authorization);
+    request
+        .extend_from_slice(b"\r\nContent-Type: application/json\r\nAccept: application/json\r\n");
+    if let (Some(value), None) = (&route.proxy_authorization, &route.tunnel) {
+        request.extend_from_slice(format!("Proxy-Authorization: {value}\r\n").as_bytes());
+    }
+    request.extend_from_slice(b"Connection: close\r\n\r\n");
+    request.extend_from_slice(body.as_bytes());
     if route.tls {
         // TLS validation is supplied by rustls and the host's certificate store.
         let roots = rustls_native_certs::load_native_certs();
@@ -623,219 +750,427 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
         let config = rustls::ClientConfig::builder()
             .with_root_certificates(store)
             .with_no_client_auth();
-        let name = match rustls_pki_types::ServerName::try_from(server_name) {
-            Ok(n) => n,
-            Err(_) => return gateway_unreachable("InvalidURL"),
-        };
-        let connection = match rustls::ClientConnection::new(std::sync::Arc::new(config), name) {
-            Ok(c) => c,
-            Err(_) => return gateway_unreachable("SSLError"),
-        };
+        let name = rustls_pki_types::ServerName::try_from(server_name)
+            .map_err(|_| unreachable("InvalidURL"))?;
+        let connection = rustls::ClientConnection::new(std::sync::Arc::new(config), name)
+            .map_err(|_| unreachable("SSLError"))?;
         let mut io = rustls::StreamOwned::new(connection, stream);
-        if let Err(error) = io.write_all(request.as_bytes()) {
-            return url_error(&error);
-        }
-        read_response(&mut io)
+        io.write_all(&request)
+            .map_err(|error| Failure::Caught(url_error(&error)))?;
+        read_response(&mut BufReader::new(RaggedEof(io)), &url)
     } else {
         let mut io = stream;
-        if let Err(error) = io.write_all(request.as_bytes()) {
-            return url_error(&error);
-        }
-        read_response(&mut io)
+        io.write_all(&request)
+            .map_err(|error| Failure::Caught(url_error(&error)))?;
+        read_response(&mut BufReader::new(io), &url)
     }
 }
 
-fn read_line(io: &mut impl Read, limit: usize) -> io::Result<Vec<u8>> {
+/// `SSLSocket` with `suppress_ragged_eofs=True`: a TLS stream that ends
+/// without `close_notify` reads as EOF.
+struct RaggedEof<T>(T);
+
+impl<T: Read> Read for RaggedEof<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.0.read(buf) {
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(0),
+            other => other,
+        }
+    }
+}
+
+/// A failure inside `HTTPResponse`.
+#[derive(Debug)]
+enum HttpFailure {
+    /// An `OSError` from the socket.
+    Os(io::Error),
+    /// `RemoteDisconnected` (an `OSError` and a `BadStatusLine`).
+    Disconnected,
+    /// A `ValueError` (`call_tool` catches it).
+    Value,
+    /// An `http.client.HTTPException` subclass, by class name.
+    Http(&'static str),
+}
+
+impl From<io::Error> for HttpFailure {
+    fn from(error: io::Error) -> Self {
+        HttpFailure::Os(error)
+    }
+}
+
+/// `type(exc).__name__` of a socket error `call_tool` catches: a socket
+/// timeout is `TimeoutError`, anything else its `OSError` subclass.
+fn os_error_name(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => "TimeoutError",
+        _ => crate::pystr::os_error_class(error),
+    }
+}
+
+/// `fp.readline(limit)`: up to `limit` bytes, through the first `\n`.
+fn readline(reader: &mut impl BufRead, limit: usize) -> io::Result<Vec<u8>> {
     let mut line = Vec::new();
-    let mut one = [0u8; 1];
+    reader
+        .by_ref()
+        .take(limit as u64)
+        .read_until(b'\n', &mut line)?;
+    Ok(line)
+}
+
+/// `str.split(None, 2)` over a status line.
+fn split_none_2(line: &str) -> Vec<String> {
+    let is_space = crate::pystr::is_space;
+    let mut parts = Vec::new();
+    let mut rest = line.trim_start_matches(is_space);
+    while parts.len() < 2 && !rest.is_empty() {
+        let end = rest.find(is_space).unwrap_or(rest.len());
+        parts.push(rest[..end].to_owned());
+        rest = rest[end..].trim_start_matches(is_space);
+    }
+    if !rest.is_empty() {
+        parts.push(rest.to_owned());
+    }
+    parts
+}
+
+fn latin1(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| char::from(*b)).collect()
+}
+
+/// `HTTPResponse._read_status()`: `(version, status, reason)`.
+fn read_status(reader: &mut impl BufRead) -> Result<(String, i128, String), HttpFailure> {
+    let raw = readline(reader, MAX_LINE + 1)?;
+    if raw.len() > MAX_LINE {
+        return Err(HttpFailure::Http("LineTooLong"));
+    }
+    if raw.is_empty() {
+        return Err(HttpFailure::Disconnected);
+    }
+    let line = latin1(&raw);
+    let parts = split_none_2(&line);
+    let version = if parts.len() >= 2 {
+        parts[0].clone()
+    } else {
+        String::new()
+    };
+    if !version.starts_with("HTTP/") {
+        return Err(HttpFailure::Http("BadStatusLine"));
+    }
+    let status = crate::pystr::int_from_str(&parts[1])
+        .filter(|status| (100..=999).contains(status))
+        .ok_or(HttpFailure::Http("BadStatusLine"))?;
+    Ok((version, status, parts.get(2).cloned().unwrap_or_default()))
+}
+
+/// `http.client._read_headers`: the raw header lines, terminator included.
+fn read_header_lines(reader: &mut impl BufRead) -> Result<Vec<Vec<u8>>, HttpFailure> {
+    let mut lines = Vec::new();
     loop {
-        if line.len() >= limit {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "LineTooLong"));
+        let line = readline(reader, MAX_LINE + 1)?;
+        if line.len() > MAX_LINE {
+            return Err(HttpFailure::Http("LineTooLong"));
         }
-        io.read_exact(&mut one)?;
-        line.push(one[0]);
-        if line.ends_with(b"\r\n") {
-            return Ok(line);
+        let end = line.is_empty() || line == b"\r\n" || line == b"\n";
+        lines.push(line);
+        if lines.len() > MAX_HEADERS {
+            return Err(HttpFailure::Http("HTTPException"));
+        }
+        if end {
+            return Ok(lines);
         }
     }
 }
 
-fn response_bytes(io: &mut impl Read) -> io::Result<(u16, Vec<u8>)> {
-    let mut interim = 0;
-    loop {
-        let status_line = read_line(io, MAX_HEADER_BYTES).map_err(|error| {
-            if error.kind() == io::ErrorKind::UnexpectedEof {
-                io::Error::new(io::ErrorKind::ConnectionAborted, "RemoteDisconnected")
-            } else {
-                error
-            }
-        })?;
-        let status_text = std::str::from_utf8(&status_line)
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-        let mut fields = status_text.split_whitespace();
-        if !fields.next().is_some_and(|v| v.starts_with("HTTP/")) {
-            return Err(io::Error::from(io::ErrorKind::InvalidData));
+/// `email.parser.Parser().parsestr(...)` over the header lines (compat32,
+/// as `http.client.parse_headers` runs it): `(name, value)` pairs in order.
+/// The text is re-split on `\r\n`, `\r` and `\n`; collection stops at the
+/// first line that is not a header, continuation or `From ` line; a
+/// continuation before any header and a name-less `:value` line are
+/// dropped; a `From ` line is an envelope line, never a header.
+fn parse_header_lines(lines: &[Vec<u8>]) -> Vec<(String, String)> {
+    let text = latin1(&lines.concat());
+    let mut logical = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        current.push(c);
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            current.push('\n');
+            chars.next();
         }
-        let status = fields
-            .next()
-            .and_then(|v| v.parse::<u16>().ok())
-            .filter(|v| (100..=599).contains(v))
-            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-        let mut header_bytes = status_line.len();
-        let mut content_length = None;
-        let mut transfer_encoding = String::new();
-        loop {
-            let line = read_line(io, MAX_HEADER_BYTES - header_bytes)?;
-            header_bytes += line.len();
-            if line == b"\r\n" {
-                break;
-            }
-            let header = std::str::from_utf8(&line)
-                .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-            let (name, value) = header
-                .split_once(':')
-                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-            let value = value.trim();
-            if name.eq_ignore_ascii_case("content-length") {
-                let length = value
-                    .parse::<usize>()
-                    .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-                if content_length.is_some_and(|previous| previous != length) {
-                    return Err(io::Error::from(io::ErrorKind::InvalidData));
-                }
-                content_length = Some(length);
-            } else if name.eq_ignore_ascii_case("transfer-encoding") {
-                transfer_encoding.push_str(value);
-                transfer_encoding.push(',');
-            }
+        if c == '\r' || c == '\n' {
+            logical.push(std::mem::take(&mut current));
         }
-        if status < 200 {
-            interim += 1;
-            if interim > 5 {
-                return Err(io::Error::from(io::ErrorKind::InvalidData));
+    }
+    if !current.is_empty() {
+        logical.push(current);
+    }
+    // `headerRE = ^(From |[\041-\071\073-\176]*:|[\t ])`.
+    let header_re = |line: &str| {
+        line.starts_with("From ")
+            || line.starts_with([' ', '\t'])
+            || line
+                .find(|c: char| !matches!(c as u32, 0x21..=0x39 | 0x3B..=0x7E))
+                .is_some_and(|i| line[i..].starts_with(':'))
+    };
+    let recognized: Vec<&String> = logical.iter().take_while(|l| header_re(l)).collect();
+    let mut headers = Vec::new();
+    let mut pending: Option<(String, Vec<String>)> = None;
+    let finish = |pending: Option<(String, Vec<String>)>, headers: &mut Vec<(String, String)>| {
+        if let Some((name, source)) = pending {
+            // `Compat32.header_source_parse`.
+            let joined = source.concat();
+            let value = joined.split_once(':').map_or("", |(_, v)| v);
+            let value = value
+                .trim_start_matches([' ', '\t', '\r', '\n'])
+                .trim_end_matches(['\r', '\n']);
+            headers.push((name, value.to_owned()));
+        }
+    };
+    let count = recognized.len();
+    for (index, line) in recognized.into_iter().enumerate() {
+        if line.starts_with([' ', '\t']) {
+            if let Some((_, source)) = pending.as_mut() {
+                source.push(line.clone());
             }
             continue;
         }
-        if status == 204 || status == 304 {
-            return Ok((status, Vec::new()));
-        }
-        let chunked = transfer_encoding
-            .split(',')
-            .map(str::trim)
-            .any(|v| v.eq_ignore_ascii_case("chunked"));
-        let body = if chunked {
-            read_chunked(io)?
-        } else {
-            let limit = content_length
-                .unwrap_or(MAX_RESPONSE_BYTES)
-                .min(MAX_RESPONSE_BYTES);
-            let mut body = Vec::new();
-            io.take(limit as u64).read_to_end(&mut body)?;
-            if content_length
-                .is_some_and(|length| length <= MAX_RESPONSE_BYTES && body.len() != length)
-            {
-                return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        finish(pending.take(), &mut headers);
+        if line.starts_with("From ") {
+            if index + 1 == count {
+                break;
             }
-            body
-        };
-        return Ok((status, body));
+            continue;
+        }
+        match line.find(':') {
+            Some(0) | None => {}
+            Some(i) => pending = Some((line[..i].to_owned(), vec![line.clone()])),
+        }
     }
+    finish(pending, &mut headers);
+    headers
 }
 
-fn read_chunked(io: &mut impl Read) -> io::Result<Vec<u8>> {
-    let mut body = Vec::new();
+/// `HTTPMessage.get(name)`: the first value, names compared case-insensitively.
+fn header_get<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(n, _)| n.to_lowercase() == name)
+        .map(|(_, v)| v.as_str())
+}
+
+/// `HTTPResponse` after `begin()`.
+struct Response {
+    status: i128,
+    headers: Vec<(String, String)>,
+    chunked: bool,
+    length: Option<i128>,
+}
+
+/// `HTTPResponse.begin()`.
+fn begin(reader: &mut impl BufRead) -> Result<Response, HttpFailure> {
+    let mut last = None;
+    for _ in 0..MAX_INTERIM_RESPONSES {
+        let (version, status, _) = read_status(reader)?;
+        if status != 100 {
+            last = Some((version, status));
+            break;
+        }
+        read_header_lines(reader)?;
+    }
+    let Some((version, status)) = last else {
+        return Err(HttpFailure::Http("HTTPException"));
+    };
+    if !(version == "HTTP/1.0" || version == "HTTP/0.9" || version.starts_with("HTTP/1.")) {
+        return Err(HttpFailure::Http("UnknownProtocol"));
+    }
+    let headers = parse_header_lines(&read_header_lines(reader)?);
+    let chunked = header_get(&headers, "transfer-encoding")
+        .is_some_and(|te| !te.is_empty() && te.to_lowercase() == "chunked");
+    let mut length = match header_get(&headers, "content-length") {
+        Some(text) if !text.is_empty() && !chunked => {
+            crate::pystr::int_from_str(text).filter(|length| *length >= 0)
+        }
+        _ => None,
+    };
+    if status == 204 || status == 304 || (100..200).contains(&status) {
+        length = Some(0);
+    }
+    Ok(Response {
+        status,
+        headers,
+        chunked,
+        length,
+    })
+}
+
+/// `fp.read(amt)`: up to `amt` bytes, fewer at EOF.
+fn read_up_to(reader: &mut impl BufRead, amt: usize) -> io::Result<Vec<u8>> {
+    let mut data = Vec::new();
+    reader.by_ref().take(amt as u64).read_to_end(&mut data)?;
+    Ok(data)
+}
+
+/// `HTTPResponse._safe_read(amt)`: exactly `amt` bytes or `IncompleteRead`.
+/// A negative `amt` (a negative chunk size) reaches `fp.read(amt)`: `-1`
+/// reads to EOF, anything lower is `ValueError`.
+fn safe_read(reader: &mut impl BufRead, amt: i128) -> Result<Vec<u8>, HttpFailure> {
+    if amt == -1 {
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data)?;
+        return Ok(data);
+    }
+    if amt < 0 {
+        return Err(HttpFailure::Value);
+    }
+    let amt = usize::try_from(amt).unwrap_or(usize::MAX);
+    let data = read_up_to(reader, amt)?;
+    if data.len() < amt {
+        return Err(HttpFailure::Http("IncompleteRead"));
+    }
+    Ok(data)
+}
+
+/// `HTTPResponse._read_chunked(amt)`.
+fn read_chunked(reader: &mut impl BufRead, amt: usize) -> Result<Vec<u8>, HttpFailure> {
+    let mut amt = amt as i128;
+    let mut value = Vec::new();
+    let mut chunk_left: Option<i128> = None;
     loop {
-        let line = read_line(io, MAX_CHUNK_LINE_BYTES)?;
-        let text =
-            std::str::from_utf8(&line).map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
-        let size = text
-            .trim()
-            .split(';')
-            .next()
-            .and_then(|s| usize::from_str_radix(s, 16).ok())
-            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-        if size == 0 {
-            // The body is complete; trailers cannot affect the parsed JSON.
-            return Ok(body);
+        // `_get_chunk_left()`.
+        let left = match chunk_left {
+            Some(left) if left != 0 => left,
+            current => {
+                if current.is_some() {
+                    safe_read(reader, 2)?;
+                }
+                let line = readline(reader, MAX_LINE + 1)?;
+                if line.len() > MAX_LINE {
+                    return Err(HttpFailure::Http("LineTooLong"));
+                }
+                let size = line.split(|b| *b == b';').next().unwrap_or_default();
+                // `int(bytes, 16)`: ASCII only.
+                let parsed = if size.iter().all(|b| b.is_ascii() && *b != 0) {
+                    crate::pystr::int_from_str_radix(&latin1(size), 16)
+                } else {
+                    None
+                };
+                let Some(size) = parsed else {
+                    return Err(HttpFailure::Http("IncompleteRead"));
+                };
+                if size == 0 {
+                    discard_trailer(reader)?;
+                    return Ok(value);
+                }
+                size
+            }
+        };
+        if amt <= left {
+            value.extend(safe_read(reader, amt)?);
+            return Ok(value);
         }
-        let remaining = MAX_RESPONSE_BYTES - body.len();
-        let copy = size.min(remaining);
-        let previous = body.len();
-        body.resize(previous + copy, 0);
-        io.read_exact(&mut body[previous..])?;
-        if copy < size || body.len() == MAX_RESPONSE_BYTES {
-            return Ok(body);
+        value.extend(safe_read(reader, left)?);
+        amt -= left;
+        chunk_left = Some(0);
+    }
+}
+
+/// `HTTPResponse._read_and_discard_trailer()`.
+fn discard_trailer(reader: &mut impl BufRead) -> Result<(), HttpFailure> {
+    let mut trailers = 0;
+    loop {
+        let line = readline(reader, MAX_LINE + 1)?;
+        if line.len() > MAX_LINE {
+            return Err(HttpFailure::Http("LineTooLong"));
         }
-        let mut ending = [0u8; 2];
-        io.read_exact(&mut ending)?;
-        if ending != *b"\r\n" {
-            return Err(io::Error::from(io::ErrorKind::InvalidData));
+        if line.is_empty() || line == b"\r\n" || line == b"\n" {
+            return Ok(());
+        }
+        trailers += 1;
+        if trailers > MAX_HEADERS {
+            return Err(HttpFailure::Http("HTTPException"));
         }
     }
 }
 
-fn read_response(io: &mut impl Read) -> (u16, Value) {
-    let (status, body) = match response_bytes(io) {
-        Ok(result) => result,
-        Err(error) => {
-            // `type(exc).__name__` of what `getresponse()`/`read()` raises:
-            // an OSError subclass (caught by `call_tool`) or an
-            // `http.client.HTTPException` (which CPython leaves uncaught).
-            let tag = error.get_ref().map(ToString::to_string).unwrap_or_default();
-            let detail = match error.kind() {
-                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "TimeoutError",
-                _ if tag == "RemoteDisconnected" || tag == "LineTooLong" => tag.as_str(),
-                io::ErrorKind::InvalidData => "BadStatusLine",
-                io::ErrorKind::UnexpectedEof => "IncompleteRead",
-                _ => crate::pystr::os_error_class(&error),
-            };
-            return gateway_unreachable(detail);
-        }
+/// `opener.open(request)` from `getresponse()` on, then `read(MAX)` of the
+/// response (or of the `HTTPError` urllib raises for a non-2xx status), then
+/// `call_tool`'s JSON decoding.
+fn read_response(reader: &mut impl BufRead, full_url: &str) -> Result<(u16, Value), Failure> {
+    let caught = |failure: HttpFailure| match failure {
+        HttpFailure::Os(error) => Failure::Caught(gateway_unreachable(os_error_name(&error))),
+        HttpFailure::Disconnected => Failure::Caught(gateway_unreachable("RemoteDisconnected")),
+        HttpFailure::Value => Failure::Caught(gateway_unreachable("ValueError")),
+        HttpFailure::Http(name) => Failure::Escaped(name),
     };
-    let text = match String::from_utf8(body) {
-        Ok(t) => t,
-        Err(_) => {
-            return (
-                status,
-                json!({"error":"ProtocolError","reason":"non_json_response","status":status}),
-            );
+    let response = begin(reader).map_err(caught)?;
+    // `HTTPErrorProcessor`: a non-2xx status goes through the redirect
+    // handler (`_NoRedirect` declines, but `http_error_302` parses the
+    // first `Location`/`URI` header first) to `HTTPError`.
+    if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+        let target = header_get(&response.headers, "location")
+            .or_else(|| header_get(&response.headers, "uri"));
+        if let Some(target) = target
+            && (crate::pystr::urlsplit(target).is_err()
+                || crate::pystr::urlsplit(full_url).is_err())
+        {
+            return Err(Failure::Caught(gateway_unreachable("ValueError")));
         }
-    };
-    match pyjson::loads(&text) {
-        Ok(v) if v.is_object() => (status, v),
-        Ok(_) => (
-            status,
-            json!({"error":"ProtocolError","reason":"non_object_response","status":status}),
-        ),
-        Err(_) => (
-            status,
-            json!({"error":"ProtocolError","reason":"non_json_response","status":status}),
-        ),
     }
+    let raw = if response.chunked {
+        read_chunked(reader, MAX_RESPONSE_BYTES).map_err(caught)?
+    } else {
+        let amt = match response.length {
+            Some(length) if (length as u128) < MAX_RESPONSE_BYTES as u128 => length as usize,
+            _ => MAX_RESPONSE_BYTES,
+        };
+        read_up_to(reader, amt).map_err(|error| caught(HttpFailure::Os(error)))?
+    };
+    let status = u16::try_from(response.status).unwrap_or_default();
+    let body = match String::from_utf8(raw).ok().map(|text| pyjson::loads(&text)) {
+        Some(Ok(value)) if value.is_object() => value,
+        Some(Ok(_)) => {
+            json!({"error":"ProtocolError","reason":"non_object_response","status":status})
+        }
+        _ => json!({"error":"ProtocolError","reason":"non_json_response","status":status}),
+    };
+    Ok((status, body))
 }
 
-/// Entry point taking the raw OS arguments. Python keeps a non-UTF-8
-/// argument as a `surrogateescape` string; a Rust `String` cannot hold it
-/// (PORTING.md §3.6), so it is a usage error instead of a panic.
+/// Entry point taking the raw OS arguments.  CPython decodes argv and the
+/// environment with `surrogateescape`; undecodable bytes are carried as
+/// [`crate::pystr::SurrogateEscape`] code points, sent as the lone
+/// surrogate escapes `json.dumps` writes, opened as their original bytes,
+/// and printed to stderr as `backslashreplace` does.
 pub fn main_os(argv: Vec<std::ffi::OsString>) -> i32 {
-    match argv
-        .into_iter()
-        .map(std::ffi::OsString::into_string)
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(argv) => main(&argv),
-        Err(_) => {
-            eprintln!(
-                "{}zeropw-agent: error: argument is not valid UTF-8",
-                build_parser().format_usage()
-            );
-            2
-        }
-    }
+    use std::os::unix::ffi::OsStrExt;
+    let url = env::var_os("ZEROPW_GATEWAY_URL");
+    let token = env::var_os("ZEROPW_CALLER_TOKEN");
+    let inputs = argv
+        .iter()
+        .map(|a| a.as_bytes())
+        .chain(url.iter().map(|v| v.as_bytes()))
+        .chain(token.iter().map(|v| v.as_bytes()));
+    let Some(esc) = crate::pystr::SurrogateEscape::avoiding(inputs) else {
+        eprintln!(
+            "{}zeropw-agent: error: argument is not valid UTF-8",
+            build_parser().format_usage()
+        );
+        return 2;
+    };
+    let argv: Vec<String> = argv.iter().map(|a| esc.decode(a.as_bytes())).collect();
+    let decode = |value: Option<std::ffi::OsString>| {
+        value.map(|v| esc.decode(v.as_bytes())).unwrap_or_default()
+    };
+    run(&argv, &esc, &decode(url), &decode(token))
 }
 
 /// Returns process exit code; caller supplies argv excluding program name.
 pub fn main(argv: &[String]) -> i32 {
+    main_os(argv.iter().map(std::ffi::OsString::from).collect())
+}
+
+fn run(argv: &[String], esc: &crate::pystr::SurrogateEscape, url: &str, token: &str) -> i32 {
     let args = match parse(argv) {
         Ok(a) => a,
         Err(ParseFail::Help(text)) => {
@@ -844,18 +1179,13 @@ pub fn main(argv: &[String]) -> i32 {
             return 0;
         }
         Err(ParseFail::Usage(text)) => {
-            eprint!("{text}");
+            eprint!("{}", esc.stderr_text(&text));
             return 2;
         }
     };
-    let base_url = env::var("ZEROPW_GATEWAY_URL")
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-    let token = env::var("ZEROPW_CALLER_TOKEN")
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
+    // `os.environ.get(name, "").strip()`: `str.strip()` whitespace.
+    let base_url = url.trim_matches(crate::pystr::is_space).to_owned();
+    let token = token.trim_matches(crate::pystr::is_space).to_owned();
     if base_url.is_empty() {
         emit(
             &json!({"error":"ConfigError","reason":"gateway_url_unset","detail":"set ZEROPW_GATEWAY_URL"}),
@@ -879,8 +1209,8 @@ pub fn main(argv: &[String]) -> i32 {
         );
         return 1;
     }
-    let payload = match payload(&args) {
-        Ok(v) => v,
+    let body = match payload(&args, esc) {
+        Ok(fields) => dumps_payload(&fields, esc),
         Err(e) => {
             emit(&e, true);
             return 1;
@@ -890,7 +1220,7 @@ pub fn main(argv: &[String]) -> i32 {
         "list-connections" => "list_connections",
         other => other,
     };
-    let (status, mut body) = call_tool(&base_url, &token, tool, &payload);
+    let (status, mut body) = call_tool_body(&base_url, &token, tool, &body);
     if status == 200 && (args.command != "request" || body.get("reason").is_none_or(Value::is_null))
     {
         emit(&body, false);
@@ -906,42 +1236,165 @@ pub fn main(argv: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
-    fn decoded(raw: &[u8]) -> (u16, Value) {
-        read_response(&mut Cursor::new(raw))
+    /// Each canned HTTP response served to `zeropw.agent_cli.call_tool` and
+    /// to this port: `(python, rust)` pairs of the request bytes sent and
+    /// the outcome (the returned `[status, body]`, or the class of the
+    /// exception that escapes `call_tool`).
+    fn transport_outcomes(responses: &[Vec<u8>]) -> Vec<(Value, Value)> {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let canned = responses.to_vec();
+        // Python's calls take the first `n` connections, this port's the next `n`.
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in canned.iter().chain(canned.iter()) {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = stream.write_all(response);
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                while stream.read(&mut buf).is_ok_and(|n| n > 0) {}
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+            }
+            requests
+        });
+        let url = format!("http://127.0.0.1:{port}/base/");
+        let script = format!(
+            r#"
+import json
+from zeropw.agent_cli import call_tool
+for _ in range({count}):
+    try:
+        print(json.dumps({{"result": list(call_tool("{url}", "zpwc_synthetic", "status", {{"run_id": "r-1"}}))}}))
+    except Exception as exc:
+        print(json.dumps({{"escaped": type(exc).__name__}}))
+"#,
+            count = responses.len(),
+        );
+        let python: Vec<Value> = crate::oracle::python(&script)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let rust: Vec<Value> = responses
+            .iter()
+            .map(|_| {
+                match call_tool_outcome(&url, "zpwc_synthetic", "status", r#"{"run_id": "r-1"}"#) {
+                    Ok((status, body)) | Err(Failure::Caught((status, body))) => {
+                        json!({"result": [status, body]})
+                    }
+                    Err(Failure::Escaped(name)) => json!({"escaped": name}),
+                }
+            })
+            .collect();
+        let requests = server.join().unwrap();
+        let (python_requests, rust_requests) = requests.split_at(responses.len());
+        python
+            .into_iter()
+            .zip(python_requests)
+            .zip(rust.into_iter().zip(rust_requests))
+            .map(|((p, pr), (r, rr))| {
+                (
+                    json!({"outcome": p, "request": pr}),
+                    json!({"outcome": r, "request": rr}),
+                )
+            })
+            .collect()
     }
 
+    /// `http.client.HTTPResponse` framing as urllib drives it (`begin`,
+    /// `read(MAX_RESPONSE_BYTES)`, `HTTPErrorProcessor` and the declined
+    /// redirect), every exception class `call_tool` catches or lets escape,
+    /// and the request bytes urllib sends.
     #[test]
-    fn response_framing_and_bounds() {
-        assert_eq!(
-            decoded(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}garbage").1["x"],
-            1
-        );
-        assert_eq!(decoded(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n{\"x\r\n4;test=yes\r\n\":1}\r\n0\r\n\r\n").1["x"], 1);
-        assert_eq!(decoded(b"HTTP/1.1 200 OK\r\n\r\n{\"x\":1}").1["x"], 1);
-        assert_eq!(decoded(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}").1["x"], 1);
-        assert_eq!(
-            decoded(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n{\"x\":1}").1["reason"],
-            "gateway_unreachable"
-        );
-        assert_eq!(
-            decoded(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n").1["reason"],
-            "gateway_unreachable"
-        );
-        assert_eq!(
-            decoded(b"HTTP/1.1 200 OK\r\n\r\nnot json").1["reason"],
-            "non_json_response"
-        );
-        let oversized_header = format!(
-            "HTTP/1.1 200 OK\r\nX: {}\r\n\r\n",
-            "a".repeat(MAX_HEADER_BYTES)
-        );
-        assert_eq!(
-            decoded(oversized_header.as_bytes()).1["reason"],
-            "gateway_unreachable"
-        );
+    fn transport_matches_python_urllib() {
+        let many = |n: usize| -> String { (0..n).map(|i| format!("X-{i}: y\r\n")).collect() };
+        let responses: Vec<Vec<u8>> = vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}garbage".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n{\"x\r\n4;test=yes\r\n\":1}\r\n0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\n\r\n{\"x\":1}".to_vec(),
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n{\"x\":1}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\n\r\nnot json".to_vec(),
+            format!("HTTP/1.1 200 OK\r\nX: {}\r\n\r\n{{}}", "a".repeat(70000)).into_bytes(),
+            format!("HTTP/1.1 200 OK\r\n{}\r\n{{}}", many(100)).into_bytes(),
+            format!("HTTP/1.1 200 OK\r\n{}\r\n{{}}", many(99)).into_bytes(),
+            b"GARBAGE\r\n\r\n".to_vec(),
+            b"".to_vec(),
+            b"{}".to_vec(),
+            b"HTTP/2.0 200 OK\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 +2_00 OK\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 999 Odd\r\n\r\n{\"e\":1}".to_vec(),
+            b"HTTP/1.1 1000 Odd\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 101 Switching\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 204 No Content\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 304 Not Modified\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked \r\n\r\n2\r\n{}\r\n0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 9\r\n\r\n{}xx".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1_0\r\n\r\n{\"a\":\"bc\"}zz".to_vec(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nBad Header\r\nContent-Length: 2\r\n\r\n{}xx".to_vec(),
+            b"HTTP/1.1 200 OK\r\nX-A: a\rContent-Length: 2\r\n\r\n{}zz".to_vec(),
+            b"HTTP/1.1 200 OK\r\nFrom x\r\nContent-Length: 2\r\n\r\n{}zz".to_vec(),
+            b"HTTP/1.1 200 OK\r\n: nameless\r\n continuation\r\nContent-Length:\r\n 2\r\n\r\n{}zz".to_vec(),
+            b"HTTP/1.1 302 Found\r\nLocation: http://[::1\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 302 Found\r\nURI: http://example.invalid/\r\n\r\n{\"r\":1}".to_vec(),
+            b"HTTP/1.1 307 Temp\r\nLocation: ftp://x/\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n-5\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n-1\r\n{}".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0x2\r\n{}\r\n0\r\n\r\n".to_vec(),
+            format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{{}}\r\n0\r\n{}\r\n", many(101)).into_bytes(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}XX0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}".to_vec(),
+            b"HTTP/1.1 200\r\n\r\n{}".to_vec(),
+            b"HTTP/1.1 200OK\r\n\r\n{}".to_vec(),
+            "HTTP/1.1 100 Continue\r\n\r\n".repeat(100).into_bytes(),
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n\xff\xfe".to_vec(),
+            b"HTTP/1.1 200 OK\r\n\r\n[1]".to_vec(),
+            b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\n{}".to_vec(),
+        ];
+        let mismatches: Vec<String> = transport_outcomes(&responses)
+            .into_iter()
+            .zip(&responses)
+            .filter(|((python, rust), _)| python != rust)
+            .map(|((python, rust), response)| {
+                format!(
+                    "response {:?}\n python: {python}\n rust:   {rust}",
+                    String::from_utf8_lossy(&response[..response.len().min(120)])
+                )
+            })
+            .collect();
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
+
+    fn dumped(args: &Args) -> Value {
+        let esc = crate::pystr::SurrogateEscape::avoiding([]).unwrap();
+        serde_json::from_str(&dumps_payload(&payload(args, &esc).unwrap(), &esc)).unwrap()
+    }
+
     #[test]
     fn payloads_and_bad_args() {
         let req = parse(
@@ -959,12 +1412,12 @@ mod tests {
             .map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(payload(&req).unwrap()["method"], "POST");
-        assert_eq!(payload(&req).unwrap()["headers"]["Accept"], "json");
+        assert_eq!(dumped(&req)["method"], "POST");
+        assert_eq!(dumped(&req)["headers"]["Accept"], "json");
         assert!(parse(&["request", "--connection", "gh"].map(str::to_owned)).is_err());
         let ex = parse(&["exec", "--connection", "gh", "--", "--flag", "-x"].map(str::to_owned))
             .unwrap();
-        assert_eq!(payload(&ex).unwrap()["argv"], json!(["--flag", "-x"]));
+        assert_eq!(dumped(&ex)["argv"], json!(["--flag", "-x"]));
         let equals = parse(
             &[
                 "request",
@@ -977,6 +1430,6 @@ mod tests {
             .map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(payload(&equals).unwrap()["headers"]["B"], "2");
+        assert_eq!(dumped(&equals)["headers"]["B"], "2");
     }
 }

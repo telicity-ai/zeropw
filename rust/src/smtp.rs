@@ -5,15 +5,15 @@
 //! The session mirrors `smtplib`'s own command sequence and failure mapping
 //! (`ehlo`, `mail FROM:`, `rcpt TO:`, `data`, `rset`, the context manager's
 //! `QUIT` after any failure inside the `with` block, `_rset` after a refusal,
-//! the AUTH challenge counter), and the message is flattened like
-//! `BytesGenerator` with the default `EmailPolicy` (RFC 2047 encoded words
-//! and folding for the header shapes ZeroPW produces; see `DEVIATIONS.md`
-//! for the residual shapes).
-use std::collections::{HashSet, VecDeque};
+//! the AUTH challenge counter), and the message is built, addressed and
+//! flattened by [`header`], a port of the `email` package's header parse,
+//! fold and envelope extraction (`EmailMessage`, `BytesGenerator` with the
+//! default `EmailPolicy`, `getaddresses`, `quoteaddr`).
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
@@ -24,6 +24,8 @@ use md5::Md5;
 use crate::errors::{Error, ErrorClass};
 use crate::notify::NotifyConfig;
 use crate::secret::SecretBytes;
+
+mod header;
 
 const MAX_LINE: usize = 8192;
 /// `smtplib._MAXCHALLENGE`.
@@ -105,17 +107,7 @@ fn tls_error_class(error: &io::Error) -> &'static str {
 
 /// `notify._send(config, subject, body)`.
 pub(crate) fn send(config: &NotifyConfig, subject: &str, body: &str) -> Result<(), SendError> {
-    // EmailMessage(): `message[...] = value` (header_store_parse) first.
-    for value in [
-        subject,
-        config.sender.as_str(),
-        &config.recipients.join(", "),
-    ] {
-        if python_splitlines_count(value) > 1 {
-            return Err(escaped_value("ValueError"));
-        }
-    }
-    let message = Message::new(config, subject, body);
+    let message = Message::new(config, subject, body)?;
     // Then the password file, read before any connection and whether or not
     // a username is configured.
     let password = match &config.password_file {
@@ -141,7 +133,7 @@ fn session(
     if let Some(user) = &config.username {
         client.login(user, password.map_or(&[][..], SecretBytes::expose))?;
     }
-    client.send_message(config, message)
+    client.send_message(message)
 }
 
 /// `str.splitlines()` length, as `EmailPolicy.header_store_parse` counts it.
@@ -594,10 +586,9 @@ impl Client {
     }
 
     /// `send_message(message)` for `notify._send`'s message.
-    fn send_message(&mut self, config: &NotifyConfig, message: &Message) -> Result<(), SendError> {
+    fn send_message(&mut self, message: &Message) -> Result<(), SendError> {
         self.ehlo_or_helo_if_needed()?;
-        let from = envelope_sender(&config.sender);
-        let to = envelope_recipients(config);
+        let (from, to) = message.envelope()?;
         let international = !from.is_ascii() || to.iter().any(|r| !r.is_ascii());
         if international && !self.has_extn("smtputf8") {
             return Err(caught("SMTPNotSupportedError"));
@@ -634,7 +625,8 @@ impl Client {
         }
         let mut refused = HashSet::new();
         for each in to {
-            let (code, _) = self.docmd("rcpt", &format!("TO:<{each}>"))?;
+            let quoted = header::quoteaddr(each).map_err(email_error)?;
+            let (code, _) = self.docmd("rcpt", &format!("TO:{quoted}"))?;
             if code != 250 && code != 251 {
                 refused.insert(each.as_str());
             }
@@ -677,7 +669,8 @@ impl Client {
             }
             optionlist = format!(" {}", options.join(" "));
         }
-        self.docmd("mail", &format!("FROM:<{sender}>{optionlist}"))
+        let quoted = header::quoteaddr(sender).map_err(email_error)?;
+        self.docmd("mail", &format!("FROM:{quoted}{optionlist}"))
     }
 
     /// `data(msg)`: dot-stuffing and the terminating line.
@@ -712,74 +705,6 @@ impl Client {
     }
 }
 
-/// `[a[1] for a in getaddresses([msg["To"]])]` for the joined recipients:
-/// one address per configured entry, unless an entry itself holds several
-/// comma-separated addresses, which Python's list parse splits.
-fn envelope_recipients(config: &NotifyConfig) -> Vec<String> {
-    if let Some(Tok::List(_, parts)) = get_address_list(&config.recipients.join(", ")) {
-        let tree = Tok::List(Kind::AddressList, parts);
-        let mut addresses = Vec::new();
-        collect_envelope_mailboxes(&tree, &mut addresses);
-        return addresses;
-    }
-    config.recipients.iter().map(|r| mailbox(r)).collect()
-}
-
-fn envelope_sender(sender: &str) -> String {
-    let mut addresses = Vec::new();
-    if let Some(tree) = get_address_list(sender) {
-        collect_envelope_mailboxes(&tree, &mut addresses);
-        return addresses.into_iter().next().unwrap_or_default();
-    }
-    mailbox(sender)
-}
-
-fn collect_envelope_mailboxes(token: &Tok, addresses: &mut Vec<String>) {
-    match token {
-        Tok::List(Kind::Mailbox, _) => {
-            let has_domain_literal = contains_kind(token, Kind::DomainLiteral);
-            addresses.push(if has_domain_literal {
-                // `email.utils.getaddresses(..., strict=True)` runs
-                // `_post_parse_validation`, which replaces every legacy
-                // parser result whose address still contains `[` with the
-                // empty tuple.
-                String::new()
-            } else {
-                mailbox(token.text().trim_start())
-            });
-        }
-        Tok::List(Kind::Group, parts) => {
-            let before = addresses.len();
-            for part in parts {
-                collect_envelope_mailboxes(part, addresses);
-            }
-            if addresses.len() == before {
-                // Legacy `_parseaddr.getaddrlist` inserts `('', '')` when
-                // an empty group returns no address, preserving its position
-                // among surrounding comma-separated addresses.
-                addresses.push(String::new());
-            }
-        }
-        Tok::List(_, parts) => {
-            for part in parts {
-                collect_envelope_mailboxes(part, addresses);
-            }
-        }
-        Tok::Term(..) => {}
-    }
-}
-
-fn contains_kind(token: &Tok, wanted: Kind) -> bool {
-    match token {
-        Tok::List(kind, parts) => {
-            *kind == wanted || parts.iter().any(|part| contains_kind(part, wanted))
-        }
-        Tok::Term(..) => false,
-    }
-}
-
-/// `self.file.readline(limit)`: up to `limit` bytes, through `\n`; a short
-/// final line at end of file is returned as is.
 fn readline(wire: &mut Wire, limit: usize) -> io::Result<Vec<u8>> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
@@ -876,20 +801,24 @@ fn gethostname() -> String {
 }
 
 /// `socket.getfqdn(hostname)`: `gethostbyaddr` of the host name's first
-/// address through the platform resolver/NSS.  `getnameinfo` exposes the
-/// canonical reverse name; the hosts-file fallback supplies aliases on
-/// platforms where the canonical name itself has no dot.
+/// address through the platform resolver/NSS.  `getnameinfo(NI_NAMEREQD)`
+/// runs the same reverse lookup (`gethostbyaddr_r` in glibc, Libinfo on
+/// macOS) and gives its canonical name; when it fails, so does Python's
+/// `gethostbyaddr`, and `getfqdn` returns the name unchanged.  No safe API
+/// exposes the `hostent` alias list, so aliases are taken from the hosts
+/// file only when its entry for the address names the same canonical host
+/// (`DEVIATIONS.md`).
 fn getfqdn(hostname: &str) -> String {
     let lookup_name = idna_hostname(hostname).unwrap_or_else(|_| hostname.to_owned());
     let Some(address) = first_resolved_address(&lookup_name, None) else {
         return hostname.to_owned();
     };
-    let canonical = lookup_addr(&address.ip()).ok();
-    let hosts = hosts_entry(address.ip());
-    let Some(canonical) = canonical.or_else(|| hosts.as_ref().map(|entry| entry.0.clone())) else {
+    let Ok(canonical) = lookup_addr(&address.ip()) else {
         return hostname.to_owned();
     };
-    let aliases = hosts.map_or_else(Vec::new, |entry| entry.1);
+    let aliases = hosts_entry(address.ip())
+        .filter(|(name, _)| *name == canonical)
+        .map_or_else(Vec::new, |entry| entry.1);
     std::iter::once(&canonical)
         .chain(aliases.iter())
         .find(|name| name.contains('.'))
@@ -934,47 +863,90 @@ fn hosts_entry(address: IpAddr) -> Option<(String, Vec<String>)> {
 /// `set_content(body)` (Content-Type, Content-Transfer-Encoding,
 /// MIME-Version).
 struct Message {
-    subject: String,
-    from: String,
-    to: String,
+    headers: [header::Header; 3],
     cte: &'static str,
     /// The payload, `\n`-terminated lines.
     payload: Vec<u8>,
 }
 
+/// A Python exception escaping the email package, the way
+/// `deliver`/`send_test_message` and `admin_cli.main` see it.
+fn email_error(error: header::Ex) -> SendError {
+    match error {
+        header::Ex::Parse | header::Ex::InvalidEw => escaped_other("HeaderParseError"),
+        header::Ex::Builtin(name) => match name {
+            "AttributeError" | "TypeError" | "KeyError" | "ValueError" | "UnicodeError"
+            | "UnicodeEncodeError" | "UnicodeDecodeError" => escaped_value(name),
+            name => escaped_other(name),
+        },
+    }
+}
+
 impl Message {
-    fn new(config: &NotifyConfig, subject: &str, body: &str) -> Self {
+    /// `message["Subject"] = subject; message["From"] = config.sender;
+    /// message["To"] = ", ".join(config.recipients); message.set_content(body)`.
+    /// Each assignment is `EmailPolicy.header_store_parse`: a value that
+    /// `str.splitlines()` splits is `ValueError`, then the header parses.
+    fn new(config: &NotifyConfig, subject: &str, body: &str) -> Result<Self, SendError> {
+        let to = config.recipients.join(", ");
+        let store = |value: &str| {
+            if python_splitlines_count(value) > 1 {
+                Err(escaped_value("ValueError"))
+            } else {
+                Ok(())
+            }
+        };
+        store(subject)?;
+        let subject = header::unstructured_header("Subject", subject).map_err(email_error)?;
+        store(&config.sender)?;
+        let from = header::address_header("From", &config.sender).map_err(email_error)?;
+        store(&to)?;
+        let to = header::address_header("To", &to).map_err(email_error)?;
         let (cte, payload) = encode_text(body);
-        Message {
-            subject: subject.to_owned(),
-            from: config.sender.clone(),
-            to: config.recipients.join(", "),
+        Ok(Message {
+            headers: [subject, from, to],
             cte,
             payload,
-        }
+        })
+    }
+
+    /// `send_message`'s envelope: `getaddresses([msg["From"]])[0][1]` and
+    /// `[a[1] for a in getaddresses([msg["To"]])]`.
+    fn envelope(&self) -> Result<(String, Vec<String>), SendError> {
+        let [_, from, to] = &self.headers;
+        let from = header::getaddresses(&from.decoded)
+            .map_err(email_error)?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let to = header::getaddresses(&to.decoded).map_err(email_error)?;
+        Ok((from, to))
     }
 
     /// `BytesGenerator(policy).flatten(msg, linesep="\r\n")`, with
-    /// `policy.utf8` for an internationalized envelope. A folded header
-    /// that fails `verify_generated_headers` is `HeaderWriteError`.
+    /// `policy.utf8` for an internationalized envelope: each header is
+    /// folded (`fold_binary`) and checked by `verify_generated_headers`
+    /// (`HeaderWriteError`) in turn.
     fn flatten(&self, utf8: bool) -> Result<Vec<u8>, SendError> {
-        let mut headers = Vec::new();
-        let subject = get_unstructured(&self.subject, true)
-            .and_then(|tree| fold_header("Subject", tree, utf8));
-        headers.push(subject.unwrap_or_else(|| format!("Subject: {}{CRLF}", self.subject)));
-        for (name, value) in [("From", &self.from), ("To", &self.to)] {
-            let folded = get_address_list(value)
-                .and_then(|tree| fold_header(name, tree, utf8))
-                .filter(|folded| utf8 || folded.is_ascii());
-            headers.push(folded.unwrap_or_else(|| format!("{name}: {value}{CRLF}")));
+        let mut bytes = Vec::new();
+        let fixed = [
+            "Content-Type: text/plain; charset=\"utf-8\"\r\n".to_owned(),
+            format!("Content-Transfer-Encoding: {}{CRLF}", self.cte),
+            "MIME-Version: 1.0\r\n".to_owned(),
+        ];
+        let folded = self
+            .headers
+            .iter()
+            .map(|h| h.fold_binary(utf8).map_err(email_error))
+            .chain(fixed.into_iter().map(|h| Ok(h.into_bytes())));
+        for folded in folded {
+            let folded = folded?;
+            if !verified_header(&folded) {
+                return Err(escaped_other("HeaderWriteError"));
+            }
+            bytes.extend_from_slice(&folded);
         }
-        headers.push("Content-Type: text/plain; charset=\"utf-8\"\r\n".to_owned());
-        headers.push(format!("Content-Transfer-Encoding: {}{CRLF}", self.cte));
-        headers.push("MIME-Version: 1.0\r\n".to_owned());
-        if !headers.iter().all(|h| verified_header(h)) {
-            return Err(escaped_other("HeaderWriteError"));
-        }
-        let mut bytes = (headers.concat() + CRLF).into_bytes();
+        bytes.extend_from_slice(CRLF.as_bytes());
         // `_write_lines`: every `\n`-terminated payload line ends in CRLF.
         for line in self.payload.split_inclusive(|b| *b == b'\n') {
             bytes.extend_from_slice(line.strip_suffix(b"\n").unwrap_or(line));
@@ -988,11 +960,10 @@ impl Message {
 /// (CPython 3.12.14): the folded header ends with the line separator and
 /// has no other line break that is not followed by `WSP`
 /// (`NEWLINE_WITHOUT_FWSP_BYTES`).
-fn verified_header(folded: &str) -> bool {
-    let Some(body) = folded.strip_suffix(CRLF) else {
+fn verified_header(folded: &[u8]) -> bool {
+    let Some(body) = folded.strip_suffix(CRLF.as_bytes()) else {
         return false;
     };
-    let body = body.as_bytes();
     let wsp = |at: usize| matches!(body.get(at), Some(b' ' | b'\t'));
     !body.iter().enumerate().any(|(i, byte)| match byte {
         b'\r' if body.get(i + 1) == Some(&b'\n') => i + 2 < body.len() && !wsp(i + 2),
@@ -1116,1361 +1087,6 @@ fn qp_body_encode(data: &[u8]) -> Vec<u8> {
     encoded.join(&b'\n')
 }
 
-// ------------------------------------------------------------------------
-// Header folding: `email._header_value_parser` for the header shapes this
-// module writes (an unstructured Subject; From/To address lists of
-// addr-specs and `display-name <addr-spec>` mailboxes, with atoms, quoted
-// strings, comments and obsolete dots in display names). `None` from a
-// parser means "outside that subset" (obsolete routes/local parts/domains
-// and invalid mailboxes): the
-// caller then writes the configured value unfolded (`DEVIATIONS.md`).
-
-const WSP: [char; 2] = [' ', '\t'];
-const SPECIALS: &str = "()<>@,:;.\\\"[]";
-
-fn is_wsp(c: char) -> bool {
-    WSP.contains(&c)
-}
-fn is_cfws_leader(c: char) -> bool {
-    is_wsp(c) || c == '('
-}
-fn is_special(c: char) -> bool {
-    SPECIALS.contains(c)
-}
-fn is_atom_end(c: char) -> bool {
-    is_special(c) || is_wsp(c)
-}
-/// `PHRASE_ENDS = SPECIALS - set('."(')`.
-fn is_phrase_end(c: char) -> bool {
-    is_special(c) && !matches!(c, '.' | '"' | '(')
-}
-fn first(value: &str) -> Option<char> {
-    value.chars().next()
-}
-fn clen(value: &str) -> usize {
-    value.chars().count()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Space {
-    Value,
-    Fws,
-    /// `EWWhiteSpaceTerminal`: whitespace between two encoded words.
-    EwFws,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Kind {
-    Header,
-    HeaderLabel,
-    Cfws,
-    Unstructured,
-    EncodedWord,
-    Comment,
-    DisplayName,
-    Atom,
-    QuotedString,
-    BareQuotedString,
-    DotAtom,
-    DotAtomText,
-    LocalPart,
-    Domain,
-    DomainLiteral,
-    AddrSpec,
-    AngleAddr,
-    NameAddr,
-    Mailbox,
-    Address,
-    AddressList,
-    MailboxList,
-    GroupList,
-    Group,
-}
-
-#[derive(Clone, Debug)]
-enum Tok {
-    /// A `Terminal`: text, `token_type`, whitespace class and whether it is
-    /// the `ListSeparator` (`as_ew_allowed = syntactic_break = False`).
-    Term(String, &'static str, Space, bool),
-    List(Kind, Vec<Tok>),
-}
-
-impl Tok {
-    fn value(text: impl Into<String>, token_type: &'static str) -> Tok {
-        Tok::Term(text.into(), token_type, Space::Value, false)
-    }
-    fn fws(text: impl Into<String>) -> Tok {
-        Tok::Term(text.into(), "fws", Space::Fws, false)
-    }
-    fn text(&self) -> String {
-        match self {
-            Tok::Term(_, _, Space::EwFws, _) => String::new(),
-            Tok::Term(text, ..) => text.clone(),
-            Tok::List(Kind::BareQuotedString, parts) => {
-                quote_string(&parts.iter().map(Tok::text).collect::<String>())
-            }
-            // `Comment.__str__`: parentheses around each part, with `\`,
-            // `(` and `)` quoted outside nested comments.
-            Tok::List(Kind::Comment, parts) => {
-                let inner: String = parts
-                    .iter()
-                    .map(|part| match part {
-                        Tok::List(Kind::Comment, _) => part.text(),
-                        _ => make_parenthesis_pairs(&part.text()),
-                    })
-                    .collect();
-                format!("({inner})")
-            }
-            Tok::List(_, parts) => parts.iter().map(Tok::text).collect(),
-        }
-    }
-    fn token_type(&self) -> &'static str {
-        match self {
-            Tok::Term(_, token_type, ..) => token_type,
-            Tok::List(Kind::BareQuotedString, _) => "bare-quoted-string",
-            Tok::List(Kind::EncodedWord, _) => "encoded-word",
-            Tok::List(..) => "",
-        }
-    }
-    fn as_ew_allowed(&self) -> bool {
-        match self {
-            Tok::Term(.., separator) => !separator,
-            Tok::List(Kind::HeaderLabel | Kind::Domain | Kind::AddrSpec | Kind::LocalPart, _) => {
-                false
-            }
-            Tok::List(Kind::DotAtomText, _) => true,
-            Tok::List(_, parts) => parts.iter().all(Tok::as_ew_allowed),
-        }
-    }
-    fn syntactic_break(&self) -> bool {
-        !matches!(self, Tok::Term(.., true))
-    }
-    fn ew_combine_allowed(&self) -> bool {
-        !matches!(self, Tok::List(Kind::DisplayName, _))
-    }
-    /// `ValueTerminal` is never FWS; `WhiteSpaceTerminal` (including a
-    /// comment's ctext) is when its own text starts with `WSP`.
-    fn startswith_fws(&self) -> bool {
-        match self {
-            Tok::Term(text, _, space, _) => *space != Space::Value && text.starts_with(WSP),
-            Tok::List(_, parts) => parts.first().is_some_and(Tok::startswith_fws),
-        }
-    }
-    fn prepend(&mut self, leader: Tok) {
-        if let Tok::List(_, parts) = self {
-            parts.insert(0, leader);
-        }
-    }
-}
-
-/// `make_quoted_pairs`/`quote_string`.
-fn quote_string(value: &str) -> String {
-    format!("\"{}\"", make_quoted_pairs(value))
-}
-fn make_quoted_pairs(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// `make_parenthesis_pairs`: escape `\`, `(` and `)` inside a comment.
-fn make_parenthesis_pairs(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-}
-
-/// A parse failure: `Header` is Python's `HeaderParseError` (the caller may
-/// try another production), `Unsupported` leaves the subset.
-#[derive(Debug)]
-enum PErr {
-    Header,
-    Unsupported,
-}
-type Parsed<'a> = Result<(Tok, &'a str), PErr>;
-
-/// `get_fws`: the leading run `str.lstrip()` removes.
-fn get_fws(value: &str) -> (Tok, &str) {
-    let rest = value.trim_start_matches(crate::pystr::is_space);
-    (Tok::fws(&value[..value.len() - rest.len()]), rest)
-}
-
-/// `get_cfws`.
-fn get_cfws(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    while let Some(c) = first(value).filter(|c| is_cfws_leader(*c)) {
-        let (token, rest) = if c == '(' {
-            get_comment(value, 0)?
-        } else {
-            get_fws(value)
-        };
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::Cfws, parts), value))
-}
-
-/// Nesting beyond this is left unfolded rather than parsed recursively.
-const MAX_COMMENT_DEPTH: usize = 64;
-
-/// `get_comment` (closed comments only).
-fn get_comment(value: &str, depth: usize) -> Parsed<'_> {
-    if depth >= MAX_COMMENT_DEPTH {
-        return Err(PErr::Unsupported);
-    }
-    let Some(mut value) = value.strip_prefix('(') else {
-        return Err(PErr::Header);
-    };
-    let mut parts = Vec::new();
-    while let Some(c) = first(value).filter(|c| *c != ')') {
-        let (token, rest) = if is_wsp(c) {
-            get_fws(value)
-        } else if c == '(' {
-            get_comment(value, depth + 1)?
-        } else {
-            // `get_qp_ctext`: a `WhiteSpaceTerminal` of unquoted ctext.
-            let (text, rest) = get_ptext_to_endchars(value, "()");
-            (Tok::Term(text, "ptext", Space::Fws, false), rest)
-        };
-        parts.push(token);
-        value = rest;
-    }
-    // Unterminated: an InvalidHeaderDefect.
-    let Some(rest) = value.strip_prefix(')') else {
-        return Err(PErr::Unsupported);
-    };
-    Ok((Tok::List(Kind::Comment, parts), rest))
-}
-
-/// `get_atext`.
-fn get_atext(value: &str) -> Parsed<'_> {
-    let end = value
-        .char_indices()
-        .find(|(_, c)| is_atom_end(*c))
-        .map_or(value.len(), |(i, _)| i);
-    if end == 0 {
-        return Err(PErr::Header);
-    }
-    Ok((Tok::value(&value[..end], "atext"), &value[end..]))
-}
-
-/// `get_atom`; an atom may be an RFC 2047 encoded word.
-fn get_atom(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    if first(value).is_some_and(is_atom_end) {
-        return Err(PErr::Header);
-    }
-    let (token, rest) = if value.starts_with("=?") {
-        match get_encoded_word(value, "vtext") {
-            EwParse::Ok(token, rest) => (token, rest),
-            EwParse::Invalid | EwParse::NotEw => get_atext(value)?,
-            EwParse::Unsupported => return Err(PErr::Unsupported),
-        }
-    } else {
-        get_atext(value)?
-    };
-    parts.push(token);
-    value = rest;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::Atom, parts), value))
-}
-
-/// `get_dot_atom_text`.
-fn get_dot_atom_text(mut value: &str) -> Parsed<'_> {
-    if first(value).is_none_or(is_atom_end) {
-        return Err(PErr::Header);
-    }
-    let mut parts = Vec::new();
-    let mut last_dot = false;
-    while first(value).is_some_and(|c| !is_atom_end(c)) {
-        let (token, rest) = get_atext(value)?;
-        parts.push(token);
-        value = rest;
-        last_dot = false;
-        if let Some(rest) = value.strip_prefix('.') {
-            parts.push(Tok::value(".", "dot"));
-            value = rest;
-            last_dot = true;
-        }
-    }
-    if last_dot {
-        return Err(PErr::Header);
-    }
-    Ok((Tok::List(Kind::DotAtomText, parts), value))
-}
-
-/// `get_dot_atom` (no encoded words).
-fn get_dot_atom(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    if value.starts_with("=?") {
-        return Err(PErr::Unsupported);
-    }
-    let (token, rest) = get_dot_atom_text(value)?;
-    parts.push(token);
-    value = rest;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::DotAtom, parts), value))
-}
-
-/// `_get_ptext_to_endchars(value, endchars)`: the unquoted text of the
-/// first whitespace-delimited fragment, up to an unescaped end character.
-fn get_ptext_to_endchars<'a>(value: &'a str, endchars: &str) -> (String, &'a str) {
-    let fragment_end = value.find(WSP).unwrap_or(value.len());
-    let fragment = &value[..fragment_end];
-    let mut text = String::new();
-    let mut escape = false;
-    let mut stop = fragment.len();
-    for (pos, c) in fragment.char_indices() {
-        if c == '\\' {
-            if escape {
-                escape = false;
-            } else {
-                escape = true;
-                continue;
-            }
-        }
-        if escape {
-            escape = false;
-        } else if endchars.contains(c) {
-            stop = pos;
-            break;
-        }
-        text.push(c);
-    }
-    (text, &value[stop..])
-}
-
-/// `get_qcontent`.
-fn get_qcontent(value: &str) -> (Tok, &str) {
-    let (text, rest) = get_ptext_to_endchars(value, "\"");
-    (Tok::value(text, "ptext"), rest)
-}
-
-/// `get_bare_quoted_string` (no encoded words, closed).
-fn get_bare_quoted_string(value: &str) -> Parsed<'_> {
-    let Some(mut value) = value.strip_prefix('"') else {
-        return Err(PErr::Header);
-    };
-    let mut parts = Vec::new();
-    if value.starts_with('"') {
-        let (token, rest) = get_qcontent(value);
-        parts.push(token);
-        value = rest;
-    }
-    while let Some(c) = first(value).filter(|c| *c != '"') {
-        let (token, rest) = if is_wsp(c) {
-            get_fws(value)
-        } else if value.starts_with("=?") {
-            return Err(PErr::Unsupported);
-        } else {
-            get_qcontent(value)
-        };
-        parts.push(token);
-        value = rest;
-    }
-    // Unterminated: an InvalidHeaderDefect.
-    let Some(rest) = value.strip_prefix('"') else {
-        return Err(PErr::Unsupported);
-    };
-    Ok((Tok::List(Kind::BareQuotedString, parts), rest))
-}
-
-/// `get_quoted_string`.
-fn get_quoted_string(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    let (token, rest) = get_bare_quoted_string(value)?;
-    parts.push(token);
-    value = rest;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::QuotedString, parts), value))
-}
-
-/// `get_word`.
-fn get_word(mut value: &str) -> Parsed<'_> {
-    let mut leader = None;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        leader = Some(token);
-        value = rest;
-    }
-    let (mut token, rest) = match first(value) {
-        None => return Err(PErr::Header),
-        Some('"') => get_quoted_string(value)?,
-        Some(c) if is_special(c) => return Err(PErr::Header),
-        Some(_) => get_atom(value)?,
-    };
-    if let Some(leader) = leader {
-        token.prepend(leader);
-    }
-    Ok((token, rest))
-}
-
-/// `get_phrase`; the flag reports an `InvalidHeaderDefect` (no leading
-/// word).
-fn get_phrase(mut value: &str) -> Result<(Vec<Tok>, bool, &str), PErr> {
-    let mut parts = Vec::new();
-    let mut invalid = false;
-    match get_word(value) {
-        Ok((token, rest)) => {
-            parts.push(token);
-            value = rest;
-        }
-        Err(PErr::Header) => invalid = true,
-        Err(PErr::Unsupported) => return Err(PErr::Unsupported),
-    }
-    while let Some(c) = first(value).filter(|c| !is_phrase_end(*c)) {
-        if c == '.' {
-            parts.push(Tok::value(".", "dot"));
-            value = &value[1..];
-            continue;
-        }
-        match get_word(value) {
-            Ok((token, rest)) => {
-                parts.push(token);
-                value = rest;
-            }
-            Err(PErr::Header) if is_cfws_leader(c) => {
-                let (token, rest) = get_cfws(value)?;
-                parts.push(token);
-                value = rest;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok((parts, invalid, value))
-}
-
-/// `get_local_part` (dot-atom or quoted string).
-fn get_local_part(mut value: &str) -> Parsed<'_> {
-    let mut leader = None;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        leader = Some(token);
-        value = rest;
-    }
-    if value.is_empty() {
-        return Err(PErr::Header);
-    }
-    let (mut token, rest) = match get_dot_atom(value) {
-        Ok(parsed) => parsed,
-        Err(PErr::Header) => match get_word(value) {
-            Ok(parsed) => parsed,
-            Err(PErr::Header) if first(value).is_some_and(|c| c != '\\' && is_phrase_end(c)) => {
-                return Err(PErr::Header);
-            }
-            // An empty token followed by an obs-local-part.
-            Err(_) => return Err(PErr::Unsupported),
-        },
-        Err(PErr::Unsupported) => return Err(PErr::Unsupported),
-    };
-    if let Some(leader) = leader {
-        token.prepend(leader);
-    }
-    if first(rest).is_some_and(|c| c == '\\' || !is_phrase_end(c)) {
-        return Err(PErr::Unsupported); // obs-local-part
-    }
-    Ok((Tok::List(Kind::LocalPart, vec![token]), rest))
-}
-
-/// `get_domain` (dot-atom or atom).
-fn get_domain(mut value: &str) -> Parsed<'_> {
-    let mut leader = None;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        leader = Some(token);
-        value = rest;
-    }
-    match first(value) {
-        None => return Err(PErr::Header),
-        Some('[') => {
-            let (mut token, rest) = get_domain_literal(value)?;
-            if let Some(leader) = leader {
-                token.prepend(leader);
-            }
-            return Ok((Tok::List(Kind::Domain, vec![token]), rest));
-        }
-        Some(_) => {}
-    }
-    let (mut token, rest) = match get_dot_atom(value) {
-        Ok(parsed) => parsed,
-        Err(PErr::Header) => get_atom(value)?,
-        Err(PErr::Unsupported) => return Err(PErr::Unsupported),
-    };
-    if rest.starts_with('@') {
-        return Err(PErr::Header);
-    }
-    if let Some(leader) = leader {
-        token.prepend(leader);
-    }
-    if rest.starts_with('.') {
-        return Err(PErr::Unsupported); // obs-domain
-    }
-    Ok((Tok::List(Kind::Domain, vec![token]), rest))
-}
-
-fn get_domain_literal(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    let Some(rest) = value.strip_prefix('[') else {
-        return Err(PErr::Header);
-    };
-    parts.push(Tok::value("[", "domain-literal-start"));
-    value = rest;
-    let mut text = String::new();
-    let mut escaped = false;
-    let mut end = None;
-    for (index, character) in value.char_indices() {
-        if escaped {
-            text.push(character);
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == ']' {
-            end = Some(index);
-            break;
-        } else if character == '[' {
-            return Err(PErr::Header);
-        } else {
-            text.push(character);
-        }
-    }
-    let Some(end) = end else {
-        // CPython repairs the missing terminator in the generated form.
-        parts.push(Tok::value(text, "ptext"));
-        parts.push(Tok::value("]", "domain-literal-end"));
-        return Ok((Tok::List(Kind::DomainLiteral, parts), ""));
-    };
-    parts.push(Tok::value(text, "ptext"));
-    parts.push(Tok::value("]", "domain-literal-end"));
-    value = &value[end + 1..];
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::DomainLiteral, parts), value))
-}
-
-/// `get_addr_spec` (with a domain).
-fn get_addr_spec(value: &str) -> Parsed<'_> {
-    let (local, rest) = get_local_part(value)?;
-    let Some(rest) = rest.strip_prefix('@') else {
-        return Err(PErr::Unsupported); // InvalidHeaderDefect: no domain
-    };
-    let (domain, rest) = get_domain(rest)?;
-    let parts = vec![local, Tok::value("@", "address-at-symbol"), domain];
-    Ok((Tok::List(Kind::AddrSpec, parts), rest))
-}
-
-/// `get_angle_addr` (no obs-route, closed, not empty).
-fn get_angle_addr(mut value: &str) -> Parsed<'_> {
-    let mut parts = Vec::new();
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    let Some(rest) = value.strip_prefix('<') else {
-        return Err(PErr::Header);
-    };
-    parts.push(Tok::value("<", "angle-addr-start"));
-    if rest.starts_with('>') {
-        return Err(PErr::Unsupported);
-    }
-    let (token, rest) = match get_addr_spec(rest) {
-        Ok(parsed) => parsed,
-        Err(_) => return Err(PErr::Unsupported),
-    };
-    parts.push(token);
-    let Some(mut value) = rest.strip_prefix('>') else {
-        return Err(PErr::Unsupported);
-    };
-    parts.push(Tok::value(">", "angle-addr-end"));
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        parts.push(token);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::AngleAddr, parts), value))
-}
-
-/// `get_display_name`.
-fn get_display_name(value: &str) -> Result<(Tok, bool, &str), PErr> {
-    let (parts, invalid, rest) = get_phrase(value)?;
-    Ok((Tok::List(Kind::DisplayName, parts), invalid, rest))
-}
-
-/// `get_name_addr`.
-fn get_name_addr(mut value: &str) -> Parsed<'_> {
-    if value.is_empty() {
-        return Err(PErr::Header);
-    }
-    let mut leader = None;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (token, rest) = get_cfws(value)?;
-        leader = Some(token);
-        value = rest;
-        if value.is_empty() {
-            return Err(PErr::Header);
-        }
-    }
-    let mut parts = Vec::new();
-    if !value.starts_with('<') {
-        if first(value).is_some_and(is_phrase_end) {
-            return Err(PErr::Header);
-        }
-        let (mut token, invalid, rest) = get_display_name(value)?;
-        if rest.is_empty() {
-            return Err(PErr::Header);
-        }
-        if invalid {
-            return Err(PErr::Unsupported);
-        }
-        if let Some(leader) = leader.take() {
-            match &mut token {
-                Tok::List(_, display) if matches!(display.first(), Some(Tok::List(..))) => {
-                    if let Some(first) = display.first_mut() {
-                        first.prepend(leader);
-                    }
-                }
-                _ => token.prepend(leader),
-            }
-        }
-        parts.push(token);
-        value = rest;
-    }
-    let (mut token, rest) = get_angle_addr(value)?;
-    if let Some(leader) = leader {
-        token.prepend(leader);
-    }
-    parts.push(token);
-    Ok((Tok::List(Kind::NameAddr, parts), rest))
-}
-
-/// `get_mailbox`.
-fn get_mailbox(value: &str) -> Parsed<'_> {
-    let (token, rest) = match get_name_addr(value) {
-        Ok(parsed) => parsed,
-        Err(PErr::Header) => get_addr_spec(value)?,
-        Err(PErr::Unsupported) => return Err(PErr::Unsupported),
-    };
-    Ok((Tok::List(Kind::Mailbox, vec![token]), rest))
-}
-
-fn get_group(value: &str) -> Parsed<'_> {
-    let (display, invalid, rest) = get_display_name(value)?;
-    if invalid {
-        return Err(PErr::Unsupported);
-    }
-    let Some(mut value) = rest.strip_prefix(':') else {
-        return Err(PErr::Header);
-    };
-    let mut parts = vec![display, Tok::value(":", "group-display-name-terminator")];
-    if let Some(rest) = value.strip_prefix(';') {
-        parts.push(Tok::value(";", "group-terminator"));
-        return Ok((Tok::List(Kind::Group, parts), rest));
-    }
-    let mut mailboxes = Vec::new();
-    if first(value).is_some_and(is_cfws_leader) {
-        let (leader, rest) = get_cfws(value)?;
-        mailboxes.push(leader);
-        value = rest;
-    }
-    while !value.is_empty() && !value.starts_with(';') {
-        let (mailbox, rest) = get_mailbox(value)?;
-        mailboxes.push(mailbox);
-        value = rest;
-        if value.starts_with(';') {
-            break;
-        }
-        let Some(rest) = value.strip_prefix(',') else {
-            return Err(PErr::Header);
-        };
-        mailboxes.push(Tok::Term(",".into(), "list-separator", Space::Value, true));
-        value = rest;
-        if first(value).is_some_and(is_cfws_leader) {
-            let (space, rest) = get_cfws(value)?;
-            mailboxes.push(space);
-            value = rest;
-        }
-    }
-    parts.push(Tok::List(
-        Kind::GroupList,
-        vec![Tok::List(Kind::MailboxList, mailboxes)],
-    ));
-    let Some(rest) = value.strip_prefix(';') else {
-        return Err(PErr::Header);
-    };
-    parts.push(Tok::value(";", "group-terminator"));
-    value = rest;
-    if first(value).is_some_and(is_cfws_leader) {
-        let (space, rest) = get_cfws(value)?;
-        parts.push(space);
-        value = rest;
-    }
-    Ok((Tok::List(Kind::Group, parts), value))
-}
-
-/// `get_address`: mailbox or group.
-fn get_address(value: &str) -> Parsed<'_> {
-    let is_group = matches!(get_display_name(value), Ok((_, _, rest)) if rest.starts_with(':'));
-    let (address, rest) = if is_group {
-        get_group(value)?
-    } else {
-        get_mailbox(value)?
-    };
-    Ok((Tok::List(Kind::Address, vec![address]), rest))
-}
-
-/// `get_address_list` without its error-recovery productions.
-fn get_address_list(mut value: &str) -> Option<Tok> {
-    let mut parts = Vec::new();
-    while !value.is_empty() {
-        let (address, rest) = get_address(value).ok()?;
-        parts.push(address);
-        value = rest;
-        if !value.is_empty() {
-            value = value.strip_prefix(',')?;
-            parts.push(Tok::Term(",".into(), "list-separator", Space::Value, true));
-        }
-    }
-    Some(Tok::List(Kind::AddressList, parts))
-}
-
-/// `get_unstructured`; with `decode_ew`, encoded words are decoded (only
-/// used on this module's own output while combining encoded words).
-fn get_unstructured(mut value: &str, decode_ew: bool) -> Option<Tok> {
-    let mut parts: Vec<Tok> = Vec::new();
-    let mut kinds: Vec<bool> = Vec::new(); // true: encoded word
-    while let Some(c) = first(value) {
-        if is_wsp(c) {
-            let (token, rest) = get_fws(value);
-            parts.push(token);
-            kinds.push(false);
-            value = rest;
-            continue;
-        }
-        let mut valid_ew = true;
-        if decode_ew && value.starts_with("=?") {
-            match get_encoded_word(value, "utext") {
-                EwParse::Ok(token, rest) => {
-                    let have_ws = parts.last().is_none_or(|last| last.token_type() == "fws");
-                    let len = parts.len();
-                    if have_ws
-                        && len > 1
-                        && kinds[len - 2]
-                        && let Some(Tok::Term(_, _, space, _)) = parts.last_mut()
-                    {
-                        *space = Space::EwFws;
-                    }
-                    parts.push(token);
-                    kinds.push(true);
-                    value = rest;
-                    continue;
-                }
-                EwParse::Invalid => valid_ew = false,
-                EwParse::NotEw => {}
-                EwParse::Unsupported => return None,
-            }
-        }
-        let split = value.find(WSP).unwrap_or(value.len());
-        let (mut token, mut rest) = value.split_at(split);
-        if valid_ew && decode_ew && rfc2047_matcher().is_match(token) {
-            let index = value.find("=?").unwrap_or(0);
-            (token, rest) = value.split_at(index);
-        }
-        if token.is_empty() {
-            return None;
-        }
-        parts.push(Tok::value(token, "utext"));
-        kinds.push(false);
-        value = rest;
-    }
-    Some(Tok::List(Kind::Unstructured, parts))
-}
-
-fn rfc2047_matcher() -> &'static regex::Regex {
-    static MATCHER: OnceLock<regex::Regex> = OnceLock::new();
-    MATCHER.get_or_init(|| {
-        regex::Regex::new(r"=\?[^?]*\?[qQbB]\?.*?\?=").expect("static pattern compiles")
-    })
-}
-
-enum EwParse<'a> {
-    Ok(Tok, &'a str),
-    /// `_InvalidEwError`.
-    Invalid,
-    /// `HeaderParseError`: not an encoded word.
-    NotEw,
-    /// A charset or payload this module never writes.
-    Unsupported,
-}
-
-fn decode_latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| char::from(*byte)).collect()
-}
-
-/// `get_encoded_word` + `_encoded_words.decode` for the charsets representable
-/// without surrogate code points in Rust strings.
-fn get_encoded_word<'a>(value: &'a str, terminal_type: &'static str) -> EwParse<'a> {
-    let Some(body) = value.strip_prefix("=?") else {
-        return EwParse::NotEw;
-    };
-    let Some((head, mut remainder)) = body.split_once("?=") else {
-        return EwParse::NotEw;
-    };
-    let mut token = head.to_owned();
-    let mut chars = remainder.chars();
-    if let (Some(a), Some(b)) = (chars.next(), chars.next())
-        && a.is_ascii_hexdigit()
-        && b.is_ascii_hexdigit()
-        && token.matches('?').count() < 2
-    {
-        let (rest, after) = remainder.split_once("?=").unwrap_or((remainder, ""));
-        token = format!("{token}?={rest}");
-        remainder = after;
-    }
-    let fields: Vec<&str> = token.split('?').collect();
-    let [charset, cte, text] = fields[..] else {
-        return EwParse::Invalid;
-    };
-    let bytes = match cte.to_ascii_lowercase().as_str() {
-        "q" => {
-            let raw = text.replace('_', " ").into_bytes();
-            let mut out = Vec::with_capacity(raw.len());
-            let mut index = 0;
-            while let Some(&byte) = raw.get(index) {
-                let pair = raw
-                    .get(index + 1..index + 3)
-                    .filter(|p| p.iter().all(u8::is_ascii_hexdigit));
-                match (byte, pair) {
-                    (b'=', Some(pair)) => {
-                        let hex = std::str::from_utf8(pair).unwrap_or_default();
-                        out.push(u8::from_str_radix(hex, 16).unwrap_or_default());
-                        index += 3;
-                    }
-                    _ => {
-                        out.push(byte);
-                        index += 1;
-                    }
-                }
-            }
-            out
-        }
-        "b" => {
-            let raw = text.as_bytes();
-            let missing = (4 - raw.len() % 4) % 4;
-            let mut padded = raw.to_vec();
-            if missing != 1 {
-                padded.extend(std::iter::repeat_n(b'=', missing));
-            }
-            crate::pybase64::b64decode_bytes(&padded)
-                .or_else(|_| crate::pybase64::b64decode_bytes(raw))
-                .or_else(|_| {
-                    let mut maximally_padded = raw.to_vec();
-                    maximally_padded.extend_from_slice(b"==");
-                    crate::pybase64::b64decode_bytes(&maximally_padded)
-                })
-                // `_encoded_words.decode_b` returns the encoded bytes for the
-                // irrecoverable length-one-mod-four case.
-                .unwrap_or_else(|_| raw.to_vec())
-        }
-        _ => return EwParse::Invalid,
-    };
-    let charset = charset
-        .split_once('*')
-        .map_or(charset, |(charset, _)| charset)
-        .to_ascii_lowercase()
-        .replace('_', "-");
-    let decoded = match charset.as_str() {
-        "utf-8" | "utf8" => String::from_utf8(bytes).ok(),
-        "ascii" | "us-ascii" => bytes.is_ascii().then(|| decode_latin1(&bytes)),
-        "iso-8859-1" | "iso8859-1" | "latin-1" | "latin1" => Some(decode_latin1(&bytes)),
-        // CPython falls back to ASCII with surrogateescape for an unknown
-        // charset.  The ASCII-only case has no surrogate and is exact.
-        _ => bytes.is_ascii().then(|| decode_latin1(&bytes)),
-    };
-    decoded.map_or(EwParse::Unsupported, |decoded| {
-        // CPython's EncodedWord is a TokenList, not a single terminal.  It
-        // splits the decoded text at each FWS run before refolding.  Keeping
-        // that shape matters when an encoded word mixes ASCII and non-ASCII:
-        // `Hello ✓` is emitted as plain `Hello ` plus an encoded word for ✓,
-        // rather than re-encoding the whole input word verbatim.
-        let mut parts = Vec::new();
-        let mut rest = decoded.as_str();
-        while !rest.is_empty() {
-            if first(rest).is_some_and(is_wsp) {
-                let (token, after) = get_fws(rest);
-                parts.push(token);
-                rest = after;
-            } else {
-                let split = rest.find(WSP).unwrap_or(rest.len());
-                let (text, after) = rest.split_at(split);
-                parts.push(Tok::value(text, terminal_type));
-                rest = after;
-            }
-        }
-        EwParse::Ok(Tok::List(Kind::EncodedWord, parts), remainder)
-    })
-}
-
-/// `BaseHeader.fold`: `Header([HeaderLabel, CFWSList(' '), parse_tree])`
-/// through `_refold_parse_tree`.
-fn fold_header(name: &str, tree: Tok, utf8: bool) -> Option<String> {
-    let label = Tok::List(
-        Kind::HeaderLabel,
-        vec![
-            Tok::value(name, "header-name"),
-            Tok::value(":", "header-sep"),
-        ],
-    );
-    let mut parts = vec![label];
-    if matches!(&tree, Tok::List(_, children) if !children.is_empty()) {
-        parts.push(Tok::List(Kind::Cfws, vec![Tok::fws(" ")]));
-    }
-    parts.push(tree);
-    refold(Tok::List(Kind::Header, parts), utf8)
-}
-
-/// `_steal_trailing_WSP_if_exists`.
-fn steal_trailing_wsp(lines: &mut [String]) -> String {
-    match lines.last_mut() {
-        Some(last) if last.ends_with(WSP) => last.pop().map(String::from).unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
-enum Item {
-    Tok(Tok),
-    /// `end_ew_not_allowed`.
-    EndBlocked,
-}
-
-/// `_refold_parse_tree(parse_tree, policy=default.clone(linesep="\r\n"))`.
-fn refold(tree: Tok, utf8: bool) -> Option<String> {
-    let Tok::List(_, children) = tree else {
-        return None;
-    };
-    let maxlen = MAX_LINE_LENGTH as isize;
-    let mut lines = vec![String::new()];
-    let mut leading_whitespace = String::new();
-    let mut last_ew: Option<usize> = None;
-    let mut last_charset: Option<&'static str> = None;
-    let mut wrap_as_ew_blocked = 0usize;
-    let mut want_encoding = false;
-    let mut parts: VecDeque<Item> = children.into_iter().map(Item::Tok).collect();
-    while let Some(item) = parts.pop_front() {
-        let part = match item {
-            Item::EndBlocked => {
-                wrap_as_ew_blocked = wrap_as_ew_blocked.saturating_sub(1);
-                continue;
-            }
-            Item::Tok(part) => part,
-        };
-        let tstr = part.text();
-        if !want_encoding {
-            want_encoding = if matches!(part.token_type(), "ptext" | "vtext") {
-                tstr.chars()
-                    .any(|c| is_special(c) || c == '\r' || c == '\n')
-            } else {
-                tstr.contains(['\r', '\n'])
-            };
-        }
-        let charset = if utf8 {
-            "utf-8"
-        } else if tstr.is_ascii() {
-            "us-ascii"
-        } else {
-            want_encoding = true;
-            "utf-8"
-        };
-        let last_len = |lines: &[String]| lines.last().map_or(0, |l| clen(l)) as isize;
-        if want_encoding && wrap_as_ew_blocked == 0 {
-            if !part.as_ew_allowed() {
-                want_encoding = false;
-                last_ew = None;
-                if part.syntactic_break() && matches!(part, Tok::List(..)) {
-                    let folded = refold(part.clone(), utf8)?;
-                    let encoded = folded.strip_suffix(CRLF).unwrap_or(&folded).to_owned();
-                    if !encoded.contains(CRLF) {
-                        if clen(&encoded) as isize > maxlen - last_len(&lines) {
-                            let newline = steal_trailing_wsp(&mut lines);
-                            lines.push(newline);
-                        }
-                        lines.last_mut()?.push_str(&encoded);
-                        continue;
-                    }
-                }
-            }
-            match part {
-                Tok::List(_, children) => {
-                    for child in children.into_iter().rev() {
-                        parts.push_front(Item::Tok(child));
-                    }
-                    want_encoding = false;
-                    continue;
-                }
-                ref term if term.as_ew_allowed() => {
-                    if last_ew.is_some()
-                        && Some(charset) != last_charset
-                        && (last_charset == Some("unknown-8bit")
-                            || last_charset == Some("utf-8") && charset != "us-ascii")
-                    {
-                        last_ew = None;
-                    }
-                    last_ew = fold_as_ew(
-                        &tstr,
-                        &mut lines,
-                        last_ew,
-                        term.ew_combine_allowed(),
-                        charset,
-                        &leading_whitespace,
-                    )?;
-                    leading_whitespace.clear();
-                    last_charset = Some(charset);
-                    want_encoding = false;
-                    continue;
-                }
-                _ => {
-                    last_ew = None;
-                    want_encoding = false;
-                }
-            }
-        }
-        if clen(&tstr) as isize <= maxlen - last_len(&lines) {
-            lines.last_mut()?.push_str(&tstr);
-            continue;
-        }
-        leading_whitespace.clear();
-        if part.syntactic_break() && (clen(&tstr) as isize) < maxlen {
-            let newline = steal_trailing_wsp(&mut lines);
-            if !newline.is_empty() || part.startswith_fws() {
-                let line = newline + &tstr;
-                leading_whitespace = line.chars().take_while(|c| is_wsp(*c)).collect();
-                lines.push(line);
-                last_ew = None;
-                continue;
-            }
-        }
-        if let Tok::List(kind, children) = &part {
-            let mut newparts: Vec<Item> = if *kind == Kind::BareQuotedString {
-                std::iter::once(Tok::value("\"", "ptext"))
-                    .chain(
-                        children
-                            .iter()
-                            .map(|p| Tok::value(make_quoted_pairs(&p.text()), "ptext")),
-                    )
-                    .chain(std::iter::once(Tok::value("\"", "ptext")))
-                    .map(Item::Tok)
-                    .collect()
-            } else if *kind == Kind::Comment {
-                // A comment keeps its parentheses, and its ctext its
-                // quoted pairs, when split across lines.
-                std::iter::once(Tok::value("(", "ptext"))
-                    .chain(children.iter().map(|p| {
-                        if p.token_type() == "ptext" {
-                            Tok::value(make_parenthesis_pairs(&p.text()), "ptext")
-                        } else {
-                            p.clone()
-                        }
-                    }))
-                    .chain(std::iter::once(Tok::value(")", "ptext")))
-                    .map(Item::Tok)
-                    .collect()
-            } else {
-                children.iter().cloned().map(Item::Tok).collect()
-            };
-            if !part.as_ew_allowed() {
-                wrap_as_ew_blocked += 1;
-                newparts.push(Item::EndBlocked);
-            }
-            for item in newparts.into_iter().rev() {
-                parts.push_front(item);
-            }
-            continue;
-        }
-        if part.as_ew_allowed() && wrap_as_ew_blocked == 0 {
-            parts.push_front(Item::Tok(part));
-            want_encoding = true;
-            continue;
-        }
-        let newline = steal_trailing_wsp(&mut lines);
-        if !newline.is_empty() || part.startswith_fws() {
-            lines.push(newline + &tstr);
-        } else {
-            lines.last_mut()?.push_str(&tstr);
-        }
-    }
-    Some(lines.join(CRLF) + CRLF)
-}
-
-/// `_fold_as_ew`. `None` where Python raises (an empty word).
-fn fold_as_ew(
-    to_encode: &str,
-    lines: &mut Vec<String>,
-    last_ew: Option<usize>,
-    ew_combine_allowed: bool,
-    charset: &'static str,
-    leading_whitespace: &str,
-) -> Option<Option<usize>> {
-    let maxlen = MAX_LINE_LENGTH as isize;
-    let mut to_encode: Vec<char> = to_encode.chars().collect();
-    let mut leading_whitespace = leading_whitespace.to_owned();
-    match last_ew {
-        Some(position) if ew_combine_allowed => {
-            let last = lines.last_mut()?;
-            let tail: String = last.chars().skip(position).collect();
-            let combined = format!("{tail}{}", to_encode.iter().collect::<String>());
-            to_encode = get_unstructured(&combined, true)?.text().chars().collect();
-            *last = last.chars().take(position).collect();
-        }
-        _ => {
-            if is_wsp(*to_encode.first()?) {
-                let leading = to_encode.remove(0);
-                if lines.last().map_or(0, |l| clen(l)) == MAX_LINE_LENGTH {
-                    let newline = steal_trailing_wsp(lines);
-                    lines.push(newline);
-                }
-                lines.last_mut()?.push(leading);
-            }
-        }
-    }
-    let trailing = if is_wsp(*to_encode.last()?) {
-        to_encode.pop()
-    } else {
-        None
-    };
-    let mut new_last_ew = last_ew.unwrap_or_else(|| lines.last().map_or(0, |l| clen(l)));
-    let encode_as = if charset == "us-ascii" {
-        "utf-8"
-    } else {
-        charset
-    };
-    let chrome_len = (encode_as.len() + 7) as isize;
-    while !to_encode.is_empty() {
-        let remaining_space = maxlen - lines.last().map_or(0, |l| clen(l)) as isize;
-        let text_space = remaining_space - chrome_len - clen(&leading_whitespace) as isize;
-        if text_space <= 0 {
-            lines.push(" ".into());
-            continue;
-        }
-        if lines.len() > 1
-            && lines.last().map_or(0, |l| clen(l)) == 1
-            && !leading_whitespace.is_empty()
-        {
-            let word = ew_encode(&leading_whitespace, encode_as);
-            lines.last_mut()?.push_str(&word);
-            leading_whitespace.clear();
-        }
-        let mut take = to_encode.len().min(text_space as usize);
-        let mut encoded = ew_encode(&to_encode[..take].iter().collect::<String>(), encode_as);
-        while clen(&encoded) as isize - remaining_space > 0 && take > 0 {
-            take -= 1;
-            encoded = ew_encode(&to_encode[..take].iter().collect::<String>(), encode_as);
-        }
-        lines.last_mut()?.push_str(&encoded);
-        to_encode.drain(..take);
-        leading_whitespace.clear();
-        if !to_encode.is_empty() {
-            lines.push(" ".into());
-            new_last_ew = 1;
-        }
-    }
-    if let Some(trailing) = trailing {
-        lines.last_mut()?.push(trailing);
-    }
-    Some(ew_combine_allowed.then_some(new_last_ew))
-}
-
-/// `_encoded_words.encode(text, charset)`: the shorter of `q` and `b`, with
-/// `q` preferred unless it is at least five characters longer.
-fn ew_encode(text: &str, charset: &str) -> String {
-    let bytes = text.as_bytes();
-    let q_safe = |b: u8| b.is_ascii_alphanumeric() || b"-!*+/".contains(&b);
-    let qlen: usize = bytes
-        .iter()
-        .map(|&b| if q_safe(b) || b == b' ' { 1 } else { 3 })
-        .sum();
-    let blen = bytes.len() / 3 * 4 + if bytes.len().is_multiple_of(3) { 0 } else { 4 };
-    if (qlen as isize) - (blen as isize) < 5 {
-        let encoded: String = bytes
-            .iter()
-            .map(|&b| match b {
-                b' ' => "_".to_owned(),
-                b if q_safe(b) => char::from(b).to_string(),
-                b => format!("={b:02X}"),
-            })
-            .collect();
-        format!("=?{charset}?q?{encoded}?=")
-    } else {
-        format!("=?{charset}?b?{}?=", crate::pybase64::b64encode(bytes))
-    }
-}
-fn mailbox(address: &str) -> String {
-    // Keep the configured header untouched. A comment is CFWS, not an address
-    // character. Preserve its position so Python's domain-atom boundary can
-    // be reproduced rather than silently joining two domain fragments.
-    // This is deliberately only the supported mailbox subset,
-    // not a general RFC 5322 address parser.
-    let mut without_comments = String::with_capacity(address.len());
-    let mut depth = 0usize;
-    let mut quoted = false;
-    let mut escaped = false;
-    let mut had_comment = false;
-    let mut chars = address.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if escaped {
-            if depth == 0 {
-                without_comments.push(ch);
-            }
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            if depth == 0 && !(quoted && matches!(chars.peek(), Some('(' | ')'))) {
-                without_comments.push(ch);
-            }
-            escaped = true;
-            continue;
-        }
-        if ch == '"' && depth == 0 {
-            quoted = !quoted;
-            without_comments.push(ch);
-        } else if ch == '(' && !quoted {
-            had_comment = true;
-            if depth == 0 {
-                without_comments.push(' ');
-            }
-            depth += 1;
-        } else if ch == ')' && depth > 0 && !quoted {
-            depth -= 1;
-        } else if depth == 0 {
-            without_comments.push(ch);
-        }
-    }
-    // Only structural angle brackets delimit a display-name mailbox. An
-    // angle bracket inside a quoted display name or local part is literal.
-    let mut start = None;
-    quoted = false;
-    escaped = false;
-    for (index, ch) in without_comments.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            quoted = !quoted;
-        } else if !quoted && ch == '<' {
-            start = Some(index + ch.len_utf8());
-        } else if !quoted
-            && ch == '>'
-            && let Some(start) = start
-        {
-            return envelope_cfws(&without_comments[start..index], had_comment);
-        }
-    }
-    envelope_cfws(&without_comments, had_comment)
-}
-
-fn envelope_cfws(address: &str, had_comment: bool) -> String {
-    if had_comment && address.ends_with(char::is_whitespace) {
-        let prefix = address.trim_end();
-        if prefix.ends_with(['@', '.']) {
-            return String::new();
-        }
-    }
-    let address = address.trim();
-    if !had_comment {
-        return address.into();
-    }
-    // Python's address extraction joins CFWS around unquoted atom separators.
-    // Leave local-part word spaces alone (including quoted/escaped contents).
-    let chars: Vec<char> = address.chars().collect();
-    let mut result = String::with_capacity(address.len());
-    let mut quoted = false;
-    let mut escaped = false;
-    let mut in_domain = false;
-    for (index, &ch) in chars.iter().enumerate() {
-        if escaped {
-            result.push(ch);
-            escaped = false;
-        } else if ch == '\\' {
-            result.push(ch);
-            escaped = true;
-        } else if ch == '"' {
-            result.push(ch);
-            quoted = !quoted;
-        } else if !quoted && ch == '@' {
-            while result.ends_with(char::is_whitespace) {
-                result.pop();
-            }
-            result.push(ch);
-            in_domain = true;
-        } else if !quoted && ch.is_whitespace() {
-            let next = chars[index + 1..].iter().find(|c| !c.is_whitespace());
-            if in_domain
-                && result.ends_with(['@', '.'])
-                && (next.is_none() || matches!(next, Some('.')))
-            {
-                // EmailMessage selects an empty mailbox for these malformed
-                // comment/dot positions; send_message emits MAIL FROM:<>.
-                return String::new();
-            }
-            if in_domain
-                && result.chars().last().is_some_and(|c| c != '@' && c != '.')
-                && next.is_some_and(|c| c.is_alphanumeric())
-            {
-                break;
-            }
-            if in_domain || result.ends_with(['.', '@']) || matches!(next, Some('@' | '.')) {
-                continue;
-            }
-            result.push(ch);
-        } else if !quoted && ch == '.' {
-            while result.ends_with(char::is_whitespace) {
-                result.pop();
-            }
-            result.push(ch);
-        } else {
-            result.push(ch);
-        }
-    }
-    if let Some((local, domain)) = result.split_once('@')
-        && local.contains(char::is_whitespace)
-        && !local.starts_with('"')
-    {
-        return format!("\"{local}\"@{domain}");
-    }
-    result
-}
-
 /// `SSLContext.wrap_socket(sock, server_hostname=host)` with the default
 /// context, handshake included (`do_handshake_on_connect`).
 fn tls(
@@ -2499,7 +1115,7 @@ fn tls(
 
 #[cfg(test)]
 mod message_tests {
-    use super::{Message, envelope_recipients, envelope_sender, mailbox};
+    use super::{Message, SendError, email_error, header};
     use crate::notify::NotifyConfig;
     use serde_json::{Value, json};
 
@@ -2514,6 +1130,129 @@ mod message_tests {
             password_file: None,
             timeout_seconds: 20.0,
         }
+    }
+
+    /// The exception class a `SendError` stands for.
+    fn class_name(error: SendError) -> String {
+        match error {
+            SendError::Caught(name) => name,
+            SendError::Escaped(error) if error.reason == "state_corrupt" => error.detail,
+            SendError::Escaped(error) => error.name.into_owned(),
+        }
+    }
+
+    /// One `[subject, sender, recipients, body]` case through this port:
+    /// the `EmailMessage` assignments, `send_message`'s envelope and
+    /// `quoteaddr` spellings, the international decision, and the flattened
+    /// bytes or the exception that stops each stage.
+    fn rust_outcome(case: &Value) -> Value {
+        let text = |index: usize| case[index].as_str().unwrap_or_default().to_owned();
+        let recipients: Vec<String> = case[2]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .map(|r| r.as_str().unwrap_or_default().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let message = match Message::new(&config(&text(1), &recipients), &text(0), &text(3)) {
+            Ok(message) => message,
+            Err(error) => return json!({"error": class_name(error), "stage": "build"}),
+        };
+        let (from, to) = match message.envelope() {
+            Ok(envelope) => envelope,
+            Err(error) => return json!({"error": class_name(error), "stage": "envelope"}),
+        };
+        let mut quoted = Vec::new();
+        for address in std::iter::once(&from).chain(&to) {
+            match header::quoteaddr(address) {
+                Ok(spelling) => quoted.push(spelling),
+                Err(error) => {
+                    return json!({"error": class_name(email_error(error)), "stage": "envelope"});
+                }
+            }
+        }
+        let intl = !from.is_ascii() || to.iter().any(|r| !r.is_ascii());
+        match message.flatten(intl) {
+            Ok(bytes) => json!({
+                "from": from, "to": to, "quoted": quoted, "intl": intl,
+                "bytes": crate::pybase64::b64encode(&bytes),
+            }),
+            Err(error) => json!({
+                "error": class_name(error), "stage": "flatten",
+                "from": from, "to": to, "quoted": quoted, "intl": intl,
+            }),
+        }
+    }
+
+    /// The same pipeline in CPython: `notify._send`'s message, then
+    /// `smtplib.send_message`'s envelope (`getaddresses`, `quoteaddr`) and
+    /// `BytesGenerator` flatten.
+    fn python_outcomes(cases: &[Value]) -> Vec<Value> {
+        let encoded =
+            crate::pybase64::b64encode(Value::Array(cases.to_vec()).to_string().as_bytes());
+        let script = format!(
+            r#"
+import base64, email.generator, email.utils, io, json, smtplib
+from email.message import EmailMessage
+def run(subject, sender, recipients, body):
+    try:
+        m = EmailMessage()
+        m["Subject"] = subject
+        m["From"] = sender
+        m["To"] = ", ".join(recipients)
+        m.set_content(body)
+    except Exception as e:
+        return {{"error": type(e).__name__, "stage": "build"}}
+    try:
+        from_addr = email.utils.getaddresses([m["From"]])[0][1]
+        to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
+        quoted = [smtplib.quoteaddr(a) for a in [from_addr, *to_addrs]]
+    except Exception as e:
+        return {{"error": type(e).__name__, "stage": "envelope"}}
+    try:
+        "".join([from_addr, *to_addrs]).encode("ascii")
+        intl = False
+    except UnicodeEncodeError:
+        intl = True
+    b = io.BytesIO()
+    g = email.generator.BytesGenerator(b, policy=m.policy.clone(utf8=True)) if intl else email.generator.BytesGenerator(b)
+    try:
+        g.flatten(m, linesep="\r\n")
+    except Exception as e:
+        return {{"error": type(e).__name__, "stage": "flatten", "from": from_addr, "to": to_addrs, "quoted": quoted, "intl": intl}}
+    return {{"from": from_addr, "to": to_addrs, "quoted": quoted, "intl": intl, "bytes": base64.b64encode(b.getvalue()).decode()}}
+out = [run(*case) for case in json.loads(base64.b64decode("{encoded}"))]
+print(json.dumps(out))
+"#
+        );
+        serde_json::from_str(crate::oracle::python(&script).trim()).unwrap()
+    }
+
+    /// Every case through both pipelines; returns the Python outcomes.
+    fn assert_parity(cases: &[Value]) -> Vec<Value> {
+        let expected = python_outcomes(cases);
+        let mut mismatches = vec![];
+        for (case, expected) in cases.iter().zip(&expected) {
+            let actual = rust_outcome(case);
+            if &actual != expected {
+                mismatches.push(format!(
+                    "case {case}\n python: {expected}\n rust:   {actual}"
+                ));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} of {} cases differ:\n{}",
+            mismatches.len(),
+            cases.len(),
+            mismatches.join("\n")
+        );
+        expected
+    }
+
+    fn case(subject: &str, sender: &str, recipients: &[&str]) -> Value {
+        json!([subject, sender, recipients, "x\n"])
     }
 
     /// `notify._send`'s message flattened the way `send_message` does
@@ -2571,214 +1310,113 @@ mod message_tests {
                 .map(|offset| mailboxes[(index * 7 + offset * 5) % mailboxes.len()].clone())
                 .collect();
             let subject = &subjects[index % subjects.len()];
-            cases.push(json!([subject, sender, recipients]));
+            cases.push(json!([subject, sender, recipients, body]));
         }
         for subject in &subjects {
-            cases.push(json!([subject, "a@example.com", ["b@example.com"]]));
+            cases.push(json!([subject, "a@example.com", ["b@example.com"], body]));
         }
-        let script = format!(
-            r#"
-import base64, email.errors, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out = []
-for subject, sender, recipients in json.loads({cases:?}):
-    m = EmailMessage()
-    m["Subject"] = subject
-    m["From"] = sender
-    m["To"] = ", ".join(recipients)
-    m.set_content({body:?})
-    from_addr = email.utils.getaddresses([m["From"]])[0][1]
-    to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
-    try:
-        "".join([from_addr, *to_addrs]).encode("ascii")
-        intl = False
-    except UnicodeEncodeError:
-        intl = True
-    b = io.BytesIO()
-    policy = m.policy.clone(utf8=True) if intl else None
-    g = email.generator.BytesGenerator(b, policy=policy) if intl else email.generator.BytesGenerator(b)
-    try:
-        g.flatten(m, linesep="\r\n")
-    except email.errors.HeaderWriteError:
-        out.append([intl, None])
-        continue
-    out.append([intl, base64.b64encode(b.getvalue()).decode()])
-print(json.dumps(out))
-"#,
-            cases = Value::Array(cases.clone()).to_string(),
-        );
-        let expected: Vec<(bool, Option<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let mut mismatches = vec![];
-        for (case, (intl, flat)) in cases.iter().zip(expected) {
-            let subject = case[0].as_str().unwrap();
-            let sender = case[1].as_str().unwrap();
-            let recipients: Vec<String> = case[2]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|r| r.as_str().unwrap().to_owned())
-                .collect();
-            let rust_intl =
-                !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
-            let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl).ok();
-            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
-            if rust_intl != intl || actual != expected {
-                let shown = |bytes: &Option<Vec<u8>>| {
-                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
-                        format!("{:?}", String::from_utf8_lossy(b))
-                    })
-                };
-                mismatches.push(format!(
-                    "case {case}\n python: {}\n rust:   {}",
-                    shown(&expected),
-                    shown(&actual)
-                ));
-            }
-        }
-        assert!(
-            mismatches.is_empty(),
-            "{} mismatches:\n{}",
-            mismatches.len(),
-            mismatches.join("\n")
-        );
+        assert_parity(&cases);
     }
 
+    /// Encoded words in the subject and in display names, local parts and
+    /// domains: every charset family CPython's codec registry resolves
+    /// (UTF-8 with undecodable bytes as surrogates, `unknown-8bit`, unknown
+    /// names, single-byte charmaps, non-text codecs, `undefined`).
     #[test]
     fn encoded_word_headers_match_python_bytes() {
-        let cases = json!([
-            [
-                "=?utf-8?q?Hello_=E2=9C=93?=",
-                "a@example.com",
-                "b@example.com"
-            ],
-            ["=?UTF-8?B?7ZWc6riA?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?b?SGVsbG8?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?b?SGVsbG8$?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?q?bad=Z1=2?=", "a@example.com", "b@example.com"],
-            [
-                "=?utf-8?q?one?=   =?utf-8?q?two?=",
-                "a@example.com",
-                "b@example.com"
-            ],
-            [
-                "prefix=?utf-8?q?middle?=suffix",
-                "a@example.com",
-                "b@example.com"
-            ],
-            ["=?iso-8859-1?q?caf=E9?=", "a@example.com", "b@example.com"],
-            ["=?x-unknown?q?plain?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?q?unterminated", "a@example.com", "b@example.com"],
-            ["=?utf-8?x?invalid?=", "a@example.com", "b@example.com"],
-            [
-                "subject",
-                "=?utf-8?q?Admin_=E2=9C=93?= <a@example.com>",
-                "b@example.com"
-            ],
-            [
-                "subject",
-                "a@example.com",
-                "=?utf-8?b?7ZWc6riA?= <b@example.com>"
-            ],
-            [
-                "subject",
-                "a@example.com",
-                "=?utf-8?q?one?= \t =?utf-8?q?two?= <b@example.com>"
-            ]
-        ]);
-        let script = format!(
-            r#"
-import base64, email.generator, io, json
-from email.message import EmailMessage
-out=[]
-for subject, sender, recipient in json.loads({cases:?}):
- m=EmailMessage(); m['Subject']=subject; m['From']=sender; m['To']=recipient; m.set_content('x\n')
- b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
- out.append(base64.b64encode(b.getvalue()).decode())
-print(json.dumps(out))
-"#,
-            cases = cases.to_string(),
-        );
-        let expected: Vec<String> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        for (case, expected) in cases.as_array().unwrap().iter().zip(expected) {
-            let sender = case[1].as_str().unwrap();
-            let recipients = [case[2].as_str().unwrap().to_owned()];
-            let actual = Message::new(
-                &config(sender, &recipients),
-                case[0].as_str().unwrap(),
-                "x\n",
-            )
-            .flatten(false)
-            .ok()
-            .expect("headers verify");
-            assert_eq!(
-                actual,
-                crate::pybase64::b64decode(&expected).unwrap(),
-                "case {case}"
-            );
+        let subjects = [
+            "=?utf-8?q?Hello_=E2=9C=93?=",
+            "=?UTF-8?B?7ZWc6riA?=",
+            "=?utf-8?b?SGVsbG8?=",
+            "=?utf-8?b?SGVsbG8$?=",
+            "=?utf-8?b?SGVsbG8x?=",
+            "=?utf-8?b?SGVsb?=",
+            "=?utf-8?q?bad=Z1=2?=",
+            "=?utf-8?q?one?=   =?utf-8?q?two?=",
+            "prefix=?utf-8?q?middle?=suffix",
+            "=?iso-8859-1?q?caf=E9?=",
+            "=?x-unknown?q?plain?=",
+            "=?x-unknown?q?caf=E9?=",
+            "=?unknown-8bit?q?caf=E9?=",
+            "=?utf-8?q?unterminated",
+            "=?utf-8?x?invalid?=",
+            "=?utf-8?q?=FF=FE_invalid_utf8?=",
+            "=?utf-8?q?=E2=9C?= truncated",
+            "=?us-ascii?q?caf=E9?=",
+            "=?windows-1252?q?=80uro_=93quoted=94?=",
+            "=?koi8-r?b?8NLJ18XU?=",
+            "=?cp424?q?=00=01=02?=",
+            "=?cp424?q?=FF?=",
+            "=?iso8859_15?q?=A4?=",
+            "=?Latin_1?q?=E9?=",
+            "=?utf-8-sig?q?=EF=BB=BFbom?=",
+            "=?base64?q?abc?=",
+            "=?undefined?q?abc?=",
+            "=?utf.8?q?abc?=",
+            "=?ut f-8?q?abc?=",
+            "=?utf-8*en?q?lang?=",
+            "=?utf-8?q?a=0Ab?=",
+            "=?utf-8?q?tab=09here?=",
+            "word =?utf-8?q?=E2=9C=93?= word =?utf-8?q?=E2=9C=93?=",
+            "=?utf-8?q?=E2=9C=93?==?utf-8?q?=E2=9C=93?=",
+        ];
+        let mut cases: Vec<Value> = subjects
+            .iter()
+            .map(|subject| case(subject, "a@example.com", &["b@example.com"]))
+            .collect();
+        for sender in [
+            "=?utf-8?q?Admin_=E2=9C=93?= <a@example.com>",
+            "=?utf-8?b?7ZWc6riA?= <b@example.com>",
+            "=?utf-8?q?one?= \t =?utf-8?q?two?= <b@example.com>",
+            "=?utf-8?q?=FF?= <a@example.com>",
+            "=?x-unknown?q?=FF?= <a@example.com>",
+            "=?utf-8?q?a=0Ab?= <a@example.com>",
+            "=?utf-8?q?a=40b?=@example.com",
+            "=?utf-8?q?a=40b?= x@example.com",
+            "=?utf-8?q?=FF?=@example.com",
+            "a@=?utf-8?q?=FF?=",
+            "a@=?utf-8?q?exa=E2=9C=93?=.com",
+            "\"=?utf-8?q?quoted?=\" <a@example.com>",
+            "\"x =?utf-8?q?one?= =?utf-8?q?two?= y\" <a@example.com>",
+            "=?koi8-r?b?8NLJ18XU?= <a@example.com>",
+        ] {
+            cases.push(case("s", sender, &["b@example.com"]));
+            cases.push(case("s", "a@example.com", &[sender]));
         }
+        assert_parity(&cases);
     }
 
     #[test]
     fn groups_and_domain_literals_match_python_headers_and_envelopes() {
-        let cases = json!([
+        let cases: Vec<Value> = [
             ["a@example.com", "undisclosed-recipients:;"],
             ["a@example.com", "Empty Team: (no recipients) ;"],
             [
                 "a@example.com",
-                "Team: Alpha <a@example.com>, b@[127.0.0.1];"
+                "Team: Alpha <a@example.com>, b@[127.0.0.1];",
             ],
             ["a@example.com", "IPv6 User <v6@[IPv6:2001:db8::1]>"],
             [
                 "a@example.com",
-                "Literal <x@ (before) [ 127.0.0.1 ] (after)>"
+                "Literal <x@ (before) [ 127.0.0.1 ] (after)>",
             ],
             [
                 "a@example.com",
-                "G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]"
+                "G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]",
             ],
             [
                 "Senders: first@[127.0.0.1], second@example.com;",
-                "b@example.com"
+                "b@example.com",
             ],
             ["Nobody:;", "b@example.com"],
             ["a@example.com", "Empty:;, b@example.com"],
             ["a@example.com", "b@example.com, Empty:;"],
-            ["A. B. <a@example.com>", "C. D. <b@example.com>"]
-        ]);
-        let script = format!(
-            r#"
-import base64, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out=[]
-for sender, recipient in json.loads({cases:?}):
- m=EmailMessage(); m['Subject']='s'; m['From']=sender; m['To']=recipient; m.set_content('x\n')
- b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
- out.append([base64.b64encode(b.getvalue()).decode(), email.utils.getaddresses([m['From']])[0][1], [a[1] for a in email.utils.getaddresses([m['To']])]])
-print(json.dumps(out))
-"#,
-            cases = cases.to_string(),
-        );
-        let expected: Vec<(String, String, Vec<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        for (case, (flat, from, to)) in cases.as_array().unwrap().iter().zip(expected) {
-            let sender = case[0].as_str().unwrap();
-            let recipients = [case[1].as_str().unwrap().to_owned()];
-            let message = Message::new(&config(sender, &recipients), "s", "x\n");
-            assert_eq!(
-                message.flatten(false).ok().expect("headers verify"),
-                crate::pybase64::b64decode(&flat).unwrap(),
-                "headers {case}"
-            );
-            assert_eq!(envelope_sender(sender), from, "sender {case}");
-            assert_eq!(
-                envelope_recipients(&config(sender, &recipients)),
-                to,
-                "recipients {case}"
-            );
-        }
+            ["A. B. <a@example.com>", "C. D. <b@example.com>"],
+        ]
+        .iter()
+        .map(|[sender, recipient]| case("s", sender, &[recipient]))
+        .collect();
+        assert_parity(&cases);
     }
 
     /// `set_content(body)`'s transfer-encoding choice and payload (7bit,
@@ -2810,69 +1448,157 @@ print(json.dumps(out))
             mixed.push_str(&format!("{} 한\n", "a".repeat(60 + index * 3)));
         }
         bodies.push(mixed);
-        let script = format!(
-            r#"
-import base64, email.generator, io, json
-from email.message import EmailMessage
-out = []
-for body in json.loads({bodies:?}):
-    m = EmailMessage()
-    m["Subject"] = "s"
-    m["From"] = "a@example.com"
-    m["To"] = "b@example.com"
-    m.set_content(body)
-    b = io.BytesIO()
-    email.generator.BytesGenerator(b).flatten(m, linesep="\r\n")
-    out.append(base64.b64encode(b.getvalue()).decode())
-print(json.dumps(out))
-"#,
-            bodies = serde_json::to_string(&bodies).unwrap(),
-        );
-        let expected: Vec<String> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let cases: Vec<Value> = bodies
+            .iter()
+            .map(|body| json!(["s", "a@example.com", ["b@example.com"], body]))
+            .collect();
+        assert_parity(&cases);
         let recipients = ["b@example.com".to_owned()];
-        let mut ctes = std::collections::BTreeSet::new();
-        for (body, flat) in bodies.iter().zip(expected) {
-            let message = Message::new(&config("a@example.com", &recipients), "s", body);
-            ctes.insert(message.cte);
-            let actual = message.flatten(false).ok().expect("headers verify");
-            let expected = crate::pybase64::b64decode(&flat).unwrap();
-            assert_eq!(
-                String::from_utf8_lossy(&actual),
-                String::from_utf8_lossy(&expected),
-                "body {body:?}"
-            );
-        }
+        let ctes: std::collections::BTreeSet<&str> = bodies
+            .iter()
+            .map(|body| {
+                Message::new(&config("a@example.com", &recipients), "s", body)
+                    .ok()
+                    .expect("message builds")
+                    .cte
+            })
+            .collect();
         assert_eq!(
             ctes.into_iter().collect::<Vec<_>>(),
             ["7bit", "8bit", "base64", "quoted-printable"]
         );
     }
 
-    /// Address shapes outside the ported grammar (DEVIATIONS.md) are
-    /// written as configured instead of folded.
+    /// The shapes the earlier partial port wrote "as configured": routes,
+    /// null and missing addresses, unterminated quoted strings, comments and
+    /// domain literals, empty list elements, obsolete local parts and
+    /// domains, invalid mailboxes and trailing garbage, and the shapes where
+    /// CPython's own parser raises a built-in exception.
     #[test]
-    fn unsupported_address_shapes_are_written_as_configured() {
-        for value in [
+    fn former_unsupported_address_shapes_match_python() {
+        let shapes = [
             "<@route.example:a@example.com>",
+            "<@r1.example,@r2.example:a@example.com>",
+            "Name <@route.example:a@example.com>",
+            "<,@r.example:a@example.com>",
+            "<@r.example a@example.com>",
             "<>",
+            "Name <>",
             "admin",
+            "first last",
             "\"unterminated <a@example.com>",
+            "\"unterminated",
             "a@example.com,, b@example.com",
+            ", a@example.com",
+            "a@example.com,",
+            " , ",
+            "(comment only)",
+            "(comment) , a@example.com",
             "first last@example.com",
-            &format!("a@example.com {}x{}", "(".repeat(100), ")".repeat(100)),
-        ] {
-            assert!(super::get_address_list(value).is_none(), "{value}");
-            let recipients = [value.to_owned()];
-            let flat =
-                Message::new(&config("a@example.com", &recipients), "s", "x\n").flatten(false);
-            let text = String::from_utf8(flat.ok().expect("headers verify")).unwrap();
-            assert!(text.contains(&format!("\r\nTo: {value}\r\n")), "{text}");
+            "first.last.@example.com",
+            ".first@example.com",
+            "first..last@example.com",
+            "a\\b@example.com",
+            "\\a@example.com",
+            "\"quoted\".atom@example.com",
+            "atom.\"quoted\"@example.com",
+            "a (c) . b@example.com",
+            "a@example .com",
+            "a@example. com",
+            "a@exa (c) .com",
+            "a@ [127.0.0.1]",
+            "a@[127.0.0.1",
+            "a@[",
+            "a@[ ",
+            "a@[\\]]",
+            "a@[a[b]",
+            "Name <a@[127.0.0.1>",
+            "a@b@c",
+            "a@",
+            "@example.com",
+            "a@example.com junk",
+            "Name <a@example.com> junk",
+            "Name <a@example.com",
+            "Name a@example.com>",
+            "G: a@example.com; junk",
+            "G: a@example.com junk;",
+            "G: (c);",
+            "G: , ,;",
+            "G: a@example.com",
+            " (c):;",
+            "(c) G: a@example.com;",
+            "G:: a@example.com;",
+            "G: H: a@example.com;;",
+            "<a@example.com> <b@example.com>",
+            "a@example.com (unterminated comment",
+            "a@example.com (nested (unterminated",
+            "a@example.com \\(not a comment\\)",
+            "(a\\)b) x@example.com",
+            "x@example.com (a\\(b)",
+            ". <a@example.com>",
+            "Name. <a@example.com>",
+            "\"a\" \"b\" <a@example.com>",
+            "Name: <a@example.com>",
+            "Na:me <a@example.com>",
+            "Na;me <a@example.com>",
+            "Na\"me <a@example.com>",
+            "a@example.com;",
+            "a;b@example.com",
+            "<a@example.com>;",
+            "\"\"@example.com",
+            "\" \"@example.com",
+            "\"a\\\"b\"@example.com",
+            "x@[IPv6:::1] (c), \"q\"@[1.2.3.4]",
+            "@",
+            ";",
+            ":",
+            "<",
+            ">",
+            "]",
+            "\\",
+            "\"",
+            "(",
+            ")",
+            "a\u{7f}b@example.com",
+            "a\u{1}b@example.com",
+            "Ünï <ünï@example.com>",
+            "\"Ünï, Còde\" <a@example.com>",
+            "사용자@도메인.example",
+            "a@example.com\u{3000}b@example.com",
+            "a@example.com\u{a0}junk",
+        ];
+        let mut cases = vec![];
+        for shape in shapes {
+            cases.push(case("s", shape, &["b@example.com"]));
+            cases.push(case("s", "a@example.com", &[shape]));
+            cases.push(case("s", "a@example.com", &[shape, "c@example.com"]));
+            let long = format!(
+                "{shape} {} {shape}",
+                "padding-word-that-forces-a-fold ".repeat(3)
+            );
+            cases.push(case("s", "a@example.com", &[&long]));
         }
+        let expected = assert_parity(&cases);
+        let errors: std::collections::BTreeSet<&str> = expected
+            .iter()
+            .filter_map(|outcome| outcome["error"].as_str())
+            .collect();
+        for raised in ["AttributeError", "IndexError", "UnboundLocalError"] {
+            assert!(
+                errors.contains(raised),
+                "{raised} not exercised: {errors:?}"
+            );
+        }
+        let sent = expected.iter().filter(|o| o.get("bytes").is_some()).count();
+        assert!(
+            sent > cases.len() / 2,
+            "only {sent} of {} cases flatten",
+            cases.len()
+        );
     }
 
     /// Deterministic pseudo-random subjects and address lists inside the
-    /// supported grammar (atoms, quoted strings with escapes and specials,
+    /// RFC grammar (atoms, quoted strings with escapes and specials,
     /// obsolete dots, long words, ASCII and non-ASCII, internationalized
     /// addresses), compared with Python byte for byte.
     #[test]
@@ -2963,7 +1689,6 @@ print(json.dumps(out))
                 }
                 text.push_str(word);
             }
-            let subject = text.replace("\\t", "\t");
             let mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
                 let local = locals[next(locals.len())];
                 let domain = domains[next(domains.len())];
@@ -2995,95 +1720,146 @@ print(json.dumps(out))
             };
             let sender = mailbox(&mut next);
             let recipients: Vec<String> = (0..1 + next(5)).map(|_| mailbox(&mut next)).collect();
-            cases.push(json!([subject, sender, recipients]));
+            cases.push(json!([text, sender, recipients, "짧은 본문\n"]));
         }
-        let body = "짧은 본문\n";
-        let script = format!(
-            r#"
-import base64, email.errors, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out = []
-for subject, sender, recipients in json.loads({cases:?}):
-    m = EmailMessage()
-    m["Subject"] = subject
-    m["From"] = sender
-    m["To"] = ", ".join(recipients)
-    m.set_content({body:?})
-    from_addr = email.utils.getaddresses([m["From"]])[0][1]
-    to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
-    try:
-        "".join([from_addr, *to_addrs]).encode("ascii")
-        intl = False
-    except UnicodeEncodeError:
-        intl = True
-    b = io.BytesIO()
-    g = email.generator.BytesGenerator(b, policy=m.policy.clone(utf8=True)) if intl else email.generator.BytesGenerator(b)
-    try:
-        g.flatten(m, linesep="\r\n")
-    except email.errors.HeaderWriteError:
-        out.append([intl, None])
-        continue
-    out.append([intl, base64.b64encode(b.getvalue()).decode()])
-print(json.dumps(out))
-"#,
-            cases = Value::Array(cases.clone()).to_string(),
-        );
-        let expected: Vec<(bool, Option<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let mut mismatches = vec![];
-        let mut unsupported = 0;
-        let mut refused = 0;
-        for (case, (intl, flat)) in cases.iter().zip(expected) {
-            let subject = case[0].as_str().unwrap();
-            let sender = case[1].as_str().unwrap();
-            let recipients: Vec<String> = case[2]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|r| r.as_str().unwrap().to_owned())
-                .collect();
-            if super::get_address_list(sender).is_none()
-                || super::get_address_list(&recipients.join(", ")).is_none()
-            {
-                unsupported += 1;
-            }
-            let rust_intl =
-                !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
-            let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl).ok();
-            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
-            refused += usize::from(expected.is_none());
-            if rust_intl != intl || actual != expected {
-                let shown = |bytes: &Option<Vec<u8>>| {
-                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
-                        format!("{:?}", String::from_utf8_lossy(b))
-                    })
-                };
-                mismatches.push(format!(
-                    "case {case}\n python: {}\n rust:   {}",
-                    shown(&expected),
-                    shown(&actual)
-                ));
-            }
-        }
-        assert_eq!(
-            unsupported, 0,
-            "generated shapes left the supported grammar"
-        );
+        let expected = assert_parity(&cases);
         // CPython 3.12.14 (the 3.12 release CI installs) refuses some of
         // these folds with `HeaderWriteError`; an older 3.12 writes them.
+        let refused = expected
+            .iter()
+            .filter(|outcome| outcome["error"] == "HeaderWriteError")
+            .count();
         assert!(
             refused > 0 && refused < cases.len(),
             "{refused} of {} cases refused: the oracle predates CPython 3.12.14's \
              verify_generated_headers in BytesGenerator",
             cases.len()
         );
+    }
+
+    /// Random strings over the characters every production branches on
+    /// (specials, quotes, backslashes, parentheses, brackets, whitespace,
+    /// encoded-word markers, non-ASCII), as subjects and as address lists.
+    #[test]
+    fn adversarial_header_fuzz_matches_python() {
+        let mut seed: u64 = 0xadd0_2026_1003;
+        let mut next = move |bound: usize| -> usize {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 33) as usize) % bound
+        };
+        let pieces = [
+            "a",
+            "b",
+            "xyz",
+            "@",
+            ".",
+            ",",
+            ";",
+            ":",
+            "<",
+            ">",
+            "(",
+            ")",
+            "[",
+            "]",
+            "\"",
+            "\\",
+            " ",
+            "  ",
+            "\t",
+            "=?utf-8?q?",
+            "?=",
+            "=?",
+            "=E2=9C=93",
+            "=FF",
+            "_",
+            "한",
+            "Ü",
+            "example.com",
+            "a@b.c",
+            "\u{1}",
+            "\u{7f}",
+            "x".repeat(40).leak(),
+            "가나다라마바사아자차카타파하",
+            "IPv6:",
+            "1.2.3.4",
+            "=?utf-8?b?7ZWc6riA?=",
+        ];
+        let mut cases = vec![];
+        for _ in 0..1500 {
+            let mut value = String::new();
+            for _ in 0..1 + next(14) {
+                value.push_str(pieces[next(pieces.len())]);
+            }
+            match next(3) {
+                0 => cases.push(case(&value, "a@example.com", &["b@example.com"])),
+                1 => cases.push(case("s", &value, &["b@example.com"])),
+                _ => cases.push(case("s", "a@example.com", &[&value, "c@d.example"])),
+            }
+        }
+        let expected = assert_parity(&cases);
+        let sent = expected.iter().filter(|o| o.get("bytes").is_some()).count();
         assert!(
-            mismatches.is_empty(),
-            "{} mismatches:\n{}",
-            mismatches.len(),
-            mismatches.join("\n")
+            sent > cases.len() / 4,
+            "only {sent} of {} cases flatten",
+            cases.len()
         );
+    }
+
+    /// Comment placements around the local part, `@` and domain, with
+    /// nested and escaped comments: the envelope (`getaddresses` then
+    /// `quoteaddr`) and the folded headers.
+    #[test]
+    fn comment_envelopes_match_python() {
+        let mut cases = vec![];
+        for base in [
+            "local+tag@domain.example",
+            "loc.al@domain.example",
+            "\"lo cal\"@domain.example",
+            "Display <loc.al@domain.example>",
+        ] {
+            let chars: Vec<char> = base.chars().collect();
+            for pos in 0..=chars.len() {
+                for comment in ["(x)", "(nested(inner))", "(escaped\\)paren)"] {
+                    let address: String = chars[..pos]
+                        .iter()
+                        .chain(comment.chars().collect::<Vec<_>>().iter())
+                        .chain(chars[pos..].iter())
+                        .collect();
+                    cases.push(case("s", &address, &["recipient@example.com"]));
+                }
+            }
+        }
+        for before in ["@", "@exa", "@exa.", "@exa-", "@example.com"] {
+            for after in ["example.com", "mple.com", "com", ".com", ""] {
+                let address = format!("sender{before}(nested(inner)){after}");
+                cases.push(case("s", &address, &["recipient@example.com"]));
+            }
+        }
+        for address in [
+            "sender(Internal)@example.com",
+            "sender@(Internal)example.com",
+            "(outer(inner)) sender@(one(two))example.com (tail)",
+            "Display (a(b)) <sender(x)@(y)example.com>",
+            "sender (x) @example.com",
+            "sender@ (x) example.com",
+            "sender (x) .foo@example.com",
+            "sender@exa(comment)mple.com",
+            "sen(comment)der@example.com",
+            "sender.foo(comment)bar@example.com",
+            "sender@(nested(inner)).com",
+            "sender@exa.(nested(inner))",
+            "\"loc(al)\"@(ignored)example.com",
+            "\"lo\\\"c(a)\"@(ignored)example.com",
+            "\"Display <literal>\" <\"lo(c)al\"@(x)example.com>",
+            "sender(comment(with\\)escape))@example.com",
+        ] {
+            cases.push(case("s", address, &["recipient@example.com"]));
+            cases.push(case("s", "a@example.com", &[address]));
+        }
+        assert_parity(&cases);
     }
 }
 
@@ -3143,106 +1919,6 @@ print(json.dumps(out, sort_keys=True))
                 actual[field], expected[field],
                 "resolver stage {field} differed; Python socket diagnostics: {expected}; Rust diagnostics: {actual}"
             );
-        }
-    }
-}
-
-#[cfg(test)]
-mod mailbox_tests {
-    use super::mailbox;
-    use std::process::Command;
-
-    #[test]
-    fn supported_comment_forms_match_python_envelope_oracle() {
-        // Expected mailboxes measured with Python 3.12 EmailMessage +
-        // smtplib.send_message/quoteaddr. The configured header is not edited.
-        for (input, expected) in [
-            ("sender(Internal)@example.com", "sender@example.com"),
-            ("sender@(Internal)example.com", "sender@example.com"),
-            ("recipient(Internal)@example.com", "recipient@example.com"),
-            ("recipient@(Internal)example.com", "recipient@example.com"),
-            (
-                "(outer(inner)) sender@(one(two))example.com (tail)",
-                "sender@example.com",
-            ),
-            (
-                "Display (a(b)) <sender(x)@(y)example.com>",
-                "sender@example.com",
-            ),
-            ("sender (x) @example.com", "sender@example.com"),
-            ("sender@ (x) example.com", "sender@example.com"),
-            ("sender (x) .foo@example.com", "sender.foo@example.com"),
-            // Measured via EmailMessage/getaddresses and actual send_message:
-            // CFWS between domain atoms terminates the selected mailbox.
-            ("sender@exa(comment)mple.com", "sender@exa"),
-            ("sen(comment)der@example.com", "\"sen der\"@example.com"),
-            (
-                "sender.foo(comment)bar@example.com",
-                "\"sender.foo bar\"@example.com",
-            ),
-            ("sender@(nested(inner)).com", ""),
-            ("sender@exa.(nested(inner))", ""),
-            (
-                "\"loc(al)\"@(ignored)example.com",
-                "\"loc(al)\"@example.com",
-            ),
-            (
-                "\"lo\\\"c(a)\"@(ignored)example.com",
-                "\"lo\\\"c(a)\"@example.com",
-            ),
-            (
-                "\"Display <literal>\" <\"lo(c)al\"@(x)example.com>",
-                "\"lo(c)al\"@example.com",
-            ),
-            (
-                "sender(comment(with\\)escape))@example.com",
-                "sender@example.com",
-            ),
-        ] {
-            assert_eq!(mailbox(input), expected, "input={input:?}");
-        }
-    }
-
-    #[test]
-    fn generated_comment_boundaries_match_python_transport() {
-        // Compute every expected envelope with the same parser and quoteaddr
-        // that send_message uses, rather than copying Rust-derived fixtures.
-        let script = r#"
-import json
-from email.message import EmailMessage
-from email.utils import getaddresses
-from smtplib import quoteaddr
-cases=[]
-for base in ('local+tag@domain.example', 'loc.al@domain.example',
-             '"lo cal"@domain.example', 'Display <loc.al@domain.example>'):
- for pos in range(len(base)+1):
-  for comment in ('(x)', '(nested(inner))', '(escaped\\)paren)'):
-   address=base[:pos]+comment+base[pos:]
-   msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
-   parsed=getaddresses([msg['From']])
-   assert parsed, address
-   cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
-for before in ('@', '@exa', '@exa.', '@exa-', '@example.com'):
- for after in ('example.com', 'mple.com', 'com', '.com', ''):
-  address='sender'+before+'(nested(inner))'+after
-  msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
-  parsed=getaddresses([msg['From']])
-  assert parsed, address
-  cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
-print(json.dumps(cases))
-"#;
-        let output = Command::new("python3.12")
-            .args(["-c", script])
-            .output()
-            .expect("Python 3.12 oracle");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: Vec<(String, String)> = serde_json::from_slice(&output.stdout).unwrap();
-        for (input, expected) in cases {
-            assert_eq!(mailbox(&input), expected, "input={input:?}");
         }
     }
 }
