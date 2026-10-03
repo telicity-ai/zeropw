@@ -158,7 +158,10 @@ fn sign_commit_matches_python_byte_for_byte() {
     let owner = fixed_device(0x77, 0x88);
     let record = owner.record().unwrap();
     let env_id = text(&fx["env_id"]);
-    assert_eq!(C::env_owner_fingerprint(env_id).unwrap(), record.fingerprint());
+    assert_eq!(
+        C::env_owner_fingerprint(env_id).unwrap(),
+        record.fingerprint()
+    );
     let op = env_init_op(&record, "alice-laptop", &"0".repeat(16));
     let c1 = C::sign_commit(&owner, env_id, 1, "1000-0000", &BTreeMap::new(), vec![op]).unwrap();
     assert_eq!(
@@ -464,7 +467,10 @@ fn commit_store_and_snapshot_files_match_python_bytes() {
         vec![json!({"op": "connection.update", "id": "gitlab", "description": "updated"})],
     )
     .unwrap();
-    assert_eq!(compact(&c8.to_dict()), text(&fx["snapshot_seeded"]["commit"]));
+    assert_eq!(
+        compact(&c8.to_dict()),
+        text(&fx["snapshot_seeded"]["commit"])
+    );
 
     let tmp = TempDir::new().unwrap();
     let state = StateDir::new(tmp.path().join("state"));
@@ -591,7 +597,6 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     )
     .unwrap();
     assert_eq!(rust_result.vector.get(&record.fingerprint()), Some(&huge));
-
 }
 
 /// Finding H-R2-6 (probe 2, "the 10^30 snapshot vector"): `snapshot_floor`
@@ -644,7 +649,6 @@ fn snapshot_floor_beyond_i64_still_refuses_a_replayed_commit() {
     );
     let rust_err = store.append(&replayed).unwrap_err();
     assert_eq!(rust_err.reason, "team_seq_duplicate");
-
 }
 
 /// Finding H-R3-9: `CommitStore.vector`/`_snapshot_floor` (Python) filter
@@ -682,7 +686,6 @@ fn commit_store_vector_reads_non_ascii_nd_digit_filename_like_python() {
         3,
         "a non-ASCII Nd digit filename must still be read as author_seq 3"
     );
-
 }
 
 /// Finding H-R3-9's other reachable shape: a stem `str.isdigit()` accepts
@@ -715,7 +718,6 @@ fn commit_store_vector_fails_closed_on_isdigit_but_unparsable_filename() {
         .last_seq(&fp)
         .expect_err("an isdigit()-but-unparsable stem must fail closed, not silently skip");
     assert_eq!(err.reason, "state_corrupt");
-
 }
 
 // ------------------------------------------------------------------ H-2/H-3/H-4/H-5/H-6
@@ -785,7 +787,6 @@ fn hlc_parse_leniency_matches_python_receive_commit_outcome() {
             rust_result, expected,
             "rust receive_commit outcome for hlc={hlc:?}"
         );
-
     }
 }
 
@@ -813,7 +814,6 @@ fn settings_update_accepts_arbitrary_precision_positive_int() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(rust_result, expected, "rust reason for {value}");
-
     }
     // 1.5 is a float, not an int shape at all -- rejected on both sides too,
     // checked separately since it needs a float JSON literal.
@@ -1166,7 +1166,6 @@ fn op_validation_reason_sweep_matches_python() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(&rust_result, expected, "rust reason for case {label:?}");
-
     }
 }
 
@@ -1203,7 +1202,6 @@ fn extra_env_key_before_value_order_matches_python_when_not_key_sorted() {
         rust_result, "invalid_env_name",
         "'b' (checked first in document order) must fail the name pattern before 'A's bad value is ever inspected"
     );
-
 }
 
 /// Finding H-R4-3 (`build_cli_profile` vs `zeropw/team/commit.py`
@@ -1339,7 +1337,6 @@ fn build_cli_profile_check_order_matches_python_over_a_sweep() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(&rust_result, expected, "rust reason for cli={cli_json:?}");
-
     }
 }
 
@@ -1416,7 +1413,6 @@ fn cli_profile_program_checked_before_base_url_env_matches_python() {
         rust_err.reason, "invalid_cli_program",
         "rust must report the PROGRAM failure, not whatever base_url_env's own reason is"
     );
-
 }
 
 /// Finding H-6 (the two `Commit::from_dict` DEVIATIONS.md rows, the second
@@ -1622,7 +1618,6 @@ fn device_record_from_dict_container_field_coercion_matches_python() {
         rust_result.is_err(),
         "rust must reject the non-ASCII-containing array agree_pub, matching python"
     );
-
 }
 
 /// Finding H-R2-5 (`Commit::from_dict`'s `ops` arm vs `zeropw/team/commit.py`
@@ -1681,7 +1676,6 @@ fn commit_ops_element_accepts_pair_list_like_python_dict_op() {
     // appended with a pair-list op.
     let all = store.all_commits().unwrap();
     assert_eq!(all.len(), 2);
-
 }
 
 /// Finding H-R3-3 (correcting H-R2-5's own reasoning): a pair-list `ops`
@@ -1772,7 +1766,6 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
         );
         let rust_result = C::receive_commit(&store, &rust_c2, 1_000_000, None).unwrap();
         assert_eq!(rust_result, "accepted");
-
     }
 
     // --- a large author_seq: signed directly (this port's own signer
@@ -1799,7 +1792,6 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
         .unwrap();
         let rust_result = C::receive_commit(&store, &huge, 1_000_000, None).unwrap();
         assert_eq!(rust_result, "rejected");
-
     }
 }
 

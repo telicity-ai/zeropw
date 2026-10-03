@@ -104,8 +104,8 @@ fn astra_t3_padded_base32_invites_match_python() {
     // `base64.b32encode(json.dumps(p).encode()).decode()`.
     let encoded = "PMRGM33SNVQXIIR2EARHUZLSN5YHOLLUMVQW2LLJNZ3GS5DFFV3DCIRMEARGK3TWL5UWIIR2EARGCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCLJQGEZDGNBVGY3TQOLBMJRWIZLGGAYTEMZUGU3DOOBZMFRGGZDFMYRCYIBCNFXHM2LUMVZCEORAEJQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQSELBAEJQWIZDSMVZXGZLTEI5CAW25FQQCE2LOOZUXIZK7ONSWG4TFOQRDUIBCIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCPJCFQQCEZLYOBUXEZLTL5QXIIR2EARDEMBZHEWTAMJNGAYVIMBQHIYDAORQGBNCELBAEJZG63DFEI5CAITVONSXEIRMEARG4YLNMURDUIBCON4W45DIMV2GSYZAOBQWIZDFMQQGS3TWNF2GK6BCPU======";
     assert!(encoded.ends_with('='));
-    let invite = membership::parse_invite(encoded)
-        .expect("Python accepts standard padded base32 invites");
+    let invite =
+        membership::parse_invite(encoded).expect("Python accepts standard padded base32 invites");
     let payload = invite_payload("aaaaaaaaaaaaaaaaaaaaaaaaaa");
     assert_eq!(invite.name, "synthetic padded invitex");
     assert_eq!(json!(invite.inviter), payload["inviter"]);

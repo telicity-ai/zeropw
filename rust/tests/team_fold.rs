@@ -1111,8 +1111,14 @@ fn state_dir_with_deeply_nested_secret_public_field_reopens() {
     let tmp = TempDir::new().expect("tempdir");
     let state_dir = tmp.path().join("state");
     let env_id = {
-        let ctx = Context::initialize(&state_dir, ADMIN, RECOVERY, Config::default(), clock::system())
-            .expect("Context::initialize");
+        let ctx = Context::initialize(
+            &state_dir,
+            ADMIN,
+            RECOVERY,
+            Config::default(),
+            clock::system(),
+        )
+        .expect("Context::initialize");
         ctx.projects
             .create("demo", projects::DEFAULT_ENVIRONMENTS)
             .unwrap();
@@ -1126,18 +1132,28 @@ fn state_dir_with_deeply_nested_secret_public_field_reopens() {
             public = json!({"a": public});
         }
         let version_id = random_hex(8);
-        let ct = envelope::encrypt_secret(&dek, &env_id, "gh-token", &version_id, b"secretvalue012345")
-            .unwrap();
+        let ct =
+            envelope::encrypt_secret(&dek, &env_id, "gh-token", &version_id, b"secretvalue012345")
+                .unwrap();
         let op2 = json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
                          "generation_id": GEN0, "version_id": version_id, "ciphertext": ct,
                          "public": public});
         C::validate_op(&op2).expect("no depth check at all on `public`");
-        let c2 = C::sign_commit(&owner, &env_id, 2, "2000-0000", &BTreeMap::new(), vec![op2]).unwrap();
+        let c2 =
+            C::sign_commit(&owner, &env_id, 2, "2000-0000", &BTreeMap::new(), vec![op2]).unwrap();
 
         let store = C::CommitStore::new(ctx.state, env_id.clone());
         store.append(&c1).unwrap();
         store.append(&c2).unwrap();
-        let result = F::fold(&env_id, store.all_commits().unwrap(), None, None, None, None).unwrap();
+        let result = F::fold(
+            &env_id,
+            store.all_commits().unwrap(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(result.skipped.is_empty(), "{:?}", result.skipped);
         F::derive_local(
             &result,

@@ -456,88 +456,88 @@ fn derive_local_fails_closed_exactly_where_python_raised() {
 /// `secrets` map, connections document, DEK files, audit records).
 fn base_expected() -> Value {
     json!({
- "audit": [
-  {
-   "action": null,
-   "caller": null,
-   "connection": null,
-   "count": 0,
-   "env_id": ENV,
-   "event": "team_commit_apply",
-   "policy_version": null,
-   "reason": null,
-   "request_id": null,
-   "result": "ok",
-   "run_id": null,
-   "target": null
-  }
- ],
- "connections": {
-  "gh": {
-   "cli": null,
-   "created_at": FIXED_TS,
-   "description": "",
-   "environment": "dev",
-   "http_auth": {
-    "basic_username": null,
-    "header_name": null,
-    "mode": "bearer",
-    "value_prefix": null
-   },
-   "http_scope": {
-    "confirm_methods": [],
-    "methods": [
-     "GET"
-    ],
-    "path_prefixes": null
-   },
-   "http_target": {
-    "allow_private_network": false,
-    "ca_file": null,
-    "host": "api.github.com",
-    "port": 443,
-    "scheme": "https"
-   },
-   "id": "gh",
-   "kind": "http",
-   "policy_version": 1,
-   "project": "demo",
-   "secret_id": "s1",
-   "secret_version": 1,
-   "service": "github",
-   "shared_env": ENV,
-   "ssh_target": null,
-   "status": "active",
-   "updated_at": "<now>"
-  }
- },
- "dek": [
-  format!("{GEN}.json")
- ],
- "outcome": "OK",
- "vault": {
-  "s1": {
-   "active_version": 1,
-   "created_at": "<now>",
-   "environment": "shared",
-   "kind": "api_key",
-   "project": "shared-01234567",
-   "shared_env": ENV,
-   "versions": {
-    "1": {
-     "ciphertext": "AAAA",
-     "created_at": "<now>",
-     "generation": GEN,
-     "nonce": "AAAA",
-     "public": {
-      "label": "x"
+     "audit": [
+      {
+       "action": null,
+       "caller": null,
+       "connection": null,
+       "count": 0,
+       "env_id": ENV,
+       "event": "team_commit_apply",
+       "policy_version": null,
+       "reason": null,
+       "request_id": null,
+       "result": "ok",
+       "run_id": null,
+       "target": null
+      }
+     ],
+     "connections": {
+      "gh": {
+       "cli": null,
+       "created_at": FIXED_TS,
+       "description": "",
+       "environment": "dev",
+       "http_auth": {
+        "basic_username": null,
+        "header_name": null,
+        "mode": "bearer",
+        "value_prefix": null
+       },
+       "http_scope": {
+        "confirm_methods": [],
+        "methods": [
+         "GET"
+        ],
+        "path_prefixes": null
+       },
+       "http_target": {
+        "allow_private_network": false,
+        "ca_file": null,
+        "host": "api.github.com",
+        "port": 443,
+        "scheme": "https"
+       },
+       "id": "gh",
+       "kind": "http",
+       "policy_version": 1,
+       "project": "demo",
+       "secret_id": "s1",
+       "secret_version": 1,
+       "service": "github",
+       "shared_env": ENV,
+       "ssh_target": null,
+       "status": "active",
+       "updated_at": "<now>"
+      }
      },
-     "shared_env": ENV,
-     "status": "active",
-     "version_id": V1
-    }
-   }
-  }
- }
-})
+     "dek": [
+      format!("{GEN}.json")
+     ],
+     "outcome": "OK",
+     "vault": {
+      "s1": {
+       "active_version": 1,
+       "created_at": "<now>",
+       "environment": "shared",
+       "kind": "api_key",
+       "project": "shared-01234567",
+       "shared_env": ENV,
+       "versions": {
+        "1": {
+         "ciphertext": "AAAA",
+         "created_at": "<now>",
+         "generation": GEN,
+         "nonce": "AAAA",
+         "public": {
+          "label": "x"
+         },
+         "shared_env": ENV,
+         "status": "active",
+         "version_id": V1
+        }
+       }
+      }
+     }
+    })
 }

@@ -189,7 +189,9 @@ fn incident_sanitizer_and_fact_conversion_boundary_corpus_match_python() {
         json!({"incident_id":"../escape"}),
     ] {
         assert_eq!(
-            sync::sanitize_incident_summary(&invalid).unwrap_err().reason,
+            sync::sanitize_incident_summary(&invalid)
+                .unwrap_err()
+                .reason,
             "team_incident_summary_invalid",
             "{invalid}"
         );
@@ -209,11 +211,17 @@ fn incident_sanitizer_and_fact_conversion_boundary_corpus_match_python() {
         (json!(2147483647_i64), with("uses", json!(2147483647_i64))),
         (json!(2147483648_i64), id()),
         (json!("x"), with("scope", json!("x"))),
-        (json!("\u{e9}".repeat(200)), with("scope", json!("\u{e9}".repeat(200)))),
+        (
+            json!("\u{e9}".repeat(200)),
+            with("scope", json!("\u{e9}".repeat(200))),
+        ),
         (json!("\u{e9}".repeat(201)), id()),
         (json!("control\u{007f}"), id()),
         (json!([]), id()),
-        (json!(["a", "b", "a"]), with("connection_ids", json!(["a", "b"]))),
+        (
+            json!(["a", "b", "a"]),
+            with("connection_ids", json!(["a", "b"])),
+        ),
         (json!(["a", false]), id()),
         (
             json!(["\u{e9}".repeat(64)]),
@@ -245,7 +253,10 @@ fn incident_sanitizer_and_fact_conversion_boundary_corpus_match_python() {
     ] {
         let mut want = fact(target.clone());
         want["target"] = expected;
-        assert_eq!(sync::Fact::from_dict(&fact(target)).unwrap().to_dict(), want);
+        assert_eq!(
+            sync::Fact::from_dict(&fact(target)).unwrap().to_dict(),
+            want
+        );
     }
 }
 

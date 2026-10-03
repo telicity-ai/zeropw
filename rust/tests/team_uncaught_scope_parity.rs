@@ -203,8 +203,10 @@ fn escaping_validation_exceptions_fail_at_python_scope() {
         let c2 = signed(&owner, &env_id, 2, "2000-0000", vec![put, op]);
         rust.insert(name.into(), rust_outcomes(&env_id, &c1, &c2));
     }
-    let raise = |name: &str| json!({"receive": format!("RAISE {name}"), "rejected": 0,
-        "fold": format!("RAISE {name}")});
+    let raise = |name: &str| {
+        json!({"receive": format!("RAISE {name}"), "rejected": 0,
+        "fold": format!("RAISE {name}")})
+    };
     let rejected = |reason: &str| json!({"receive": "rejected", "rejected": 1, "fold": [reason]});
     assert_eq!(
         Value::Object(rust),

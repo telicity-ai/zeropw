@@ -2318,9 +2318,7 @@ mod tests {
             None,
             None,
         )
-        .expect(
-            "zero commits never touch secrets.s1 -- must fold successfully",
-        );
+        .expect("zero commits never touch secrets.s1 -- must fold successfully");
         assert_eq!(
             untouched.document.as_object().unwrap().get("secrets"),
             malformed_doc.as_object().unwrap().get("secrets"),
@@ -2604,7 +2602,6 @@ mod tests {
                 "case {:?}: an untouched document must pass through unchanged",
                 case.label
             );
-
         }
     }
 
@@ -2673,7 +2670,6 @@ mod tests {
             .expect_err(&format!("stray _version_order={stray:?} must fail closed"));
             assert!(err.is(crate::errors::ErrorClass::StateError));
             assert_eq!(err.reason, "state_corrupt");
-
         }
     }
 
@@ -2682,7 +2678,10 @@ mod tests {
     #[test]
     fn derive_version_index_iterates_raw_strings_and_objects() {
         let cases = [
-            (json!({"sid": "a\u{1f642}"}), json!({"sid": {"a": 1, "\u{1f642}": 2}})),
+            (
+                json!({"sid": "a\u{1f642}"}),
+                json!({"sid": {"a": 1, "\u{1f642}": 2}}),
+            ),
             (
                 json!({"sid": {"second": 2, "first": 1}}),
                 json!({"sid": {"first": 2, "second": 1}}),
@@ -2728,7 +2727,6 @@ mod tests {
             "the malformed local secrets field must be left completely untouched"
         );
         let _ = SecretBytes::new(vec![]); // keep the import used even if unrelated code shifts
-
     }
 
     /// X-15 (equivalence review, round 8): `_derive_vault`'s `"kind":
@@ -2772,7 +2770,6 @@ mod tests {
             "the local vault file must be left completely untouched -- not even the \
              well-formed \"good-secret\" entry should have been written"
         );
-
     }
 
     /// Finding H-R4-5: Python's `fold()` keeps `_version_order` INSIDE `doc`
@@ -2841,7 +2838,6 @@ mod tests {
                 .get("_version_order")
                 .is_none()
         );
-
     }
 
     // A-R5-3: `commit_time` at the gmtime boundary. One millisecond under

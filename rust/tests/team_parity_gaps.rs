@@ -187,7 +187,9 @@ fn share_environment_invalid_retired_version_key_fails_before_mutation() {
         .read_json(zeropw::vault::VAULT_DOC, json!({}))
         .unwrap();
     doc["secrets"]["secret"]["versions"]["invalid"] = json!({"status": "retired"});
-    ctx.state.write_json(zeropw::vault::VAULT_DOC, &doc).unwrap();
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
     let error =
         membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap_err();
     let doc = ctx
