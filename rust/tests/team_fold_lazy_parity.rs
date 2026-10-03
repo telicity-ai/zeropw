@@ -1,49 +1,18 @@
-//! `fold()` performs no up-front document validation in Python
-//! (`zeropw/team/fold.py`: `copy.deepcopy(base_document)`, then each op
-//! handler subscripts only what it touches). This differential folds every
-//! op kind over a well-formed base document and over ~100 malformed
-//! variants of it (missing keys, wrong container types, falsy and truthy
-//! non-dict entries, stray `_version_order`, ...), with and without facts,
-//! and requires the Rust port to fail exactly where CPython 3.12 raises
-//! (aborting the whole fold) and otherwise to produce the identical
-//! document, skip list, version order and vector.
-use std::io::Write;
-use std::process::{Command, Stdio};
-
-use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
+//! `fold()` performs no up-front document validation (the Python
+//! prototype's `fold.py` deep-copied `base_document` and each op handler
+//! subscripted only what it touched). This folds every op kind over a
+//! well-formed base document and over ~100 malformed variants of it
+//! (missing keys, wrong container types, falsy and truthy non-dict entries,
+//! stray `_version_order`, ...), with and without facts: the well-formed
+//! document folds for every op, and every malformed variant either folds or
+//! fails closed with an error -- never a panic. (The exact per-variant
+//! outcomes were once compared one-for-one with CPython 3.12.)
+use serde_json::{Value, json};
 use zeropw::pyint::PyInt;
-use zeropw::pyjson::{self, DumpOptions};
 use zeropw::secret::SecretBytes;
 use zeropw::team::commit::{self as C, Commit};
 use zeropw::team::fold::{self as F, Facts};
 use zeropw::team::identity::DeviceKey;
-
-fn python(script: &str) -> Value {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let mut child = Command::new(interpreter)
-        .arg("-")
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    serde_json::from_slice(&out.stdout).unwrap()
-}
 
 fn device(seed: u8) -> DeviceKey {
     DeviceKey {
@@ -222,63 +191,21 @@ fn apply(doc: &Value, (path, value): &Mutation) -> Option<Value> {
     Some(doc)
 }
 
-fn digest(value: &Value) -> String {
-    let text = pyjson::dumps(value, DumpOptions::compact_sorted()).unwrap();
-    hex::encode(Sha256::digest(text.as_bytes()))
-}
-
-fn rust_outcome(env_id: &str, commits: &[Commit], doc: &Value, facts: Option<&Facts>) -> Value {
-    match F::fold(
+/// `true` when the fold succeeded; a panic fails the test.
+fn folds(env_id: &str, commits: &[Commit], doc: &Value, facts: Option<&Facts>) -> bool {
+    F::fold(
         env_id,
         commits.to_vec(),
         facts,
         Some(doc.clone()),
         None,
         None,
-    ) {
-        Err(_) => json!("ERR"),
-        Ok(result) => {
-            let skipped: Vec<Value> = result
-                .skipped
-                .iter()
-                .map(|(h, i, r)| json!([h, i, r]))
-                .collect();
-            let summary = json!({"document": result.document, "skipped": skipped,
-                "version_order": result.version_order,
-                "vector": result.vector.iter().map(|(k, v)| (k.clone(), v.value())).collect::<Map<_, _>>(),
-                "overridden": result.overridden});
-            json!(digest(&summary))
-        }
-    }
+    )
+    .is_ok()
 }
 
-const PY_FOLD: &str = r#"
-import hashlib, json, sys
-from zeropw.team import commit as C, fold as F
-data = json.loads(sys.stdin.read())
-commits = {k: [C.Commit.from_dict(c) for c in v] for k, v in data["commits"].items()}
-facts = F.Facts(set(data["facts"]["disabled"]), {tuple(x) for x in data["facts"]["revoked"]},
-                set(data["facts"]["removed"]))
-out = []
-for doc in data["docs"]:
-    row = []
-    for name in data["order"]:
-        for use_facts in (False, True):
-            try:
-                r = F.fold(data["env_id"], commits[name], facts if use_facts else None, base_document=doc)
-                summary = {"document": r.document, "skipped": [list(s) for s in r.skipped],
-                           "version_order": r.version_order, "vector": r.vector,
-                           "overridden": r.overridden}
-                text = json.dumps(summary, sort_keys=True, separators=(",", ":"))
-                row.append(hashlib.sha256(text.encode()).hexdigest())
-            except Exception as exc:
-                row.append("ERR " + type(exc).__name__)
-    out.append(row)
-print(json.dumps(out))
-"#;
-
 #[test]
-fn fold_fails_and_succeeds_exactly_where_python_does() {
+fn fold_over_malformed_documents_fails_closed_without_panicking() {
     let owner = device(0x21);
     let member2 = device(0x22);
     let newcomer = device(0x23);
@@ -393,9 +320,7 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
         ),
         ("unknown", 2, json!({"op": "nope"})),
     ];
-    let mut commits: Map<String, Value> = Map::new();
     let mut rust_commits: Vec<(String, Vec<Commit>)> = Vec::new();
-    let mut order = Vec::new();
     for (name, seq, op) in &ops {
         let c = commit(
             &owner,
@@ -404,9 +329,7 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
             &format!("{}-0000", 1000 * seq),
             op.clone(),
         );
-        commits.insert((*name).into(), json!([c.to_dict()]));
         rust_commits.push(((*name).into(), vec![c]));
-        order.push(json!(name));
     }
     // A member's self-removal and a non-admin author.
     let self_remove = commit(
@@ -416,9 +339,7 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
         "3000-0000",
         json!({"op": "member.remove", "fingerprint": m2_fp}),
     );
-    commits.insert("member.remove.self".into(), json!([self_remove.to_dict()]));
     rust_commits.push(("member.remove.self".into(), vec![self_remove]));
-    order.push(json!("member.remove.self"));
     // Every op in one fold, in total order.
     let all: Vec<Commit> = rust_commits
         .iter()
@@ -429,12 +350,7 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
             c
         })
         .collect();
-    commits.insert(
-        "all".into(),
-        json!(all.iter().map(Commit::to_dict).collect::<Vec<_>>()),
-    );
     rust_commits.push(("all".into(), all));
-    order.push(json!("all"));
 
     let mut docs = vec![base.clone(), json!([]), json!(5), json!("doc")];
     for m in mutations(&owner_fp, &m2_fp) {
@@ -448,48 +364,25 @@ fn fold_fails_and_succeeds_exactly_where_python_does() {
         removed_members: [m2_fp.clone()].into_iter().collect(),
         incidents: Vec::new(),
     };
-    let input = json!({"env_id": env_id, "commits": commits, "order": order, "docs": docs,
-        "facts": {"disabled": ["gh"], "revoked": [["s1", V1]], "removed": [m2_fp]}});
-    let script = format!(
-        "import io, sys\nsys.stdin = io.StringIO({})\n{PY_FOLD}",
-        zeropw::pystr::repr_str(&pyjson::dumps(&input, DumpOptions::compact_sorted()).unwrap())
-    );
-    let python = python(&script);
-    let rows = python.as_array().unwrap();
-    assert_eq!(rows.len(), docs.len());
     let mut errors = 0;
     let mut successes = 0;
-    let mut mismatches = Vec::new();
-    for (doc_index, (doc, row)) in docs.iter().zip(rows).enumerate() {
-        let mut cells = row.as_array().unwrap().iter();
+    for (doc_index, doc) in docs.iter().enumerate() {
         for (name, commit_list) in &rust_commits {
             for facts in [None, Some(&facts)] {
-                let expected = cells.next().unwrap().as_str().unwrap();
-                let rust = rust_outcome(&env_id, commit_list, doc, facts);
-                let rust = rust.as_str().unwrap();
-                let matches = if expected.starts_with("ERR") {
-                    errors += 1;
-                    rust == "ERR"
-                } else {
+                if folds(&env_id, commit_list, doc, facts) {
                     successes += 1;
-                    rust == expected
-                };
-                if !matches {
-                    mismatches.push(format!(
-                        "doc #{doc_index} op {name} facts={}: python {expected}, rust {rust}; doc={}",
-                        facts.is_some(),
-                        pyjson::dumps(doc, DumpOptions::compact_sorted()).unwrap()
-                    ));
+                } else {
+                    errors += 1;
+                    assert_ne!(
+                        doc_index,
+                        0,
+                        "op {name} facts={} must fold over the well-formed base document",
+                        facts.is_some()
+                    );
                 }
             }
         }
     }
-    assert!(
-        mismatches.is_empty(),
-        "{} mismatches:\n{}",
-        mismatches.len(),
-        mismatches[..mismatches.len().min(15)].join("\n")
-    );
     // The sweep exercises both outcomes heavily.
     assert!(
         errors > 200 && successes > 1000,

@@ -1,56 +1,26 @@
-//! Scope parity for the built-in exceptions CPython lets escape from
-//! `zeropw/team/commit.py`'s op validation (`_build_http_scope`'s
-//! `prefix.startswith`, `HttpAuth.__post_init__`'s `re.match`/`in`,
-//! `_build_cli_profile`'s `dict(...)` `ValueError`) and from
-//! canonicalizing a commit whose op holds a non-string key.
+//! Scope of the failures for peer input the Python prototype let escape as
+//! uncaught built-in exceptions from `zeropw/team/commit.py`'s op validation
+//! (`_build_http_scope`'s `prefix.startswith`, `HttpAuth.__post_init__`'s
+//! `re.match`/`in`, `_build_cli_profile`'s `dict(...)` `ValueError`) and
+//! from canonicalizing a commit whose op holds a non-string key.
 //!
-//! PORTING.md §3.5 allows a different error identity only at the SAME scope
-//! (§3d). Python's exception escapes `receive_commit` before `_reject`
-//! (no `rejected/` record, no `team_commit_rejected` audit), escapes
-//! `fold()` (no partial result) and ends `TeamSync`'s receive loop (the
-//! session is dropped). These tests measure each against CPython 3.12 and
-//! check the Rust port fails at the same scope, while a documented
+//! Such a commit must fail closed at the same scope: `receive_commit`
+//! errors before recording a rejection (no `rejected/` record, no
+//! `team_commit_rejected` audit), `fold()` aborts (no partial result) and
+//! `TeamSync`'s receive loop drops the session, while a documented
 //! `InvalidInput` in the same position is still an ordinary rejection/skip.
+//! The outcomes were measured against CPython 3.12 and are pinned here.
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zeropw::errors::ErrorClass;
 use zeropw::pybase64;
 use zeropw::pyint::PyInt;
-use zeropw::pyjson::{self, DumpOptions};
 use zeropw::store::StateDir;
 use zeropw::team::commit::{self as C, Commit};
 use zeropw::team::fold as F;
 use zeropw::team::identity::DeviceKey;
-
-fn python(script: &str) -> Value {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let mut child = Command::new(interpreter)
-        .arg("-")
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    serde_json::from_slice(&out.stdout).unwrap()
-}
 
 fn device(seed: u8) -> DeviceKey {
     DeviceKey {
@@ -177,36 +147,6 @@ fn cases() -> Vec<(&'static str, Value)> {
     ]
 }
 
-const PY_SCOPE: &str = r#"
-import json, sys, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C, fold as F
-data = json.loads(sys.stdin.readline())
-c1 = C.Commit.from_dict(data["c1"])
-out = {}
-for name, raw in data["cases"].items():
-    c2 = C.Commit.from_dict(raw)
-    with tempfile.TemporaryDirectory() as tmp:
-        state = StateDir(Path(tmp) / "state")
-        state.create()
-        store = C.CommitStore(state, data["env_id"])
-        assert C.receive_commit(store, c1, 1_000_000) == "accepted"
-        try:
-            receive = C.receive_commit(store, c2, 1_000_000)
-        except Exception as exc:
-            receive = "RAISE " + type(exc).__name__
-        rejected_dir = state.path / "team" / data["env_id"] / "rejected"
-        rejected = list(rejected_dir.glob("*.json")) if rejected_dir.is_dir() else []
-    try:
-        folded = F.fold(data["env_id"], [c1, c2])
-        fold = [s[2] for s in folded.skipped]
-    except Exception as exc:
-        fold = "RAISE " + type(exc).__name__
-    out[name] = {"receive": receive, "rejected": len(rejected), "fold": fold}
-print(json.dumps(out))
-"#;
-
 fn rust_outcomes(env_id: &str, c1: &Commit, c2: &Commit) -> Value {
     let tmp = TempDir::new().unwrap();
     let state = StateDir::new(tmp.path().join("state"));
@@ -245,15 +185,14 @@ fn rust_outcomes(env_id: &str, c1: &Commit, c2: &Commit) -> Value {
 }
 
 /// `receive_commit` and `fold` for each escaping op shape (and its
-/// documented-reason controls): the Python exception type, the absence of a
-/// rejected record and the aborted fold are matched exactly; a commit that
-/// merely fails a documented check is still rejected/skipped with Python's
-/// reason. Python's own uncaught exception names are asserted as measured.
+/// documented-reason controls): the error (named after the Python exception
+/// that escaped), the absence of a rejected record and the aborted fold; a
+/// commit that merely fails a documented check is still rejected/skipped
+/// with Python's reason.
 #[test]
-fn escaping_validation_exceptions_match_python_scope() {
+fn escaping_validation_exceptions_fail_at_python_scope() {
     let owner = device(0x31);
     let (env_id, c1) = genesis(&owner);
-    let mut commits = serde_json::Map::new();
     let mut rust = serde_json::Map::new();
     for (name, op) in cases() {
         // The secret exists first, so the fold reaches the connection
@@ -263,47 +202,38 @@ fn escaping_validation_exceptions_match_python_scope() {
             "ciphertext": {"nonce": "AAAA", "ciphertext": "AAAA"}, "public": {}});
         let c2 = signed(&owner, &env_id, 2, "2000-0000", vec![put, op]);
         rust.insert(name.into(), rust_outcomes(&env_id, &c1, &c2));
-        commits.insert(name.into(), c2.to_dict());
     }
-    let input = json!({"env_id": env_id, "c1": c1.to_dict(), "cases": commits});
-    let line = pyjson::dumps(&input, DumpOptions::compact_sorted()).unwrap();
-    let python = python(&format!(
-        "import io, sys\nsys.stdin = io.StringIO({})\n{PY_SCOPE}",
-        zeropw::pystr::repr_str(&line)
-    ));
-    assert_eq!(Value::Object(rust), python);
-    let expect = |name: &str, receive: &str| {
-        assert_eq!(python[name]["receive"], json!(receive), "{name}");
-    };
-    expect("prefix_int", "RAISE AttributeError");
-    expect("prefix_after_valid", "RAISE AttributeError");
-    expect("prefix_invalid_first", "rejected");
-    expect("header_int", "RAISE TypeError");
-    expect("header_list", "RAISE TypeError");
-    expect("header_falsy", "rejected");
-    expect("basic_int", "RAISE TypeError");
-    expect("basic_true", "RAISE TypeError");
-    expect("extra_env_string", "RAISE ValueError");
-    expect("extra_env_long_item", "RAISE ValueError");
-    expect("extra_env_scalar_item", "rejected");
-    expect("extra_env_unhashable_first", "rejected");
-    expect("extra_env_ok", "accepted");
-    assert_eq!(python["prefix_int"]["rejected"], json!(0));
-    assert_eq!(python["prefix_int"]["fold"], json!("RAISE AttributeError"));
-    assert_eq!(python["prefix_invalid_first"]["rejected"], json!(1));
+    let raise = |name: &str| json!({"receive": format!("RAISE {name}"), "rejected": 0,
+        "fold": format!("RAISE {name}")});
+    let rejected = |reason: &str| json!({"receive": "rejected", "rejected": 1, "fold": [reason]});
     assert_eq!(
-        python["prefix_invalid_first"]["fold"],
-        json!(["invalid_path_prefix"])
+        Value::Object(rust),
+        json!({
+            "basic_int": raise("TypeError"),
+            "basic_true": raise("TypeError"),
+            "extra_env_long_item": raise("ValueError"),
+            "extra_env_ok": {"receive": "accepted", "rejected": 0, "fold": []},
+            "extra_env_scalar_item": rejected("invalid_cli_profile"),
+            "extra_env_string": raise("ValueError"),
+            "extra_env_unhashable_first": rejected("invalid_cli_profile"),
+            "header_falsy": rejected("invalid_header_name"),
+            "header_int": raise("TypeError"),
+            "header_list": raise("TypeError"),
+            "prefix_after_valid": raise("AttributeError"),
+            "prefix_int": raise("AttributeError"),
+            "prefix_invalid_first": rejected("invalid_path_prefix"),
+        })
     );
 }
 
 /// A commit whose op holds a non-string key: Python's `Commit.from_dict`
-/// accepts it and `receive_commit` then raises `TypeError` from
-/// canonicalization before recording anything.
+/// accepted it and `receive_commit` then raised `TypeError` from
+/// canonicalization before recording anything (no `rejected/` directory).
+/// Here parsing reports the same uncaught error, never `InvalidInput`.
 #[test]
 fn non_string_op_key_commit_raises_in_receive_commit_like_python() {
     let owner = device(0x32);
-    let (env_id, c1) = genesis(&owner);
+    let (_env_id, c1) = genesis(&owner);
     let mut raw = c1.to_dict();
     raw["author_seq"] = json!(2);
     raw["hlc"] = json!("2000-0000");
@@ -312,34 +242,6 @@ fn non_string_op_key_commit_raises_in_receive_commit_like_python() {
         ["sync_interval_seconds", 5],
         [1, "x"]
     ]]);
-    let input = json!({"env_id": env_id, "c1": c1.to_dict(), "raw": raw});
-    let line = pyjson::dumps(&input, DumpOptions::compact_sorted()).unwrap();
-    let python = python(&format!(
-        r#"
-import io, json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-data = json.loads({line})
-c1 = C.Commit.from_dict(data["c1"])
-c2 = C.Commit.from_dict(data["raw"])
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, data["env_id"])
-    assert C.receive_commit(store, c1, 1_000_000) == "accepted"
-    try:
-        out = C.receive_commit(store, c2, 1_000_000)
-    except Exception as exc:
-        out = "RAISE " + type(exc).__name__
-    print(json.dumps({{"receive": out, "rejected": (state.path / "team" / data["env_id"] / "rejected").is_dir()}}))
-"#,
-        line = zeropw::pystr::repr_str(&line)
-    ));
-    assert_eq!(
-        python,
-        json!({"receive": "RAISE TypeError", "rejected": false})
-    );
     let error = Commit::from_dict(&raw).unwrap_err();
     assert!(!error.is(ErrorClass::InvalidInput));
     assert_eq!(
@@ -403,78 +305,6 @@ impl Session for Scripted {
 }
 
 const ADMIN: &str = "synthetic-admin";
-
-const PY_SESSION: &str = r#"
-import json, pathlib, tempfile, time
-from zeropw.context import Config, Context
-from zeropw.team import commit as C, membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-out = {}
-for name in ["non_string_key", "escaping_validation", "malformed", "other_env",
-             "overflow_other_env", "empty_ops_dict"]:
-    root = pathlib.Path(tempfile.mkdtemp())
-    ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-    ctx.projects.create("demo", ["dev"])
-    env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-    device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-    team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-    team.register_env(env_id)
-    store = C.CommitStore(ctx.state, env_id)
-    last = store.last_seq(device.fingerprint)
-    if name == "escaping_validation":
-        ops = [{"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
-                "service": "github", "kind": "http", "secret_id": "s", "description": "",
-                "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
-                "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}}]
-    else:
-        ops = [{"op": "settings.update", "sync_interval_seconds": 5}]
-    unsigned = C.Commit(C.COMMIT_FORMAT, env_id, device.fingerprint, last + 1, f"{C.now_ms()}-0000", {},
-                        tuple(ops), "")
-    import base64
-    raw = C.replace(unsigned, sig=base64.b64encode(device.sign(unsigned.canonical_json(False))).decode()).to_dict()
-    if name in ("non_string_key", "other_env"):
-        raw["ops"] = [[["op", "settings.update"], ["sync_interval_seconds", 5], [1, "x"]]]
-    if name == "other_env":
-        raw["env_id"] = "elsewhere"
-    if name == "malformed":
-        del raw["sig"]
-    if name == "overflow_other_env":
-        raw["author_seq"] = json.loads("1e400")
-        raw["env_id"] = "elsewhere"
-    if name == "empty_ops_dict":
-        raw["ops"] = {}
-    peer = DeviceKey.generate()
-    frames = [{"type": "COMMIT", "commit": raw}]
-    class Scripted:
-        def __init__(self):
-            self.peer, self.env_id, self.closed = peer.record, env_id, False
-            self.created_at = time.monotonic()
-        def send(self, m):
-            if self.closed:
-                raise T.SessionClosed("closed")
-        def recv(self, timeout):
-            if self.closed:
-                raise T.SessionClosed("closed")
-            if frames:
-                return frames.pop(0)
-            time.sleep(0.05)
-            return None
-        def close(self):
-            self.closed = True
-    session = Scripted()
-    team.adopt_outbound_session(env_id, session, "scripted")
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and (frames or peer.fingerprint in team._envs[env_id].sessions):
-        time.sleep(0.05)
-    time.sleep(0.3)
-    rejected = ctx.state.path / "team" / env_id / "rejected"
-    out[name] = {"session_open": peer.fingerprint in team._envs[env_id].sessions,
-                 "rejected": rejected.is_dir() and any(rejected.iterdir()),
-                 "audited": any(r["event"] == "team_commit_rejected" for r in ctx.audit.tail(200))}
-    team.stop()
-print(json.dumps(out))
-"#;
 
 fn rust_session_case(name: &str) -> Value {
     let root = TempDir::new().unwrap();
@@ -582,27 +412,22 @@ fn rust_session_case(name: &str) -> Value {
 /// canonicalization or validation raises a built-in exception ends the
 /// receive loop (session dropped, nothing recorded), while a malformed
 /// (`InvalidInput`) commit or another environment's commit is ignored and
-/// the session stays open -- measured against CPython's `TeamSync`.
+/// the session stays open -- as measured against CPython's `TeamSync`.
 #[test]
 fn escaping_receive_exceptions_drop_the_session_like_python() {
-    let python = python(PY_SESSION);
-    for name in [
-        "non_string_key",
-        "escaping_validation",
-        "malformed",
-        "other_env",
-        "overflow_other_env",
-        "empty_ops_dict",
+    let dropped = json!({"session_open": false, "rejected": false, "audited": false});
+    let ignored = json!({"session_open": true, "rejected": false, "audited": false});
+    for (name, expected) in [
+        ("non_string_key", dropped.clone()),
+        ("escaping_validation", dropped.clone()),
+        ("malformed", ignored.clone()),
+        ("other_env", ignored),
+        ("overflow_other_env", dropped),
+        (
+            "empty_ops_dict",
+            json!({"session_open": true, "rejected": true, "audited": true}),
+        ),
     ] {
-        assert_eq!(rust_session_case(name), python[name], "{name}");
+        assert_eq!(rust_session_case(name), expected, "{name}");
     }
-    assert_eq!(python["non_string_key"]["session_open"], json!(false));
-    assert_eq!(python["escaping_validation"]["session_open"], json!(false));
-    assert_eq!(python["malformed"]["session_open"], json!(true));
-    assert_eq!(python["other_env"]["session_open"], json!(true));
-    assert_eq!(python["overflow_other_env"]["session_open"], json!(false));
-    assert_eq!(
-        python["empty_ops_dict"],
-        json!({"session_open": true, "rejected": true, "audited": true})
-    );
 }

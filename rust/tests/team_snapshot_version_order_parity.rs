@@ -1,115 +1,59 @@
-//! Differential coverage for snapshot `version_order` coercion and
-//! preservation of non-string entries.
+//! Snapshot `version_order` coercion and preservation of non-string
+//! entries, and snapshot categories validated only when an operation reaches
+//! them. Saved snapshot bytes are compared with the Python prototype's
+//! (`tests/fixtures/python/team/snapshots/`); the other outcomes were
+//! measured against it and are pinned explicitly.
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use base64::Engine;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use zeropw::pyjson::{self, DumpOptions};
+use zeropw::secret::SecretBytes;
 use zeropw::store::StateDir;
 use zeropw::team::commit;
 use zeropw::team::fold;
 use zeropw::team::identity::DeviceKey;
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
-fn py_str(value: &Path) -> String {
-    format!("{:?}", value.to_str().unwrap())
+fn signer() -> DeviceKey {
+    DeviceKey {
+        sign_seed: SecretBytes::from_slice(&[0x5e; 32]),
+        agree_private: SecretBytes::from_slice(&[0x5f; 32]),
+    }
 }
 
 #[test]
 fn snapshot_version_order_successes_and_saved_bytes_match_python() {
-    let cases = [
-        (Value::Null, json!({"sid": [1, true, null, "v", 1.5]})),
-        (Value::Null, json!({"sid": "a🙂"})),
-        (Value::Null, json!({"sid": {"first": 1, "second": 2}})),
-        // An existing document key wins over the separately supplied map.
-        // Python only requires it to support `.setdefault` if an accepted
-        // secret.put_version later appends; with no ops it is popped and
-        // returned unchanged.
-        (json!({"_version_order": 5}), json!({"ignored": ["v1"]})),
-        // No op touches this deliberately incomplete/malformed document, so
-        // Python returns it unchanged instead of eagerly validating fields.
-        (
-            json!({"env_id": "env", "connections": {"bad": {}}}),
-            json!({}),
-        ),
-    ];
-    for (index, (document, version_order)) in cases.into_iter().enumerate() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/python/team/snapshots/cases.json"
+    );
+    let cases: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    let cases = cases.as_array().unwrap();
+    // `null` documents with list/string/object orders, an existing document
+    // key winning over the separately supplied map (popped and returned
+    // unchanged with no ops), and a deliberately incomplete document no op
+    // touches (returned unchanged instead of eagerly validated).
+    assert_eq!(cases.len(), 5);
+    for (index, case) in cases.iter().enumerate() {
         let tmp = TempDir::new().unwrap();
-        let rust_path = tmp.path().join("rust");
-        let python_path = tmp.path().join("python");
-        let rust_state = StateDir::new(&rust_path);
-        rust_state.create().unwrap();
-        let snapshot = json!({"document": document, "vector": {}, "version_order": version_order});
-        rust_state
-            .write_json("team/env/snapshots/1.json", &snapshot)
+        let state_path = tmp.path().join("rust");
+        let state = StateDir::new(&state_path);
+        state.create().unwrap();
+        state
+            .write_json("team/env/snapshots/1.json", &case["snapshot"])
             .unwrap();
-        let rust_result = fold::fold_with_snapshot("env", vec![], &rust_state, None, None).unwrap();
-        fold::save_snapshot(
-            &rust_state,
-            "env",
-            &zeropw::pyint::PyInt::from(2),
-            &rust_result,
-        )
-        .unwrap();
-        let rust_bytes = fs::read(rust_path.join("team/env/snapshots/2.json")).unwrap();
-
-        let snapshot_text = pyjson::dumps(&snapshot, DumpOptions::compact_sorted()).unwrap();
-        let script = format!(
-            r#"
-import base64,json
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import fold as F
-state=StateDir(Path({state}))
-state.create()
-state.write_json("team/env/snapshots/1.json", json.loads({snapshot:?}))
-result=F.fold_with_snapshot("env", [], state)
-F.save_snapshot(state, "env", 2, result)
-print(json.dumps(result.version_order, ensure_ascii=False, separators=(",", ":")))
-print(base64.b64encode((state.path/"team/env/snapshots/2.json").read_bytes()).decode("ascii"))
-"#,
-            state = py_str(&python_path),
-            snapshot = snapshot_text,
-        );
-        let interpreter =
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_owned());
-        let output = Command::new(interpreter)
-            .arg("-c")
-            .arg(script)
-            .env("PYTHONPATH", repo_root())
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "case {index}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let lines: Vec<&str> = stdout.lines().collect();
-        let python_order: Value = serde_json::from_str(lines[0]).unwrap();
+        let result = fold::fold_with_snapshot("env", vec![], &state, None, None).unwrap();
+        fold::save_snapshot(&state, "env", &zeropw::pyint::PyInt::from(2), &result).unwrap();
         assert_eq!(
-            serde_json::to_value(&rust_result.version_order).unwrap(),
-            python_order,
+            serde_json::to_value(&result.version_order).unwrap(),
+            case["version_order"],
             "case {index}"
         );
-        let python_bytes = base64::engine::general_purpose::STANDARD
-            .decode(lines[1])
-            .unwrap();
         assert_eq!(
-            rust_bytes, python_bytes,
+            fs::read_to_string(state_path.join("team/env/snapshots/2.json")).unwrap(),
+            case["saved"].as_str().unwrap(),
             "saved snapshot bytes, case {index}"
         );
     }
@@ -117,13 +61,14 @@ print(base64.b64encode((state.path/"team/env/snapshots/2.json").read_bytes()).de
 
 #[test]
 fn snapshot_categories_are_validated_only_when_an_operation_reaches_them() {
-    let signer = DeviceKey::generate();
-    let fingerprint = signer.fingerprint().unwrap();
+    let fingerprint = signer().fingerprint().unwrap();
+    // (label, document, op, skip reason, expected settings value)
     let cases = vec![
         (
             "unknown",
             json!({"opaque": {"connections": 5}, "settings": ["untouched"]}),
             json!({"op": "future.unknown", "id": "x"}),
+            Some("unknown_op"),
             None,
         ),
         (
@@ -138,6 +83,7 @@ fn snapshot_categories_are_validated_only_when_an_operation_reaches_them() {
                 "settings": 7,
             }),
             json!({"op": "settings.update", "sync_interval_seconds": 3}),
+            Some("not_admin"),
             None,
         ),
         (
@@ -151,10 +97,11 @@ fn snapshot_categories_are_validated_only_when_an_operation_reaches_them() {
                 "settings": {"sync_interval_seconds": 1},
             }),
             json!({"op": "settings.update", "sync_interval_seconds": 3}),
+            None,
             Some(json!(3)),
         ),
     ];
-    for (index, (label, document, op, expected_setting)) in cases.into_iter().enumerate() {
+    for (label, document, op, skip_reason, expected_setting) in cases {
         // Public fold accepts already-loaded commits. Construct this directly
         // so the deliberately unknown operation reaches fold instead of being
         // rejected by sign_commit's local authoring validation.
@@ -170,70 +117,39 @@ fn snapshot_categories_are_validated_only_when_an_operation_reaches_them() {
         };
         let snapshot = json!({"document": document, "vector": {}, "version_order": {}});
         let tmp = TempDir::new().unwrap();
-        let rust_path = tmp.path().join("rust");
-        let python_path = tmp.path().join("python");
-        let rust_state = StateDir::new(&rust_path);
-        rust_state.create().unwrap();
-        rust_state
+        let state = StateDir::new(tmp.path().join("rust"));
+        state.create().unwrap();
+        state
             .write_json("team/env/snapshots/1.json", &snapshot)
             .unwrap();
         let rust =
-            fold::fold_with_snapshot("env", vec![commit.clone()], &rust_state, None, None).unwrap();
+            fold::fold_with_snapshot("env", vec![commit.clone()], &state, None, None).unwrap();
 
-        let script = format!(
-            r#"
-import json
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-state=StateDir(Path({state}))
-state.create()
-state.write_json("team/env/snapshots/1.json", json.loads({snapshot:?}))
-commit=C.Commit.from_dict(json.loads({commit:?}))
-result=F.fold_with_snapshot("env", [commit], state)
-print(json.dumps({{"document": result.document, "skipped": result.skipped,
-                  "version_order": result.version_order}}, sort_keys=True, separators=(",", ":")))
-"#,
-            state = py_str(&python_path),
-            snapshot = pyjson::dumps(&snapshot, DumpOptions::compact_sorted()).unwrap(),
-            commit = pyjson::dumps(&commit.to_dict(), DumpOptions::compact_sorted()).unwrap(),
-        );
-        let interpreter =
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_owned());
-        let output = Command::new(interpreter)
-            .arg("-c")
-            .arg(script)
-            .env("PYTHONPATH", repo_root())
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{label}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let python: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let actual = json!({
-            "document": rust.document,
-            "skipped": rust.skipped,
-            "version_order": rust.version_order,
-        });
-        assert_eq!(actual, python, "case {index}: {label}");
-        if let Some(expected_setting) = expected_setting {
-            assert_eq!(
-                actual["document"]["settings"]["sync_interval_seconds"],
-                expected_setting
-            );
-        } else {
-            assert_eq!(actual["document"], snapshot["document"]);
+        // What the Python prototype's `fold_with_snapshot` produced: the
+        // document untouched except by an applied op.
+        let mut expected_document = snapshot["document"].clone();
+        if let Some(setting) = expected_setting {
+            expected_document["settings"]["sync_interval_seconds"] = setting;
         }
+        let expected_skipped = match skip_reason {
+            Some(reason) => json!([[commit.hash().unwrap(), 0, reason]]),
+            None => json!([]),
+        };
+        assert_eq!(
+            json!({
+                "document": rust.document,
+                "skipped": rust.skipped,
+                "version_order": rust.version_order,
+            }),
+            json!({"document": expected_document, "skipped": expected_skipped, "version_order": {}}),
+            "{label}"
+        );
     }
 }
 
 #[test]
 fn raw_version_order_valid_target_appends_without_touching_bad_sibling() {
-    let signer = DeviceKey::generate();
+    let signer = signer();
     let fingerprint = signer.fingerprint().unwrap();
     let document = json!({
         "env_id": "env",
@@ -254,53 +170,30 @@ fn raw_version_order_valid_target_appends_without_touching_bad_sibling() {
         commit::sign_commit(&signer, "env", 1, "1000-0000", &BTreeMap::new(), vec![op]).unwrap();
     let snapshot = json!({"document": document, "vector": {}, "version_order": {"ignored": []}});
     let tmp = TempDir::new().unwrap();
-    let rust_path = tmp.path().join("rust");
-    let python_path = tmp.path().join("python");
-    let rust_state = StateDir::new(&rust_path);
-    rust_state.create().unwrap();
-    rust_state
+    let state = StateDir::new(tmp.path().join("rust"));
+    state.create().unwrap();
+    state
         .write_json("team/env/snapshots/1.json", &snapshot)
         .unwrap();
-    let rust =
-        fold::fold_with_snapshot("env", vec![commit.clone()], &rust_state, None, None).unwrap();
+    let rust = fold::fold_with_snapshot("env", vec![commit], &state, None, None).unwrap();
 
-    let script = format!(
-        r#"
-import json
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-state=StateDir(Path({state}))
-state.create()
-state.write_json("team/env/snapshots/1.json", json.loads({snapshot:?}))
-commit=C.Commit.from_dict(json.loads({commit:?}))
-result=F.fold_with_snapshot("env", [commit], state)
-print(json.dumps({{"document": result.document, "version_order": result.version_order}},
-                 sort_keys=True, separators=(",", ":")))
-"#,
-        state = py_str(&python_path),
-        snapshot = pyjson::dumps(&snapshot, DumpOptions::compact_sorted()).unwrap(),
-        commit = pyjson::dumps(&commit.to_dict(), DumpOptions::compact_sorted()).unwrap(),
-    );
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_owned());
-    let output = Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let python: Value = serde_json::from_slice(&output.stdout).unwrap();
+    // The result the Python prototype's `fold_with_snapshot` produced.
     assert_eq!(
         json!({"document": rust.document, "version_order": rust.version_order}),
-        python
+        json!({
+            "document": {
+                "connections": {},
+                "dek": {"current": "0000000000000000",
+                        "generations": {"0000000000000000": {"wraps": {}}}},
+                "env_id": "env",
+                "members": {(fingerprint.clone()): {"role": "admin", "status": "active"}},
+                "owner": fingerprint,
+                "secrets": {"new": {"active_version": null, "kind": "api_key", "versions": {
+                    "1111111111111111": {"ciphertext": "AA==", "generation": "0000000000000000",
+                                         "nonce": "AA==", "public": {}, "status": "staged"}}}},
+                "settings": {},
+            },
+            "version_order": {"bad-unrelated": 5, "existing": ["v0"], "new": ["1111111111111111"]},
+        })
     );
-    assert_eq!(python["version_order"]["bad-unrelated"], json!(5));
-    assert_eq!(python["version_order"]["new"], json!(["1111111111111111"]));
 }

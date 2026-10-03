@@ -2236,7 +2236,7 @@ mod tests {
         let hlc = format!("{WALL_MS_GMTIME_FAILS_AT}-0000");
         let c2 = connection_create_commit(&env_id, &owner, 2, &hlc, "gh");
         let err = fold(&env_id, vec![c1, c2], None, None, None, None)
-            .expect_err("a commit whose hlc python3.12 can't gmtime() must abort the whole fold");
+            .expect_err("a commit whose hlc is past gmtime range must abort the whole fold");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "team_commit_time_out_of_range");
     }
@@ -2319,7 +2319,7 @@ mod tests {
             None,
         )
         .expect(
-            "zero commits never touch secrets.s1 -- must fold successfully, matching python3.12",
+            "zero commits never touch secrets.s1 -- must fold successfully",
         );
         assert_eq!(
             untouched.document.as_object().unwrap().get("secrets"),
