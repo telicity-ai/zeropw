@@ -1,0 +1,1059 @@
+{
+ "flattened_body": "ZeroPW 알림 설정을 확인하기 위한 시험 메시지입니다.\n실제 침입 사건이 아닙니다. 이 메시지가 도착했다면 SMTP 설정이 올바르게 동작합니다.\n",
+ "flattened": [
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "a@example.com",
+   "recipients": [
+    "a@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7Lmo7J6FIOqwkOyngCDigJQg7ISc67mE7IqkIOygleyngCw=?=\r\n =?utf-8?b?IOyekOqyqeymneuqhSDqtZDssrQg7ZWE7JqUICjsgqzqsbQ=?=\r\n inc-20231114T221320Z-0123abcd)\r\nFrom: a@example.com\r\nTo: a@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "very.long.local.part.for.folding.checks@subdomain.example-domain.com",
+   "recipients": [
+    "ZeroPW <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "관리자 <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7JWM66a8IOyEpOyglSDsi5ztl5gg66mU7Iuc7KeA?=\r\nFrom: very.long.local.part.for.folding.checks@subdomain.example-domain.com\r\nTo:\r\n ZeroPW <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n =?utf-8?b?6rSA66as7J6Q?= <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "사용자@example.com",
+   "recipients": [
+    "관리자 <사용자@example.com>",
+    "\"Doe, John\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "\"관리자 (보안)\" <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: 사용자@example.com\r\nTo: 관리자 <사용자@example.com>, \"Doe, John\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n \"관리자 (보안)\" <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "A <a@example.com>",
+   "recipients": [
+    "Joe Q. Public <a@example.com>",
+    "\"관리자 (보안)\" <사용자@example.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: A <a@example.com>\r\nTo: Joe Q. Public <a@example.com>, \"관리자 (보안)\" <사용자@example.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "\"quoted \\\"inner\\\" name\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlA==?=\r\n =?utf-8?b?7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Trnbzrp4jrsJTsgqwg?=\r\n =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIA=?=\r\n =?utf-8?b?64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpg=?=\r\n =?utf-8?b?64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Q=?=\r\n =?utf-8?b?652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCAg64Gd?=\r\nFrom: A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: \"quoted \\\"inner\\\" name\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "A <사용자@example.com>",
+   "recipients": [
+    "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>",
+    "very.long.local.part.for.folding.checks@subdomain.example-domain.com"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: A <사용자@example.com>\r\nTo: 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>,\r\n very.long.local.part.for.folding.checks@subdomain.example-domain.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "ZeroPW <a@example.com>",
+   "recipients": [
+    "A <a@example.com>",
+    "ZeroPW <사용자@example.com>",
+    "관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject:\r\n [ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)\r\nFrom: ZeroPW <a@example.com>\r\nTo: A <a@example.com>, ZeroPW <사용자@example.com>,\r\n 관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "ZeroPW <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "ZeroPW 알림 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Ünïcode Náme <a@example.com>",
+    "\"Doe, John\" <사용자@example.com>",
+    "\"관리자 (보안)\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] 알림 설정 시험 메시지\r\nFrom:\r\n ZeroPW <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: ZeroPW 알림\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Ünïcode Náme <a@example.com>, \"Doe, John\" <사용자@example.com>, \"관리자 (보안)\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "ZeroPW <사용자@example.com>",
+   "recipients": [
+    "Ünïcode Náme <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: ZeroPW <사용자@example.com>\r\nTo: Ünïcode Náme <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "ZeroPW 알림 <a@example.com>",
+   "recipients": [
+    "\"관리자 (보안)\" <a@example.com>",
+    "\"quoted \\\"inner\\\" name\" <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: ZeroPW 알림 <a@example.com>\r\nTo: \"관리자 (보안)\" <a@example.com>, \"quoted \\\"inner\\\" name\" <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "ZeroPW 알림 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>",
+    "사용자@example.com"
+   ],
+   "intl": true,
+   "message": "Subject: 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사\r\n 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝\r\nFrom: ZeroPW 알림\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>,\r\n 사용자@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "ZeroPW 알림 <사용자@example.com>",
+   "recipients": [
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>",
+    "A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 알림 <a@example.com>",
+    "관리자 <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: ZeroPW 알림 <사용자@example.com>\r\nTo: ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>,\r\n A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 알림 <a@example.com>, 관리자 <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "관리자 <a@example.com>",
+   "recipients": [
+    "ZeroPW <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7Lmo7J6FIOqwkOyngCDigJQg7ISc67mE7IqkIOygleyngCw=?=\r\n =?utf-8?b?IOyekOqyqeymneuqhSDqtZDssrQg7ZWE7JqUICjsgqzqsbQ=?=\r\n inc-20231114T221320Z-0123abcd)\r\nFrom: =?utf-8?b?6rSA66as7J6Q?= <a@example.com>\r\nTo: ZeroPW <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "\"Doe, John\" <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7JWM66a8IOyEpOyglSDsi5ztl5gg66mU7Iuc7KeA?=\r\nFrom: =?utf-8?b?6rSA66as7J6Q?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: =?utf-8?b?6rSA66as7J6Q?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n \"Doe, John\" <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "관리자 <사용자@example.com>",
+   "recipients": [
+    "\"Doe, John\" <사용자@example.com>",
+    "\"관리자 (보안)\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: 관리자 <사용자@example.com>\r\nTo: \"Doe, John\" <사용자@example.com>, \"관리자 (보안)\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "Ünïcode Náme <a@example.com>",
+   "recipients": [
+    "\"quoted \\\"inner\\\" name\" <a@example.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <사용자@example.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "A <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: Ünïcode Náme <a@example.com>\r\nTo: \"quoted \\\"inner\\\" name\" <a@example.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <사용자@example.com>, ZeroPW 보안 알림 수신자 목록 Security Notification Recipients\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n A <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "Ünïcode Náme <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlA==?=\r\n =?utf-8?b?7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Trnbzrp4jrsJTsgqwg?=\r\n =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIA=?=\r\n =?utf-8?b?64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpg=?=\r\n =?utf-8?b?64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Q=?=\r\n =?utf-8?b?652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCAg64Gd?=\r\nFrom: =?utf-8?b?w5xuw69jb2RlIE7DoW1l?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: =?utf-8?b?6rSA66as7J6QIO2VnOq1reyWtCDsnbTrpoTsnbQg7JWE7KO8IOq4uOyWtA==?=\r\n =?utf-8?b?7IScIO2VnCDspITsl5Ag64ukIOuTpOyWtOqwgOyngCDslYrripQg6rK97Jqw66W8?=\r\n =?utf-8?b?IOyLnO2XmO2VqeuLiOuLpA==?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "Ünïcode Náme <사용자@example.com>",
+   "recipients": [
+    "사용자@example.com",
+    "ZeroPW <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: Ünïcode Náme <사용자@example.com>\r\nTo: 사용자@example.com, ZeroPW\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "\"Doe, John\" <a@example.com>",
+   "recipients": [
+    "ZeroPW 알림 <a@example.com>",
+    "관리자 <사용자@example.com>",
+    "\"Doe, John\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject:\r\n [ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)\r\nFrom: \"Doe, John\" <a@example.com>\r\nTo: ZeroPW 알림 <a@example.com>, 관리자 <사용자@example.com>, \"Doe, John\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "\"Doe, John\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "Ünïcode Náme <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Joe Q. Public <a@example.com>",
+    "\"관리자 (보안)\" <사용자@example.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] 알림 설정 시험 메시지\r\nFrom: \"Doe, John\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: Ünïcode Náme\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Joe Q. Public <a@example.com>, \"관리자 (보안)\" <사용자@example.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "\"Doe, John\" <사용자@example.com>",
+   "recipients": [
+    "Joe Q. Public <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: \"Doe, John\" <사용자@example.com>\r\nTo: Joe Q. Public <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "Joe Q. Public <a@example.com>",
+   "recipients": [
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <a@example.com>",
+    "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: Joe Q. Public <a@example.com>\r\nTo: Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <a@example.com>,\r\n 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "Joe Q. Public <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "A <a@example.com>",
+    "ZeroPW <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사\r\n 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝\r\nFrom: Joe Q. Public\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: ZeroPW 보안 알림 수신자 목록 Security Notification Recipients\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n A <a@example.com>, ZeroPW <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "Joe Q. Public <사용자@example.com>",
+   "recipients": [
+    "A <사용자@example.com>",
+    "ZeroPW 알림 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Ünïcode Náme <a@example.com>",
+    "\"Doe, John\" <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: Joe Q. Public <사용자@example.com>\r\nTo: A <사용자@example.com>, ZeroPW 알림\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Ünïcode Náme <a@example.com>, \"Doe, John\" <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "\"관리자 (보안)\" <a@example.com>",
+   "recipients": [
+    "관리자 <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7Lmo7J6FIOqwkOyngCDigJQg7ISc67mE7IqkIOygleyngCw=?=\r\n =?utf-8?b?IOyekOqyqeymneuqhSDqtZDssrQg7ZWE7JqUICjsgqzqsbQ=?=\r\n inc-20231114T221320Z-0123abcd)\r\nFrom: =?utf-8?b?6rSA66as7J6QICjrs7TslYgp?= <a@example.com>\r\nTo: =?utf-8?b?6rSA66as7J6Q?= <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "\"관리자 (보안)\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "\"Doe, John\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "\"관리자 (보안)\" <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7JWM66a8IOyEpOyglSDsi5ztl5gg66mU7Iuc7KeA?=\r\nFrom: =?utf-8?b?6rSA66as7J6QICjrs7TslYgp?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: \"Doe, John\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n =?utf-8?b?6rSA66as7J6QICjrs7TslYgp?= <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "\"관리자 (보안)\" <사용자@example.com>",
+   "recipients": [
+    "\"관리자 (보안)\" <사용자@example.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: \"관리자 (보안)\" <사용자@example.com>\r\nTo: \"관리자 (보안)\" <사용자@example.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "\"quoted \\\"inner\\\" name\" <a@example.com>",
+   "recipients": [
+    "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <a@example.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>",
+    "A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 알림 <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: \"quoted \\\"inner\\\" name\" <a@example.com>\r\nTo: 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <a@example.com>,\r\n ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>,\r\n A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 알림 <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "\"quoted \\\"inner\\\" name\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "very.long.local.part.for.folding.checks@subdomain.example-domain.com"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlA==?=\r\n =?utf-8?b?7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Trnbzrp4jrsJTsgqwg?=\r\n =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIA=?=\r\n =?utf-8?b?64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpg=?=\r\n =?utf-8?b?64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Q=?=\r\n =?utf-8?b?652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCAg64Gd?=\r\nFrom: \"quoted \\\"inner\\\" name\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: very.long.local.part.for.folding.checks@subdomain.example-domain.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "\"quoted \\\"inner\\\" name\" <사용자@example.com>",
+   "recipients": [
+    "ZeroPW <사용자@example.com>",
+    "관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: \"quoted \\\"inner\\\" name\" <사용자@example.com>\r\nTo: ZeroPW <사용자@example.com>,\r\n 관리자 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "Security Operations Response Team Distribution List For ZeroPW Incidents <a@example.com>",
+   "recipients": [
+    "Ünïcode Náme <a@example.com>",
+    "\"Doe, John\" <사용자@example.com>",
+    "\"관리자 (보안)\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject:\r\n [ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)\r\nFrom:\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <a@example.com>\r\nTo: Ünïcode Náme <a@example.com>, \"Doe, John\" <사용자@example.com>, \"관리자 (보안)\"\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "Security Operations Response Team Distribution List For ZeroPW Incidents <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "Joe Q. Public <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "\"quoted \\\"inner\\\" name\" <a@example.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <사용자@example.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <very.long.local.part.for.folding.checks@subdomain.example-domain.com>"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] 알림 설정 시험 메시지\r\nFrom:\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: Joe Q. Public\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n \"quoted \\\"inner\\\" name\" <a@example.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <사용자@example.com>, ZeroPW 보안 알림 수신자 목록 Security Notification Recipients\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "Security Operations Response Team Distribution List For ZeroPW Incidents <사용자@example.com>",
+   "recipients": [
+    "\"quoted \\\"inner\\\" name\" <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom:\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <사용자@example.com>\r\nTo: \"quoted \\\"inner\\\" name\" <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <a@example.com>",
+   "recipients": [
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>",
+    "사용자@example.com"
+   ],
+   "intl": true,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?= (사건 inc-1)\r\nFrom: 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <a@example.com>\r\nTo: ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>,\r\n 사용자@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "ZeroPW 알림 <a@example.com>",
+    "관리자 <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사\r\n 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝\r\nFrom: 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: A <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n ZeroPW 알림 <a@example.com>, 관리자 <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>",
+   "recipients": [
+    "ZeroPW 알림 <사용자@example.com>",
+    "Ünïcode Náme <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Joe Q. Public <a@example.com>",
+    "\"관리자 (보안)\" <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: 관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다 <사용자@example.com>\r\nTo: ZeroPW 알림 <사용자@example.com>, Ünïcode Náme\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Joe Q. Public <a@example.com>, \"관리자 (보안)\" <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <a@example.com>",
+   "recipients": [
+    "\"Doe, John\" <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7Lmo7J6FIOqwkOyngCDigJQg7ISc67mE7IqkIOygleyngCw=?=\r\n =?utf-8?b?IOyekOqyqeymneuqhSDqtZDssrQg7ZWE7JqUICjsgqzqsbQ=?=\r\n inc-20231114T221320Z-0123abcd)\r\nFrom: ZeroPW =?utf-8?b?67O07JWIIOyVjOumvCDsiJjsi6DsnpAg66qp66Gd?= Security\r\n Notification Recipients <a@example.com>\r\nTo: \"Doe, John\" <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+   "recipients": [
+    "\"관리자 (보안)\" <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <a@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7JWM66a8IOyEpOyglSDsi5ztl5gg66mU7Iuc7KeA?=\r\nFrom: ZeroPW =?utf-8?b?67O07JWIIOyVjOumvCDsiJjsi6DsnpAg66qp66Gd?= Security\r\n Notification Recipients\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>\r\nTo: =?utf-8?b?6rSA66as7J6QICjrs7TslYgp?=\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>",
+   "recipients": [
+    "Security Operations Response Team Distribution List For ZeroPW Incidents <사용자@example.com>",
+    "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <very.long.local.part.for.folding.checks@subdomain.example-domain.com>",
+    "A <a@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: plain ascii subject\r\nFrom: ZeroPW 보안 알림 수신자 목록 Security Notification Recipients <사용자@example.com>\r\nTo: Security Operations Response Team Distribution List For ZeroPW Incidents\r\n <사용자@example.com>, ZeroPW 보안 알림 수신자 목록 Security Notification Recipients\r\n <very.long.local.part.for.folding.checks@subdomain.example-domain.com>,\r\n A <a@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7Lmo7J6FIOqwkOyngCDigJQg7ISc67mE7IqkIOygleyngCw=?=\r\n =?utf-8?b?IOyekOqyqeymneuqhSDqtZDssrQg7ZWE7JqUICjsgqzqsbQ=?=\r\n inc-20231114T221320Z-0123abcd)\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] 알림 설정 시험 메시지",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?b?7JWM66a8IOyEpOyglSDsi5ztl5gg66mU7Iuc7KeA?=\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "plain ascii subject",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: plain ascii subject\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "[ZeroPW] xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (사건 inc-1)",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: [ZeroPW] =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?=\r\n =?utf-8?q?xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_=28=EC=82=AC=EA=B1=B4?=\r\n inc-1)\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사 가나다라마바사  끝",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlA==?=\r\n =?utf-8?b?7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Trnbzrp4jrsJTsgqwg?=\r\n =?utf-8?b?6rCA64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIA=?=\r\n =?utf-8?b?64KY64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpg=?=\r\n =?utf-8?b?64uk652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCDqsIDrgpjri6Q=?=\r\n =?utf-8?b?652866eI67CU7IKsIOqwgOuCmOuLpOudvOuniOuwlOyCrCAg64Gd?=\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  },
+  {
+   "subject": "a;b [c] (d), e: \"f\" g.h",
+   "sender": "a@example.com",
+   "recipients": [
+    "b@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: a;b [c] (d), e: \"f\" g.h\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\nWmVyb1BXIOyVjOumvCDshKTsoJXsnYQg7ZmV7J247ZWY6riwIOychO2VnCDsi5ztl5gg66mU7Iuc\r\n7KeA7J6F64uI64ukLgrsi6TsoJwg7Lmo7J6FIOyCrOqxtOydtCDslYTri5nri4jri6QuIOydtCDr\r\nqZTsi5zsp4DqsIAg64+E7LCp7ZaI64uk66m0IFNNVFAg7ISk7KCV7J20IOyYrOuwlOultOqyjCDr\r\nj5nsnpHtlanri4jri6QuCg==\r\n"
+  }
+ ],
+ "generated_body": "짧은 본문\n",
+ "generated": [
+  {
+   "index": 0,
+   "subject": "_u_ a",
+   "sender": "a (escaped \\) paren, and; specials)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+   "recipients": [
+    "\"Doe, John\" <a (ops)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "x-y x-y <very.long.local.part.name.for.folding@도메인.example>",
+    "very.long.local.part.name.for.folding@sub.example-domain.org",
+    "\"Doe, John\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@sub.example-domain.org>"
+   ],
+   "intl": true,
+   "message": "Subject: _u_ a\r\nFrom: a (escaped \\) paren, and; specials)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\nTo: \"Doe, John\" <a (ops)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>,\r\n x-y x-y <very.long.local.part.name.for.folding@도메인.example>,\r\n very.long.local.part.name.for.folding@sub.example-domain.org, \"Doe, John\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@sub.example-domain.org>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 1,
+   "subject": "[tag]",
+   "sender": "first.last (보안팀)@sub.example-domain.org",
+   "recipients": [
+    "\"\" <x+tag@도메인.example(tight)>",
+    "\"quoted local\"@도메인.example (escaped \\) paren, and; specials)",
+    "\"한국어, 쉼표\" <very.long.local.part.name.for.folding@도메인.example (a very long comment that goes on and on and on and on and on and on and on)>",
+    "anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx (nested (inner) comment)@example.com",
+    "O'Neil Ünïcode Q. Ünïcode <first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": true,
+   "message": null
+  },
+  {
+   "index": 2,
+   "subject": "a=b  —\t관리자 a",
+   "sender": "teamname <first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (보안팀)>",
+   "recipients": [
+    "admin@sub.example-domain.org",
+    "admin@sub.example-domain.org (보안팀)",
+    "first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (a very long comment that goes on and on and on and on and on and on and on)",
+    "관리자 (보안) <first.last (보안팀)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": false,
+   "message": null
+  },
+  {
+   "index": 3,
+   "subject": "_u_ 알림\ta",
+   "sender": "first.last (a very long comment that goes on and on and on and on and on and on and on)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+   "recipients": [
+    "\"관리자 (보안)\" <admin (보안팀)@도메인.example>",
+    "관리자 (보안) 알림 Q. <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (a very long comment that goes on and on and on and on and on and on and on)>",
+    "\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+    "\"Doe, John\" <admin (ops)@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject: _u_ 알림\ta\r\nFrom: first.last\r\n (a very long comment that goes on and on and on and on and on and on and on)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\nTo: \"관리자 (보안)\" <admin (보안팀)@도메인.example>, 관리자 (보안) 알림 Q. <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (a very long comment that goes on and on and on and on and on and on and on)>,\r\n \"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example,\r\n \"Doe, John\" <admin (ops)@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 4,
+   "subject": "_u_",
+   "sender": "Admin x-y Ünïcode <x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+   "recipients": [
+    "\"Doe, John\" <사용자@도메인.example (ops)>",
+    "a+b 관리자 (보안) O'Neil O'Neil <a@sub.example-domain.org (ops)>",
+    "\"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\" <first.last@sub.example-domain.org>",
+    "a+b averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx 관리자 (보안) <very.long.local.part.name.for.folding (nested (inner) comment)@도메인.example>",
+    "very.long.local.part.name.for.folding (ops)@도메인.example"
+   ],
+   "intl": true,
+   "message": "Subject: _u_\r\nFrom: Admin x-y Ünïcode <x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>\r\nTo: \"Doe, John\" <사용자@도메인.example (ops)>,\r\n a+b 관리자 (보안) O'Neil O'Neil <a@sub.example-domain.org (ops)>,\r\n \"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\"\r\n <first.last@sub.example-domain.org>, a+b\r\n averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx\r\n 관리자 (보안)\r\n <very.long.local.part.name.for.folding (nested (inner) comment)@도메인.example>,\r\n very.long.local.part.name.for.folding (ops)@도메인.example\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 5,
+   "subject": "Ünï  _u_  q?x a Ünï x-y.z",
+   "sender": "관리자 anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure 알림 teamname <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx(tight)@sub.example-domain.org>",
+   "recipients": [
+    "Q. teamname a+b <사용자@sub.example-domain.org>",
+    "averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx 관리자 <first.last@example.com (escaped \\) paren, and; specials)>",
+    "\"관리자, Admin; Ops\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com (ops)>",
+    "\"관리자, Admin; Ops\" <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (a very long comment that goes on and on and on and on and on and on and on)>"
+   ],
+   "intl": true,
+   "message": "Subject: Ünï  _u_  q?x a Ünï x-y.z\r\nFrom: 관리자\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n 알림 teamname <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx(tight)@sub.example-domain.org>\r\nTo: Q. teamname a+b <사용자@sub.example-domain.org>,\r\n averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx\r\n 관리자 <first.last@example.com (escaped \\) paren, and; specials)>,\r\n \"관리자, Admin; Ops\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com\r\n (ops)>, \"관리자, Admin; Ops\" <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (a very long comment that goes on and on and on and on and on and on and on)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 6,
+   "subject": "[tag]  (note) x-y.z _u_ [tag]  (note)\t긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 _u_",
+   "sender": "알림 O'Neil Ünïcode Admin <\"quoted local\"@sub.example-domain.org(tight)>",
+   "recipients": [
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure x-y <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (nested (inner) comment)>",
+    "Ünïcode <first.last@example.com (escaped \\) paren, and; specials)>",
+    "관리자 (보안) anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure <very.long.local.part.name.for.folding@도메인.example(tight)>",
+    "관리자 (보안) averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx teamname <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (보안팀)>"
+   ],
+   "intl": true,
+   "message": "Subject:\r\n [tag]  (note) x-y.z _u_ [tag]  (note)\t긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 _u_\r\nFrom: 알림 O'Neil Ünïcode Admin <\"quoted local\"@sub.example-domain.org(tight)>\r\nTo:\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n x-y <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (nested (inner) comment)>,\r\n Ünïcode <first.last@example.com (escaped \\) paren, and; specials)>, 관리자 (보안)\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n <very.long.local.part.name.for.folding@도메인.example(tight)>, 관리자 (보안)\r\n averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx\r\n teamname <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (보안팀)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 7,
+   "subject": "x-y.z",
+   "sender": "a+b x-y <first.last@도메인.example>",
+   "recipients": [
+    "관리자 (보안) Ops_Team 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "\"Doe, John\" <x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (nested (inner) comment)>",
+    "admin@도메인.example(tight)",
+    "\"\" <first.last@example.com (nested (inner) comment)>",
+    "사용자@example.com (ops)"
+   ],
+   "intl": true,
+   "message": "Subject: x-y.z\r\nFrom: a+b x-y <first.last@도메인.example>\r\nTo: 관리자 (보안) Ops_Team 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>,\r\n \"Doe, John\" <x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (nested (inner) comment)>, admin@도메인.example(tight),\r\n \"\" <first.last@example.com (nested (inner) comment)>, 사용자@example.com (ops)\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 8,
+   "subject": "averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx Ünï",
+   "sender": "사용자@example.com",
+   "recipients": [
+    "Ünïcode Ops (team) teamname <사용자@example.com>"
+   ],
+   "intl": true,
+   "message": "Subject:\r\n averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n Ünï\r\nFrom: 사용자@example.com\r\nTo: Ünïcode Ops (team) teamname <사용자@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 9,
+   "subject": "Ünï  mix한글mix [tag] a=b a=b Ünï x-y.z tab\tsep",
+   "sender": "\"관리자, Admin; Ops\" <very.long.local.part.name.for.folding(tight)@sub.example-domain.org>",
+   "recipients": [
+    "\"a;b:c\" <\"quoted local\"@example.com (보안팀)>",
+    "사용자 (nested (inner) comment)@도메인.example",
+    "very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (보안팀)"
+   ],
+   "intl": true,
+   "message": "Subject: Ünï  mix한글mix [tag] a=b a=b Ünï x-y.z tab\tsep\r\nFrom: \"관리자, Admin; Ops\"\r\n <very.long.local.part.name.for.folding(tight)@sub.example-domain.org>\r\nTo: \"a;b:c\" <\"quoted local\"@example.com (보안팀)>,\r\n 사용자 (nested (inner) comment)@도메인.example,\r\n very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (보안팀)\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 10,
+   "subject": "tab\tsep (note)\t긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 ZeroPW\taveryveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx",
+   "sender": "\"\" <a@sub.example-domain.org (escaped \\) paren, and; specials)>",
+   "recipients": [
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure <first.last@도메인.example (a very long comment that goes on and on and on and on and on and on and on)>",
+    "\"관리자, Admin; Ops\" <a@sub.example-domain.org>",
+    "averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx <사용자@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example(tight)>"
+   ],
+   "intl": true,
+   "message": "Subject: tab\tsep (note)\t긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 ZeroPW\r\n\taveryveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\nFrom: \"\" <a@sub.example-domain.org (escaped \\) paren, and; specials)>\r\nTo:\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n <first.last@도메인.example\r\n (a very long comment that goes on and on and on and on and on and on and on)>,\r\n \"관리자, Admin; Ops\" <a@sub.example-domain.org>,\r\n averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx <사용자@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example(tight)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 11,
+   "subject": "tab\tsep  averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx 관리자 Ünï 긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 Ünï\t[tag]  보안-담당 —",
+   "sender": "very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+   "recipients": [
+    "teamname <a@example.com>",
+    "a@sub.example-domain.org (nested (inner) comment)",
+    "\"a;b:c\" <very.long.local.part.name.for.folding@example.com>",
+    "사용자@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (a very long comment that goes on and on and on and on and on and on and on)"
+   ],
+   "intl": true,
+   "message": "Subject: tab\tsep \r\n averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n 관리자 Ünï 긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 Ünï\t[tag]  보안-담당 —\r\nFrom: very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\nTo: teamname <a@example.com>,\r\n a@sub.example-domain.org (nested (inner) comment),\r\n \"a;b:c\" <very.long.local.part.name.for.folding@example.com>, 사용자@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (a very long comment that goes on and on and on and on and on and on and on)\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 12,
+   "subject": "Ünï\t50% —  관리자",
+   "sender": "O'Neil Ops (team) 관리자 (보안) anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure <사용자@example.com>",
+   "recipients": [
+    "Q. Ünïcode <a@sub.example-domain.org>",
+    "\"Doe, John\" <a(tight)@도메인.example>",
+    "teamname Ops (team) <사용자@example.com>",
+    "\"esc \\\"q\\\" \\\\\" <\"quoted local\"@도메인.example (escaped \\) paren, and; specials)>"
+   ],
+   "intl": true,
+   "message": "Subject: Ünï\t50% —  관리자\r\nFrom: O'Neil Ops (team) 관리자 (보안)\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n <사용자@example.com>\r\nTo: Q. Ünïcode <a@sub.example-domain.org>, \"Doe, John\" <a(tight)@도메인.example>,\r\n teamname Ops (team) <사용자@example.com>, \"esc \\\"q\\\" \\\\\"\r\n <\"quoted local\"@도메인.example (escaped \\) paren, and; specials)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 13,
+   "subject": "ZeroPW averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx 50%",
+   "sender": "very.long.local.part.name.for.folding@example.com",
+   "recipients": [
+    "admin@sub.example-domain.org (a very long comment that goes on and on and on and on and on and on and on)",
+    "\"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\" <first.last@sub.example-domain.org (escaped \\) paren, and; specials)>"
+   ],
+   "intl": false,
+   "message": "Subject: ZeroPW\r\n averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n 50%\r\nFrom: very.long.local.part.name.for.folding@example.com\r\nTo: admin@sub.example-domain.org\r\n (a very long comment that goes on and on and on and on and on and on and on),\r\n =?utf-8?b?IOq4tCDsnbjsmqkg7J2066aELCDtirnsiJjrrLjsnpA7IO2PrO2VqCDquLQg7J24?=\r\n =?utf-8?b?7JqpIOydtOumhCDquLQg7J247JqpIOydtOumhCDquLQg7J247JqpIOydtOumhCA=?=\r\n =?utf-8?b?6ri0IOyduOyaqSDsnbTrpoQg6ri0IOyduOyaqSDsnbTrpoQ=?=\r\n <first.last@sub.example-domain.org (escaped \\) paren, and; specials)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 20,
+   "subject": "q?x 보안-담당\tÜnï 관리자\t_u_ mix한글mix\t긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 mix한글mix sp  ace",
+   "sender": "알림 anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure x-y <very.long.local.part.name.for.folding (nested (inner) comment)@sub.example-domain.org>",
+   "recipients": [
+    "\"\" <first.last (escaped \\) paren, and; specials)@example.com>",
+    "\"관리자 (보안)\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": false,
+   "message": "Subject: q?x =?utf-8?b?67O07JWILeuLtOuLuQnDnG7DryDqtIDrpqzsnpAJX3VfIG1peA==?=\r\n =?utf-8?b?7ZWc6riAbWl4Ceq4tO2VnOq1reyWtOuLqOyWtOq4tO2VnOq1reyWtOuLqOyWtA==?=\r\n =?utf-8?b?6ri07ZWc6rWt7Ja064uo7Ja06ri07ZWc6rWt7Ja064uo7Ja06ri07ZWc6rWt7Ja0?=\r\n =?utf-8?b?64uo7Ja0IG1peO2VnOq4gG1peA==?= sp  ace\r\nFrom: =?utf-8?q?=EC=95=8C=EB=A6=BC_anevenlongerdisplaynameatomthatexceedsthe?=\r\n =?utf-8?q?maximumlinelengthoftheemailpolicyforsure?= x-y <very.long.local.part.name.for.folding\r\n (nested (inner) comment)@sub.example-domain.org>\r\nTo: \"\" <first.last (escaped \\) paren, and; specials)@example.com>,\r\n =?utf-8?b?6rSA66as7J6QICjrs7TslYgp?= <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 21,
+   "subject": "— a a Ünï 긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 x-y.z  보안-담당 x-y.z",
+   "sender": "관리자 Q. <very.long.local.part.name.for.folding@sub.example-domain.org (보안팀)>",
+   "recipients": [
+    "Ops (team) 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 관리자 (보안) anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure <very.long.local.part.name.for.folding@sub.example-domain.org>",
+    "\"Doe, John\" <first.last@example.com(tight)>",
+    "\"esc \\\"q\\\" \\\\\" <사용자@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure x-y <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx (ops)@sub.example-domain.org>",
+    "ZeroPW 알림 a+b 알림 <\"quoted local\" (보안팀)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": true,
+   "message": null
+  },
+  {
+   "index": 22,
+   "subject": "averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx mix한글mix\t관리자",
+   "sender": "Admin <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (escaped \\) paren, and; specials)>",
+   "recipients": [
+    "관리자 (보안) a+b anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure <very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (escaped \\) paren, and; specials)>",
+    "x-y Ops_Team x-y <first.last@example.com>",
+    "very.long.local.part.name.for.folding@sub.example-domain.org"
+   ],
+   "intl": false,
+   "message": "Subject:\r\n averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n =?utf-8?b?IG1peO2VnOq4gG1peAnqtIDrpqzsnpA=?=\r\nFrom: Admin <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (escaped \\) paren, and; specials)>\r\nTo: =?utf-8?b?6rSA66as7J6QIOuztOyViCBhK2IgYW5ldmVubG9uZ2VyZGlzcGxheW5hbWVh?=\r\n =?utf-8?q?tomthatexceedsthemaximumlinelengthoftheemailpolicyforsure?= <very.long.local.part.name.for.folding@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (escaped \\) paren, and; specials)>, x-y Ops_Team x-y <first.last@example.com>,\r\n very.long.local.part.name.for.folding@sub.example-domain.org\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 25,
+   "subject": "Ünï Ünï\t보안-담당  averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx 50%",
+   "sender": "\"quoted local\"@example.com (nested (inner) comment)",
+   "recipients": [
+    "a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (escaped \\) paren, and; specials)",
+    "Ops_Team 관리자 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 Ünïcode <\"quoted local\" (ops)@example.com>",
+    "Ops_Team Q. 관리자 (보안) <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (escaped \\) paren, and; specials)>",
+    "\"\" <\"quoted local\"(tight)@sub.example-domain.org>"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?w5xuw68gw5xuw68J67O07JWILeuLtOuLuQ==?= \r\n averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n 50%\r\nFrom: \"quoted local\"@example.com (nested (inner) comment)\r\nTo: a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (escaped \\) paren, and; specials), Ops_Team =?utf-8?b?6rSA66as7J6QIOq4tA==?=\r\n =?utf-8?b?7ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J20?=\r\n =?utf-8?b?66aE6ri07ZWc6rWt7Ja07J2066aEIMOcbsOvY29kZQ==?=\r\n <\"quoted local\" (ops)@example.com>, Ops_Team Q. =?utf-8?b?6rSA66as7J6QIA==?=\r\n =?utf-8?b?67O07JWI?= <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (escaped \\) paren, and; specials)>,\r\n \"\" <\"quoted local\"(tight)@sub.example-domain.org>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 29,
+   "subject": "긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어 긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어",
+   "sender": "Ünïcode <admin(tight)@sub.example-domain.org>",
+   "recipients": [
+    "\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (보안팀)",
+    "\"a;b:c\" <admin@example.com (보안팀)>",
+    "\"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\" <first.last(tight)@example.com>",
+    "긴한국어이름긴한국어이름긴한국어이름긴한국어이름 Ops (team) a+b Q. <x+tag (보안팀)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": false,
+   "message": null
+  },
+  {
+   "index": 34,
+   "subject": "averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\t알림\t_u_  sp  ace  알림\tÜnï",
+   "sender": "알림 Ops (team) x-y <x+tag@example.com (ops)>",
+   "recipients": [
+    "긴한국어이름긴한국어이름긴한국어이름긴한국어이름 관리자 <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@도메인.example (a very long comment that goes on and on and on and on and on and on and on)>",
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure Ünïcode <first.last@example.com (보안팀)>",
+    "\"quoted local\"@sub.example-domain.org (nested (inner) comment)",
+    "Admin 관리자 (보안) <admin@example.com>"
+   ],
+   "intl": true,
+   "message": null
+  },
+  {
+   "index": 37,
+   "subject": "x-y.z",
+   "sender": "x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (a very long comment that goes on and on and on and on and on and on and on)",
+   "recipients": [
+    "긴한국어이름긴한국어이름긴한국어이름긴한국어이름 ZeroPW Ops_Team Admin <very.long.local.part.name.for.folding@도메인.example(tight)>",
+    "x-y Q. 관리자 <admin@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure Ops_Team Ünïcode <first.last (ops)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "ZeroPW anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure Q. <x+tag (nested (inner) comment)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": true,
+   "message": null
+  },
+  {
+   "index": 39,
+   "subject": "a a\tZeroPW\tÜnï sp  ace [tag]\t알림",
+   "sender": "\"a;b:c\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+   "recipients": [
+    "\"quoted local\"@sub.example-domain.org (escaped \\) paren, and; specials)",
+    "x-y 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <very.long.local.part.name.for.folding@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: a a\tZeroPW\t=?utf-8?b?w5xuw68gc3AgIGFjZSBbdGFnXQnslYzrprw=?=\r\nFrom: \"a;b:c\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>\r\nTo: \"quoted local\"@sub.example-domain.org (escaped \\) paren, and; specials),\r\n x-y =?utf-8?b?6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt?=\r\n =?utf-8?b?7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE?=\r\n <very.long.local.part.name.for.folding@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 44,
+   "subject": "x-y.z  Ünï  긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어",
+   "sender": "\"한국어, 쉼표\" <a (보안팀)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+   "recipients": [
+    "\"한국어, 쉼표\" <사용자@example.com>",
+    "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure 관리자 (보안) <사용자@sub.example-domain.org>",
+    "a@sub.example-domain.org(tight)",
+    "first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (ops)"
+   ],
+   "intl": true,
+   "message": null
+  },
+  {
+   "index": 49,
+   "subject": "— ZeroPW",
+   "sender": "first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (escaped \\) paren, and; specials)",
+   "recipients": [
+    "알림 <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example(tight)>",
+    "Ünïcode Ops_Team 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 O'Neil <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "Ops (team) <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com>"
+   ],
+   "intl": false,
+   "message": "Subject: =?utf-8?b?4oCU?= ZeroPW\r\nFrom: first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (escaped \\) paren, and; specials)\r\nTo:\r\n =?utf-8?b?7JWM66a8?= <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example(tight)>,\r\n =?utf-8?b?IMOcbsOvY29kZSBPcHNfVGVhbSDquLTtlZzqta3slrTsnbTrpoTquLTtlZzqta0=?=\r\n =?utf-8?b?7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE?=\r\n O'Neil <a@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>,\r\n Ops (team) <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 52,
+   "subject": "[tag] q?x Ünï 50% ZeroPW\tsp  ace",
+   "sender": "a (a very long comment that goes on and on and on and on and on and on and on)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+   "recipients": [
+    "x-y <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (ops)>",
+    "\"Doe, John\" <very.long.local.part.name.for.folding@example.com (nested (inner) comment)>",
+    "Ops (team) Ünïcode <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com(tight)>",
+    "admin (보안팀)@example.com"
+   ],
+   "intl": false,
+   "message": "Subject: [tag] q?x =?utf-8?b?w5xuw68=?= 50% ZeroPW\tsp  ace\r\nFrom: a\r\n (a very long comment that goes on and on and on and on and on and on and on)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\nTo: x-y <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (ops)>, \"Doe, John\"\r\n <very.long.local.part.name.for.folding@example.com (nested (inner) comment)>,\r\n Ops (team) =?utf-8?b?w5xuw69jb2Rl?= <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@example.com(tight)>,\r\n admin =?utf-8?b?67O07JWI7YyA?=@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 66,
+   "subject": "ZeroPW (note) mix한글mix q?x [tag]",
+   "sender": "긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+   "recipients": [
+    "x+tag@example.com (a very long comment that goes on and on and on and on and on and on and on)",
+    "Admin <first.last@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (보안팀)>",
+    "\"\" <\"quoted local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example (ops)>"
+   ],
+   "intl": false,
+   "message": "Subject: ZeroPW (note) =?utf-8?b?bWl47ZWc6riAbWl4?= q?x [tag]\r\nFrom: =?utf-8?b?6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt?=\r\n =?utf-8?b?7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE?= <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>\r\nTo: x+tag@example.com\r\n (a very long comment that goes on and on and on and on and on and on and on),\r\n Admin <first.last@an-extremely-long-domain-label-that-keeps-going-and-going.\r\n =?utf-8?q?and-another-long-label?=.example =?utf-8?b?67O07JWI7YyA?=>, \"\" <\"quoted\r\n local\"@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example\r\n (ops)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 67,
+   "subject": "a=b sp  ace\t[tag] Ünï  a  a=b\t[tag] _u_",
+   "sender": "x-y Q. Q. <first.last@example.com>",
+   "recipients": [
+    "긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <\"quoted local\"@sub.example-domain.org>",
+    "first.last@example.com (ops)"
+   ],
+   "intl": false,
+   "message": "Subject: a=b sp  ace\t[tag] =?utf-8?b?w5xuw68=?=  a  a=b\t[tag] _u_\r\nFrom: x-y Q. Q. <first.last@example.com>\r\nTo: =?utf-8?b?6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE6ri07ZWc6rWt?=\r\n =?utf-8?b?7Ja07J2066aE6ri07ZWc6rWt7Ja07J2066aE?=\r\n <\"quoted local\"@sub.example-domain.org>, first.last@example.com (ops)\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 70,
+   "subject": "a 알림\ta=b  (note)\t알림 ZeroPW",
+   "sender": "Ünïcode 알림 Admin 알림 <x+tag (escaped \\) paren, and; specials)@sub.example-domain.org>",
+   "recipients": [
+    "O'Neil O'Neil <admin (ops)@sub.example-domain.org>"
+   ],
+   "intl": false,
+   "message": "Subject: a =?utf-8?b?7JWM66a8CWE9YiAgKG5vdGUpCeyVjOumvA==?= ZeroPW\r\nFrom: =?utf-8?b?w5xuw69jb2RlIOyVjOumvCBBZG1pbiDslYzrprw=?=\r\n <x+tag (escaped \\) paren, and; specials)@sub.example-domain.org>\r\nTo: O'Neil O'Neil <admin (ops)@sub.example-domain.org>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 72,
+   "subject": "sp  ace\t_u_  —\t관리자 q?x  x-y.z\taveryveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx  —",
+   "sender": "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure O'Neil <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@sub.example-domain.org(tight)>",
+   "recipients": [
+    "\"관리자, Admin; Ops\" <\"quoted local\"(tight)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>"
+   ],
+   "intl": false,
+   "message": "Subject: sp  ace\t_u_  =?utf-8?b?4oCUCeq0gOumrOyekA==?= q?x  x-y.z\r\n\taveryveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx\r\n  =?utf-8?b?4oCU?=\r\nFrom:\r\n anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure\r\n O'Neil <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@sub.example-domain.org(tight)>\r\nTo:\r\n =?utf-8?b?6rSA66as7J6QLCBBZG1pbjs=?= Ops <\"quoted local\"(tight)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "index": 106,
+   "subject": "x-y.z  관리자  긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어",
+   "sender": "averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx Admin averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx 관리자 (보안) <admin@example.com>",
+   "recipients": [
+    "ZeroPW 긴한국어이름긴한국어이름긴한국어이름긴한국어이름 <very.long.local.part.name.for.folding@도메인.example>",
+    "\"esc \\\"q\\\" \\\\\" <anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@도메인.example>",
+    "anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx (a very long comment that goes on and on and on and on and on and on and on)@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
+    "관리자 (보안) a+b a+b x-y <x+tag@an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example>",
+    "anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx@sub.example-domain.org"
+   ],
+   "intl": true,
+   "message": null
+  }
+ ],
+ "encoded_words": [
+  {
+   "subject": "=?utf-8?q?Hello_=E2=9C=93?=",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: Hello =?utf-8?b?4pyT?=\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "=?UTF-8?B?7ZWc6riA?=",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: =?utf-8?b?7ZWc6riA?=\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "=?utf-8?b?SGVsbG8?=",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: Hello\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "=?utf-8?q?one?=   =?utf-8?q?two?=",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: onetwo\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "prefix=?utf-8?q?middle?=suffix",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: prefixmiddlesuffix\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "=?iso-8859-1?q?caf=E9?=",
+   "sender": "a@example.com",
+   "recipient": "b@example.com",
+   "message": "Subject: =?utf-8?q?caf=C3=A9?=\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "subject",
+   "sender": "=?utf-8?q?Admin_=E2=9C=93?= <a@example.com>",
+   "recipient": "b@example.com",
+   "message": "Subject: subject\r\nFrom: Admin =?utf-8?b?4pyT?= <a@example.com>\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "subject",
+   "sender": "a@example.com",
+   "recipient": "=?utf-8?b?7ZWc6riA?= <b@example.com>",
+   "message": "Subject: subject\r\nFrom: a@example.com\r\nTo: =?utf-8?b?7ZWc6riA?= <b@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  },
+  {
+   "subject": "subject",
+   "sender": "a@example.com",
+   "recipient": "=?utf-8?q?one?= \t =?utf-8?q?two?= <b@example.com>",
+   "message": "Subject: subject\r\nFrom: a@example.com\r\nTo: one \t two <b@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n"
+  }
+ ],
+ "groups": [
+  {
+   "sender": "a@example.com",
+   "recipient": "undisclosed-recipients:;",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: undisclosed-recipients:;\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    ""
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "Empty Team: (no recipients) ;",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: Empty Team: (no recipients) ;\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    ""
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "Team: Alpha <a@example.com>, b@[127.0.0.1];",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: Team: Alpha <a@example.com>, b@[127.0.0.1];\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    "a@example.com",
+    ""
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "IPv6 User <v6@[IPv6:2001:db8::1]>",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: IPv6 User <v6@[IPv6:2001:db8::1]>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    ""
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "Literal <x@ (before) [ 127.0.0.1 ] (after)>",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: Literal <x@ (before) [ 127.0.0.1 ] (after)>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    ""
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    "a@example.com",
+    "",
+    ""
+   ]
+  },
+  {
+   "sender": "Senders: first@[127.0.0.1], second@example.com;",
+   "recipient": "b@example.com",
+   "message": "Subject: s\r\nFrom: Senders: first@[127.0.0.1], second@example.com;\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "",
+   "envelope_recipients": [
+    "b@example.com"
+   ]
+  },
+  {
+   "sender": "Nobody:;",
+   "recipient": "b@example.com",
+   "message": "Subject: s\r\nFrom: Nobody:;\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "",
+   "envelope_recipients": [
+    "b@example.com"
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "Empty:;, b@example.com",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: Empty:;, b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    "",
+    "b@example.com"
+   ]
+  },
+  {
+   "sender": "a@example.com",
+   "recipient": "b@example.com, Empty:;",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com, Empty:;\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    "b@example.com",
+    ""
+   ]
+  },
+  {
+   "sender": "A. B. <a@example.com>",
+   "recipient": "C. D. <b@example.com>",
+   "message": "Subject: s\r\nFrom: A. B. <a@example.com>\r\nTo: C. D. <b@example.com>\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nx\r\n",
+   "envelope_sender": "a@example.com",
+   "envelope_recipients": [
+    "b@example.com"
+   ]
+  }
+ ],
+ "bodies": [
+  {
+   "body": "short ascii\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nshort ascii\r\n"
+  },
+  {
+   "body": "짧은 본문\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 8bit\r\nMIME-Version: 1.0\r\n\r\n짧은 본문\r\n"
+  },
+  {
+   "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=\r\nxx\r\n"
+  },
+  {
+   "body": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy \nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\t\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy \r\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\t\r\n"
+  },
+  {
+   "body": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq=abc\nrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr=\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\nqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq=\r\n=3Dabc\r\nrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr=\r\n=3D\r\n"
+  },
+  {
+   "body": "ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii \n한글 한 줄\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\nascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii=\r\n ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii asci=\r\ni ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii ascii asc=\r\nii ascii=20\r\n=ED=95=9C=EA=B8=80 =ED=95=9C =EC=A4=84\r\n"
+  },
+  {
+   "body": "ascii text line that is quite long indeed, ascii text line that is quite long indeed, ascii text line that is quite long indeed, 끝\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\nascii text line that is quite long indeed, ascii text line that is quite long=\r\n indeed, ascii text line that is quite long indeed, =EB=81=9D\r\n"
+  },
+  {
+   "body": "no trailing newline",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\nno trailing newline\r\n"
+  },
+  {
+   "body": "crlf line one\r\ncr line two\rlf line three\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\ncrlf line one\r\ncr line two\r\nlf line three\r\n"
+  },
+  {
+   "body": ".leading dot line\n..two dots\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: 7bit\r\nMIME-Version: 1.0\r\n\r\n.leading dot line\r\n..two dots\r\n"
+  },
+  {
+   "body": "안내 생성 시각: 2023-11-14T22:13:21Z\n\n1. 무슨 일이 있었나\n침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: base64\r\nMIME-Version: 1.0\r\n\r\n7JWI64K0IOyDneyEsSDsi5zqsIE6IDIwMjMtMTEtMTRUMjI6MTM6MjFaCgoxLiDrrLTsiqgg7J28\r\n7J20IOyeiOyXiOuCmArsuajtlbTrkJwg7Iuk7ZaJIO2ZmOqyvSjtmLjsiqTtirgp7J2EIO2PkOq4\r\nsO2VmOqzoCDsg4jroZwg6rWs7LaV7ZWY7Iut7Iuc7JikLiDquLDsobQg7Zi47LacIOyjvOyytOyd\r\nmCDthqDtgbDsnYAg65CY7IK07JWE64KY7KeAIOyViuyKteuLiOuLpC4K\r\n"
+  },
+  {
+   "body": "line 0 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 1 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 2 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 3 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 4 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 5 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 6 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 7 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 8 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 9 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 10 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 11 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 12 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\nline 13 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\nline 0 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\r\nline 1 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww\r\nline 2 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nww\r\nline 3 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwww\r\nline 4 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwww\r\nline 5 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwww\r\nline 6 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwww\r\nline 7 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwww\r\nline 8 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwww\r\nline 9 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwwww\r\nline 10 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwwwwww\r\nline 11 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwwwwwww\r\nline 12 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwwwwwwww\r\nline 13 wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=\r\nwwwwwwwwwwwwww\r\n"
+  },
+  {
+   "body": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 한\n",
+   "message": "Subject: s\r\nFrom: a@example.com\r\nTo: b@example.com\r\nContent-Type: text/plain; charset=\"utf-8\"\r\nContent-Transfer-Encoding: quoted-printable\r\nMIME-Version: 1.0\r\n\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =ED=95=\r\n=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =ED=\r\n=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa =\r\n=ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\na =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\naaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\naaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\naaaaaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\naaaaaaaaaaaaa =ED=95=9C\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=\r\naaaaaaaaaaaaaaaa =ED=95=9C\r\n"
+  }
+ ]
+}

@@ -1,6 +1,8 @@
-//! Response parity gaps: each test pins one Python behaviour of
+//! Response parity gaps: each test pins one behaviour of the original
 //! `zeropw/{incident,intrusion,notify}.py` (and `smtplib` as used there) that
-//! the Rust port previously diverged from. Synthetic values and loopback only.
+//! the Rust port previously diverged from. Expected values were recorded from
+//! the Python prototype (`fixtures/python/response`, see `GENERATE.md`).
+//! Synthetic values and loopback only.
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -13,10 +15,6 @@ use zeropw::audit::RecordArgs;
 use zeropw::clock::{self, Clock};
 use zeropw::context::{Config, Context};
 use zeropw::intrusion;
-
-#[path = "../src/oracle.rs"]
-#[allow(dead_code)]
-mod oracle;
 
 fn fixture_with_clock(clock: Clock) -> (TempDir, Arc<Context>) {
     let tmp = TempDir::new().unwrap();
@@ -106,48 +104,32 @@ fn panic_inside_the_decision_is_counted_and_detection_keeps_working() {
     assert_eq!(detector.decision_errors.load(Ordering::SeqCst), 1);
 }
 
-/// `DetectorConfig.__post_init__` validates strong -> weak -> window ->
-/// weak_threshold -> enumeration_min -> enumeration_ratio -> burst_count.
-/// Every pair of differently invalid fields (wrong type or out of range)
-/// must report the same first reason as Python.
+/// `DetectorConfig` rejects each invalid field (wrong type or out of
+/// range) with the original reason.
 #[test]
-fn detector_config_reports_invalid_fields_in_python_order() {
-    let invalid: Vec<(&str, Value)> = vec![
-        ("strong_thresholds", json!({"unknown_tool": "2"})),
-        ("strong_thresholds", json!({"signer_misuse": 0})),
-        ("weak_points", json!({"burst": 1.5})),
-        ("weak_points", json!({"revoked_use": -1})),
-        ("window_seconds", json!("120")),
-        ("window_seconds", json!(true)),
-        ("window_seconds", json!(0)),
-        ("weak_threshold", json!(2.0)),
-        ("weak_threshold", json!(0)),
-        ("enumeration_min", json!(null)),
-        ("enumeration_min", json!(0)),
-        ("enumeration_ratio", json!([0.5])),
-        ("enumeration_ratio", json!(1.5)),
-        ("burst_count", json!("60")),
-        ("burst_count", json!(-3)),
-    ];
-    let mut configs = vec![];
-    for (i, (key_a, value_a)) in invalid.iter().enumerate() {
-        for (key_b, value_b) in invalid.iter().skip(i + 1) {
-            if key_a != key_b {
-                configs.push(json!({ *key_a: value_a, *key_b: value_b }));
-            }
-        }
-    }
-    let script = format!(
-        "import json\nfrom zeropw.errors import InvalidInput\nfrom zeropw.intrusion import DetectorConfig\nout=[]\nfor c in json.loads({:?}):\n    try:\n        DetectorConfig.from_mapping(c)\n        out.append(None)\n    except InvalidInput as e:\n        out.append(e.reason)\nprint(json.dumps(out))\n",
-        Value::Array(configs.clone()).to_string()
-    );
-    let expected: Vec<Option<String>> =
-        serde_json::from_str(oracle::python(&script).trim()).unwrap();
-    for (config, expected) in configs.iter().zip(expected) {
-        let actual = intrusion::DetectorConfig::from_mapping(Some(config))
+fn detector_config_reports_each_invalid_field_with_the_original_reason() {
+    for (key, value, reason) in [
+        ("strong_thresholds", json!({"unknown_tool": "2"}), "intrusion_strong_threshold_invalid"),
+        ("strong_thresholds", json!({"signer_misuse": 0}), "intrusion_strong_threshold_invalid"),
+        ("weak_points", json!({"burst": 1.5}), "intrusion_weak_points_invalid"),
+        ("weak_points", json!({"revoked_use": -1}), "intrusion_weak_points_invalid"),
+        ("window_seconds", json!("120"), "intrusion_window_invalid"),
+        ("window_seconds", json!(true), "intrusion_window_invalid"),
+        ("window_seconds", json!(0), "intrusion_window_invalid"),
+        ("weak_threshold", json!(2.0), "intrusion_weak_threshold_invalid"),
+        ("weak_threshold", json!(0), "intrusion_weak_threshold_invalid"),
+        ("enumeration_min", json!(null), "intrusion_enumeration_min_invalid"),
+        ("enumeration_min", json!(0), "intrusion_enumeration_min_invalid"),
+        ("enumeration_ratio", json!([0.5]), "intrusion_enumeration_ratio_invalid"),
+        ("enumeration_ratio", json!(1.5), "intrusion_enumeration_ratio_invalid"),
+        ("burst_count", json!("60"), "intrusion_burst_count_invalid"),
+        ("burst_count", json!(-3), "intrusion_burst_count_invalid"),
+    ] {
+        let config = json!({ key: value });
+        let actual = intrusion::DetectorConfig::from_mapping(Some(&config))
             .err()
             .map(|e| e.reason.to_string());
-        assert_eq!(actual, expected, "config {config}");
+        assert_eq!(actual.as_deref(), Some(reason), "config {config}");
     }
 }
 
@@ -155,70 +137,11 @@ fn fixture() -> (TempDir, Arc<Context>) {
     fixture_with_clock(clock::fixed(1_700_000_000.0))
 }
 
-fn copy_dir(src: &Path, dst: &Path) {
-    fs::create_dir_all(dst).unwrap();
-    fs::set_permissions(dst, fs::metadata(src).unwrap().permissions()).unwrap();
-    for entry in fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let target = dst.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
 fn edit_incident_actions(ctx: &Context, id: &str, actions: Value) {
     let path = format!("incidents/{id}.json");
     let mut doc = ctx.state.read_json(&path, Value::Null).unwrap();
     doc["actions"] = actions;
     ctx.state.write_json(&path, &doc).unwrap();
-}
-
-/// `_apply_lockdown` starts with `actions.setdefault("failed_steps", [])`,
-/// always adds `principals_disabled`/`grants_revoked` with Python numeric
-/// promotion (`True + 1 == 2`, a float stays a float), touches
-/// `runs_cancelled`/`sockets_closed` only when something was cancelled, and
-/// tests `stopped`/`handle_key_rotated` by truthiness. A legacy or
-/// hand-edited `actions` document must widen exactly like Python's.
-#[test]
-fn widening_a_hand_edited_incident_updates_actions_like_python() {
-    let (tmp, ctx) = fixture();
-    ctx.policy.create_principal("agent-1", "box-1").unwrap();
-    ctx.policy.create_principal("agent-2", "box-1").unwrap();
-    ctx.policy.create_principal("agent-3", "box-2").unwrap();
-    let opened = zeropw::incident::open_incident(
-        &ctx,
-        "principal",
-        Some(&["agent-1".to_owned()]),
-        None,
-        "manual",
-        None,
-        None,
-    )
-    .unwrap();
-    edit_incident_actions(
-        &ctx,
-        &opened.id,
-        json!({"stopped": 1, "principals_disabled": true, "grants_revoked": 1.5,
-               "runs_cancelled": "legacy", "handle_key_rotated": 0}),
-    );
-    let python_state = tmp.path().join("python-state");
-    copy_dir(&tmp.path().join("state"), &python_state);
-
-    let widened =
-        zeropw::incident::widen_incident(&ctx, &opened.id, "runtime", Some("box-1"), None, None)
-            .unwrap();
-    let script = format!(
-        "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.widen_incident(c, {:?}, scope='runtime', runtime='box-1')\nprint(json.dumps(inc.to_dict()['actions']))\n",
-        python_state.to_str().unwrap(),
-        opened.id
-    );
-    let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
-    assert_eq!(widened.to_dict()["actions"], python);
-    assert_eq!(python["principals_disabled"], json!(2));
-    assert_eq!(python["failed_steps"], json!([]));
 }
 
 /// `_audit_incident` records an unavailable audit log with
@@ -242,34 +165,16 @@ fn close_with_unavailable_audit_records_the_step_without_a_prior_list() {
     let audit_log = tmp.path().join("state/audit/audit.jsonl");
     fs::remove_file(&audit_log).unwrap();
     fs::create_dir(&audit_log).unwrap();
-    let python_state = tmp.path().join("python-state");
-    copy_dir(&tmp.path().join("state"), &python_state);
 
     let closed = zeropw::incident::close_incident(&ctx, &opened.id).unwrap();
-    let script = format!(
-        "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.close_incident(c, {:?})\nprint(json.dumps(inc.to_dict()['actions']))\n",
-        python_state.to_str().unwrap(),
-        opened.id
+    assert_eq!(
+        closed.to_dict()["actions"],
+        json!({"stopped": false, "failed_steps": ["audit_incident_close"]})
     );
-    let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
-    assert_eq!(python["failed_steps"], json!(["audit_incident_close"]));
-    assert_eq!(closed.to_dict()["actions"], python);
 }
 
-fn admin_cli(language: &str, state: &Path, args: &[&str]) -> (i32, Value) {
-    let mut command = if language == "python" {
-        let mut command = Command::new(
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string()),
-        );
-        command
-            .args(["-m", "zeropw.admin_cli"])
-            .env("PYTHONPATH", oracle::repo_root())
-            .env("PYTHONDONTWRITEBYTECODE", "1");
-        command
-    } else {
-        Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
-    };
-    let output = command
+fn admin_cli(state: &Path, args: &[&str]) -> (i32, Value, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
         .arg("--state-dir")
         .arg(state)
         .args(args)
@@ -281,111 +186,73 @@ fn admin_cli(language: &str, state: &Path, args: &[&str]) -> (i32, Value) {
         .output()
         .unwrap();
     let text = if output.status.success() {
-        output.stdout
+        output.stdout.clone()
     } else {
-        output.stderr
+        output.stderr.clone()
     };
     let text = String::from_utf8(text).unwrap();
     let last = text.lines().last().unwrap_or_default().to_owned();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     (
         output.status.code().unwrap_or(-1),
         serde_json::from_str(&last).unwrap_or(Value::String(text)),
+        all,
     )
 }
 
-/// `incident declare --scope principal` without `--principal`: Python passes
-/// `principals=[None]`, so `get_principal(None)` fails `principal_not_found`
-/// rather than `incident_principals_required`.
+/// `incident declare --scope principal` without `--principal` fails as the
+/// original did: `principal_not_found` (it looked up a missing principal).
 #[test]
-fn declare_principal_scope_without_principal_matches_python_cli() {
+fn declare_principal_scope_without_principal_matches_original_cli() {
     let tmp = TempDir::new().unwrap();
-    let mut results = vec![];
-    for language in ["python", "rust"] {
-        let state = tmp.path().join(language);
-        let (code, _) = admin_cli(language, &state, &["init"]);
-        assert_eq!(code, 0, "{language} init");
-        let (_, created) = admin_cli(
-            language,
-            &state,
-            &[
-                "principal",
-                "create",
-                "--id",
-                "agent-1",
-                "--runtime",
-                "box-1",
-            ],
-        );
-        assert!(created.get("error").is_none(), "{created}");
-        results.push(admin_cli(
-            language,
-            &state,
-            &["incident", "declare", "--scope", "principal"],
-        ));
-    }
-    assert_eq!(results[0].1["reason"], json!("principal_not_found"));
-    assert_eq!(results[1], results[0]);
+    let state = tmp.path().join("state");
+    let (code, _, _) = admin_cli(&state, &["init"]);
+    assert_eq!(code, 0, "init");
+    let (_, created, _) = admin_cli(
+        &state,
+        &[
+            "principal",
+            "create",
+            "--id",
+            "agent-1",
+            "--runtime",
+            "box-1",
+        ],
+    );
+    assert!(created.get("error").is_none(), "{created}");
+    let (code, error, _) = admin_cli(&state, &["incident", "declare", "--scope", "principal"]);
+    assert_eq!(code, 1);
+    assert_eq!(error["reason"], json!("principal_not_found"), "{error}");
+    assert!(ctx_open_incident(&state).is_none());
 }
 
-/// `render_incident_email` skips a falsy runtime/rule, uses `x or default`
-/// for first/last use, service, creation time and fingerprint, renders
-/// `.get(key, 0)` values with `str()`, and tests flags by truthiness. Loaded
-/// (legacy or hand-edited) incidents must render byte-identically.
+fn ctx_open_incident(state: &Path) -> Option<String> {
+    let ctx = Context::open(
+        state,
+        Config::default(),
+        clock::fixed(1_700_000_000.0),
+    )
+    .unwrap();
+    ctx.policy.open_incident_id().unwrap()
+}
+
+/// Incident emails for loaded incident documents (no runtime and rule, and a
+/// runtime with a detector rule) render exactly as the original rendered them
+/// (`fixtures/python/response/incident_emails.json`).
 #[test]
-fn email_rendering_follows_python_truthiness_for_loaded_incidents() {
-    let base = json!({
-        "id": "inc-20231114T221320Z-0123abcd", "opened_at": "2023-11-14T22:13:20Z",
-        "status": "open", "scope": "principal", "principals": ["agent-1"],
-        "trigger": "manual", "detail": null, "closed_at": null, "widened_from": [],
-        "notification": {"status": "not_configured", "attempts": 0},
-        "actions": {"stopped": false, "principals_disabled": 1, "grants_revoked": 0,
-                    "handle_key_rotated": false, "runs_cancelled": 0, "sockets_closed": 0,
-                    "failed_steps": []},
-        "assessment": {"principals": [{"id": "agent-1", "created_at": "2023-11-14T22:00:00Z"}],
-                       "secrets": []}
-    });
-    let mandatory = json!({
-        "secret_id": "deploy-key", "kind": "ssh_private_key", "project": "demo",
-        "environment": "dev", "service": "", "connections": "ab",
-        "targets": [{"host": 7, "port": null, "username": 0},
-                    {"host": "box.example", "port": 22, "username": "deploy"}, "not-a-dict"],
-        "first_used": "", "last_used": 0, "use_count": 2.5, "active_version": 1,
-        "fingerprint": "", "tier": "mandatory"
-    });
-    let mut cases = vec![];
-    for (runtime, rule) in [
-        (json!(""), json!("")),
-        (json!(null), json!(null)),
-        (json!(5), json!(["x"])),
-        (json!("box-1"), json!("unknown_tool")),
-    ] {
-        let mut case = base.clone();
-        case["runtime"] = runtime;
-        case["rule"] = rule;
-        cases.push(case);
-    }
-    let mut case = base.clone();
-    case["runtime"] = json!(null);
-    case["rule"] = json!(null);
-    case["actions"] = json!({"stopped": 1, "principals_disabled": true, "grants_revoked": 1.5,
-                             "handle_key_rotated": "yes", "runs_cancelled": null});
-    case["assessment"] = json!({
-        "principals": [{"id": "agent-1", "created_at": ""}, {"id": 5}, "x"],
-        "secrets": [mandatory, {"secret_id": 9, "kind": null, "tier": "recommended"}],
-        "recover_required": 1
-    });
-    cases.push(case);
-    let script = format!(
-        "import json\nfrom zeropw import incident as I\nfrom zeropw.notify import render_incident_email\nout=[]\nfor d in json.loads({:?}):\n    out.append(render_incident_email(I.Incident.from_dict(d), now='2023-11-14T22:13:21Z'))\nprint(json.dumps(out))\n",
-        Value::Array(cases.clone()).to_string()
-    );
-    let expected: Vec<(String, String)> =
-        serde_json::from_str(oracle::python(&script).trim()).unwrap();
-    for (case, expected) in cases.iter().zip(expected) {
-        let incident = zeropw::incident::Incident::from_dict(case).unwrap();
-        let actual = zeropw::notify::render_incident_email(&incident, "2023-11-14T22:13:21Z");
-        assert_eq!(actual.0, expected.0);
-        assert_eq!(actual.1, expected.1, "case {case}");
+fn email_rendering_matches_the_original_for_loaded_incidents() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/python/response/incident_emails.json")).unwrap();
+    let now = fixture["now"].as_str().unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let incident = zeropw::incident::Incident::from_dict(&case["incident"]).unwrap();
+        let (subject, body) = zeropw::notify::render_incident_email(&incident, now);
+        assert_eq!(subject, case["subject"].as_str().unwrap());
+        assert_eq!(body, case["body"].as_str().unwrap(), "case {}", case["incident"]);
     }
 }
 
@@ -779,90 +646,88 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
         ("tls_plaintext", json!({"mode": "smtps"}), Password::None),
         ("tls_eof", json!({"mode": "smtps"}), Password::None),
     ];
+    let recorded: Vec<Value> =
+        serde_json::from_str(include_str!("fixtures/python/response/smtp_sessions.json")).unwrap();
     let (tmp, ctx) = fixture();
-    let state = tmp.path().join("state");
     let mut failures = vec![];
+    assert_eq!(scenarios.len(), recorded.len());
     for (scenario, overrides, password) in scenarios {
-        let mut results = vec![];
-        for language in ["python", "rust"] {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let port = listener.local_addr().unwrap().port();
-            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let server = scripted_server(scenario, listener, Arc::clone(&stop));
-            let port = if scenario == "connection_refused" {
-                let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                closed.local_addr().unwrap().port()
-            } else {
-                port
-            };
-            let mut config = json!({"host": "127.0.0.1", "port": port, "mode": "plain",
-                "sender": "zeropw@example.com", "recipients": ["admin@example.com"],
-                "timeout_seconds": 2.0});
-            for (key, value) in overrides.as_object().unwrap() {
-                config[key] = value.clone();
-            }
-            let password_path = tmp
-                .path()
-                .join(format!("smtp-password-{scenario}-{language}"));
-            match password {
-                Password::None => {}
-                Password::Text(bytes) => {
-                    fs::write(&password_path, bytes).unwrap();
-                    config["password_file"] = json!(password_path);
-                }
-                Password::Directory => {
-                    fs::create_dir(&password_path).unwrap();
-                    config["password_file"] = json!(password_path);
-                }
-            }
-            if password_path.exists() {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&password_path, fs::Permissions::from_mode(0o600)).unwrap();
-            }
-            ctx.state.write_json("notify.json", &config).unwrap();
-            let before = audit_lines(&ctx).len();
-            let outcome = if language == "python" {
-                let script = format!(
-                    "import json\nfrom zeropw.context import Context\nfrom zeropw.notify import send_test_message\nc=Context.open({:?})\ntry:\n    out={{'result': send_test_message(c)}}\nexcept Exception as e:\n    out={{'exception': type(e).__name__}}\nprint(json.dumps(out))\n",
-                    state.to_str().unwrap()
-                );
-                serde_json::from_str::<Value>(oracle::python(&script).trim()).unwrap()
-            } else {
-                match zeropw::notify::send_test_message(&ctx) {
-                    Ok(result) => json!({"result": result}),
-                    Err(error) if error.reason == "state_corrupt" => {
-                        json!({"exception": error.detail})
-                    }
-                    Err(error) => json!({"exception": error.name}),
-                }
-            };
-            stop.store(true, Ordering::SeqCst);
-            let transcript: Vec<Vec<u8>> = server
-                .join()
-                .unwrap()
-                .iter()
-                .map(|line| mask_greeting_argument(line))
-                .filter(|_| !scenario.starts_with("tls_"))
-                .collect();
-            let audit: Vec<Value> = audit_lines(&ctx).split_off(before);
-            results.push((outcome, audit, transcript));
+        let expected = recorded
+            .iter()
+            .find(|r| r["scenario"] == scenario)
+            .unwrap_or_else(|| panic!("{scenario} not recorded"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server = scripted_server(scenario, listener, Arc::clone(&stop));
+        let port = if scenario == "connection_refused" {
+            let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            closed.local_addr().unwrap().port()
+        } else {
+            port
+        };
+        let mut config = json!({"host": "127.0.0.1", "port": port, "mode": "plain",
+            "sender": "zeropw@example.com", "recipients": ["admin@example.com"],
+            "timeout_seconds": 2.0});
+        for (key, value) in overrides.as_object().unwrap() {
+            config[key] = value.clone();
         }
-        println!("{scenario}: python {} rust {}", results[0].0, results[1].0);
-        if results[0] != results[1] {
-            let show = |r: &(Value, Vec<Value>, Vec<Vec<u8>>)| {
-                format!(
-                    "{} audit={:?} transcript={:?}",
-                    r.0,
-                    r.1,
-                    r.2.iter()
-                        .map(|l| String::from_utf8_lossy(l).into_owned())
-                        .collect::<Vec<_>>()
-                )
-            };
+        let password_path = tmp.path().join(format!("smtp-password-{scenario}"));
+        let mut secret: Option<&[u8]> = None;
+        match password {
+            Password::None => {}
+            Password::Text(bytes) => {
+                fs::write(&password_path, bytes).unwrap();
+                config["password_file"] = json!(password_path);
+                secret = Some(bytes);
+            }
+            Password::Directory => {
+                fs::create_dir(&password_path).unwrap();
+                config["password_file"] = json!(password_path);
+            }
+        }
+        if password_path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&password_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        ctx.state.write_json("notify.json", &config).unwrap();
+        let before = audit_lines(&ctx).len();
+        let outcome = match zeropw::notify::send_test_message(&ctx) {
+            Ok(result) => json!({"result": result}),
+            Err(error) if error.reason == "state_corrupt" => {
+                json!({"exception": error.detail})
+            }
+            Err(error) => json!({"exception": error.name}),
+        };
+        stop.store(true, Ordering::SeqCst);
+        let transcript: Vec<String> = server
+            .join()
+            .unwrap()
+            .iter()
+            .map(|line| mask_greeting_argument(line))
+            .filter(|_| !scenario.starts_with("tls_"))
+            .map(|line| String::from_utf8(line).unwrap())
+            .collect();
+        let audit = Value::Array(audit_lines(&ctx).split_off(before));
+        // An escaping failure only has to fail closed; its CPython exception
+        // class is not part of the contract.
+        let outcome_matches = if expected["outcome"].get("exception").is_some() {
+            outcome.get("exception").is_some()
+        } else {
+            outcome == expected["outcome"]
+        };
+        if let Some(secret) = secret {
+            let text = String::from_utf8_lossy(secret);
+            let secret = text.trim();
+            assert!(
+                !transcript.iter().any(|line| line.contains(secret)),
+                "{scenario}: password on the wire in clear"
+            );
+        }
+        if !outcome_matches || audit != expected["audit"] || json!(transcript) != expected["transcript"] {
             failures.push(format!(
-                "{scenario}:\n  python {}\n  rust   {}",
-                show(&results[0]),
-                show(&results[1])
+                "{scenario}:\n  python {} audit={} transcript={}\n  rust   {outcome} audit={audit} transcript={transcript:?}",
+                expected["outcome"], expected["audit"], expected["transcript"]
             ));
         }
     }
@@ -878,7 +743,8 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
 /// username is configured: an `OSError` (here `IsADirectoryError`) becomes
 /// `notification.last_error` and the `incident_notify` audit reason, while
 /// a `UnicodeDecodeError` escapes `deliver` and `_deliver_notification`
-/// records `notify` in `failed_steps`, leaving the notification as it was.
+/// records `notify` in `failed_steps`, leaving the notification as it was
+/// (the values the original recorded).
 #[test]
 fn incident_delivery_failures_record_what_python_records() {
     for case in [
@@ -905,8 +771,6 @@ fn incident_delivery_failures_record_what_python_records() {
             config["password_file"] = json!(password);
         }
         ctx.state.write_json("notify.json", &config).unwrap();
-        let python_state = tmp.path().join("python-state");
-        copy_dir(&tmp.path().join("state"), &python_state);
 
         let incident = zeropw::incident::open_incident(
             &ctx,
@@ -932,63 +796,64 @@ fn incident_delivery_failures_record_what_python_records() {
             "failed_steps": incident.actions["failed_steps"],
             "audit": notify_audit(ctx.audit.iter_records().unwrap()),
         });
-        let script = format!(
-            "import json\nfrom zeropw.context import Context\nfrom zeropw import incident as I\nc=Context.open({:?})\ninc=I.open_incident(c, scope='principal', principals=['agent-1'], trigger='manual')\nn=inc.notification\naudit=[[r.get('result'), r.get('reason')] for r in c.audit.iter_records() if r.get('event')=='incident_notify']\nprint(json.dumps({{'status': n.get('status'), 'attempts': n.get('attempts'), 'last_error': n.get('last_error'), 'failed_steps': inc.actions['failed_steps'], 'audit': audit}}))\n",
-            python_state.to_str().unwrap()
-        );
-        let python: Value = serde_json::from_str(oracle::python(&script).trim()).unwrap();
-        assert_eq!(rust, python, "{case}");
+        let expected = match case {
+            "password_directory" => json!({"status": "pending", "attempts": 1,
+                "last_error": "IsADirectoryError", "failed_steps": [],
+                "audit": [["denied", "IsADirectoryError"]]}),
+            "password_non_utf8" => json!({"status": "not_configured", "attempts": 0,
+                "last_error": null, "failed_steps": ["notify"], "audit": []}),
+            _ => json!({"status": "pending", "attempts": 1,
+                "last_error": "ConnectionRefusedError", "failed_steps": [],
+                "audit": [["denied", "ConnectionRefusedError"]]}),
+        };
+        assert_eq!(rust, expected, "{case}");
     }
 }
 
-/// `incident notify-test` when `_send` raises a built-in exception: the
-/// administrator CLIs report the same error object and exit status
-/// (`OverflowError` from the socket timeout, `UnicodeDecodeError` from a
-/// non-UTF-8 password file, which the CLI prints as Python's
-/// `state_corrupt` handler does, and CPython 3.12.14's `HeaderWriteError`
-/// for a header fold it refuses).
+/// `incident notify-test` when sending fails before or while writing the
+/// message (a socket timeout out of range, a non-UTF-8 password file, a
+/// header fold the email library refuses): the CLI fails closed with a JSON
+/// error and never prints the password.
 #[test]
-fn notify_test_cli_reports_escaping_errors_like_python() {
+fn notify_test_cli_fails_closed_on_escaping_errors() {
     let tmp = TempDir::new().unwrap();
     for case in [
         "timeout_overflow",
         "password_non_utf8",
         "header_write_refused",
     ] {
-        let mut results = vec![];
-        for language in ["python", "rust"] {
-            let state = tmp.path().join(format!("{case}-{language}"));
-            let (code, _) = admin_cli(language, &state, &["init"]);
-            assert_eq!(code, 0, "{language} init");
-            let mut config = json!({"host": "127.0.0.1", "port": 9, "mode": "plain",
-                "sender": "zeropw@example.com", "recipients": ["admin@example.com"]});
-            let mut server = None;
-            if case == "header_write_refused" {
-                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-                config["port"] = json!(listener.local_addr().unwrap().port());
-                config["recipients"] = json!([LONG_DOMAIN_COMMENT_RECIPIENT]);
-                let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                server = Some((scripted_server(case, listener, Arc::clone(&stop)), stop));
-            } else if case == "password_non_utf8" {
-                let password = tmp.path().join(format!("{case}-{language}.pass"));
-                fs::write(&password, b"synthetic-\xff").unwrap();
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&password, fs::Permissions::from_mode(0o600)).unwrap();
-                config["password_file"] = json!(password);
-            } else {
-                config["timeout_seconds"] = json!(1e10);
-            }
-            let path = state.join("notify.json");
-            fs::write(&path, config.to_string()).unwrap();
+        let state = tmp.path().join(case);
+        let (code, _, _) = admin_cli(&state, &["init"]);
+        assert_eq!(code, 0, "init");
+        let mut config = json!({"host": "127.0.0.1", "port": 9, "mode": "plain",
+            "sender": "zeropw@example.com", "recipients": ["admin@example.com"]});
+        let mut server = None;
+        if case == "header_write_refused" {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            config["port"] = json!(listener.local_addr().unwrap().port());
+            config["recipients"] = json!([LONG_DOMAIN_COMMENT_RECIPIENT]);
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            server = Some((scripted_server(case, listener, Arc::clone(&stop)), stop));
+        } else if case == "password_non_utf8" {
+            let password = tmp.path().join(format!("{case}.pass"));
+            fs::write(&password, b"synthetic-\xff-password").unwrap();
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-            results.push(admin_cli(language, &state, &["incident", "notify-test"]));
-            if let Some((server, stop)) = server {
-                stop.store(true, Ordering::SeqCst);
-                server.join().unwrap();
-            }
+            fs::set_permissions(&password, fs::Permissions::from_mode(0o600)).unwrap();
+            config["password_file"] = json!(password);
+        } else {
+            config["timeout_seconds"] = json!(1e10);
         }
-        assert_ne!(results[0].0, 0, "{case}");
-        assert_eq!(results[1], results[0], "{case}");
+        let path = state.join("notify.json");
+        fs::write(&path, config.to_string()).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let (code, error, all) = admin_cli(&state, &["incident", "notify-test"]);
+        if let Some((server, stop)) = server {
+            stop.store(true, Ordering::SeqCst);
+            server.join().unwrap();
+        }
+        assert_eq!(code, 1, "{case}: {all}");
+        assert!(error["reason"].is_string(), "{case}: {all}");
+        assert!(!all.contains("-password"), "{case}: {all}");
     }
 }

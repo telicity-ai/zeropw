@@ -1,8 +1,7 @@
-//! Original response boundaries plus byte-for-byte Python rendering oracles.
+//! Original response boundaries plus byte-for-byte rendering recorded from
+//! the Python prototype.
 use serde_json::{Value, json};
 use std::{
-    path::Path,
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -17,101 +16,64 @@ use zeropw::{
     policy::{Connection, HttpAuth, HttpScope, HttpTarget},
 };
 
-fn python(script: &str) -> Value {
-    let result = Command::new("python3.12")
-        .args(["-c", script])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
-        .output()
-        .unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    serde_json::from_slice(&result.stdout).unwrap()
-}
-
+/// The original detector rule table: every `(event, result, reason)`
+/// combination that matched a rule in the Python prototype, with its rule
+/// and strength (`fixtures/python/response/denial_rules.json`).
 #[test]
 fn every_rule_combination_matches_original_python_table_and_nonmatches() {
-    let events = [
-        "tools_unknown",
-        "http_relay",
-        "ssh_agent_refused",
-        "ssh_bind",
-        "ssh_sign",
-        "run_finish",
-        "tools_request",
-        "tools_exec",
-        "tools_status",
-        "unmatched",
-    ];
-    let results = ["ok", "denied", "blocked", "cancelled", ""];
-    let reasons = [
-        "tool_not_found",
-        "handle_signature",
-        "handle_malformed",
-        "handle_version",
-        "handle_expired",
-        "unsupported_agent_message",
-        "unsupported_extension",
-        "agent_forwarding_not_allowed",
-        "not_userauth_request",
-        "no_session_bind",
-        "unsupported_sign_flags",
-        "output_credential_blocked",
-        "grant_revoked",
-        "grant_stale",
-        "principal_disabled",
-        "method_not_allowed",
-        "path_not_allowed",
-        "approval_required",
-        "no_grant",
-        "grant_unknown",
-        "connection_unknown",
-        "global_stop",
-        "restore_pending",
-        "cancelled_by_caller",
-        "",
-    ];
-    let mut cases = Vec::new();
-    for e in events {
-        for r in results {
-            for why in reasons {
-                cases.push(json!([e, r, why]));
+    let table: Value =
+        serde_json::from_str(include_str!("fixtures/python/response/denial_rules.json")).unwrap();
+    let strings = |key: &str| -> Vec<String> {
+        table[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let matches: std::collections::HashMap<(String, String, String), Value> = table["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                (
+                    m[0].as_str().unwrap().to_owned(),
+                    m[1].as_str().unwrap().to_owned(),
+                    m[2].as_str().unwrap().to_owned(),
+                ),
+                json!([m[3], m[4]]),
+            )
+        })
+        .collect();
+    assert!(!matches.is_empty());
+    let mut checked = 0;
+    for e in strings("events") {
+        for r in strings("results") {
+            for why in strings("reasons") {
+                let got = intrusion::match_denial_rule(Some(&e), Some(&r), Some(&why))
+                    .map(|(rule, strength)| json!([rule, strength]))
+                    .unwrap_or(json!([null, null]));
+                let want = matches
+                    .get(&(e.clone(), r.clone(), why.clone()))
+                    .cloned()
+                    .unwrap_or(json!([null, null]));
+                assert_eq!(got, want, "{e} {r} {why}");
+                checked += 1;
             }
         }
     }
-    let expected = python(&format!(
-        "import json\nfrom zeropw.intrusion import _match_denial_rule\ncases={}\nprint(json.dumps([_match_denial_rule(*c) for c in cases]))",
-        json!(cases)
-    ));
-    for (input, want) in cases.iter().zip(expected.as_array().unwrap()) {
-        let got =
-            intrusion::match_denial_rule(input[0].as_str(), input[1].as_str(), input[2].as_str());
-        let got = got
-            .map(|(rule, strength)| json!([rule, strength]))
-            .unwrap_or(json!([null, null]));
-        assert_eq!(&got, want, "{input}");
-    }
+    assert_eq!(checked, 1250);
 }
 
+/// Incident email subject and body for each scope, exactly as the original
+/// rendered them for the same incident documents
+/// (`fixtures/python/response/scope_emails.json`).
 #[test]
 fn all_scope_email_bodies_match_original_python_exactly() {
-    let cases = python(
-        r#"
-import json
-from tests.test_notify import NotifyTestCase
-from zeropw.notify import render_incident_email
-out=[]
-for scope in ('principal','runtime','all'):
- case=NotifyTestCase(); case.setUp()
- try:
-  i=case.build_incident(scope=scope,incident_runtime='default' if scope=='runtime' else None)
-  out.append([i.to_dict(),render_incident_email(i,now='2026-09-16T00:00:00Z')])
- finally: case.doCleanups()
-print(json.dumps(out))
-"#,
-    );
+    let cases: Value =
+        serde_json::from_str(include_str!("fixtures/python/response/scope_emails.json")).unwrap();
+    assert_eq!(cases.as_array().unwrap().len(), 3);
     for case in cases.as_array().unwrap() {
         let incident = incident::Incident::from_dict(&case[0]).unwrap();
         let (subject, body) = notify::render_incident_email(&incident, "2026-09-16T00:00:00Z");

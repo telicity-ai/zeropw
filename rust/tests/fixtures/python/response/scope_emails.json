@@ -1,0 +1,403 @@
+[
+ [
+  {
+   "id": "inc-20231114T221321Z-d8260dee",
+   "opened_at": "2023-11-14T22:13:21Z",
+   "status": "open",
+   "scope": "principal",
+   "runtime": null,
+   "principals": [
+    "agent-1"
+   ],
+   "trigger": "manual",
+   "rule": null,
+   "detail": null,
+   "actions": {
+    "stopped": false,
+    "principals_disabled": 1,
+    "grants_revoked": 4,
+    "handle_key_rotated": false,
+    "runs_cancelled": 0,
+    "sockets_closed": 0,
+    "failed_steps": [],
+    "applied_by_serve": true
+   },
+   "assessment": {
+    "principals": [
+     {
+      "id": "agent-1",
+      "created_at": "2023-11-14T22:13:20Z",
+      "runtime": "default"
+     }
+    ],
+    "secrets": [
+     {
+      "secret_id": "box-key",
+      "kind": "ssh_private_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-ssh-box",
+      "connections": [
+       "box"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 2222,
+        "username": "deploy"
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory",
+      "fingerprint": "SHA256:El4H3wrXSHbXTtSll02lHY/yBQwCxycCG+hejnetUEM"
+     },
+     {
+      "secret_id": "gh-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-github",
+      "connections": [
+       "gh"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory"
+     },
+     {
+      "secret_id": "jira-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-jira",
+      "connections": [
+       "jira"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": null,
+      "last_used": null,
+      "use_count": 0,
+      "active_version": 1,
+      "tier": "recommended"
+     },
+     {
+      "secret_id": "svc-pw",
+      "kind": "password",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-service-basic",
+      "connections": [
+       "svc"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory"
+     }
+    ]
+   },
+   "notification": {
+    "status": "not_configured",
+    "attempts": 0
+   },
+   "closed_at": null,
+   "widened_from": []
+  },
+  [
+   "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221321Z-d8260dee)",
+   "안내 생성 시각: 2026-09-16T00:00:00Z\n\n1. 무슨 일이 있었나\n사건 ID: inc-20231114T221321Z-d8260dee\n사건 시각: 2023-11-14T22:13:21Z  (판정 방식: manual)\n봉쇄 범위: 호출 주체\n침해된 호출 주체:\n  - agent-1 (토큰 생성: 2023-11-14T22:13:20Z)\n\n2. ZeroPW가 이미 한 것\n전체 정지: 아니오\n비활성화된 호출 주체 수: 1\n회수한 권한 수: 4\n핸들 키 교체: 아니오\n취소한 실행 수: 0\n닫은 서명기 소켓 수: 0\n\n3. 지금 해야 할 것 — 필수 교체\n* 비밀 ID: box-key  (종류: ssh_private_key, 서비스: fake-ssh-box)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: box\n  대상: deploy@127.0.0.1:2222\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 새 키를 생성하십시오.\n  2. 대상 서버마다 authorized_keys에서 지문 SHA256:El4H3wrXSHbXTtSll02lHY/yBQwCxycCG+hejnetUEM인 키를 제거하고 새 키로 교체하십시오.\n  3. 대상 서버에서 활성 세션을 확인하고 종료하십시오 (who, ss -tnp).\n  4. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n\n* 비밀 ID: gh-token  (종류: api_key, 서비스: fake-github)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: gh\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 공급자 콘솔에서 이 자격증명을 폐기하고 재발급하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 공급자 감사 로그에서 토큰 생성 시각 이후의 행위를 검토하십시오.\n\n* 비밀 ID: svc-pw  (종류: password, 서비스: fake-service-basic)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: svc\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 서비스에서 비밀번호를 변경하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 해당 서비스의 활성 세션을 종료하십시오.\n\n4. 권장 교체\n* 비밀 ID: jira-token  (종류: api_key) - 사용 기록 없이 권한만 보유\n\n5. 실행 환경\n실행 환경 자체의 침해를 배제할 수 없다면, 같은 실행 환경에 새 호출 주체를 만들기 전에 그 실행 환경을 재구축하고 다음 명령으로 범위를 넓히십시오:\n  incident escalate --id inc-20231114T221321Z-d8260dee --scope runtime|all\n기존 호출 주체의 토큰은 되살아나지 않습니다.\n\n6. 복구 명령\n  incident show --id inc-20231114T221321Z-d8260dee\n  (위 필수 교체를 모두 완료한 뒤)\n  incident close --id inc-20231114T221321Z-d8260dee\n  principal create --runtime <실행 환경 ID>\n  grant create --principal <새 호출 주체 ID> --connection <연결 ID>\n  resume\n"
+  ]
+ ],
+ [
+  {
+   "id": "inc-20231114T221321Z-78285bed",
+   "opened_at": "2023-11-14T22:13:21Z",
+   "status": "open",
+   "scope": "runtime",
+   "runtime": "default",
+   "principals": [
+    "agent-1"
+   ],
+   "trigger": "manual",
+   "rule": null,
+   "detail": null,
+   "actions": {
+    "stopped": true,
+    "principals_disabled": 1,
+    "grants_revoked": 4,
+    "handle_key_rotated": true,
+    "runs_cancelled": 0,
+    "sockets_closed": 0,
+    "failed_steps": [],
+    "applied_by_serve": true
+   },
+   "assessment": {
+    "principals": [
+     {
+      "id": "agent-1",
+      "created_at": "2023-11-14T22:13:20Z",
+      "runtime": "default"
+     }
+    ],
+    "secrets": [
+     {
+      "secret_id": "box-key",
+      "kind": "ssh_private_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-ssh-box",
+      "connections": [
+       "box"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 2222,
+        "username": "deploy"
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory",
+      "fingerprint": "SHA256:OlLtlxhY6F8WaIcPPOy4R1s39X0iqeC473URs26atkY"
+     },
+     {
+      "secret_id": "gh-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-github",
+      "connections": [
+       "gh"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory"
+     },
+     {
+      "secret_id": "jira-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-jira",
+      "connections": [
+       "jira"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": null,
+      "last_used": null,
+      "use_count": 0,
+      "active_version": 1,
+      "tier": "recommended"
+     },
+     {
+      "secret_id": "svc-pw",
+      "kind": "password",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-service-basic",
+      "connections": [
+       "svc"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory"
+     }
+    ]
+   },
+   "notification": {
+    "status": "not_configured",
+    "attempts": 0
+   },
+   "closed_at": null,
+   "widened_from": []
+  },
+  [
+   "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221321Z-78285bed)",
+   "안내 생성 시각: 2026-09-16T00:00:00Z\n\n1. 무슨 일이 있었나\n사건 ID: inc-20231114T221321Z-78285bed\n사건 시각: 2023-11-14T22:13:21Z  (판정 방식: manual)\n봉쇄 범위: 실행 환경 (실행 환경: default)\n침해된 호출 주체:\n  - agent-1 (토큰 생성: 2023-11-14T22:13:20Z)\n\n2. ZeroPW가 이미 한 것\n전체 정지: 예\n비활성화된 호출 주체 수: 1\n회수한 권한 수: 4\n핸들 키 교체: 예\n취소한 실행 수: 0\n닫은 서명기 소켓 수: 0\n\n3. 지금 해야 할 것 — 필수 교체\n* 비밀 ID: box-key  (종류: ssh_private_key, 서비스: fake-ssh-box)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: box\n  대상: deploy@127.0.0.1:2222\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 새 키를 생성하십시오.\n  2. 대상 서버마다 authorized_keys에서 지문 SHA256:OlLtlxhY6F8WaIcPPOy4R1s39X0iqeC473URs26atkY인 키를 제거하고 새 키로 교체하십시오.\n  3. 대상 서버에서 활성 세션을 확인하고 종료하십시오 (who, ss -tnp).\n  4. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n\n* 비밀 ID: gh-token  (종류: api_key, 서비스: fake-github)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: gh\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 공급자 콘솔에서 이 자격증명을 폐기하고 재발급하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 공급자 감사 로그에서 토큰 생성 시각 이후의 행위를 검토하십시오.\n\n* 비밀 ID: svc-pw  (종류: password, 서비스: fake-service-basic)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: svc\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 서비스에서 비밀번호를 변경하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 해당 서비스의 활성 세션을 종료하십시오.\n\n4. 권장 교체\n* 비밀 ID: jira-token  (종류: api_key) - 사용 기록 없이 권한만 보유\n\n5. 실행 환경\n침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.\n\n6. 복구 명령\n  incident show --id inc-20231114T221321Z-78285bed\n  (위 필수 교체를 모두 완료한 뒤)\n  incident close --id inc-20231114T221321Z-78285bed\n  principal create --runtime <실행 환경 ID>\n  grant create --principal <새 호출 주체 ID> --connection <연결 ID>\n  resume\n"
+  ]
+ ],
+ [
+  {
+   "id": "inc-20231114T221321Z-95b61005",
+   "opened_at": "2023-11-14T22:13:21Z",
+   "status": "open",
+   "scope": "all",
+   "runtime": null,
+   "principals": [
+    "agent-1"
+   ],
+   "trigger": "manual",
+   "rule": null,
+   "detail": null,
+   "actions": {
+    "stopped": true,
+    "principals_disabled": 1,
+    "grants_revoked": 4,
+    "handle_key_rotated": true,
+    "runs_cancelled": 0,
+    "sockets_closed": 0,
+    "failed_steps": [],
+    "applied_by_serve": true
+   },
+   "assessment": {
+    "principals": [
+     {
+      "id": "agent-1",
+      "created_at": "2023-11-14T22:13:20Z",
+      "runtime": "default"
+     }
+    ],
+    "secrets": [
+     {
+      "secret_id": "box-key",
+      "kind": "ssh_private_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-ssh-box",
+      "connections": [
+       "box"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 2222,
+        "username": "deploy"
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory",
+      "fingerprint": "SHA256:1AFlS/bHihRGeWwbN4yfchjJJ6EFkBHzkpggixF9qxQ",
+      "recover_required": true
+     },
+     {
+      "secret_id": "gh-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-github",
+      "connections": [
+       "gh"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory",
+      "recover_required": true
+     },
+     {
+      "secret_id": "jira-token",
+      "kind": "api_key",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-jira",
+      "connections": [
+       "jira"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": null,
+      "last_used": null,
+      "use_count": 0,
+      "active_version": 1,
+      "tier": "mandatory",
+      "recover_required": true
+     },
+     {
+      "secret_id": "svc-pw",
+      "kind": "password",
+      "project": "demo",
+      "environment": "dev",
+      "service": "fake-service-basic",
+      "connections": [
+       "svc"
+      ],
+      "targets": [
+       {
+        "host": "127.0.0.1",
+        "port": 8080
+       }
+      ],
+      "first_used": "2023-11-14T22:13:21Z",
+      "last_used": "2023-11-14T22:13:21Z",
+      "use_count": 1,
+      "active_version": 1,
+      "tier": "mandatory",
+      "recover_required": true
+     }
+    ],
+    "recover_required": true
+   },
+   "notification": {
+    "status": "not_configured",
+    "attempts": 0
+   },
+   "closed_at": null,
+   "widened_from": []
+  },
+  [
+   "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221321Z-95b61005)",
+   "안내 생성 시각: 2026-09-16T00:00:00Z\n\n1. 무슨 일이 있었나\n사건 ID: inc-20231114T221321Z-95b61005\n사건 시각: 2023-11-14T22:13:21Z  (판정 방식: manual)\n봉쇄 범위: 전체\n침해된 호출 주체:\n  - agent-1 (토큰 생성: 2023-11-14T22:13:20Z)\n\n2. ZeroPW가 이미 한 것\n전체 정지: 예\n비활성화된 호출 주체 수: 1\n회수한 권한 수: 4\n핸들 키 교체: 예\n취소한 실행 수: 0\n닫은 서명기 소켓 수: 0\n\n3. 지금 해야 할 것 — 필수 교체\n* 비밀 ID: box-key  (종류: ssh_private_key, 서비스: fake-ssh-box)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: box\n  대상: deploy@127.0.0.1:2222\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 새 키를 생성하십시오.\n  2. 대상 서버마다 authorized_keys에서 지문 SHA256:1AFlS/bHihRGeWwbN4yfchjJJ6EFkBHzkpggixF9qxQ인 키를 제거하고 새 키로 교체하십시오.\n  3. 대상 서버에서 활성 세션을 확인하고 종료하십시오 (who, ss -tnp).\n  4. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n\n* 비밀 ID: gh-token  (종류: api_key, 서비스: fake-github)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: gh\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 공급자 콘솔에서 이 자격증명을 폐기하고 재발급하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 공급자 감사 로그에서 토큰 생성 시각 이후의 행위를 검토하십시오.\n\n* 비밀 ID: jira-token  (종류: api_key, 서비스: fake-jira)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: jira\n  대상: 127.0.0.1:8080\n  첫 사용: 없음  마지막 사용: 없음  사용 횟수: 0\n  1. 공급자 콘솔에서 이 자격증명을 폐기하고 재발급하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 공급자 감사 로그에서 토큰 생성 시각 이후의 행위를 검토하십시오.\n\n* 비밀 ID: svc-pw  (종류: password, 서비스: fake-service-basic)\n  프로젝트/환경: demo/dev  현재 활성 버전: 1\n  연결: svc\n  대상: 127.0.0.1:8080\n  첫 사용: 2023-11-14T22:13:21Z  마지막 사용: 2023-11-14T22:13:21Z  사용 횟수: 1\n  1. 서비스에서 비밀번호를 변경하십시오.\n  2. `rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.\n  3. 해당 서비스의 활성 세션을 종료하십시오.\n\n4. 권장 교체\n권장 교체 대상이 없습니다.\n\n5. 실행 환경\n침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.\n\n6. 복구 명령\n  incident show --id inc-20231114T221321Z-95b61005\n  (위 필수 교체를 모두 완료한 뒤)\n  incident close --id inc-20231114T221321Z-95b61005\n  principal create --runtime <실행 환경 ID>\n  grant create --principal <새 호출 주체 ID> --connection <연결 ID>\n  resume\n\n이 사건은 금고 전체 노출로 판정되었습니다. `incident close` 전에 다음을 수행하십시오:\n  recover   (새 KMS 키, 권한 전부 회수, 핸들 키 교체)\n  관리자 패스프레이즈와 복구 패스프레이즈를 모두 변경하십시오.\n"
+  ]
+ ]
+]
