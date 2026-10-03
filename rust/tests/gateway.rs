@@ -2668,10 +2668,7 @@ fn replay_status_preserves_out_of_range_magnitudes_exactly() {
             "numeric_string_huge",
             serde_json::json!("18446744073709551816"),
         ),
-        (
-            "numeric_string_underscore",
-            serde_json::json!(" 65736_0 "),
-        ),
+        ("numeric_string_underscore", serde_json::json!(" 65736_0 ")),
     ];
     let oracle_input = serde_json::to_string(
         &out_of_range

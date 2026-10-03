@@ -486,6 +486,30 @@ fn python_int_coerce(v: &Value) -> Option<i64> {
     }
 }
 
+/// Represent the stored `Connection.secret_version` values that compare and
+/// hash equal to a Python integer version key. `Connection.from_dict` leaves
+/// this field untyped, so `True` and integral floats are valid successful
+/// inputs; Python dictionary lookup treats them as the integer keys `1` and
+/// `int(float)` respectively. Do not apply general `int()` coercion here:
+/// `1.5` is a valid stored Python value too, but it does not identify version
+/// `1` and remains outside this typed `Option<PyInt>` representation (the
+/// documented untyped-field gap), so loading it still fails closed.
+fn connection_secret_version(v: &Value) -> Option<PyInt> {
+    match v {
+        Value::Bool(_) => PyInt::from_python_int(v),
+        Value::Number(number) if number_is_python_int(number) => PyInt::from_json_integer(v),
+        Value::Number(number) => {
+            let value = number.as_f64()?;
+            if value.is_finite() && value.fract() == 0.0 {
+                PyInt::coerce_from_json(v)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// `i64::MIN` as `f64`: exact (a power of two), so this is an inclusive
 /// lower bound for "truncates to a representable `i64`".
 const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
@@ -1976,7 +2000,7 @@ impl CliProfile {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Connection {
     pub id: String,
     pub project: String,
@@ -1986,6 +2010,10 @@ pub struct Connection {
     pub kind: String,
     pub secret_id: String,
     pub secret_version: Option<PyInt>,
+    // Original JSON spelling for Python numeric values that identify the
+    // same integer version but must survive `to_dict()` unchanged (`True`,
+    // `1.0`). Semantic comparisons use `secret_version`, never this field.
+    raw_secret_version: Option<Value>,
     pub description: String,
     pub http_target: Option<HttpTarget>,
     pub http_auth: Option<HttpAuth>,
@@ -1997,6 +2025,28 @@ pub struct Connection {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl PartialEq for Connection {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.project == other.project
+            && self.environment == other.environment
+            && self.service == other.service
+            && self.kind == other.kind
+            && self.secret_id == other.secret_id
+            && self.secret_version == other.secret_version
+            && self.description == other.description
+            && self.http_target == other.http_target
+            && self.http_auth == other.http_auth
+            && self.http_scope == other.http_scope
+            && self.ssh_target == other.ssh_target
+            && self.cli == other.cli
+            && self.policy_version == other.policy_version
+            && self.status == other.status
+            && self.created_at == other.created_at
+            && self.updated_at == other.updated_at
+    }
 }
 
 /// The subset of `Connection`'s fields `Policy::update_connection` may
@@ -2112,6 +2162,7 @@ impl Connection {
             kind,
             secret_id: secret_id.into(),
             secret_version,
+            raw_secret_version: None,
             description: description.into(),
             http_target,
             http_auth,
@@ -2128,7 +2179,7 @@ impl Connection {
     /// `replace(before, **changes)` then re-run `__post_init__` (Python's
     /// frozen-dataclass `replace` re-validates through the constructor).
     fn with_changes(&self, changes: &ConnectionChanges) -> Result<Connection, Error> {
-        Connection::new(
+        let mut updated = Connection::new(
             self.id.clone(),
             self.project.clone(),
             self.environment.clone(),
@@ -2170,15 +2221,31 @@ impl Connection {
                 .unwrap_or_else(|| self.status.clone()),
             self.created_at.clone(),
             self.updated_at.clone(),
-        )
+        )?;
+        if changes.secret_version.is_none() {
+            updated
+                .raw_secret_version
+                .clone_from(&self.raw_secret_version);
+        }
+        Ok(updated)
     }
 
     /// `Connection.to_dict` (`dataclasses.asdict`).
     pub fn to_value(&self) -> Value {
+        let secret_version = self
+            .raw_secret_version
+            .as_ref()
+            .filter(|raw| connection_secret_version(raw).as_ref() == self.secret_version.as_ref())
+            .cloned()
+            .unwrap_or_else(|| {
+                self.secret_version
+                    .as_ref()
+                    .map_or(Value::Null, PyInt::value)
+            });
         json!({
             "id": self.id, "project": self.project, "environment": self.environment,
             "service": self.service, "kind": self.kind, "secret_id": self.secret_id,
-            "secret_version": self.secret_version, "description": self.description,
+            "secret_version": secret_version, "description": self.description,
             "http_target": self.http_target.as_ref().map(HttpTarget::to_value),
             "http_auth": self.http_auth.as_ref().map(HttpAuth::to_value),
             "http_scope": self.http_scope.as_ref().map(HttpScope::to_value),
@@ -2246,10 +2313,18 @@ impl Connection {
         let secret_id = required_str("secret_id", &mut corrupt)?;
         // Kwarg order 7-8: secret_version, description (both untyped in
         // Python -- see the doc comment above).
+        let mut raw_secret_version = None;
         let secret_version = match obj.get("secret_version") {
             None | Some(Value::Null) => None,
-            Some(v) => match PyInt::from_json_integer(v) {
-                Some(n) => Some(n),
+            Some(v) => match connection_secret_version(v) {
+                Some(n) => {
+                    if matches!(v, Value::Bool(_))
+                        || matches!(v, Value::Number(number) if !number_is_python_int(number))
+                    {
+                        raw_secret_version = Some(v.clone());
+                    }
+                    Some(n)
+                }
                 None => {
                     corrupt = true;
                     None
@@ -2308,7 +2383,7 @@ impl Connection {
         let id = id_raw.as_str().unwrap_or("").to_string();
         let kind = kind_raw.as_str().unwrap_or("").to_string();
         let status = status_raw.as_str().unwrap_or("").to_string();
-        let connection = Connection::new(
+        let mut connection = Connection::new(
             id,
             project,
             environment,
@@ -2327,6 +2402,7 @@ impl Connection {
             created_at,
             updated_at,
         )?;
+        connection.raw_secret_version = raw_secret_version;
         if corrupt {
             return Err(bad());
         }

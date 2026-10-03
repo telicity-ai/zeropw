@@ -1391,6 +1391,88 @@ probe("secret_version_int", d, lambda c: c.secret_version)
     );
 }
 
+#[test]
+fn connection_numeric_secret_version_preserves_raw_roundtrip_and_unrelated_update() {
+    let python = run_python(
+        r#"
+import json
+from dataclasses import replace
+from zeropw import policy as P
+
+def document(value):
+    connection = P.Connection(
+        id="gh", project="demo", environment="dev", service="fake-github", kind="http",
+        secret_id="gh-token", secret_version=value, description="demo connection",
+        http_target=P.HttpTarget("http", "127.0.0.1", 8080),
+        http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(),
+        ssh_target=None, cli=None, policy_version=1, status="active",
+        created_at="", updated_at="",
+    )
+    connection = P.Connection.from_dict(connection.to_dict())
+    return [
+        connection.to_dict()["secret_version"],
+        replace(connection, description="mutated").to_dict()["secret_version"],
+        replace(connection, secret_version=2).to_dict()["secret_version"],
+    ]
+
+print(json.dumps([document(True), document(1.0)], separators=(",", ":")))
+"#,
+    );
+    let expected: serde_json::Value = serde_json::from_str(python.trim()).unwrap();
+    assert_eq!(
+        expected,
+        serde_json::json!([[true, true, 2], [1.0, 1.0, 2]])
+    );
+
+    for (index, raw) in [serde_json::json!(true), serde_json::json!(1.0)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut document = rust_connection().to_value();
+        document["secret_version"] = raw;
+        document["policy_version"] = serde_json::json!(1);
+
+        let loaded = Connection::from_value(&document).unwrap();
+        assert_eq!(loaded.to_value()["secret_version"], expected[index][0]);
+        let mut directly_mutated = loaded.clone();
+        directly_mutated.secret_version = Some(2.into());
+        assert_eq!(directly_mutated.to_value()["secret_version"], 2);
+        directly_mutated.secret_version = None;
+        assert_eq!(
+            directly_mutated.to_value()["secret_version"],
+            serde_json::Value::Null
+        );
+
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        state
+            .write_json(policy::CONNECTIONS, &serde_json::json!({"gh": document}))
+            .unwrap();
+        let policy = Policy::new(&state, clock::fixed(1_700_000_000.0));
+        let (updated, _) = policy
+            .update_connection("gh", ConnectionChanges::new().description("mutated"))
+            .unwrap();
+        assert_eq!(updated.to_value()["secret_version"], expected[index][1]);
+        let persisted = state
+            .read_json(policy::CONNECTIONS, serde_json::json!({}))
+            .unwrap();
+        assert_eq!(persisted["gh"]["secret_version"], expected[index][1]);
+
+        let (replaced, _) = policy
+            .update_connection(
+                "gh",
+                ConnectionChanges::new().secret_version(Some(2.into())),
+            )
+            .unwrap();
+        assert_eq!(replaced.to_value()["secret_version"], expected[index][2]);
+        let persisted = state
+            .read_json(policy::CONNECTIONS, serde_json::json!({}))
+            .unwrap();
+        assert_eq!(persisted["gh"]["secret_version"], expected[index][2]);
+    }
+}
+
 // ------------------------------------------------------------------- D-4
 // `is_stopped`/`restore_pending`/`_decide`/`usable_connections` read
 // `control.json`'s `"stopped"`/`"restore_pending"` flags with Python
