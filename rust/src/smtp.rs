@@ -2478,7 +2478,7 @@ fn tls(
 
 #[cfg(test)]
 mod message_tests {
-    use super::{Message, mailbox};
+    use super::{Message, envelope_recipients, envelope_sender, mailbox};
     use crate::notify::NotifyConfig;
     use serde_json::{Value, json};
 

@@ -18,10 +18,24 @@ Full equivalence remains unproven. The current candidate branch is
 `codex/rust-full-parity`, with `rust/parity-status.json` tracking the historical
 residual inventory and exact revision evidence. The current implementation
 workers are actually `gpt-6-sol`; this local session coordinates and reviews.
-Product code and tests execute only on disposable hosted GitHub Actions
-runners with synthetic credentials. No product builds or tests from this
-continuation execute on the coordinator host. Older local-run reports below
-are historical evidence and do not describe this execution arrangement.
+The 2026-10-03 user decision disables GitHub Actions for this repository.
+The repository Actions API was updated and read back as `enabled: false`.
+Workflow files remain as historical test manifests; disabling automation does
+not remove any test or acceptance requirement.
+
+Verification now uses the dedicated `zeropw-parity` Lima Linux VM, with no
+host-directory mounts, SSH-agent forwarding, proxy environment propagation,
+or automatic application-port forwarding. An unprivileged `parity` user
+receives a committed source archive, with its SHA and archive digest recorded
+outside the guest. Guest firewall rules reject that user's connections to
+private/link-local networks; loopback synthetic endpoints remain available.
+No repository, model, vault, gateway or signer administrator credentials are
+provided to the guest. Product builds and tests execute there, never directly
+on the coordinator host. Rust 1.98.1 and CPython 3.12.14 (source commit
+`2abcf904b8dac8c999d2b3aac76681abb333798a`) match the prior verification tools.
+This ARM64 Linux environment does not replace required macOS platform tests.
+Older local-run reports below are historical evidence and do not describe
+this execution arrangement.
 
 At `f2091e8309cea8cc843020c3ee562bf106db4d7f`, hosted run
 [37041858065](https://github.com/handlecusion/zeropw/actions/runs/37041858065)
@@ -55,8 +69,8 @@ diff checks passed. Hosted [run 37048435634](https://github.com/handlecusion/zer
 rejected all 18 jobs before their first step because GitHub reported failed
 account payments or a spending limit. The preceding `0cd4cb7` run had the
 same infrastructure failure. Neither run provides compilation or runtime
-validation. Payment/Actions availability must be restored before hosted
-verification can resume; no local product execution substitutes for it.
+validation. This blocked hosted verification at the time. The later user decision above
+disables Actions and establishes an isolated VM execution path instead.
 
 The earlier `949207b` full matrix passed both platforms' Python reference
 (1099), harness (80), explicit signer probes (4), native E2E/fake upstream,
