@@ -33,6 +33,20 @@
 //!   `_normalize_request_id` have no Rust equivalent (compile-time
 //!   impossible), only their *value* validation is ported. See
 //!   `DEVIATIONS.md`.
+//!
+//! ## Exceptions
+//!
+//! Where Python's `relay`/`relay_for_caller` raise instead of returning a
+//! `RelayResult`, [`try_relay`]/[`try_relay_for_caller`] return that
+//! exception as `Err`: a `ZeroPWError` as the matching [`Error`], and a
+//! CPython built-in escaping uncaught (`OverflowError` from a huge negative
+//! chunk size, `ValueError`/`OverflowError` from `settimeout`, the
+//! `TypeError`/`ValueError`/`AttributeError` the request ledger raises on
+//! malformed state, ...) as an [`escaped_builtin`], with the same side
+//! effects already done (and the same ones not done) as in Python.
+//! `server.rs` and `tools.rs` propagate it exactly as `zeropw.server` and
+//! `zeropw.tools` do; [`relay`]/[`relay_for_caller`] are conveniences that
+//! render it as the server's reply.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -1043,59 +1057,37 @@ fn peer_is_local_listener(stream: &TcpStream) -> bool {
 /// `float(False) == 0.0` does (confirmed against live `python3.12` --
 /// Python `bool` is an `int` subclass, so `float()` never raises for one,
 /// unlike the earlier version of this doc comment claimed); a JSON string
-/// is parsed with CPython's `float(str)` grammar, including Unicode decimal
-/// digits and whitespace, PEP 515 underscores between digits, non-finite
-/// spellings and exponent overflow. Anything else
+/// is parsed with the canonical [`crate::pystr::float_from_str`] (CPython's
+/// `float(str)` grammar, PORTING.md §3b). Anything else
 /// (`null`, an array, an object) has no non-panicking `float()` equivalent
-/// and is treated as unconvertible. Returns `None` exactly where Python's
-/// `float(v)` would raise `TypeError`/`ValueError`.
+/// and is treated as unconvertible; a JSON integer too large for a double
+/// (`as_f64` rounds it to infinity and refuses it) is `float(10**400)`'s
+/// `OverflowError`. Returns `None` exactly where Python's `float(v)` would
+/// raise `TypeError`/`ValueError`/`OverflowError`.
 fn python_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::String(s) => python_float_str(s),
+        Value::String(s) => crate::pystr::float_from_str(s),
         _ => None,
     }
 }
 
-/// `PyFloat_FromString` for a Python `str`. CPython first maps Unicode
-/// whitespace to ASCII space and Unicode decimal digits to their ASCII
-/// values, then accepts underscores only between two digits before passing
-/// the resulting literal to its decimal/non-finite parser.
-fn python_float_str(text: &str) -> Option<f64> {
-    let mut ascii = String::new();
-    for c in text.chars() {
-        if u32::from(c) < 127 {
-            ascii.push(c);
-        } else if crate::pystr::is_space(c) {
-            ascii.push(' ');
-        } else {
-            ascii.push(char::from_digit(
-                crate::pystr::unicode_decimal_digit(c)?,
-                10,
-            )?);
-        }
+/// The built-in exception `float(v)` raises where [`python_float`] returns
+/// `None`: `ValueError` for an unparsable `str`, `OverflowError` for a JSON
+/// integer too large for a double (`float(10**400)`), `TypeError` for
+/// `None`/`list`/`dict`.
+fn float_error_class(v: &Value) -> &'static str {
+    match v {
+        Value::String(_) => "ValueError",
+        Value::Number(_) => "OverflowError",
+        _ => "TypeError",
     }
+}
 
-    let mut plain = String::new();
-    let mut previous = '\0';
-    for c in ascii.chars() {
-        if c == '_' {
-            if !previous.is_ascii_digit() {
-                return None;
-            }
-        } else {
-            if previous == '_' && !c.is_ascii_digit() {
-                return None;
-            }
-            plain.push(c);
-        }
-        previous = c;
-    }
-    if previous == '_' || plain.contains('\0') {
-        return None;
-    }
-    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
+/// `float(v)` for a stored ledger value, raising the escaping built-in.
+fn ledger_float(v: &Value) -> Result<f64, Error> {
+    python_float(v).ok_or_else(|| escaped_builtin(float_error_class(v)))
 }
 
 /// `int(v)` as applied to a stored `response["status"]` value (finding
@@ -1163,10 +1155,13 @@ fn is_json_falsy(v: &Value) -> bool {
 /// `k="a", v="b"`, confirmed directly against live `python3.12`: `for k, v
 /// in ["ab"]` succeeds). A wrong-length array/string, or an element of any
 /// other JSON type, is exactly where Python's own unpacking raises
-/// (`ValueError`/`TypeError`) -- fail-closed with `state_corrupt`.
+/// (`ValueError`/`TypeError`), an exception that escapes `relay`
+/// ([`escaped_builtin`]).
 fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
+    // A non-iterable (`TypeError`) or wrong-length (`ValueError`) element
+    // is a built-in exception escaping `replay` and `relay`.
     fn bad_shape() -> Error {
-        Error::state("state_corrupt").with_detail("request_ledger_headers")
+        escaped_builtin("TypeError")
     }
     let Some(value) = v else {
         return Ok(Headers::new());
@@ -1190,7 +1185,7 @@ fn python_headers_from_json(v: Option<&Value>) -> Result<Headers, Error> {
     for item in iter(value).ok_or_else(bad_shape)? {
         let pair = iter(&item).ok_or_else(bad_shape)?;
         if pair.len() != 2 {
-            return Err(bad_shape());
+            return Err(escaped_builtin("ValueError"));
         }
         out.push((python_str_of(&pair[0]), python_str_of(&pair[1])));
     }
@@ -1300,26 +1295,45 @@ impl<'a> RequestLedger<'a> {
     /// `entries[request_id]` raises `TypeError`/`AttributeError` for a
     /// non-dict caller value; the previous version silently `continue`d
     /// past it instead of failing closed.
+    ///
+    /// Every failure above is a CPython built-in exception escaping `_save`
+    /// (and `relay`), so it is an [`escaped_builtin`], never a `StateError`.
+    /// Measured on CPython 3.12.14: a caller value that is an EMPTY `str` or
+    /// `list` iterates zero times and is then deleted by `if not entries:
+    /// del doc[caller]` (a value is returned, the document is rewritten);
+    /// every other non-dict caller value raises (`list(None)`/`list(5)` ->
+    /// `TypeError`, `"ab"["a"]` -> `TypeError`, a non-empty list always
+    /// reaches a `TypeError`/`AttributeError`/`IndexError` on one of its
+    /// own elements); a non-dict entry raises `AttributeError` from
+    /// `.get("updated_at", 0)`.
     fn save(&self, mut doc: Map<String, Value>) -> Result<(), Error> {
-        let corrupt = |detail: &str| Error::state("state_corrupt").with_detail(detail);
         let now = (self.ctx.clock)();
         let callers: Vec<String> = doc.keys().cloned().collect();
         for caller in callers {
             let Some(entries_value) = doc.get_mut(&caller) else {
                 continue;
             };
-            let Value::Object(entries) = entries_value else {
-                return Err(corrupt("request_ledger_caller"));
+            let entries = match entries_value {
+                Value::Object(entries) => entries,
+                Value::String(text) if text.is_empty() => {
+                    doc.remove(&caller);
+                    continue;
+                }
+                Value::Array(items) if items.is_empty() => {
+                    doc.remove(&caller);
+                    continue;
+                }
+                _ => return Err(escaped_builtin("TypeError")),
             };
             let ids: Vec<String> = entries.keys().cloned().collect();
             for id in ids {
-                let raw = entries
-                    .get(&id)
-                    .and_then(|e| e.get("updated_at"))
-                    .cloned()
-                    .unwrap_or(json!(0));
-                let updated_at =
-                    python_float(&raw).ok_or_else(|| corrupt("request_ledger_updated_at"))?;
+                let Some(Value::Object(entry)) = entries.get(&id) else {
+                    return Err(escaped_builtin("AttributeError"));
+                };
+                let updated_at = match entry.get("updated_at") {
+                    None => 0.0,
+                    Some(raw) => ledger_float(raw)?,
+                };
                 if now - updated_at > LEDGER_TTL_SECONDS {
                     entries.remove(&id);
                 }
@@ -1336,14 +1350,18 @@ impl<'a> RequestLedger<'a> {
         if total > LEDGER_MAX_ENTRIES {
             let mut completed: Vec<(f64, String, String)> = Vec::new();
             for (caller, entries) in doc.iter() {
+                // Every surviving caller value is a dict whose entries are
+                // dicts with a float-convertible `updated_at` (the sweep
+                // above raised otherwise); kept fail-closed regardless.
                 let Some(entries) = entries.as_object() else {
-                    return Err(corrupt("request_ledger_caller"));
+                    return Err(escaped_builtin("AttributeError"));
                 };
                 for (rid, entry) in entries {
                     if entry.get("state").and_then(Value::as_str) == Some("completed") {
-                        let raw = entry.get("updated_at").cloned().unwrap_or(json!(0));
-                        let updated_at = python_float(&raw)
-                            .ok_or_else(|| corrupt("request_ledger_updated_at"))?;
+                        let updated_at = match entry.get("updated_at") {
+                            None => 0.0,
+                            Some(raw) => ledger_float(raw)?,
+                        };
                         completed.push((updated_at, caller.clone(), rid.clone()));
                     }
                 }
@@ -1411,27 +1429,27 @@ impl<'a> RequestLedger<'a> {
         // therefore never replaces it -- went on to relay the request AND
         // silently drop the claim, permanently disabling idempotency for
         // that caller while reporting success.
+        //
+        // These are built-in exceptions escaping `relay`
+        // ([`escaped_builtin`]), not `StateError`s. A JSON `null` entry is
+        // `entry is None` in Python -- the claim simply overwrites it.
         let entry = match doc.get(caller) {
             None => None,
-            Some(Value::Object(m)) => m.get(request_id).cloned(),
-            Some(_) => {
-                return Err(Error::state("state_corrupt").with_detail("request_ledger_caller"));
-            }
+            Some(Value::Object(m)) => m.get(request_id).filter(|e| !e.is_null()).cloned(),
+            Some(_) => return Err(escaped_builtin("AttributeError")),
         };
         if let Some(entry) = &entry {
             // Likewise, `entry.get("updated_at", 0)` raises `AttributeError`
             // for a wrong-typed *entry* (`{"agent-1": {"rid-1": "oops"}}`,
             // finding F-R3-5) -- and `float(entry.get("updated_at", 0))`
-            // raises `ValueError`/`TypeError` for an `updated_at` that isn't
-            // float-convertible (`updated_at: "soon"`, same finding).
+            // raises `ValueError`/`TypeError`/`OverflowError` for an
+            // `updated_at` that isn't float-convertible.
             let Value::Object(entry_obj) = entry else {
-                return Err(Error::state("state_corrupt").with_detail("request_ledger_entry"));
+                return Err(escaped_builtin("AttributeError"));
             };
             let updated_at = match entry_obj.get("updated_at") {
                 None => 0.0,
-                Some(v) => python_float(v).ok_or_else(|| {
-                    Error::state("state_corrupt").with_detail("request_ledger_updated_at")
-                })?,
+                Some(v) => ledger_float(v)?,
             };
             if now - updated_at <= LEDGER_TTL_SECONDS {
                 if entry_obj.get("digest").and_then(Value::as_str) != Some(digest) {
@@ -1448,10 +1466,9 @@ impl<'a> RequestLedger<'a> {
             .entry(caller.to_string())
             .or_insert_with(|| Value::Object(Map::new()));
         let Value::Object(m) = caller_entries else {
-            // Unreachable: a non-object caller value already returned
-            // `state_corrupt` above. Kept fail-closed rather than
-            // `unreachable!()` in case that invariant ever drifts.
-            return Err(Error::state("state_corrupt").with_detail("request_ledger_caller"));
+            // Unreachable: a non-object caller value already raised above.
+            // Kept fail-closed rather than `unreachable!()`.
+            return Err(escaped_builtin("AttributeError"));
         };
         m.insert(
             request_id.to_string(),
@@ -1477,11 +1494,19 @@ impl<'a> RequestLedger<'a> {
         let _lock = self.ctx.state.lock()?;
         let mut doc = self.load()?;
         let now = (self.ctx.clock)();
-        let Some(Value::Object(entries)) = doc.get_mut(caller) else {
-            return Ok(());
+        // `entry = doc.get(caller, {}).get(request_id)`: a non-dict caller
+        // value (even `null`) raises `AttributeError`; a missing or `null`
+        // entry returns; `entry.update(changes)` on a non-dict entry raises
+        // `AttributeError`.
+        let entries = match doc.get_mut(caller) {
+            None => return Ok(()),
+            Some(Value::Object(entries)) => entries,
+            Some(_) => return Err(escaped_builtin("AttributeError")),
         };
-        let Some(Value::Object(entry)) = entries.get_mut(request_id) else {
-            return Ok(());
+        let entry = match entries.get_mut(request_id) {
+            None | Some(Value::Null) => return Ok(()),
+            Some(Value::Object(entry)) => entry,
+            Some(_) => return Err(escaped_builtin("AttributeError")),
         };
         apply(entry);
         entry.insert("updated_at".into(), json!(now));
@@ -1492,13 +1517,31 @@ impl<'a> RequestLedger<'a> {
     pub fn release(&self, caller: &str, request_id: &str) -> Result<(), Error> {
         let _lock = self.ctx.state.lock()?;
         let mut doc = self.load()?;
-        if let Some(Value::Object(entries)) = doc.get_mut(caller)
-            && entries.remove(request_id).is_some()
-        {
-            if entries.is_empty() {
-                doc.remove(caller);
+        // `if request_id in doc.get(caller, {})`: a `str` caller value is a
+        // substring test and a `list` a membership test -- either way a hit
+        // then fails `del doc[caller][request_id]` with `TypeError`; a
+        // number/bool/`null` value raises `TypeError` from `in` itself.
+        match doc.get_mut(caller) {
+            None => {}
+            Some(Value::Object(entries)) => {
+                if entries.remove(request_id).is_some() {
+                    if entries.is_empty() {
+                        doc.remove(caller);
+                    }
+                    self.save(doc)?;
+                }
             }
-            self.save(doc)?;
+            Some(Value::String(text)) => {
+                if text.contains(request_id) {
+                    return Err(escaped_builtin("TypeError"));
+                }
+            }
+            Some(Value::Array(items)) => {
+                if items.iter().any(|item| item.as_str() == Some(request_id)) {
+                    return Err(escaped_builtin("TypeError"));
+                }
+            }
+            Some(_) => return Err(escaped_builtin("TypeError")),
         }
         Ok(())
     }
@@ -1551,9 +1594,9 @@ impl<'a> RequestLedger<'a> {
     /// `status = int(response.get("status", 502))` and
     /// `headers = [(str(k), str(v)) for k, v in response.get("headers") or
     /// []]` both raise uncaught built-in exceptions for a wrong-typed
-    /// stored `status`/`headers` (finding F-R3-5) -- fail-closed with the
-    /// same `state_corrupt` `StateError` [`RequestLedger::claim`] uses for
-    /// its own wrong-typed shapes, per PORTING.md §3.5.
+    /// stored `status`/`headers` (finding F-R3-5); they escape `relay`
+    /// unchanged, so they are [`escaped_builtin`]s (finding X-5: `zeropw.server`
+    /// answers them with its fixed `500 internal_error`, not a `StateError`).
     ///
     /// Finding F-R4-4 fixed four further truthiness/coercion divergences,
     /// none of which fall under §3.5's carve-out (Python *returns a value*
@@ -1586,19 +1629,25 @@ impl<'a> RequestLedger<'a> {
     /// `base64.b64decode` is *lenient*, silently discarding any
     /// non-alphabet byte before decoding (`"YWJj\n"` -> `b"abc"`), not the
     /// `base64` crate's strict `STANDARD` engine this used before; a
-    /// genuinely undecodable value now fails closed with `state_corrupt`
-    /// instead of silently relaying a `200` with an emptied body.
+    /// genuinely undecodable value raises (`binascii.Error`, an escaping
+    /// built-in) instead of silently relaying a `200` with an emptied body.
     pub fn replay(entry: &Value) -> Result<RelayResult, Error> {
-        let corrupt = |detail: &str| Error::state("state_corrupt").with_detail(detail);
         let response: Map<String, Value> = match entry.get("response") {
             None => Map::new(),
             Some(value) if is_json_falsy(value) => Map::new(),
             Some(Value::Object(m)) => m.clone(),
-            Some(_) => return Err(corrupt("request_ledger_response")),
+            // `response.get(...)` on a truthy non-dict.
+            Some(_) => return Err(escaped_builtin("AttributeError")),
         };
         let status = match response.get("status") {
             None => crate::pyint::PyInt::from(502i64),
-            Some(v) => python_int_status(v).ok_or_else(|| corrupt("request_ledger_status"))?,
+            Some(v) => python_int_status(v).ok_or_else(|| {
+                escaped_builtin(match v {
+                    Value::String(_) => "ValueError",
+                    Value::Number(_) => "OverflowError",
+                    _ => "TypeError",
+                })
+            })?,
         };
         let mut headers: Headers = python_headers_from_json(response.get("headers"))?;
         let reason = match response.get("reason") {
@@ -1629,10 +1678,12 @@ impl<'a> RequestLedger<'a> {
         let body = match response.get("body_b64") {
             None => Vec::new(),
             Some(value) if is_json_falsy(value) => Vec::new(),
+            // `binascii.Error` (bad padding) or, for a truthy non-`str`,
+            // `TypeError` -- both escape `relay`.
             Some(Value::String(s)) => {
-                crate::pybase64::b64decode(s).map_err(|_| corrupt("request_ledger_body_b64"))?
+                crate::pybase64::b64decode(s).map_err(|_| escaped_builtin("Error"))?
             }
-            Some(_) => return Err(corrupt("request_ledger_body_b64")),
+            Some(_) => return Err(escaped_builtin("TypeError")),
         };
         headers.push(("X-ZeroPW-Replay".to_string(), "true".to_string()));
         Ok(RelayResult {
@@ -1647,11 +1698,20 @@ impl<'a> RequestLedger<'a> {
 // --------------------------------------------------------------- upstream
 
 /// Port of `gateway._UpstreamFailure`.
+///
+/// `escaped` is not part of Python's class: it carries a CPython built-in
+/// exception (`ValueError`, `OverflowError`, `TypeError`) that Python raises
+/// inside `_exchange`/`_open_connection` where none of `_exchange`'s
+/// `except` clauses catch it. Such an exception is never an
+/// `_UpstreamFailure` in Python; it escapes `_Relay.run` and `relay`
+/// untouched, so [`Relay::try_run`] turns it into [`escaped_builtin`]
+/// before any ledger or audit step `_UpstreamFailure` handling would take.
 struct UpstreamFailure {
     reason: &'static str,
     result: &'static str,
     known_outcome: bool,
     upstream_status: Option<u16>,
+    escaped: Option<&'static str>,
 }
 
 impl UpstreamFailure {
@@ -1661,6 +1721,7 @@ impl UpstreamFailure {
             result: "denied",
             known_outcome: false,
             upstream_status: None,
+            escaped: None,
         }
     }
     fn error(reason: &'static str) -> Self {
@@ -1669,6 +1730,7 @@ impl UpstreamFailure {
             result: "error",
             known_outcome: false,
             upstream_status: None,
+            escaped: None,
         }
     }
     fn blocked(reason: &'static str, status: u16) -> Self {
@@ -1677,8 +1739,41 @@ impl UpstreamFailure {
             result: "blocked",
             known_outcome: true,
             upstream_status: Some(status),
+            escaped: None,
         }
     }
+    /// A CPython built-in exception named `class` escapes `_exchange`
+    /// uncaught (see the struct doc).
+    fn escape(class: &'static str) -> Self {
+        UpstreamFailure {
+            reason: "internal_error",
+            result: "error",
+            known_outcome: false,
+            upstream_status: None,
+            escaped: Some(class),
+        }
+    }
+}
+
+/// A CPython built-in exception (`ValueError`, `OverflowError`,
+/// `TypeError`, ...) that propagates out of `relay`/`relay_for_caller`
+/// uncaught. Like `admin_cli`/`smtp`'s escaped built-ins it is an
+/// [`ErrorClass::ZeroPW`] error whose `name` is the Python class name and
+/// whose reason is `internal_error`; `server.rs` answers it with
+/// `ZeroPWHandler._dispatch`'s final `except Exception` reply
+/// (`500 {"error": "InternalError", "reason": "internal_error"}`), exactly
+/// what CPython sends for the same escape, and `tools.request` propagates it
+/// the same way `tools.py` does.
+pub(crate) fn escaped_builtin(class: &'static str) -> Error {
+    Error::subclass(ErrorClass::ZeroPW, class, "internal_error", "")
+}
+
+/// True for an [`escaped_builtin`] error: a ZeroPW-class error whose name is
+/// not `ZeroPWError` itself. `zeropw/errors.py` defines no direct
+/// `ZeroPWError` subclass besides the seven [`ErrorClass`] bases, so only a
+/// built-in-exception stand-in can have this shape.
+pub fn is_escaped_builtin(error: &Error) -> bool {
+    error.class == ErrorClass::ZeroPW && error.name != ErrorClass::ZeroPW.class_name()
 }
 
 struct UpstreamResponse {
@@ -1860,12 +1955,16 @@ fn build_tls_connector(
     use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
     use openssl::x509::verify::X509VerifyFlags;
 
-    // CPython 3.12's `_DEFAULT_CIPHERS` used by `create_default_context`.
-    // TLS 1.3 ciphers are provider defaults on both paths and are not
-    // controlled by this pre-1.3 cipher-list API.
+    // CPython 3.12's `PY_SSL_DEFAULT_CIPHER_STRING` (`Modules/_ssl.c`), which
+    // every `SSLContext` -- and so `create_default_context` -- starts with.
+    // Measured against CPython 3.12.14 / OpenSSL 3.0.13: `set_ciphers` with
+    // this string yields exactly `create_default_context().get_ciphers()`
+    // (17 suites, same order). The previous string here (the pre-3.10
+    // `_DEFAULT_CIPHERS`) also offered 23 suites CPython does not (SHA-1
+    // CBC, CCM, CAMELLIA, DHE-CHACHA20). TLS 1.3 ciphers are provider
+    // defaults on both paths and are not controlled by this list.
     const PYTHON_DEFAULT_CIPHERS: &str = "@SECLEVEL=2:ECDH+AESGCM:ECDH+CHACHA20:\
-        ECDH+AES:ECDH+CAMELLIA:DHE+AESGCM:DHE+CHACHA20:DHE+AES:\
-        DHE+CAMELLIA:!aNULL:!eNULL:!MD5:!DSS";
+        ECDH+AES:DHE+AES:!aNULL:!eNULL:!aDSS:!SHA1:!AESCCM";
 
     let mut builder = SslConnector::builder(SslMethod::tls_client())
         .map_err(|_| UpstreamFailure::error("upstream_tls_failed"))?;
@@ -1895,11 +1994,46 @@ fn build_tls_connector(
     Ok(builder.build())
 }
 
+/// `socket.settimeout(timeout)` as `socket.create_connection` applies it
+/// to `float(ctx.config.upstream_timeout)` (CPython 3.12
+/// `socket_parse_timeout` -> `_PyTime_FromSecondsObject(...,
+/// _PyTime_ROUND_TIMEOUT)`): NaN is `ValueError("Invalid value NaN (not a
+/// number)")`; the value is scaled to nanoseconds and rounded away from
+/// zero, and a result outside `[-2**63, 2**63)` is `OverflowError`; a
+/// negative result is `ValueError("Timeout value out of range")`. Measured
+/// against CPython 3.12.14 (`socket.create_connection` against a local
+/// listener): `inf`/`-inf`/`9.3e9`/`1e30` -> `OverflowError`; `nan`,
+/// `-1.0`, `-1e-300` -> `ValueError`; `-0.0`/`0.0` -> a non-blocking
+/// connect (`BlockingIOError`, an `OSError`); `5e-324`/`1e-10` -> a 1ns
+/// timeout; `2147483.648` -> accepted. `Err` names the escaping built-in.
+fn python_socket_timeout(seconds: f64) -> Result<Duration, &'static str> {
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if seconds.is_nan() {
+        return Err("ValueError");
+    }
+    let scaled = seconds * 1e9;
+    let rounded = if scaled >= 0.0 {
+        scaled.ceil()
+    } else {
+        scaled.floor()
+    };
+    if !(-TWO_POW_63..TWO_POW_63).contains(&rounded) {
+        return Err("OverflowError");
+    }
+    if rounded < 0.0 {
+        return Err("ValueError");
+    }
+    // In range and non-negative: the cast is exact for this integral value.
+    Ok(Duration::from_nanos(rounded as u64))
+}
+
+/// `_open_connection` + `conn.connect()`. Returns the connected stream and
+/// the socket timeout it was opened with.
 fn open_connection(
     connection: &Connection,
-    timeout: Duration,
+    timeout_seconds: f64,
     pinned_address: &str,
-) -> Result<UpstreamStream, UpstreamFailure> {
+) -> Result<(UpstreamStream, Duration), UpstreamFailure> {
     let target = connection.http_target.as_ref().expect("http connection");
     // Python's `_open_connection` builds the `ssl.SSLContext` (including
     // `load_verify_locations(cafile=target.ca_file)`, which is where a bad
@@ -1909,14 +2043,21 @@ fn open_connection(
     // as `ca_file_unavailable`, not `upstream_unreachable` (finding F-R2-9).
     let tls_connector = if target.scheme == "https" {
         let ca_file = match target.raw_ca_file.as_ref() {
-            None => target.ca_file.as_deref(),
+            // `if target.ca_file:` -- an empty string loads nothing.
+            None => target.ca_file.as_deref().filter(|path| !path.is_empty()),
             Some(value) if is_json_falsy(value) => None,
             // Python reaches `load_verify_locations(cafile=value)` here and
-            // raises an uncaught TypeError for a truthy non-path JSON value.
-            // Fail closed with this path's documented handled refusal; do
-            // not silently fall back to default trust or open a socket.
-            Some(_) => return Err(UpstreamFailure::error("ca_file_unavailable")),
+            // raises `TypeError("cafile should be a valid filesystem path")`
+            // for every truthy non-`str` JSON value (number, bool, list,
+            // dict; measured on CPython 3.12.14). It is not an `OSError` or
+            // `ssl.SSLError`, so it escapes `relay` before any socket exists.
+            Some(_) => return Err(UpstreamFailure::escape("TypeError")),
         };
+        // `load_verify_locations(cafile="a\x00b")` raises `ValueError:
+        // embedded null byte`, likewise uncaught.
+        if ca_file.is_some_and(|path| path.contains('\0')) {
+            return Err(UpstreamFailure::escape("ValueError"));
+        }
         Some(build_tls_connector(ca_file)?)
     } else {
         None
@@ -1924,7 +2065,14 @@ fn open_connection(
     let ip: IpAddr = pinned_address
         .parse()
         .map_err(|_| UpstreamFailure::error("upstream_unreachable"))?;
+    // `socket.create_connection` calls `sock.settimeout(timeout)` before
+    // `connect`; its `ValueError`/`OverflowError` is not an `OSError`, so
+    // none of `_exchange`'s handlers around `conn.connect()` catch it.
+    let timeout = python_socket_timeout(timeout_seconds).map_err(UpstreamFailure::escape)?;
     let sockaddr = SocketAddr::new(ip, target.port as u16);
+    // A zero timeout is a non-blocking socket in CPython: `connect` raises
+    // `BlockingIOError` (`upstream_unreachable`). `connect_timeout` refuses
+    // a zero duration with an `io::Error`, mapped to the same reason.
     let tcp = TcpStream::connect_timeout(&sockaddr, timeout)
         .map_err(|e| UpstreamFailure::error(classify_connect_error(&e)))?;
     let _ = tcp.set_nodelay(true);
@@ -1937,11 +2085,11 @@ fn open_connection(
         let stream = connector
             .connect(&target.host, tcp)
             .map_err(|e| UpstreamFailure::error(classify_openssl_handshake_error(&e)))?;
-        return Ok(UpstreamStream::Tls(Box::new(stream)));
+        return Ok((UpstreamStream::Tls(Box::new(stream)), timeout));
     }
     tcp.set_read_timeout(Some(timeout)).ok();
     tcp.set_write_timeout(Some(timeout)).ok();
-    Ok(UpstreamStream::Plain(tcp))
+    Ok((UpstreamStream::Plain(tcp), timeout))
 }
 
 const METHODS_EXPECTING_BODY: &[&str] = &["PATCH", "POST", "PUT"];
@@ -2450,12 +2598,21 @@ fn read_headers_block(reader: &mut impl BufRead) -> Result<Headers, UpstreamFail
             break;
         }
     }
-    let logical_lines = split_keep_terminators(&blob);
+    Ok(parse_header_blob(&blob))
+}
+
+/// Steps 2-4 of [`read_headers_block`]: `email.parser.Parser().parsestr`'s
+/// (compat32) header fields for the latin-1 text of a header block that
+/// `http.client._read_headers` already read line by line. Shared with
+/// `fake_upstream.rs`, whose `BaseHTTPRequestHandler` reads request headers
+/// through the same `http.client.parse_headers`.
+pub(crate) fn parse_header_blob(blob: &str) -> Headers {
+    let logical_lines = split_keep_terminators(blob);
     let recognized: Vec<String> = logical_lines
         .into_iter()
         .take_while(|line| header_re_matches(line))
         .collect();
-    Ok(parse_recognized_header_lines(&recognized))
+    parse_recognized_header_lines(&recognized)
 }
 
 enum BodyMode {
@@ -2500,6 +2657,40 @@ fn body_mode(method: &str, status: u16, headers: &Headers) -> BodyMode {
         return BodyMode::ContentLength(i128_to_usize_saturating(n));
     }
     BodyMode::UntilClose
+}
+
+/// `http.client` returns a negative chunk size from `_read_next_chunk_size`
+/// unchanged, and `_read_chunked` hands it to `_safe_read`, whose
+/// `self.fp.read(amt)` runs on the socket's `io.BufferedReader`
+/// (`sock.makefile("rb")`). Measured against CPython 3.12.14:
+///
+/// * `-1` is "read to EOF": every remaining byte is read (a socket timeout
+///   meanwhile is `upstream_timeout`, any other `OSError`
+///   `upstream_connection_lost`), then the next `_safe_read(2)` finds EOF
+///   and raises `IncompleteRead` -> `upstream_protocol_error`;
+/// * `-2` down to `-2**63` raise `ValueError("read length must be
+///   non-negative or -1")`, which `_exchange`'s `except (OSError,
+///   ValueError)` maps to `upstream_connection_lost`;
+/// * below `-2**63` the value does not fit `Py_ssize_t` and raises
+///   `OverflowError`, which no `except` clause of `_exchange` catches: it
+///   escapes `relay` ([`UpstreamFailure::escape`]).
+fn negative_chunk_size(reader: &mut impl BufRead, size: i128) -> UpstreamFailure {
+    if size == -1 {
+        let mut sink = vec![0u8; READ_CHUNK];
+        loop {
+            match reader.read(&mut sink) {
+                Ok(0) => return UpstreamFailure::error("upstream_protocol_error"),
+                Ok(_) => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return UpstreamFailure::error(classify_read_write_error(&e)),
+            }
+        }
+    }
+    if size >= i128::from(i64::MIN) {
+        UpstreamFailure::error("upstream_connection_lost")
+    } else {
+        UpstreamFailure::escape("OverflowError")
+    }
 }
 
 /// Reads up to `limit` bytes of the body, in `READ_CHUNK`-sized increments
@@ -2555,9 +2746,20 @@ fn read_body(
                 // (finding F-9). PEP 515 underscores are accepted, and so is
                 // an optional `0x`/`0X` prefix, matching CPython's
                 // `int(text, 16)` (finding F-R2-5).
+                //
+                // `int(line, 16)` runs on the raw line BYTES, not on a
+                // latin-1 `str`: CPython's bytes path accepts only ASCII
+                // digits and ASCII whitespace, so a non-ASCII byte (even
+                // 0x85/0xA0, which `str.isspace()` would strip) is a
+                // `ValueError` -> `IncompleteRead` here.
+                if !size_text.is_ascii() {
+                    return Err(UpstreamFailure::error("upstream_protocol_error"));
+                }
                 let size = python_int(size_text, 16)
-                    .filter(|n| *n >= 0)
                     .ok_or(UpstreamFailure::error("upstream_protocol_error"))?;
+                if size < 0 {
+                    return Err(negative_chunk_size(reader, size));
+                }
                 let mut size = i128_to_usize_saturating(size);
                 if size == 0 {
                     // Trailers, until the blank line -- or EOF, which ends
@@ -2790,9 +2992,9 @@ impl<'a> Relay<'a> {
 
     /// `_annotate_approval`: both `state.read_json`/`state.write_json` calls
     /// are unguarded in Python, so a `StateError` from either propagates
-    /// uncaught out of `_annotate_approval`, out of `run`, to `relay`'s
-    /// top-level fail-closed conversion (`DEVIATIONS.md`'s
-    /// `unexpected_error_result` row). Previously this swallowed both
+    /// uncaught out of `_annotate_approval`, out of `run` and out of `relay`
+    /// (`try_relay`'s `Err`, which `server.rs` answers like
+    /// `zeropw.server`). Previously this swallowed both
     /// failures (`let Ok(..) = .. else { return }` / `let _ = ..`), so a
     /// state failure still returned `428 approval_required` with an
     /// under-annotated approval entry instead of failing closed (finding
@@ -2950,36 +3152,15 @@ impl<'a> Relay<'a> {
     ) -> Result<UpstreamResponse, UpstreamFailure> {
         let connection = self.connection.as_ref().expect("checked").clone();
         // Finding X-18: `timeout = float(self.ctx.config.upstream_timeout)`
-        // never raises in Python -- the failure happens later, inside
-        // `socket.create_connection`/`.settimeout()` when `conn.connect()`
-        // runs, and `_exchange`'s own `except (socket.timeout, TimeoutError)`
-        // / `except OSError` around that call does NOT catch it: confirmed
-        // against a real `python3.12` socket, `.settimeout(float('inf'))`
-        // and `.settimeout(1e30)` both raise `OverflowError: timestamp out
-        // of range for platform time_t`, `.settimeout(float('nan'))` raises
-        // `ValueError: Invalid value NaN (not a number)`, and
-        // `.settimeout(-1.0)` raises `ValueError: Timeout value out of
-        // range` -- all four uncaught. `Duration::from_secs_f64` panics on
-        // a non-finite input where Python raises (PORTING.md §4: no panic
-        // on untrusted input), and the previous `.max(0.0)` clamp silently
-        // turned a NaN timeout into a ZERO-duration one instead of failing
-        // at all (Rust's `f64::max` returns the non-NaN operand for a NaN
-        // input) -- and separately never reproduced the negative-timeout
-        // `ValueError` either, silently clamping it to zero instead of
-        // failing. `Duration::try_from_secs_f64` rejects negative,
-        // non-finite AND Duration-overflowing input uniformly (covering all
-        // four probed cases, not just the two originally reported) with an
-        // `Err` instead of panicking; mapped onto the same `upstream_timeout`
-        // reason `classify_connect_error` already uses for a real socket
-        // timeout at this exact call site (PORTING.md §3.5).
-        // `upstream_timeout` is this crate's own in-process config (not
-        // untrusted network/state input), so this is a defensive fix for an
-        // unrecorded behavioural gap rather than a §4 panic-on-untrusted-input
-        // fix.
-        let timeout = Duration::try_from_secs_f64(self.ctx.config.upstream_timeout)
-            .map_err(|_| UpstreamFailure::error("upstream_timeout"))?;
+        // never raises; `socket.create_connection`'s `settimeout` does, after
+        // `_open_connection` built the TLS context (so `ca_file_unavailable`
+        // still wins) -- see [`python_socket_timeout`].
         let limit = self.ctx.config.max_response_bytes.max(0) as usize;
-        let mut stream = open_connection(&connection, timeout, pinned_address)?;
+        let (mut stream, timeout) = open_connection(
+            &connection,
+            self.ctx.config.upstream_timeout,
+            pinned_address,
+        )?;
         stream.set_timeouts(Some(timeout));
         if peer_is_local_listener(stream.raw()) {
             return Err(UpstreamFailure::denied("self_referential_target"));
@@ -3078,11 +3259,11 @@ impl<'a> Relay<'a> {
         }
     }
 
-    fn run(mut self) -> RelayResult {
-        match self.try_run() {
-            Ok(result) => result,
-            Err(e) => unexpected_error_result(e),
-        }
+    /// `_Relay.run`: `Ok` for every `RelayResult` Python returns, `Err` for
+    /// every exception Python lets escape (a `ZeroPWError` from
+    /// `Policy`/`Audit`/`Vault`/ledger state, or an [`escaped_builtin`]).
+    fn run(mut self) -> Result<RelayResult, Error> {
+        self.try_run()
     }
 
     fn try_run(&mut self) -> Result<RelayResult, Error> {
@@ -3403,6 +3584,13 @@ impl<'a> Relay<'a> {
         let response = match self.exchange(&upstream_headers, &pinned_address) {
             Ok(r) => r,
             Err(failure) => {
+                if let Some(class) = failure.escaped {
+                    // Not an `_UpstreamFailure` in Python: the built-in
+                    // exception leaves `_Relay.run` without `_finish` or
+                    // `_refuse`, so the claimed ledger entry stays
+                    // `in_flight` and no outcome audit record is written.
+                    return Err(escaped_builtin(class));
+                }
                 if failure.known_outcome {
                     let mut result = error_result(502, failure.reason, None, None);
                     let outcome = failure.result;
@@ -3437,24 +3625,48 @@ impl<'a> Relay<'a> {
     }
 }
 
-/// Any internal `crate::errors::Error` that Python would let escape `relay`/
-/// `relay_for_caller` uncaught (from `Policy`/`Audit`/`Vault` operations the
-/// Python code does not wrap in a `try`/`except`) is converted to a
-/// fail-closed `RelayResult` here instead of panicking, so `relay`'s Rust
-/// signature can stay `-> RelayResult` like Python's declared return type.
-/// See `DEVIATIONS.md`.
+/// The reply `zeropw.server` sends when `relay`/`relay_for_caller` raises
+/// instead of returning, as a `RelayResult`: `_dispatch`'s `except
+/// ZeroPWError` answers `error_status(exc)` with `json.dumps(exc.to_dict(),
+/// sort_keys=True)`, and its final `except Exception` answers a CPython
+/// built-in ([`escaped_builtin`]) with `500 {"error": "InternalError",
+/// "reason": "internal_error"}`. Only the infallible convenience wrappers
+/// [`relay`]/[`relay_for_caller`] use this; the server and `tools.request`
+/// call [`try_relay`]/[`try_relay_for_caller`] and propagate the error
+/// exactly as Python's exception propagates.
 fn unexpected_error_result(e: Error) -> RelayResult {
-    let status = match e.class {
-        ErrorClass::InvalidInput => 400,
-        ErrorClass::AuthFailed => 401,
-        ErrorClass::PolicyDenied => 403,
-        ErrorClass::NotFound => 404,
-        ErrorClass::Unsupported => 501,
-        ErrorClass::AuditUnavailable => 503,
-        ErrorClass::StateError => 503,
-        ErrorClass::ZeroPW => 500,
+    let (status, payload) = if is_escaped_builtin(&e) {
+        (
+            500,
+            json!({"error": "InternalError", "reason": "internal_error"}),
+        )
+    } else {
+        let status = match e.class {
+            ErrorClass::InvalidInput => 400,
+            ErrorClass::AuthFailed => 401,
+            ErrorClass::PolicyDenied => 403,
+            ErrorClass::NotFound => 404,
+            ErrorClass::Unsupported => 501,
+            ErrorClass::AuditUnavailable => 503,
+            ErrorClass::StateError => 503,
+            ErrorClass::ZeroPW => 500,
+        };
+        (status, e.to_dict())
     };
-    error_result(status, &e.reason, Some(&e.name), None)
+    let reason = payload
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let body = pyjson::dumps(&payload, DumpOptions::default_sorted())
+        .expect("error payload is representable")
+        .into_bytes();
+    RelayResult {
+        status: status.into(),
+        headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+        body,
+        reason: Some(reason),
+    }
 }
 
 fn refuse_unauthenticated(
@@ -3506,8 +3718,10 @@ fn refuse_unauthenticated(
 }
 
 /// Port of `gateway.relay`: relay on behalf of a handle (URL prefix or
-/// `X-ZeroPW-Handle` header).
-pub fn relay(
+/// `X-ZeroPW-Handle` header). `Err` is exactly the exception Python's
+/// `relay` lets escape; `zeropw.server` (and `server.rs`) turn it into the
+/// HTTP reply.
+pub fn try_relay(
     ctx: &Context,
     handle_token: &str,
     method: &str,
@@ -3515,8 +3729,8 @@ pub fn relay(
     headers: &Headers,
     body: &[u8],
     request_id: Option<&str>,
-) -> RelayResult {
-    relay_with_resolver(
+) -> Result<RelayResult, Error> {
+    try_relay_with_resolver(
         ctx,
         handle_token,
         method,
@@ -3526,6 +3740,21 @@ pub fn relay(
         request_id,
         default_resolver(),
     )
+}
+
+/// [`try_relay`], answering an escaped exception the way `zeropw.server`
+/// does ([`unexpected_error_result`]) instead of returning it.
+pub fn relay(
+    ctx: &Context,
+    handle_token: &str,
+    method: &str,
+    path: &str,
+    headers: &Headers,
+    body: &[u8],
+    request_id: Option<&str>,
+) -> RelayResult {
+    try_relay(ctx, handle_token, method, path, headers, body, request_id)
+        .unwrap_or_else(unexpected_error_result)
 }
 
 /// [`relay`] with an injectable [`Resolver`] (see the module doc's seam
@@ -3541,15 +3770,42 @@ pub fn relay_with_resolver(
     request_id: Option<&str>,
     resolver: Resolver,
 ) -> RelayResult {
+    try_relay_with_resolver(
+        ctx,
+        handle_token,
+        method,
+        path,
+        headers,
+        body,
+        request_id,
+        resolver,
+    )
+    .unwrap_or_else(unexpected_error_result)
+}
+
+/// [`try_relay`] with an injectable [`Resolver`].
+#[allow(clippy::too_many_arguments)]
+pub fn try_relay_with_resolver(
+    ctx: &Context,
+    handle_token: &str,
+    method: &str,
+    path: &str,
+    headers: &Headers,
+    body: &[u8],
+    request_id: Option<&str>,
+    resolver: Resolver,
+) -> Result<RelayResult, Error> {
     let handle = match ctx.handles.verify(handle_token, Some((ctx.clock)())) {
         Ok(h) => h,
         Err(e) if e.is(ErrorClass::AuthFailed) => {
-            return refuse_unauthenticated(ctx, &e.reason, method, path, request_id);
+            return Ok(refuse_unauthenticated(
+                ctx, &e.reason, method, path, request_id,
+            ));
         }
         // `relay` only catches `AuthFailed`; the built-in exception a
-        // non-ASCII token raises inside `verify` reaches the server's
-        // catch-all, which answers this fixed 500 and writes no audit record.
-        Err(_) => return error_result(500, "internal_error", Some("InternalError"), None),
+        // non-ASCII token raises inside `verify` escapes to the server's
+        // catch-all, which answers its fixed 500 and writes no audit record.
+        Err(e) => return Err(e),
     };
     Relay::new(
         ctx,
@@ -3568,7 +3824,34 @@ pub fn relay_with_resolver(
 }
 
 /// Port of `gateway.relay_for_caller`: relay for an authenticated tools
-/// caller, no handle, any usable grant.
+/// caller, no handle, any usable grant. `Err` is exactly the exception
+/// Python's `relay_for_caller` lets escape (out of `tools.request` too).
+#[allow(clippy::too_many_arguments)]
+pub fn try_relay_for_caller(
+    ctx: &Context,
+    caller: &str,
+    connection_id: &str,
+    method: &str,
+    path: &str,
+    headers: &Headers,
+    body: &[u8],
+    request_id: Option<&str>,
+) -> Result<RelayResult, Error> {
+    try_relay_for_caller_with_resolver(
+        ctx,
+        caller,
+        connection_id,
+        method,
+        path,
+        headers,
+        body,
+        request_id,
+        default_resolver(),
+    )
+}
+
+/// [`try_relay_for_caller`], answering an escaped exception the way
+/// `zeropw.server` does ([`unexpected_error_result`]).
 #[allow(clippy::too_many_arguments)]
 pub fn relay_for_caller(
     ctx: &Context,
@@ -3580,7 +3863,7 @@ pub fn relay_for_caller(
     body: &[u8],
     request_id: Option<&str>,
 ) -> RelayResult {
-    relay_for_caller_with_resolver(
+    try_relay_for_caller(
         ctx,
         caller,
         connection_id,
@@ -3589,8 +3872,8 @@ pub fn relay_for_caller(
         headers,
         body,
         request_id,
-        default_resolver(),
     )
+    .unwrap_or_else(unexpected_error_result)
 }
 
 /// [`relay_for_caller`] with an injectable [`Resolver`].
@@ -3606,6 +3889,33 @@ pub fn relay_for_caller_with_resolver(
     request_id: Option<&str>,
     resolver: Resolver,
 ) -> RelayResult {
+    try_relay_for_caller_with_resolver(
+        ctx,
+        caller,
+        connection_id,
+        method,
+        path,
+        headers,
+        body,
+        request_id,
+        resolver,
+    )
+    .unwrap_or_else(unexpected_error_result)
+}
+
+/// [`try_relay_for_caller`] with an injectable [`Resolver`].
+#[allow(clippy::too_many_arguments)]
+pub fn try_relay_for_caller_with_resolver(
+    ctx: &Context,
+    caller: &str,
+    connection_id: &str,
+    method: &str,
+    path: &str,
+    headers: &Headers,
+    body: &[u8],
+    request_id: Option<&str>,
+    resolver: Resolver,
+) -> Result<RelayResult, Error> {
     Relay::new(
         ctx,
         caller,
@@ -3634,6 +3944,95 @@ fn unused_type_anchor(_: HashMap<(), ()>) {}
 /// `annotate_approval` directly against an already-corrupt state file is
 /// both simpler and more precise.
 #[cfg(test)]
+mod socket_timeout_oracle_tests {
+    use super::*;
+
+    /// [`python_socket_timeout`] against CPython 3.12's own
+    /// `socket.settimeout` (`gettimeout()` reports the stored nanosecond
+    /// value as seconds; the error class is what escapes `relay`).
+    #[test]
+    fn python_socket_timeout_matches_cpython_settimeout() {
+        let cases: &[f64] = &[
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            -1.0,
+            -1e-300,
+            -0.0,
+            0.0,
+            5e-324,
+            1e-10,
+            1e-9,
+            1.5e-9,
+            0.001,
+            30.0,
+            2_147_483.648,
+            9_223_372_036.0,
+            9_223_372_036.854_775,
+            9_223_372_037.0,
+            9.3e9,
+            1e30,
+            -9.3e9,
+        ];
+        let literals: Vec<String> = cases
+            .iter()
+            .map(|v| {
+                if v.is_nan() {
+                    "float('nan')".to_string()
+                } else if v.is_infinite() {
+                    format!("float('{}inf')", if *v < 0.0 { "-" } else { "" })
+                } else {
+                    format!("float.fromhex('{}')", hex_float(*v))
+                }
+            })
+            .collect();
+        let script = format!(
+            "import socket\nfor v in [{}]:\n    s = socket.socket()\n    try:\n        s.settimeout(v)\n        print(repr(s.gettimeout()))\n    except Exception as exc:\n        print(type(exc).__name__)\n    finally:\n        s.close()\n",
+            literals.join(", ")
+        );
+        let expected = crate::oracle::python(&script);
+        for (value, python) in cases.iter().zip(expected.lines()) {
+            let rust = match python_socket_timeout(*value) {
+                Ok(duration) => {
+                    // `_PyTime_AsSecondsDouble`: whole seconds convert
+                    // exactly, anything else is `(double)ns / 1e9`.
+                    let ns = duration.as_nanos();
+                    let seconds = if ns % 1_000_000_000 == 0 {
+                        (ns / 1_000_000_000) as f64
+                    } else {
+                        ns as f64 / 1e9
+                    };
+                    pyjson::python_float_repr(seconds)
+                }
+                Err(class) => class.to_string(),
+            };
+            assert_eq!(rust, python, "settimeout({value:?})");
+        }
+    }
+
+    /// `float.hex()` spelling, so the oracle sees the exact same double.
+    fn hex_float(v: f64) -> String {
+        if v == 0.0 {
+            return if v.is_sign_negative() {
+                "-0x0p+0"
+            } else {
+                "0x0p+0"
+            }
+            .to_string();
+        }
+        let bits = v.to_bits();
+        let sign = if bits >> 63 == 1 { "-" } else { "" };
+        let exponent = ((bits >> 52) & 0x7ff) as i64;
+        let mantissa = bits & ((1u64 << 52) - 1);
+        if exponent == 0 {
+            format!("{sign}0x0.{mantissa:013x}p-1022")
+        } else {
+            format!("{sign}0x1.{mantissa:013x}p{:+}", exponent - 1023)
+        }
+    }
+}
+
+#[cfg(test)]
 mod annotate_approval_tests {
     use super::*;
     use crate::clock;
@@ -3645,9 +4044,8 @@ mod annotate_approval_tests {
         // Python's `_annotate_approval` has no `try`/`except` around either
         // `state.read_json(CONTROL, None)` or `state.write_json(CONTROL,
         // control)`: a `StateError` from either propagates uncaught out of
-        // `_annotate_approval`, out of `run`, to `relay`'s top-level
-        // fail-closed conversion (`DEVIATIONS.md`'s `unexpected_error_result`
-        // row). This used to `let Ok(..) = .. else { return }` (silently
+        // `_annotate_approval`, out of `run` and out of `relay` (`try_relay`'s
+        // `Err`). This used to `let Ok(..) = .. else { return }` (silently
         // giving up) and `let _ = ..` (silently ignoring a write failure)
         // instead, so a state failure here still returned `428
         // approval_required` with an under-annotated approval entry.
@@ -3874,19 +4272,20 @@ mod http_framing_fuzz {
         Ok(u16, Vec<u8>),
         ProtocolError,
         TooLarge,
+        ConnectionLost,
+        Escaped(String),
     }
 
     /// Runs exactly the read sequence `_Relay._exchange` performs on a
     /// `conn.getresponse()` result (`begin()` via `read_status_and_headers`,
     /// then the `resp.read(min(READ_CHUNK, limit + 1 - total))` loop), over
     /// an in-memory `Cursor` standing in for the socket. A `Cursor` never
-    /// produces a real I/O error, so the only failure category reachable
-    /// here is `upstream_protocol_error` (never `upstream_timeout`/
-    /// `upstream_connection_lost`, which only come from a genuine transport
-    /// error) -- exactly mirroring a `python3.12` `http.client.HTTPResponse`
-    /// fed the same bytes via an `io.BytesIO`-backed fake socket, which can
-    /// only ever raise an `http.client.HTTPException` subclass here, never a
-    /// real `OSError`.
+    /// produces a real I/O error, so `upstream_timeout` is unreachable here;
+    /// `upstream_connection_lost` and an escaped built-in still arise from
+    /// a negative chunk size, exactly as in a `python3.12`
+    /// `http.client.HTTPResponse` whose fake socket's `makefile("rb")`
+    /// returns an `io.BufferedReader` like a real socket's does (a bare
+    /// `io.BytesIO` would accept `read(-5)` and hide that `ValueError`).
     fn rust_outcome(method: &str, raw: &[u8]) -> FuzzOutcome {
         let mut reader = Cursor::new(raw);
         let head = match read_status_and_headers(&mut reader) {
@@ -3901,6 +4300,10 @@ mod http_framing_fuzz {
         match read_body(&mut reader, mode, FUZZ_LIMIT) {
             Ok(body) => FuzzOutcome::Ok(head.status, body),
             Err(f) if f.reason == "response_too_large" => FuzzOutcome::TooLarge,
+            Err(f) if f.escaped.is_some() => {
+                FuzzOutcome::Escaped(f.escaped.unwrap_or_default().to_string())
+            }
+            Err(f) if f.reason == "upstream_connection_lost" => FuzzOutcome::ConnectionLost,
             Err(_) => FuzzOutcome::ProtocolError,
         }
     }
@@ -3929,7 +4332,7 @@ class FakeSock:
     def __init__(self, data):
         self._data = data
     def makefile(self, mode):
-        return io.BytesIO(self._data)
+        return io.BufferedReader(io.BytesIO(self._data))
 
 def run_one(method, raw):
     resp = http.client.HTTPResponse(FakeSock(raw), method=method)
@@ -3952,7 +4355,7 @@ def run_one(method, raw):
     except (OSError, ValueError):
         return ["connection_lost"]
     except Exception as e:
-        return ["other_error", type(e).__name__, str(e)]
+        return ["escaped", type(e).__name__]
 
 cases = json.loads(sys.stdin.read())
 out = []
@@ -3999,12 +4402,9 @@ sys.stdout.write(json.dumps(out))
                 }
                 "too_large" => FuzzOutcome::TooLarge,
                 "protocol_error" => FuzzOutcome::ProtocolError,
-                other => panic!(
-                    "python oracle produced an outcome this harness has no bucket for \
-                     (findings F-R2-2..7 assume every failure here is an \
-                     http.client.HTTPException, never a real OSError/ValueError, since \
-                     the fake socket is an in-memory io.BytesIO): {other:?} / {entry:?}"
-                ),
+                "connection_lost" => FuzzOutcome::ConnectionLost,
+                "escaped" => FuzzOutcome::Escaped(entry[1].as_str().unwrap().to_string()),
+                other => panic!("unknown python oracle outcome {other:?} / {entry:?}"),
             })
             .collect()
     }
@@ -4134,6 +4534,27 @@ sys.stdout.write(json.dumps(out))
             format!("{hex};ext=1"),
             "\u{1c}5".to_string(),
         ];
+        if rng.one_in(4) {
+            // Negative sizes reach `_safe_read` unchanged: `-1` reads to
+            // EOF, `-2..=-2**63` are a `ValueError`, anything lower an
+            // escaping `OverflowError` (finding F-R4-7 re-measured).
+            candidates.push(
+                pick_owned(
+                    rng,
+                    &[
+                        "-1",
+                        "-2",
+                        "-a",
+                        "-0",
+                        "-7fffffffffffffff",
+                        "-8000000000000000",
+                        "-8000000000000001",
+                        "-99999999999999999999999999999999",
+                    ],
+                )
+                .to_string(),
+            );
+        }
         if actual > 0 {
             candidates.push(underscored);
             candidates.push(format!("0x{hex}"));
@@ -4310,6 +4731,8 @@ sys.stdout.write(json.dumps(out))
                 (FuzzOutcome::Ok(rs, rb), FuzzOutcome::Ok(ps, pb)) => rs == ps && rb == pb,
                 (FuzzOutcome::ProtocolError, FuzzOutcome::ProtocolError) => true,
                 (FuzzOutcome::TooLarge, FuzzOutcome::TooLarge) => true,
+                (FuzzOutcome::ConnectionLost, FuzzOutcome::ConnectionLost) => true,
+                (FuzzOutcome::Escaped(r), FuzzOutcome::Escaped(p)) => r == p,
                 _ => false,
             };
             if !same_class {

@@ -579,8 +579,10 @@ fn latin1(bytes: &[u8]) -> String {
 /// `BaseHTTPRequestHandler.parse_request` for the requests this fixture
 /// answers (three words; `//` paths reduced to one slash), then
 /// `http.client.parse_headers`' header block as the `email` parser reads it
-/// (see [`parse_header_block`]) and `_Handler._read_body`.
-fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, ReadRequestError> {
+/// (see [`crate::gateway::parse_header_blob`]) and `_Handler._read_body`.
+fn read_request(
+    reader: &mut BufReader<IncomingStream>,
+) -> Result<Option<IncomingRequest>, ReadRequestError> {
     let Some(line) = read_line(reader)? else {
         return Ok(None);
     };
@@ -666,7 +668,7 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
         raw_path.to_string()
     };
     // `_read_headers`: lines up to a blank one or the end of the stream.
-    let mut block = Vec::new();
+    let mut block = String::new();
     let mut header_count = 0usize;
     while let Some(header_line) = read_line(reader)? {
         header_count += 1;
@@ -688,12 +690,28 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
                 method == "HEAD",
             ));
         }
+        block.push_str(&latin1(&header_line));
         if header_line == b"\r\n" || header_line == b"\n" {
             break;
         }
-        block.push(latin1(&header_line));
     }
-    let headers = parse_header_block(&block);
+    // `http.client.parse_headers`: the joined block through the `email`
+    // parser, shared with the gateway's own response-header parsing.
+    let headers = crate::gateway::parse_header_blob(&block);
+    // `parse_request`'s `Expect: 100-continue` handling (`protocol_version`
+    // is "HTTP/1.1"; `request_version >= "HTTP/1.1"` is a plain string
+    // comparison, so "HTTP/1.10" qualifies and "HTTP/01.1" does not):
+    // `handle_expect_100` answers `100 Continue` before the method is even
+    // looked up or the body read.
+    if words.len() == 3
+        && words[2] >= "HTTP/1.1"
+        && header_get(&headers, "Expect").is_some_and(|v| v.to_lowercase() == "100-continue")
+    {
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+        reader.get_mut().flush()?;
+    }
     // An unsupported method is answered 501 before `_read_body` runs.
     let handled = HANDLED_METHODS.contains(&method.as_str());
     let body = match header_get(&headers, "Content-Length").map(crate::pystr::int_from_str) {
@@ -715,54 +733,6 @@ fn read_request(reader: &mut impl BufRead) -> Result<Option<IncomingRequest>, Re
         body,
         response_headers,
     }))
-}
-
-/// The `email` parser's (compat32) view of a header block: a line is a
-/// field when it matches `^[\041-\071\073-\176]*:` (an empty name is a
-/// skipped defect); a line starting with a space or tab continues the
-/// previous field; a `From ` envelope line is not a field; any other line
-/// starts the body, so the fields after it are not headers. A field's value
-/// is its first line after the colon with leading blanks removed, plus each
-/// continuation line as sent, with trailing CR/LF removed.
-fn parse_header_block(lines: &[String]) -> Vec<(String, String)> {
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut last: Option<usize> = None;
-    for line in lines {
-        if line.starts_with([' ', '\t']) {
-            if let Some(index) = last
-                && let Some((_, value)) = headers.get_mut(index)
-            {
-                value.push_str(line);
-            }
-            continue;
-        }
-        if line.starts_with("From ") {
-            last = None;
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            break;
-        };
-        let (name, value) = line.split_at(colon);
-        if !name.chars().all(|c| ('\x21'..='\x7e').contains(&c)) {
-            break;
-        }
-        if name.is_empty() {
-            last = None;
-            continue;
-        }
-        let value = value.get(1..).unwrap_or_default();
-        headers.push((
-            name.to_string(),
-            value.trim_start_matches([' ', '\t']).to_string(),
-        ));
-        last = Some(headers.len() - 1);
-    }
-    for (_, value) in &mut headers {
-        let trimmed = value.trim_end_matches(['\r', '\n']).len();
-        value.truncate(trimmed);
-    }
-    headers
 }
 
 fn header_get<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -939,47 +909,6 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
             (!value.is_empty()).then(|| (unquote_plus(name), unquote_plus(value)))
         })
         .collect()
-}
-
-/// `float(text)` for a `str` (CPython 3.12 `PyFloat_FromString`): non-ASCII
-/// whitespace becomes a space and non-ASCII decimal digits their ASCII
-/// digit (any other non-ASCII character fails), PEP 515 underscores only
-/// between digits, `Py_ISSPACE` stripped from both ends, then the float
-/// literal grammar (`inf`/`infinity`/`nan` in any case, optional sign),
-/// which Rust's `f64` parser shares.
-fn python_float(text: &str) -> Option<f64> {
-    let mut ascii = String::new();
-    for c in text.chars() {
-        if u32::from(c) < 127 {
-            ascii.push(c);
-        } else if crate::pystr::is_space(c) {
-            ascii.push(' ');
-        } else {
-            ascii.push(char::from_digit(
-                crate::pystr::unicode_decimal_digit(c)?,
-                10,
-            )?);
-        }
-    }
-    let mut plain = String::new();
-    let mut previous = '\0';
-    for c in ascii.chars() {
-        if c == '_' {
-            if !previous.is_ascii_digit() {
-                return None;
-            }
-        } else {
-            if previous == '_' && !c.is_ascii_digit() {
-                return None;
-            }
-            plain.push(c);
-        }
-        previous = c;
-    }
-    if previous == '_' || plain.contains('\0') {
-        return None;
-    }
-    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
 }
 
 /// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`): `+`
@@ -1219,7 +1148,9 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         // echoes `{"slept": -5.0}`) -- the previous version applied
         // `.clamp(0.0, 30.0)` before both the sleep *and* the echo, so a
         // negative `seconds` wrongly echoed `0.0`.
-        let seconds: f64 = python_float(query_get(&query, "seconds").unwrap_or("1")).unwrap_or(1.0);
+        let seconds: f64 =
+            crate::pystr::float_from_str(query_get(&query, "seconds").unwrap_or("1"))
+                .unwrap_or(1.0);
         // Rust's `f64::min`/`max` ignore a NaN operand and return the
         // *other* one (`f64::NAN.min(30.0) == 30.0`), unlike Python's
         // comparison-based `min`/`max`, which propagate NaN (confirmed
@@ -1304,66 +1235,6 @@ mod tests {
             &[0x31, 0x30, 0x30, 0x25, 0x64, 0x6f, 0x6e, 0x65],
         );
         case(b"\xff\xfe%41", &[0xff, 0xfe, 0x41]);
-    }
-
-    /// `python_float` against CPython's `float(str)` over the shapes the
-    /// `/slow?seconds=` query can carry.
-    #[test]
-    fn python_float_matches_cpython() {
-        let cases = [
-            "1",
-            " 1.5 ",
-            "\t2\n",
-            "1_0.5",
-            "1__0",
-            "_1",
-            "1_",
-            "1_e5",
-            "1e_5",
-            "1e5",
-            "-0.25",
-            "+.5",
-            "5.",
-            ".",
-            "e5",
-            "inf",
-            "-Infinity",
-            "INF",
-            "nan",
-            "+NaN",
-            "infin",
-            "0x10",
-            "1e999",
-            "\u{1c}1",
-            "\u{a0}3\u{2003}",
-            "\u{0663}.\u{0665}",
-            "1\u{0}",
-            "\u{7f}1",
-            "\u{e9}",
-            "",
-            "  ",
-            "1 2",
-            "--1",
-            "+-1",
-            "1.5e+3",
-            "1.5E-3",
-            "١_٢",
-        ];
-        use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
-        let script = format!(
-            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
-        );
-        let expected = crate::oracle::python(&script);
-        for (case, python) in cases.iter().zip(expected.lines()) {
-            let rust = match python_float(case) {
-                Some(v) if v.is_nan() => "nan".to_string(),
-                Some(v) => crate::pyjson::python_float_repr(v),
-                None => "error".to_string(),
-            };
-            assert_eq!(rust, python, "float({case:?})");
-        }
     }
 
     /// Finding X-6, unit-level: the `/repos/` prefix and `/issues` suffix

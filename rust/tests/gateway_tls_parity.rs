@@ -897,3 +897,143 @@ fn p521_server_certificate_matches_python() {
     assert_eq!(python, vec![(200, None)]);
     assert_eq!(rust, python);
 }
+
+// ------------------------------------------------ ClientHello on the wire
+
+/// Accepts `count` connections, returning each one's first TLS handshake
+/// message (the ClientHello) reassembled from its records, then closes.
+fn capture_client_hellos(count: usize) -> (u16, std::thread::JoinHandle<Vec<Vec<u8>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let mut hellos = Vec::new();
+        for _ in 0..count {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut message = Vec::new();
+            loop {
+                let mut header = [0u8; 5];
+                if stream.read_exact(&mut header).is_err() || header[0] != 0x16 {
+                    break;
+                }
+                let length = usize::from(u16::from_be_bytes([header[3], header[4]]));
+                let mut fragment = vec![0u8; length];
+                if stream.read_exact(&mut fragment).is_err() {
+                    break;
+                }
+                message.extend_from_slice(&fragment);
+                if message.len() >= 4 {
+                    let body = (usize::from(message[1]) << 16)
+                        | (usize::from(message[2]) << 8)
+                        | usize::from(message[3]);
+                    if message.len() >= 4 + body {
+                        message.truncate(4 + body);
+                        break;
+                    }
+                }
+            }
+            hellos.push(message);
+        }
+        hellos
+    });
+    (port, handle)
+}
+
+/// The ClientHello with its per-connection random values blanked: the
+/// 32-byte random, the legacy session id's bytes (its length kept) and each
+/// key share's key exchange bytes (group and length kept). Everything else
+/// -- version, cipher suites and their order, compression, every extension
+/// in order with its content (SNI, groups, signature algorithms,
+/// supported versions, padding length, ...) -- is kept verbatim.
+fn normalized_client_hello(message: &[u8]) -> Vec<u8> {
+    let mut m = message.to_vec();
+    assert_eq!(m.first(), Some(&1), "not a ClientHello: {message:?}");
+    // type(1) length(3) version(2) random(32)
+    for b in &mut m[6..38] {
+        *b = 0;
+    }
+    let mut at = 38;
+    let session_len = usize::from(m[at]);
+    for b in &mut m[at + 1..at + 1 + session_len] {
+        *b = 0;
+    }
+    at += 1 + session_len;
+    let suites = usize::from(u16::from_be_bytes([m[at], m[at + 1]]));
+    at += 2 + suites;
+    let compression = usize::from(m[at]);
+    at += 1 + compression;
+    let end = at + 2 + usize::from(u16::from_be_bytes([m[at], m[at + 1]]));
+    at += 2;
+    while at + 4 <= end {
+        let kind = u16::from_be_bytes([m[at], m[at + 1]]);
+        let length = usize::from(u16::from_be_bytes([m[at + 2], m[at + 3]]));
+        let data = at + 4;
+        if kind == 51 {
+            // key_share: client_shares<len>: (group(2) key_exchange<len>)*
+            let mut share = data + 2;
+            while share + 4 <= data + length {
+                let key_len = usize::from(u16::from_be_bytes([m[share + 2], m[share + 3]]));
+                for b in &mut m[share + 4..share + 4 + key_len] {
+                    *b = 0;
+                }
+                share += 4 + key_len;
+            }
+        }
+        at = data + length;
+    }
+    m
+}
+
+/// The cipher-suite list of a ClientHello.
+fn client_hello_suites(message: &[u8]) -> Vec<u8> {
+    let at = 38 + 1 + usize::from(message[38]);
+    let suites = usize::from(u16::from_be_bytes([message[at], message[at + 1]]));
+    message[at + 2..at + 2 + suites].to_vec()
+}
+
+/// The ClientHello the gateway's TLS client sends is CPython's: same cipher
+/// suites in the same order (`create_default_context`'s
+/// `PY_SSL_DEFAULT_CIPHER_STRING`), same extensions and SNI behaviour, for
+/// a DNS name (SNI sent) and an IP literal (no SNI). When the Python
+/// interpreter and this crate link different OpenSSL builds, only the
+/// TLS 1.2 cipher-suite list is a property of this code rather than of the
+/// library, so only that is compared.
+#[test]
+fn client_hello_matches_python() {
+    let python_openssl: i64 = python("import ssl\nprint(ssl.OPENSSL_VERSION_NUMBER)")
+        .trim()
+        .parse()
+        .unwrap();
+    let same_library = python_openssl == openssl::version::number();
+    let hosts = ["upstream.example.test", "127.0.0.1"];
+    let (port, capture) = capture_client_hellos(2 * hosts.len());
+    let pin = TempDir::new().unwrap();
+    let ca = pin.path().join("unused-ca.pem");
+    std::fs::write(&ca, "").unwrap();
+    let g = Gateway::new();
+    for (index, host) in hosts.iter().enumerate() {
+        // An empty `ca_file` string is falsy: default trust only.
+        let _ = python_relay_host(host, port, Path::new(""));
+        let _ = g.relay_host(&format!("hello-{index}"), host, port, None, true);
+    }
+    let hellos = capture.join().unwrap();
+    assert_eq!(hellos.len(), 2 * hosts.len());
+    for (index, host) in hosts.iter().enumerate() {
+        let python = &hellos[2 * index];
+        let rust = &hellos[2 * index + 1];
+        assert_eq!(
+            client_hello_suites(rust),
+            client_hello_suites(python),
+            "{host}: cipher suites"
+        );
+        if same_library {
+            assert_eq!(
+                normalized_client_hello(rust),
+                normalized_client_hello(python),
+                "{host}: ClientHello"
+            );
+        }
+    }
+}

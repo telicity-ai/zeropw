@@ -140,10 +140,9 @@ fn rust_ctx(tmp: &TempDir) -> Context {
 
 // --------------------------------------------------- raw request byte oracle
 
-/// Accepts exactly one connection on `listener`, reads until the peer
-/// closes (both the Rust and the Python relay always send `Connection:
-/// close` and finish the write side before reading the response), and
-/// writes back a minimal `200 OK` so the relay call completes normally.
+/// Accepts exactly one connection on `listener`, reads the request head and
+/// its `Content-Length` body, and writes back a minimal `200 OK` so the
+/// relay call completes normally.
 fn capture_one_request(listener: &TcpListener) -> Vec<u8> {
     let (mut stream, _) = listener.accept().expect("accept");
     stream
@@ -152,6 +151,20 @@ fn capture_one_request(listener: &TcpListener) -> Vec<u8> {
     let mut received = Vec::new();
     let mut buf = [0u8; 65536];
     loop {
+        // Stop once the head and its declared `Content-Length` body have
+        // arrived (neither relay half-closes before reading the reply, so
+        // waiting for EOF would only wait out the read timeout).
+        if let Some(head_end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&received[..head_end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if received.len() >= head_end + 4 + length {
+                break;
+            }
+        }
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => received.extend_from_slice(&buf[..n]),
@@ -420,4 +433,293 @@ fn rust_relay_reaches_a_live_python_fake_upstream() {
         result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"login": "synthetic-user"})
     );
+}
+
+// --------------------------------------- request bytes across many shapes
+
+/// One request-shape case for [`request_bytes_match_python_across_shapes`].
+struct WireCase {
+    name: &'static str,
+    method: &'static str,
+    target: &'static str,
+    /// Caller headers, in order (distinct exact names; Python receives them
+    /// as a `dict` built from these pairs).
+    headers: &'static [(&'static str, &'static str)],
+    body: &'static [u8],
+    /// `("bearer", None, None, None)`, `("basic", None, None, Some(user))`
+    /// or `("header", Some(name), prefix, None)`.
+    auth: (
+        &'static str,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+    ),
+}
+
+fn rust_wire_bytes(case: &WireCase, port: u16) -> Vec<u8> {
+    let tmp = TempDir::new().unwrap();
+    let ctx = rust_ctx(&tmp);
+    ctx.vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            SECRET.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    ctx.policy.create_principal("agent-1", "cli").unwrap();
+    let (mode, header_name, value_prefix, basic_username) = case.auth;
+    let auth = HttpAuth::new(
+        mode,
+        header_name.map(str::to_string),
+        value_prefix.map(str::to_string),
+        basic_username.map(str::to_string),
+    )
+    .unwrap();
+    let connection = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "svc",
+        "http",
+        "gh-token",
+        None,
+        "",
+        Some(HttpTarget::new("http", "127.0.0.1", port as i64, None, false).unwrap()),
+        Some(auth),
+        Some(HttpScope::new(None, None, vec![]).unwrap()),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    ctx.policy.create_connection(connection).unwrap();
+    ctx.policy
+        .create_grant("agent-1", "gh", Some(3600), None)
+        .unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind capture port");
+    let capture = std::thread::spawn(move || capture_one_request(&listener));
+    let headers: Headers = case
+        .headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let result = gateway::relay_for_caller(
+        &ctx,
+        "agent-1",
+        "gh",
+        case.method,
+        case.target,
+        &headers,
+        case.body,
+        None,
+    );
+    assert!(
+        result.status == 200 || result.reason.is_some(),
+        "{}: {result:?}",
+        case.name
+    );
+    capture.join().expect("capture thread")
+}
+
+fn python_wire_bytes(case: &WireCase, port: u16) -> Vec<u8> {
+    use base64::Engine as _;
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path().join("state");
+    let capture_thread = std::thread::spawn(move || {
+        let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind capture port (python)");
+        capture_one_request(&listener)
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    let (mode, header_name, value_prefix, basic_username) = case.auth;
+    let py_opt = |v: Option<&str>| v.map_or("None".to_string(), py_str_literal);
+    let headers = case
+        .headers
+        .iter()
+        .map(|(k, v)| format!("({}, {})", py_str_literal(k), py_str_literal(v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let script = format!(
+        r#"
+import base64
+from pathlib import Path
+from zeropw import policy as P
+from zeropw.context import Config, Context
+from zeropw import gateway
+
+ctx = Context.initialize(Path({state}), {admin}, {recovery}, Config(), lambda: 1700000000.0)
+ctx.projects.create("demo")
+ctx.vault.put_secret("gh-token", "api_key", {secret}.encode(), "demo", "dev")
+ctx.policy.create_principal("agent-1")
+ctx.policy.create_connection(P.Connection(
+    id="gh", project="demo", environment="dev", service="svc", kind="http", secret_id="gh-token",
+    secret_version=None, description="", http_target=P.HttpTarget("http", "127.0.0.1", {port}, None),
+    http_auth=P.HttpAuth({mode}, header_name={header_name}, value_prefix={value_prefix},
+                         basic_username={basic_username}),
+    http_scope=P.HttpScope(), ssh_target=None, cli=None,
+    policy_version=0, status="active", created_at="", updated_at=""))
+ctx.policy.create_grant("agent-1", "gh", 3600, None)
+gateway.relay_for_caller(ctx, "agent-1", "gh", {method}, {target}, dict([{headers}]),
+                         base64.b64decode({body}))
+"#,
+        state = py_str_literal(state_dir.to_str().unwrap()),
+        admin = py_str_literal(ADMIN),
+        recovery = py_str_literal(RECOVERY),
+        secret = py_str_literal(SECRET),
+        mode = py_str_literal(mode),
+        header_name = py_opt(header_name),
+        value_prefix = py_opt(value_prefix),
+        basic_username = py_opt(basic_username),
+        method = py_str_literal(case.method),
+        target = py_str_literal(case.target),
+        body = py_str_literal(&base64::engine::general_purpose::STANDARD.encode(case.body)),
+    );
+    run_python(&script);
+    capture_thread.join().expect("capture thread (python)")
+}
+
+/// `DEVIATIONS.md` "HTTP request byte-identity": the exact bytes on the wire
+/// for every header-order, method/body, auth-mode and header-collision
+/// shape, Rust against `zeropw.gateway.relay_for_caller`.
+#[test]
+fn request_bytes_match_python_across_shapes() {
+    let cases = [
+        WireCase {
+            name: "get no body, caller order kept, case folded",
+            method: "GET",
+            target: "/repos?per_page=5&q=a%20b",
+            headers: &[
+                ("User-Agent", "ua/1"),
+                ("ACCEPT", "application/json"),
+                ("Range", "bytes=0-1"),
+                ("If-None-Match", "\"etag\""),
+            ],
+            body: b"",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "dropped and hop-by-hop headers",
+            method: "GET",
+            target: "/me",
+            headers: &[
+                ("Authorization", "Bearer agent-placeholder"),
+                ("Cookie", "a=b"),
+                ("Connection", "keep-alive"),
+                ("Host", "evil.invalid"),
+                ("X-ZeroPW-Request-Id", "r-1"),
+                ("x-request-id", "rid"),
+                ("Content-Length", "99"),
+                ("Accept-Encoding", "gzip"),
+            ],
+            body: b"",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "same name in two spellings: first position, last value",
+            method: "GET",
+            target: "/me",
+            headers: &[
+                ("accept", "text/plain"),
+                ("User-Agent", "ua"),
+                (" Accept ", "application/json"),
+            ],
+            body: b"",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "post with body",
+            method: "POST",
+            target: "/repos/demo/issues",
+            headers: &[("Content-Type", "application/json")],
+            body: br#"{"title":"t"}"#,
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "put with empty body sends Content-Length 0",
+            method: "PUT",
+            target: "/repos/demo",
+            headers: &[],
+            body: b"",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "delete with body",
+            method: "DELETE",
+            target: "/repos/demo",
+            headers: &[],
+            body: b"x",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "lower-case method normalised",
+            method: " patch ",
+            target: "/repos/demo",
+            headers: &[],
+            body: b"{}",
+            auth: ("bearer", None, None, None),
+        },
+        WireCase {
+            name: "basic auth",
+            method: "GET",
+            target: "/me",
+            headers: &[("Accept", "*/*")],
+            body: b"",
+            auth: ("basic", None, None, Some("synthetic-user")),
+        },
+        WireCase {
+            name: "header auth with prefix",
+            method: "GET",
+            target: "/me",
+            headers: &[("Accept", "*/*")],
+            body: b"",
+            auth: ("header", Some("X-Api-Key"), Some("Token "), None),
+        },
+        WireCase {
+            name: "header auth named like a forwarded header (same spelling)",
+            method: "GET",
+            target: "/me",
+            headers: &[("Accept", "*/*"), ("User-Agent", "ua")],
+            body: b"",
+            auth: ("header", Some("accept"), None, None),
+        },
+        WireCase {
+            name: "header auth named like a relay header (Via)",
+            method: "GET",
+            target: "/me",
+            headers: &[("User-Agent", "ua")],
+            body: b"",
+            auth: ("header", Some("Via"), None, None),
+        },
+        WireCase {
+            name: "header auth differing only in case from a forwarded header",
+            method: "GET",
+            target: "/me",
+            headers: &[("x-request-id", "rid")],
+            body: b"",
+            auth: ("header", Some("X-Request-Id"), None, None),
+        },
+    ];
+    let mut mismatches = Vec::new();
+    for case in &cases {
+        let rust_port = free_port();
+        let python_port = free_port();
+        let normalize = |bytes: &[u8], port: u16| -> String {
+            String::from_utf8_lossy(bytes).replace(&format!("127.0.0.1:{port}"), "127.0.0.1:PORT")
+        };
+        let rust = normalize(&rust_wire_bytes(case, rust_port), rust_port);
+        let python = normalize(&python_wire_bytes(case, python_port), python_port);
+        assert!(!python.is_empty(), "{}: python sent nothing", case.name);
+        if rust != python {
+            mismatches.push(format!(
+                "{}:\n  rust:   {rust:?}\n  python: {python:?}",
+                case.name
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

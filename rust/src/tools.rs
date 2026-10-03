@@ -382,9 +382,11 @@ pub fn request(
     if mismatch {
         return Ok(denied_relay("action_kind_mismatch"));
     }
-    let result = gateway::relay_for_caller(
+    // `gateway.relay_for_caller` raising propagates out of `tools.request`
+    // (and `tools.dispatch`) unchanged, as in Python.
+    let result = gateway::try_relay_for_caller(
         ctx, caller, connection, method, path, headers, body, request_id,
-    );
+    )?;
     let (text, encoded) = match String::from_utf8(result.body.clone()) {
         Ok(s) => (Some(s), None),
         Err(_) => (None, Some(STANDARD.encode(&result.body))),

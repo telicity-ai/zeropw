@@ -615,7 +615,7 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
                 reply
             }
             Err(DispatchError::Gone) => break,
-            Err(DispatchError::Error(e)) if escaped_builtin(&e) => {
+            Err(DispatchError::Error(e)) if gateway::is_escaped_builtin(&e) => {
                 mark(inner, id, false);
                 // Not a `ZeroPWError` in Python: `_dispatch` closes the
                 // connection for these three and otherwise answers its fixed
@@ -675,12 +675,6 @@ fn log_request(inner: &Inner, progress: &Progress) {
         path
     };
     lock(&inner.log_lines).push(format!("{command} {path}"));
-}
-/// An [`Error`] that stands for a built-in exception Python lets escape
-/// (an `OSError` from `store::uncaught_os_error`, a `TypeError` from handle
-/// verification, ...): class `ZeroPW` under a name other than `ZeroPWError`.
-fn escaped_builtin(e: &Error) -> bool {
-    e.is(ErrorClass::ZeroPW) && e.name != "ZeroPWError"
 }
 enum DispatchError {
     Gone,
@@ -868,7 +862,9 @@ fn dispatch(
                 None => headers.push((name.clone(), value.clone())),
             }
         }
-        let result = gateway::relay(
+        // `gateway.relay` raising propagates to `_dispatch`'s handlers,
+        // exactly like any other exception from this route.
+        let result = gateway::try_relay(
             ctx,
             handle,
             &r.method,
@@ -876,7 +872,7 @@ fn dispatch(
             &headers,
             &body,
             r.header(REQUEST_ID_HEADER),
-        );
+        )?;
         return Ok((result.status, result.body, result.headers));
     }
     if r.path == "/healthz" {

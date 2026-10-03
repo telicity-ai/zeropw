@@ -80,10 +80,15 @@ for value in json.loads({cases}):
 }
 
 #[test]
-fn malformed_replay_status_keeps_state_corrupt_mapping() {
+fn malformed_replay_status_raises_the_same_builtin_as_python() {
+    // `int(response.get("status", 502))` raises a CPython built-in that
+    // escapes `relay`; the Rust error is the matching escaped built-in
+    // (`zeropw.server` answers it with `500 internal_error`), named after
+    // the exact Python exception class.
     let too_many_digits = "1".repeat(4301);
     let positive_infinity = Value::Number(serde_json::Number::from_str("1e400").unwrap());
     let negative_infinity = Value::Number(serde_json::Number::from_str("-1e400").unwrap());
+    let mut rust = Vec::new();
     for status in [
         Value::Null,
         json!([]),
@@ -103,8 +108,9 @@ fn malformed_replay_status_keeps_state_corrupt_mapping() {
             "body_b64": "", "body_stored": true,
         }});
         let error = RequestLedger::replay(&entry).unwrap_err();
-        assert_eq!(error.reason, "state_corrupt");
-        assert_eq!(error.detail, "request_ledger_status");
+        assert_eq!(error.reason, "internal_error");
+        assert!(zeropw::gateway::is_escaped_builtin(&error));
+        rust.push(error.name.to_string());
     }
 
     let python = run_python(
@@ -120,32 +126,5 @@ for value in values:
         print(type(exc).__name__)
 "#,
     );
-    assert_eq!(
-        python.lines().collect::<Vec<_>>(),
-        vec![
-            "TypeError",
-            "TypeError",
-            "TypeError",
-            "ValueError",
-            "ValueError",
-            "ValueError",
-            "ValueError",
-            "ValueError",
-            "ValueError",
-            "ValueError",
-            "OverflowError",
-            "OverflowError",
-        ]
-    );
-}
-
-#[test]
-fn replay_status_accepts_the_default_4300_digit_boundary() {
-    let digits = "9".repeat(4300);
-    let entry = json!({"response": {
-        "status": digits, "headers": [], "reason": null,
-        "body_b64": "", "body_stored": true,
-    }});
-    let replay = RequestLedger::replay(&entry).unwrap();
-    assert_eq!(replay.status.to_string(), "9".repeat(4300));
+    assert_eq!(python.lines().collect::<Vec<_>>(), rust);
 }

@@ -559,6 +559,56 @@ fn parse_int_grammar(s: &str, base: u32) -> Option<(bool, String)> {
 }
 
 // ---------------------------------------------------------------------------
+// `float(str)` grammar (PORTING.md §3b): the one canonical home for CPython's
+// `PyFloat_FromString`. `gateway.rs` (ledger `updated_at`) and
+// `fake_upstream.rs` (`/slow?seconds=`) each kept a byte-identical private
+// copy of this function; both now call this one.
+// ---------------------------------------------------------------------------
+
+/// `float(text)` for a Python `str` (CPython 3.12 `PyFloat_FromString`):
+/// `_PyUnicode_TransformDecimalAndSpaceToASCII` first (non-ASCII whitespace
+/// becomes a space, non-ASCII decimal digits their ASCII digit, any other
+/// non-ASCII character makes the parse fail), then
+/// `_Py_string_to_number_with_underscores` (PEP 515 underscores only between
+/// two ASCII digits), then `Py_ISSPACE` ([`is_int_space`]) stripped from both
+/// ends and the float literal grammar (`inf`/`infinity`/`nan` in any case
+/// with an optional sign, or a decimal literal with optional exponent; an
+/// overflowing literal is `inf`), which Rust's correctly-rounded `f64`
+/// parser shares. `None` exactly where CPython raises `ValueError`.
+/// Oracle-tested by `float_from_str_matches_cpython`.
+pub fn float_from_str(text: &str) -> Option<f64> {
+    let mut ascii = String::new();
+    for c in text.chars() {
+        if u32::from(c) < 127 {
+            ascii.push(c);
+        } else if is_space(c) {
+            ascii.push(' ');
+        } else {
+            ascii.push(char::from_digit(unicode_decimal_digit(c)?, 10)?);
+        }
+    }
+    let mut plain = String::new();
+    let mut previous = '\0';
+    for c in ascii.chars() {
+        if c == '_' {
+            if !previous.is_ascii_digit() {
+                return None;
+            }
+        } else {
+            if previous == '_' && !c.is_ascii_digit() {
+                return None;
+            }
+            plain.push(c);
+        }
+        previous = c;
+    }
+    if previous == '_' || plain.contains('\0') {
+        return None;
+    }
+    plain.trim_matches(is_int_space).parse().ok()
+}
+
+// ---------------------------------------------------------------------------
 // Generated tables -- see rust/tools/gen_pystr_tables.py. Do not hand-edit.
 // ---------------------------------------------------------------------------
 
@@ -1426,6 +1476,146 @@ fn unquote_ascii_run(run: &[char]) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+// ---------------------------------------------------------------------------
+// `posixpath.normpath`/`abspath` and `tempfile` directory selection. Used by
+// `signer.rs`'s port of `tempfile.mkdtemp(prefix="zpws-")`.
+// ---------------------------------------------------------------------------
+
+/// `posixpath.normpath(path)` on raw path bytes: repeated separators and
+/// `.` components collapse, `..` removes the previous component (and is
+/// dropped at the root, kept at the start of a relative path), exactly two
+/// leading slashes are preserved while one or three-or-more become one, a
+/// trailing slash is dropped, and an empty result is `.`.
+pub fn posix_normpath(path: &std::ffi::OsStr) -> std::path::PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let bytes = path.as_bytes();
+    if bytes.is_empty() {
+        return std::path::PathBuf::from(".");
+    }
+    let initial_slashes = if bytes.starts_with(b"//") && !bytes.starts_with(b"///") {
+        2
+    } else if bytes.starts_with(b"/") {
+        1
+    } else {
+        0
+    };
+    let mut components: Vec<&[u8]> = Vec::new();
+    for component in bytes.split(|b| *b == b'/') {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        if component != b".."
+            || (initial_slashes == 0 && components.is_empty())
+            || components.last() == Some(&&b".."[..])
+        {
+            components.push(component);
+        } else if !components.is_empty() {
+            components.pop();
+        }
+    }
+    let mut out = vec![b'/'; initial_slashes];
+    out.extend_from_slice(&components.join(&b'/'));
+    if out.is_empty() {
+        out.push(b'.');
+    }
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
+}
+
+/// `os.path.abspath(path)`: joined onto `os.getcwd()` when relative, then
+/// [`posix_normpath`].
+pub fn posix_abspath(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    if path.is_absolute() {
+        return Ok(posix_normpath(path.as_os_str()));
+    }
+    let joined = std::env::current_dir()?.join(path);
+    Ok(posix_normpath(joined.as_os_str()))
+}
+
+/// One name from `tempfile._RandomNameSequence`: 8 characters drawn from
+/// `"abcdefghijklmnopqrstuvwxyz0123456789_"`.
+pub fn tempfile_random_name() -> String {
+    use rand::Rng;
+    const CHARACTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut rng = rand::rngs::OsRng;
+    (0..8)
+        .map(|_| char::from(CHARACTERS[rng.gen_range(0..CHARACTERS.len())]))
+        .collect()
+}
+
+/// `tempfile._candidate_tempdir_list()` on POSIX: non-empty `TMPDIR`,
+/// `TEMP`, `TMP`, then `/tmp`, `/var/tmp`, `/usr/tmp`, then `os.getcwd()`
+/// (`os.curdir` if that fails).
+fn tempfile_candidate_dirs(
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    for name in ["TMPDIR", "TEMP", "TMP"] {
+        if let Some(value) = env(name).filter(|v| !v.is_empty()) {
+            dirs.push(std::path::PathBuf::from(value));
+        }
+    }
+    dirs.extend(["/tmp", "/var/tmp", "/usr/tmp"].map(std::path::PathBuf::from));
+    dirs.push(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    dirs
+}
+
+/// `tempfile._get_default_tempdir()`: the first candidate (made absolute
+/// unless it is `os.curdir`) in which a fresh `O_RDWR|O_CREAT|O_EXCL|
+/// O_NOFOLLOW` 0600 file can be created and written; up to 100 names per
+/// directory, moving on at the first error other than `FileExistsError`.
+/// `Err` is the `FileNotFoundError` CPython raises when none qualifies.
+fn tempfile_default_tempdir(
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    for candidate in tempfile_candidate_dirs(env) {
+        let dir = if candidate.as_os_str() == "." {
+            candidate
+        } else {
+            match posix_abspath(&candidate) {
+                Ok(dir) => dir,
+                Err(_) => continue,
+            }
+        };
+        for _ in 0..100 {
+            let file = dir.join(tempfile_random_name());
+            let opened = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .mode(0o600)
+                .open(&file);
+            match opened {
+                Ok(mut handle) => {
+                    let written = handle.write_all(b"blat");
+                    drop(handle);
+                    let removed = std::fs::remove_file(&file);
+                    if written.is_err() || removed.is_err() {
+                        break;
+                    }
+                    return Ok(dir);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
+            }
+        }
+    }
+    Err(std::io::Error::from_raw_os_error(libc::ENOENT))
+}
+
+/// `tempfile.gettempdir()`: [`tempfile_default_tempdir`], computed once per
+/// process and cached afterwards like CPython's module-level `tempdir`.
+pub fn gettempdir() -> std::io::Result<std::path::PathBuf> {
+    static TEMPDIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    if let Some(dir) = TEMPDIR.get() {
+        return Ok(dir.clone());
+    }
+    let dir = tempfile_default_tempdir(&|name| std::env::var_os(name))?;
+    Ok(TEMPDIR.get_or_init(|| dir).clone())
 }
 
 /// `type(exc).__name__` of the `OSError` CPython raises for `error`: the
@@ -2581,6 +2771,202 @@ for item in json.loads(base64.b64decode("{encoded}")):
             .unwrap();
             assert_eq!(esc.json_text(&dumped), json_text, "{input:?}");
             assert_eq!(esc.stderr_text(&repr_str(&text)), repr_text, "{input:?}");
+        }
+    }
+
+    /// [`float_from_str`] against CPython's `float(str)`, including the
+    /// cases both former private copies were tested with.
+    #[test]
+    fn float_from_str_matches_cpython() {
+        let cases = [
+            "1",
+            " 1.5 ",
+            "\t2\n",
+            "1_0.5",
+            "1_000.5",
+            "1_0e1_0",
+            "1__0",
+            "_1",
+            "1_",
+            "1_e5",
+            "1e_5",
+            "1._5",
+            "1_.5",
+            "1e5",
+            "-0.25",
+            "+.5",
+            "5.",
+            ".",
+            "e5",
+            "inf",
+            "-Infinity",
+            "INF",
+            "nan",
+            "+NaN",
+            "-nan",
+            "infin",
+            "in_f",
+            "0x10",
+            "1e999",
+            "-1e999",
+            "1e-400",
+            "\u{1c}1",
+            "\u{a0}3\u{2003}",
+            "\u{0663}.\u{0665}",
+            "1\u{0}",
+            "\u{7f}1",
+            "\u{e9}",
+            "",
+            "  ",
+            "1 2",
+            "--1",
+            "+-1",
+            "1.5e+3",
+            "1.5E-3",
+            "\u{0661}_\u{0662}",
+            " _1",
+            "1_ ",
+            "1_000_000.000_001",
+            "123456789012345678901234567890",
+            "0.1000000000000000055511151231257827",
+            "\u{ff11}\u{ff12}",
+            "\u{2028}7",
+        ];
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
+        let script = format!(
+            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
+        );
+        let expected = crate::oracle::python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let rust = match float_from_str(case) {
+                Some(v) if v.is_nan() => "nan".to_string(),
+                Some(v) => crate::pyjson::python_float_repr(v),
+                None => "error".to_string(),
+            };
+            assert_eq!(rust, python, "float({case:?})");
+        }
+    }
+
+    /// [`posix_normpath`] against `posixpath.normpath`.
+    #[test]
+    fn posix_normpath_matches_cpython() {
+        let cases = [
+            "",
+            ".",
+            "/",
+            "//",
+            "///",
+            "////a",
+            "//a//b/",
+            "a/./b/../c",
+            "../a",
+            "/../a",
+            "a/../..",
+            "a/b/../../..",
+            "./",
+            "/tmp/",
+            "/var/folders/x/T/",
+            "a//b///c",
+            "..",
+            "../..",
+            "/.",
+            "/a/b/c/../../..",
+            "rel/../x",
+        ];
+        let script = format!(
+            "import posixpath, json\nfor p in json.loads({:?}):\n    print(posixpath.normpath(p))\n",
+            serde_json::to_string(&cases).unwrap()
+        );
+        let expected = python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let rust = posix_normpath(std::ffi::OsStr::new(case));
+            assert_eq!(rust.to_str().unwrap(), python, "normpath({case:?})");
+        }
+    }
+
+    /// [`tempfile_default_tempdir`] picks the same directory as CPython's
+    /// `tempfile._get_default_tempdir` for the same environment.
+    #[test]
+    fn default_tempdir_matches_cpython_candidate_selection() {
+        let root = tempfile::TempDir::new().unwrap();
+        let writable = root.path().join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        let file = root.path().join("plain-file");
+        std::fs::write(&file, b"x").unwrap();
+        let w = writable.to_str().unwrap().to_string();
+        let f = file.to_str().unwrap().to_string();
+        let cases: Vec<Vec<(&str, String)>> = vec![
+            vec![("TMPDIR", w.clone())],
+            vec![("TMPDIR", format!("{w}//./"))],
+            vec![("TMPDIR", format!("{w}/sub/.."))],
+            vec![("TMPDIR", String::new()), ("TEMP", w.clone())],
+            vec![("TMPDIR", format!("{w}/missing")), ("TMP", w.clone())],
+            vec![("TMPDIR", f.clone()), ("TEMP", w.clone())],
+            vec![("TEMP", f.clone())],
+            vec![],
+        ];
+        let script = format!(
+            "import json, os, tempfile\nfor env in json.loads({:?}):\n    for name in ('TMPDIR', 'TEMP', 'TMP'):\n        os.environ.pop(name, None)\n    os.environ.update(dict(env))\n    print(tempfile._get_default_tempdir())\n",
+            serde_json::to_string(&cases).unwrap()
+        );
+        let expected = python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let env = |name: &str| {
+                case.iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            };
+            let rust = tempfile_default_tempdir(&env).unwrap();
+            assert_eq!(rust.to_str().unwrap(), python, "{case:?}");
+        }
+    }
+
+    /// [`parse_int_max_str_digits`] against the limit CPython 3.12 actually
+    /// starts with for each `PYTHONINTMAXSTRDIGITS` value (or its startup
+    /// abort).
+    #[test]
+    fn int_max_str_digits_matches_cpython_startup() {
+        let interpreter =
+            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
+        for raw in [
+            "",
+            "0",
+            "-0",
+            "+0",
+            "640",
+            " 640",
+            "\t+700",
+            "640 ",
+            "639",
+            "5",
+            "-1",
+            "abc",
+            "0x280",
+            "4300",
+            "2147483647",
+            "2147483648",
+            "99999999999999999999",
+            "1_000",
+        ] {
+            let output = std::process::Command::new(&interpreter)
+                .arg("-c")
+                .arg("import sys; print(sys.flags.int_max_str_digits)")
+                .env("PYTHONINTMAXSTRDIGITS", raw)
+                .output()
+                .unwrap();
+            let python = output.status.success().then(|| {
+                String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap()
+            });
+            assert_eq!(
+                parse_int_max_str_digits(Some(raw.as_bytes())),
+                python,
+                "PYTHONINTMAXSTRDIGITS={raw:?}"
+            );
         }
     }
 }
