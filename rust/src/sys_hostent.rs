@@ -20,9 +20,7 @@
 //!
 //! In both cases a failed lookup is reported with the thread's `h_errno`
 //! (not glibc's `h_errnop` out-parameter), exactly as `gethost_common` does.
-#[cfg(target_os = "linux")]
-use std::ffi::c_char;
-use std::ffi::{CStr, CString, c_int};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::fmt;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -528,57 +526,11 @@ print(json.dumps(out))
 
     /// Runs `f` over the cases on one fresh thread, mirroring the single
     /// Python thread, so `h_errno` has the same history on both sides.
-    /// Runs `compute` in a fresh copy of this test binary and returns its
-    /// JSON result; returns `None` when this process IS that copy (after
-    /// printing the result), so the caller must stop there.
-    ///
-    /// The resolver differentials need a process whose only lookups are the
-    /// ones under test: on macOS, Libinfo orders `getaddrinfo` results by
-    /// process-wide history (one `AI_PASSIVE` wildcard query makes later
-    /// `localhost` lookups answer `::1` first, in CPython and here alike),
-    /// and every other test thread's lookups would feed that history. The
-    /// Python oracle likewise runs in a fresh process.
-    pub(crate) fn fresh_process(test: &str, compute: impl FnOnce() -> Value) -> Option<Value> {
-        const CHILD: &str = "ZEROPW_RESOLVER_TEST_CHILD";
-        const MARK: &str = "ZEROPW_RESOLVER_TEST_RESULT=";
-        if std::env::var(CHILD).as_deref() == Ok(test) {
-            println!("{MARK}{}", compute());
-            return None;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test, "--nocapture", "--test-threads=1"])
-            .env(CHILD, test)
-            .output()
-            .unwrap();
-        // libtest's progress text may share the line, and where the child's
-        // test output lands (stdout or stderr) is libtest's choice.
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let line = stdout
-            .lines()
-            .chain(stderr.lines())
-            .find_map(|line| line.split_once(MARK).map(|(_, rest)| rest))
-            .unwrap_or_else(|| {
-                panic!(
-                    "child {test} printed no result ({}): {stdout}{stderr}",
-                    output.status
-                )
-            });
-        Some(serde_json::from_str(line).unwrap())
-    }
-
-    pub(crate) fn rust_outcomes(
-        test: &str,
-        cases: &[String],
-        f: fn(&str) -> Value,
-    ) -> Option<Vec<Value>> {
-        let value = fresh_process(test, || {
-            Value::Array(cases.iter().map(|case| f(case)).collect())
-        })?;
-        match value {
-            Value::Array(values) => Some(values),
-            other => panic!("unexpected child result {other}"),
-        }
+    pub(crate) fn rust_outcomes(cases: &[String], f: fn(&str) -> Value) -> Vec<Value> {
+        let cases = cases.to_vec();
+        std::thread::spawn(move || cases.iter().map(|case| f(case)).collect())
+            .join()
+            .unwrap()
     }
 
     pub(crate) fn assert_parity(function: &str, cases: &[String], rust: &[Value]) {
@@ -592,36 +544,23 @@ print(json.dumps(out))
     #[test]
     fn gethostbyaddr_matches_socketmodule() {
         let cases = cases();
-        let Some(rust) = rust_outcomes(
-            "sys_hostent::tests::gethostbyaddr_matches_socketmodule",
-            &cases,
-            |case| match super::gethostbyaddr(case) {
-                Ok((name, aliases, addresses)) => {
-                    let addresses: Vec<String> =
-                        addresses.iter().map(ToString::to_string).collect();
-                    json!({"ok": [name, aliases, addresses]})
-                }
-                Err(error) => rust_error(&error),
-            },
-        ) else {
-            return;
-        };
+        let rust = rust_outcomes(&cases, |case| match super::gethostbyaddr(case) {
+            Ok((name, aliases, addresses)) => {
+                let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+                json!({"ok": [name, aliases, addresses]})
+            }
+            Err(error) => rust_error(&error),
+        });
         assert_parity("gethostbyaddr", &cases, &rust);
     }
 
     #[test]
     fn gethostbyname_matches_socketmodule() {
         let cases = cases();
-        let Some(rust) = rust_outcomes(
-            "sys_hostent::tests::gethostbyname_matches_socketmodule",
-            &cases,
-            |case| match super::gethostbyname(case) {
-                Ok(address) => json!({"ok": address.to_string()}),
-                Err(error) => rust_error(&error),
-            },
-        ) else {
-            return;
-        };
+        let rust = rust_outcomes(&cases, |case| match super::gethostbyname(case) {
+            Ok(address) => json!({"ok": address.to_string()}),
+            Err(error) => rust_error(&error),
+        });
         assert_parity("gethostbyname", &cases, &rust);
     }
 }

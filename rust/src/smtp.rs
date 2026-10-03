@@ -1959,14 +1959,11 @@ mod hostname_tests {
     /// its alias list.
     #[test]
     fn local_hostname_matches_smtplib() {
-        let Some(rust) = crate::sys_hostent::tests::fresh_process(
-            "smtp::hostname_tests::local_hostname_matches_smtplib",
-            || json!(super::local_hostname().ok()),
-        ) else {
-            return;
-        };
         let out = crate::oracle::python("import smtplib; print(smtplib.SMTP().local_hostname)");
-        assert_eq!(rust, json!(out.trim()), "local_hostname raised or differed");
+        let Ok(rust) = super::local_hostname() else {
+            panic!("local_hostname raised where smtplib returned {out:?}");
+        };
+        assert_eq!(rust, out.trim());
     }
 
     /// `socket.getfqdn(name)` over the `gethostbyaddr` cases (empty and
@@ -1974,16 +1971,10 @@ mod hostname_tests {
     #[test]
     fn getfqdn_matches_socket_getfqdn() {
         let cases = cases();
-        let Some(rust) = rust_outcomes(
-            "smtp::hostname_tests::getfqdn_matches_socket_getfqdn",
-            &cases,
-            |case| match super::getfqdn(case) {
-                Ok(name) => json!({"ok": name}),
-                Err(error) => rust_error(&error),
-            },
-        ) else {
-            return;
-        };
+        let rust = rust_outcomes(&cases, |case| match super::getfqdn(case) {
+            Ok(name) => json!({"ok": name}),
+            Err(error) => rust_error(&error),
+        });
         assert_parity("getfqdn", &cases, &rust);
     }
 
