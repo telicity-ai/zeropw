@@ -1075,43 +1075,27 @@ mod version_tests {
         fn close(&self) {}
     }
 
-    /// `_respond`'s first check is Python `!=`: `1`, `1.0` and `true` pass
-    /// it (the handshake then fails at the next field here), every other
-    /// value is `version_mismatch` -- compared with CPython's `_respond`.
+    /// `respond`'s first check is the handshake `version`: `1`, `1.0` and
+    /// `true` pass it (the handshake then fails at the next field here),
+    /// every other value is `version_mismatch`. Expected reasons were
+    /// measured once against the retired Python prototype's `_respond`.
     #[test]
-    fn handshake_version_uses_python_equality() {
-        let versions = [
-            "1", "1.0", "true", "2", "0", "\"1\"", "null", "[1]", "1e0", "false",
+    fn handshake_version_check_accepts_only_numeric_one() {
+        let cases = [
+            ("1", "invalid_env_id"),
+            ("1.0", "invalid_env_id"),
+            ("true", "invalid_env_id"),
+            ("2", "version_mismatch"),
+            ("0", "version_mismatch"),
+            ("\"1\"", "version_mismatch"),
+            ("null", "version_mismatch"),
+            ("[1]", "version_mismatch"),
+            ("1e0", "invalid_env_id"),
+            ("false", "version_mismatch"),
         ];
-        let script = format!(
-            r#"
-import json, time
-from zeropw.team import transport as T
-from zeropw.team.identity import DeviceKey
-class Channel:
-    def __init__(self, raw): self.raw = raw
-    def recv(self, timeout):
-        raw, self.raw = self.raw, None
-        return raw
-    def send(self, data): pass
-    def close(self): pass
-out = []
-for version in json.loads({versions}):
-    raw = ('{{"env_id": 5, "version": ' + version + '}}').encode()
-    try:
-        T._respond(Channel(raw), DeviceKey.generate(), lambda e, f: None, None)
-        out.append("ok")
-    except T.HandshakeFailed as exc:
-        out.append(exc.reason)
-print(json.dumps(out))
-"#,
-            versions = crate::pystr::repr_str(&serde_json::to_string(&versions).unwrap())
-        );
-        let python: Vec<String> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
         let device = DeviceKey::generate();
         let membership: MembershipCheck = Arc::new(|_: &str, _: &str| None);
-        for (version, expected) in versions.iter().zip(&python) {
+        for (version, expected) in cases {
             let raw = format!("{{\"env_id\": 5, \"version\": {version}}}").into_bytes();
             let channel: Arc<dyn ByteChannel> = Arc::new(OneMessage(Mutex::new(Some(raw))));
             let reason = match respond(channel, &device, &membership, None) {
@@ -1120,7 +1104,5 @@ print(json.dumps(out))
             };
             assert_eq!(reason, expected, "version {version}");
         }
-        assert_eq!(python[1], "invalid_env_id");
-        assert_eq!(python[3], "version_mismatch");
     }
 }
