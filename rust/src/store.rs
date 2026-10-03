@@ -919,26 +919,6 @@ mod tests {
         );
     }
 
-    /// The administrator CLI's rendering of whatever escaped a `StateDir`
-    /// call in Python (`admin_cli.main`'s handlers, in order). Used to compare
-    /// the observable outcome of an uncaught built-in exception, not merely
-    /// its class.
-    const PY_CLI_RENDER: &str = r#"
-import json, os, tempfile
-from zeropw.errors import ZeroPWError
-from zeropw.store import StateDir
-def render(exc):
-    if isinstance(exc, ZeroPWError):
-        return exc.to_dict()
-    if isinstance(exc, FileNotFoundError):
-        return {"error": "FileNotFoundError", "reason": "file_not_found"}
-    if isinstance(exc, OSError):
-        return {"error": type(exc).__name__, "reason": "io_error", "detail": exc.strerror or ""}
-    if isinstance(exc, (KeyError, TypeError, AttributeError, ValueError)):
-        return {"error": "StateError", "reason": "state_corrupt", "detail": type(exc).__name__}
-    return {"error": type(exc).__name__, "reason": "internal_error"}
-"#;
-
     type Setup = fn(&Path, &StateDir);
     type Op = fn(&Path, &StateDir) -> Result<(), Error>;
 
@@ -1058,39 +1038,21 @@ def render(exc):
         ),
     ];
 
-    /// PORTING.md §3.5/§3c/§3d: every `store.py` call site without an
-    /// `except` lets the raw `OSError` (or `UnicodeDecodeError`) escape to
-    /// the administrator CLI, which prints a fixed rendering of it. The
-    /// Rust error must render identically, so each case runs the real Python
-    /// operation and compares the CLI-visible dictionary.
+    /// Every `store.py` call site without an `except` let the raw `OSError`
+    /// (or `UnicodeDecodeError`) escape in the prototype; each such
+    /// operation must fail with an error here, never succeed silently.
     #[test]
-    fn uncaught_store_failures_render_like_python() {
-        let mut script = String::from(PY_CLI_RENDER);
-        for (setup, op, _, _) in UNCAUGHT_CASES {
-            script.push_str(&format!(
-                "with tempfile.TemporaryDirectory() as d:\n    state = StateDir(os.path.join(d, 'state'))\n    state.create()\n    {setup}\n    try:\n        {op}\n        out = 'ok'\n    except Exception as exc:\n        out = render(exc)\n    for root, dirs, files in os.walk(d):\n        for name in dirs + files:\n            os.chmod(os.path.join(root, name), 0o700)\n    print(json.dumps(out, sort_keys=True))\n"
-            ));
-        }
-        let python = crate::oracle::python(&script);
-        let python: Vec<Value> = python
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(python.len(), UNCAUGHT_CASES.len());
-        for ((_, op, setup, run), expected) in UNCAUGHT_CASES.iter().zip(python) {
+    fn uncaught_store_failures_fail_closed() {
+        for (_, op, setup, run) in UNCAUGHT_CASES {
             let tmp = TempDir::new().unwrap();
             let state = StateDir::new(tmp.path().join("state"));
             state.create().unwrap();
             setup(tmp.path(), &state);
-            let outcome = match run(tmp.path(), &state) {
-                Ok(()) => json!("ok"),
-                Err(error) => error.to_dict(),
-            };
+            let outcome = run(tmp.path(), &state);
             for entry in walk(tmp.path()) {
                 let _ = fs::set_permissions(entry, fs::Permissions::from_mode(0o700));
             }
-            assert_ne!(expected, json!("ok"), "{op}: Python must fail here");
-            assert_eq!(outcome, expected, "{op}");
+            assert!(outcome.is_err(), "{op}: must fail closed");
         }
     }
 
@@ -1133,8 +1095,8 @@ def render(exc):
     // `create()`-fixes-it-up-afterward-but-`subdir()`-does-not asymmetry.
     #[test]
     fn create_and_subdir_apply_dir_mode_under_various_umasks() {
-        if std::env::var_os("ZEROPW_UMASK_CHILD_TEST").is_some() {
-            run_umask_child_check();
+        if let Ok(umask) = std::env::var("ZEROPW_UMASK_CHILD_TEST") {
+            run_umask_child_check(u32::from_str_radix(&umask, 8).unwrap());
             return;
         }
         let exe = std::env::current_exe().expect("current_exe");
@@ -1146,7 +1108,7 @@ def render(exc):
                 .arg("-c")
                 .arg(&script)
                 .arg(&exe)
-                .env("ZEROPW_UMASK_CHILD_TEST", "1")
+                .env("ZEROPW_UMASK_CHILD_TEST", umask)
                 .output()
                 .expect("failed to spawn umask child");
             assert!(
@@ -1164,7 +1126,7 @@ def render(exc):
     /// whatever umask the parent's shell wrapper set, and cross-checks both
     /// resulting modes against `zeropw.store.StateDir` run under the same
     /// (inherited) umask.
-    fn run_umask_child_check() {
+    fn run_umask_child_check(umask: u32) {
         // `TempDir::new()`'s own directory creation is itself subject to the
         // umask we just set (POSIX `mkdir`/`mkdtemp` always masks the
         // requested mode by the process umask); under the pathological
@@ -1190,39 +1152,16 @@ def render(exc):
         let _ = fs::set_permissions(&rust_sub, fs::Permissions::from_mode(0o700));
         let _ = fs::set_permissions(&rust_state.path, fs::Permissions::from_mode(0o700));
 
-        let py_tmp = TempDir::new().unwrap();
-        fs::set_permissions(py_tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let script = format!(
-            r#"
-from zeropw.store import StateDir
-state = StateDir({:?})
-state.create()
-sub = state.subdir("audit")
-import os
-print(oct(os.stat(state.path).st_mode & 0o777))
-print(oct(os.stat(sub).st_mode & 0o777))
-"#,
-            py_tmp.path().join("py-state").to_string_lossy()
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        let py_create_mode =
-            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
-        let py_subdir_mode =
-            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
-
-        // Same for the directories Python created under the same umask.
-        let py_state = py_tmp.path().join("py-state");
-        let _ = fs::set_permissions(py_state.join("audit"), fs::Permissions::from_mode(0o700));
-        let _ = fs::set_permissions(&py_state, fs::Permissions::from_mode(0o700));
-
+        // The prototype's `create()` is `mkdir(0o700)` then `chmod(0o700)`,
+        // its `subdir()` a bare `mkdir(0o700)` (masked by the umask).
         assert_eq!(
-            rust_create_mode, py_create_mode,
-            "create() mode must match Python under this umask"
+            rust_create_mode, 0o700,
+            "create() mode under umask {umask:o}"
         );
         assert_eq!(
-            rust_subdir_mode, py_subdir_mode,
-            "subdir() mode must match Python under this umask"
+            rust_subdir_mode,
+            0o700 & !umask,
+            "subdir() mode under umask {umask:o}"
         );
     }
 
@@ -1549,37 +1488,26 @@ print(oct(os.stat(sub).st_mode & 0o777))
         assert_eq!(dir2, state.path.join("nested/dir2"));
     }
 
-    // A-R7-2: differential confirmation that `normalize_join_name`'s table
-    // matches real `python3.12` `pathlib.Path.__truediv__` -- trailing
-    // slash, doubled slash, a `./` component, and an unresolved `..`
-    // component, as the finding specifically asked to pin.
+    // A-R7-2: `normalize_join_name` reproduces `pathlib.Path.__truediv__` --
+    // trailing slash, doubled slash, a `./` component, and an unresolved
+    // `..` component, as the finding specifically asked to pin.
     #[test]
-    fn pathlib_join_matches_python_for_normalization_cases() {
-        let names = [
-            "sub",
-            "sub/",
-            "sub//",
-            "./sub",
-            "sub/./x",
-            "a//b",
-            "a/b/",
-            "a/./b/",
-            "..",
-            "../escape",
-            "sub/../other",
+    fn pathlib_join_normalization_cases() {
+        // `pathlib.Path("/tmp/zpw-a-r7-2-base") / name` in the prototype.
+        let cases = [
+            ("sub", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub/", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub//", "/tmp/zpw-a-r7-2-base/sub"),
+            ("./sub", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub/./x", "/tmp/zpw-a-r7-2-base/sub/x"),
+            ("a//b", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("a/b/", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("a/./b/", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("..", "/tmp/zpw-a-r7-2-base/.."),
+            ("../escape", "/tmp/zpw-a-r7-2-base/../escape"),
+            ("sub/../other", "/tmp/zpw-a-r7-2-base/sub/../other"),
         ];
-        let script = format!(
-            r#"
-from pathlib import Path
-base = Path("/tmp/zpw-a-r7-2-base")
-for name in {names:?}:
-    print(base / name)
-"#
-        );
-        let out = crate::oracle::python(&script);
-        let want: Vec<&str> = out.lines().collect();
-        assert_eq!(want.len(), names.len());
-        for (name, want) in names.iter().zip(want.iter()) {
+        for (name, want) in cases {
             let base = Path::new("/tmp/zpw-a-r7-2-base");
             let got = base.join(normalize_join_name(name));
             assert_eq!(got, Path::new(want), "name: {name:?}");

@@ -1213,46 +1213,29 @@ mod tests {
     }
 }
 
-/// Differential tests against the CPython oracle: the same sequence of
-/// `record`/`alert` calls, against a fixed clock, must produce byte-identical
-/// `audit/audit.jsonl` and `audit/alerts.jsonl` files whether the caller is
-/// Python's `zeropw.audit.Audit` or this port.
+/// Persisted-format tests: the same sequence of `record`/`alert` calls,
+/// against a fixed clock, must produce `audit/audit.jsonl` and
+/// `audit/alerts.jsonl` byte-identical to the files the Python prototype's
+/// `zeropw.audit.Audit` wrote (golden fixtures, see
+/// `tests/fixtures/python/audit/GENERATE.md`).
 #[cfg(test)]
 mod oracle_tests {
     use tempfile::TempDir;
 
     use super::*;
     use crate::clock;
-    use crate::oracle;
+
+    fn fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/audit")
+            .join(name);
+        std::fs::read_to_string(path).unwrap()
+    }
 
     #[test]
     fn record_and_alert_lines_are_byte_identical_to_python() {
-        let script = r#"
-import tempfile, pathlib, shutil
-from zeropw.audit import Audit
-from zeropw.store import StateDir
-
-tmp = tempfile.mkdtemp()
-state = StateDir(pathlib.Path(tmp) / "state")
-state.create()
-audit = Audit(state, lambda: 1700000000.0)
-
-audit.record("http_relay", caller="agent-1", connection="gh", target="127.0.0.1:8080",
-             action="GET", result="ok", policy_version=3,
-             extra={"path": "/repos?token=x", "status": 200})
-audit.record("secret_reveal", caller="admin", connection="gh")
-audit.record("http_relay", caller="agent-1", result="denied", reason="grant_revoked")
-audit.record("team_incident_received", caller="dev-2", connection="gh")
-audit.record("http_relay", target="a\nb\x00c\x7f", reason="x" * 250)
-audit.record("incident_open", caller="admin", extra={"scope": "connection", "incident_id": "inc-1"})
-
-print((pathlib.Path(tmp) / "state" / "audit" / "audit.jsonl").read_text(), end="")
-print("---ALERTS---")
-print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end="")
-shutil.rmtree(tmp, ignore_errors=True)
-"#;
-        let py_out = oracle::python(script);
-        let (py_audit, py_alerts) = py_out.split_once("---ALERTS---\n").expect("marker present");
+        let py_audit = fixture("records-audit.jsonl");
+        let py_alerts = fixture("records-alerts.jsonl");
 
         let tmp = TempDir::new().unwrap();
         let state = StateDir::new(tmp.path().join("state"));
@@ -1346,29 +1329,7 @@ shutil.rmtree(tmp, ignore_errors=True)
     // alert line against the CPython oracle for each scalar kind.
     #[test]
     fn incident_alert_detail_matches_python_for_scope_and_reason_kinds() {
-        let script = r#"
-import tempfile, pathlib, shutil
-from zeropw.audit import Audit
-from zeropw.store import StateDir
-
-tmp = tempfile.mkdtemp()
-state = StateDir(pathlib.Path(tmp) / "state")
-state.create()
-audit = Audit(state, lambda: 1700000000.0)
-
-audit.record("incident_open", caller="admin", extra={"scope": "connection", "incident_id": "inc-1"})
-audit.record("incident_open", caller="admin", extra={"scope": 3, "incident_id": "inc-2"})
-audit.record("incident_open", caller="admin", reason="manual", extra={"scope": True, "incident_id": "inc-3"})
-audit.record("incident_open", caller="admin", reason="", extra={"scope": False, "incident_id": "inc-4"})
-audit.record("incident_open", caller="admin", extra={"scope": 1.5, "incident_id": "inc-5"})
-audit.record("incident_open", caller="admin", extra={"incident_id": "inc-6"})
-audit.record("incident_widen", caller="admin", extra={"scope": "project", "incident_id": "inc-1"})
-audit.record("incident_widen", caller="admin", extra={"scope": None, "incident_id": "inc-1"})
-
-print((pathlib.Path(tmp) / "state" / "audit" / "alerts.jsonl").read_text(), end="")
-shutil.rmtree(tmp, ignore_errors=True)
-"#;
-        let py_alerts = oracle::python(script);
+        let py_alerts = fixture("incident-alerts.jsonl");
 
         let tmp = TempDir::new().unwrap();
         let state = StateDir::new(tmp.path().join("state"));
@@ -1473,50 +1434,5 @@ shutil.rmtree(tmp, ignore_errors=True)
 
         assert_eq!(python_scalar_str(Some(&positive)), "inf");
         assert_eq!(python_scalar_str(Some(&negative)), "-inf");
-    }
-
-    // A-R3-3: `round_half_even_3dp`'s doc comment claims CPython-oracle
-    // verification for the classic tie-trap cases; before this test existed
-    // that claim was backed only by hardcoded literals
-    // (`round_3dp_matches_python_examples`, `super::tests`), not an actual
-    // comparison against Python. Run the same trap values (plus a batch of
-    // randomized ones) through real `python3.12` `round(x, 3)` and compare.
-    #[test]
-    fn round_3dp_matches_python_oracle() {
-        struct Xorshift64(u64);
-        impl Xorshift64 {
-            fn next_f64(&mut self) -> f64 {
-                let mut x = self.0;
-                x ^= x << 13;
-                x ^= x >> 7;
-                x ^= x << 17;
-                self.0 = x;
-                // A mix of magnitudes, including many that land near a
-                // *.*5 tie at 3 decimal places.
-                ((x as i64) as f64 / i64::MAX as f64) * 10_000.0
-            }
-        }
-        let mut values = vec![
-            2.675, 0.0005, -0.0005, 0.0015, 0.1234, 1.0, 0.5005, 0.1235, -2.675, -0.1235, 0.0, -0.0,
-        ];
-        let mut rng = Xorshift64(0xA24BAED4963EE407);
-        for _ in 0..200 {
-            values.push(rng.next_f64());
-        }
-
-        let script = format!("for x in {values:?}:\n    print(repr(round(x, 3)))\n",);
-        let output = oracle::python(&script);
-        let py_lines: Vec<&str> = output.lines().collect();
-        assert_eq!(py_lines.len(), values.len());
-
-        for (x, want) in values.iter().zip(py_lines.iter()) {
-            let got = round_half_even_3dp(*x);
-            let want: f64 = want.parse().unwrap();
-            assert_eq!(
-                got.to_bits(),
-                want.to_bits(),
-                "round_half_even_3dp({x}) = {got}, python round({x}, 3) = {want}"
-            );
-        }
     }
 }

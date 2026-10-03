@@ -362,122 +362,67 @@ mod tests {
         ));
     }
 
+    /// Golden vectors generated once from the Python prototype
+    /// (`tests/fixtures/python/crypto/GENERATE.md`).
+    fn python_vectors() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/crypto/vectors.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
     #[test]
     fn oracle_clamp_scalar_matches_python_for_every_length_boundary() {
-        let mut cases = vec![
-            Vec::new(),
-            vec![0xa5],
-            vec![0xa5; 31],
-            vec![0xff; 32],
-            vec![0xff; 33],
-            vec![0xff; 64],
-            vec![0xff; 257],
-        ];
-        let mut high_tail_zero = vec![0xff; 64];
-        high_tail_zero[32..].fill(0);
-        cases.push(high_tail_zero);
-
-        let encoded = cases
-            .iter()
-            .map(hex::encode)
-            .map(|value| format!("'{value}'"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             for encoded in [{encoded}]:\n\
-             \traw = bytes.fromhex(encoded)\n\
-             \ttry:\n\
-             \t\tvalue = x25519.clamp_scalar(raw)\n\
-             \t\tprint(value.to_bytes(len(raw), 'little').hex())\n\
-             \texcept Exception as exc:\n\
-             \t\tprint(type(exc).__name__)"
-        );
-        let python = crate::oracle::python(&script);
-        let python_results = python.lines().collect::<Vec<_>>();
-        assert_eq!(python_results.len(), cases.len());
-
-        for (raw, python_result) in cases.iter().zip(python_results) {
-            match clamp_scalar(raw) {
+        let vectors = python_vectors();
+        let cases = vectors["x25519_clamp"].as_array().unwrap();
+        assert_eq!(cases.len(), 8);
+        for case in cases {
+            let raw = hex::decode(case[0].as_str().unwrap()).unwrap();
+            let python_result = case[1].as_str().unwrap();
+            match clamp_scalar(&raw) {
                 Ok(rust) => {
                     assert_eq!(hex::encode(rust.expose()), python_result);
                     let reclamped = clamp_scalar(rust.expose()).unwrap();
                     assert!(reclamped.ct_eq(rust.expose()));
                 }
-                Err(_) => assert_eq!(python_result, "IndexError"),
+                Err(_) => assert_eq!(python_result, "IndexError", "{}", case[0]),
             }
         }
     }
 
     #[test]
     fn oracle_scalarmult_matches_python() {
-        let k = h("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
-        let u = h("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+        let vectors = python_vectors();
+        let v = &vectors["x25519_scalarmult"];
+        let k = h(v["k"].as_str().unwrap());
+        let u = h(v["u"].as_str().unwrap());
         let rust_result = scalarmult(&k, &u).unwrap();
-
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             k = bytes.fromhex('{}')\n\
-             u = bytes.fromhex('{}')\n\
-             print(x25519.scalarmult(k, u).hex())",
-            hex::encode(&k),
-            hex::encode(&u),
+        assert_eq!(hex::encode(rust_result), v["result"].as_str().unwrap());
+        // RFC 7748 section 5.2, first test vector.
+        assert_eq!(
+            hex::encode(rust_result),
+            "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"
         );
-        let python_result = crate::oracle::python(&script);
-        assert_eq!(hex::encode(rust_result), python_result.trim());
     }
 
     #[test]
     fn oracle_public_key_and_shared_secret_match_python() {
-        let a_priv = generate_private();
-        let b_priv = generate_private();
-        let a_pub = public_key(a_priv.expose()).unwrap();
-        let b_pub = public_key(b_priv.expose()).unwrap();
-        let rust_shared = shared_secret(a_priv.expose(), &b_pub).unwrap();
-
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             a_priv = bytes.fromhex('{}')\n\
-             b_priv = bytes.fromhex('{}')\n\
-             a_pub = x25519.public_key(a_priv)\n\
-             b_pub = x25519.public_key(b_priv)\n\
-             print(a_pub.hex())\n\
-             print(b_pub.hex())\n\
-             print(x25519.shared_secret(a_priv, b_pub).hex())\n\
-             print(x25519.shared_secret(b_priv, a_pub).hex())",
-            hex::encode(a_priv.expose()),
-            hex::encode(b_priv.expose()),
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        let python_a_pub = lines.next().expect("a_pub line");
-        let python_b_pub = lines.next().expect("b_pub line");
-        let python_shared_ab = lines.next().expect("shared a->b line");
-        let python_shared_ba = lines.next().expect("shared b->a line");
-
-        assert_eq!(hex::encode(a_pub), python_a_pub);
-        assert_eq!(hex::encode(b_pub), python_b_pub);
-        assert_eq!(hex::encode(rust_shared), python_shared_ab);
-        assert_eq!(python_shared_ab, python_shared_ba);
+        let vectors = python_vectors();
+        let v = &vectors["x25519_exchange"];
+        let a_priv = h(v["a_priv"].as_str().unwrap());
+        let b_priv = h(v["b_priv"].as_str().unwrap());
+        let a_pub = public_key(&a_priv).unwrap();
+        let b_pub = public_key(&b_priv).unwrap();
+        assert_eq!(hex::encode(a_pub), v["a_pub"].as_str().unwrap());
+        assert_eq!(hex::encode(b_pub), v["b_pub"].as_str().unwrap());
+        let shared_ab = shared_secret(&a_priv, &b_pub).unwrap();
+        let shared_ba = shared_secret(&b_priv, &a_pub).unwrap();
+        assert_eq!(hex::encode(shared_ab), v["shared"].as_str().unwrap());
+        assert_eq!(shared_ab, shared_ba);
     }
 
     #[test]
     fn oracle_low_order_point_rejected_identically() {
         let priv_key = generate_private();
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             from zeropw.errors import InvalidInput\n\
-             priv = bytes.fromhex('{}')\n\
-             try:\n\
-             \tx25519.shared_secret(priv, b'\\x00' * 32)\n\
-             \tprint('accepted')\n\
-             except InvalidInput as exc:\n\
-             \tprint(f'rejected:{{exc.reason}}')",
-            hex::encode(priv_key.expose()),
-        );
-        let python_out = crate::oracle::python(&script);
-        assert_eq!(python_out.trim(), "rejected:x25519_low_order_point");
-
         let err = shared_secret(priv_key.expose(), &[0u8; 32]).unwrap_err();
         match err {
             SharedSecretError::LowOrderPoint(e) => assert_eq!(e.reason, "x25519_low_order_point"),

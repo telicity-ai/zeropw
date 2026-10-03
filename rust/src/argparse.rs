@@ -1666,41 +1666,6 @@ mod tests {
         p
     }
 
-    const SAMPLE_PY: &str = r#"
-import argparse, sys, io, contextlib, json
-class NoAbbrev(argparse.ArgumentParser):
-    # Like admin_cli._Parser: every (sub)parser disables abbreviation.
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("allow_abbrev", False)
-        super().__init__(*args, **kwargs)
-def build(allow):
-    cls = argparse.ArgumentParser if allow else NoAbbrev
-    p = cls(prog="prog", description="A tool (trusted; JSON output).")
-    p.add_argument("--state-dir", required=True, metavar="DIR", help="trusted state directory (0700)")
-    sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
-    put = sub.add_parser("put", help="store a new secret version; value via --value-file or --stdin only", description="store a new secret version; value via --value-file or --stdin only")
-    put.add_argument("--id", required=True)
-    put.add_argument("--kind", required=True, choices=("api_key", "password"))
-    put.add_argument("--version", type=int)
-    put.add_argument("--staged", action="store_true", help="store without activating")
-    g = put.add_mutually_exclusive_group(required=True)
-    g.add_argument("--value-file", metavar="PATH", help="read the secret value from this file (delete it afterwards)")
-    g.add_argument("--stdin", action="store_true", help="read the secret value from standard input")
-    join = sub.add_parser("join", help="dial the inviter, prove the invite, and join")
-    join.add_argument("invite")
-    join.add_argument("--project", help="local project name (default: derived from the inviter)")
-    return p
-"#;
-
-    fn run_python(argv: &[&str], columns: usize, abbrev: bool) -> String {
-        let script = format!(
-            "{SAMPLE_PY}\nimport os\nos.environ['COLUMNS']='{columns}'\nargv={}\nout=io.StringIO(); err=io.StringIO()\ncode=None\nwith contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):\n    try:\n        ns, extras = build({abbrev}).parse_known_args(argv)\n        print(json.dumps(sorted((k, v) for k, v in vars(ns).items() if k != 'handler')), extras)\n    except SystemExit as e:\n        code = e.code\nsys.stdout.write(json.dumps([code, out.getvalue(), err.getvalue()]))\n",
-            serde_json::to_string(argv).unwrap(),
-            abbrev = if abbrev { "True" } else { "False" },
-        );
-        crate::oracle::python(&script)
-    }
-
     fn run_rust(argv: &[&str], columns: usize, abbrev: bool) -> (Option<i32>, String, String) {
         let args: Vec<String> = argv.iter().map(|s| (*s).to_owned()).collect();
         match sample(abbrev).parse_known_args_at(&args, columns) {
@@ -1749,156 +1714,48 @@ def build(allow):
 
     use serde_json::Value;
 
+    /// The fixture's expected outcomes were recorded from CPython 3.12's
+    /// `argparse`/`textwrap` (what the prototype's CLIs printed), see
+    /// `tests/fixtures/python/argparse/GENERATE.md`.
+    fn cases() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/argparse/cases.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
     #[test]
-    fn parsing_help_and_errors_match_python_argparse() {
-        let cases: &[&[&str]] = &[
-            &[],
-            &["-h"],
-            &["--state-dir", "s", "put", "-h"],
-            &["--state-dir", "s", "put"],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "nope",
-                "--stdin",
-            ],
-            &["--state-dir", "s", "put", "--id", "x", "--kind", "api_key"],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "api_key",
-                "--stdin",
-                "--value-file",
-                "f",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "api_key",
-                "--stdin",
-                "--version",
-                " 5_0",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "api_key",
-                "--stdin",
-                "--version",
-                "abc",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "-x",
-                "--kind",
-                "api_key",
-                "--stdin",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind=api_key",
-                "--stdin",
-                "--value",
-                "v",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "api_key",
-                "--stdin=1",
-            ],
-            &["--state-dir", "s", "join"],
-            &["--state-dir", "s", "join", "a", "b"],
-            &["--state-dir", "s", "join", "--", "-a"],
-            &["--state-dir", "s", "join", "-5"],
-            &["--state-dir", "s", "join", "x", "-hfoo"],
-            &["--state-dir", "s", "bogus"],
-            &["put"],
-            &["--state-dir"],
-            &["--state-dir=s", "join", "a b", "--project", ""],
-            &["--state", "s", "join", "a", "--proj", "p"],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--i",
-                "x",
-                "--k",
-                "api_key",
-                "--st",
-            ],
-            &[
-                "--state-dir",
-                "s",
-                "put",
-                "--id",
-                "x",
-                "--kind",
-                "api_key",
-                "--s",
-            ],
-        ];
-        for abbrev in [false, true] {
-            for columns in [80, 40, 120, 25] {
-                for argv in cases {
-                    let expected: Value =
-                        serde_json::from_str(&run_python(argv, columns, abbrev)).unwrap();
-                    let (code, out, err) = run_rust(argv, columns, abbrev);
-                    assert_eq!(
-                        serde_json::json!([code, out, err]),
-                        expected,
-                        "argv {argv:?} at COLUMNS={columns} abbrev={abbrev}"
-                    );
-                }
-            }
+    fn parsing_help_and_errors_match_the_recorded_outcomes() {
+        let cases = cases();
+        let parse = cases["parse"].as_array().unwrap();
+        assert_eq!(parse.len(), 48);
+        for case in parse {
+            let argv: Vec<&str> = case["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            let columns = case["columns"].as_u64().unwrap() as usize;
+            let abbrev = case["abbrev"].as_bool().unwrap();
+            let (code, out, err) = run_rust(&argv, columns, abbrev);
+            assert_eq!(
+                serde_json::json!([code, out, err]),
+                case["expected"],
+                "argv {argv:?} at COLUMNS={columns} abbrev={abbrev}"
+            );
         }
     }
 
     #[test]
-    fn textwrap_matches_python_for_hyphenated_and_long_words() {
-        let texts = [
-            "start team sync on a separate LAN/VPN-facing socket (default: team sync off)",
-            "open an incident: lock down the given scope (docs/compromise-response.md §4)",
-            "a very-long-hyphenated-compound-word-that-must-break and x--y em -- dash --foo",
-            "supercalifragilisticexpialidocious-and-more-words-here ok",
-            "30m, 1h, 3600s, 86400 (default: 1h; max 30d)",
-        ];
-        for width in [5usize, 11, 17, 22, 30, 54] {
-            for text in texts {
-                let expected: Vec<String> = serde_json::from_str(&crate::oracle::python(&format!(
-                    "import textwrap, json\nprint(json.dumps(textwrap.wrap({}, {width})))",
-                    pystr::repr_str(text)
-                )))
-                .unwrap();
-                assert_eq!(wrap(text, width, "", ""), expected, "{text:?} at {width}");
-            }
+    fn textwrap_matches_the_recorded_lines_for_hyphenated_and_long_words() {
+        let cases = cases();
+        let wrap_cases = cases["wrap"].as_array().unwrap();
+        assert_eq!(wrap_cases.len(), 15);
+        for case in wrap_cases {
+            let text = case["text"].as_str().unwrap();
+            let width = case["width"].as_u64().unwrap() as usize;
+            let expected: Vec<String> = serde_json::from_value(case["lines"].clone()).unwrap();
+            assert_eq!(wrap(text, width, "", ""), expected, "{text:?} at {width}");
         }
     }
 }

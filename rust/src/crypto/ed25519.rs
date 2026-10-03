@@ -132,6 +132,14 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Golden vectors generated once from the Python prototype
+    /// (`tests/fixtures/python/crypto/GENERATE.md`).
+    fn python_vectors() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/crypto/vectors.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
     fn hex(s: &str) -> Vec<u8> {
         hex::decode(s).expect("valid hex fixture")
     }
@@ -476,48 +484,14 @@ mod tests {
     ///   clear or set) -- the exact forged-signature evidence from
     ///   `DEVIATIONS.md` finding B-1.
     fn forged_non_canonical_identity_rejected() {
-        let script = r#"
-from zeropw.crypto import ed25519 as m
-
-P = m._P
-B = m._B
-
-
-def encode_y(y_int, sign):
-    b = bytearray(y_int.to_bytes(32, "little"))
-    assert b[31] & 0x80 == 0
-    if sign:
-        b[31] |= 0x80
-    return bytes(b)
-
-
-R = m._point_encode(m._scalar_mult(5, B))
-S = (5).to_bytes(32, "little")
-sig = R + S
-message = b"forged under a non-canonical identity encoding"
-
-pk_canonical = (1).to_bytes(32, "little")
-pk_signbit = encode_y(1, True)
-pk_p_plus_1 = encode_y(P + 1, False)
-pk_p_plus_1_signbit = encode_y(P + 1, True)
-
-assert m.verify(pk_canonical, message, sig) is True
-assert m.verify(pk_signbit, message, sig) is False
-assert m.verify(pk_p_plus_1, message, sig) is False
-assert m.verify(pk_p_plus_1_signbit, message, sig) is False
-
-for value in (sig, message, pk_canonical, pk_signbit, pk_p_plus_1, pk_p_plus_1_signbit):
-    print(value.hex())
-"#;
-        let out = crate::oracle::python(script);
-        let mut lines = out.lines();
-        let mut next_hex = move || hex(lines.next().expect("oracle line"));
-        let sig = next_hex();
-        let message = next_hex();
-        let pk_canonical = next_hex();
-        let pk_signbit = next_hex();
-        let pk_p_plus_1 = next_hex();
-        let pk_p_plus_1_signbit = next_hex();
+        let v = &python_vectors()["ed25519_forged_identity"];
+        let field = |name: &str| hex(v[name].as_str().unwrap());
+        let sig = field("signature");
+        let message = field("message");
+        let pk_canonical = field("pk_canonical");
+        let pk_signbit = field("pk_signbit");
+        let pk_p_plus_1 = field("pk_p_plus_1");
+        let pk_p_plus_1_signbit = field("pk_p_plus_1_signbit");
 
         assert!(
             verify(&pk_canonical, &message, &sig),
@@ -581,51 +555,12 @@ for value in (sig, message, pk_canonical, pk_signbit, pk_p_plus_1, pk_p_plus_1_s
     /// `_sha512_mod_l(R, bad_pk, message)` challenge happens to be even
     /// (~50% of messages qualify, so this terminates immediately).
     fn forged_non_canonical_order2_point_rejected() {
-        let script = r#"
-from zeropw.crypto import ed25519 as m
-
-P = m._P
-B = m._B
-
-
-def encode_y(y_int, sign):
-    b = bytearray(y_int.to_bytes(32, "little"))
-    assert b[31] & 0x80 == 0
-    if sign:
-        b[31] |= 0x80
-    return bytes(b)
-
-
-p_minus_1 = P - 1
-pk_canonical = encode_y(p_minus_1, False)
-pk_signbit = encode_y(p_minus_1, True)
-
-R = m._point_encode(B)
-S = (1).to_bytes(32, "little")
-
-message = None
-for i in range(10_000):
-    candidate = f"order2-forge-{i}".encode()
-    k = m._sha512_mod_l(R, pk_signbit, candidate)
-    if k % 2 == 0:
-        message = candidate
-        break
-assert message is not None, "no even-challenge message found"
-sig = R + S
-
-assert m.verify(pk_canonical, message, sig) is True
-assert m.verify(pk_signbit, message, sig) is False
-
-for value in (sig, message, pk_canonical, pk_signbit):
-    print(value.hex())
-"#;
-        let out = crate::oracle::python(script);
-        let mut lines = out.lines();
-        let mut next_hex = move || hex(lines.next().expect("oracle line"));
-        let sig = next_hex();
-        let message = next_hex();
-        let pk_canonical = next_hex();
-        let pk_signbit = next_hex();
+        let v = &python_vectors()["ed25519_forged_order2"];
+        let field = |name: &str| hex(v[name].as_str().unwrap());
+        let sig = field("signature");
+        let message = field("message");
+        let pk_canonical = field("pk_canonical");
+        let pk_signbit = field("pk_signbit");
 
         assert!(
             verify(&pk_canonical, &message, &sig),
@@ -750,40 +685,20 @@ for value in (sig, message, pk_canonical, pk_signbit):
 
     #[test]
     fn oracle_signature_matches_python() {
-        let seed = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
-        let message = b"zeropw rust/python ed25519 oracle check";
-        let rust_sig = sign(&seed, message).unwrap();
+        let v = &python_vectors()["ed25519_sign"];
+        let seed = hex(v["seed"].as_str().unwrap());
+        let message = hex(v["message"].as_str().unwrap());
+        assert_eq!(message, b"zeropw rust/python ed25519 oracle check");
+        let rust_sig = sign(&seed, &message).unwrap();
         let rust_pub = public_key_from_seed(&seed).unwrap();
-
-        let script = format!(
-            "from zeropw.crypto import ed25519\n\
-             seed = bytes.fromhex('{}')\n\
-             message = bytes.fromhex('{}')\n\
-             print(ed25519.sign(seed, message).hex())\n\
-             print(ed25519.public_key_from_seed(seed).hex())",
-            hex::encode(&seed),
-            hex::encode(message),
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        let python_sig = lines.next().expect("signature line");
-        let python_pub = lines.next().expect("public key line");
-        assert_eq!(hex::encode(rust_sig), python_sig);
-        assert_eq!(hex::encode(rust_pub), python_pub);
-
-        // Cross-verify: Python must accept the Rust-produced signature, and
-        // Rust must accept a signature produced entirely by Python.
-        let verify_script = format!(
-            "from zeropw.crypto import ed25519\n\
-             pk = bytes.fromhex('{}')\n\
-             message = bytes.fromhex('{}')\n\
-             sig = bytes.fromhex('{}')\n\
-             print(ed25519.verify(pk, message, sig))",
-            python_pub,
-            hex::encode(message),
-            hex::encode(rust_sig),
-        );
-        assert_eq!(crate::oracle::python(&verify_script).trim(), "True");
+        assert_eq!(hex::encode(rust_sig), v["signature"].as_str().unwrap());
+        assert_eq!(hex::encode(rust_pub), v["public_key"].as_str().unwrap());
+        // Rust accepts the signature the prototype produced.
+        assert!(verify(
+            &rust_pub,
+            &message,
+            &hex(v["signature"].as_str().unwrap())
+        ));
     }
 
     /// Port of `tests/test_crypto_ed25519.py::OpenSSHInteropTests` (and its

@@ -1068,23 +1068,11 @@ mod tests {
         assert_eq!(mode, 0o700);
     }
 
-    /// Finding E-R3-2: `create_private_dir`'s random suffix used to be 8 raw
-    /// bytes hex-encoded (16 characters), 8 characters longer than Python's
-    /// `tempfile.mkdtemp`'s own suffix for the same prefix -- oracle-compared
-    /// here directly against real `python3.12`, mirroring `signer.rs`'s own
-    /// `make_temp_dir_suffix_length_matches_python_mkdtemp` (the identical
-    /// fix for the identical bug, findings G-2/G-3).
+    /// Finding E-R3-2: `create_private_dir`'s random suffix is 8 characters,
+    /// like the prototype's `tempfile.mkdtemp` suffix (it used to be 16 hex
+    /// characters, which ate into the short AF_UNIX socket path budget).
     #[test]
-    fn create_private_dir_suffix_length_matches_python_mkdtemp() {
-        let python_suffix_len: usize = crate::oracle::python(
-            "import tempfile, os, shutil\n\
-             path = tempfile.mkdtemp(prefix='zeropw-sockets-')\n\
-             print(len(os.path.basename(path)) - len('zeropw-sockets-'))\n\
-             shutil.rmtree(path, ignore_errors=True)\n",
-        )
-        .trim()
-        .parse()
-        .expect("python prints an integer suffix length");
+    fn create_private_dir_suffix_length_is_eight_like_mkdtemp() {
         let base = std::env::temp_dir();
         let path = create_private_dir(&base, "zeropw-sockets-").unwrap();
         let name = path
@@ -1094,8 +1082,7 @@ mod tests {
             .to_string();
         fs::remove_dir(&path).unwrap();
         assert!(name.starts_with("zeropw-sockets-"), "{name}");
-        let rust_suffix_len = name.len() - "zeropw-sockets-".len();
-        assert_eq!(rust_suffix_len, python_suffix_len);
+        assert_eq!(name.len() - "zeropw-sockets-".len(), 8, "{name}");
     }
 
     /// Finding E-R3-1: the reviewer's probe shape for the fail-*open* cycle-handling gap.
@@ -1110,7 +1097,7 @@ mod tests {
     /// Rust implementation kept resolving past the cycle, so it *did* follow `M`, giving the
     /// wrong answer `<base>/other/x`.
     #[test]
-    fn resolve_lenient_matches_python_for_loop_then_dotdot_then_symlink() {
+    fn resolve_lenient_for_loop_then_dotdot_then_symlink() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let base = tmp.path().to_path_buf();
         let loop_path = base.join("L");
@@ -1123,16 +1110,9 @@ mod tests {
 
         let rust_resolved = resolve_lenient(&candidate).expect("resolve_lenient");
 
-        let python_resolved = crate::oracle::python(&format!(
-            "import pathlib\n\
-             print(pathlib.Path({candidate:?}).resolve(strict=False))\n",
-        ));
-        let python_resolved = PathBuf::from(python_resolved.trim());
-
-        assert_eq!(
-            rust_resolved, python_resolved,
-            "rust={rust_resolved:?} python={python_resolved:?}"
-        );
+        // `pathlib.Path(candidate).resolve(strict=False)` in the prototype.
+        let expected = fs::canonicalize(&base).unwrap().join("x");
+        assert_eq!(rust_resolved, expected, "rust={rust_resolved:?}");
         assert_eq!(
             rust_resolved.file_name().and_then(|n| n.to_str()),
             Some("x"),

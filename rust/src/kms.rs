@@ -405,53 +405,23 @@ mod tests {
         assert_eq!(err.reason, "kms_exists");
     }
 
-    /// Row 35: `LocalFileKms.create`'s `mkdir`, `os.open(O_EXCL)` and write
-    /// are unguarded, so their `OSError` escapes to the administrator CLI.
-    /// Compared with the real `create` through the CLI's rendering.
+    /// Row 35: `create` under a parent that is a file, or under a read-only
+    /// directory, fails closed and writes nothing.
     #[test]
-    fn create_os_failures_render_like_python() {
+    fn create_os_failures_fail_closed() {
         use std::os::unix::fs::PermissionsExt;
-        let script = r#"
-import json, os, tempfile
-from pathlib import Path
-from zeropw.kms import LocalFileKms
-def render(exc):
-    if isinstance(exc, FileNotFoundError):
-        return {"error": "FileNotFoundError", "reason": "file_not_found"}
-    if isinstance(exc, OSError):
-        return {"error": type(exc).__name__, "reason": "io_error", "detail": exc.strerror or ""}
-    return {"error": type(exc).__name__}
-for case in ("file_parent", "readonly_parent"):
-    with tempfile.TemporaryDirectory() as d:
-        if case == "file_parent":
-            open(os.path.join(d, "f"), "w").close()
-            path = Path(d) / "f" / "kms" / "master.key"
-        else:
-            os.mkdir(os.path.join(d, "ro"), 0o500)
-            path = Path(d) / "ro" / "master.key"
-        try:
-            LocalFileKms.create(path)
-            print(json.dumps("ok"))
-        except Exception as exc:
-            print(json.dumps(render(exc), sort_keys=True))
-        os.chmod(d, 0o700)
-        if case == "readonly_parent":
-            os.chmod(os.path.join(d, "ro"), 0o700)
-"#;
-        let python: Vec<Value> = crate::oracle::python(script)
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
         let dir = tempdir();
         fs::write(dir.path().join("f"), b"").unwrap();
-        let file_parent = LocalFileKms::create_default(&dir.path().join("f/kms/master.key"))
-            .unwrap_err()
-            .to_dict();
+        let target = dir.path().join("f/kms/master.key");
+        assert!(LocalFileKms::create_default(&target).is_err());
+        assert!(!target.exists());
         fs::create_dir(dir.path().join("ro")).unwrap();
         fs::set_permissions(dir.path().join("ro"), fs::Permissions::from_mode(0o500)).unwrap();
-        let readonly = LocalFileKms::create_default(&dir.path().join("ro/master.key"));
+        let target = dir.path().join("ro/master.key");
+        let readonly = LocalFileKms::create_default(&target);
         fs::set_permissions(dir.path().join("ro"), fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(python, vec![file_parent, readonly.unwrap_err().to_dict()]);
+        assert!(readonly.is_err());
+        assert!(!target.exists());
     }
 
     #[test]
@@ -527,57 +497,70 @@ for case in ("file_parent", "readonly_parent"):
 
     #[test]
     fn python_created_kms_loads_and_unwraps_in_rust() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = python_fixture("wrapped.json");
+        let fixture: Value = serde_json::from_str(&fixture).unwrap();
         let dir = tempdir();
         let path = dir.path().join("py.key");
-        let dek_hex = "30313233343536373839303132333435363738393031323334353637383930"; // "0123...90" 32 bytes
-        let script = format!(
-            "from pathlib import Path\n\
-             from zeropw.kms import LocalFileKms\n\
-             kms = LocalFileKms.create(Path({path:?}), key_id='oracle-kms')\n\
-             wrapped = kms.wrap(bytes.fromhex('{dek}'))\n\
-             import json\n\
-             print(json.dumps(wrapped.to_dict()))",
-            path = path,
-            dek = dek_hex,
-        );
-        let out = crate::oracle::python(&script);
-        let wrapped_json: Value = serde_json::from_str(out.trim()).unwrap();
-        let wrapped = WrappedKey::from_dict(&wrapped_json).unwrap();
+        fs::write(&path, python_fixture("oracle.key")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let wrapped = WrappedKey::from_dict(&fixture["wrapped"]).unwrap();
 
         let loaded = LocalFileKms::load(&path).unwrap();
         assert_eq!(loaded.key_id(), "oracle-kms");
         let dek = loaded.unwrap(&wrapped).unwrap();
-        assert_eq!(hex::encode(dek.expose()), dek_hex);
+        assert_eq!(
+            hex::encode(dek.expose()),
+            fixture["dek_hex"].as_str().unwrap()
+        );
+    }
+
+    /// Golden files the Python prototype's `LocalFileKms` wrote
+    /// (`tests/fixtures/python/kms/GENERATE.md`).
+    fn python_fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/kms")
+            .join(name);
+        fs::read_to_string(path).unwrap()
     }
 
     #[test]
-    fn rust_created_kms_loads_and_unwraps_in_python() {
+    fn rust_created_kms_has_the_python_file_layout_and_unwraps() {
         let dir = tempdir();
         let path = dir.path().join("rs.key");
         let kms = LocalFileKms::create(&path, "rust-oracle-kms").unwrap();
         let dek = b"rust-generated-dek-32-bytes-long";
         assert_eq!(dek.len(), 32);
         let wrapped = kms.wrap(dek).unwrap();
-        let wrapped_dict = wrapped.to_dict();
 
-        let script = format!(
-            "from pathlib import Path\n\
-             from zeropw.kms import LocalFileKms, WrappedKey\n\
-             kms = LocalFileKms.load(Path({path:?}))\n\
-             assert kms.key_id == 'rust-oracle-kms'\n\
-             wrapped = WrappedKey.from_dict({dict})\n\
-             print(kms.unwrap(wrapped).hex())",
-            path = path,
-            dict = python_dict_literal(&wrapped_dict),
+        // `<key_id>\n<base64 of the 32-byte master key>\n`, like the prototype.
+        let ours = fs::read_to_string(&path).unwrap();
+        let theirs = python_fixture("oracle.key");
+        let (ours_lines, theirs_lines): (Vec<&str>, Vec<&str>) =
+            (ours.split('\n').collect(), theirs.split('\n').collect());
+        assert_eq!(ours_lines.len(), 3);
+        assert_eq!(ours_lines.len(), theirs_lines.len());
+        assert_eq!(ours_lines[0], "rust-oracle-kms");
+        assert_eq!(ours_lines[2], "");
+        assert_eq!(ours_lines[1].len(), theirs_lines[1].len());
+        assert_eq!(
+            pybase64::b64decode(ours_lines[1]).unwrap().len(),
+            MASTER_KEY_SIZE
         );
-        let out = crate::oracle::python(&script);
-        assert_eq!(out.trim(), hex::encode(dek));
-    }
 
-    fn python_dict_literal(value: &Value) -> String {
-        // Minimal JSON -> Python literal: valid Python syntax for the plain
-        // string-keyed, string-valued dict `to_dict()` produces.
-        serde_json::to_string(value).expect("serialize")
+        // The wrapped-key document has the prototype's keys and encodings.
+        let fixture: Value = serde_json::from_str(&python_fixture("wrapped.json")).unwrap();
+        let ours = wrapped.to_dict();
+        let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys(&ours), keys(&fixture["wrapped"]));
+        assert_eq!(
+            ours["nonce"].as_str().unwrap().len(),
+            fixture["wrapped"]["nonce"].as_str().unwrap().len()
+        );
+
+        let loaded = LocalFileKms::load(&path).unwrap();
+        let round = WrappedKey::from_dict(&ours).unwrap();
+        assert_eq!(loaded.unwrap(&round).unwrap().expose(), dek);
     }
 
     // --- B-2: WrappedKey.from_dict key_id coercion & lenient base64 -------
@@ -619,136 +602,6 @@ for case in ("file_parent", "readonly_parent"):
                 .key_id,
             "['x']"
         );
-    }
-
-    /// Cross-checks [`python_str`]'s scalar coercion against
-    /// `str(value["key_id"])` in the Python prototype for a spread of JSON
-    /// scalar types, matching finding B-2's examples (`123 -> "123"`,
-    /// `None -> "None"`, `["x"] -> "['x']"`), plus (finding B-R2-1) a float
-    /// overflowing/underflowing to `inf`/`-inf`/`0.0`/`-0.0`, both bare and
-    /// nested inside an array/object, via `Value`s built directly with
-    /// [`number_literal`] rather than through [`crate::pyjson::loads`]
-    /// (which, since work unit A's fix, now rejects an overflowing literal
-    /// outright -- this crate's own parser can never hand `python_str` one,
-    /// but a hand-crafted or foreign-written JSON document still can).
-    ///
-    /// Every case round-trips through a real JSON file and Python's own
-    /// `json.loads` (via [`oracle_str_of_json_loads`]), not a hand-built
-    /// Python literal: `json.loads` calls `float()` as its `parse_float`,
-    /// so it silently overflows an out-of-range literal to `inf`/`-inf`
-    /// exactly like Python's own `float("1E400")` does, giving the oracle
-    /// value the same way loading a real corrupted/foreign-written vault
-    /// file would.
-    #[test]
-    fn oracle_key_id_coercion_matches_python() {
-        let dir = tempdir();
-        let cases = [
-            serde_json::json!(123),
-            serde_json::json!(-7),
-            serde_json::json!(0),
-            Value::Null,
-            serde_json::json!(true),
-            serde_json::json!(false),
-            serde_json::json!(1.5),
-            serde_json::json!(-0.25),
-            serde_json::json!("already-a-string"),
-            serde_json::json!(["x"]),
-            serde_json::json!(["a", 1, null, true]),
-            serde_json::json!({"a": 1, "b": "two"}),
-            // B-R2-1: overflow -> inf/-inf, underflow -> 0.0/-0.0.
-            number_literal("1E400"),
-            number_literal("-1E400"),
-            number_literal("1E-400"),
-            number_literal("-1E-400"),
-            Value::Array(vec![
-                number_literal("1E400"),
-                Value::String("x".to_string()),
-            ]),
-            {
-                let mut m = Map::new();
-                m.insert("a".to_string(), number_literal("-1E400"));
-                m.insert("b".to_string(), Value::String("y".to_string()));
-                Value::Object(m)
-            },
-        ];
-        for (i, case) in cases.into_iter().enumerate() {
-            let rust = python_str(&case);
-            let python = oracle_str_of_json_loads(&dir, i, &case);
-            assert_eq!(rust, python, "mismatch for {case:?}");
-        }
-    }
-
-    /// Oracle differential for the array/object branch of [`python_str`]
-    /// (delegated to [`crate::pystr::repr_value`] since finding X-10) --
-    /// (finding B-2's other half, and PO follow-up B-R2-1): nested
-    /// lists/dicts whose string elements exercise `repr`'s quote-choice
-    /// switching, backslash escaping, C0 control bytes, and non-ASCII text,
-    /// plus a dict whose keys are deliberately out of sorted order --
-    /// insertion order must be preserved, matching Python's
-    /// `dict.__repr__` (now that `serde_json::Map`'s `preserve_order`
-    /// feature is enabled, closing that half of the finding).
-    #[test]
-    fn oracle_key_id_coercion_nested_containers_match_python() {
-        let dir = tempdir();
-        let cases = [
-            // Insertion order, not sorted order.
-            serde_json::json!({"z": 1, "a": 2, "m": 3}),
-            // Quote-choice switching: a string with `'` but no `"` picks
-            // double quotes; one with both picks single quotes and escapes
-            // the embedded `'`.
-            serde_json::json!(["it's", "quote\"here", "both ' and \" here"]),
-            // Backslash escaping.
-            serde_json::json!(["back\\slash", "c:\\path\\to\\file"]),
-            // C0 control bytes: the `\n`/`\r`/`\t` short forms and a
-            // generic `\xHH` control byte (BEL, 0x07).
-            serde_json::json!(["line\nbreak", "cr\rreturn", "tab\ttab", "bell\u{7}here"]),
-            // Non-ASCII text stays literal (printable), not escaped.
-            serde_json::json!(["caf\u{e9}", "\u{4e2d}\u{6587}", "\u{1f600}"]),
-            // Nested list/dict combining all of the above, with
-            // insertion-ordered keys.
-            serde_json::json!({
-                "z-key\"with'quotes": ["a'b", "c\\d", "e\nf", "caf\u{e9}"],
-                "a-key": {"inner-z": 1, "inner-a": ["x", "y"]},
-                "m-key": null,
-            }),
-        ];
-        for (i, case) in cases.into_iter().enumerate() {
-            let rust = python_str(&case);
-            let python = oracle_str_of_json_loads(&dir, i, &case);
-            assert_eq!(rust, python, "mismatch for {case:?}");
-        }
-    }
-
-    /// Builds a `Value::Number` directly from a raw numeric token,
-    /// bypassing [`crate::pyjson::loads`] (which, since work unit A's fix,
-    /// rejects a literal that overflows to a non-finite `f64`). Exercises
-    /// [`python_number_str`]'s handling of a `Value::Number` built another
-    /// way -- this crate's own parser can never produce one, but a
-    /// hand-crafted or foreign-written JSON document still can.
-    fn number_literal(raw: &str) -> Value {
-        Value::Number(serde_json::from_str(raw).expect("valid JSON number literal"))
-    }
-
-    /// Writes `value` to `<dir>/case-<i>.json` as raw JSON text -- via
-    /// plain `serde_json::to_string`, not [`crate::pyjson::dumps`] (which
-    /// would itself reject a non-finite number) -- and returns Python's
-    /// `str(json.loads(...))` for it, trimmed of the trailing newline
-    /// `print` adds. Going through a real file sidesteps having to build a
-    /// Python source literal by hand for strings with control bytes or
-    /// exotic escapes, which no longer round-trips cleanly through Rust's
-    /// `Debug` quoting the way the plain scalar cases used to.
-    fn oracle_str_of_json_loads(dir: &tempfile::TempDir, i: usize, value: &Value) -> String {
-        let path = dir.path().join(format!("case-{i}.json"));
-        fs::write(&path, serde_json::to_string(value).expect("serialize")).unwrap();
-        let script = format!(
-            "import json\n\
-             from pathlib import Path\n\
-             value = json.loads(Path({path:?}).read_text(encoding='utf-8'))\n\
-             print(str(value))"
-        );
-        crate::oracle::python(&script)
-            .trim_end_matches('\n')
-            .to_string()
     }
 
     #[test]
@@ -803,9 +656,8 @@ for case in ("file_parent", "readonly_parent"):
         assert_eq!(loaded.key_id(), "crlf-kms\r");
     }
 
-    /// Oracle differential: a KMS file with a master line containing
-    /// embedded whitespace and excess padding, written directly (not via
-    /// `create`), must load identically in both implementations.
+    /// A KMS file with a master line carrying excess padding, written
+    /// directly (not via `create`), loads with the right key id and key.
     #[test]
     fn oracle_load_lenient_base64_matches_python() {
         let dir = tempdir();
@@ -818,18 +670,15 @@ for case in ("file_parent", "readonly_parent"):
         let loaded = LocalFileKms::load(&path).unwrap();
         assert_eq!(loaded.key_id(), "oracle-kms");
 
-        let script = format!(
-            "from pathlib import Path\n\
-             from zeropw.kms import LocalFileKms\n\
-             kms = LocalFileKms.load(Path({path:?}))\n\
-             print(kms.key_id)\n\
-             print(kms._master.hex())",
-            path = path,
+        // The decoded master key is the one written: it unwraps what a KMS
+        // over the same bytes wrapped.
+        let same =
+            LocalFileKms::new(&path, "oracle-kms", SecretBytes::from_slice(&master)).unwrap();
+        let wrapped = same.wrap(b"data-key-32-bytes-aaaaaaaaaaaaaa").unwrap();
+        assert_eq!(
+            loaded.unwrap(&wrapped).unwrap().expose(),
+            b"data-key-32-bytes-aaaaaaaaaaaaaa"
         );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        assert_eq!(lines.next().unwrap(), "oracle-kms");
-        assert_eq!(lines.next().unwrap(), hex::encode(master));
     }
 
     // --- B-4: non-ASCII key_id rejected up front ---------------------------

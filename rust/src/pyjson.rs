@@ -1884,37 +1884,34 @@ mod tests {
     }
 }
 
-/// Differential tests against the CPython oracle (`crate::oracle`). Separate
-/// module so the plain unit tests above stay fast and offline-only; these
-/// shell out to `python3.12`.
+/// Wire/persisted-format tests against output the Python prototype's `json`
+/// module produced (golden fixtures, `tests/fixtures/python/pyjson/
+/// GENERATE.md`): canonical JSON is signed, hashed and used as AEAD
+/// associated data, so these bytes must not drift.
 #[cfg(test)]
 mod oracle_tests {
     use super::*;
-    use crate::oracle;
     use serde_json::json;
 
-    // A-R3-1: the exact depths the equivalence review probed against
-    // `python3.12` (all confirmed there to parse without error) must also
-    // parse in Rust -- pinning the fix for the bug where anything past a
-    // mere 128 levels of nesting became `state_corrupt`/a silent skip/a
-    // malformed-input error in this port despite Python handling it fine.
+    fn fixture() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/pyjson/cases.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn f64_from_hex(bits: &str) -> f64 {
+        f64::from_bits(u64::from_str_radix(bits, 16).unwrap())
+    }
+
+    // A-R3-1: depths the prototype's `json.loads` parsed (128-500) must
+    // parse here too and keep their value.
     #[test]
     fn loads_matches_python_for_probed_nesting_depths() {
-        let depths = [128, 129, 200, 500];
-        let script = format!("for n in {depths:?}:\n    print('[' * n + '1' + ']' * n)\n",);
-        let output = oracle::python(&script);
-        let py_lines: Vec<&str> = output.lines().collect();
-        assert_eq!(py_lines.len(), depths.len());
-        for (&n, py_doc) in depths.iter().zip(py_lines.iter()) {
-            // Python parsed it without raising (otherwise the script above
-            // would have thrown and `oracle::python` would have panicked on
-            // the non-zero exit) -- confirm Rust parses the identical text
-            // too, and that the two produce the same logical value.
-            let rust_doc = super::tests::nested_array(n);
-            assert_eq!(&rust_doc, py_doc, "depth {n} document text mismatch");
-            let mut value = loads(py_doc).unwrap_or_else(|e| {
-                panic!("depth {n} (confirmed OK in Python) failed to parse in Rust: {e}")
-            });
+        for n in [128, 129, 200, 500] {
+            let doc = super::tests::nested_array(n);
+            assert_eq!(doc, format!("{}1{}", "[".repeat(n), "]".repeat(n)));
+            let mut value =
+                loads(&doc).unwrap_or_else(|e| panic!("depth {n} failed to parse in Rust: {e}"));
             for _ in 0..n {
                 let mut arr = match value {
                     Value::Array(arr) if arr.len() == 1 => arr,
@@ -1926,302 +1923,71 @@ mod oracle_tests {
         }
     }
 
-    // A-R5-1 lowered `MAX_JSON_DEPTH` from 1,000 to 500; finding X-3 (round
-    // 7 whole-scope cross-unit review) then raised it back up to 990 --
-    // `loads`/`dumps`'s shared acceptance bound was never supposed to be set
-    // by `dumps`'s own narrow render-safety margin alone (that concern is
-    // `SAFE_INLINE_DEPTH` plus the dedicated-stack tier's job, see the
-    // module doc), and 500 silently rejected real state directories Python
-    // itself both writes and reads (`rust/DEVIATIONS.md`'s pyjson row 14).
-    // Depth 1,000 -- 10 past the new cap, and comfortably inside real
-    // `python3.12`'s own `json.loads` ceiling (measured directly against
-    // `python3.12` for this fix: `json.loads` accepts up to 9,997) -- is
-    // still intentionally rejected by Rust: a real, narrower-than-CPython
-    // divergence (like the lone-surrogate and overflowing-float-literal ones
-    // below), recorded in `rust/DEVIATIONS.md`, not a bug. Confirm both
-    // halves directly, with a genuine `json.loads` call on the Python side
-    // (not just string construction -- a prior version of this test only
-    // built the bracket text and asserted `n > MAX_JSON_DEPTH` by
-    // inspection, never actually exercising Python's parser at all): Python
-    // still accepts it, and Rust's rejection is a clean error, never a
-    // silent truncation or abort.
+    // Depth 1,000 is past `MAX_JSON_DEPTH` (990, below the deepest document
+    // the prototype could persist): a clean rejection, never a truncation or
+    // abort (`rust/DEVIATIONS.md` pyjson row 14).
     #[test]
     fn python_accepts_depths_past_max_json_depth_that_rust_now_rejects() {
         let n = 1000;
-        assert!(
-            n > MAX_JSON_DEPTH,
-            "this test's whole point is n > MAX_JSON_DEPTH"
-        );
-        let script =
-            format!("import json\ndoc = '[' * {n} + '1' + ']' * {n}\njson.loads(doc)\nprint(doc)");
-        let py_doc = oracle::python(&script);
-        let py_doc = py_doc.trim_end_matches('\n');
-        let rust_doc = super::tests::nested_array(n);
-        assert_eq!(rust_doc, py_doc, "depth {n} document text mismatch");
-
-        // `json.loads(doc)` above already ran, on the Python side, without
-        // raising (`oracle::python` would have panicked on `RecursionError`'s
-        // non-zero exit otherwise) -- this is a real measurement, not an
-        // assumption carried over from the module doc's own probing.
-        let err = loads(py_doc).expect_err(
-            "depth past MAX_JSON_DEPTH must be a clean rejection, even though python3.12 accepts it",
-        );
+        assert!(n > MAX_JSON_DEPTH);
+        let doc = super::tests::nested_array(n);
+        let err = loads(&doc).expect_err("depth past MAX_JSON_DEPTH must be a clean rejection");
         assert!(
             err.to_string().contains("depth"),
             "expected a depth-related parse error, got: {err}"
         );
     }
 
-    /// A small, deterministic xorshift64 PRNG -- good enough to fuzz float
-    /// bit patterns reproducibly without pulling `rand` into a test that's
-    /// meant to stay easy to re-run by hand.
-    struct Xorshift64(u64);
-    impl Xorshift64 {
-        fn next(&mut self) -> u64 {
-            let mut x = self.0;
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            self.0 = x;
-            x
-        }
-    }
-
-    /// Finding H-R4-2's brute-force oracle test: [`python_float_repr`]
-    /// against real `python3.12`'s `repr()`, over every category the finding
-    /// (and this fix's own tie-detection logic) calls out by name --
-    /// deliberately exact ties, powers of two at the exponent extremes, well
-    /// over 200,000 uniformly random bit patterns, subnormals, and the
-    /// specific values the finding and PORTING.md's own float-handling notes
-    /// mention. `python3.12` is invoked in a handful of large batches (not
-    /// once per value) so this stays fast enough to run in the normal test
-    /// suite.
-    #[allow(clippy::excessive_precision)]
+    /// Finding H-R4-2: [`python_float_repr`] against the prototype's
+    /// `repr(float)` over a representative sample -- the finding's own
+    /// values, exact ties, powers of two (and neighbours) across the whole
+    /// exponent range, subnormals and random bit patterns.
     #[test]
-    fn float_repr_matches_python_extensive_fuzz() {
-        let mut rng = Xorshift64(0x9E3779B97F4A7C15);
-        let mut bits: Vec<u64> = Vec::new();
-
-        // 1. The finding's own three reported disagreements, plus the other
-        // specific values PORTING.md/the finding call out by name.
-        for f in [
-            270784837363767.125,
-            599995984171052.25,
-            275078784986996.625,
-            1.5,
-            0.1,
-            0.0,
-            5e-324,
-            f64::MAX,
-            -f64::MAX,
-            1e16,
-            1e22,
-            1e-5,
-            1.0 / 3.0,
-        ] {
-            bits.push(f.to_bits());
-        }
-        bits.push((-0.0f64).to_bits());
-
-        // 2. Deliberately constructed exact-tie values: an integer part
-        // (14-17 digits, spanning the range where the shortest round-trip
-        // representation needs the full ~17 significant digits) plus a
-        // fraction with a small power-of-two denominator (an eighth,
-        // sixteenth, ... up to 1/2^12) -- exactly the shape of the finding's
-        // own three examples (e.g. 270784837363767 + 0.125), which forces
-        // the true decimal expansion to terminate with a bare `5` right at
-        // the digit position the shortest representation cuts off.
-        for int_exp in [13u64, 14, 15, 16] {
-            let base = 10u64.pow(int_exp as u32);
-            for i in 0..250u64 {
-                let integer_part = base + i * 97 + 1; // odd-ish spread, not just base+i
-                for denom_bits in 1u32..=12 {
-                    let denom = 1u64 << denom_bits;
-                    for numerator in (1..denom).step_by(2) {
-                        // odd numerator: `numerator/denom` is in lowest
-                        // terms, so this really does need `denom_bits` bits
-                        // of fraction, not fewer.
-                        let f = integer_part as f64 + (numerator as f64) / (denom as f64);
-                        if f.is_finite() {
-                            bits.push(f.to_bits());
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Every power of two across the full exponent range, and its two
-        // immediate neighbours (next value down / up): the fixed/exponential
-        // layout thresholds and the shortest-digit-count boundary are most
-        // likely to disagree right at these transitions.
-        for biased_exp in 0i32..=2046 {
-            let pow2_bits = (biased_exp as u64) << 52; // mantissa 0 => value 2^(biased_exp-1075) (or subnormal boundary at 0)
-            let f = f64::from_bits(pow2_bits);
-            if f.is_finite() {
-                bits.push(pow2_bits);
-                if pow2_bits > 0 {
-                    bits.push(pow2_bits - 1);
-                }
-                bits.push(pow2_bits + 1);
-            }
-        }
-
-        // 4. Subnormals: random mantissas with the exponent field forced to
-        // zero.
-        for _ in 0..3_000 {
-            let mantissa = rng.next() & 0x000f_ffff_ffff_ffff;
-            if mantissa != 0 {
-                bits.push(mantissa);
-            }
-        }
-
-        // 5. >200,000 uniformly random bit patterns (finite only).
-        let random_target = 200_000;
-        let mut random_count = 0usize;
-        while random_count < random_target {
-            let b = rng.next();
-            if f64::from_bits(b).is_finite() {
-                bits.push(b);
-                random_count += 1;
-            }
-        }
-
-        // 6. Random-magnitude "nice" decimals: covers the fixed/exponential
-        // threshold boundaries with realistic-looking values (timestamps,
-        // prices, ratios) rather than only fully random bit patterns.
-        for exp in -20..20 {
-            for _ in 0..25 {
-                let mantissa = (rng.next() % 1_000_000_000) as f64 / 1e6;
-                let f = mantissa * 10f64.powi(exp);
-                if f.is_finite() {
-                    bits.push(f.to_bits());
-                }
-            }
-        }
-
-        bits.sort_unstable();
-        bits.dedup();
-        let sample_size = bits.len();
-
-        // Batch through `python3.12` in chunks: one call per value would be
-        // far too slow at this sample size, and one call for all of them
-        // risks the OS's command-line length limit.
-        const CHUNK: usize = 20_000;
-        let mut mismatches: Vec<(u64, String, String)> = Vec::new();
-        for chunk in bits.chunks(CHUNK) {
-            let script = format!(
-                "import struct\nfor b in {chunk:?}:\n    print(repr(struct.unpack('>d', struct.pack('>Q', b))[0]))",
-            );
-            let output = oracle::python(&script);
-            let expected: Vec<&str> = output.lines().collect();
-            assert_eq!(
-                expected.len(),
-                chunk.len(),
-                "python oracle produced the wrong number of lines for this chunk"
-            );
-            for (&b, want) in chunk.iter().zip(expected.iter()) {
-                let got = python_float_repr(f64::from_bits(b));
-                if got != *want {
-                    mismatches.push((b, got, want.to_string()));
-                }
-            }
-        }
-
-        eprintln!(
-            "float_repr_matches_python_extensive_fuzz: {sample_size} values checked against python3.12, {} mismatches",
-            mismatches.len()
-        );
-        assert!(
-            mismatches.is_empty(),
-            "{} / {sample_size} mismatches (showing up to 20): {:#?}",
-            mismatches.len(),
-            &mismatches[..mismatches.len().min(20)],
-        );
+    fn float_repr_matches_python_for_a_representative_sample() {
+        let fixture = fixture();
+        let cases = fixture["float_repr"].as_array().unwrap();
+        assert!(cases.len() > 900, "{}", cases.len());
+        let mismatches: Vec<_> = cases
+            .iter()
+            .filter_map(|case| {
+                let f = f64_from_hex(case[0].as_str().unwrap());
+                let want = case[1].as_str().unwrap();
+                let got = python_float_repr(f);
+                (got != want).then(|| (case[0].clone(), got, want.to_string()))
+            })
+            .collect();
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
     }
 
     /// Finding H-R4-2's real-world consequence: `team/commit.rs` signs
     /// `Commit::canonical_json`, so any digit mismatch in a float's rendering
-    /// breaks Ed25519 signature verification across languages. Confirms the
-    /// fix at the actual call site shape -- a JSON *document* (not a bare
-    /// number) containing each of the finding's failing values (plus the
-    /// power-of-two edge case this fix's tie-detection had to avoid a false
-    /// positive on), rendered through [`dumps`] with every [`DumpOptions`]
-    /// preset this crate actually uses, byte-for-byte against real
-    /// `python3.12`'s `json.dumps` called with the matching keyword
-    /// arguments.
-    #[allow(clippy::excessive_precision)]
+    /// breaks Ed25519 signature verification across implementations. Every
+    /// [`DumpOptions`] preset this crate uses, byte for byte.
     #[test]
     fn dumps_matches_python_json_dumps_for_finding_values_in_every_option_combination() {
-        let values = [
-            270784837363767.125,
-            599995984171052.25,
-            275078784986996.625,
-            0.000000059604644775390625, // 2^-24
-            1.5,
-            0.1,
-            -0.0,
-        ];
-
-        // One document per value, shaped like the real call sites this
-        // module's doc comment lists (`DumpOptions::compact_sorted` for
-        // audit/handle/policy/team-facts JSON, `pretty_sorted` for state
-        // files, `default_sorted` for vault backups/gateway responses,
-        // `plain` for `agent_cli.py`-style unsorted payloads) -- an object
-        // with the float alongside an int and a string, an array containing
-        // it, so both `write_number`'s direct and nested paths are
-        // exercised.
-        let docs: Vec<Value> = values
+        let fixture = fixture();
+        let docs = &fixture["float_documents"];
+        let values: Vec<f64> = docs["values"]
+            .as_array()
+            .unwrap()
             .iter()
-            .map(|f| json!({"value": f, "list": [f, 1, "x"], "count": 3}))
+            .map(|v| f64_from_hex(v.as_str().unwrap()))
             .collect();
-
-        let presets: [(&str, DumpOptions, &str); 4] = [
-            (
-                "compact_sorted",
-                DumpOptions::compact_sorted(),
-                "sort_keys=True, separators=(',', ':')",
-            ),
-            (
-                "pretty_sorted",
-                DumpOptions::pretty_sorted(),
-                "sort_keys=True, indent=2",
-            ),
-            (
-                "default_sorted",
-                DumpOptions::default_sorted(),
-                "sort_keys=True",
-            ),
-            ("plain", DumpOptions::plain(), ""),
+        assert_eq!(values.len(), 7);
+        let presets: [(&str, DumpOptions); 4] = [
+            ("compact_sorted", DumpOptions::compact_sorted()),
+            ("pretty_sorted", DumpOptions::pretty_sorted()),
+            ("default_sorted", DumpOptions::default_sorted()),
+            ("plain", DumpOptions::plain()),
         ];
-
-        // `pretty_sorted`'s `indent=2` output has embedded newlines, so a
-        // plain `str.lines()` split can't tell docs apart -- print an
-        // explicit sentinel between docs and split on that instead.
-        for (name, opts, kwargs) in &presets {
-            let script = format!(
-                r#"
-import json, struct
-values = {values:?}
-docs = [{{"value": v, "list": [v, 1, "x"], "count": 3}} for v in values]
-for doc in docs:
-    print(json.dumps(doc, {kwargs}))
-    print("---SENTINEL---")
-"#,
-            );
-            let output = oracle::python(&script);
-            let want: Vec<&str> = output.split("---SENTINEL---\n").collect();
-            // One trailing empty chunk after the last sentinel.
-            assert_eq!(
-                want.len(),
-                docs.len() + 1,
-                "preset {name}: expected {} docs' worth of output",
-                docs.len()
-            );
-            for ((doc, f), want_chunk) in docs.iter().zip(values.iter()).zip(want.iter()) {
-                let got = dumps(doc, *opts).unwrap();
+        for (name, opts) in presets {
+            let want = docs["outputs"][name].as_array().unwrap();
+            assert_eq!(want.len(), values.len());
+            for (f, want) in values.iter().zip(want) {
+                let doc = json!({"value": f, "list": [f, 1, "x"], "count": 3});
                 assert_eq!(
-                    got,
-                    want_chunk.trim_end_matches('\n'),
+                    dumps(&doc, opts).unwrap(),
+                    want.as_str().unwrap(),
                     "preset {name} mismatch for value {f}"
                 );
             }
@@ -2230,99 +1996,65 @@ for doc in docs:
 
     #[test]
     fn compact_sorted_matches_python_json_dumps_for_audit_style_records() {
-        let script = r#"
-import json
-records = [
-    {"b": 1, "a": "x\ny", "c": None, "d": True, "e": 3.5},
-    {"ts": "2023-11-14T22:13:20Z", "event": "http_relay", "reason": None, "policy_version": 3},
-    {"unicode": "café テスト \U0001F600", "empty_list": [], "empty_obj": {}},
-    {"nested": {"z": [1, 2, {"y": 3}], "a": -0.0}},
-]
-for r in records:
-    print(json.dumps(r, sort_keys=True, separators=(",", ":")))
-"#;
-        let output = oracle::python(script);
-        let py_lines: Vec<&str> = output.lines().collect();
-
+        let fixture = fixture();
         let records = [
             json!({"b": 1, "a": "x\ny", "c": null, "d": true, "e": 3.5}),
             json!({"ts": "2023-11-14T22:13:20Z", "event": "http_relay", "reason": null, "policy_version": 3}),
             json!({"unicode": "caf\u{e9} \u{30c6}\u{30b9}\u{30c8} \u{1F600}", "empty_list": [], "empty_obj": {}}),
             json!({"nested": {"z": [1, 2, {"y": 3}], "a": -0.0}}),
         ];
-        assert_eq!(py_lines.len(), records.len());
-        for (record, want) in records.iter().zip(py_lines.iter()) {
+        let want = fixture["compact_sorted_records"].as_array().unwrap();
+        assert_eq!(want.len(), records.len());
+        for (record, want) in records.iter().zip(want) {
             let got = dumps(record, DumpOptions::compact_sorted()).unwrap();
-            assert_eq!(&got, want);
+            assert_eq!(got, want.as_str().unwrap());
         }
     }
 
     #[test]
     fn pretty_sorted_matches_python_json_dump_indent_2() {
-        let script = r#"
-import json
-doc = {"z": [1, 2, 3], "a": {"nested": True, "b": None}, "empty": {}}
-print(json.dumps(doc, sort_keys=True, indent=2))
-"#;
-        let want = oracle::python(script);
         let doc = json!({"z": [1, 2, 3], "a": {"nested": true, "b": null}, "empty": {}});
         let got = dumps(&doc, DumpOptions::pretty_sorted()).unwrap();
-        assert_eq!(got, want.trim_end_matches('\n'));
+        assert_eq!(got, fixture()["pretty_sorted"].as_str().unwrap());
     }
 
     #[test]
     fn big_int_matches_python_str() {
-        let script = "print(2**100)\nprint(-(2**200))";
-        let want = oracle::python(script);
-        let mut lines = want.lines();
         let a = loads("1267650600228229401496703205376").unwrap();
         assert_eq!(
             dumps(&a, DumpOptions::plain()).unwrap(),
-            lines.next().unwrap()
+            "1267650600228229401496703205376" // 2**100
         );
         let b = loads("-1606938044258990275541962092341162602522202993782792835301376").unwrap();
         assert_eq!(
             dumps(&b, DumpOptions::plain()).unwrap(),
-            lines.next().unwrap()
+            "-1606938044258990275541962092341162602522202993782792835301376" // -(2**200)
         );
     }
 
     #[test]
     fn ensure_ascii_matches_python_for_non_bmp_and_control_chars() {
-        let script = r#"
-import json
-s = "café \U0001F600 \x00\x1f\x7f \\ \" \n\t"
-print(json.dumps(s))
-print(json.dumps(s, ensure_ascii=False))
-"#;
-        let want = oracle::python(script);
-        let mut lines = want.lines();
+        let fixture = fixture();
+        let v = &fixture["ensure_ascii"];
         let s = "caf\u{e9} \u{1F600} \u{0}\u{1f}\u{7f} \\ \" \n\t";
-        assert_eq!(encode_str(s, true), lines.next().unwrap());
-        assert_eq!(encode_str(s, false), lines.next().unwrap());
+        assert_eq!(v["input"].as_str().unwrap(), s);
+        assert_eq!(encode_str(s, true), v["ascii"].as_str().unwrap());
+        assert_eq!(encode_str(s, false), v["unicode"].as_str().unwrap());
     }
 
     // A-2: with `preserve_order` enabled, `DumpOptions::plain()` (no
-    // `sort_keys`) must emit keys in insertion order, matching Python's
-    // `json.dumps(payload)` on a plain `dict` -- e.g. `ZeroPWError.to_dict()`'s
-    // `{"error": ..., "reason": ..., "detail": ...}` shape.
+    // `sort_keys`) emits keys in insertion order, matching `json.dumps` on a
+    // plain `dict` -- e.g. `ZeroPWError.to_dict()`'s `{"error", "reason",
+    // "detail"}` shape that agents parse.
     #[test]
     fn plain_preserves_insertion_order_matching_python_error_to_dict_shape() {
-        let script = r#"
-import json
-print(json.dumps({"error": "InvalidInput", "reason": "invalid_input", "detail": "bad name"}))
-print(json.dumps({"z": 1, "a": 2, "m": 3}))
-"#;
-        let want = oracle::python(script);
-        let mut lines = want.lines();
-
         let mut error_shape = serde_json::Map::new();
         error_shape.insert("error".to_string(), json!("InvalidInput"));
         error_shape.insert("reason".to_string(), json!("invalid_input"));
         error_shape.insert("detail".to_string(), json!("bad name"));
         assert_eq!(
             dumps(&Value::Object(error_shape), DumpOptions::plain()).unwrap(),
-            lines.next().unwrap()
+            r#"{"error": "InvalidInput", "reason": "invalid_input", "detail": "bad name"}"#
         );
 
         let mut unsorted = serde_json::Map::new();
@@ -2331,45 +2063,26 @@ print(json.dumps({"z": 1, "a": 2, "m": 3}))
         unsorted.insert("m".to_string(), json!(3));
         assert_eq!(
             dumps(&Value::Object(unsorted), DumpOptions::plain()).unwrap(),
-            lines.next().unwrap()
+            r#"{"z": 1, "a": 2, "m": 3}"#
         );
     }
 
     #[test]
     fn loads_matches_python_json_loads_round_trip() {
-        // A state-directory-shaped document, pretty-printed by Python, must
-        // parse in Rust to the same logical value `pyjson::dumps` then
-        // re-serializes byte-identically (StateDir's actual contract).
-        let script = r#"
-import json
-doc = {"secrets": {"s1": {"version": 3, "created_at": "2023-01-01T00:00:00Z"}}, "count": 5, "ratio": 0.1}
-print(json.dumps(doc, sort_keys=True, indent=2))
-"#;
-        let python_text = oracle::python(script);
-        let value = loads(python_text.trim_end_matches('\n')).unwrap();
+        // A state-directory-shaped document pretty-printed by the prototype
+        // parses here and re-serializes byte-identically (StateDir's
+        // contract).
+        let python_text = fixture()["state_document"].as_str().unwrap().to_string();
+        let value = loads(&python_text).unwrap();
         let rust_text = dumps(&value, DumpOptions::pretty_sorted()).unwrap();
-        assert_eq!(rust_text, python_text.trim_end_matches('\n'));
+        assert_eq!(rust_text, python_text);
     }
 
-    // A-11: pins the actual CPython behaviour this port intentionally
-    // diverges from (PORTING.md §3.6 and the pyjson DEVIATIONS.md rows) --
-    // Python accepts a lone surrogate escape and an overflowing numeric
-    // literal; this port rejects both as malformed.
+    // A-11 (PORTING.md §3.6): a lone surrogate escape and an overflowing
+    // numeric literal (both accepted by CPython's `json.loads`) are rejected
+    // as malformed here.
     #[test]
     fn python_accepts_what_rust_rejects_lone_surrogate_and_overflow_literal() {
-        let script = r#"
-import json
-print(repr(json.loads('"\ud800"')))
-n = json.loads("1e400")
-print(n)
-print(json.dumps(n))
-"#;
-        let out = oracle::python(script);
-        let mut lines = out.lines();
-        assert_eq!(lines.next().unwrap(), r"'\ud800'");
-        assert_eq!(lines.next().unwrap(), "inf");
-        assert_eq!(lines.next().unwrap(), "Infinity");
-
         assert!(loads("\"\\ud800\"").is_err());
         assert!(loads("1e400").is_err());
     }

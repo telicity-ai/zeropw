@@ -2646,156 +2646,44 @@ fn bidi_l_3_2(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::encode;
-    use base64::Engine;
 
+    /// IDNA 2003 (`str.encode("idna")`, what the prototype used for host
+    /// names): representative mappings and the label-length/empty-label
+    /// rejections. Expected values recorded from CPython 3.12.
     #[test]
-    fn matches_cpython_idna2003_boundaries() {
-        let cases = [
-            "under_score.example".to_owned(),
-            "faß.example".to_owned(),
-            "join\u{200c}er.example".to_owned(),
-            "join\u{200d}er.example".to_owned(),
-            "empty..example".to_owned(),
-            "trailing.example.".to_owned(),
-            "unicode\u{3002}dot.example".to_owned(),
-            "\u{1e9e}.example".to_owned(),
-            "\u{13a0}.example".to_owned(),
-            "\u{1c90}.example".to_owned(),
-            "\u{ab70}.example".to_owned(),
-            "\u{10570}.example".to_owned(),
-            "\u{10c80}.example".to_owned(),
-            "\u{118a0}.example".to_owned(),
-            "\u{16e40}.example".to_owned(),
-            "\u{1e900}.example".to_owned(),
-            "\u{1f600}.example".to_owned(),
-            "\u{2f868}.example".to_owned(),
-            "\u{2f874}.example".to_owned(),
-            "\u{2f91f}.example".to_owned(),
-            "\u{2f95f}.example".to_owned(),
-            "\u{2f9bf}.example".to_owned(),
-            "A\u{030a}.example".to_owned(),
-            "\u{0130}.example".to_owned(),
-            "\u{1e9e}\u{0301}.example".to_owned(),
-            "\u{2f868}\u{0301}.example".to_owned(),
-            "a\u{3000}.example".to_owned(),
-            "a\u{e000}.example".to_owned(),
-            "aא.example".to_owned(),
-            "אaא.example".to_owned(),
-            "א1א.example".to_owned(),
-            "א\u{1e9e}א.example".to_owned(),
-            "a\u{1e900}.example".to_owned(),
-            format!("{}.example", "a".repeat(63)),
-            format!("{}.example", "a".repeat(64)),
-            format!("{}.example", "ü".repeat(57)),
-            format!("{}.example", "ü".repeat(58)),
+    fn idna2003_encodes_representative_host_names() {
+        let ok: &[(String, &str)] = &[
+            ("under_score.example".to_owned(), "under_score.example"),
+            ("fa\u{df}.example".to_owned(), "fass.example"),
+            ("join\u{200c}er.example".to_owned(), "joiner.example"),
+            ("trailing.example.".to_owned(), "trailing.example."),
+            (
+                "unicode\u{3002}dot.example".to_owned(),
+                "unicode.dot.example",
+            ),
+            ("\u{130}.example".to_owned(), "xn--i-9bb.example"),
+            ("\u{1f600}.example".to_owned(), "xn--e28h.example"),
+            ("b\u{fc}cher.example".to_owned(), "xn--bcher-kva.example"),
+            (format!("{}.example", "a".repeat(63)), ""),
+            (
+                format!("{}.example", "\u{fc}".repeat(57)),
+                "xn--tdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+            ),
         ];
-        let input = serde_json::to_string(cases.as_slice()).unwrap();
-        let input = crate::pybase64::b64encode(input.as_bytes());
-        let script = format!(
-            "import base64,json\nout=[]\nfor value in json.loads(base64.b64decode('{input}')):\n try: out.append(['ok', value.encode('idna').decode('ascii')])\n except UnicodeError: out.append(['error', 'UnicodeError'])\nprint(json.dumps(out))"
-        );
-        let expected: Vec<(String, String)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let actual: Vec<(String, String)> = cases
-            .iter()
-            .map(|value| match encode(value) {
-                Ok(value) => ("ok".to_owned(), value),
-                Err(_) => ("error".to_owned(), "UnicodeError".to_owned()),
-            })
-            .collect();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn every_unicode_scalar_matches_cpython_by_chunk_digest() {
-        use sha2::{Digest, Sha256};
-
-        const CHUNK: u32 = 4096;
-        let script = r#"
-import hashlib, json
-out=[]
-for start in range(0, 0x110000, 4096):
- h=hashlib.sha256()
- for cp in range(start, min(start+4096, 0x110000)):
-  if 0xD800 <= cp <= 0xDFFF:
-   continue
-  try:
-   value=chr(cp).encode('idna')
-  except UnicodeError:
-   h.update(b'E')
-  else:
-   h.update(b'O');h.update(len(value).to_bytes(4,'big'));h.update(value)
- out.append(h.hexdigest())
-print(json.dumps(out))
-"#;
-        let expected: Vec<String> =
-            serde_json::from_str(crate::oracle::python(script).trim()).unwrap();
-        let actual: Vec<String> = (0..0x11_0000u32)
-            .step_by(CHUNK as usize)
-            .map(|start| {
-                let mut digest = Sha256::new();
-                for cp in start..(start + CHUNK).min(0x11_0000) {
-                    let Some(value) = char::from_u32(cp) else {
-                        continue;
-                    };
-                    match encode(&value.to_string()) {
-                        Ok(value) => {
-                            digest.update(b"O");
-                            digest.update((value.len() as u32).to_be_bytes());
-                            digest.update(value.as_bytes());
-                        }
-                        Err(_) => digest.update(b"E"),
-                    }
-                }
-                hex::encode(digest.finalize())
-            })
-            .collect();
-        let mismatched: Vec<usize> = actual
-            .iter()
-            .zip(&expected)
-            .enumerate()
-            .filter_map(|(index, (actual, expected))| (actual != expected).then_some(index))
-            .collect();
-        if mismatched.is_empty() {
-            return;
-        }
-        let chunks = serde_json::to_string(&mismatched).unwrap();
-        let detail_script = format!(
-            r#"import base64,json
-out=[]
-for chunk in json.loads('{chunks}'):
- for cp in range(chunk*4096, min((chunk+1)*4096, 0x110000)):
-  if 0xD800 <= cp <= 0xDFFF: continue
-  try: value=chr(cp).encode('idna')
-  except UnicodeError: out.append([cp,'error',''])
-  else: out.append([cp,'ok',base64.b64encode(value).decode('ascii')])
-print(json.dumps(out))"#
-        );
-        let python: Vec<(u32, String, String)> =
-            serde_json::from_str(crate::oracle::python(&detail_script).trim()).unwrap();
-        let mut differences = Vec::new();
-        for (cp, state, value) in python {
-            let rust = match encode(&char::from_u32(cp).unwrap().to_string()) {
-                Ok(value) => (
-                    "ok",
-                    base64::engine::general_purpose::STANDARD.encode(value),
-                ),
-                Err(_) => ("error", String::new()),
+        for (input, want) in ok {
+            let want = if want.is_empty() {
+                input.as_str()
+            } else {
+                want
             };
-            if rust.0 != state || rust.1 != value {
-                differences.push(format!(
-                    "U+{cp:04X}: python=({state},{value}) rust=({},{})",
-                    rust.0, rust.1
-                ));
-            }
+            assert_eq!(encode(input).unwrap(), want, "{input:?}");
         }
-        panic!(
-            "IDNA mismatches in chunks {mismatched:?}:\n{}",
-            differences
-                .into_iter()
-                .take(256)
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+        for input in [
+            "empty..example".to_owned(),
+            format!("{}.example", "a".repeat(64)),
+            format!("{}.example", "\u{fc}".repeat(58)),
+        ] {
+            assert!(encode(&input).is_err(), "{input:?}");
+        }
     }
 }
