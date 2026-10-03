@@ -1,0 +1,293 @@
+{
+ "secret": "synthetic-token-oracle-cross-lang-0123456789",
+ "cases": [
+  {
+   "name": "relay_for_caller post",
+   "method": "POST",
+   "target": "/repos/demo/issues",
+   "headers": [
+    [
+     "Accept",
+     "application/json"
+    ],
+    [
+     "User-Agent",
+     "oracle-test/1"
+    ]
+   ],
+   "body_b64": "eyJ0aXRsZSI6ImZyb20gb3JhY2xlIn0=",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "POST /repos/demo/issues HTTP/1.1\r\nContent-Length: 23\r\naccept: application/json\r\nuser-agent: oracle-test/1\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n{\"title\":\"from oracle\"}"
+  },
+  {
+   "name": "get no body, caller order kept, case folded",
+   "method": "GET",
+   "target": "/repos?per_page=5&q=a%20b",
+   "headers": [
+    [
+     "User-Agent",
+     "ua/1"
+    ],
+    [
+     "ACCEPT",
+     "application/json"
+    ],
+    [
+     "Range",
+     "bytes=0-1"
+    ],
+    [
+     "If-None-Match",
+     "\"etag\""
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "GET /repos?per_page=5&q=a%20b HTTP/1.1\r\nuser-agent: ua/1\r\naccept: application/json\r\nrange: bytes=0-1\r\nif-none-match: \"etag\"\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "dropped and hop-by-hop headers",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "Authorization",
+     "Bearer agent-placeholder"
+    ],
+    [
+     "Cookie",
+     "a=b"
+    ],
+    [
+     "Connection",
+     "keep-alive"
+    ],
+    [
+     "Host",
+     "evil.invalid"
+    ],
+    [
+     "X-ZeroPW-Request-Id",
+     "r-1"
+    ],
+    [
+     "x-request-id",
+     "rid"
+    ],
+    [
+     "Content-Length",
+     "99"
+    ],
+    [
+     "Accept-Encoding",
+     "gzip"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\nx-request-id: rid\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "same name in two spellings: first position, last value",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "accept",
+     "text/plain"
+    ],
+    [
+     "User-Agent",
+     "ua"
+    ],
+    [
+     " Accept ",
+     "application/json"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\naccept: application/json\r\nuser-agent: ua\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "post with body",
+   "method": "POST",
+   "target": "/repos/demo/issues",
+   "headers": [
+    [
+     "Content-Type",
+     "application/json"
+    ]
+   ],
+   "body_b64": "eyJ0aXRsZSI6InQifQ==",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "POST /repos/demo/issues HTTP/1.1\r\nContent-Length: 13\r\ncontent-type: application/json\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n{\"title\":\"t\"}"
+  },
+  {
+   "name": "put with empty body sends Content-Length 0",
+   "method": "PUT",
+   "target": "/repos/demo",
+   "headers": [],
+   "body_b64": "",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "PUT /repos/demo HTTP/1.1\r\nContent-Length: 0\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "delete with body",
+   "method": "DELETE",
+   "target": "/repos/demo",
+   "headers": [],
+   "body_b64": "eA==",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "DELETE /repos/demo HTTP/1.1\r\nContent-Length: 1\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\nx"
+  },
+  {
+   "name": "lower-case method normalised",
+   "method": " patch ",
+   "target": "/repos/demo",
+   "headers": [],
+   "body_b64": "e30=",
+   "auth": [
+    "bearer",
+    null,
+    null,
+    null
+   ],
+   "request": "PATCH /repos/demo HTTP/1.1\r\nContent-Length: 2\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Bearer synthetic-token-oracle-cross-lang-0123456789\r\n\r\n{}"
+  },
+  {
+   "name": "basic auth",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "Accept",
+     "*/*"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "basic",
+    null,
+    null,
+    "synthetic-user"
+   ],
+   "request": "GET /me HTTP/1.1\r\naccept: */*\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nAuthorization: Basic c3ludGhldGljLXVzZXI6c3ludGhldGljLXRva2VuLW9yYWNsZS1jcm9zcy1sYW5nLTAxMjM0NTY3ODk=\r\n\r\n"
+  },
+  {
+   "name": "header auth with prefix",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "Accept",
+     "*/*"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "header",
+    "X-Api-Key",
+    "Token ",
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\naccept: */*\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nX-Api-Key: Token synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "header auth named like a forwarded header (same spelling)",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "Accept",
+     "*/*"
+    ],
+    [
+     "User-Agent",
+     "ua"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "header",
+    "accept",
+    null,
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\naccept: synthetic-token-oracle-cross-lang-0123456789\r\nuser-agent: ua\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\n\r\n"
+  },
+  {
+   "name": "header auth named like a relay header (Via)",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "User-Agent",
+     "ua"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "header",
+    "Via",
+    null,
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\nuser-agent: ua\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  },
+  {
+   "name": "header auth differing only in case from a forwarded header",
+   "method": "GET",
+   "target": "/me",
+   "headers": [
+    [
+     "x-request-id",
+     "rid"
+    ]
+   ],
+   "body_b64": "",
+   "auth": [
+    "header",
+    "X-Request-Id",
+    null,
+    null
+   ],
+   "request": "GET /me HTTP/1.1\r\nx-request-id: rid\r\nHost: 127.0.0.1:PORT\r\nAccept-Encoding: identity\r\nConnection: close\r\nVia: 1.1 zeropw-relay\r\nX-Request-Id: synthetic-token-oracle-cross-lang-0123456789\r\n\r\n"
+  }
+ ]
+}

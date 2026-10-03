@@ -1,16 +1,19 @@
-//! Gateway TLS parity with Python's `ssl` (OpenSSL): a pinned self-signed
-//! `CA:TRUE` certificate (what `openssl req -x509` makes by default, and what
-//! `tests/test_gateway.py`'s `TlsTests` use) is accepted as the server's own
-//! certificate, with hostname, validity and purpose still enforced; and a
-//! handshake that times out, is reset or is cut short maps to Python's
-//! reasons. Synthetic credentials and loopback only.
+//! Gateway TLS verification against fixed expectations: a pinned
+//! self-signed `CA:TRUE` certificate (what `openssl req -x509` makes by
+//! default) is accepted as the server's own certificate, with hostname,
+//! validity and purpose still enforced; an unpinned or wrong pin is refused;
+//! and a handshake that times out, is reset or is cut short maps to the
+//! documented reasons. The ClientHello is compared with the one the Python
+//! prototype's `ssl` sent (`tests/fixtures/python/gateway/client_hello.json`,
+//! see `GENERATE.md` there). Synthetic credentials and loopback only.
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tempfile::TempDir;
 use zeropw::context::{Config, Context};
 use zeropw::fake_upstream::FakeUpstream;
@@ -18,39 +21,7 @@ use zeropw::gateway::{self, Headers};
 use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
 
 const SECRET: &str = "synthetic-tls-parity-token-0123456789";
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
-}
-
-fn python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let mut child = std::process::Command::new(&interpreter)
-        .arg("-")
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "python oracle failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
+const CLIENT_HELLO: &str = include_str!("fixtures/python/gateway/client_hello.json");
 
 /// A context with the synthetic secret, principal `alice` and a 1 s
 /// upstream timeout.
@@ -154,83 +125,6 @@ impl Gateway {
     }
 }
 
-/// Python's gateway doing the same relays: `CASES` is a JSON list of
-/// `[connection id, port, ca_file or null]`; one `[status, reason]` per line.
-const PY_RELAY: &str = r#"
-import json, tempfile
-from pathlib import Path
-from zeropw import gateway, policy as P
-from zeropw.context import Config, Context
-SECRET = "synthetic-tls-parity-token-0123456789"
-tmp = tempfile.TemporaryDirectory()
-ctx = Context.initialize(Path(tmp.name) / "state", "synthetic-admin-passphrase", "synthetic-recovery-passphrase",
-                         Config(upstream_timeout=1.0))
-ctx.projects.create("demo")
-ctx.vault.put_secret("key", "api_key", SECRET.encode(), "demo", "dev")
-ctx.policy.create_principal("alice")
-for cid, port, ca_file in json.loads(CASES):
-    ctx.policy.create_connection(P.Connection(id=cid, project="demo", environment="dev", service="api", kind="http",
-        secret_id="key", secret_version=None, description="", http_target=P.HttpTarget("https", "127.0.0.1", port, ca_file),
-        http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(), ssh_target=None, cli=None,
-        policy_version=0, status="active", created_at="", updated_at=""))
-    ctx.policy.create_grant("alice", cid, 3600, None)
-    result = gateway.relay_for_caller(ctx, "alice", cid, "GET", "/me", {}, b"")
-    print(json.dumps([result.status, result.reason]))
-"#;
-
-fn python_relays(cases: &[(String, u16, Option<PathBuf>)]) -> Vec<(u16, Option<String>)> {
-    let cases: Vec<Value> = cases
-        .iter()
-        .map(|(id, port, ca)| json!([id, port, ca.as_ref().map(|p| p.display().to_string())]))
-        .collect();
-    let script = format!("CASES = {:?}\n{PY_RELAY}", Value::from(cases).to_string());
-    python(&script)
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-fn python_relay_host(host: &str, port: u16, ca_file: &Path) -> (u16, Option<String>) {
-    let script = format!(
-        r#"
-import tempfile
-from pathlib import Path
-from zeropw import gateway, policy as P
-from zeropw.context import Config, Context
-tmp = tempfile.TemporaryDirectory()
-ctx = Context.initialize(Path(tmp.name) / "state", "synthetic-admin-passphrase",
-    "synthetic-recovery-passphrase", Config(upstream_timeout=1.0))
-ctx.projects.create("demo")
-ctx.vault.put_secret("key", "api_key", {secret:?}.encode(), "demo", "dev")
-ctx.policy.create_principal("alice")
-target = P.HttpTarget("https", {host:?}, {port}, {ca:?}, True)
-conn = P.Connection(id="host-case", project="demo", environment="dev", service="api", kind="http",
-    secret_id="key", secret_version=None, description="", http_target=target,
-    http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(), ssh_target=None, cli=None,
-    policy_version=0, status="active", created_at="", updated_at="")
-ctx.policy.create_connection(conn)
-ctx.policy.create_grant("alice", "host-case", 3600, None)
-old = gateway._getaddrinfo
-gateway._getaddrinfo = lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", {port}))]
-try:
-    result = gateway.relay_for_caller(ctx, "alice", "host-case", "GET", "/me", {{}}, b"")
-finally:
-    gateway._getaddrinfo = old
-print(result.status)
-print(result.reason or "")
-"#,
-        secret = SECRET,
-        host = host,
-        port = port,
-        ca = ca_file.display().to_string(),
-    );
-    let output = python(&script);
-    let mut lines = output.lines();
-    let status = lines.next().unwrap().parse().unwrap();
-    let reason = lines.next().filter(|s| !s.is_empty()).map(str::to_string);
-    (status, reason)
-}
-
 fn server_config(cert_der: Vec<u8>, key_der: Vec<u8>) -> Arc<rustls::ServerConfig> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     Arc::new(
@@ -290,30 +184,40 @@ fn pin(dir: &TempDir, name: &str, pems: &[&str]) -> PathBuf {
     path
 }
 
-/// Compare every rcgen self-signed CA decision with the Python gateway on the
-/// same host. OpenSSL provider policy differs across supported CI platforms,
-/// so the basic good/bundle acceptance is oracle-derived; security refusals
-/// and the explicit TLS-server-purpose acceptance remain fixed regressions.
+/// rcgen self-signed `CA:TRUE` certificates pinned through `ca_file`. Whether
+/// OpenSSL accepts the basic (no key usage) certificate as the server's own,
+/// and whether it finds it in a bundle after another CA with the same
+/// subject, differs between the OpenSSL builds of the supported CI
+/// platforms (the prototype's `ssl` decided the same way as this gateway on
+/// each), so those two only have to be an acceptance or a TLS refusal;
+/// every security refusal and the explicit TLS-server-purpose acceptance
+/// are fixed expectations.
 #[test]
-fn pinned_self_signed_ca_certificate_decisions_match_python() {
+fn pinned_self_signed_ca_certificate_decisions() {
     let g = Gateway::new();
     let dir = TempDir::new().unwrap();
     let same = |id: &str, port: u16, ca: Option<&Path>| {
-        let cases = vec![(format!("python-{id}"), port, ca.map(Path::to_path_buf))];
-        let python = python_relays(&cases).remove(0);
         let rust = g.relay(id, port, ca);
-        eprintln!("rcgen pinned-CA {id}: python={python:?} rust={rust:?}");
-        assert_eq!(rust, python, "rcgen pinned-CA case {id}");
+        eprintln!("rcgen pinned-CA {id}: {rust:?}");
         rust
     };
+    let refused = (502, Some("upstream_tls_failed".to_string()));
     let good = ca_certificate(&["127.0.0.1"], None, |_| ());
     let fake = serve(&good);
     let pinned = pin(&dir, "good.pem", &[&good.pem]);
-    same("good", fake.port(), Some(&pinned));
-    // A bundle holding the certificate among others is still a pin.
+    let good_result = same("good", fake.port(), Some(&pinned));
+    assert!(
+        good_result == (200, None) || good_result == refused,
+        "{good_result:?}"
+    );
+    // A bundle holding the certificate among others.
     let other = ca_certificate(&["127.0.0.1"], None, |_| ());
     let bundle = pin(&dir, "bundle.pem", &[&other.pem, &good.pem]);
-    same("bundle", fake.port(), Some(&bundle));
+    let bundle_result = same("bundle", fake.port(), Some(&bundle));
+    assert!(
+        bundle_result == (200, None) || bundle_result == refused,
+        "{bundle_result:?}"
+    );
     // A different CA:TRUE certificate with the same names is not the pin.
     let wrong_pin = pin(&dir, "other.pem", &[&other.pem]);
     assert_eq!(
@@ -380,6 +284,12 @@ fn pinned_self_signed_ca_certificate_decisions_match_python() {
     for fake in [&named_fake, &expired_fake, &client_fake, &sign_fake] {
         assert!(fake.requests().is_empty());
     }
+    // Only the accepted pins (good and bundle, when accepted) reached it.
+    let accepted = [&good_result, &bundle_result]
+        .iter()
+        .filter(|result| result.0 == 200)
+        .count();
+    assert_eq!(fake.requests().len(), accepted);
 }
 
 fn openssl(args: &[&str]) -> bool {
@@ -507,14 +417,15 @@ fn openssl_certificate_with_cn(
     (crt, Issued { der, pem, key_der })
 }
 
-/// The same decisions made by Python's gateway (OpenSSL) and this one, for
-/// certificates made the way `tests/test_gateway.py` makes them (`openssl
-/// req -x509 ... basicConstraints = CA:TRUE`), served by the same upstream.
+/// Pinned-CA decisions for certificates made the way the prototype's own TLS
+/// tests made them (`openssl req -x509 ... basicConstraints = CA:TRUE`),
+/// served by the same upstream: the server's own pinned certificate is
+/// accepted when its purpose allows TLS serving; another host, an expired
+/// certificate, a non-server purpose and a different pin are refused.
 #[test]
-fn pinned_ca_decisions_match_python() {
+fn pinned_ca_decisions() {
     if !openssl(&["version"]) {
-        // `TlsTests` is skipped without the openssl binary; say so loudly.
-        panic!("openssl binary not available: the differential cannot run");
+        panic!("openssl binary not available: the certificates cannot be made");
     }
     let dir = TempDir::new().unwrap();
     let make = |name: &str, ext: &str, days: &str| openssl_certificate(&dir, name, ext, days);
@@ -568,70 +479,101 @@ fn pinned_ca_decisions_match_python() {
     }
     // A different CA:TRUE certificate pinned for the default server.
     cases.push(("wrong-pin".into(), fakes[0].port(), cases[1].2.clone()));
-    let expected = python_relays(&cases);
     let g = Gateway::new();
     let actual: Vec<_> = cases
         .iter()
         .map(|(id, port, ca)| g.relay(id, *port, ca.as_deref()))
         .collect();
-    for ((case, rust), python) in cases.iter().zip(&actual).zip(&expected) {
-        assert_eq!(rust, python, "case {}", case.0);
+    let accepted = ["default", "critical", "server-eku", "tls-ku"];
+    for ((name, _, _), result) in cases.iter().zip(&actual) {
+        let expected = if accepted.contains(&name.as_str()) {
+            (200, None)
+        } else {
+            (502, Some("upstream_tls_failed".to_string()))
+        };
+        assert_eq!(result, &expected, "case {name}");
     }
-    let accepted: Vec<_> = cases
-        .iter()
-        .zip(&expected)
-        .filter(|(_, result)| result.0 == 200)
-        .map(|(case, _)| case.0.as_str())
-        .collect();
-    assert_eq!(accepted, ["default", "critical", "server-eku", "tls-ku"]);
-    assert_eq!(expected[0], (200, None));
-    assert_eq!(expected[3], (502, Some("upstream_tls_failed".into())));
-    assert_eq!(expected[7], (502, Some("upstream_tls_failed".into())));
+    // Refused handshakes never carried the credential upstream.
+    for ((name, _, _), fake) in cases.iter().zip(&fakes) {
+        let expected = usize::from(accepted.contains(&name.as_str()));
+        assert_eq!(fake.requests().len(), expected, "case {name}");
+    }
 }
 
-/// An OpenSSL (Python `ssl`) HTTPS upstream presenting `cert`: rustls
-/// refuses to serve a certificate with an unhandled critical extension, so
-/// the fake upstream cannot present these variants.
-fn openssl_upstream(cert: &Path, key: &Path) -> (std::process::Child, u16) {
-    let script = format!(
-        r#"
-import socket, ssl, sys, threading
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain({cert:?}, {key:?})
-listener = socket.socket()
-listener.bind(("127.0.0.1", 0))
-listener.listen(8)
-print(listener.getsockname()[1], flush=True)
-def answer(raw):
-    try:
-        with context.wrap_socket(raw, server_side=True) as tls:
-            tls.recv(65536)
-            body = b'{{"login": "synthetic"}}'
-            tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-                        + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
-    except Exception:
-        pass
-while True:
-    raw, _ = listener.accept()
-    threading.Thread(target=answer, args=(raw,), daemon=True).start()
-"#,
-        cert = cert.display().to_string(),
-        key = key.display().to_string(),
-    );
-    let mut child = std::process::Command::new(
-        std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into()),
-    )
-    .args(["-c", &script])
-    .stdout(std::process::Stdio::piped())
-    .spawn()
-    .unwrap();
-    let mut line = String::new();
-    std::io::BufRead::read_line(
-        &mut std::io::BufReader::new(child.stdout.take().unwrap()),
-        &mut line,
-    )
-    .unwrap();
-    (child, line.trim().parse().unwrap())
+/// An in-process OpenSSL HTTPS upstream presenting `cert`: rustls refuses to
+/// serve a certificate with an unhandled critical extension (or a P-521
+/// key), so the fake upstream cannot present these variants. Every
+/// connection whose handshake completes gets one fixed `200` reply; the
+/// count of those is `served`.
+struct OpensslUpstream {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    served: Arc<std::sync::atomic::AtomicUsize>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OpensslUpstream {
+    fn start(cert: &Path, key: &Path) -> Self {
+        use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).unwrap();
+        builder
+            .set_certificate_file(cert, SslFiletype::PEM)
+            .unwrap();
+        builder.set_private_key_file(key, SslFiletype::PEM).unwrap();
+        builder.check_private_key().unwrap();
+        let acceptor = builder.build();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let served = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (flag, count) = (stop.clone(), served.clone());
+        let thread = std::thread::spawn(move || {
+            while !flag.load(Ordering::Acquire) {
+                let Ok((stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let Ok(mut tls) = acceptor.accept(stream) else {
+                    continue;
+                };
+                let mut request = [0u8; 65536];
+                let _ = tls.read(&mut request);
+                let body = br#"{"login": "synthetic"}"#;
+                let mut reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes();
+                reply.extend_from_slice(body);
+                if tls.write_all(&reply).is_ok() {
+                    count.fetch_add(1, Ordering::AcqRel);
+                }
+                let _ = tls.shutdown();
+            }
+        });
+        OpensslUpstream {
+            port,
+            stop,
+            served,
+            thread: Some(thread),
+        }
+    }
+
+    fn served(&self) -> usize {
+        self.served.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for OpensslUpstream {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// OpenSSL refuses a certificate carrying a critical extension it does not
@@ -643,13 +585,13 @@ while True:
 /// `CaUsedAsEndEntity` and `PinnedCaVerifier`'s exception is never reached;
 /// this test guards that ordering.)
 #[test]
-fn pinned_ca_with_unhandled_critical_extension_is_refused_like_python() {
+fn pinned_ca_with_unhandled_critical_extension_is_refused() {
     if !openssl(&["version"]) {
-        panic!("openssl binary not available: the differential cannot run");
+        panic!("openssl binary not available: the certificates cannot be made");
     }
     let dir = TempDir::new().unwrap();
     let base = "subjectAltName = IP:127.0.0.1\nbasicConstraints = CA:TRUE";
-    let mut children = Vec::new();
+    let mut servers = Vec::new();
     let mut cases = Vec::new();
     for (name, ext) in [
         (
@@ -663,23 +605,21 @@ fn pinned_ca_with_unhandled_critical_extension_is_refused_like_python() {
     ] {
         let (crt, _) = openssl_certificate(&dir, name, &ext, "2");
         let key = dir.path().join(format!("{name}.key"));
-        let (child, port) = openssl_upstream(&crt, &key);
-        children.push(child);
-        cases.push((name.to_string(), port, Some(crt)));
+        let server = OpensslUpstream::start(&crt, &key);
+        cases.push((name.to_string(), server.port, Some(crt)));
+        servers.push(server);
     }
-    let expected = python_relays(&cases);
     let g = Gateway::new();
     let actual: Vec<_> = cases
         .iter()
         .map(|(id, port, ca)| g.relay(id, *port, ca.as_deref()))
         .collect();
-    for mut child in children {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    assert_eq!(actual, expected);
-    assert_eq!(expected[0], (502, Some("upstream_tls_failed".into())));
-    assert_eq!(expected[1], (200, None));
+    assert_eq!(
+        actual,
+        vec![(502, Some("upstream_tls_failed".into())), (200, None)]
+    );
+    assert_eq!(servers[0].served(), 0);
+    assert_eq!(servers[1].served(), 1);
 }
 
 // --------------------------------------------- handshake failure reasons
@@ -689,8 +629,8 @@ fn misbehaving(behaviour: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
-        // One connection from each gateway.
-        for _ in 0..2 {
+        // One connection from the gateway.
+        for _ in 0..1 {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
@@ -714,29 +654,24 @@ fn misbehaving(behaviour: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     (port, handle)
 }
 
-/// `_exchange`: `ssl.SSLError` -> `upstream_tls_failed` (including the peer
+/// `_exchange`: a TLS error -> `upstream_tls_failed` (including the peer
 /// closing mid-handshake and a non-TLS reply), a timeout -> `upstream_timeout`,
-/// any other `OSError` (a reset) -> `upstream_unreachable`.
+/// any other socket error (a reset) -> `upstream_unreachable`.
 #[test]
-fn handshake_failures_map_like_python() {
+fn handshake_failures_map_to_fixed_reasons() {
     let behaviours = ["silent", "reset", "close", "garbage"];
     let servers: Vec<_> = behaviours.iter().map(|b| misbehaving(b)).collect();
-    let cases: Vec<(String, u16, Option<PathBuf>)> = behaviours
+    let g = Gateway::new();
+    let actual: Vec<_> = behaviours
         .iter()
         .zip(&servers)
-        .map(|(b, (port, _))| (b.to_string(), *port, None))
-        .collect();
-    let expected = python_relays(&cases);
-    let g = Gateway::new();
-    let actual: Vec<_> = cases
-        .iter()
-        .map(|(id, port, _)| g.relay(id, *port, None))
+        .map(|(id, (port, _))| g.relay(id, *port, None))
         .collect();
     for (_, handle) in servers {
         let _ = handle.join();
     }
     assert_eq!(
-        expected,
+        actual,
         vec![
             (502, Some("upstream_timeout".into())),
             (502, Some("upstream_unreachable".into())),
@@ -744,15 +679,15 @@ fn handshake_failures_map_like_python() {
             (502, Some("upstream_tls_failed".into())),
         ]
     );
-    assert_eq!(actual, expected);
 }
 
 /// Ordinary `CA:FALSE` leaves receive OpenSSL's own SSL-server purpose
-/// checks, including key usage and the legacy SGC EKU accepted by Python.
+/// checks: a key usage without a TLS bit is refused, and the legacy SGC EKU
+/// (which the prototype's OpenSSL accepted) is accepted.
 #[test]
-fn non_ca_leaf_purpose_decisions_match_python() {
+fn non_ca_leaf_purpose_decisions() {
     if !openssl(&["version"]) {
-        panic!("openssl binary not available: the measurement cannot run");
+        panic!("openssl binary not available: the certificates cannot be made");
     }
     let dir = TempDir::new().unwrap();
     let base = "subjectAltName = IP:127.0.0.1\nbasicConstraints = CA:FALSE";
@@ -768,25 +703,23 @@ fn non_ca_leaf_purpose_decisions_match_python() {
         cases.push((name.to_string(), fake.port(), Some(crt)));
         fakes.push(fake);
     }
-    let python = python_relays(&cases);
     let g = Gateway::new();
     let rust: Vec<_> = cases
         .iter()
         .map(|(id, port, ca)| g.relay(id, *port, ca.as_deref()))
         .collect();
     let refused = (502, Some("upstream_tls_failed".to_string()));
-    assert_eq!(python, vec![refused.clone(), (200, None)]);
-    assert_eq!(rust, python);
+    assert_eq!(rust, vec![refused, (200, None)]);
     assert!(fakes[0].requests().is_empty());
-    assert_eq!(fakes[1].requests().len(), 2);
+    assert_eq!(fakes[1].requests().len(), 1);
 }
 
-/// Python enables OpenSSL's common-name fallback for a DNS hostname when SAN
-/// is absent, but does not apply that legacy fallback to an IP address.
+/// OpenSSL's common-name fallback applies to a DNS hostname when SAN is
+/// absent (as in the prototype), but not to an IP address.
 #[test]
-fn common_name_fallback_matches_python() {
+fn common_name_fallback_applies_to_dns_names_only() {
     if !openssl(&["version"]) {
-        panic!("openssl binary not available: the differential cannot run");
+        panic!("openssl binary not available: the certificates cannot be made");
     }
     let dir = TempDir::new().unwrap();
     let (dns_crt, dns_issued) = openssl_certificate_with_cn(
@@ -797,7 +730,6 @@ fn common_name_fallback_matches_python() {
         "2",
     );
     let dns_fake = serve(&dns_issued);
-    let python_dns = python_relay_host("upstream.synthetic", dns_fake.port(), &dns_crt);
     let g = Gateway::new();
     let rust_dns = g.relay_host(
         "cn-dns",
@@ -806,9 +738,8 @@ fn common_name_fallback_matches_python() {
         Some(&dns_crt),
         true,
     );
-    assert_eq!(python_dns, (200, None));
-    assert_eq!(rust_dns, python_dns);
-    assert_eq!(dns_fake.requests().len(), 2);
+    assert_eq!(rust_dns, (200, None));
+    assert_eq!(dns_fake.requests().len(), 1);
 
     let (ip_crt, ip_issued) = openssl_certificate(
         &dir,
@@ -817,20 +748,16 @@ fn common_name_fallback_matches_python() {
         "2",
     );
     let ip_fake = serve(&ip_issued);
-    let cases = vec![("cn-ip".to_string(), ip_fake.port(), Some(ip_crt))];
-    let python_ip = python_relays(&cases);
-    let rust_ip = vec![g.relay("cn-ip", ip_fake.port(), cases[0].2.as_deref())];
-    let refused = (502, Some("upstream_tls_failed".to_string()));
-    assert_eq!(python_ip, vec![refused]);
-    assert_eq!(rust_ip, python_ip);
+    let rust_ip = g.relay("cn-ip", ip_fake.port(), Some(&ip_crt));
+    assert_eq!(rust_ip, (502, Some("upstream_tls_failed".to_string())));
     assert!(ip_fake.requests().is_empty());
 }
 
-/// The gateway uses the same OpenSSL signature algorithms as Python, so a
-/// P-521 server certificate is verified instead of being rejected merely
-/// because rustls' ring provider does not implement that curve.
+/// The gateway uses OpenSSL's signature algorithms (as the prototype's `ssl`
+/// did), so a P-521 server certificate is verified instead of being rejected
+/// merely because rustls' ring provider does not implement that curve.
 #[test]
-fn p521_server_certificate_matches_python() {
+fn p521_server_certificate_is_verified() {
     if !openssl(&["version"]) {
         panic!("openssl binary not available: the differential cannot run");
     }
@@ -881,21 +808,10 @@ fn p521_server_certificate_matches_python() {
         "ext",
     ]));
 
-    // Each gateway gets its own controlled server because this helper is a
-    // separate process and the test deliberately tears it down explicitly.
-    let (mut python_server, python_port) = openssl_upstream(&crt, &key);
-    let python_cases = vec![("p521-python".to_string(), python_port, Some(crt.clone()))];
-    let python = python_relays(&python_cases);
-    let _ = python_server.kill();
-    let _ = python_server.wait();
-
-    let (mut rust_server, rust_port) = openssl_upstream(&crt, &key);
+    let server = OpensslUpstream::start(&crt, &key);
     let g = Gateway::new();
-    let rust = vec![g.relay("p521-rust", rust_port, Some(&crt))];
-    let _ = rust_server.kill();
-    let _ = rust_server.wait();
-    assert_eq!(python, vec![(200, None)]);
-    assert_eq!(rust, python);
+    assert_eq!(g.relay("p521", server.port, Some(&crt)), (200, None));
+    assert_eq!(server.served(), 1);
 }
 
 // ------------------------------------------------ ClientHello on the wire
@@ -993,45 +909,40 @@ fn client_hello_suites(message: &[u8]) -> Vec<u8> {
     message[at + 2..at + 2 + suites].to_vec()
 }
 
-/// The ClientHello the gateway's TLS client sends is CPython's: same cipher
-/// suites in the same order (`create_default_context`'s
-/// `PY_SSL_DEFAULT_CIPHER_STRING`), same extensions and SNI behaviour, for
-/// a DNS name (SNI sent) and an IP literal (no SNI). When the Python
-/// interpreter and this crate link different OpenSSL builds, only the
-/// TLS 1.2 cipher-suite list is a property of this code rather than of the
-/// library, so only that is compared.
+/// The ClientHello the gateway's TLS client sends is the one the prototype's
+/// `ssl` sent (fixture): same cipher suites in the same order
+/// (`create_default_context`'s `PY_SSL_DEFAULT_CIPHER_STRING`), same
+/// extensions and SNI behaviour, for a DNS name (SNI sent) and an IP literal
+/// (no SNI). When this crate links a different OpenSSL build than the one
+/// the fixture was captured with, only the cipher-suite list is a property
+/// of this code rather than of the library, so only that is compared.
 #[test]
-fn client_hello_matches_python() {
-    let python_openssl: i64 = python("import ssl\nprint(ssl.OPENSSL_VERSION_NUMBER)")
-        .trim()
-        .parse()
-        .unwrap();
-    let same_library = python_openssl == openssl::version::number();
+fn client_hello_matches_the_python_fixture() {
+    let fixture: Value = serde_json::from_str(CLIENT_HELLO).unwrap();
+    let same_library =
+        fixture["openssl_version_number"].as_i64().unwrap() == openssl::version::number();
     let hosts = ["upstream.example.test", "127.0.0.1"];
-    let (port, capture) = capture_client_hellos(2 * hosts.len());
-    let pin = TempDir::new().unwrap();
-    let ca = pin.path().join("unused-ca.pem");
-    std::fs::write(&ca, "").unwrap();
+    let (port, capture) = capture_client_hellos(hosts.len());
     let g = Gateway::new();
     for (index, host) in hosts.iter().enumerate() {
-        // An empty `ca_file` string is falsy: default trust only.
-        let _ = python_relay_host(host, port, Path::new(""));
         let _ = g.relay_host(&format!("hello-{index}"), host, port, None, true);
     }
     let hellos = capture.join().unwrap();
-    assert_eq!(hellos.len(), 2 * hosts.len());
-    for (index, host) in hosts.iter().enumerate() {
-        let python = &hellos[2 * index];
-        let rust = &hellos[2 * index + 1];
+    assert_eq!(hellos.len(), hosts.len());
+    for (host, rust) in hosts.iter().zip(&hellos) {
+        let python = hex::decode(fixture["hellos"][host].as_str().unwrap()).unwrap();
         assert_eq!(
             client_hello_suites(rust),
-            client_hello_suites(python),
+            client_hello_suites(&python),
             "{host}: cipher suites"
         );
+        // SNI (extension 0) carries the DNS name and is absent for an IP.
+        let sni = String::from_utf8_lossy(rust).contains("upstream.example.test");
+        assert_eq!(sni, *host == "upstream.example.test", "{host}: SNI");
         if same_library {
             assert_eq!(
                 normalized_client_hello(rust),
-                normalized_client_hello(python),
+                normalized_client_hello(&python),
                 "{host}: ClientHello"
             );
         }

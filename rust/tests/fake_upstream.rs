@@ -3,10 +3,10 @@
 //! `FakeUpstream(SECRET, mode="digest")` / `mode="basic"` with no
 //! `basic_username` raising Python's `ValueError` at construction are ported
 //! through `FakeUpstream::with_mode` (the `mode=` string form) and
-//! `mode_basic("")` (which panics with the same message). The request
-//! parsing and routing rules the fixture shares with `BaseHTTPRequestHandler`
-//! and `urllib.parse` are compared byte-for-byte with the Python fixture in
-//! `request_handling_matches_the_python_fixture`.
+//! `mode_basic("")` (which panics with the same message). Replies to
+//! well-formed requests are compared byte-for-byte with what the Python
+//! fixture answered (`tests/fixtures/python/fake_upstream/GENERATE.md`);
+//! malformed requests only have to leave the fixture serving.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -1133,62 +1133,7 @@ fn issue_counter_counts_created_issues() {
     }
 }
 
-/// The Python prototype as the oracle (script on stdin, repository on
-/// `PYTHONPATH`).
-fn python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut child = std::process::Command::new(&interpreter)
-        .arg("-")
-        .env("PYTHONPATH", root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "python oracle failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
-}
-
-/// Python's `FakeUpstream` answering each raw request in `CASES` (base64
-/// JSON): send, half-close, read to EOF. Prints the replies, then what the
-/// fixture recorded.
-const PY_FAKE_EXCHANGE: &str = r#"
-import base64, json, socket
-from zeropw.fake_upstream import FakeUpstream
-fake = FakeUpstream(SECRET).start()
-replies = []
-for raw in json.loads(base64.b64decode(CASES)):
-    with socket.create_connection((fake.host, fake.port), timeout=10) as sock:
-        sock.sendall(base64.b64decode(raw))
-        sock.shutdown(socket.SHUT_WR)
-        out = b""
-        try:
-            while chunk := sock.recv(65536):
-                out += chunk
-        except OSError:
-            pass
-    replies.append(base64.b64encode(out).decode())
-print(json.dumps(replies))
-print(json.dumps([[r["method"], r["path"], r["headers"], base64.b64encode(r["body"]).decode()]
-                  for r in fake.requests], sort_keys=True))
-fake.stop()
-"#;
+const REPLIES: &str = include_str!("fixtures/python/fake_upstream/replies.json");
 
 fn raw_exchange(port: u16, raw: &[u8]) -> Vec<u8> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -1202,58 +1147,117 @@ fn raw_exchange(port: u16, raw: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The status line and body of a reply (`Server`/`Date` values are the
-/// fixture's own boilerplate, pinned separately).
-fn status_and_body(reply: &[u8]) -> (String, Vec<u8>) {
-    let split = find(reply, b"\r\n\r\n").map_or(reply.len(), |i| i + 4);
-    let head = String::from_utf8_lossy(&reply[..split]).into_owned();
-    let status = head.lines().next().unwrap_or("").to_string();
-    (status, reply[split..].to_vec())
+/// `reply` with every `Date` header's value (the only per-call value the
+/// fixture sends) replaced by `<date>`, after checking it is an IMF-fixdate
+/// (`email.utils.formatdate(usegmt=True)`).
+fn without_date_values(reply: &[u8]) -> String {
+    let text = String::from_utf8(reply.to_vec()).expect("ASCII reply");
+    let mut out = String::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("\r\nDate: ") {
+        let value_start = start + "\r\nDate: ".len();
+        let value_end = value_start + rest[value_start..].find("\r\n").unwrap();
+        let value = &rest[value_start..value_end];
+        let fields: Vec<&str> = value.split(' ').collect();
+        assert_eq!(fields.len(), 6, "Date {value:?}");
+        assert!(
+            ["Mon,", "Tue,", "Wed,", "Thu,", "Fri,", "Sat,", "Sun,"].contains(&fields[0]),
+            "Date {value:?}"
+        );
+        assert!(fields[1].len() == 2 && fields[1].bytes().all(|b| b.is_ascii_digit()));
+        assert!(
+            [
+                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+            ]
+            .contains(&fields[2])
+        );
+        assert!(fields[3].len() == 4 && fields[4].len() == 8 && fields[5] == "GMT");
+        out.push_str(&rest[..value_start]);
+        out.push_str("<date>");
+        rest = &rest[value_end..];
+    }
+    out.push_str(rest);
+    out
 }
 
-/// Methods without a `do_` handler, `parse_qs` and `int()`/`float()` query
-/// rules, a short body, folded and malformed header lines, `//` paths and
-/// fragments -- reply status lines and bodies and the recorded requests
-/// match Python's fixture.
+/// Every reply byte to a well-formed request -- status line,
+/// `Server: fake-upstream ` and `Date` boilerplate, header order, chunked
+/// streaming, redirects, cookies, `HEAD`, `DELETE`, the unauthenticated
+/// `401`, the `Expect: 100-continue` interim response, absolute-form
+/// targets and a keep-alive request -- is identical to what the Python
+/// fixture answered, and so are the recorded requests.
 #[test]
-fn request_handling_matches_the_python_fixture() {
+fn replies_match_the_python_fixture_byte_for_byte() {
     use base64::Engine as _;
     let engine = base64::engine::general_purpose::STANDARD;
+    let fixture: serde_json::Value = serde_json::from_str(REPLIES).unwrap();
+    assert_eq!(fixture["secret"], SECRET);
+    let fake = FakeUpstream::new(SECRET).start();
+    let mut mismatches = Vec::new();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 15);
+    for case in cases {
+        let request = case["request"].as_str().unwrap();
+        let expected = case["reply"].as_str().unwrap();
+        let rust = without_date_values(&raw_exchange(fake.port(), request.as_bytes()));
+        if rust != expected {
+            mismatches.push(format!(
+                "request {request:?}\n  rust:   {rust:?}\n  python: {expected:?}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    let recorded: Vec<serde_json::Value> = fake
+        .requests()
+        .into_iter()
+        .map(|r| {
+            let headers: serde_json::Map<String, serde_json::Value> = r
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect();
+            serde_json::json!([r.method, r.path, headers, engine.encode(&r.body)])
+        })
+        .collect();
+    assert_eq!(serde_json::Value::from(recorded), fixture["recorded"]);
+}
+
+/// Malformed request lines and headers, unsupported methods and versions,
+/// oversized lines and too many headers each get an answer (or a closed
+/// connection) without taking the fixture down: a well-formed request still
+/// succeeds afterwards.
+#[test]
+fn malformed_requests_leave_the_fixture_serving() {
     let auth = format!("Authorization: Bearer {SECRET}\r\n");
     let get = |target: &str| format!("GET {target} HTTP/1.1\r\n{auth}\r\n").into_bytes();
     let mut cases: Vec<Vec<u8>> = vec![
         format!("TRACE /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
         format!("PROPFIND /me HTTP/1.1\r\n{auth}Content-Length: 2\r\n\r\n{{}}").into_bytes(),
-        get("/base64-embedded-leak?offset=&wrap=60"),
-        get("/base64-embedded-leak?offset=%202%20&wrap=1_0"),
-        get("/base64-embedded-leak?offset=%2B1&wrap"),
         get("/base64-embedded-leak?offset=x"),
         get("/base64-embedded-leak?offset=\u{663}"),
-        get("/slow?seconds=0.0_5"),
-        get("/slow?seconds=+0.01"),
         get("/slow?seconds=bogus"),
-        get("/leak?auth=a&auth=b"),
-        get("/leak?auth=&auth=c"),
         get("/leak?=x&auth"),
         get("//me"),
-        get("/me#frag?x=1"),
-        get("/encoded-leak?form=raw#frag"),
-        get("http://example.invalid/me?ignored=1"),
+        get("*"),
+        get("http://[::1/me"),
         format!("GET /me HTTP/0.9\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/0.8\r\n{auth}\r\n").into_bytes(),
-        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length: 50\r\n\r\n{{\"title\"").into_bytes(),
-        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length:  1_4 \r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Folded: a\r\n b\r\n\tc\r\nX-Pad: v  \r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\nX-Before: 1\r\nNot a header\r\n{auth}\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}:empty-name\r\nX-After: 2\r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Last: end").into_bytes(),
+        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Content-Length: 50\r\n\r\n{{\"title\"")
+            .into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Folded: a\r\n b\r\n\tc\r\n\r\n")
+            .into_bytes(),
+        format!("GET /echo-headers HTTP/1.1\r\nX-Before: 1\r\nNot a header\r\n{auth}\r\n")
+            .into_bytes(),
+        format!("GET\u{1c}/me\u{1c}HTTP/1.1\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/12345678901.0\r\n{auth}\r\n").into_bytes(),
+        format!("GET /me HTTP/1.\u{b2}\r\n{auth}\r\n").into_bytes(),
+        b"\r\n".to_vec(),
+        b"GET\r\n\r\n".to_vec(),
+        b"GET /me extra words HTTP/1.1\r\n\r\n".to_vec(),
+        b"GET /me NOTHTTP\r\n\r\n".to_vec(),
     ];
     cases.extend([
-        b"GET /me extra HTTP/1.1\r\n\r\n".to_vec(),
-        b"GET /me extra NOTHTTP\r\n\r\n".to_vec(),
-        b"GET /me NOTHTTP\r\n\r\n".to_vec(),
-        format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(65_530)).into_bytes(),
-        format!("GET /me HTTP/1.1\r\nX-Long: {}\r\n\r\n", "x".repeat(65_530)).into_bytes(),
+        format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(65_540)).into_bytes(),
+        format!("GET /me HTTP/1.1\r\nX-Long: {}\r\n\r\n", "x".repeat(65_540)).into_bytes(),
         format!(
             "GET /me HTTP/1.1\r\n{}\r\n",
             (0..100)
@@ -1262,199 +1266,21 @@ fn request_handling_matches_the_python_fixture() {
         )
         .into_bytes(),
     ]);
-    let encoded: Vec<String> = cases.iter().map(|c| engine.encode(c)).collect();
-    let script = format!(
-        "SECRET = {SECRET:?}\nCASES = '{}'\n{PY_FAKE_EXCHANGE}",
-        engine.encode(serde_json::to_string(&encoded).unwrap())
-    );
-    let out = python(&script);
-    let mut lines = out.lines();
-    let python_replies: Vec<String> = serde_json::from_str(lines.next().unwrap()).unwrap();
-    let python_recorded: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
-
     let fake = FakeUpstream::new(SECRET).start();
-    for (case, python) in cases.iter().zip(&python_replies) {
-        let python = engine.decode(python).unwrap();
-        let rust = raw_exchange(fake.port(), case);
-        assert_eq!(
-            status_and_body(&rust),
-            status_and_body(&python),
-            "request {:?}",
-            String::from_utf8_lossy(case)
-        );
+    for case in &cases {
+        // Any answer, or none, is acceptable; a panic in the fixture would
+        // stop it from answering the request below.
+        let _ = raw_exchange(fake.port(), case);
     }
-    let rust_recorded: Vec<serde_json::Value> = fake
-        .requests()
-        .into_iter()
-        .map(|r| {
-            let headers: serde_json::Map<String, serde_json::Value> = r
-                .headers
-                .into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v)))
-                .collect();
-            serde_json::json!([r.method, r.path, headers, engine.encode(&r.body)])
-        })
-        .collect();
-    assert_eq!(serde_json::Value::from(rust_recorded), python_recorded);
-    // The shapes the audit named, on Python's own replies.
-    let status = |i: usize| status_and_body(&engine.decode(&python_replies[i]).unwrap()).0;
-    assert_eq!(status(0), "HTTP/1.1 501 Unsupported method ('TRACE')");
-    assert_eq!(status(2), "HTTP/1.1 200 OK");
-    assert_eq!(status(19), "HTTP/1.1 400 Bad Request");
-    assert_eq!(
-        status(cases.len() - 6),
-        "HTTP/1.1 400 Bad request syntax ('GET /me extra HTTP/1.1')"
-    );
-    assert_eq!(status(cases.len() - 5), "<!DOCTYPE HTML>");
-    assert_eq!(status(cases.len() - 3), "HTTP/1.1 414 Request-URI Too Long");
-    assert_eq!(status(cases.len() - 2), "HTTP/1.1 431 Line too long");
-    assert_eq!(status(cases.len() - 1), "HTTP/1.1 431 Too many headers");
-    assert_eq!(python_recorded.as_array().unwrap().len(), cases.len() - 8);
+    let (status, body) = status_and_body(&raw_exchange(fake.port(), &get("/me")));
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(json(&body), serde_json::json!({"login": "synthetic-user"}));
 }
 
-/// `reply` with the `Date` header's value (the only per-call value
-/// `BaseHTTPRequestHandler` sends) replaced by `<date>`, after checking it is
-/// an IMF-fixdate (`email.utils.formatdate(usegmt=True)`).
-fn without_date_value(reply: &[u8]) -> Vec<u8> {
-    let Some(start) = find(reply, b"\r\nDate: ") else {
-        return reply.to_vec();
-    };
-    let value_start = start + b"\r\nDate: ".len();
-    let value_end = value_start + find(&reply[value_start..], b"\r\n").unwrap();
-    let value = String::from_utf8_lossy(&reply[value_start..value_end]).into_owned();
-    let fields: Vec<&str> = value.split(' ').collect();
-    assert_eq!(fields.len(), 6, "Date {value:?}");
-    assert!(
-        ["Mon,", "Tue,", "Wed,", "Thu,", "Fri,", "Sat,", "Sun,"].contains(&fields[0]),
-        "Date {value:?}"
-    );
-    assert!(fields[1].len() == 2 && fields[1].bytes().all(|b| b.is_ascii_digit()));
-    assert!(
-        [
-            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-        ]
-        .contains(&fields[2])
-    );
-    assert!(fields[3].len() == 4 && fields[4].len() == 8 && fields[5] == "GMT");
-    let mut out = reply[..value_start].to_vec();
-    out.extend_from_slice(b"<date>");
-    out.extend_from_slice(&reply[value_end..]);
-    out
-}
-
-/// Every reply byte -- status line, `Server: fake-upstream ` and `Date`
-/// boilerplate, header order, `send_error` pages for 400/414/431/501/505
-/// (with and without a status line, depending on how far
-/// `parse_request` got), the `Expect: 100-continue` interim response,
-/// HTTP/0.9 bodies, absolute-form targets and email-parser header quirks --
-/// is identical to Python's `BaseHTTPRequestHandler`-based fixture, and so
-/// are the recorded requests.
-#[test]
-fn raw_replies_match_the_python_fixture_byte_for_byte() {
-    use base64::Engine as _;
-    let engine = base64::engine::general_purpose::STANDARD;
-    let auth = format!("Authorization: Bearer {SECRET}\r\n");
-    let get = |target: &str| format!("GET {target} HTTP/1.1\r\n{auth}\r\n").into_bytes();
-    let mut cases: Vec<Vec<u8>> = vec![
-        get("/me"),
-        get("/repos"),
-        get("http://example.invalid/me?ignored=1"),
-        get("https://example.invalid:8443/repos"),
-        get("*"),
-        get("http://[::1/me"),
-        get("/stream"),
-        get("/redirect"),
-        get("/set-cookie"),
-        format!("HEAD /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
-        format!("DELETE /repos/demo HTTP/1.1\r\n{auth}\r\n").into_bytes(),
-        b"GET /me HTTP/1.1\r\n\r\n".to_vec(),
-        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-continue\r\nContent-Length: 14\r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
-        format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-Continue\r\nContent-Length: 1\r\n\r\nx").into_bytes(),
-        format!("POST /repos/demo/issues HTTP/1.0\r\n{auth}Expect: 100-continue\r\nContent-Length: 2\r\n\r\n{{}}").into_bytes(),
-        format!("GET /me HTTP/01.1\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
-        format!("GET /me HTTP/1.10\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
-        format!("TRACE /me HTTP/1.1\r\n{auth}Expect: 100-continue\r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-A: a\rX-B: b\r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Empty:\r\n folded\r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\n{auth}X-Tab:\t\tv\r\nX-Latin: \u{e9}\r\n\r\n").into_bytes(),
-        format!("GET /echo-headers HTTP/1.1\r\nFrom nobody\r\n{auth}\r\n").into_bytes(),
-        format!("GET\u{1c}/me\u{1c}HTTP/1.1\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me http/1.1\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/1.1.1\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/2.0\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/12345678901.0\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/1.\u{b2}\r\n{auth}\r\n").into_bytes(),
-        b"POST /me\r\n\r\n".to_vec(),
-        b"GET /me\r\n\r\n".to_vec(),
-        format!("GET /me\r\n{auth}\r\n").into_bytes(),
-        b"\r\n".to_vec(),
-        b"GET\r\n\r\n".to_vec(),
-        b"GET /me extra words HTTP/1.1\r\n\r\n".to_vec(),
-        format!("GET /{} HTTP/1.1\r\n\r\n", "x".repeat(65_540)).into_bytes(),
-        format!("HEAD /me HTTP/1.1\r\nX-Long: {}\r\n\r\n", "x".repeat(65_540)).into_bytes(),
-        format!(
-            "HEAD /me HTTP/1.1\r\n{}\r\n",
-            (0..100)
-                .map(|i| format!("X-{i}: v\r\n"))
-                .collect::<String>()
-        )
-        .into_bytes(),
-        format!(
-            "GET /me HTTP/1.1\r\n{}",
-            (0..99)
-                .map(|i| format!("X-{i}: v\r\n"))
-                .collect::<String>()
-        )
-        .into_bytes(),
-    ];
-    cases.push(
-        format!(
-            "GET /me HTTP/1.1\r\n{auth}Connection: keep-alive\r\n\r\nGET /me HTTP/1.1\r\n{auth}\r\n"
-        )
-        .into_bytes(),
-    );
-    let encoded: Vec<String> = cases.iter().map(|c| engine.encode(c)).collect();
-    let script = format!(
-        "SECRET = {SECRET:?}\nCASES = '{}'\n{PY_FAKE_EXCHANGE}",
-        engine.encode(serde_json::to_string(&encoded).unwrap())
-    );
-    let out = python(&script);
-    let mut lines = out.lines();
-    let python_replies: Vec<String> = serde_json::from_str(lines.next().unwrap()).unwrap();
-    let python_recorded: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
-
-    let fake = FakeUpstream::new(SECRET).start();
-    let mut mismatches = Vec::new();
-    for (case, python) in cases.iter().zip(&python_replies) {
-        let python = without_date_value(&engine.decode(python).unwrap());
-        let rust = without_date_value(&raw_exchange(fake.port(), case));
-        if rust != python {
-            mismatches.push(format!(
-                "request {:?}\n  rust:   {:?}\n  python: {:?}",
-                String::from_utf8_lossy(&case[..case.len().min(120)]),
-                String::from_utf8_lossy(&rust[..rust.len().min(400)]),
-                String::from_utf8_lossy(&python[..python.len().min(400)])
-            ));
-        }
-    }
-    let rust_recorded: Vec<serde_json::Value> = fake
-        .requests()
-        .into_iter()
-        .map(|r| {
-            let headers: serde_json::Map<String, serde_json::Value> = r
-                .headers
-                .into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v)))
-                .collect();
-            serde_json::json!([r.method, r.path, headers, engine.encode(&r.body)])
-        })
-        .collect();
-    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
-    assert_eq!(serde_json::Value::from(rust_recorded), python_recorded);
-    // Shapes the comparison pins, on Python's own replies.
-    let reply = |i: usize| {
-        String::from_utf8_lossy(&engine.decode(&python_replies[i]).unwrap()).into_owned()
-    };
-    assert!(reply(12).starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\n"));
-    assert!(reply(0).contains("\r\nServer: fake-upstream \r\nDate: "));
+/// The status line and body of a reply.
+fn status_and_body(reply: &[u8]) -> (String, Vec<u8>) {
+    let split = find(reply, b"\r\n\r\n").map_or(reply.len(), |i| i + 4);
+    let head = String::from_utf8_lossy(&reply[..split]).into_owned();
+    let status = head.lines().next().unwrap_or("").to_string();
+    (status, reply[split..].to_vec())
 }

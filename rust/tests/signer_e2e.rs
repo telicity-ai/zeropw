@@ -674,56 +674,273 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 // rule as above: when sshd cannot start, `build_fixture` fails the test.
 
 /// `INSPECTOR_TEMPLATE`: wraps the real ssh client as the connection's CLI
-/// program, records what the exec child can see, then becomes ssh.
-const INSPECTOR_TEMPLATE: &str = r#"#!{python}
-import json, os, sys, time
-entries = {}
-for name in sorted(os.listdir(".")):
-    if os.path.isfile(name):
-        with open(name, "rb") as fh:
-            entries[name] = fh.read().hex()
-    else:
-        entries[name] = None
-report = {"argv": sys.argv, "cwd": os.getcwd(), "env": dict(os.environ), "entries": entries}
-with open(os.path.join({reports}, "%d-%d.json" % (time.time_ns(), os.getpid())), "w") as fh:
-    json.dump(report, fh)
-os.execv({ssh}, [{ssh}, *sys.argv[1:]])
+/// program, records what the exec child can see (its argv, cwd, complete
+/// environment and run-directory files, unmodified), then becomes ssh. Perl
+/// rather than a shell so that no interpreter-added variable (`PWD`,
+/// `SHLVL`, ...) muddies the recorded environment.
+const INSPECTOR_TEMPLATE: &str = r#"#!/usr/bin/perl
+use strict;
+use warnings;
+use Cwd qw(getcwd);
+use Time::HiRes qw(time);
+my $dir = sprintf("%s/%d-%d", {reports}, int(time() * 1e6), $$);
+mkdir $dir or die "mkdir $dir: $!";
+mkdir "$dir/entries" or die "mkdir entries: $!";
+sub put {
+    my ($path, $data) = @_;
+    open(my $fh, '>:raw', $path) or die "$path: $!";
+    print $fh $data;
+    close $fh;
+}
+put("$dir/cwd", getcwd());
+put("$dir/env", join("\0", map { "$_=$ENV{$_}" } sort keys %ENV));
+put("$dir/argv", join("\0", $0, @ARGV));
+opendir(my $dh, ".") or die "opendir: $!";
+for my $name (sort readdir($dh)) {
+    next if $name eq "." || $name eq "..";
+    if (-f $name) {
+        open(my $in, '<:raw', $name) or die "$name: $!";
+        my $content = do { local $/; <$in> } // "";
+        close $in;
+        put("$dir/entries/$name", $content);
+    } else {
+        mkdir "$dir/entries/$name";
+    }
+}
+closedir $dh;
+exec { {ssh} } {ssh}, @ARGV or die "exec: $!";
 "#;
 
-/// The Python test oracle (its `tests.leakcheck` helpers are used for the
-/// key-material search).
-fn python_interpreter() -> PathBuf {
-    std::env::var_os("ZEROPW_PYTHON")
-        .map(PathBuf::from)
-        .or_else(|| which("python3.12"))
-        .expect("python3.12 test oracle")
+/// A Perl single-quoted string literal for `text`.
+fn perl_str(text: &str) -> String {
+    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+// ------------------------------------------------------------ leak check
+//
+// Port of the prototype's `tests/leakcheck.py`: `find_secret` looks for
+// every pattern `runs::credential_patterns` derives (raw, base64 at every
+// alignment, hex, percent-encoding), and additionally decodes base64, hex
+// and percent-encoded tokens found in the data and searches the decoded
+// bytes for the raw secret. Only where a match was found is reported, never
+// the value.
+
+/// Needles for an OpenSSH private key: the PEM text, the decoded
+/// `openssh-key-v1` blob, the Ed25519 seed and the PEM marker (not secret by
+/// itself, but a fragment of the PEM carries it).
+fn ssh_key_material(pem: &str) -> Vec<Vec<u8>> {
+    use base64::Engine as _;
+    let body: String = pem
+        .trim()
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .expect("PEM body");
+    let key = sshwire::parse_openssh_private_key(pem.as_bytes()).expect("OpenSSH key");
+    vec![
+        pem.as_bytes().to_vec(),
+        blob,
+        key.seed().expose().to_vec(),
+        b"BEGIN OPENSSH PRIVATE KEY".to_vec(),
+    ]
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// `base64.b64decode`/`urlsafe_b64decode` of a token starting at each
+/// alignment: characters outside the alphabet are discarded, padding is
+/// optional.
+fn b64_decodings(token: &[u8]) -> Vec<Vec<u8>> {
+    use base64::Engine as _;
+    let engine = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::GeneralPurposeConfig::new()
+            .with_decode_allow_trailing_bits(true)
+            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+    );
+    let body: &[u8] = {
+        let mut end = token.len();
+        while end > 0 && token[end - 1] == b'=' {
+            end -= 1;
+        }
+        &token[..end]
+    };
+    let mut out = Vec::new();
+    for offset in 0..4 {
+        let Some(chunk) = body.get(offset..) else {
+            break;
+        };
+        if chunk.len() < 8 {
+            break;
+        }
+        for urlsafe in [false, true] {
+            let mapped: Vec<u8> = chunk
+                .iter()
+                .map(|&b| match (urlsafe, b) {
+                    (true, b'-') => b'+',
+                    (true, b'_') => b'/',
+                    _ => b,
+                })
+                .filter(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/')
+                .collect();
+            if let Ok(decoded) = engine.decode(&mapped) {
+                out.push(decoded);
+            }
+        }
+    }
+    out
+}
+
+fn hex_decodings(token: &[u8]) -> Vec<Vec<u8>> {
+    (0..2)
+        .filter_map(|offset| {
+            let chunk = &token[offset..];
+            hex::decode(&chunk[..chunk.len() - chunk.len() % 2]).ok()
+        })
+        .collect()
+}
+
+/// `urllib.parse.unquote_to_bytes(data.replace(b"+", b" "))`.
+fn unquote_plus(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut index = 0;
+    while index < data.len() {
+        match data[index] {
+            b'%' if index + 2 < data.len() => match hex::decode(&data[index + 1..index + 3]) {
+                Ok(byte) => {
+                    out.extend_from_slice(&byte);
+                    index += 3;
+                    continue;
+                }
+                Err(_) => out.push(b'%'),
+            },
+            b'+' => out.push(b' '),
+            other => out.push(other),
+        }
+        index += 1;
+    }
+    out
+}
+
+/// Where (which encoding) one of `secrets` occurs in `data`, or `None`.
+fn find_secret(data: &[u8], secrets: &[Vec<u8>]) -> Option<String> {
+    for (index, secret) in secrets.iter().enumerate() {
+        for pattern in zeropw::runs::credential_patterns(secret) {
+            if contains(data, &pattern) {
+                return Some(format!("secret #{index} in a directly scanned encoding"));
+            }
+        }
+    }
+    let needles: Vec<(usize, &Vec<u8>)> = secrets
+        .iter()
+        .enumerate()
+        .filter(|(_, secret)| secret.len() >= 16)
+        .collect();
+    let decoded_hit = |decoded: &[u8], how: &str| {
+        needles
+            .iter()
+            .find(|(_, secret)| contains(decoded, secret))
+            .map(|(index, _)| format!("secret #{index} inside decoded {how}"))
+    };
+    let unquoted = unquote_plus(data);
+    if unquoted != data
+        && let Some(hit) = decoded_hit(&unquoted, "percent-encoding")
+    {
+        return Some(hit);
+    }
+    let base64_token = regex::bytes::Regex::new(r"[A-Za-z0-9+/_-]{16,}={0,2}").unwrap();
+    for token in base64_token.find_iter(data) {
+        for decoded in b64_decodings(token.as_bytes()) {
+            if let Some(hit) = decoded_hit(&decoded, "base64") {
+                return Some(hit);
+            }
+        }
+    }
+    let hex_token = regex::bytes::Regex::new(r"[0-9A-Fa-f]{16,}").unwrap();
+    for token in hex_token.find_iter(data) {
+        for decoded in hex_decodings(token.as_bytes()) {
+            if let Some(hit) = decoded_hit(&decoded, "hex") {
+                return Some(hit);
+            }
+        }
+    }
+    None
 }
 
 /// `assert_exec_children_held_no_key`, plus `find_secret(blob, material)`
-/// for the tool results and audit trail, run by `tests/leakcheck.py`.
-const PY_HELD_NO_KEY: &str = r#"
-import json, sys
-from pathlib import Path
-from tests.leakcheck import find_secret, ssh_key_material
-reports, pem, blob, minimum = Path(sys.argv[1]), Path(sys.argv[2]).read_text(), Path(sys.argv[3]).read_text(), int(sys.argv[4])
-material = ssh_key_material(pem)
-assert find_secret(blob, material) is None, "tool results or audit"
-files = sorted(reports.glob("*.json"))
-assert len(files) >= minimum, "the inspector never ran"
-for path in files:
-    report = json.loads(path.read_text())
-    assert set(report["entries"]) == {"id.pub", "known_hosts"}, sorted(report["entries"])
-    for name, content in report["entries"].items():
-        assert find_secret(bytes.fromhex(content), material) is None, "run directory file " + name
-    env = report["env"]
-    names = {name for name in env if not name.startswith("__CF_")}
-    assert names == {"PATH", "HOME", "LANG", "TMPDIR", "ZEROPW_RUN_ID", "SSH_AUTH_SOCK"}, sorted(names)
-    for name, value in env.items():
-        assert find_secret(value, material) is None, "environment variable " + name
-    for item in report["argv"]:
-        assert find_secret(item, material) is None, "exec child argument"
-print(len(files))
-"#;
+/// for the tool results and audit trail. Returns the number of inspector
+/// reports checked.
+fn assert_exec_children_held_no_key(
+    reports: &Path,
+    pem: &str,
+    blob: &str,
+    minimum: usize,
+) -> usize {
+    let material = ssh_key_material(pem);
+    // The checker itself finds the key wherever it is.
+    assert!(find_secret(pem.as_bytes(), &material).is_some());
+    assert_eq!(
+        find_secret(blob.as_bytes(), &material),
+        None,
+        "tool results or audit"
+    );
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(reports)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    dirs.sort();
+    assert!(dirs.len() >= minimum, "the inspector never ran");
+    for dir in &dirs {
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("entries"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["id.pub", "known_hosts"]);
+        for name in &names {
+            let content = std::fs::read(dir.join("entries").join(name)).unwrap();
+            assert_eq!(
+                find_secret(&content, &material),
+                None,
+                "run directory file {name}"
+            );
+        }
+        let env = std::fs::read(dir.join("env")).unwrap();
+        let mut env_names = std::collections::BTreeSet::new();
+        for item in env.split(|&b| b == 0) {
+            let text = String::from_utf8_lossy(item);
+            let (name, _) = text.split_once('=').expect("NAME=value");
+            if !name.starts_with("__CF_") {
+                env_names.insert(name.to_string());
+            }
+            assert_eq!(
+                find_secret(item, &material),
+                None,
+                "environment variable {name}"
+            );
+        }
+        assert_eq!(
+            env_names.into_iter().collect::<Vec<_>>(),
+            [
+                "HOME",
+                "LANG",
+                "PATH",
+                "SSH_AUTH_SOCK",
+                "TMPDIR",
+                "ZEROPW_RUN_ID"
+            ]
+        );
+        let argv = std::fs::read(dir.join("argv")).unwrap();
+        for item in argv.split(|&b| b == 0) {
+            assert_eq!(find_secret(item, &material), None, "exec child argument");
+        }
+    }
+    dirs.len()
+}
 
 struct ExecFixture {
     f: Fixture,
@@ -749,13 +966,11 @@ fn build_exec_fixture() -> Fixture2 {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
     let inspector = bin_dir.join("ssh-inspector");
-    let py_str = |p: &Path| serde_json::to_string(&p.display().to_string()).unwrap();
     std::fs::write(
         &inspector,
         INSPECTOR_TEMPLATE
-            .replace("{python}", &python_interpreter().display().to_string())
-            .replace("{reports}", &py_str(&reports))
-            .replace("{ssh}", &py_str(&ssh_bin)),
+            .replace("{reports}", &perl_str(&reports.display().to_string()))
+            .replace("{ssh}", &perl_str(&ssh_bin.display().to_string())),
     )
     .unwrap();
     std::fs::set_permissions(&inspector, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -884,30 +1099,8 @@ fn exec_tool_runs_two_remote_commands_on_one_connection() {
     assert!(!blob.contains(&x.f.root.join("state").display().to_string()));
     // What both exec children could see: their run directory, its files and
     // their environment; and the results and audit trail above.
-    let pem_path = x.f.root.join("private.pem.check");
-    let blob_path = x.f.root.join("blob.check");
-    std::fs::write(&pem_path, &x.private_pem).unwrap();
-    std::fs::write(&blob_path, &blob).unwrap();
-    let output = Command::new(python_interpreter())
-        .arg("-c")
-        .arg(PY_HELD_NO_KEY)
-        .arg(&x.reports)
-        .arg(&pem_path)
-        .arg(&blob_path)
-        .arg("2")
-        .env(
-            "PYTHONPATH",
-            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap(),
-        )
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .unwrap();
-    std::fs::remove_file(&pem_path).unwrap();
-    assert!(
-        output.status.success(),
-        "exec children or results held key material:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let checked = assert_exec_children_held_no_key(&x.reports, &x.private_pem, &blob, 2);
+    assert_eq!(checked, 2);
 }
 
 // Port of ExecToolSshEndToEndTestCase::test_exec_tool_after_revocation_is_denied_before_ssh_starts
