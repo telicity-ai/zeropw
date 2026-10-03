@@ -1,21 +1,19 @@
-//! `zeropw/team/fold.py`'s `derive_local` (`_derive_dek_generations`,
-//! `_derive_vault`, `_derive_connections`) subscripts the folded document,
-//! the local vault document and the local connections document directly;
-//! an uncaught built-in exception aborts it at that point, after whatever
-//! it already wrote. This differential runs CPython 3.12's and the port's
-//! `derive_local` over a well-formed document and malformed variants of the
-//! document and of both local documents, and compares the outcome (error or
-//! success) and the resulting state (vault and connections documents with
-//! wall-clock timestamps normalized, DEK files, audit records).
-use std::io::Write;
+//! `derive_local` (`derive_dek_generations`, `derive_vault`,
+//! `derive_connections`) over a well-formed folded document and malformed
+//! variants of the document and of both local documents. The Python
+//! prototype subscripted these documents directly, so an uncaught built-in
+//! exception aborted it at that point; the port fails closed with an error
+//! at the same points. The per-case outcome (error or success) and the
+//! well-formed case's resulting state (vault and connections documents with
+//! wall-clock timestamps normalized, DEK files, audit records) were measured
+//! against CPython 3.12 and are pinned here.
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use zeropw::clock;
 use zeropw::context::{Config, Context};
-use zeropw::pyjson::{self, DumpOptions};
 use zeropw::team::fold::{self as F, FoldResult};
 use zeropw::team::identity::DeviceKey;
 
@@ -23,32 +21,6 @@ const ENV: &str = "envaaaaaaaaaaaaaaaaaaaaaaaaa-0123456789abcdef0123456789abcdef
 const GEN: &str = "00000000000000aa";
 const V1: &str = "aaaaaaaaaaaaaaaa";
 const FIXED_TS: &str = "2026-01-01T00:00:00Z";
-
-fn python(script: &str) -> Value {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into());
-    let mut child = Command::new(interpreter)
-        .arg("-")
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    serde_json::from_slice(&out.stdout).unwrap()
-}
 
 fn connection(id: &str) -> Value {
     json!({"id": id, "project": "demo", "environment": "dev", "service": "github",
@@ -306,54 +278,6 @@ fn normalize(value: &Value) -> Value {
     }
 }
 
-const PY_DERIVE: &str = r#"
-import json, os, shutil, sys, tempfile, pathlib
-from zeropw.context import Config, Context
-from zeropw.team import fold as F
-from zeropw.team.identity import DeviceKey
-from zeropw import policy as P
-from zeropw.vault import VAULT_DOC
-
-data = json.loads(sys.stdin.read())
-root = pathlib.Path(tempfile.mkdtemp())
-template = root / "template"
-ctx = Context.initialize(template, "synthetic-admin", "synthetic-recovery", Config())
-DeviceKey.load_or_create(ctx.state, ctx.kms)
-ctx.state.write_json(f"team/{data['env']}/dek/{data['gen']}.json", {})
-def vault_view(doc):
-    # The vault's own key material differs per state; only its secrets map
-    # is written by derive.
-    return doc.get("secrets") if isinstance(doc, dict) else doc
-
-out = {}
-for i, (name, document, order, vault_doc, connections_doc) in enumerate(data["cases"]):
-    target = root / f"c{i}"
-    shutil.copytree(template, target)
-    c = Context.open(target, Config())
-    if vault_doc is not None:
-        c.state.write_json(VAULT_DOC, vault_doc)
-    if connections_doc is not None:
-        c.state.write_json(P.CONNECTIONS, connections_doc)
-    before = len(c.audit.tail(1000))
-    device = DeviceKey.load_or_create(c.state, c.kms)
-    result = F.FoldResult(document=document, skipped=[], version_order=order, vector={})
-    try:
-        F.derive_local(result, c.state, c.vault, c.policy, c.audit, device=device)
-        outcome = "OK"
-    except Exception as exc:
-        outcome = "ERR " + type(exc).__name__
-    audit = c.audit.tail(1000)[before:]
-    for record in audit:
-        record.pop("ts", None)
-    dek_dir = c.state.path / "team" / data["env"] / "dek"
-    out[name] = {"outcome": outcome,
-                 "vault": vault_view(c.state.read_json(VAULT_DOC, None)),
-                 "connections": c.state.read_json(P.CONNECTIONS, None),
-                 "dek": sorted(p.name for p in dek_dir.iterdir()) if dek_dir.is_dir() else [],
-                 "audit": audit}
-print(json.dumps(out))
-"#;
-
 /// The vault's own key material differs per state; only its `secrets` map
 /// is written by derive.
 fn vault_view(doc: Value) -> Value {
@@ -377,14 +301,62 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 #[test]
-fn derive_local_fails_and_writes_exactly_like_python() {
+fn derive_local_fails_closed_exactly_where_python_raised() {
     let cases = cases();
-    let input = json!({"env": ENV, "gen": GEN, "cases": cases.iter().map(|(n, d, o, v, c)| json!([n, d, o, v, c])).collect::<Vec<_>>()});
-    let script = format!(
-        "import io, sys\nsys.stdin = io.StringIO({})\n{PY_DERIVE}",
-        zeropw::pystr::repr_str(&pyjson::dumps(&input, DumpOptions::compact_sorted()).unwrap())
-    );
-    let python = python(&script);
+    let expected_outcomes: BTreeMap<&str, &str> = [
+        ("base", "OK"),
+        ("no_env_id", "ERR"),
+        ("no_dek", "ERR"),
+        ("generations_list", "ERR"),
+        ("generation_int", "ERR"),
+        ("generation_null", "ERR"),
+        ("generation_empty", "OK"),
+        ("wraps_int", "ERR"),
+        ("wraps_null", "ERR"),
+        ("no_secrets", "ERR"),
+        ("secrets_list", "ERR"),
+        ("secret_int", "ERR"),
+        ("secret_empty", "ERR"),
+        ("versions_list", "ERR"),
+        ("record_int", "ERR"),
+        ("unindexed_record_int", "OK"),
+        ("no_generation", "ERR"),
+        ("generation_number", "OK"),
+        ("no_nonce", "ERR"),
+        ("no_status", "ERR"),
+        ("public_pairs", "OK"),
+        ("public_string", "ERR"),
+        ("public_int", "ERR"),
+        ("public_falsy", "OK"),
+        ("active_list", "ERR"),
+        ("active_int", "OK"),
+        ("no_kind", "ERR"),
+        ("no_connections", "ERR"),
+        ("connections_list", "ERR"),
+        ("connection_int", "ERR"),
+        ("connection_no_secret_id", "ERR"),
+        ("connection_list_secret_id", "ERR"),
+        ("connection_list_version", "ERR"),
+        ("connection_unknown_version", "OK"),
+        ("vault_falsy_list", "OK"),
+        ("vault_truthy_list", "ERR"),
+        ("vault_secrets_list", "ERR"),
+        ("vault_existing_int", "ERR"),
+        ("vault_existing_zero", "ERR"),
+        ("vault_existing_other_env", "OK"),
+        ("vault_existing_versions_int", "ERR"),
+        ("vault_existing_version_int", "ERR"),
+        ("vault_existing_created_at", "OK"),
+        ("connections_truthy_list", "ERR"),
+        ("connections_existing_int", "ERR"),
+        ("connections_unrelated_int", "ERR"),
+        ("connections_other_env", "OK"),
+        ("connections_stale_then_int", "ERR"),
+        ("connections_existing_same", "OK"),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(expected_outcomes.len(), cases.len());
 
     let root = TempDir::new().unwrap();
     let template = root.path().join("template");
@@ -402,7 +374,6 @@ fn derive_local_fails_and_writes_exactly_like_python() {
             .write_json(&format!("team/{ENV}/dek/{GEN}.json"), &json!({}))
             .unwrap();
     }
-    let mut mismatches = Vec::new();
     for (i, (name, document, order, vault_doc, connections_doc)) in cases.iter().enumerate() {
         let target = root.path().join(format!("c{i}"));
         copy_dir(&template, &target);
@@ -461,26 +432,112 @@ fn derive_local_fails_and_writes_exactly_like_python() {
             "dek": dek,
             "audit": audit,
         });
-        let mut expected = python[name.as_str()].clone();
-        if expected["outcome"].as_str().unwrap().starts_with("ERR") {
-            expected["outcome"] = json!("ERR");
-        }
-        if normalize(&rust) != normalize(&expected) {
-            mismatches.push(format!(
-                "{name}:\n  rust   {}\n  python {}",
-                normalize(&rust),
-                normalize(&expected)
-            ));
+        assert_eq!(
+            json!(outcome),
+            json!(expected_outcomes[name.as_str()]),
+            "{name}: {}",
+            normalize(&rust)
+        );
+        if name == "base" {
+            assert_eq!(normalize(&rust), base_expected(), "base");
         }
     }
-    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
-    let outcomes: Map<String, Value> = python
-        .as_object()
-        .unwrap()
-        .iter()
-        .map(|(k, v)| (k.clone(), v["outcome"].clone()))
-        .collect();
     // Both outcomes are exercised.
-    assert_eq!(outcomes["base"], json!("OK"));
-    assert!(outcomes.values().filter(|o| o != &&json!("OK")).count() > 20);
+    assert!(
+        expected_outcomes
+            .values()
+            .filter(|outcome| **outcome == "ERR")
+            .count()
+            > 20
+    );
+}
+
+/// The well-formed case's state as the Python prototype derived it (vault
+/// `secrets` map, connections document, DEK files, audit records).
+fn base_expected() -> Value {
+    json!({
+     "audit": [
+      {
+       "action": null,
+       "caller": null,
+       "connection": null,
+       "count": 0,
+       "env_id": ENV,
+       "event": "team_commit_apply",
+       "policy_version": null,
+       "reason": null,
+       "request_id": null,
+       "result": "ok",
+       "run_id": null,
+       "target": null
+      }
+     ],
+     "connections": {
+      "gh": {
+       "cli": null,
+       "created_at": FIXED_TS,
+       "description": "",
+       "environment": "dev",
+       "http_auth": {
+        "basic_username": null,
+        "header_name": null,
+        "mode": "bearer",
+        "value_prefix": null
+       },
+       "http_scope": {
+        "confirm_methods": [],
+        "methods": [
+         "GET"
+        ],
+        "path_prefixes": null
+       },
+       "http_target": {
+        "allow_private_network": false,
+        "ca_file": null,
+        "host": "api.github.com",
+        "port": 443,
+        "scheme": "https"
+       },
+       "id": "gh",
+       "kind": "http",
+       "policy_version": 1,
+       "project": "demo",
+       "secret_id": "s1",
+       "secret_version": 1,
+       "service": "github",
+       "shared_env": ENV,
+       "ssh_target": null,
+       "status": "active",
+       "updated_at": "<now>"
+      }
+     },
+     "dek": [
+      format!("{GEN}.json")
+     ],
+     "outcome": "OK",
+     "vault": {
+      "s1": {
+       "active_version": 1,
+       "created_at": "<now>",
+       "environment": "shared",
+       "kind": "api_key",
+       "project": "shared-01234567",
+       "shared_env": ENV,
+       "versions": {
+        "1": {
+         "ciphertext": "AAAA",
+         "created_at": "<now>",
+         "generation": GEN,
+         "nonce": "AAAA",
+         "public": {
+          "label": "x"
+         },
+         "shared_env": ENV,
+         "status": "active",
+         "version_id": V1
+        }
+       }
+      }
+     }
+    })
 }

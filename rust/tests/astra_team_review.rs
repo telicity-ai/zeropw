@@ -1,6 +1,4 @@
 //! Independent Astra review regressions for 06cf76f665937da557bf7a0272dbbc2d07735569.
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -9,30 +7,6 @@ use zeropw::context::{Config, Context};
 use zeropw::team::identity::DeviceKey;
 use zeropw::team::transport::{InProcessTransport, MembershipCheck};
 use zeropw::team::{commit, membership, sync};
-
-fn python(script: &str, input: &Value) -> Value {
-    let mut child = Command::new("python3.12")
-        .args(["-c", script])
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    serde_json::from_slice(&out.stdout).unwrap()
-}
 
 fn ctx(tmp: &TempDir) -> Arc<Context> {
     Arc::new(
@@ -55,11 +29,15 @@ fn invite_payload(inviter: &str) -> Value {
 
 #[test]
 fn astra_t1_untrusted_unicode_inviter_cannot_panic_join() {
-    let input = invite_payload("aaaaaaaé");
-    let encoded = python(
-        "import json,base64,sys\np=json.load(sys.stdin)\ns=base64.b32encode(json.dumps(p).encode()).decode().rstrip('=')\nfrom zeropw.team.membership import parse_invite\nassert parse_invite(s)['inviter'] == p['inviter']\nprint(json.dumps(s))",
-        &input,
+    // `invite_payload("aaaaaaa\u{e9}")` as the Python prototype encoded it:
+    // `base64.b32encode(json.dumps(p).encode()).decode().rstrip("=")`.
+    let encoded = json!(
+        "PMRGM33SNVQXIIR2EARHUZLSN5YHOLLUMVQW2LLJNZ3GS5DFFV3DCIRMEARGK3TWL5UWIIR2EARGCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCLJQGEZDGNBVGY3TQOLBMJRWIZLGGAYTEMZUGU3DOOBZMFRGGZDFMYRCYIBCNFXHM2LUMVZCEORAEJQWCYLBMFQWCXDVGAYGKOJCFQQCEYLEMRZGK43TMVZSEORALNOSYIBCNFXHM2LUMVPXGZLDOJSXIIR2EARECQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBHURCYIBCMV4HA2LSMVZV6YLUEI5CAIRSGA4TSLJQGEWTAMKUGAYDUMBQHIYDAWRCFQQCE4TPNRSSEORAEJ2XGZLSEIWCAITOMFWWKIR2EARHG6LOORUGK5DJMMRH2"
     );
+    let payload = invite_payload("aaaaaaa\u{e9}");
+    let invite = membership::parse_invite(encoded.as_str().unwrap()).unwrap();
+    assert_eq!(json!(invite.inviter), payload["inviter"]);
+    assert_eq!(json!(invite.env_id), payload["env_id"]);
     let tmp = TempDir::new().unwrap();
     let ctx = ctx(&tmp);
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
@@ -121,28 +99,30 @@ fn astra_t2_live_fact_publication_records_apply_audit() {
 
 #[test]
 fn astra_t3_padded_base32_invites_match_python() {
-    let mut input = invite_payload("aaaaaaaaaaaaaaaaaaaaaaaaaa");
-    // Choose a payload whose standard base32 representation needs padding.
-    input["name"] = json!("synthetic padded invite");
-    let encoded = python(
-        "import json,base64,sys\np=json.load(sys.stdin)\np['name'] += 'x'\ns=base64.b32encode(json.dumps(p).encode()).decode()\nfrom zeropw.team.membership import parse_invite\nassert parse_invite(s)['name'] == p['name']\nassert '=' in s\nprint(json.dumps(s))",
-        &input,
-    );
-    assert!(
-        membership::parse_invite(encoded.as_str().unwrap()).is_ok(),
-        "Python accepts standard padded base32 invites"
-    );
+    // `invite_payload("aaaaaaaaaaaaaaaaaaaaaaaaaa")` named "synthetic padded
+    // invitex", as the Python prototype encoded it with standard padding:
+    // `base64.b32encode(json.dumps(p).encode()).decode()`.
+    let encoded = "PMRGM33SNVQXIIR2EARHUZLSN5YHOLLUMVQW2LLJNZ3GS5DFFV3DCIRMEARGK3TWL5UWIIR2EARGCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCLJQGEZDGNBVGY3TQOLBMJRWIZLGGAYTEMZUGU3DOOBZMFRGGZDFMYRCYIBCNFXHM2LUMVZCEORAEJQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQSELBAEJQWIZDSMVZXGZLTEI5CAW25FQQCE2LOOZUXIZK7ONSWG4TFOQRDUIBCIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCPJCFQQCEZLYOBUXEZLTL5QXIIR2EARDEMBZHEWTAMJNGAYVIMBQHIYDAORQGBNCELBAEJZG63DFEI5CAITVONSXEIRMEARG4YLNMURDUIBCON4W45DIMV2GSYZAOBQWIZDFMQQGS3TWNF2GK6BCPU======";
+    assert!(encoded.ends_with('='));
+    let invite =
+        membership::parse_invite(encoded).expect("Python accepts standard padded base32 invites");
+    let payload = invite_payload("aaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(invite.name, "synthetic padded invitex");
+    assert_eq!(json!(invite.inviter), payload["inviter"]);
+    assert_eq!(json!(invite.expires_at), payload["expires_at"]);
 }
 
 #[test]
 fn astra_t4_fact_target_dict_string_pairs_match_python() {
     let input = json!({"format":sync::FACT_FORMAT,"env_id":"env","kind":"incident",
         "target":["ab","cd"],"author":"author","hlc":"1-0","sig":""});
-    let expected = python(
-        "import json,sys\nfrom zeropw.team.sync import Fact\nprint(json.dumps(Fact.from_dict(json.load(sys.stdin)).to_dict()))",
-        &input,
+    // What the Python prototype's `Fact.from_dict(...).to_dict()` gave:
+    // `dict(["ab", "cd"])` pairs each string's two characters.
+    assert_eq!(
+        sync::Fact::from_dict(&input).unwrap().to_dict(),
+        json!({"format": sync::FACT_FORMAT, "env_id": "env", "kind": "incident",
+            "target": {"a": "b", "c": "d"}, "author": "author", "hlc": "1-0", "sig": ""})
     );
-    assert_eq!(sync::Fact::from_dict(&input).unwrap().to_dict(), expected);
 }
 
 #[test]
@@ -166,11 +146,6 @@ fn astra_t5_iso_expiry_invite_state_matches_python() {
         "used":false,"expires_at":"2099-01-01T00:00:00Z"}}),
         )
         .unwrap();
-    let expected = python(
-        "import json,sys\nfrom zeropw.team.membership import _parse_expiry\nprint(json.dumps(_parse_expiry(json.load(sys.stdin)) > 0))",
-        &json!("2099-01-01T00:00:00Z"),
-    );
-    assert_eq!(expected, true);
     assert_eq!(
         membership::consume_invite(&ctx, &env, &hash, &proof).unwrap(),
         Some(("user".into(), "synthetic".into()))

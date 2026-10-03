@@ -9,7 +9,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -25,33 +24,6 @@ use zeropw::team::fold::{self as F};
 use zeropw::team::identity::DeviceKey;
 use zeropw::vault::VAULT_DOC;
 use zeropw::{clock, pyjson};
-
-/// Runs `script` with `python3.12` (override with `ZEROPW_PYTHON`) and the
-/// repository root on `PYTHONPATH`. Mirrors `team_oracle.rs`'s own helper --
-/// this is a separate standalone test binary, so `crate::oracle` (this
-/// crate's own `#[cfg(test)]` helper) is not reachable from here either.
-fn run_python(script: &str) -> String {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf();
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let output = Command::new(&interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", &repo_root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
-    if !output.status.success() {
-        panic!(
-            "python oracle failed ({}):\n--- script ---\n{script}\n--- stderr ---\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    String::from_utf8(output.stdout).expect("oracle stdout is UTF-8")
-}
 
 const ADMIN: &str = "admin-pass-1";
 const RECOVERY: &str = "recovery-pass-1";
@@ -992,8 +964,8 @@ fn derive_local_count_is_the_exact_python_sum_beyond_any_fixed_width() {
 /// {})` only installs `{}` when the key is ABSENT -- a PRESENT but non-dict
 /// `vault/secrets.json["secrets"]` (a corrupt local vault) is returned
 /// AS-IS, and the very next line's `secrets_doc.get(secret_id)` then raises
-/// an uncaught `AttributeError`, confirmed here directly against real
-/// `python3.12`, BEFORE `_derive_vault` ever reaches its own
+/// an uncaught `AttributeError` (as the prototype did), BEFORE
+/// `_derive_vault` ever reaches its own
 /// `state.write_json(VAULT_DOC, doc)` call at the end -- the corrupt vault
 /// file is left completely untouched. This used to silently substitute an
 /// empty `Map` for the non-dict "secrets" field and then OVERWRITE it with a
@@ -1030,56 +1002,14 @@ fn derive_vault_non_object_secrets_field_fails_closed_without_overwriting() {
         after, corrupt_vault,
         "the corrupt vault file must be left byte-for-byte unchanged, not overwritten"
     );
-
-    // Cross-check directly against real python3.12's own `_derive_vault`:
-    // same corrupt vault file, same document shape (one secret with at
-    // least one version, so the loop that crashes actually runs), same
-    // "left untouched" assertion.
-    let document_text =
-        pyjson::dumps(&result.document, pyjson::DumpOptions::compact_sorted()).unwrap();
-    let corrupt_vault_text =
-        pyjson::dumps(&corrupt_vault, pyjson::DumpOptions::compact_sorted()).unwrap();
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("vault/secrets.json", json.loads({corrupt_vault_text:?}))
-    document = json.loads({document_text:?})
-    try:
-        F._derive_vault(document, state, {env_id:?}, {{}}, None, project=None, environment=None)
-        print("OK")
-    except Exception as e:
-        print(f"ERR {{type(e).__name__}}")
-    print(json.dumps(state.read_json("vault/secrets.json", None), sort_keys=True))
-"#,
-    );
-    let out = run_python(&script);
-    let mut lines = out.lines();
-    assert_eq!(
-        lines.next().unwrap(),
-        "ERR AttributeError",
-        "real python3.12 must raise an uncaught AttributeError"
-    );
-    let py_vault_after: Value = pyjson::loads(lines.next().unwrap()).unwrap();
-    assert_eq!(
-        py_vault_after, corrupt_vault,
-        "python3.12's own vault file must also be left untouched"
-    );
 }
 
 // ----------------------------------------------------------- H-R6-1 ca_file
 /// H-R6-1 (peer-reachable denial of sync): `HttpTarget.ca_file` has no
-/// `__post_init__` check in Python at all -- confirmed directly against
-/// real `python3.12` below, for a number, bool, list, dict and (as a
-/// control) a string and `null`: `fold()` and `derive_local()` BOTH always
-/// succeed, for every shape, and keep the value byte-identical in both the
-/// folded environment document and the locally derived
+/// `__post_init__` check in Python at all -- for a number, bool, list, dict
+/// and (as a control) a string and `null`, the prototype's `fold()` and
+/// `derive_local()` BOTH always succeeded and kept the value byte-identical
+/// in both the folded environment document and the locally derived
 /// `policy/connections.json`.
 ///
 /// A real peer's signed `connection.create` op can therefore put a
@@ -1156,176 +1086,104 @@ fn derive_connections_preserves_every_ca_file_shape_like_python() {
             reloaded["http_target"]["ca_file"], ca_file,
             "{label}: policy load/save must preserve ca_file byte-identically"
         );
-
-        // Cross-check fold()+derive_local() against real python3.12: both
-        // must succeed and keep ca_file byte-identical for EVERY shape,
-        // including non-string values.
-        let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-        let commits_text =
-            pyjson::dumps(&json!(commits_json), pyjson::DumpOptions::compact_sorted()).unwrap();
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.context import Config, Context
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-raw = json.loads({commits_text:?})
-commits = [C.Commit.from_dict(c) for c in raw]
-env_id = {env_id:?}
-result = F.fold(env_id, commits)
-assert result.skipped == [], result.skipped
-with tempfile.TemporaryDirectory() as tmp:
-    ctx = Context.initialize(Path(tmp) / "state", "admin-pass-1", "recovery-pass-1", Config())
-    ctx.projects.create("demo")
-    F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit)
-    connections = ctx.state.read_json("policy/connections.json")
-print(json.dumps({{
-    "document_ca_file": result.document["connections"]["bad"]["http_target"]["ca_file"],
-    "local_bad_ca_file": connections.get("bad", {{}}).get("http_target", {{}}).get("ca_file", "__ABSENT__"),
-    "local_good_present": "good" in connections,
-}}, sort_keys=True))
-"#,
-        );
-        let out = run_python(&script);
-        let py: Value = pyjson::loads(out.trim()).unwrap();
-        assert_eq!(
-            py["document_ca_file"], ca_file,
-            "{label}: python's own folded document must keep ca_file byte-identical too"
-        );
-        assert_eq!(
-            py["local_good_present"],
-            json!(true),
-            "{label}: python's derive_local must also derive the sibling connection"
-        );
-        assert_eq!(
-            py["local_bad_ca_file"], ca_file,
-            "{label}: Python must derive the connection locally with ca_file byte-identical"
-        );
     }
-}
-
-/// A minimal, non-quoting Python string literal for a temp-dir path. Every
-/// path this test builds comes from `tempfile::TempDir`, never from
-/// untrusted input, so this does not need `state_dir_cross_language.rs`'s
-/// full `py_str_literal` escaping -- just enough to survive normal path
-/// characters.
-fn py_path_literal(p: &std::path::Path) -> String {
-    format!(
-        "'{}'",
-        p.to_str()
-            .expect("utf8 path")
-            .replace('\\', "\\\\")
-            .replace('\'', "\\'")
-    )
 }
 
 /// Finding X-3 (HIGH): `pyjson::MAX_JSON_DEPTH` used to be 500, lowered from
 /// 1,000 purely for `dumps`'s own stack safety -- but `loads` shares the
 /// same bound, and Python's own `validate_op` places no depth limit at all
 /// on a `secret.put_version` op's `public` field (`isinstance(public, dict)`
-/// is the only check). A real Python node happily accepts, signs, folds and
-/// derives such a commit -- `derive_local` -> `_derive_vault` ->
-/// `StateDir.write_json` all succeed for `public` nested far deeper than
-/// 500 -- and the resulting `vault/secrets.json` used to be completely
-/// unreadable by this port (`StateError(state_corrupt)`), taking the WHOLE
-/// node down (vault, policy, gateway, signer all key off the same
-/// `Context::open`), not just the one deep secret. This is the real-world
-/// shape PORTING.md's own invariant names explicitly: "A state directory
-/// written by Python must load in Rust and vice versa".
+/// is the only check). A real Python node happily accepted, signed, folded
+/// and derived such a commit, and the resulting `vault/secrets.json` used
+/// to be completely unreadable by this port (`StateError(state_corrupt)`),
+/// taking the WHOLE node down (vault, policy, gateway, signer all key off
+/// the same `Context::open`), not just the one deep secret.
 ///
-/// Builds the state directory the same way a real peer would -- entirely in
-/// Python, through the real API this finding's own repro used
-/// (`validate_op`, `sign_commit`, `CommitStore.append`, `fold`,
-/// `derive_local`), with `public` nested 600 deep (the finding's own
-/// reported depth: comfortably past the OLD 500 cap this port used to
-/// reject at, comfortably under the NEW cap this fix raises it to) -- then
-/// confirms this port's `Context::open` + `Vault::list_secrets` +
-/// `CommitStore::all_commits` all succeed against that same directory, with
-/// no Rust code involved in writing it at all. Before this fix (`cargo test
-/// --offline` on the pre-fix `MAX_JSON_DEPTH = 500`), `Context::open`
-/// itself already failed with `state_corrupt` -- this test would not even
-/// reach the `list_secrets`/`all_commits` assertions.
+/// Builds the state directory through the real API the finding's repro
+/// used (`validate_op`, `sign_commit`, `CommitStore::append`, `fold`,
+/// `derive_local`), with `public` nested 600 deep (past the OLD 500 cap,
+/// under the new one), closes it, then confirms `Context::open` +
+/// `Vault::list_secrets` + `CommitStore::all_commits` all succeed on it.
+/// (The prototype-written directory this test once used is >500 KB of
+/// indented JSON; `StateDir::write_json` writes the same bytes.)
 #[test]
-fn python_written_state_dir_with_deeply_nested_secret_public_field_opens_in_rust() {
+fn state_dir_with_deeply_nested_secret_public_field_reopens() {
     let tmp = TempDir::new().expect("tempdir");
     let state_dir = tmp.path().join("state");
+    let env_id = {
+        let ctx = Context::initialize(
+            &state_dir,
+            ADMIN,
+            RECOVERY,
+            Config::default(),
+            clock::system(),
+        )
+        .expect("Context::initialize");
+        ctx.projects
+            .create("demo", projects::DEFAULT_ENVIRONMENTS)
+            .unwrap();
+        let owner = DeviceKey::create(ctx.state, ctx.kms).unwrap();
+        let env_id = C::new_env_id(&owner.fingerprint().unwrap()).unwrap();
+        let dek: Vec<u8> = (0..32u8).collect();
+        let c1 = env_init_commit(&env_id, &owner, &dek, "1000-0000", None);
 
-    let script = format!(
-        r#"
-import secrets
-from zeropw.context import Config, Context
-from zeropw.team import commit as C
-from zeropw.team import envelope
-from zeropw.team import fold as F
-from zeropw.team.identity import DeviceKey
+        let mut public = json!({});
+        for _ in 0..600 {
+            public = json!({"a": public});
+        }
+        let version_id = random_hex(8);
+        let ct =
+            envelope::encrypt_secret(&dek, &env_id, "gh-token", &version_id, b"secretvalue012345")
+                .unwrap();
+        let op2 = json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+                         "generation_id": GEN0, "version_id": version_id, "ciphertext": ct,
+                         "public": public});
+        C::validate_op(&op2).expect("no depth check at all on `public`");
+        let c2 =
+            C::sign_commit(&owner, &env_id, 2, "2000-0000", &BTreeMap::new(), vec![op2]).unwrap();
 
-GEN0 = "0" * 16
-
-def nested_public(depth):
-    obj = {{}}
-    for _ in range(depth):
-        obj = {{"a": obj}}
-    return obj
-
-ctx = Context.initialize({state_dir}, {admin:?}, {recovery:?}, Config())
-ctx.projects.create("demo")
-owner = DeviceKey.create(ctx.state, ctx.kms)
-env_id = C.new_env_id(owner.fingerprint)
-dek = bytes(range(32))
-wraps = {{owner.fingerprint: envelope.wrap_dek(dek, env_id, GEN0, owner.record)}}
-op_init = {{"op": "env.init", "owner_device": owner.record.to_dict(), "owner_name": "alice",
-           "generation_id": GEN0, "wraps": wraps}}
-c1 = C.sign_commit(owner, env_id, 1, "1000-0000", {{}}, [op_init])
-
-public = nested_public({depth})
-version_id = secrets.token_hex(8)
-ct = envelope.encrypt_secret(dek, env_id, "gh-token", version_id, b"secretvalue012345")
-op2 = {{"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
-       "generation_id": GEN0, "version_id": version_id, "ciphertext": ct, "public": public}}
-C.validate_op(op2)  # the finding: no depth check at all on `public`
-c2 = C.sign_commit(owner, env_id, 2, "2000-0000", {{}}, [op2])
-
-store = C.CommitStore(ctx.state, env_id)
-store.append(c1)
-store.append(c2)
-
-result = F.fold(env_id, store.all_commits())
-assert result.skipped == [], result.skipped
-F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit, device=owner)
-
-import os
-print(env_id)
-print(os.path.getsize({state_dir} + "/vault/secrets.json"))
-"#,
-        state_dir = py_path_literal(&state_dir),
-        admin = ADMIN,
-        recovery = RECOVERY,
-        depth = 600,
-    );
-    let out = run_python(&script);
-    let mut lines = out.lines();
-    let env_id = lines.next().expect("python printed env_id").to_string();
-    let secrets_json_size: u64 = lines
-        .next()
-        .expect("python printed vault/secrets.json size")
-        .parse()
-        .expect("size is a number");
+        let store = C::CommitStore::new(ctx.state, env_id.clone());
+        store.append(&c1).unwrap();
+        store.append(&c2).unwrap();
+        let result = F::fold(
+            &env_id,
+            store.all_commits().unwrap(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(result.skipped.is_empty(), "{:?}", result.skipped);
+        F::derive_local(
+            &result,
+            ctx.state,
+            &ctx.policy,
+            Some(ctx.audit),
+            Some(&owner),
+            Some(ctx.kms),
+            None,
+            None,
+        )
+        .unwrap();
+        env_id
+    };
+    let secrets_json_size = std::fs::metadata(state_dir.join("vault/secrets.json"))
+        .unwrap()
+        .len();
     assert!(
         secrets_json_size > 500_000,
         "sanity check: the deeply-nested public field should make vault/secrets.json large, got {secrets_json_size} bytes"
     );
 
-    // No Rust code wrote any of this -- open it exactly the way a real node
-    // resuming from disk would.
+    // Open it exactly the way a real node resuming from disk would.
     let ctx = Context::open(&state_dir, Config::default(), clock::system())
-        .expect("a state directory python's own real API wrote must open in rust (PORTING.md #2)");
+        .expect("a state directory holding a 600-deep public field must open");
 
     let secrets = ctx
         .vault
         .list_secrets(None, None)
-        .expect("list_secrets must succeed against the python-written vault document");
+        .expect("list_secrets must succeed against the deep vault document");
     let gh_token = secrets
         .iter()
         .find(|s| s.id == "gh-token")
@@ -1432,46 +1290,4 @@ fn derive_connections_represents_container_value_prefix_for_every_mode_and_deriv
         json!(["pre"]),
         "the container value_prefix connection must ALSO derive locally, byte-identical to the fold document"
     );
-
-    // Cross-check against real python3.12: both connections derive, and
-    // value_prefix stays byte-identical throughout.
-    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-    let commits_text =
-        pyjson::dumps(&json!(commits_json), pyjson::DumpOptions::compact_sorted()).unwrap();
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.context import Config, Context
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-raw = json.loads({commits_text:?})
-commits = [C.Commit.from_dict(c) for c in raw]
-env_id = {env_id:?}
-result = F.fold(env_id, commits)
-assert result.skipped == [], result.skipped
-with tempfile.TemporaryDirectory() as tmp:
-    ctx = Context.initialize(Path(tmp) / "state", "admin-pass-1", "recovery-pass-1", Config())
-    ctx.projects.create("demo")
-    F.derive_local(result, ctx.state, ctx.vault, ctx.policy, ctx.audit)
-    connections = ctx.state.read_json("policy/connections.json")
-print(json.dumps({{
-    "document_value_prefix": result.document["connections"]["odd"]["http_auth"]["value_prefix"],
-    "local_odd_value_prefix": connections.get("odd", {{}}).get("http_auth", {{}}).get("value_prefix", "__ABSENT__"),
-    "local_good_present": "good" in connections,
-    "local_odd_present": "odd" in connections,
-}}, sort_keys=True))
-"#,
-    );
-    let out = run_python(&script);
-    let py: Value = pyjson::loads(out.trim()).unwrap();
-    assert_eq!(py["document_value_prefix"], json!(["pre"]));
-    assert_eq!(py["local_good_present"], json!(true));
-    assert_eq!(
-        py["local_odd_present"],
-        json!(true),
-        "python must derive BOTH connections -- confirming rust must too, not skip one"
-    );
-    assert_eq!(py["local_odd_value_prefix"], json!(["pre"]));
 }

@@ -2310,29 +2310,6 @@ mod tests {
 
     const ENV_ID: &str = "env-0123456789abcdef";
 
-    /// A valid single-quoted Python string literal for `s`, escaping every
-    /// character via Python's own `\xNN`/`\uNNNN`/`\UNNNNNNNN` string syntax
-    /// (never a raw byte) so a control character or line-separator-like
-    /// codepoint can never be misread by Python's tokenizer as ending the
-    /// literal early, and never via Rust's `{:?}` debug format, which emits
-    /// `\u{NN}` -- not valid Python syntax.
-    fn py_str_literal(s: &str) -> String {
-        let mut out = String::from("'");
-        for c in s.chars() {
-            let cp = c as u32;
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '\'' => out.push_str("\\'"),
-                _ if cp < 0x20 || cp == 0x7f => out.push_str(&format!("\\x{cp:02x}")),
-                _ if cp > 0x7e && cp <= 0xffff => out.push_str(&format!("\\u{cp:04x}")),
-                _ if cp > 0xffff => out.push_str(&format!("\\U{cp:08x}")),
-                _ => out.push(c),
-            }
-        }
-        out.push('\'');
-        out
-    }
-
     fn env_init_op(owner: &DeviceKey, name: &str, generation_id: &str) -> Value {
         let record = owner.record().unwrap();
         let mut wraps = Map::new();
@@ -2372,23 +2349,24 @@ mod tests {
     }
 
     /// Finding H-R3-8, closed: `Hlc.tick`'s `self.counter += 1` and
-    /// `Hlc.parse`/`observe` are exact Python ints, so a peer-chosen counter
-    /// far beyond any fixed width keeps incrementing (no saturation, no
-    /// panic) and renders exactly as CPython does.
+    /// `Hlc.parse`/`observe` are exact (unbounded) integers, so a
+    /// peer-chosen counter far beyond any fixed width keeps incrementing
+    /// (no saturation, no panic) and renders in full decimal.
     #[test]
-    fn tick_increments_beyond_any_fixed_width_like_python() {
+    fn tick_increments_beyond_any_fixed_width() {
         let big = "170141183460469231731687303715884105727"; // 2**127 - 1
         let huge = format!("{big}{big}");
         let mut hlc = Hlc::new(1000, 0);
         hlc.observe(&format!("1000-{huge}")).unwrap();
-        let rendered = hlc.tick(Some(500)); // wall clock does not advance
-        let script = format!(
-            "from zeropw.team.commit import Hlc\nh = Hlc(1000, 0)\nh.observe('1000-{huge}')\nprint(h.tick(500))\nprint(h.tick(500))"
+        // The wall clock does not advance, so the counter increments.
+        assert_eq!(
+            hlc.tick(Some(500)),
+            format!("1000-{big}170141183460469231731687303715884105728")
         );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        assert_eq!(Some(rendered.as_str()), lines.next());
-        assert_eq!(Some(hlc.tick(Some(500)).as_str()), lines.next());
+        assert_eq!(
+            hlc.tick(Some(500)),
+            format!("1000-{big}170141183460469231731687303715884105729")
+        );
         let (wall, counter) = Hlc::parse(&format!("{huge}-{huge}")).unwrap();
         assert_eq!(wall.to_string(), huge);
         assert_eq!(counter.to_string(), huge);
@@ -2984,74 +2962,16 @@ mod tests {
     // Round-2 equivalence-review fixes. `python_int_parse` no longer has
     // any hand/generated-table logic of its own to pin here (PORTING.md §3b,
     // finding E-R6-1 round 6: it now delegates entirely to
-    // `crate::pystr::int_from_str_checked`, whose own full-enumeration oracle
-    // tests live in `pystr.rs`), but this end-to-end probe through
+    // `crate::pystr::int_from_str_checked`), but this probe through
     // `python_int_parse` itself is kept as a regression pin for this
     // call site.
 
     /// Finding H-R2-1: CPython 3.12's `int(str)` strips only 25 of
-    /// `str.isspace()`'s 29 code points -- U+001C..U+001F
-    /// (`Bidi_Class=B`) are `isspace()`-true but rejected by `int()`.
-    /// Enumerates every `str.isspace()` code point (`crate::pystr::is_space`,
-    /// itself already oracle-proven against `python3.12` in `pystr.rs`) and
-    /// checks [`python_int_parse`]'s accept/reject decision, in both
-    /// leading and trailing position, against real `python3.12` `int()`.
+    /// `str.isspace()`'s 29 code points -- U+001C..U+001F (`Bidi_Class=B`)
+    /// are `isspace()`-true but rejected. Pins [`python_int_parse`]'s
+    /// accept/reject decision for those four and for ordinary whitespace.
     #[test]
-    fn int_strip_space_matches_python_over_every_isspace_codepoint() {
-        let isspace_codepoints: Vec<u32> = (0..=0x10FFFFu32)
-            .filter(|&cp| {
-                char::from_u32(cp)
-                    .map(crate::pystr::is_space)
-                    .unwrap_or(false)
-            })
-            .collect();
-        // Sanity: matches the finding's own count (25 accepted + 4 rejected).
-        assert_eq!(
-            isspace_codepoints.len(),
-            29,
-            "str.isspace() should have exactly 29 code points"
-        );
-
-        let mut probes: Vec<(String, bool)> = Vec::new(); // (numeral string, leading?)
-        for &cp in &isspace_codepoints {
-            let c = char::from_u32(cp).unwrap();
-            probes.push((format!("{c}1000"), true));
-            probes.push((format!("1000{c}"), false));
-        }
-
-        // One python3.12 subprocess for the whole table, not one per probe.
-        // Every character is escaped via Python's own `\xNN`/`\uNNNN` string
-        // syntax (not Rust's `{:?}`, which emits `\u{NN}` -- invalid Python,
-        // and not raw bytes, which risk a control character the tokenizer
-        // reads as a physical line break inside a plain quoted string).
-        let mut script = String::from("import json\nresults = []\n");
-        for (s, _) in &probes {
-            script.push_str(&format!(
-                "try:\n    int({})\n    results.append(True)\nexcept ValueError:\n    results.append(False)\n",
-                py_str_literal(s)
-            ));
-        }
-        script.push_str("print(json.dumps(results))\n");
-        let out = crate::oracle::python(&script);
-        let py_results: Vec<bool> = pyjson::loads(out.trim())
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_bool().unwrap())
-            .collect();
-
-        assert_eq!(py_results.len(), probes.len());
-        for ((s, leading), py_ok) in probes.iter().zip(py_results.iter()) {
-            let rust_ok = python_int_parse(s).is_some();
-            assert_eq!(
-                rust_ok, *py_ok,
-                "int({s:?}) accept/reject mismatch (leading={leading}): rust={rust_ok} python={py_ok}"
-            );
-        }
-
-        // Concrete pin for the four rejected exceptions and one accepted
-        // case, independent of the full sweep above.
+    fn int_strip_space_rejects_the_four_separator_controls() {
         assert!(python_int_parse("\u{1c}1000-0000".split('-').next().unwrap()).is_none());
         for cp in [0x1Cu32, 0x1D, 0x1E, 0x1F] {
             let c = char::from_u32(cp).unwrap();

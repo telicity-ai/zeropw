@@ -441,37 +441,9 @@ mod retry_tests {
         );
     }
 
-    /// Python half of [`owner_with_admin_peer`]: an owner node with a shared
-    /// environment, a `TeamSync` and one admin peer, plus a recording session
-    /// for that peer (driven through `_handle_message` directly).
-    const PY_OWNER_WITH_ADMIN_PEER: &str = r#"
-import json, tempfile, pathlib, time
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-team.register_env(env_id)
-peer = DeviceKey.generate()
-M.author_commit(ctx, team, env_id, [{"op": "member.add", "device": peer.record.to_dict(), "name": "bob",
-                                     "role": "admin"}])
-
-class Fake:
-    def __init__(self, peer):
-        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
-        self.created_at = time.monotonic()
-    def send(self, m): self.sent.append(m)
-    def recv(self, timeout): return None
-    def close(self): self.closed = True
-
-session = Fake(peer.record)
-"#;
-
+    /// An owner node with a shared environment, a `TeamSync` and one admin
+    /// peer, plus a recording session for that peer (driven through
+    /// `handle_message` directly).
     struct OwnerWithAdminPeer {
         _root: TempDir,
         ctx: Arc<Context>,
@@ -544,63 +516,13 @@ session = Fake(peer.record)
         }
     }
 
-    /// The same inbound traffic replayed against Python, whose
-    /// `_relaxed_document` is wrapped to count the `F.fold` calls it makes.
-    const PY_RELAXED_FOLDS: &str = r#"
-folds = [0]
-real_relaxed = S.TeamSync._relaxed_document
-def counted(self, env_id):
-    real_fold = S.F.fold
-    def fold(*args, **kwargs):
-        folds[0] += 1
-        return real_fold(*args, **kwargs)
-    S.F.fold = fold
-    try:
-        return real_relaxed(self, env_id)
-    finally:
-        S.F.fold = real_fold
-S.TeamSync._relaxed_document = counted
-
-def bad_fact(i):
-    fact = S.sign_fact(peer, env_id, "connection_disabled", {"connection_id": f"c{i}"}, f"{5000 + i}-0000").to_dict()
-    fact["target"]["connection_id"] = "tampered"
-    return {"type": "FACT", "fact": fact}
-
-def incident(i):
-    fact = S.sign_fact(peer, env_id, "incident", {"incident_id": f"{i:016x}"}, f"{6000 + i}-0000")
-    return {"type": "INCIDENT", "fact": fact.to_dict()}
-
-counts = []
-for i in range(5):
-    team._handle_message(env_id, session, bad_fact(i))
-counts.append(folds[0])
-for i in range(3):
-    team._handle_message(env_id, session, incident(i))
-counts.append(folds[0])
-M.author_commit(ctx, None, env_id, [{"op": "settings.update", "sync_interval_seconds": 7}])
-team._handle_message(env_id, session, bad_fact(10))
-counts.append(folds[0])
-team._handle_message(env_id, session, bad_fact(11))
-counts.append(folds[0])
-team.poll()
-team._handle_message(env_id, session, bad_fact(12))
-counts.append(folds[0])
-acks = sum(1 for m in session.sent if m["type"] == "INCIDENT_ACK")
-rejected = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_fact_rejected")
-print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
-"#;
-
     /// Gap 1: `_relaxed_document` is cached by the store vector and cleared
     /// only by `_refold`, so a removed member's device record is resolved
     /// without re-folding the whole log per FACT/INCIDENT -- and the
     /// Rust-only offline fact replay folds at most once per pass, not once
     /// per replayed line.
     #[test]
-    fn relaxed_document_is_cached_by_store_vector_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_RELAXED_FOLDS}")).trim(),
-        )
-        .unwrap();
+    fn relaxed_document_is_cached_by_store_vector() {
         let OwnerWithAdminPeer {
             _root,
             ctx,
@@ -675,11 +597,12 @@ print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
             .iter()
             .filter(|r| r["event"] == "team_fact_rejected")
             .count();
+        // The counts the Python prototype's `_relaxed_document` produced for
+        // the same traffic.
         assert_eq!(
             json!({"counts":counts,"acks":acks,"rejected":rejected}),
-            python
+            json!({"counts": [1, 1, 2, 2, 3], "acks": 3, "rejected": 8})
         );
-        assert_eq!(python["counts"], json!([1, 1, 2, 2, 3]));
 
         // Rust-only offline fact replay (DEVIATIONS.md): 64 lines, each
         // needing the author's device record.
@@ -711,34 +634,6 @@ print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
         assert_eq!(folds(), warm + 1, "one fold per replay pass, not per line");
     }
 
-    /// `_apply_incident_rotation_flags` over a corrupt `rotation_flags.json`.
-    const PY_ROTATION_FLAGS: &str = r#"
-path = f"team/{env_id}/rotation_flags.json"
-cases = [(["x"], {"secret_ids_mandatory": ["s1"]}), (["x"], {}),
-         ({"s2": "bad"}, {"secret_ids_recommended": ["s2"]}), ({"s2": "bad"}, {"secret_ids_mandatory": ["s2"]}),
-         ({"s2": None}, {"secret_ids_recommended": ["s2"]}), (0, {"secret_ids_recommended": ["s3"]}),
-         ({"s4": {"reason": "rotation_required", "flagged_at": "T0"}},
-          {"secret_ids_recommended": ["s4", "s5"], "secret_ids_mandatory": ["s6"]})]
-out = []
-for i, (flags, extra) in enumerate(cases):
-    ctx.state.write_json(path, flags)
-    before = len(session.sent)
-    fact = S.sign_fact(peer, env_id, "incident", dict(extra, incident_id=f"{i:016x}"), f"{6000 + i}-0000")
-    try:
-        team._handle_message(env_id, session, {"type": "INCIDENT", "fact": fact.to_dict()})
-        raised = False
-    except Exception:
-        raised = True
-    after = ctx.state.read_json(path, None)
-    if isinstance(after, dict):
-        after = {k: dict(v, flagged_at="T") if isinstance(v, dict) and v.get("flagged_at") != "T0" else v
-                 for k, v in after.items()}
-    out.append({"raised": raised, "flags": after, "acked": len(session.sent) - before,
-                "record": ctx.state.exists(f"team/{env_id}/incidents/{peer.fingerprint}-{i:016x}.json")})
-received = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_incident_received")
-print(json.dumps({"cases": out, "received": received}))
-"#;
-
     /// A truthy non-dict `rotation_flags.json` (or a non-dict entry that a
     /// recommended id reads) raises in Python inside `_handle_incident`,
     /// after the incident record is written and before the ACK; Rust returns
@@ -746,11 +641,7 @@ print(json.dumps({"cases": out, "received": received}))
     /// session exactly as Python's escaping exception does) instead of
     /// panicking on `Value` index assignment.
     #[test]
-    fn corrupt_rotation_flags_fail_the_incident_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_ROTATION_FLAGS}")).trim(),
-        )
-        .unwrap();
+    fn corrupt_rotation_flags_fail_the_incident() {
         let fixture = owner_with_admin_peer();
         let (ctx, env_id, team) = (&fixture.ctx, &fixture.env_id, &fixture.team);
         let path = format!("team/{env_id}/rotation_flags.json");
@@ -814,39 +705,27 @@ print(json.dumps({"cases": out, "received": received}))
             .iter()
             .filter(|r| r["event"] == "team_incident_received")
             .count();
-        assert_eq!(json!({"cases":out,"received":received}), python);
-        assert_eq!(python["cases"][0]["raised"], json!(true));
-        assert_eq!(python["cases"][1]["raised"], json!(false));
+        // The outcomes the Python prototype's `_handle_incident` produced
+        // (`raised` there is an escaping exception, here `state_corrupt`).
+        assert_eq!(
+            json!({"cases":out,"received":received}),
+            json!({"cases": [
+                {"raised": true, "flags": ["x"], "acked": 0, "record": true},
+                {"raised": false, "flags": ["x"], "acked": 1, "record": true},
+                {"raised": true, "flags": {"s2": "bad"}, "acked": 0, "record": true},
+                {"raised": false, "flags": {"s2": {"flagged_at": "T", "reason": "rotation_required"}},
+                 "acked": 1, "record": true},
+                {"raised": true, "flags": {"s2": null}, "acked": 0, "record": true},
+                {"raised": false, "flags": {"s3": {"flagged_at": "T", "reason": "rotation_recommended"}},
+                 "acked": 1, "record": true},
+                {"raised": false, "flags": {
+                    "s4": {"flagged_at": "T0", "reason": "rotation_required"},
+                    "s5": {"flagged_at": "T", "reason": "rotation_recommended"},
+                    "s6": {"flagged_at": "T", "reason": "rotation_required"}},
+                 "acked": 1, "record": true},
+            ], "received": 4})
+        );
     }
-
-    /// `_load_env_locked`'s reads of `peer_vectors.json` and
-    /// `overridden_alerted.json`, shape by shape, against CPython.
-    const PY_LOAD_PEER_STATE: &str = r#"
-import json, tempfile, pathlib
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-cases = json.loads(CASES)
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-out = []
-for vectors, alerted in cases:
-    ctx.state.write_json(f"team/{env_id}/peer_vectors.json", vectors)
-    ctx.state.write_json(f"team/{env_id}/overridden_alerted.json", alerted)
-    team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-    try:
-        team.register_env(env_id)
-    except Exception as exc:
-        out.append({"error": type(exc).__name__})
-        continue
-    env = team._envs[env_id]
-    out.append({"peer_vectors": env.peer_vectors, "alerted": sorted(env.alerted_overrides)})
-print(json.dumps(out))
-"#;
 
     /// `register_env` over every JSON shape of the two peer-state documents:
     /// a truthy non-dict `peer_vectors.json` raises `AttributeError` and a
@@ -854,7 +733,7 @@ print(json.dumps(out))
     /// Python (`state_corrupt` here, §3.5); a falsy document is empty; any
     /// other iterable is iterated like Python; peer-vector ints are exact.
     #[test]
-    fn peer_state_documents_load_like_python() {
+    fn peer_state_documents_load() {
         let fps: Vec<String> = (0..3)
             .map(|_| DeviceKey::generate().record().unwrap().fingerprint())
             .collect();
@@ -892,13 +771,30 @@ print(json.dumps(out))
         for doc in falsy.iter().chain(alerted.iter()) {
             cases.push(json!([{}, doc]));
         }
-        let script = PY_LOAD_PEER_STATE.replace(
-            "json.loads(CASES)",
-            &format!("json.loads({:?})", json!(cases).to_string()),
-        );
-        let python: Value = serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let python = python.as_array().unwrap();
-        assert_eq!(python.len(), cases.len());
+        // `None`: the load fails closed (`state_corrupt`; the Python
+        // prototype raised `AttributeError`/`TypeError`). Otherwise the
+        // loaded state, as the Python prototype loaded it.
+        let loaded = |alerted: Value| Some(json!({"peer_vectors": {}, "alerted": alerted}));
+        let mut expected: Vec<Option<Value>> = vec![Some(json!({
+            "peer_vectors": {
+                (fps[0].clone()): {"a": 1, "d": -3, "e": serde_json::from_str::<Value>(big).unwrap(),
+                    "e2": serde_json::from_str::<Value>(&format!("-{big}")).unwrap(), "j": 0, "k": 0},
+                (fps[2].clone()): {},
+            },
+            "alerted": ["o1", "o2"],
+        }))];
+        expected.extend(falsy.iter().map(|_| loaded(json!(["o1"]))));
+        expected.extend(odd.iter().map(|_| None));
+        expected.extend(falsy.iter().map(|_| loaded(json!([]))));
+        expected.extend([
+            loaded(json!(["k1", "k2"])),
+            loaded(json!(["x", "y", "z"])),
+            loaded(json!(["c"])),
+            None,
+            None,
+            None,
+        ]);
+        assert_eq!(expected.len(), cases.len());
 
         let root = TempDir::new().unwrap();
         let ctx = Arc::new(
@@ -930,7 +826,7 @@ print(json.dumps(out))
             closed: AtomicBool::new(false),
             created: Instant::now(),
         });
-        for (case, expected) in cases.iter().zip(python) {
+        for (case, expected) in cases.iter().zip(&expected) {
             ctx.state
                 .write_json(&format!("team/{env_id}/peer_vectors.json"), &case[0])
                 .unwrap();
@@ -947,10 +843,7 @@ print(json.dumps(out))
             match team.register_env(&env_id) {
                 Err(error) => {
                     assert_eq!(error.reason, "state_corrupt", "{case}");
-                    assert!(
-                        expected["error"] == "AttributeError" || expected["error"] == "TypeError",
-                        "{case}: Rust failed, Python gave {expected}"
-                    );
+                    assert!(expected.is_none(), "{case}: failed, expected {expected:?}");
                 }
                 Ok(()) => {
                     let envs = team.envs.lock().unwrap();
@@ -958,52 +851,21 @@ print(json.dumps(out))
                     let mut alerted: Vec<&String> = env.alerted_overrides.iter().collect();
                     alerted.sort();
                     assert_eq!(
-                        json!({"peer_vectors": env.peer_vectors, "alerted": alerted}),
+                        Some(json!({"peer_vectors": env.peer_vectors, "alerted": alerted})),
                         *expected,
                         "{case}"
                     );
                 }
             }
         }
-        // The shapes this test is about really do reach each Python branch.
-        assert_eq!(
-            python[0]["peer_vectors"][&fps[0]]["e"],
-            serde_json::from_str::<Value>(big).unwrap()
-        );
-        assert_eq!(python[7]["error"], "AttributeError");
-        assert!(python.iter().any(|r| r["error"] == "TypeError"));
-        assert!(
-            python
-                .iter()
-                .any(|r| r["alerted"] == json!(["x", "y", "z"]))
-        );
     }
 
-    /// `_handle_vector` with Python-int edge values from a peer: the stored
+    /// `handle_vector` with integer edge values from a peer: the stored
     /// and persisted vector keeps every non-negative int exactly, and the
     /// catch-up range treats a claim past the local sequence (at any
     /// magnitude) as "nothing to send", a negative/bool/float as 0.
-    const PY_VECTOR_INTS: &str = r#"
-own = device.fingerprint
-big = 10 ** 30
-huge = 10 ** 40
-out = []
-for vector in ({"a": huge, "b": -1, "c": True, "d": 1.5, "e": 5, own: huge},
-               {own: big}, {own: -5}, {own: True}, {own: 1.0}, {own: 1}, {}):
-    session.sent.clear()
-    team._handle_message(env_id, session, {"type": "VECTOR", "vector": vector})
-    out.append({"commits": sum(1 for m in session.sent if m["type"] == "COMMIT"),
-                "stored": {("OWN" if k == own else k): v for k, v in
-                           ctx.state.read_json(f"team/{env_id}/peer_vectors.json", None)[peer.fingerprint].items()}})
-print(json.dumps(out))
-"#;
-
     #[test]
-    fn peer_vector_ints_are_exact_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_VECTOR_INTS}")).trim(),
-        )
-        .unwrap();
+    fn peer_vector_ints_are_exact() {
         let fixture = owner_with_admin_peer();
         let own = fixture.team.device.fingerprint().unwrap();
         let peer_fp = fixture.peer_key.fingerprint().unwrap();
@@ -1062,40 +924,26 @@ print(json.dumps(out))
                 .collect::<Map<String, Value>>();
             out.push(json!({"commits": commits, "stored": stored}));
         }
-        assert_eq!(json!(out), python);
-        // A huge claim sends nothing; an invalid one is treated as 0.
-        assert_eq!(python[1]["commits"], 0);
-        assert_eq!(python[2]["commits"], python[6]["commits"]);
-        assert!(python[6]["commits"].as_u64().unwrap() >= 2);
+        // A huge claim sends nothing; an invalid one is treated as 0. (The
+        // outcomes the Python prototype's `_handle_vector` produced.)
+        let huge_value: Value = serde_json::from_str(huge).unwrap();
+        assert_eq!(
+            json!(out),
+            json!([
+                {"commits": 0, "stored": {"a": huge_value, "e": 5, "OWN": huge_value}},
+                {"commits": 0, "stored": {"OWN": serde_json::from_str::<Value>(big).unwrap()}},
+                {"commits": 2, "stored": {}},
+                {"commits": 2, "stored": {}},
+                {"commits": 2, "stored": {}},
+                {"commits": 1, "stored": {"OWN": 1}},
+                {"commits": 2, "stored": {}},
+            ])
+        );
     }
 
     /// `stop()`'s ordering, observed through a transport whose `dial` is
-    /// slow: Python joins the poll thread (so the in-flight dial returns)
-    /// before closing the transport.
-    const PY_STOP_ORDER: &str = r#"
-import threading
-events = []
-started = threading.Event()
-
-class Slow:
-    def dial(self, address, env_id, invite_proof=None):
-        events.append("dial_start")
-        started.set()
-        time.sleep(0.3)
-        events.append("dial_end")
-        raise T.SessionClosed("synthetic_refused")
-    def close(self):
-        events.append("close")
-
-slow = S.TeamSync(ctx, Slow(), device)
-slow.register_env(env_id)
-slow.set_peer_address(env_id, peer.fingerprint, "synthetic-slow-address")
-slow.start()
-assert started.wait(10)
-slow.stop()
-print(json.dumps(events))
-"#;
-
+    /// slow: the poll thread is joined (so the in-flight dial returns)
+    /// before the transport is closed.
     struct SlowDialTransport {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -1124,10 +972,6 @@ print(json.dumps(events))
 
     #[test]
     fn stop_joins_the_poll_thread_before_closing_the_transport() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_STOP_ORDER}")).trim(),
-        )
-        .unwrap();
         let fixture = owner_with_admin_peer();
         let events = Arc::new(Mutex::new(Vec::new()));
         let slow = TeamSync::new(
@@ -1152,7 +996,6 @@ print(json.dumps(events))
         }
         slow.stop();
         let events = events.lock().unwrap().clone();
-        assert_eq!(json!(events), python);
         assert_eq!(events, ["dial_start", "dial_end", "close"]);
     }
 
@@ -1230,10 +1073,11 @@ print(json.dumps(events))
         assert!(env.next_attempt.contains_key(&other_fp));
     }
 
-    /// Gap 2: the rebroadcast seen-set is `sync._LruSet` (hit refreshes
-    /// recency, overflow evicts the least recent), compared call by call.
+    /// Gap 2: the rebroadcast seen-set is an LRU set like `sync._LruSet` (a
+    /// hit refreshes recency, overflow evicts the least recent), compared
+    /// call by call with a straightforward reference model.
     #[test]
-    fn lru_seen_set_matches_python() {
+    fn lru_seen_set_refreshes_on_hit_and_evicts_least_recent() {
         let mut state = 0x2545_f491_u64;
         let keys: Vec<String> = (0..400)
             .map(|_| {
@@ -1243,15 +1087,24 @@ print(json.dumps(events))
                 format!("k{}", state % 9)
             })
             .collect();
-        let script = format!(
-            "import json\nfrom zeropw.team.sync import _LruSet\ns = _LruSet(4)\nprint(json.dumps([s.add_if_new(k) for k in json.loads({:?})]))",
-            json!(keys).to_string()
-        );
-        let python: Vec<bool> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let mut model: Vec<&str> = Vec::new(); // least recent first
+        let mut expected = Vec::new();
+        for key in &keys {
+            if let Some(index) = model.iter().position(|k| k == key) {
+                let hit = model.remove(index);
+                model.push(hit);
+                expected.push(false);
+            } else {
+                model.push(key);
+                if model.len() > 4 {
+                    model.remove(0);
+                }
+                expected.push(true);
+            }
+        }
         let mut seen = LruSet::new(4);
         let rust: Vec<bool> = keys.iter().map(|k| seen.add_if_new(k)).collect();
-        assert_eq!(rust, python);
+        assert_eq!(rust, expected);
         assert!(
             rust.iter().filter(|new| **new).count() > 9,
             "no eviction exercised"

@@ -1,0 +1,15 @@
+{
+  "author": "ph5tr32bj27nk7zphjn2qf4z5u",
+  "author_seq": 5,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "4000-0000",
+  "ops": [
+    {
+      "id": "gh",
+      "op": "connection.disable"
+    }
+  ],
+  "seen": {},
+  "sig": "3rWByU14DD+oD5D4Qx65TqKG0JccjtXG5stNYQ3nuB+gQhe5gmXUT6mcANSf6RHXmrzyigM+1cTUMMJjOAn1Aw=="
+}

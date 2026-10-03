@@ -865,46 +865,51 @@ pub fn share_environment(
 #[cfg(test)]
 mod invite_compat_tests {
     use super::*;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
+    /// Invite codes are unpadded (or standard-padded) base32 of the invite
+    /// JSON. `b32d` strips surrounding whitespace, upper-cases and re-pads
+    /// before decoding; surplus padding, interior garbage and incomplete
+    /// quanta are rejected. Expected values were measured once against the
+    /// retired Python prototype's `_b32d`.
     #[test]
-    fn base32_padding_and_malformed_inputs_match_python() {
-        let mut corpus = Vec::new();
-        for stem in [
-            "MY", "MZ", "MZXQ", "MZXW6", "MZXW6YQ", "MZXW6YTB", "A", "AAA", "AAAAAA",
-        ] {
+    fn base32_padding_and_malformed_inputs() {
+        // (stem, largest accepted count of trailing '=', decoded hex)
+        let stems: [(&str, usize, Option<&str>); 9] = [
+            ("MY", 6, Some("66")),
+            ("MZ", 6, Some("66")),
+            ("MZXQ", 4, Some("666f")),
+            ("MZXW6", 3, Some("666f6f")),
+            ("MZXW6YQ", 1, Some("666f6f62")),
+            ("MZXW6YTB", 0, Some("666f6f6261")),
+            ("A", 0, None),
+            ("AAA", 0, None),
+            ("AAAAAA", 0, None),
+        ];
+        for (stem, max_pad, decoded) in stems {
             for pad in 0..=9 {
-                corpus.push(format!("{stem}{}", "=".repeat(pad)));
+                let input = format!("{stem}{}", "=".repeat(pad));
+                let expected = if pad <= max_pad { decoded } else { None };
+                assert_eq!(
+                    b32d(&input).ok().map(hex::encode).as_deref(),
+                    expected,
+                    "{input:?}"
+                );
             }
         }
-        corpus.extend(
-            [
-                " my====== ",
-                "my=",
-                "MY=Q",
-                "MY====A=",
-                "M Y",
-                "é",
-                "\u{2003}MY\u{2003}",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        );
-        let mut child = Command::new("python3.12")
-            .args(["-c", "import sys,json,base64\nout=[]\nfor s in json.load(sys.stdin):\n try:\n  p=s.strip().upper();p+='='*(-len(p)%8);out.append(base64.b32decode(p).hex())\n except Exception: out.append(None)\nprint(json.dumps(out))"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(json!(corpus).to_string().as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(output.status.success());
-        let expected: Vec<Option<String>> = serde_json::from_slice(&output.stdout).unwrap();
-        for (input, expected) in corpus.iter().zip(expected) {
-            assert_eq!(b32d(input).ok().map(hex::encode), expected, "{input:?}");
+        for (input, expected) in [
+            (" my====== ", Some("66")),
+            ("my=", Some("66")),
+            ("MY=Q", None),
+            ("MY====A=", None),
+            ("M Y", None),
+            ("\u{e9}", None),
+            ("\u{2003}MY\u{2003}", Some("66")),
+        ] {
+            assert_eq!(
+                b32d(input).ok().map(hex::encode).as_deref(),
+                expected,
+                "{input:?}"
+            );
         }
     }
 

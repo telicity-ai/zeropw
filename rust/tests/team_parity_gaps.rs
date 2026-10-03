@@ -1,8 +1,6 @@
 //! Parity regressions for team sync/membership behaviour that previously
 //! differed from the Python specification (`zeropw/team/sync.py`,
 //! `zeropw/team/membership.py`). Synthetic keys and in-process sessions only.
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -20,31 +18,6 @@ use zeropw::team::transport::{
 use zeropw::team::{membership, sync};
 
 const ADMIN: &str = "synthetic-admin";
-
-fn python(script: &str) -> Value {
-    let mut child = Command::new("python3.12")
-        .arg("-")
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    serde_json::from_slice(&out.stdout).unwrap()
-}
 
 /// A session driven by the test: frames pushed on `inbox` are what the node
 /// receives; everything the node sends is recorded in `sent`.
@@ -158,206 +131,93 @@ fn context(root: &TempDir, name: &str) -> Arc<Context> {
     )
 }
 
-// `share_environment` compares JSON-decoded Python numeric values with
-// integer version keys. This differential uses Python to prepare identical
-// encrypted states so large synthetic version keys have matching AAD in the
-// Rust half too.
-#[test]
-fn share_environment_numeric_version_identity_matches_python() {
-    let root = TempDir::new().unwrap();
-    let rust_states: Vec<_> = (0..5)
-        .map(|index| root.path().join(format!("rust-numeric-{index}")))
-        .collect();
-    let python_states: Vec<_> = (0..5)
-        .map(|index| root.path().join(format!("python-numeric-{index}")))
-        .collect();
-    let rust_paths = serde_json::to_string(&rust_states).unwrap();
-    let python_paths = serde_json::to_string(&python_states).unwrap();
-    let script = format!(
-        r#"
-import json
-from pathlib import Path
-from zeropw import policy as P
-from zeropw.context import Config, Context
-from zeropw.store import iso
-from zeropw.team import membership as M
-
-cases = [
-    ("bool", 1, True, True),
-    ("float", 1, 1.0, 1.0),
-    ("large_exact", 9007199254740993, 9007199254740993, 9007199254740993),
-    ("integer_mismatch", 9007199254740992, 9007199254740993, 9007199254740993),
-    ("rounded_float", 9007199254740992, 9007199254740993.0, 9007199254740993.0),
-]
-
-def prepare(path, key, active, connection_version):
-    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
-    ctx.projects.create("demo", ["dev"])
-    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
-    doc = ctx.state.read_json("vault/secrets.json")
-    record = ctx.vault._encrypt("secret", key, b"synthetic-wide")
-    record.update({{"created_at": iso(), "status": "active", "public": {{}}}})
-    entry = doc["secrets"]["secret"]
-    entry["versions"] = {{str(key): record}}
-    entry["active_version"] = active
-    ctx.state.write_json("vault/secrets.json", doc)
-    ctx.policy.create_connection(P.Connection(
-        id="connection", project="demo", environment="dev", service="synthetic", kind="http",
-        secret_id="secret", secret_version=None, description="",
-        http_target=P.HttpTarget("https", "example.com", 443), http_auth=P.HttpAuth("bearer"),
-        http_scope=P.HttpScope(), ssh_target=None, cli=None, policy_version=0, status="active",
-        created_at="", updated_at=""))
-    connections = ctx.state.read_json(P.CONNECTIONS)
-    connections["connection"]["secret_version"] = connection_version
-    ctx.state.write_json(P.CONNECTIONS, connections)
-    return ctx
-
-def summary(ctx, env_id):
-    doc = M.load_environment(ctx, env_id).document
-    secret = doc["secrets"]["secret"]
-    connection = doc["connections"]["connection"]
-    active = secret["active_version"]
-    pinned = connection["secret_version"]
-    return {{"active": active is not None, "pinned": pinned is not None,
-             "pin_is_active": pinned is not None and pinned == active}}
-
-rust_paths = {rust_paths}
-python_paths = {python_paths}
-out = []
-for (case, key, active, connection_version), rust_path, python_path in zip(cases, rust_paths, python_paths):
-    prepare(rust_path, key, active, connection_version).close()
-    ctx = prepare(python_path, key, active, connection_version)
-    env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-    out.append({{"case": case, **summary(ctx, env_id)}})
-print(json.dumps(out, sort_keys=True))
-"#,
-    );
-    let expected = python(&script);
-    let mut actual = Vec::new();
-    for (index, state) in rust_states.iter().enumerate() {
-        let ctx = Context::open(state, Config::default(), clock::system()).unwrap();
-        let env_id = membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN)
-            .unwrap()["env_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let doc = membership::load_environment(&ctx, &env_id)
-            .unwrap()
-            .document;
-        let active = &doc["secrets"]["secret"]["active_version"];
-        let pinned = &doc["connections"]["connection"]["secret_version"];
-        actual.push(json!({
-            "case": expected[index]["case"],
-            "active": !active.is_null(),
-            "pinned": !pinned.is_null(),
-            "pin_is_active": !pinned.is_null() && pinned == active,
-        }));
+/// A context with project demo/dev and one active `secret` (version 1),
+/// closed so the test can hand-edit its documents and reopen it.
+fn prepare_share_state(path: &std::path::Path, connection: bool) {
+    let ctx = Context::initialize(
+        path,
+        ADMIN,
+        "synthetic-recovery",
+        Config::default(),
+        clock::system(),
+    )
+    .unwrap();
+    ctx.projects.create("demo", &["dev"]).unwrap();
+    ctx.vault
+        .put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev", true)
+        .unwrap();
+    if connection {
+        use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
+        let connection = Connection::new(
+            "connection",
+            "demo",
+            "dev",
+            "synthetic",
+            "http",
+            "secret",
+            None,
+            "",
+            Some(HttpTarget::new("https", "example.com".to_string(), 443, None, false).unwrap()),
+            Some(HttpAuth::bearer()),
+            Some(HttpScope::new(Some(vec!["GET".into()]), None, vec![]).unwrap()),
+            None,
+            None,
+            0,
+            "active",
+            "",
+            "",
+        )
+        .unwrap();
+        ctx.policy.create_connection(connection).unwrap();
     }
-    assert_eq!(json!(actual), expected);
-    assert_eq!(expected[0]["active"], true);
-    assert_eq!(expected[1]["active"], true);
-    assert_eq!(expected[2]["active"], true);
-    assert_eq!(expected[3]["active"], false);
-    assert_eq!(expected[3]["pinned"], false);
-    assert_eq!(expected[4]["active"], true);
 }
 
+/// A vault version key that is not a version number (hand-edited state):
+/// `share_environment` fails closed before retagging anything. (The Python
+/// prototype raised `ValueError` at the same point, leaving `shared_env`
+/// unset.)
 #[test]
-fn share_environment_invalid_retired_version_key_fails_before_mutation_like_python() {
+fn share_environment_invalid_retired_version_key_fails_before_mutation() {
     let root = TempDir::new().unwrap();
-    let rust_state = root.path().join("rust-invalid-key");
-    let python_state = root.path().join("python-invalid-key");
-    let script = format!(
-        r#"
-import json
-from pathlib import Path
-from zeropw.context import Config, Context
-from zeropw.team import membership as M
-
-def prepare(path):
-    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
-    ctx.projects.create("demo", ["dev"])
-    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
-    doc = ctx.state.read_json("vault/secrets.json")
-    doc["secrets"]["secret"]["versions"]["invalid"] = {{"status": "retired"}}
-    ctx.state.write_json("vault/secrets.json", doc)
-    return ctx
-
-prepare({rust_state}).close()
-ctx = prepare({python_state})
-try:
-    M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")
-    result = "ok"
-except Exception as exc:
-    result = type(exc).__name__
-doc = ctx.state.read_json("vault/secrets.json")
-print(json.dumps({{"result": result, "shared_env": doc["secrets"]["secret"].get("shared_env")}}))
-"#,
-        rust_state = serde_json::to_string(&rust_state).unwrap(),
-        python_state = serde_json::to_string(&python_state).unwrap(),
-    );
-    let expected = python(&script);
-    let ctx = Context::open(&rust_state, Config::default(), clock::system()).unwrap();
+    let state = root.path().join("invalid-key");
+    prepare_share_state(&state, false);
+    let ctx = Context::open(&state, Config::default(), clock::system()).unwrap();
+    let mut doc = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, json!({}))
+        .unwrap();
+    doc["secrets"]["secret"]["versions"]["invalid"] = json!({"status": "retired"});
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &doc)
+        .unwrap();
     let error =
         membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap_err();
     let doc = ctx
         .state
         .read_json(zeropw::vault::VAULT_DOC, json!({}))
         .unwrap();
-    assert_eq!(expected["result"], "ValueError");
-    assert_eq!(expected["shared_env"], Value::Null);
     assert_eq!(error.reason, "state_corrupt");
     assert_eq!(doc["secrets"]["secret"]["shared_env"], Value::Null);
 }
 
+/// A connection whose `secret_version` is a list or object (hand-edited
+/// state): `share_environment` fails closed before retagging the secret or
+/// the connection. (The Python prototype raised `TypeError` there.)
 #[test]
 fn share_environment_rejects_unhashable_connection_versions_before_mutation() {
     let root = TempDir::new().unwrap();
     for (index, raw) in [json!([]), json!({})].into_iter().enumerate() {
-        let rust_state = root.path().join(format!("rust-unhashable-{index}"));
-        let python_state = root.path().join(format!("python-unhashable-{index}"));
-        let script = format!(
-            r#"
-import json
-from pathlib import Path
-from zeropw import policy as P
-from zeropw.context import Config, Context
-from zeropw.team import membership as M
-
-def prepare(path):
-    ctx = Context.initialize(Path(path), "synthetic-admin", "synthetic-recovery", Config())
-    ctx.projects.create("demo", ["dev"])
-    ctx.vault.put_secret("secret", "api_key", b"synthetic-seed", "demo", "dev")
-    ctx.policy.create_connection(P.Connection(
-        id="connection", project="demo", environment="dev", service="synthetic", kind="http",
-        secret_id="secret", secret_version=None, description="",
-        http_target=P.HttpTarget("https", "example.com", 443), http_auth=P.HttpAuth("bearer"),
-        http_scope=P.HttpScope(), ssh_target=None, cli=None, policy_version=0, status="active",
-        created_at="", updated_at=""))
-    connections = ctx.state.read_json(P.CONNECTIONS)
-    connections["connection"]["secret_version"] = {raw}
-    ctx.state.write_json(P.CONNECTIONS, connections)
-    return ctx
-
-prepare({rust_state}).close()
-ctx = prepare({python_state})
-try:
-    M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")
-    result = "ok"
-except Exception as exc:
-    result = type(exc).__name__
-vault = ctx.state.read_json("vault/secrets.json")
-connections = ctx.state.read_json(P.CONNECTIONS)
-print(json.dumps({{"result": result,
-                  "secret_shared": vault["secrets"]["secret"].get("shared_env"),
-                  "connection_shared": connections["connection"].get("shared_env")}}))
-"#,
-            raw = raw,
-            rust_state = serde_json::to_string(&rust_state).unwrap(),
-            python_state = serde_json::to_string(&python_state).unwrap(),
-        );
-        let expected = python(&script);
-        let ctx = Context::open(&rust_state, Config::default(), clock::system()).unwrap();
+        let state = root.path().join(format!("unhashable-{index}"));
+        prepare_share_state(&state, true);
+        let ctx = Context::open(&state, Config::default(), clock::system()).unwrap();
+        let mut connections = ctx
+            .state
+            .read_json(zeropw::policy::CONNECTIONS, json!({}))
+            .unwrap();
+        connections["connection"]["secret_version"] = raw;
+        ctx.state
+            .write_json(zeropw::policy::CONNECTIONS, &connections)
+            .unwrap();
         let error =
             membership::share_environment(&ctx, None, "demo", "dev", "owner", ADMIN).unwrap_err();
         let vault = ctx
@@ -368,9 +228,6 @@ print(json.dumps({{"result": result,
             .state
             .read_json(zeropw::policy::CONNECTIONS, json!({}))
             .unwrap();
-        assert_eq!(expected["result"], "TypeError");
-        assert_eq!(expected["secret_shared"], Value::Null);
-        assert_eq!(expected["connection_shared"], Value::Null);
         assert_eq!(error.reason, "state_corrupt");
         assert_eq!(vault["secrets"]["secret"]["shared_env"], Value::Null);
         assert_eq!(connections["connection"]["shared_env"], Value::Null);
@@ -547,42 +404,8 @@ fn released_deferred_commit_is_broadcast_once_across_polls() {
 
 // ------------------------------------------------------------ INCIDENT from unknown author (gap 3)
 
-const PY_UNKNOWN_INCIDENT: &str = r#"
-import json, tempfile, pathlib, time
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-team.register_env(env_id)
-stranger = DeviceKey.generate()
-
-class Fake:
-    def __init__(self, peer):
-        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
-        self.created_at = time.monotonic()
-    def send(self, m): self.sent.append(m)
-    def recv(self, timeout): return None
-    def close(self): self.closed = True
-
-session = Fake(stranger.record)
-fact = S.sign_fact(stranger, env_id, "incident", {"incident_id": "0123456789abcdef"}, "1000-0000")
-team._handle_message(env_id, session, {"type": "INCIDENT", "fact": fact.to_dict()})
-rejected = [r for r in ctx.audit.tail(50) if r["event"] == "team_fact_rejected"]
-for r in rejected:
-    r.pop("ts")
-    assert r.pop("env_id") == env_id and r.pop("fingerprint") == stranger.fingerprint
-print(json.dumps({"rejected": rejected, "sent": session.sent}))
-"#;
-
 #[test]
 fn incident_from_unknown_author_is_audited_like_python() {
-    let expected = python(PY_UNKNOWN_INCIDENT);
     let root = TempDir::new().unwrap();
     let node = Node::new(&root, "a");
     let stranger = DeviceKey::generate();
@@ -617,8 +440,13 @@ fn incident_from_unknown_author_is_audited_like_python() {
             r
         })
         .collect();
-    assert_eq!(json!(rejected), expected["rejected"]);
-    assert_eq!(expected["sent"], json!([]));
+    // The record the Python prototype audited for the same frame.
+    assert_eq!(
+        json!(rejected),
+        json!([{"action": null, "caller": null, "connection": null, "event": "team_fact_rejected",
+                "kind": "incident", "policy_version": null, "reason": "team_fact_signature_invalid",
+                "request_id": null, "result": "denied", "run_id": null, "target": null}])
+    );
     assert!(session.frames("INCIDENT_ACK").is_empty());
 }
 
@@ -713,13 +541,8 @@ fn peers_frame_is_filtered_and_sorted_like_python() {
         .adopt_outbound_session(&node.env, session.clone(), "gap-peers");
     let persisted = node.ctx.state.read_json(&path, json!({})).unwrap();
     assert_eq!(persisted[&peer_fp], json!(["z", "y", "gap-peers"]));
-    let expected = python(&format!(
-        "import json\ndoc = json.loads({:?})\nprint(json.dumps({{fp: sorted(a for a in addrs if isinstance(a, str)) for fp, addrs in doc.items() if isinstance(addrs, list)}}))",
-        persisted.to_string()
-    ));
     let frames = session.frames("PEERS");
     assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0]["peers"], expected);
     assert_eq!(
         frames[0]["peers"],
         json!({
@@ -753,57 +576,6 @@ fn falsy_peers_document_is_an_empty_dict() {
     );
 }
 
-const PY_NON_DICT_PEERS: &str = r#"
-import json, tempfile, pathlib, time
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-path = f"team/{env_id}/peers.json"
-load = {}
-for doc in (["x"], "x", 5, True, [], 0, "", None, {}):
-    ctx.state.write_json(path, doc)
-    try:
-        S.TeamSync(ctx, T.InProcessTransport(device), device).register_env(env_id)
-        load[json.dumps(doc)] = "ok"
-    except Exception as exc:
-        load[json.dumps(doc)] = type(exc).__name__
-
-class Fake:
-    def __init__(self, peer):
-        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
-        self.created_at = time.monotonic()
-    def send(self, m): self.sent.append(m)
-    def recv(self, timeout): return None
-    def close(self): self.closed = True
-
-ctx.state.write_json(path, {})
-team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-team.register_env(env_id)
-ctx.state.write_json(path, ["synthetic-raw-entry"])
-session = Fake(DeviceKey.generate().record)
-try:
-    team.adopt_outbound_session(env_id, session, "gap-non-dict")
-    wired = "ok"
-except Exception as exc:
-    wired = type(exc).__name__
-peers_after = ctx.state.read_json(path, None)
-other = Fake(DeviceKey.generate().record)
-ctx.state.write_json(path, {other.peer.fingerprint: 5})
-try:
-    team.adopt_outbound_session(env_id, other, "gap-non-list")
-    entry = "ok"
-except Exception as exc:
-    entry = type(exc).__name__
-print(json.dumps({"load": load, "wired": wired, "sent": session.sent, "peers": peers_after, "entry": entry,
-                  "entry_sent": other.sent, "sessions": sorted(team._envs[env_id].sessions)}))
-"#;
-
 /// A truthy non-dict peers document makes Python raise `AttributeError`
 /// (`_read_peers(...).items()` loading the environment, `doc.get` in
 /// `_persist_peer_address` before a dialed session is accepted). Rust fails
@@ -811,15 +583,23 @@ print(json.dumps({"load": load, "wired": wired, "sent": session.sent, "peers": p
 /// panicking, wiring the session anyway or relaying the raw document.
 #[test]
 fn non_dict_peers_document_is_never_sent() {
-    let python = python(PY_NON_DICT_PEERS);
     let root = TempDir::new().unwrap();
     let node = Node::new(&root, "a");
     let path = format!("team/{}/peers.json", node.env);
-    for (doc, expected) in python["load"].as_object().unwrap() {
-        node.ctx
-            .state
-            .write_json(&path, &serde_json::from_str::<Value>(doc).unwrap())
-            .unwrap();
+    // `register_env` outcome per peers document, as the Python prototype
+    // loaded it (a falsy document is an empty dict).
+    for (doc, expected) in [
+        (json!(["x"]), "AttributeError"),
+        (json!("x"), "AttributeError"),
+        (json!(5), "AttributeError"),
+        (json!(true), "AttributeError"),
+        (json!([]), "ok"),
+        (json!(0), "ok"),
+        (json!(""), "ok"),
+        (Value::Null, "ok"),
+        (json!({}), "ok"),
+    ] {
+        node.ctx.state.write_json(&path, &doc).unwrap();
         let fresh = sync::TeamSync::new(
             node.ctx.clone(),
             Arc::new(InProcessTransport::new(node.key.clone(), no_members())),
@@ -833,7 +613,6 @@ fn non_dict_peers_document_is_never_sent() {
             }
         }
     }
-    assert_eq!(python["load"]["[\"x\"]"], "AttributeError");
     // `Node::new` registered its environment while the document was valid.
     node.ctx
         .state
@@ -842,16 +621,12 @@ fn non_dict_peers_document_is_never_sent() {
     let (session, _inbox) = Scripted::new(DeviceKey::generate().record().unwrap(), &node.env, None);
     node.team
         .adopt_outbound_session(&node.env, session.clone(), "gap-non-dict");
-    assert_eq!(python["wired"], "AttributeError");
-    assert_eq!(python["sent"], json!([]));
     assert!(session.sent.lock().unwrap().is_empty());
-    assert_eq!(python["sessions"], json!([]));
     assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
     assert!(
         session.is_closed(),
         "an unwired dialed session is not leaked"
     );
-    assert_eq!(python["peers"], json!(["synthetic-raw-entry"]));
     assert_eq!(
         node.ctx.state.read_json(&path, json!(null)).unwrap(),
         json!(["synthetic-raw-entry"])
@@ -863,8 +638,6 @@ fn non_dict_peers_document_is_never_sent() {
     node.ctx.state.write_json(&path, &entry).unwrap();
     node.team
         .adopt_outbound_session(&node.env, other.clone(), "gap-non-list");
-    assert_eq!(python["entry"], "TypeError");
-    assert_eq!(python["entry_sent"], json!([]));
     assert!(other.sent.lock().unwrap().is_empty());
     assert!(other.is_closed());
     assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
@@ -932,46 +705,11 @@ fn join_with_non_dict_peers_document_fails_before_dialing() {
 
 // ------------------------------------------------------- failed broadcast send
 
-const PY_BROADCAST_DROP: &str = r#"
-import json, tempfile, pathlib, time
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-team.register_env(env_id)
-peer = DeviceKey.generate()
-
-class Failing:
-    def __init__(self, peer):
-        self.peer, self.env_id, self.closed = peer, env_id, False
-        self.created_at = time.monotonic()
-    def send(self, m): raise T.SessionClosed("synthetic_send_failure")
-    def recv(self, timeout): return None
-    def close(self): self.closed = True
-
-session = Failing(peer.record)
-assert team._accept_or_replace_session(env_id, session, inbound=False)
-team.publish_fact(env_id, "connection_disabled", connection_id="gh")
-closes = [r for r in ctx.audit.tail(200) if r["event"] == "team_session_close"]
-for r in closes:
-    r.pop("ts")
-    assert r.pop("env_id") == env_id and r.pop("fingerprint") == peer.fingerprint
-print(json.dumps({"closes": closes, "sessions": sorted(team._envs[env_id].sessions),
-                  "closed": session.closed}))
-"#;
-
 /// sync.py `_broadcast`: a send failure calls `_drop_session` right away --
 /// the session leaves the table, is closed, and `team_session_close` is
 /// audited before the broadcasting call returns (not at the next poll).
 #[test]
 fn failed_broadcast_send_drops_the_session_immediately() {
-    let python = python(PY_BROADCAST_DROP);
     let root = TempDir::new().unwrap();
     let node = Node::new(&root, "a");
     // A receive loop that never notices `close`, so only the broadcast path
@@ -1008,12 +746,15 @@ fn failed_broadcast_send_drops_the_session_immediately() {
             })
             .collect()
     };
-    assert_eq!(json!(closes(&node)), python["closes"]);
-    assert_eq!(python["closes"].as_array().unwrap().len(), 1);
+    // The record the Python prototype audited for the same failure.
+    assert_eq!(
+        json!(closes(&node)),
+        json!([{"action": null, "caller": null, "connection": null, "event": "team_session_close",
+                "policy_version": null, "reason": null, "request_id": null, "result": "ok",
+                "run_id": null, "target": null}])
+    );
     assert_eq!(node.team.status(&node.env).unwrap()["sessions"], json!([]));
-    assert_eq!(python["sessions"], json!([]));
     assert!(session.is_closed());
-    assert_eq!(python["closed"], json!(true));
     // The receive thread's own exit later finds nothing left to drop.
     node.team.stop();
     assert_eq!(closes(&node).len(), 1);
@@ -1095,65 +836,18 @@ fn stop_join_is_bounded_like_python() {
 
 // ------------------------------------------------------------------ parse_invite (gap 6)
 
-const PY_INVITES: &str = r#"
-import base64, json
-from zeropw.team.membership import parse_invite, INVITE_FORMAT
-base = {"format": INVITE_FORMAT, "env_id": "aaaaaaaaaaaaaaaaaaaaaaaaaa-0123456789abcdef0123456789abcdef",
-        "inviter": "x", "addresses": ["a:1"], "invite_secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "expires_at": "2099-01-01T00:00:00Z", "role": "user", "name": "synthetic"}
-DROP = object()
-variants = [
-    {}, {"addresses": DROP}, {"addresses": None}, {"addresses": "ab"}, {"addresses": {"k1": 1, "k2": [2]}},
-    {"addresses": 5}, {"addresses": True}, {"addresses": [1, 1.5, -0.0, 1e20, 12345678901234567890, None, True,
-     False, [1, "a", None], {"a": [1.5]}, "s", "é\x01"]},
-    {"inviter": 12}, {"inviter": None}, {"inviter": [1, "x"]}, {"inviter": {"k": "é\x7f"}}, {"inviter": 2.5},
-    {"inviter": DROP}, {"name": 42}, {"name": True}, {"name": None}, {"name": 1e-7}, {"name": ["x" * 100, "y" * 100]},
-    {"name": ""}, {"name": DROP}, {"expires_at": 1.5}, {"expires_at": 4102444800}, {"expires_at": None},
-    {"expires_at": DROP}, {"invite_secret": [1]}, {"invite_secret": None}, {"invite_secret": 5},
-    {"invite_secret": "AAAA"}, {"invite_secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
-    {"invite_secret": "AA AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}, {"role": True}, {"role": "admin"},
-    {"role": "owner"}, {"role": DROP}, {"env_id": 5}, {"env_id": DROP}, {"format": DROP}, {"format": "other"},
-]
-texts = []
-for over in variants:
-    payload = dict(base)
-    for k, v in over.items():
-        if v is DROP:
-            payload.pop(k)
-        else:
-            payload[k] = v
-    texts.append(base64.b32encode(json.dumps(payload).encode()).decode().rstrip("=").lower())
-plain = texts[0]
-texts += [plain + "\x1c", "\x1f" + plain, " " + plain + "　", plain.upper(),
-          plain.replace("s", "ſ"), plain.replace("i", "ı"), plain + "é", plain + "=",
-          base64.b32encode(json.dumps(base).encode()).decode(), plain[:-1], "", "!!",
-          base64.b32encode(b"[1, 2]").decode(), base64.b32encode(b"\xff\xfe").decode(),
-          base64.b32encode(json.dumps(dict(base, extra=[1])).encode()).decode()]
-out = []
-for text in texts:
-    try:
-        r = parse_invite(text)
-        r["invite_secret"] = base64.b64encode(r["invite_secret"]).decode()
-        out.append({"text": text, "ok": r})
-    except Exception as e:
-        out.append({"text": text, "err": [type(e).__name__, getattr(e, "reason", None)]})
-upper = {}
-for cp in range(0x80, 0x110000):
-    if 0xD800 <= cp <= 0xDFFF:
-        continue
-    u = chr(cp).upper()
-    if u.isascii():
-        upper[str(cp)] = u
-print(json.dumps({"cases": out, "upper_to_ascii": upper}))
-"#;
-
 /// membership.py `parse_invite`: `str()` coercion of every field, a missing
 /// `addresses` defaulting to `[]`, Python iteration of `addresses`, and
-/// `_b32d`'s `strip().upper()` -- compared case by case with CPython.
+/// `_b32d`'s `strip().upper()` -- compared case by case with the Python
+/// prototype's outcomes in `tests/fixtures/python/team/invites/cases.json`.
 #[test]
 fn parse_invite_accepts_every_shape_python_accepts() {
-    let oracle = python(PY_INVITES);
-    let cases = oracle["cases"].as_array().unwrap();
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/python/team/invites/cases.json"
+    );
+    let oracle: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let cases = oracle.as_array().unwrap();
     assert!(cases.len() > 50);
     let mut accepted = 0;
     for case in cases {
@@ -1179,18 +873,4 @@ fn parse_invite_accepts_every_shape_python_accepts() {
         }
     }
     assert!(accepted >= 25, "only {accepted} accepted");
-    // `_b32d`'s `str.upper()`: every non-ASCII code point whose uppercase is
-    // ASCII (and so decodes) maps identically in Rust.
-    let upper = oracle["upper_to_ascii"].as_object().unwrap();
-    let mut rust_upper = serde_json::Map::new();
-    for cp in 0x80u32..0x11_0000 {
-        let Some(c) = char::from_u32(cp) else {
-            continue;
-        };
-        let u = c.to_uppercase().collect::<String>();
-        if u.is_ascii() {
-            rust_upper.insert(cp.to_string(), json!(u));
-        }
-    }
-    assert_eq!(&rust_upper, upper);
 }

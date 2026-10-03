@@ -854,35 +854,128 @@ fn full_team_sync_tcp_wire_uses_original_encoding_leak_scanner() {
         streams.iter().any(|stream| stream.len() > 500),
         "capture must include more than an empty handshake"
     );
-    let a = f._root.path().join("wire-a.bin");
-    let b = f._root.path().join("wire-b.bin");
-    fs::write(&a, &streams[0]).unwrap();
-    fs::write(&b, &streams[1]).unwrap();
-    let script = r#"
-import sys
-from pathlib import Path
-from tests.leakcheck import find_secret
-streams = [Path(name).read_bytes() for name in sys.argv[1:]]
-needles = [b'synthetic-team-share-secret-0123456789', bytes([7]) * 32]
-for stream in streams + [b''.join(streams)]:
-    hit = find_secret(stream, needles)
-    if hit is not None:
-        print(hit)
-        sys.exit(1)
-print('NONE')
-"#;
-    let scan = Command::new("python3.12")
-        .args(["-c", script])
-        .args([&a, &b])
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .output()
-        .unwrap();
-    assert!(
-        scan.status.success(),
-        "original leak scanner found a captured encoding: {}",
-        String::from_utf8_lossy(&scan.stdout)
-    );
-    assert_eq!(scan.stdout, b"NONE\n");
+    let needles: [&[u8]; 2] = [b"synthetic-team-share-secret-0123456789", &[7u8; 32]];
+    let joined = streams.concat();
+    for stream in streams.iter().chain(std::iter::once(&joined)) {
+        assert_eq!(
+            find_secret(stream, &needles),
+            None,
+            "leak scanner found a captured encoding"
+        );
+    }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Port of the retired Python test helper `tests/leakcheck.py::find_secret`:
+/// where (which encoding) one of `secrets` occurs in `data`, or `None`.
+/// Looks for every pattern `runs::credential_patterns` derives (raw,
+/// standard/urlsafe base64 at every alignment with and without padding, hex
+/// in both cases, percent-encoding), then decodes percent-encoded, base64
+/// and hex tokens found in the data and searches the decoded bytes for any
+/// secret of at least 16 bytes. Only a description is returned, never the
+/// value.
+fn find_secret(data: &[u8], secrets: &[&[u8]]) -> Option<String> {
+    for (index, secret) in secrets.iter().enumerate() {
+        for pattern in zeropw::runs::credential_patterns(secret) {
+            if contains(data, &pattern) {
+                return Some(format!("secret #{index} in a directly scanned encoding"));
+            }
+        }
+    }
+    let raw: Vec<(usize, &[u8])> = secrets
+        .iter()
+        .enumerate()
+        .filter(|(_, secret)| secret.len() >= 16)
+        .map(|(index, secret)| (index, *secret))
+        .collect();
+    if raw.is_empty() {
+        return None;
+    }
+    let decoded_hit = |decoded: &[u8], how: &str| {
+        raw.iter()
+            .find(|(_, secret)| contains(decoded, secret))
+            .map(|(index, _)| format!("secret #{index} inside decoded {how}"))
+    };
+    // `urllib.parse.unquote_to_bytes(blob.replace(b"+", b" "))`
+    let plus: Vec<u8> = data
+        .iter()
+        .map(|&b| if b == b'+' { b' ' } else { b })
+        .collect();
+    let unquoted: Vec<u8> = percent_encoding::percent_decode(&plus).collect();
+    if unquoted != data
+        && let Some(hit) = decoded_hit(&unquoted, "percent-encoding")
+    {
+        return Some(hit);
+    }
+    let base64_token = regex::bytes::Regex::new(r"[A-Za-z0-9+/_-]{16,}={0,2}").unwrap();
+    for token in base64_token.find_iter(data) {
+        let body = token.as_bytes();
+        let end = body.iter().rposition(|&b| b != b'=').map_or(0, |i| i + 1);
+        let body = &body[..end];
+        // The token may start in the middle of an encoded group.
+        for offset in 0..4 {
+            let Some(chunk) = body.get(offset..) else {
+                break;
+            };
+            if chunk.len() < 8 {
+                break;
+            }
+            let mut padded = chunk.to_vec();
+            padded.resize(chunk.len().div_ceil(4) * 4, b'=');
+            for decoded in [
+                zeropw::pybase64::b64decode_bytes(&padded),
+                zeropw::pybase64::urlsafe_b64decode_bytes(&padded),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(hit) = decoded_hit(&decoded, "base64") {
+                    return Some(hit);
+                }
+            }
+        }
+    }
+    let hex_token = regex::bytes::Regex::new(r"[0-9A-Fa-f]{16,}").unwrap();
+    for token in hex_token.find_iter(data) {
+        for offset in 0..2 {
+            let chunk = &token.as_bytes()[offset..];
+            let chunk = &chunk[..chunk.len() - chunk.len() % 2];
+            if let Ok(decoded) = hex::decode(chunk)
+                && let Some(hit) = decoded_hit(&decoded, "hex")
+            {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn leak_scanner_finds_encoded_and_embedded_secrets() {
+    let secret: &[u8] = b"synthetic-team-share-secret-0123456789";
+    let needles = [secret];
+    assert_eq!(find_secret(b"nothing to see here", &needles), None);
+    let mut shifted = b"x".to_vec();
+    shifted.extend_from_slice(secret);
+    for data in [
+        secret.to_vec(),
+        format!("prefix {} suffix", zeropw::pybase64::b64encode(secret)).into_bytes(),
+        format!("[{}]", zeropw::pybase64::b64encode(&shifted)).into_bytes(),
+        hex::encode_upper(secret).into_bytes(),
+        format!("k={}", hex::encode(&shifted)).into_bytes(),
+        percent_encoding::percent_encode(secret, percent_encoding::NON_ALPHANUMERIC)
+            .to_string()
+            .into_bytes(),
+    ] {
+        assert!(
+            find_secret(&data, &needles).is_some(),
+            "{}",
+            String::from_utf8_lossy(&data)
+        );
+    }
 }
 
 fn reserve_port() -> u16 {

@@ -2236,7 +2236,7 @@ mod tests {
         let hlc = format!("{WALL_MS_GMTIME_FAILS_AT}-0000");
         let c2 = connection_create_commit(&env_id, &owner, 2, &hlc, "gh");
         let err = fold(&env_id, vec![c1, c2], None, None, None, None)
-            .expect_err("a commit whose hlc python3.12 can't gmtime() must abort the whole fold");
+            .expect_err("a commit whose hlc is past gmtime range must abort the whole fold");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "team_commit_time_out_of_range");
     }
@@ -2268,36 +2268,11 @@ mod tests {
     /// `_commit_time` after its `not _is_admin`/`connection_not_found`
     /// checks, so it never even reaches `_commit_time` for this op and
     /// simply skips it with `connection_not_found`, folding fine. A single
-    /// peer commit could stop every node. This confirms real `python3.12`'s
-    /// `_op_connection_disable` really does return `"connection_not_found"`
-    /// (not raise) for exactly this shape, then confirms Rust's fold
-    /// (through the public `fold()` entry point, not the private handler)
-    /// now agrees: skips the op, does not abort.
+    /// peer commit could stop every node. Rust's fold (through the public
+    /// `fold()` entry point) must skip the op, not abort.
     #[test]
     fn connection_disable_for_missing_id_skips_even_with_hlc_past_gmtime_range() {
         let huge_wall_ms = WALL_MS_GMTIME_FAILS_AT + 12345;
-        let script = format!(
-            r#"
-from types import SimpleNamespace
-from zeropw.team import fold as F
-
-doc = F.new_document("env")
-doc["owner"] = "owner-fp"
-doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
-commit = SimpleNamespace(author="owner-fp", hlc="{huge_wall_ms}-0000")
-facts = F.Facts()
-op = {{"op": "connection.disable", "id": "missing"}}
-print(F._op_connection_disable(doc, commit, facts, op))
-"#
-        );
-        let py_reason = crate::oracle::python(&script);
-        assert_eq!(
-            py_reason.trim(),
-            "connection_not_found",
-            "real python3.12 must skip (not raise) for a connection.disable of a missing id, \
-             even with an hlc past gmtime's range"
-        );
-
         let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
         let hlc = format!("{huge_wall_ms}-0000");
         let op = json!({"op": "connection.disable", "id": "missing"});
@@ -2314,48 +2289,12 @@ print(F._op_connection_disable(doc, commit, facts, op))
     /// and then PANICKED at `op_secret_put_version`'s
     /// `entry.as_object_mut().expect("secret entry is always an object")` --
     /// a panic on file-supplied (snapshot) data, which PORTING.md §4
-    /// forbids. Confirms real `python3.12`'s equivalent -- `_op_secret_put_
-    /// version` touching that same pre-existing, wrongly-shaped entry --
-    /// really does raise an uncaught `TypeError` (not merely return a
-    /// documented reason), then confirms `fold()` now returns a clean
-    /// `state_corrupt` error instead of panicking, for both this shape and
-    /// the sibling `secrets.s1.versions = 5` shape the same finding named.
+    /// forbids. Python's equivalent handler raised an uncaught `TypeError`
+    /// there; `fold()` must return a clean `state_corrupt` error instead of
+    /// panicking, for both this shape and the sibling
+    /// `secrets.s1.versions = 5` shape the same finding named.
     #[test]
     fn malformed_secret_entry_shapes_fail_closed_instead_of_panicking() {
-        let confirm_python_raises = |doc_secrets_s1: &str| {
-            let script = format!(
-                r#"
-from types import SimpleNamespace
-from zeropw.team import fold as F
-
-doc = F.new_document("env")
-doc["owner"] = "owner-fp"
-doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
-doc["dek"]["generations"]["g0"] = {{"wraps": {{}}}}
-doc["dek"]["current"] = "g0"
-doc["secrets"]["s1"] = {doc_secrets_s1}
-commit = SimpleNamespace(author="owner-fp")
-facts = F.Facts()
-op = {{"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
-      "generation_id": "g0", "kind": "api_key",
-      "ciphertext": {{"nonce": "n", "ciphertext": "c"}}}}
-try:
-    F._op_secret_put_version(doc, commit, facts, op)
-    print("OK")
-except Exception as e:
-    print(f"ERR {{type(e).__name__}}")
-"#
-            );
-            let out = crate::oracle::python(&script);
-            assert_eq!(
-                out.trim(),
-                "ERR TypeError",
-                "real python3.12 must raise an uncaught TypeError for doc[\"secrets\"][\"s1\"] = {doc_secrets_s1}"
-            );
-        };
-        confirm_python_raises("5");
-        confirm_python_raises(r#"{"kind": "api_key", "active_version": None, "versions": 5}"#);
-
         // Finding H-R5-6: `secrets.s1 = 5` alone -- with NO op in this
         // `fold()` call ever targeting `"s1"` -- is no longer eagerly
         // rejected: `validate_document_shape` only requires a `secrets`
@@ -2379,35 +2318,15 @@ except Exception as e:
             None,
             None,
         )
-        .expect(
-            "zero commits never touch secrets.s1 -- must fold successfully, matching python3.12",
-        );
+        .expect("zero commits never touch secrets.s1 -- must fold successfully");
         assert_eq!(
             untouched.document.as_object().unwrap().get("secrets"),
             malformed_doc.as_object().unwrap().get("secrets"),
             "an untouched malformed secrets entry must pass through unchanged, matching Python"
         );
-        let py_script = format!(
-            r#"
-import json
-from zeropw.team import fold as F
-doc = json.loads({doc_text:?})
-r = F.fold({env_id:?}, [], base_document=doc)
-print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":")))
-"#,
-            doc_text =
-                pyjson::dumps(&malformed_doc, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            env_id = env_id,
-        );
-        assert_eq!(
-            crate::oracle::python(&py_script).trim(),
-            r#"{"s1":5}"#,
-            "real python3.12 must also leave the untouched malformed secrets entry unchanged"
-        );
-
         // The panic risk this test originally guarded against only exists
-        // once a real op actually TARGETS the malformed entry -- confirmed
-        // above by `confirm_python_raises("5")`. Build a real signed
+        // once a real op actually TARGETS the malformed entry (Python's
+        // handler raised an uncaught `TypeError` there). Build a real signed
         // `secret.put_version` commit for `"s1"` and fold it against the
         // SAME malformed document: this must now fail closed
         // (`state_corrupt`, not a panic), matching Python's own uncaught
@@ -2445,13 +2364,10 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
     /// UNCONDITIONALLY (a Python dict subscript, not `.get`), so each of
     /// these seven still passed validation and then let `fold()` complete
     /// SUCCESSFULLY with a wrong document, where Python raises an uncaught
-    /// exception from the equivalent handler. For each case: (1) confirm
-    /// real `python3.12`'s own handler, called directly against the exact
-    /// same document (round-tripped through JSON so both languages parse
-    /// byte-identical input), really does raise the claimed exception --
-    /// not merely assumed from reading the source; (2) confirm `fold()` now
-    /// returns `state_corrupt` when the corresponding op actually accesses
-    /// that malformed shape. A no-op fold deliberately preserves malformed
+    /// exception from the equivalent handler (`KeyError` for all but the
+    /// `secrets.s1.versions.v=5` case, a `TypeError`). `fold()` must return
+    /// `state_corrupt` when the corresponding op actually accesses that
+    /// malformed shape. A no-op fold deliberately preserves malformed
     /// data untouched, matching Python's lazy access semantics.
     #[test]
     fn seven_more_unconditionally_indexed_fields_fail_closed_instead_of_fail_open() {
@@ -2474,10 +2390,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
         struct Case {
             label: &'static str,
             doc: Value,
-            handler: &'static str,
             author: &'static str,
             op: Value,
-            expected_python_exception: &'static str,
         }
         let cases: Vec<Case> = vec![
             {
@@ -2486,10 +2400,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "connections.c1={} + connection.disable",
                     doc: Value::Object(doc),
-                    handler: "_op_connection_disable",
                     author: "owner-fp",
                     op: json!({"op": "connection.disable", "id": "c1"}),
-                    expected_python_exception: "KeyError",
                 }
             },
             {
@@ -2498,10 +2410,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "connection without created_at + connection.update",
                     doc: Value::Object(doc),
-                    handler: "_op_connection_update",
                     author: "owner-fp",
                     op: json!({"op": "connection.update", "id": "c1"}),
-                    expected_python_exception: "KeyError",
                 }
             },
             {
@@ -2516,10 +2426,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "truthy members entry without status + settings.update",
                     doc: Value::Object(doc),
-                    handler: "_op_settings_update",
                     author: "m2",
                     op: json!({"op": "settings.update", "sync_interval_seconds": 5}),
-                    expected_python_exception: "KeyError",
                 }
             },
             {
@@ -2528,12 +2436,10 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "secrets.s1={\"versions\":{}} + secret.put_version",
                     doc: Value::Object(doc),
-                    handler: "_op_secret_put_version",
                     author: "owner-fp",
                     op: json!({"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
                                "generation_id": "g0", "kind": "api_key",
                                "ciphertext": {"nonce": "n", "ciphertext": "c"}}),
-                    expected_python_exception: "KeyError",
                 }
             },
             {
@@ -2545,10 +2451,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "secrets.s1.versions.v=5 + secret.activate",
                     doc: Value::Object(doc),
-                    handler: "_op_secret_activate",
                     author: "owner-fp",
                     op: json!({"op": "secret.activate", "secret_id": "s1", "version_id": "v1"}),
-                    expected_python_exception: "TypeError",
                 }
             },
             {
@@ -2560,10 +2464,8 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "secret without active_version + secret.activate",
                     doc: Value::Object(doc),
-                    handler: "_op_secret_activate",
                     author: "owner-fp",
                     op: json!({"op": "secret.activate", "secret_id": "s1", "version_id": "v1"}),
-                    expected_python_exception: "KeyError",
                 }
             },
             {
@@ -2575,50 +2477,15 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
                 Case {
                     label: "dek.generations.g={} + member.add with wraps",
                     doc: Value::Object(doc),
-                    handler: "_op_member_add",
                     author: "owner-fp",
                     op: json!({"op": "member.add", "device": new_member_record.clone(),
                                "name": "bob", "role": "user",
                                "wraps": {"g0": {"eph_pub": "a", "nonce": "b", "ciphertext": "c"}}}),
-                    expected_python_exception: "KeyError",
                 }
             },
         ];
 
         for case in &cases {
-            let doc_text = pyjson::dumps(&case.doc, pyjson::DumpOptions::compact_sorted()).unwrap();
-            let op_text = pyjson::dumps(&case.op, pyjson::DumpOptions::compact_sorted()).unwrap();
-            let script = format!(
-                r#"
-import json
-from types import SimpleNamespace
-from zeropw.team import fold as F
-
-doc = json.loads({doc_text:?})
-commit = SimpleNamespace(author={author:?}, hlc="1000-0000")
-facts = F.Facts()
-op = json.loads({op_text:?})
-try:
-    F.{handler}(doc, commit, facts, op)
-    print("OK")
-except Exception as e:
-    print(f"ERR {{type(e).__name__}}")
-"#,
-                doc_text = doc_text,
-                author = case.author,
-                op_text = op_text,
-                handler = case.handler,
-            );
-            let out = crate::oracle::python(&script);
-            assert_eq!(
-                out.trim(),
-                format!("ERR {}", case.expected_python_exception),
-                "real python3.12's {} must raise an uncaught {} for case {:?}",
-                case.handler,
-                case.expected_python_exception,
-                case.label,
-            );
-
             let commit = Commit {
                 format: "zeropw-team-commit-v1".into(),
                 env_id: "env".into(),
@@ -2656,13 +2523,11 @@ except Exception as e:
     }
 
     /// Finding H-R5-6: `validate_document_shape` used to reject nine
-    /// document shapes Python's `fold()` folds without error. Confirmed
-    /// against real `python3.12`: `F.fold(env_id, [], base_document=doc)`
-    /// (zero commits -- nothing is ever dereferenced) returns `OK`,
-    /// document unchanged, for every one of these. Each case round-trips
-    /// through `pyjson` so both languages parse byte-identical input.
+    /// document shapes Python's `fold()` folded without error: with zero
+    /// commits nothing is ever dereferenced, so the document passes through
+    /// unchanged for every one of these.
     #[test]
-    fn nine_over_strict_shapes_now_fold_successfully_matching_python() {
+    fn nine_over_strict_shapes_now_fold_successfully() {
         fn base(patch: &[(&str, Value)]) -> Value {
             let mut doc: Map<String, Value> = serde_json::from_str(
                 r#"{"env_id":"env","format":"zeropw-team-env-v1","owner":"owner-fp",
@@ -2737,27 +2602,6 @@ except Exception as e:
                 "case {:?}: an untouched document must pass through unchanged",
                 case.label
             );
-
-            let doc_text = pyjson::dumps(&case.doc, pyjson::DumpOptions::plain()).unwrap();
-            let script = format!(
-                r#"
-import json
-from zeropw.team import fold as F
-doc = json.loads({doc_text:?})
-try:
-    r = F.fold("env", [], base_document=doc)
-    print("OK " + json.dumps(r.document, sort_keys=True, separators=(",", ":")))
-except Exception as e:
-    print("RAISE " + type(e).__name__)
-"#,
-            );
-            let py_out = crate::oracle::python(&script);
-            assert!(
-                py_out.trim().starts_with("OK"),
-                "case {:?}: real python3.12 must fold this shape successfully too, got: {}",
-                case.label,
-                py_out
-            );
         }
     }
 
@@ -2826,54 +2670,26 @@ except Exception as e:
             .expect_err(&format!("stray _version_order={stray:?} must fail closed"));
             assert!(err.is(crate::errors::ErrorClass::StateError));
             assert_eq!(err.reason, "state_corrupt");
-
-            // Confirm python3.12's own handler really does raise once a
-            // real op touches this secret id.
-            let script = format!(
-                r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-doc = json.loads({doc:?})
-commit = C.Commit.from_dict(json.loads({commit:?}))
-try:
-    F.fold("env", [commit], base_document=doc)
-    print("OK")
-except Exception as e:
-    print(f"ERR {{type(e).__name__}}")
-"#,
-                doc = pyjson::dumps(&Value::Object(doc), pyjson::DumpOptions::plain()).unwrap(),
-                commit = pyjson::dumps(&commit.to_dict(), pyjson::DumpOptions::plain()).unwrap(),
-            );
-            let py_out = crate::oracle::python(&script);
-            assert_eq!(
-                py_out.trim(),
-                "ERR AttributeError",
-                "real python3.12 must raise for stray _version_order={stray:?} once touched"
-            );
         }
     }
 
+    /// A raw snapshot `version_order` entry is iterated like Python did:
+    /// a string by character, an object by key in document order.
     #[test]
-    fn derive_version_index_iterates_raw_strings_and_objects_like_python() {
-        for raw in [
-            json!({"sid": "a🙂"}),
-            json!({"sid": {"second": 2, "first": 1}}),
-        ] {
+    fn derive_version_index_iterates_raw_strings_and_objects() {
+        let cases = [
+            (
+                json!({"sid": "a\u{1f642}"}),
+                json!({"sid": {"a": 1, "\u{1f642}": 2}}),
+            ),
+            (
+                json!({"sid": {"second": 2, "first": 1}}),
+                json!({"sid": {"first": 2, "second": 1}}),
+            ),
+        ];
+        for (raw, expected) in cases {
             let rust = version_index_from_order(&raw).unwrap();
-            let script = format!(
-                r#"
-import json
-order = json.loads({raw:?})
-result = {{sid: {{vid: i + 1 for i, vid in enumerate(items)}}
-          for sid, items in order.items()}}
-print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
-"#,
-                raw = pyjson::dumps(&raw, pyjson::DumpOptions::plain()).unwrap(),
-            );
-            let python: Value =
-                serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-            assert_eq!(json!(rust), python, "raw version_order={raw}");
+            assert_eq!(json!(rust), expected, "raw version_order={raw}");
         }
     }
 
@@ -2884,9 +2700,7 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=Fal
     /// ["secrets"]` -- for a document with NO secrets to derive, that loop
     /// never runs, so a malformed local `vault/secrets.json` `"secrets"`
     /// field is never touched and `derive_local` succeeds, the local vault
-    /// file left completely unchanged. Confirmed against real
-    /// `python3.12`'s own `_derive_vault` (called directly against a fake
-    /// `StateDir`-like object, mirroring the reviewer's own probe method).
+    /// file left completely unchanged.
     #[test]
     fn derive_vault_skips_the_secrets_type_check_when_there_is_nothing_to_derive() {
         use crate::audit::Audit;
@@ -2913,33 +2727,6 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=Fal
             "the malformed local secrets field must be left completely untouched"
         );
         let _ = SecretBytes::new(vec![]); // keep the import used even if unrelated code shifts
-
-        // Confirm the same against real python3.12's own `_derive_vault`.
-        let script = r#"
-from zeropw.team import fold as F
-
-class FakeState:
-    def __init__(self, doc):
-        self._doc = doc
-    def read_json(self, path, default):
-        return self._doc
-    def write_json(self, path, value):
-        self.written = value
-
-doc = {"secrets": 5, "other": "keepme"}
-state = FakeState(doc)
-document = {"secrets": {}}
-F._derive_vault(document, state, "env", {}, None, project=None, environment=None)
-import json
-print(json.dumps(state.written, sort_keys=True))
-"#;
-        let py_out = crate::oracle::python(script);
-        let py_value: Value = serde_json::from_str(py_out.trim()).unwrap();
-        assert_eq!(
-            py_value,
-            json!({"other": "keepme", "secrets": 5}),
-            "python's own local vault must also be left unchanged"
-        );
     }
 
     /// X-15 (equivalence review, round 8): `_derive_vault`'s `"kind":
@@ -2983,43 +2770,6 @@ print(json.dumps(state.written, sort_keys=True))
             "the local vault file must be left completely untouched -- not even the \
              well-formed \"good-secret\" entry should have been written"
         );
-
-        // Confirm the same against real python3.12's own `_derive_vault`: it raises KeyError,
-        // and `state.write_json` (which would set `.written`) is never reached.
-        let script = r#"
-from zeropw.team import fold as F
-
-class FakeState:
-    def __init__(self, doc):
-        self._doc = doc
-        self.written = None
-    def read_json(self, path, default):
-        return self._doc
-    def write_json(self, path, value):
-        self.written = value
-
-doc = {"secrets": {}, "other": "keepme"}
-state = FakeState(doc)
-document = {"secrets": {
-    "good-secret": {"kind": "api_key", "versions": {}},
-    "bad-secret": {"versions": {}},
-}}
-try:
-    F._derive_vault(document, state, "env", {}, None, project=None, environment=None)
-    print("NO_EXCEPTION")
-except KeyError as e:
-    print(f"KeyError:{e}")
-print(f"written_is_none:{state.written is None}")
-"#;
-        let py_out = crate::oracle::python(script);
-        assert!(
-            py_out.contains("KeyError:'kind'"),
-            "python3.12 must raise KeyError('kind'): {py_out}"
-        );
-        assert!(
-            py_out.contains("written_is_none:True"),
-            "python's own write_json must never be called either: {py_out}"
-        );
     }
 
     /// Finding H-R4-5: Python's `fold()` keeps `_version_order` INSIDE `doc`
@@ -3034,10 +2784,9 @@ print(f"written_is_none:{state.written is None}")
     /// way. This builds a `base_document` whose own stray `_version_order`
     /// deliberately DISAGREES with a separately-passed `base_version_order`
     /// argument, folds a `secret.put_version` commit that appends to it, and
-    /// confirms against real `python3.12`'s own `fold()` on the identical
-    /// input that (a) the DOCUMENT's value -- not the argument's -- is what
-    /// gets appended to, and (b) `_version_order` never appears in either
-    /// language's returned document.
+    /// checks that (a) the DOCUMENT's value -- not the argument's -- is what
+    /// gets appended to, and (b) `_version_order` never appears in the
+    /// returned document (both as Python's `fold()` behaved).
     #[test]
     fn base_documents_own_version_order_wins_over_the_argument_and_is_popped_from_the_result() {
         let (owner, env_id, _dek, c1) = new_env(None);
@@ -3089,80 +2838,15 @@ print(f"written_is_none:{state.written is None}")
                 .get("_version_order")
                 .is_none()
         );
-
-        let base_text =
-            pyjson::dumps(&base_document, pyjson::DumpOptions::compact_sorted()).unwrap();
-        let c2_text = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap();
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-base_document = json.loads({base_text:?})
-c2 = C.Commit.from_dict(json.loads({c2_text:?}))
-result = F.fold({env_id:?}, [c2], base_document=base_document,
-                base_version_order={{"gh-token": ["arg-v0"]}})
-print(json.dumps({{
-    "version_order": result.version_order,
-    "has_stray_key": "_version_order" in result.document,
-}}, sort_keys=True))
-"#,
-        );
-        let out = crate::oracle::python(&script);
-        let py: Value = pyjson::loads(out.trim()).unwrap();
-        assert_eq!(
-            py["has_stray_key"],
-            json!(false),
-            "python3.12's own returned document must not contain _version_order either"
-        );
-        assert_eq!(
-            py["version_order"]["gh-token"],
-            json!(["stray-v0", "2222222222222222"]),
-            "python3.12 itself must prefer the document's own _version_order over the separate argument"
-        );
     }
 
-    // A-R5-3: probes real `python3.12`'s `zeropw.team.fold._commit_time`
-    // directly (not just `time.gmtime` in isolation) end to end for the
-    // three cases this finding is about, and confirms Rust's `commit_time`
-    // agrees on the accept/reject decision (and, where both accept, on the
-    // exact rendered string) for the first two. `_commit_time` only ever
-    // reads `commit.hlc`, so a `SimpleNamespace` stands in for a real
-    // `Commit` here -- no signing/device-key machinery needed to exercise
-    // this one function directly.
+    // A-R5-3: `commit_time` at the gmtime boundary. One millisecond under
+    // `WALL_MS_GMTIME_FAILS_AT` still renders (the expected string is what
+    // the retired Python prototype's `_commit_time` rendered); exactly at
+    // it, and for a wall_ms literal beyond i128, it must refuse (Python's
+    // uncaught `OverflowError`) rather than format a bogus date.
     #[test]
-    fn commit_time_matches_python_end_to_end_for_the_gmtime_boundary() {
-        let script = format!(
-            r#"
-from types import SimpleNamespace
-from zeropw.team.fold import _commit_time
-
-def probe(hlc):
-    c = SimpleNamespace(hlc=hlc)
-    try:
-        return "OK " + _commit_time(c)
-    except Exception as e:
-        return "ERR " + type(e).__name__
-
-print(probe("{boundary}-0000"))
-print(probe("{over}-0000"))
-print(probe("{huge}-0000"))
-"#,
-            boundary = WALL_MS_GMTIME_FAILS_AT - 1,
-            over = WALL_MS_GMTIME_FAILS_AT,
-            huge = "9".repeat(45),
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-
-        // Case 1: one millisecond under the real cliff -- Python succeeds.
-        let want_boundary = lines.next().unwrap();
-        assert!(
-            want_boundary.starts_with("OK "),
-            "python3.12 should still accept wall_ms = WALL_MS_GMTIME_FAILS_AT - 1, got: {want_boundary}"
-        );
-        let want_rendered = want_boundary.strip_prefix("OK ").unwrap();
+    fn commit_time_at_the_gmtime_boundary() {
         let commit = Commit {
             format: String::new(),
             env_id: String::new(),
@@ -3173,95 +2857,43 @@ print(probe("{huge}-0000"))
             seen: BTreeMap::new(),
             sig: String::new(),
         };
-        let got_rendered = commit_time(&commit).expect("Rust should also accept this wall_ms");
         assert_eq!(
-            got_rendered, want_rendered,
-            "Rust and Python must render the identical timestamp at the real boundary"
-        );
-
-        // Case 2: exactly at the real cliff -- Python raises (OSError on
-        // this platform), Rust must also refuse (not silently format a
-        // bogus date).
-        let want_over = lines.next().unwrap();
-        assert!(
-            want_over.starts_with("ERR "),
-            "python3.12 should raise for wall_ms = WALL_MS_GMTIME_FAILS_AT, got: {want_over}"
+            commit_time(&commit).expect("one millisecond under the boundary renders"),
+            "2147483647-12-31T23:59:52Z"
         );
         let commit_over = Commit {
             hlc: format!("{WALL_MS_GMTIME_FAILS_AT}-0000"),
             ..commit
         };
-        commit_time(&commit_over)
-            .expect_err("Rust must also refuse wall_ms = WALL_MS_GMTIME_FAILS_AT");
-
-        // Case 3: a wall_ms literal too large even for i128 -- Python's own
-        // int()/1000 float division overflows (a different exception,
-        // OverflowError, but still an uncaught one Python never recovers
-        // from); Rust's Hlc::parse already refuses this literal outright.
-        let want_huge = lines.next().unwrap();
-        assert!(
-            want_huge.starts_with("ERR "),
-            "python3.12 should also raise for a wall_ms literal beyond i128, got: {want_huge}"
-        );
+        commit_time(&commit_over).expect_err("wall_ms = WALL_MS_GMTIME_FAILS_AT must be refused");
         let commit_huge = Commit {
             hlc: format!("{}-0000", "9".repeat(45)),
             ..commit_over
         };
-        commit_time(&commit_huge).expect_err("Rust must also refuse a wall_ms literal beyond i128");
+        commit_time(&commit_huge).expect_err("a wall_ms literal beyond i128 must be refused");
     }
 
-    /// Finding H-R3-1: `commit_time`'s `wall_ms as f64 / 1000.0` was TWO
-    /// roundings (round `wall_ms` to the nearest `f64`, then divide by the
-    /// exact `1000.0`), not Python's ONE correctly-rounded `int / int`
-    /// division -- byte-different for many `wall_ms` values above `2^53`
-    /// (where `wall_ms as f64` first loses precision), not just the one
-    /// reviewer-supplied repro (`hlc = "9999999999999999-0000"`, where
-    /// Python renders `...T17:46:39Z` and the old code rendered
-    /// `...T17:46:40Z`). This pins the fix ([`divide_by_1000_like_python`])
-    /// against real `python3.12`'s actual `_commit_time` at that repro
-    /// value, at both ends of the `WALL_MS_GMTIME_FAILS_AT` boundary, and
-    /// over 2,000 random `wall_ms` values spanning `2^53` up to the
-    /// boundary (batched into a single Python subprocess call for speed).
+    /// Finding H-R3-1: `commit_time` divides `wall_ms` by 1000 with ONE
+    /// correctly-rounded `int / int` division ([`divide_by_1000_like_python`]),
+    /// not two roundings (`wall_ms as f64 / 1000.0`), which renders a
+    /// different second for many `wall_ms` values above `2^53` (the reviewer
+    /// repro `9999999999999999` renders `...T17:46:39Z`, the old code
+    /// `...T17:46:40Z`). Expected strings were rendered once by the retired
+    /// Python prototype (`iso(wall_ms / 1000)`), including samples between
+    /// `2^53` and the `WALL_MS_GMTIME_FAILS_AT` boundary.
     #[test]
-    fn commit_time_matches_python_true_division_at_boundary_and_random_wall_ms() {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let mut wall_ms_values: Vec<i128> = vec![
-            9_999_999_999_999_999, // the exact reviewer-supplied repro value
-            (1u128 << 53) as i128,
-            (1u128 << 53) as i128 + 1,
-            WALL_MS_GMTIME_FAILS_AT - 1, // largest value Python still accepts
+    fn commit_time_uses_one_correctly_rounded_division() {
+        let cases: [(i128, &str); 8] = [
+            (9_999_999_999_999_999, "318857-05-20T17:46:39Z"),
+            (9_007_199_254_740_992, "287396-10-12T08:59:00Z"),
+            (9_007_199_254_740_993, "287396-10-12T08:59:00Z"),
+            (WALL_MS_GMTIME_FAILS_AT - 1, "2147483647-12-31T23:59:52Z"),
+            (9_433_176_290_256_686_317, "298927426-10-02T05:31:26Z"),
+            (57_391_318_262_068_824_561, "1818660446-12-19T22:40:24Z"),
+            (61_437_908_793_891_721_711, "1946891796-03-04T17:02:00Z"),
+            (64_763_969_344_647_292_417, "2052290459-03-24T00:14:56Z"),
         ];
-        for _ in 0..2000 {
-            let low = 1u128 << 53;
-            let high = WALL_MS_GMTIME_FAILS_AT as u128;
-            let sample = rng.gen_range(low..high);
-            wall_ms_values.push(sample as i128);
-        }
-
-        let py_list = wall_ms_values
-            .iter()
-            .map(|w| w.to_string())
-            .collect::<Vec<_>>()
-            .join(",\n");
-        let script = format!(
-            r#"
-from zeropw.store import iso
-values = [
-{py_list}
-]
-for w in values:
-    print(iso(w / 1000))
-"#
-        );
-        let out = crate::oracle::python(&script);
-        let py_lines: Vec<&str> = out.lines().collect();
-        assert_eq!(
-            py_lines.len(),
-            wall_ms_values.len(),
-            "python3.12 must accept every one of these wall_ms values (all below the boundary)"
-        );
-        for (wall_ms, want) in wall_ms_values.iter().zip(py_lines.iter()) {
+        for (wall_ms, want) in cases {
             let commit = Commit {
                 format: String::new(),
                 env_id: String::new(),
@@ -3273,12 +2905,8 @@ for w in values:
                 sig: String::new(),
             };
             let got = commit_time(&commit)
-                .unwrap_or_else(|e| panic!("Rust must also accept wall_ms={wall_ms}: {e:?}"));
-            assert_eq!(
-                &got, want,
-                "wall_ms={wall_ms}: Rust and Python must render the identical timestamp \
-                 (single correctly-rounded division), not merely both succeed"
-            );
+                .unwrap_or_else(|e| panic!("wall_ms={wall_ms} must render: {e:?}"));
+            assert_eq!(got, want, "wall_ms={wall_ms}");
         }
     }
 
@@ -3321,38 +2949,6 @@ for w in values:
         )
         .unwrap();
         assert_eq!(folded.skipped.len(), 1);
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C, fold as F
-c1 = C.Commit.from_dict(json.loads({c1}))
-c2 = C.Commit.from_dict(json.loads({c2}))
-c3 = C.Commit.from_dict(json.loads({c3}))
-try:
-    F.fold({env}, [c1, c2])
-    print("OK")
-except Exception as e:
-    print("ERR " + type(e).__name__)
-print(len(F.fold({env}, [c1, c3]).skipped))
-"#,
-            c1 = crate::pystr::repr_str(
-                &crate::pyjson::dumps(&c1.to_dict(), crate::pyjson::DumpOptions::compact_sorted())
-                    .unwrap()
-            ),
-            c2 = crate::pystr::repr_str(
-                &crate::pyjson::dumps(&c2.to_dict(), crate::pyjson::DumpOptions::compact_sorted())
-                    .unwrap()
-            ),
-            c3 = crate::pystr::repr_str(
-                &crate::pyjson::dumps(&c3.to_dict(), crate::pyjson::DumpOptions::compact_sorted())
-                    .unwrap()
-            ),
-            env = crate::pystr::repr_str(&env_id),
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        assert!(lines.next().unwrap().starts_with("ERR "));
-        assert_eq!(lines.next().unwrap(), "1");
     }
 
     #[test]
@@ -3927,7 +3523,7 @@ print(len(F.fold({env}, [c1, c3]).skipped))
     /// shape`'s `.as_object()` check as `state_corrupt`. The snapshot's
     /// `vector` still applies (so `c1`, already reflected there, is
     /// filtered out of `later`): the result must equal folding ONLY `c2`
-    /// from scratch, confirmed both directly and against real `python3.12`.
+    /// from scratch.
     #[test]
     fn snapshot_document_null_folds_from_a_fresh_document() {
         let (_tmp, state) = new_state();
@@ -3956,32 +3552,6 @@ print(len(F.fold({env}, [c1, c3]).skipped))
             pyjson::dumps(&expected.document, pyjson::DumpOptions::compact_sorted()).unwrap(),
             from_snapshot_text,
         );
-
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
-    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
-    c2 = C.Commit.from_dict(json.loads({c2_text:?}))
-    result = F.fold_with_snapshot({env_id:?}, [c1, c2], state)
-    print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
-"#,
-            env_id = env_id,
-            snapshot_text =
-                pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-            c2_text = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-        );
-        let py_document_text = crate::oracle::python(&script);
-        assert_eq!(py_document_text.trim(), from_snapshot_text);
     }
 
     #[test]
@@ -4012,22 +3582,9 @@ with tempfile.TemporaryDirectory() as tmp:
             None,
         )
         .unwrap();
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-doc=json.loads({doc:?})
-commit=C.Commit.from_dict(json.loads({commit:?}))
-result=F.fold({env:?}, [commit], base_document=doc, base_version_order={{}})
-print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
-"#,
-            doc = pyjson::dumps(&document, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            commit = pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-            env = env_id,
-        );
-        let python: Value = serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        assert_eq!(rust.document, python);
+        let mut expected = document;
+        expected["settings"]["sync_interval_seconds"] = json!(7);
+        assert_eq!(rust.document, expected);
     }
 
     /// Finding H-R4-7 (non-object snapshot): Python's `snapshot.get(...)`
@@ -4038,7 +3595,7 @@ print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
     /// whole snapshot (every field defaulted) and fold successfully with a
     /// wrong document; now it fails closed with `state_corrupt`.
     #[test]
-    fn snapshot_non_object_fails_closed_matching_pythons_attributeerror() {
+    fn snapshot_non_object_fails_closed() {
         let (_tmp, state) = new_state();
         let (_owner, env_id, _dek, c1) = new_env(None);
         write_raw_snapshot(&state, &env_id, &json!([1, 2, 3]));
@@ -4047,35 +3604,6 @@ print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
             .expect_err("a non-object snapshot must fail closed, not silently fold");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
-
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("team/{env_id}/snapshots/1.json", [1, 2, 3])
-    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
-    try:
-        F.fold_with_snapshot({env_id:?}, [c1], state)
-        print("OK")
-    except Exception as e:
-        print(f"ERR {{type(e).__name__}}")
-"#,
-            env_id = env_id,
-            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-        );
-        let out = crate::oracle::python(&script);
-        assert_eq!(
-            out.trim(),
-            "ERR AttributeError",
-            "real python3.12 must raise an uncaught AttributeError for a non-dict snapshot"
-        );
     }
 
     /// Finding H-R4-7 (`version_order[sid]` shapes): a non-array entry
@@ -4095,36 +3623,6 @@ with tempfile.TemporaryDirectory() as tmp:
             .expect_err("a non-array version_order entry must fail closed");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
-    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
-    try:
-        F.fold_with_snapshot({env_id:?}, [c1], state)
-        print("OK")
-    except Exception as e:
-        print(f"ERR {{type(e).__name__}}")
-"#,
-            env_id = env_id,
-            snapshot_text =
-                pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-        );
-        let out = crate::oracle::python(&script);
-        assert_eq!(
-            out.trim(),
-            "ERR TypeError",
-            "real python3.12 must raise an uncaught TypeError for list(5)"
-        );
 
         // `version_order` itself is a truthy non-object (an array).
         let snapshot2 = json!({"document": null, "vector": {}, "version_order": [1, 2]});
@@ -4133,36 +3631,6 @@ with tempfile.TemporaryDirectory() as tmp:
             .expect_err("a non-object version_order must fail closed");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
-        let script2 = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
-    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
-    try:
-        F.fold_with_snapshot({env_id:?}, [c1], state)
-        print("OK")
-    except Exception as e:
-        print(f"ERR {{type(e).__name__}}")
-"#,
-            env_id = env_id,
-            snapshot_text =
-                pyjson::dumps(&snapshot2, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            c1_text = pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-        );
-        let out2 = crate::oracle::python(&script2);
-        assert_eq!(
-            out2.trim(),
-            "ERR AttributeError",
-            "real python3.12 must raise an uncaught AttributeError for a non-dict version_order"
-        );
     }
 
     #[test]
@@ -4188,7 +3656,7 @@ with tempfile.TemporaryDirectory() as tmp:
     /// silently become a floor of `0`, letting a replayed/duplicate commit
     /// through as if the snapshot had never covered it.
     #[test]
-    fn snapshot_vector_entry_types_match_pythons_numeric_comparison() {
+    fn snapshot_vector_entry_types_compare_numerically() {
         let (_tmp, state) = new_state();
         let (owner, env_id, _dek, c1) = new_env(None);
         let base = fold(&env_id, vec![c1.clone()], None, None, None, None).unwrap();
@@ -4262,79 +3730,5 @@ with tempfile.TemporaryDirectory() as tmp:
             .expect_err("a numeric-string vector floor must fail closed");
         assert!(err.is(crate::errors::ErrorClass::StateError));
         assert_eq!(err.reason, "state_corrupt");
-
-        // Cross-check all four (true/false/2.5/"1") against real
-        // python3.12 in one subprocess.
-        let cases = [
-            ("true", json!(true)),
-            ("false", json!(false)),
-            ("2.5", json!(2.5)),
-            ("\"1\"", json!("1")),
-        ];
-        for (label, floor) in cases {
-            let snapshot = json!({"document": base_document, "vector": {owner_fp.clone(): floor},
-                                  "version_order": {}});
-            let script = format!(
-                r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json("team/{env_id}/snapshots/1.json", json.loads({snapshot_text:?}))
-    c1 = C.Commit.from_dict(json.loads({c1_text:?}))
-    c2 = C.Commit.from_dict(json.loads({c2_text:?}))
-    c3 = C.Commit.from_dict(json.loads({c3_text:?}))
-    try:
-        result = F.fold_with_snapshot({env_id:?}, [c1, c2, c3], state)
-        print("OK " + str(result.document["settings"]["sync_interval_seconds"]))
-    except Exception as e:
-        print(f"ERR {{type(e).__name__}}")
-"#,
-                env_id = env_id,
-                snapshot_text =
-                    pyjson::dumps(&snapshot, pyjson::DumpOptions::compact_sorted()).unwrap(),
-                c1_text =
-                    pyjson::dumps(&c1.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-                c2_text =
-                    pyjson::dumps(&c2.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-                c3_text =
-                    pyjson::dumps(&c3.to_dict(), pyjson::DumpOptions::compact_sorted()).unwrap(),
-            );
-            let out = crate::oracle::python(&script);
-            let py_result = out.trim().to_string();
-            write_raw_snapshot(&state, &env_id, &snapshot);
-            let rust_result = match fold_with_snapshot(
-                &env_id,
-                vec![c1.clone(), c2.clone(), c3.clone()],
-                &state,
-                None,
-                None,
-            ) {
-                Ok(r) => format!(
-                    "OK {}",
-                    r.document["settings"]["sync_interval_seconds"]
-                        .as_i64()
-                        .unwrap()
-                ),
-                Err(_) => "ERR StateError".to_string(),
-            };
-            match label {
-                "\"1\"" => {
-                    assert_eq!(py_result, "ERR TypeError", "python for floor {label}");
-                    assert_eq!(rust_result, "ERR StateError", "rust for floor {label}");
-                }
-                _ => {
-                    assert_eq!(
-                        py_result, rust_result,
-                        "rust/python must agree for vector floor {label}"
-                    );
-                }
-            }
-        }
     }
 }

@@ -1,0 +1,38 @@
+{
+  "author": "bzvg5rt5tkjvxcwso3hp2nurtm",
+  "author_seq": 1,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "3000-0000",
+  "ops": [
+    {
+      "description": "",
+      "environment": "dev",
+      "http_auth": {
+        "mode": "bearer"
+      },
+      "http_scope": {
+        "methods": [
+          "GET"
+        ],
+        "path_prefixes": [
+          "/repos"
+        ]
+      },
+      "http_target": {
+        "host": "api.github.com",
+        "port": 443,
+        "scheme": "https"
+      },
+      "id": "gitlab",
+      "kind": "http",
+      "op": "connection.create",
+      "project": "demo",
+      "secret_id": "gh-token",
+      "secret_version": null,
+      "service": "github"
+    }
+  ],
+  "seen": {},
+  "sig": "whWtTysZG/iQgVuqcnzl4p8O2yiy0xWvHKkfSMP5avuGo0B54pt3Mmzt3OHPJAKSW6G/pkyoZpXgRxJzcTfBCw=="
+}
