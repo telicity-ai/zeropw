@@ -278,3 +278,37 @@ fn try_iso_int_matches_python_store_iso_for_python_ints() {
         assert_eq!(&got, want, "try_iso_int({value})");
     }
 }
+
+/// `IsoError::to_error` renders each escaped `store.iso` exception the way
+/// the administrator CLI's handlers print it (checked against the real
+/// exception objects run through the same handler order as `admin_cli.main`).
+#[test]
+fn iso_error_to_error_matches_the_cli_rendering_of_the_python_exception() {
+    let script = r#"
+import json
+from zeropw.store import iso
+def render(exc):
+    if isinstance(exc, FileNotFoundError):
+        return {"error": "FileNotFoundError", "reason": "file_not_found"}
+    if isinstance(exc, OSError):
+        return {"error": type(exc).__name__, "reason": "io_error", "detail": exc.strerror or ""}
+    if isinstance(exc, (KeyError, TypeError, AttributeError, ValueError)):
+        return {"error": "StateError", "reason": "state_corrupt", "detail": type(exc).__name__}
+    return {"error": type(exc).__name__, "reason": "internal_error"}
+for ts in (1e18, float("nan"), float("inf"), 6.7768e16):
+    try:
+        iso(ts)
+        print(json.dumps("ok"))
+    except Exception as exc:
+        print(json.dumps(render(exc), sort_keys=True))
+"#;
+    let python: Vec<serde_json::Value> = run_python(script)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let rust: Vec<serde_json::Value> = [1e18, f64::NAN, f64::INFINITY, 6.7768e16]
+        .into_iter()
+        .map(|ts| zeropw::store::try_iso(Some(ts)).unwrap_err().to_error().to_dict())
+        .collect();
+    assert_eq!(rust, python);
+}

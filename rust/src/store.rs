@@ -618,6 +618,27 @@ impl IsoError {
             message: "timestamp out of range for platform time_t".into(),
         }
     }
+
+    /// This escaped built-in in the crate's error shapes, i.e. what the
+    /// administrator CLI prints for it: `OSError` through `except OSError`
+    /// (`io_error` with its `strerror`), `ValueError` through the
+    /// `(KeyError, TypeError, AttributeError, ValueError)` handler
+    /// (`StateError`/`state_corrupt`), `OverflowError` through the final
+    /// `except Exception` (`internal_error`).
+    pub fn to_error(&self) -> Error {
+        match self.class_name {
+            "OSError" => Error::subclass(
+                ErrorClass::ZeroPW,
+                "OSError",
+                "io_error",
+                self.message
+                    .split_once("] ")
+                    .map_or(self.message.as_str(), |(_, strerror)| strerror),
+            ),
+            "ValueError" => Error::state("state_corrupt").with_detail("ValueError"),
+            other => Error::subclass(ErrorClass::ZeroPW, other, "internal_error", ""),
+        }
+    }
 }
 
 impl std::fmt::Display for IsoError {
