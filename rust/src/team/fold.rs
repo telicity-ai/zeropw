@@ -2871,7 +2871,7 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
             );
             doc.insert(
                 "dek".into(),
-                json!({"current": GEN0, "generations": {GEN0: {"wraps": {}}}}),
+                json!({"current": "g0", "generations": {"g0": {"wraps": {}}}}),
             );
             doc
         }
