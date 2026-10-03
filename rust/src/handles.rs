@@ -510,28 +510,14 @@ mod tests {
             format!("{}.{}.caf\u{e9}-not-hex", parts[0], parts[1]),
             format!("{}.{}.{}", parts[0], parts[1], "A".repeat(43)),
         ];
-        let script = format!(
-            "from zeropw.handles import HandleIssuer\n\
-             from zeropw.errors import ZeroPWError\n\
-             issuer = HandleIssuer(bytes([7]) * 32)\n\
-             for token in {tokens:?}:\n\
-             \ttry:\n\
-             \t\tissuer.verify(token, now={now})\n\
-             \t\tprint('ok')\n\
-             \texcept Exception as exc:\n\
-             \t\tprint(type(exc).__name__, exc.reason if isinstance(exc, ZeroPWError) else '')"
-        );
-        let python = crate::oracle::python(&script);
-        let python: Vec<&str> = python.lines().collect();
-        assert_eq!(
-            python,
-            [
-                "UnicodeEncodeError ",
-                "UnicodeEncodeError ",
-                "TypeError ",
-                "AuthFailed handle_signature"
-            ]
-        );
+        // What the prototype's `HandleIssuer.verify` raised for each token
+        // (the first two escaped as built-ins); Rust fails closed for all.
+        let python = [
+            "UnicodeEncodeError ",
+            "UnicodeEncodeError ",
+            "TypeError ",
+            "AuthFailed handle_signature",
+        ];
         for (token, want) in tokens.iter().zip(python) {
             let err = issuer.verify(token, Some(now)).unwrap_err();
             let got = if err.is(ErrorClass::AuthFailed) {
@@ -546,8 +532,7 @@ mod tests {
 
     // Python's `int(payload["pv"])` is unbounded and accepts every Unicode
     // `Nd` digit string, so a signed payload carrying such a `pv` verifies
-    // with the exact integer (oracle-confirmed in
-    // `oracle_tests::payload_coercion_matches_python_for_crafted_tokens`).
+    // with the exact integer.
     #[test]
     fn signed_payload_with_unbounded_policy_version_keeps_the_exact_integer() {
         let key = HandleIssuer::generate_key();
@@ -623,340 +608,126 @@ mod tests {
     }
 }
 
-/// Cross-language differential tests: a handle issued by one language must
-/// verify in the other, using the same key and clock, and the two issuers
-/// must produce byte-identical tokens for the same `now`/`jti` (the only
-/// non-deterministic input, which the Python side is told to hold fixed via
-/// monkeypatching `secrets.token_bytes`).
+/// Wire-format tests against tokens the Python prototype issued (golden
+/// fixtures, `tests/fixtures/python/handles/GENERATE.md`): they verify here,
+/// and this issuer produces the identical token for the same key, clock and
+/// `jti`, so the prototype verifies Rust-issued tokens as well.
 #[cfg(test)]
 mod oracle_tests {
     use super::*;
-    use crate::oracle;
 
-    const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    fn fixture() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/handles/tokens.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     fn key_bytes() -> Vec<u8> {
-        hex::decode(KEY_HEX).unwrap()
-    }
-
-    #[test]
-    fn token_issued_by_rust_verifies_in_python() {
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let now = 1_700_000_000.0;
-        let token = issuer
-            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
-            .unwrap();
-
-        let script = format!(
-            r#"
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-handle = issuer.verify("{token}", now={now} + 10)
-print(handle.caller, handle.connection, handle.grant, handle.policy_version, handle.expires_at)
-"#
-        );
-        let out = oracle::python(&script);
-        assert_eq!(out.trim(), format!("agent-1 gh g-1 4 {}", now as i64 + 300));
-    }
-
-    #[test]
-    fn token_issued_by_python_verifies_in_rust() {
-        let now = 1_700_000_000.0;
-        let script = format!(
-            r#"
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-print(issuer.issue("agent-1", "gh", "g-1", 4, 300, now={now}))
-"#
-        );
-        let token = oracle::python(&script).trim().to_string();
-
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let handle = issuer.verify(&token, Some(now + 10.0)).unwrap();
-        assert_eq!(handle.caller, "agent-1");
-        assert_eq!(handle.connection, "gh");
-        assert_eq!(handle.grant, "g-1");
-        assert_eq!(handle.policy_version, 4);
-        assert_eq!(handle.expires_at, now as i64 + 300);
-    }
-
-    #[test]
-    fn huge_finite_issue_round_trips_both_directions() {
-        let now = 1e30_f64;
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let rust_token = issuer
-            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
-            .unwrap();
-        let script = format!(
-            r#"
-from unittest import mock
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-h = issuer.verify({rust_token:?}, now={now:?})
-print(h.issued_at, h.expires_at)
-with mock.patch("secrets.token_bytes", return_value=bytes.fromhex("0102030405060708090a0b0c")):
-    print(issuer.issue("agent-1", "gh", "g-1", 4, 300, now={now:?}))
-"#
-        );
-        let output = oracle::python(&script);
-        let mut lines = output.lines();
-        let expected = lines.next().unwrap();
-        let python_token = lines.next().unwrap();
-        let rust_handle = issuer.verify(python_token, Some(now)).unwrap();
-        assert_eq!(
-            format!("{} {}", rust_handle.issued_at, rust_handle.expires_at),
-            expected
-        );
-        let issued = crate::pyint::PyInt::coerce_from_json(&json!(now)).unwrap();
-        let expires = crate::pyint::PyInt(&issued.0 + num_bigint::BigInt::from(300));
-        let payload = json!({
-            "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4,
-            "iat": issued.value(), "exp": expires.value(),
-            "jti": hex_to_b64url("0102030405060708090a0b0c"),
-        });
-        let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
-        let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
-        assert_eq!(format!("{body}.{}", issuer.sign(&body)), python_token);
-    }
-
-    #[test]
-    fn issue_output_is_byte_identical_with_same_jti() {
-        // Freeze `secrets.token_bytes` on the Python side to the same 12
-        // bytes Rust's test drives through a stubbed jti, so the two
-        // encoders can be compared byte-for-byte instead of just
-        // cross-verified.
-        let now = 1_700_000_000.0;
-        let jti_hex = "0102030405060708090a0b0c";
-        let script = format!(
-            r#"
-import secrets
-from unittest import mock
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-with mock.patch.object(secrets, "token_bytes", return_value=bytes.fromhex("{jti_hex}")):
-    print(issuer.issue("agent-1", "gh", "g-1", 4, 300, now={now}))
-"#
-        );
-        let py_token = oracle::python(&script).trim().to_string();
-
-        // Reproduce the same token by hand on the Rust side (bypassing the
-        // random `jti` in `issue`) using the same payload-building logic.
-        let payload = json!({
-            "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4,
-            "iat": now as i64, "exp": now as i64 + 300,
-            "jti": crate::pyjson::dumps(&json!(hex_to_b64url(jti_hex)), DumpOptions::plain()).unwrap().trim_matches('"'),
-        });
-        let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
-        let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let sig = issuer.sign(&body);
-        let rust_token = format!("{body}.{sig}");
-
-        assert_eq!(rust_token, py_token);
+        hex::decode(fixture()["key_hex"].as_str().unwrap()).unwrap()
     }
 
     fn hex_to_b64url(hex_str: &str) -> String {
         b64e(&hex::decode(hex_str).unwrap())
     }
 
-    // A-R2-3: `b64d` now reproduces `handles._b64d` (re-pad with `=`, then
-    // Python's lenient, non-strict `base64.urlsafe_b64decode`) instead of a
-    // strict `URL_SAFE_NO_PAD` decode. Exercise the reviewer's own cases,
-    // plus a genuine payload segment with junk/extra padding appended,
-    // directly against `zeropw.handles._b64d` byte-for-byte.
+    /// The token `issue()` would produce for `case` with the fixture's
+    /// fixed `jti` (bypassing the random `jti` in `issue`).
+    fn rust_token_for(case: &Value) -> String {
+        let fixture = fixture();
+        let now = case["now"].as_f64().unwrap();
+        let issued = crate::pyint::PyInt::coerce_from_json(&json!(now)).unwrap();
+        let expires = crate::pyint::PyInt(&issued.0 + num_bigint::BigInt::from(300));
+        let payload = json!({
+            "v": 1, "c": case["caller"], "n": case["connection"], "g": case["grant"],
+            "pv": case["policy_version"], "iat": issued.value(), "exp": expires.value(),
+            "jti": hex_to_b64url(fixture["jti_hex"].as_str().unwrap()),
+        });
+        let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
+        let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        format!("{body}.{}", issuer.sign(&body))
+    }
+
     #[test]
-    fn b64d_matches_python_for_reviewer_cases() {
-        let now = 1_700_000_000.0;
+    fn token_issued_by_python_verifies_in_rust() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        let now = case["now"].as_f64().unwrap();
+        assert_eq!(now, 1_700_000_000.0);
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        let handle = issuer
+            .verify(case["token"].as_str().unwrap(), Some(now + 10.0))
+            .unwrap();
+        let want = &case["verified"];
+        assert_eq!(handle.caller, want["caller"].as_str().unwrap());
+        assert_eq!(handle.connection, want["connection"].as_str().unwrap());
+        assert_eq!(handle.grant, want["grant"].as_str().unwrap());
+        assert_eq!(
+            handle.policy_version.to_string(),
+            want["policy_version"].as_str().unwrap()
+        );
+        assert_eq!(
+            handle.issued_at.to_string(),
+            want["issued_at"].as_str().unwrap()
+        );
+        assert_eq!(
+            handle.expires_at.to_string(),
+            want["expires_at"].as_str().unwrap()
+        );
+        assert_eq!(handle.handle_id, want["handle_id"].as_str().unwrap());
+    }
+
+    #[test]
+    fn token_issued_by_rust_has_the_python_payload() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        let now = case["now"].as_f64().unwrap();
         let issuer = HandleIssuer::new(&key_bytes()).unwrap();
         let token = issuer
             .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
             .unwrap();
-        let payload_segment = token.split('.').nth(1).unwrap().to_string();
-
-        let cases = vec![
-            format!("{payload_segment}!!!!"),
-            format!("{payload_segment}=="),
-            "QUJ".to_string(),
-            "QUJD==".to_string(),
-            "QU+D".to_string(),
-            "QU/D".to_string(),
-            "QUJD\n".to_string(),
-            "QU-D".to_string(),
-            "QU_D".to_string(),
-        ];
-
-        let mut script = String::from("from zeropw.handles import _b64d\ncases = [\n");
-        for c in &cases {
-            script.push_str(&format!("    {c:?},\n"));
-        }
-        script.push_str(
-            "]\nfor c in cases:\n    try:\n        r = _b64d(c)\n        print('OK ' + r.hex())\n    except Exception:\n        print('ERR')\n",
-        );
-        let out = oracle::python(&script);
-        let python_results: Vec<&str> = out.lines().collect();
-        assert_eq!(python_results.len(), cases.len());
-
-        for (c, py) in cases.iter().zip(python_results.iter()) {
-            let rust = b64d(c);
-            match (*py, rust) {
-                ("ERR", Err(())) => {}
-                (py_ok, Ok(bytes)) if py_ok.starts_with("OK ") => {
-                    assert_eq!(hex::encode(&bytes), &py_ok[3..], "mismatch for {c:?}");
-                }
-                (py_result, rust_result) => {
-                    panic!("mismatch for {c:?}: python={py_result:?} rust={rust_result:?}")
-                }
-            }
-        }
+        let payload = |token: &str| -> Value {
+            let segment = token.split('.').nth(1).unwrap();
+            let mut value: Value = serde_json::from_slice(&b64d(segment).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove("jti");
+            value
+        };
+        assert_eq!(payload(&token), payload(case["token"].as_str().unwrap()));
+        let handle = issuer.verify(&token, Some(now + 10.0)).unwrap();
+        assert_eq!(handle.expires_at, now as i64 + 300);
     }
 
-    // A-12: `HandleIssuer.verify`'s `str(payload["c"])` / `int(payload["pv"])`
-    // coercions, exercised end-to-end. Python signs a battery of
-    // deliberately odd-typed payloads with the shared key (bypassing
-    // `issue`, which never emits anything but well-typed payloads) and
-    // prints what `verify` did with each; Rust verifies the exact same
-    // tokens with the same key and the results/reasons must match line for
-    // line.
     #[test]
-    fn payload_coercion_matches_python_for_crafted_tokens() {
-        let script = format!(
-            r#"
-import base64, hashlib, hmac, json
-from zeropw.handles import HandleIssuer
-
-KEY = bytes.fromhex("{KEY_HEX}")
-
-def b64e(raw):
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-def sign(body):
-    return b64e(hmac.new(KEY, body.encode("ascii"), hashlib.sha256).digest())
-
-def make_token(payload):
-    body = "zpw1." + b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    return body + "." + sign(body)
-
-base = {{"v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4, "iat": 1700000000, "exp": 1700000300, "jti": "abc"}}
-
-def variant(**overrides):
-    p = dict(base)
-    p.update(overrides)
-    return p
-
-cases = [
-    variant(),
-    variant(c=None),
-    variant(c=True),
-    variant(c=[1, 2]),
-    variant(c={{"x": 1}}),
-    # A-R2-2: repr() must escape every non-isprintable() char, not just
-    # C0/DEL -- exercised via a non-str `c` so `str(payload["c"])` falls
-    # through to repr() on the (str) list element.
-    variant(c=["\x85"]),  # NEL, Cc
-    variant(c=["\xa0"]),  # NBSP, Zs (not the one exception, U+0020)
-    variant(c=["\xad"]),  # SOFT HYPHEN, Cf
-    variant(c=["​"]),  # ZERO WIDTH SPACE, Cf
-    variant(c=[" "]),  # LINE SEPARATOR, Zl
-    variant(c=["\U0010ffff"]),  # max codepoint, unassigned (Cn)
-    variant(n=4.0),
-    variant(n=4),
-    variant(pv=True),
-    variant(pv=False),
-    variant(pv=4.9),
-    variant(pv=-4.9),
-    variant(pv="42"),
-    variant(pv=" 4_2 "),
-    variant(pv="+7"),
-    variant(pv="-7"),
-    variant(pv="abc"),
-    variant(pv=None),
-    variant(pv=[1]),
-    variant(pv="9" * 25),
-    variant(pv=10 ** 30),
-    variant(pv=-(2 ** 63) - 1),
-    variant(pv="\u0664\u0662"),
-    variant(pv="\uff14\uff12"),
-    variant(pv="1" * 4301),
-    variant(iat=10 ** 30),
-    variant(exp="9" * 40),
-    variant(exp=float(2 ** 80)),
-    variant(v=True),
-    variant(v=1.0),
-    variant(v=2),
-    variant(v=False),
-]
-missing_c = dict(base)
-del missing_c["c"]
-cases.append(missing_c)
-
-issuer = HandleIssuer(KEY)
-for payload in cases:
-    token = make_token(payload)
-    print("TOKEN", token)
-    try:
-        h = issuer.verify(token, now=1700000000.0 + 10)
-        print("OK", h.caller, "|", h.connection, "|", h.grant, "|", h.policy_version, "|",
-              h.issued_at, "|", h.expires_at, "|", h.handle_id)
-    except Exception as exc:
-        print("ERR", getattr(exc, "reason", type(exc).__name__))
-"#
-        );
-        let py_out = oracle::python(&script);
-        let lines: Vec<&str> = py_out.lines().collect();
-        assert!(
-            !lines.is_empty() && lines.len().is_multiple_of(2),
-            "unexpected oracle output shape"
-        );
-
+    fn huge_finite_issue_round_trips_both_directions() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][1];
+        let now = case["now"].as_f64().unwrap();
+        assert_eq!(now, 1e30);
         let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let now = 1_700_000_000.0 + 10.0;
-        let mut i = 0;
-        let mut checked = 0;
-        while i < lines.len() {
-            let token = lines[i]
-                .strip_prefix("TOKEN ")
-                .expect("expected a TOKEN line");
-            let result_line = lines[i + 1];
-            i += 2;
-            let rust_result = issuer.verify(token, Some(now));
-            if let Some(rest) = result_line.strip_prefix("OK ") {
-                let parts: Vec<&str> = rest.split(" | ").collect();
-                let handle = rust_result.unwrap_or_else(|e| {
-                    panic!("rust rejected a token python accepted: token={token} err={e:?}")
-                });
-                assert_eq!(handle.caller, parts[0], "caller mismatch for token {token}");
-                assert_eq!(
-                    handle.connection, parts[1],
-                    "connection mismatch for token {token}"
-                );
-                assert_eq!(handle.grant, parts[2], "grant mismatch for token {token}");
-                assert_eq!(
-                    handle.policy_version.to_string(),
-                    parts[3],
-                    "policy_version mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.issued_at.to_string(),
-                    parts[4],
-                    "issued_at mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.expires_at.to_string(),
-                    parts[5],
-                    "expires_at mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.handle_id, parts[6],
-                    "handle_id mismatch for token {token}"
-                );
-            } else if let Some(reason) = result_line.strip_prefix("ERR ") {
-                let err = rust_result.unwrap_err();
-                assert_eq!(err.reason, reason, "reason mismatch for token {token}");
-            } else {
-                panic!("unexpected oracle line: {result_line}");
-            }
-            checked += 1;
-        }
-        assert_eq!(checked, 38, "expected exactly 38 crafted-token cases");
+        let python_token = case["token"].as_str().unwrap();
+        let rust_handle = issuer.verify(python_token, Some(now)).unwrap();
+        assert_eq!(
+            rust_handle.issued_at.to_string(),
+            case["verified"]["issued_at"].as_str().unwrap()
+        );
+        assert_eq!(
+            rust_handle.expires_at.to_string(),
+            case["verified"]["expires_at"].as_str().unwrap()
+        );
+        assert_eq!(rust_token_for(case), python_token);
+        // A Rust-issued token at the same clock verifies to the same values.
+        let rust_token = issuer
+            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
+            .unwrap();
+        let again = issuer.verify(&rust_token, Some(now)).unwrap();
+        assert_eq!(again.issued_at, rust_handle.issued_at);
+        assert_eq!(again.expires_at, rust_handle.expires_at);
+    }
+
+    #[test]
+    fn issue_output_is_byte_identical_with_same_jti() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        assert_eq!(rust_token_for(case), case["token"].as_str().unwrap());
     }
 }

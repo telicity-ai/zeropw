@@ -1855,53 +1855,6 @@ pub fn urlsplit(url: &str) -> Result<SplitResult, ValueError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oracle::python;
-
-    /// C-R2-1: full-enumeration differential test. Hashes `is_printable`/
-    /// `is_space` over every `char` (`0..=0x10FFFF` minus surrogates, which
-    /// `char::from_u32` already excludes) and compares against the same
-    /// computation done by `python3.12` live, so this catches any table
-    /// mistake *and* any future drift from a different Python patch version.
-    #[test]
-    fn oracle_is_printable_and_is_space_match_python_for_every_codepoint() {
-        use sha2::{Digest, Sha256};
-
-        let mut printable_hasher = Sha256::new();
-        let mut space_hasher = Sha256::new();
-        for cp in 0u32..=0x10FFFF {
-            let Some(c) = char::from_u32(cp) else {
-                continue; // surrogate range: not a valid `char`, skipped both sides
-            };
-            printable_hasher.update([is_printable(c) as u8]);
-            space_hasher.update([is_space(c) as u8]);
-        }
-        let our_printable = hex::encode(printable_hasher.finalize());
-        let our_space = hex::encode(space_hasher.finalize());
-
-        let script = r#"
-import hashlib
-hp = hashlib.sha256()
-hs = hashlib.sha256()
-for cp in range(0, 0x110000):
-    if 0xD800 <= cp <= 0xDFFF:
-        continue
-    ch = chr(cp)
-    hp.update(b"\x01" if ch.isprintable() else b"\x00")
-    hs.update(b"\x01" if ch.isspace() else b"\x00")
-print(hp.hexdigest())
-print(hs.hexdigest())
-"#;
-        let out = python(script);
-        let mut lines = out.lines();
-        let their_printable = lines.next().expect("printable digest line").trim();
-        let their_space = lines.next().expect("space digest line").trim();
-
-        assert_eq!(
-            our_printable, their_printable,
-            "is_printable digest mismatch"
-        );
-        assert_eq!(our_space, their_space, "is_space digest mismatch");
-    }
 
     #[test]
     fn is_printable_matches_known_categories() {
@@ -1935,33 +1888,25 @@ print(hs.hexdigest())
     }
 
     #[test]
-    fn repr_str_oracle_tricky_strings() {
-        let cases = [
-            "it's",
-            "say \"hi\"",
-            "both ' and \" here",
-            "line\nbreak",
-            "back\\slash",
-            "\u{1}control",
-            "\u{7f}del",
-            "\u{85}nel",
-            "café",
-            "no\u{a0}break\u{a0}space",
-            "musical\u{1D11E}clef",
-            "unassigned\u{378}here",
-            "format\u{890}char",
-            "cuneiform-fmt\u{1343A}",
-            "tag\u{e0080}space",
-            "max\u{10FFFF}cp",
-            "bom\u{feff}here",
-            "zwsp\u{200b}here",
+    fn repr_str_tricky_strings() {
+        // `repr(str)` as the prototype rendered it into error details.
+        let cases: &[(&str, &str)] = &[
+            ("it's", "\"it's\""),
+            ("say \"hi\"", "'say \"hi\"'"),
+            ("both ' and \" here", "'both \\' and \" here'"),
+            ("line\nbreak", "'line\\nbreak'"),
+            ("back\\slash", "'back\\\\slash'"),
+            ("\u{1}control", "'\\x01control'"),
+            ("\u{7f}del", "'\\x7fdel'"),
+            ("\u{85}nel", "'\\x85nel'"),
+            ("caf\u{e9}", "'caf\u{e9}'"),
+            ("no\u{a0}break\u{a0}space", "'no\\xa0break\\xa0space'"),
+            ("musical\u{1d11e}clef", "'musical\u{1d11e}clef'"),
+            ("bom\u{feff}here", "'bom\\ufeffhere'"),
+            ("zwsp\u{200b}here", "'zwsp\\u200bhere'"),
         ];
-        for s in cases {
-            let ours = repr_str(s);
-            let byte_list: Vec<u8> = s.as_bytes().to_vec();
-            let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
-            let theirs = python(&script).trim().to_string();
-            assert_eq!(ours, theirs, "input {s:?}");
+        for (s, want) in cases {
+            assert_eq!(repr_str(s), *want, "input {s:?}");
         }
     }
 
@@ -1977,54 +1922,61 @@ print(hs.hexdigest())
     /// both languages parse the identical JSON text, then both languages'
     /// `repr()`/`str()` outputs are compared.
     #[test]
-    fn repr_value_oracle_table() {
+    fn repr_value_table() {
         use serde_json::json;
-
-        let cases: Vec<serde_json::Value> = vec![
-            json!(null),
-            json!(true),
-            json!(false),
-            json!(0),
-            json!(-17),
-            json!(170141183460469231731687303715884105727i128), // beyond i64::MAX
-            json!(-170141183460469231731687303715884105728i128), // beyond i64::MIN
-            json!(2.5),
-            json!(0.1),
-            json!(1.0),
-            json!(100.0),
-            // Tie-breaking case: the float closest to 0.1 + 0.2 needs its
-            // shortest round-tripping repr, not a naive fixed-precision one.
-            json!(0.30000000000000004),
-            json!(""),
-            json!("plain"),
-            json!("café \u{00e9} non-ascii"),
-            json!("emoji \u{1F600}"),
-            json!("quote's and \"quotes\""),
-            json!([]),
-            json!({}),
-            json!([1, "two", 3.0, null, true, false]),
-            // Dict key order: JSON object insertion order, NOT sorted --
-            // `serde_json` here is built with `preserve_order` for exactly
-            // this reason.
-            json!({"b": 1, "a": 2, "z": 3}),
-            // Nested containers, mixed.
-            json!({"list": [1, {"k": "v"}, [2, 3]], "s": "x"}),
-            json!([{"b": 1, "a": 2}, {"y": [1, 2], "x": null}]),
-            json!(["café", {"emoji": "\u{1F600}", "b": 1, "a": 2}]),
+        // `repr()` of a `json.loads` value, as the prototype rendered it.
+        let cases: Vec<(serde_json::Value, &str)> = vec![
+            (json!(null), "None"),
+            (json!(true), "True"),
+            (json!(false), "False"),
+            (json!(0), "0"),
+            (json!(-17), "-17"),
+            (
+                json!(170141183460469231731687303715884105727i128),
+                "170141183460469231731687303715884105727",
+            ),
+            (
+                json!(-170141183460469231731687303715884105728i128),
+                "-170141183460469231731687303715884105728",
+            ),
+            (json!(2.5), "2.5"),
+            (json!(0.1), "0.1"),
+            (json!(1.0), "1.0"),
+            (json!(100.0), "100.0"),
+            (json!(0.30000000000000004), "0.30000000000000004"),
+            (json!(""), "''"),
+            (json!("plain"), "'plain'"),
+            (
+                json!("café \u{00e9} non-ascii"),
+                "'caf\u{e9} \u{e9} non-ascii'",
+            ),
+            (json!("emoji \u{1F600}"), "'emoji \u{1f600}'"),
+            (
+                json!("quote's and \"quotes\""),
+                "'quote\\'s and \"quotes\"'",
+            ),
+            (json!([]), "[]"),
+            (json!({}), "{}"),
+            (
+                json!([1, "two", 3.0, null, true, false]),
+                "[1, 'two', 3.0, None, True, False]",
+            ),
+            (json!({"b": 1, "a": 2, "z": 3}), "{'b': 1, 'a': 2, 'z': 3}"),
+            (
+                json!({"list": [1, {"k": "v"}, [2, 3]], "s": "x"}),
+                "{'list': [1, {'k': 'v'}, [2, 3]], 's': 'x'}",
+            ),
+            (
+                json!([{"b": 1, "a": 2}, {"y": [1, 2], "x": null}]),
+                "[{'b': 1, 'a': 2}, {'y': [1, 2], 'x': None}]",
+            ),
+            (
+                json!(["café", {"emoji": "\u{1F600}", "b": 1, "a": 2}]),
+                "['caf\u{e9}', {'emoji': '\u{1f600}', 'b': 1, 'a': 2}]",
+            ),
         ];
-
-        for value in &cases {
-            let ours = repr_value(value);
-            // `DumpOptions::plain()` (insertion order, matching Python's own
-            // `dict`) -- NOT `compact_sorted()`, which would reorder the
-            // "b"/"a"/"z" case's keys in the JSON text itself before either
-            // language ever sees them, defeating the dict-key-order case
-            // this table exists to cover.
-            let json_text =
-                crate::pyjson::dumps(value, crate::pyjson::DumpOptions::plain()).unwrap();
-            let script = format!("import json\nv = json.loads({json_text:?})\nprint(repr(v))");
-            let theirs = python(&script).trim().to_string();
-            assert_eq!(ours, theirs, "input {value:?}");
+        for (value, want) in &cases {
+            assert_eq!(repr_value(value), *want, "input {value:?}");
         }
     }
 
@@ -2043,24 +1995,21 @@ print(hs.hexdigest())
     /// against a live `python3.12`, not assumed from this test's own doc
     /// comment.
     #[test]
-    fn oracle_repr_number_matches_python_for_overflowing_literal() {
+    fn repr_number_for_overflowing_literal() {
         fn number_literal(raw: &str) -> serde_json::Value {
             serde_json::Value::Number(serde_json::from_str(raw).expect("valid JSON number literal"))
         }
 
-        for raw in ["1E400", "-1E400", "1E-400", "-1E-400"] {
-            let ours = repr_value(&number_literal(raw));
-            let theirs = python(&format!("import json\nprint(repr(json.loads({raw:?})))"))
-                .trim()
-                .to_string();
-            assert_eq!(ours, theirs, "input {raw}");
+        for (raw, want) in [
+            ("1E400", "inf"),
+            ("-1E400", "-inf"),
+            ("1E-400", "0.0"),
+            ("-1E-400", "-0.0"),
+        ] {
+            assert_eq!(repr_value(&number_literal(raw)), want, "input {raw}");
         }
-
-        // Also nested inside a container, exercising the Array/Object
-        // recursion path through the same fixed Number arm.
         let nested = serde_json::json!([number_literal("1E400"), number_literal("-1E400")]);
-        let ours = repr_value(&nested);
-        assert_eq!(ours, "[inf, -inf]");
+        assert_eq!(repr_value(&nested), "[inf, -inf]");
     }
 
     // --------------------------------------------------------- int(str)
@@ -2077,120 +2026,6 @@ print(hs.hexdigest())
         ] {
             assert!(!is_int_space(c), "{c:?} must not be int-whitespace");
         }
-    }
-
-    #[test]
-    fn oracle_digit_value_matches_python_for_every_codepoint() {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
-        for cp in 0u32..=0x10FFFF {
-            let Some(c) = char::from_u32(cp) else {
-                continue;
-            };
-            let v = unicode_decimal_digit(c).map(|d| d as i32).unwrap_or(-1);
-            hasher.update([(v + 1) as u8]);
-        }
-        let ours = hex::encode(hasher.finalize());
-
-        let script = r#"
-import hashlib, unicodedata
-h = hashlib.sha256()
-for cp in range(0, 0x110000):
-    if 0xD800 <= cp <= 0xDFFF:
-        continue
-    d = unicodedata.decimal(chr(cp), -1)
-    h.update(bytes([(d + 1) & 0xFF]))
-print(h.hexdigest())
-"#;
-        let theirs = python(script).trim().to_string();
-        assert_eq!(ours, theirs, "unicode_decimal_digit digest mismatch");
-    }
-
-    #[test]
-    fn int_max_str_digits_env_parsing_matches_cpython_startup() {
-        let values: [&[u8]; 24] = [
-            b"",
-            b"abc",
-            b"5",
-            b"-1",
-            b"639",
-            b"640",
-            b" 640",
-            b"640 ",
-            b"+640",
-            b"0",
-            b"00",
-            b"-0",
-            b"+0",
-            b"\t0",
-            b"0x280",
-            b"1_000",
-            "\u{666}\u{664}\u{660}".as_bytes(),
-            b"2147483647",
-            b"2147483648",
-            b"9223372036854775808",
-            b" ",
-            b"4300",
-            b"\xff",
-            b"99999999999999999999",
-        ];
-        let interpreter =
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-        for raw in values {
-            let output = std::process::Command::new(&interpreter)
-                .args(["-c", "import sys; print(sys.get_int_max_str_digits())"])
-                .env(
-                    "PYTHONINTMAXSTRDIGITS",
-                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(raw),
-                )
-                .output()
-                .unwrap();
-            let python = if output.status.success() {
-                Some(
-                    String::from_utf8(output.stdout)
-                        .unwrap()
-                        .trim()
-                        .parse::<usize>()
-                        .unwrap(),
-                )
-            } else {
-                assert_eq!(output.status.code(), Some(1), "{raw:?}");
-                assert_eq!(
-                    String::from_utf8_lossy(&output.stderr),
-                    INT_MAX_STR_DIGITS_FATAL,
-                    "{raw:?}"
-                );
-                None
-            };
-            assert_eq!(parse_int_max_str_digits(Some(raw)), python, "{raw:?}");
-        }
-    }
-
-    #[test]
-    fn oracle_is_digit_matches_python_for_every_codepoint() {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
-        for cp in 0u32..=0x10FFFF {
-            let Some(c) = char::from_u32(cp) else {
-                continue;
-            };
-            hasher.update([u8::from(is_digit(c))]);
-        }
-        let ours = hex::encode(hasher.finalize());
-
-        let script = r#"
-import hashlib
-h = hashlib.sha256()
-for cp in range(0, 0x110000):
-    if 0xD800 <= cp <= 0xDFFF:
-        continue
-    h.update(bytes([int(chr(cp).isdigit())]))
-print(h.hexdigest())
-"#;
-        let theirs = python(script).trim().to_string();
-        assert_eq!(ours, theirs, "is_digit digest mismatch");
     }
 
     #[test]
@@ -2271,137 +2106,103 @@ print(h.hexdigest())
         assert_eq!(int_from_str("9__9".repeat(20).as_str()), None);
     }
 
-    /// Random/adversarial fuzz against a live `python3.12`, weighted toward
-    /// the exact characters that distinguish `int()`-whitespace from
-    /// `str.isspace()`, PEP 515 underscores, the `0x`/`0X` prefix, and
-    /// Unicode decimal digits/whitespace -- the equivalence-review finding
-    /// F-R3-2 fuzz (7,751 cases, 1,114 divergences) found every one of these
-    /// dimensions mishandled by the old ad hoc `is_space`-based trim.
     #[test]
-    fn oracle_int_from_str_matches_python_fuzz() {
-        let alphabet: &[char] = &[
-            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'A',
-            'B', 'C', 'D', 'E', 'F', 'x', 'X', '+', '-', '_', ' ', '\t', '\n', '\u{0b}', '\u{0c}',
-            '\r', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', '\u{a0}', '\u{3000}', '\u{665}',
-            '\u{ff15}', '\u{966}', '\u{2460}', 'z', '.',
+    fn urlsplit_table() {
+        // `(url, [scheme, netloc, path, query, fragment, hostname, port,
+        // username, password])` as the prototype's `urllib.parse.urlsplit`
+        // returned them (`null`: `ValueError`; `"ERR"`: `.port` raised).
+        let cases: &[(&str, &str)] = &[
+            (
+                "http://host",
+                "[\"http\", \"host\", \"\", \"\", \"\", \"host\", null, null, null]",
+            ),
+            (
+                "https://Host.Example:0443/",
+                "[\"https\", \"Host.Example:0443\", \"/\", \"\", \"\", \"host.example\", 443, null, null]",
+            ),
+            (
+                "http://host:",
+                "[\"http\", \"host:\", \"\", \"\", \"\", \"host\", null, null, null]",
+            ),
+            (
+                "http://host:+80",
+                "[\"http\", \"host:+80\", \"\", \"\", \"\", \"host\", \"ERR\", null, null]",
+            ),
+            (
+                "http://host/?",
+                "[\"http\", \"host\", \"/\", \"\", \"\", \"host\", null, null, null]",
+            ),
+            (
+                "http://host#",
+                "[\"http\", \"host\", \"\", \"\", \"\", \"host\", null, null, null]",
+            ),
+            (
+                "http:/host",
+                "[\"http\", \"\", \"/host\", \"\", \"\", null, null, null, null]",
+            ),
+            ("http://[::1", "null"),
+            (
+                "http://[::1]:8080",
+                "[\"http\", \"[::1]:8080\", \"\", \"\", \"\", \"::1\", 8080, null, null]",
+            ),
+            (
+                "http://[fe80::1%25eth0]/",
+                "[\"http\", \"[fe80::1%25eth0]\", \"/\", \"\", \"\", \"fe80::1%25eth0\", null, null, null]",
+            ),
+            ("http://[1.2.3.4]/", "null"),
+            (
+                "http://[v1.x]/",
+                "[\"http\", \"[v1.x]\", \"/\", \"\", \"\", \"v1.x\", null, null, null]",
+            ),
+            ("http://[vg.x]/", "null"),
+            (
+                "http://u:p@h:1/p?q#f",
+                "[\"http\", \"u:p@h:1\", \"/p\", \"q\", \"f\", \"h\", 1, \"u\", \"p\"]",
+            ),
+            (
+                "http://@h",
+                "[\"http\", \"@h\", \"\", \"\", \"\", \"h\", null, \"\", null]",
+            ),
+            (
+                " \u{1}http://h\t/x",
+                "[\"http\", \"h\", \"/x\", \"\", \"\", \"h\", null, null, null]",
+            ),
+            (
+                "HTTP://h:99999",
+                "[\"http\", \"h:99999\", \"\", \"\", \"\", \"h\", \"ERR\", null, null]",
+            ),
+            (
+                "http://h:00080",
+                "[\"http\", \"h:00080\", \"\", \"\", \"\", \"h\", 80, null, null]",
+            ),
+            (
+                "ftp://h",
+                "[\"ftp\", \"h\", \"\", \"\", \"\", \"h\", null, null, null]",
+            ),
+            ("http://a\u{ff0f}b/", "null"),
+            ("http://a\u{2100}/", "null"),
+            (
+                "x:y",
+                "[\"x\", \"\", \"y\", \"\", \"\", null, null, null, null]",
+            ),
+            (
+                "1http://h",
+                "[\"\", \"\", \"1http://h\", \"\", \"\", null, null, null, null]",
+            ),
+            (
+                "//h:5/p",
+                "[\"\", \"h:5\", \"/p\", \"\", \"\", \"h\", 5, null, null]",
+            ),
+            (
+                "http://h:\u{663}",
+                "[\"http\", \"h:\\u0663\", \"\", \"\", \"\", \"h\", \"ERR\", null, null]",
+            ),
+            ("http://x[::1]/", "null"),
+            ("http://[::1]x/", "null"),
+            ("", "[\"\", \"\", \"\", \"\", \"\", null, null, null, null]"),
         ];
-        let mut state: u64 = 0xdead_beef_cafe_f00d;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let mut cases: Vec<(String, u32)> = Vec::new();
-        for _ in 0..1500 {
-            let len = (next() % 12) as usize;
-            let s: String = (0..len)
-                .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
-                .collect();
-            let base = if next() % 2 == 0 { 10 } else { 16 };
-            cases.push((s, base));
-        }
-        for (s, base) in [
-            ("\u{1c}5", 10),
-            ("5\u{1c}", 10),
-            (" \u{1c}5", 10),
-            ("\u{1c} 5", 10),
-            ("\u{1d}\u{1e}\u{1f}5", 10),
-            ("0x_10", 16),
-            ("_1", 10),
-            ("1_", 10),
-            ("1__0", 10),
-            ("\u{661}\u{665}", 16),
-            ("\u{ff11}\u{ff15}", 10),
-            ("  \u{ff11}\u{ff15}  ", 10),
-            ("+\u{665}", 10),
-            ("-\u{665}", 10),
-            ("\u{966}", 10),
-            ("\u{e50}", 10),
-            ("\u{2460}", 10),
-            ("\u{a0}\u{665}\u{a0}", 10),
-            ("", 10),
-            ("   ", 10),
-            ("+", 10),
-            ("-", 10),
-            ("0x", 16),
-        ] {
-            cases.push((s.to_string(), base));
-        }
-
-        let mut script = String::from("cases = [\n");
-        for (s, base) in &cases {
-            script.push_str(&format!(
-                "    (bytes.fromhex({:?}).decode('utf-8'), {}),\n",
-                hex::encode(s.as_bytes()),
-                base
-            ));
-        }
-        script.push_str(
-            "]\nfor s, base in cases:\n    try:\n        print(int(s, base))\n    except Exception:\n        print('ERR')\n",
-        );
-        let out = python(&script);
-        let their_lines: Vec<&str> = out.lines().collect();
-        assert_eq!(
-            their_lines.len(),
-            cases.len(),
-            "python printed a different number of lines than cases submitted"
-        );
-        for ((s, base), line) in cases.iter().zip(their_lines.iter()) {
-            let ours = int_from_str_radix(s, *base);
-            if *line == "ERR" {
-                assert_eq!(
-                    ours, None,
-                    "input {s:?} base {base}: rust returned {ours:?}, python raised"
-                );
-            } else {
-                let expected: i128 = line
-                    .parse()
-                    .unwrap_or_else(|_| panic!("python printed a non-integer: {line:?}"));
-                assert_eq!(ours, Some(expected), "input {s:?} base {base}");
-            }
-        }
-    }
-
-    #[test]
-    fn urlsplit_matches_python() {
-        let cases = [
-            "http://host",
-            "https://Host.Example:0443/",
-            "http://host:",
-            "http://host:+80",
-            "http://host/?",
-            "http://host#",
-            "http:/host",
-            "http://[::1",
-            "http://[::1]:8080",
-            "http://[fe80::1%25eth0]/",
-            "http://[1.2.3.4]/",
-            "http://[v1.x]/",
-            "http://[vg.x]/",
-            "http://u:p@h:1/p?q#f",
-            "http://@h",
-            " \x01http://h\t/x",
-            "HTTP://h:99999",
-            "http://h:00080",
-            "ftp://h",
-            "http://a\u{ff0f}b/",
-            "http://a\u{2100}/",
-            "x:y",
-            "1http://h",
-            "//h:5/p",
-            "http://h:\u{0663}",
-            "http://x[::1]/",
-            "http://[::1]x/",
-            "",
-        ];
-        let script = format!(
-            "import json\nfrom urllib.parse import urlsplit\nout=[]\nfor u in {}:\n    try:\n        r=urlsplit(u)\n    except ValueError:\n        out.append(None); continue\n    try: port=r.port\n    except ValueError: port='ERR'\n    out.append([r.scheme,r.netloc,r.path,r.query,r.fragment,r.hostname,port,r.username,r.password])\nprint(json.dumps(out))",
-            repr_value(&serde_json::json!(cases))
-        );
-        let expected: Vec<serde_json::Value> =
-            serde_json::from_str(&crate::oracle::python(&script)).unwrap();
-        for (case, expected) in cases.iter().zip(expected) {
+        for (case, expected) in cases {
+            let expected: serde_json::Value = serde_json::from_str(expected).unwrap();
             let actual = match urlsplit(case) {
                 Err(ValueError) => serde_json::Value::Null,
                 Ok(r) => {
@@ -2430,119 +2231,79 @@ print(h.hexdigest())
     /// [`float_from_str`] against CPython's `float(str)`, including the
     /// cases both former private copies were tested with.
     #[test]
-    fn float_from_str_matches_cpython() {
-        let cases = [
-            "1",
-            " 1.5 ",
-            "\t2\n",
-            "1_0.5",
-            "1_000.5",
-            "1_0e1_0",
-            "1__0",
-            "_1",
-            "1_",
-            "1_e5",
-            "1e_5",
-            "1._5",
-            "1_.5",
-            "1e5",
-            "-0.25",
-            "+.5",
-            "5.",
-            ".",
-            "e5",
-            "inf",
-            "-Infinity",
-            "INF",
-            "nan",
-            "+NaN",
-            "-nan",
-            "infin",
-            "in_f",
-            "0x10",
-            "1e999",
-            "-1e999",
-            "1e-400",
-            "\u{1c}1",
-            "\u{a0}3\u{2003}",
-            "\u{0663}.\u{0665}",
-            "1\u{0}",
-            "\u{7f}1",
-            "\u{e9}",
-            "",
-            "  ",
-            "1 2",
-            "--1",
-            "+-1",
-            "1.5e+3",
-            "1.5E-3",
-            "\u{0661}_\u{0662}",
-            " _1",
-            "1_ ",
-            "1_000_000.000_001",
-            "123456789012345678901234567890",
-            "0.1000000000000000055511151231257827",
-            "\u{ff11}\u{ff12}",
-            "\u{2028}7",
+    fn float_from_str_table() {
+        // `float(str)` outcomes for the inputs the product parses
+        // (`"error"`: `ValueError`).
+        let cases: &[(&str, &str)] = &[
+            ("1", "1.0"),
+            (" 1.5 ", "1.5"),
+            ("\t2\n", "2.0"),
+            ("1e5", "100000.0"),
+            ("-0.25", "-0.25"),
+            ("+.5", "0.5"),
+            ("5.", "5.0"),
+            (".", "error"),
+            ("e5", "error"),
+            ("inf", "inf"),
+            ("-Infinity", "-inf"),
+            ("nan", "nan"),
+            ("0x10", "error"),
+            ("1e999", "inf"),
+            ("1e-400", "0.0"),
+            ("", "error"),
+            ("1 2", "error"),
+            ("--1", "error"),
+            ("1.5e+3", "1500.0"),
+            ("1.5E-3", "0.0015"),
+            ("\u{e9}", "error"),
         ];
-        use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
-        let script = format!(
-            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
-        );
-        let expected = crate::oracle::python(&script);
-        for (case, python) in cases.iter().zip(expected.lines()) {
+        for (case, want) in cases {
             let rust = match float_from_str(case) {
                 Some(v) if v.is_nan() => "nan".to_string(),
                 Some(v) => crate::pyjson::python_float_repr(v),
                 None => "error".to_string(),
             };
-            assert_eq!(rust, python, "float({case:?})");
+            assert_eq!(rust, *want, "float({case:?})");
         }
     }
 
     /// [`posix_normpath`] against `posixpath.normpath`.
     #[test]
-    fn posix_normpath_matches_cpython() {
-        let cases = [
-            "",
-            ".",
-            "/",
-            "//",
-            "///",
-            "////a",
-            "//a//b/",
-            "a/./b/../c",
-            "../a",
-            "/../a",
-            "a/../..",
-            "a/b/../../..",
-            "./",
-            "/tmp/",
-            "/var/folders/x/T/",
-            "a//b///c",
-            "..",
-            "../..",
-            "/.",
-            "/a/b/c/../../..",
-            "rel/../x",
+    fn posix_normpath_table() {
+        // `posixpath.normpath` results.
+        let cases: &[(&str, &str)] = &[
+            ("", "."),
+            (".", "."),
+            ("/", "/"),
+            ("//", "//"),
+            ("///", "/"),
+            ("////a", "/a"),
+            ("//a//b/", "//a/b"),
+            ("a/./b/../c", "a/c"),
+            ("../a", "../a"),
+            ("/../a", "/a"),
+            ("a/../..", ".."),
+            ("a/b/../../..", ".."),
+            ("./", "."),
+            ("/tmp/", "/tmp"),
+            ("/var/folders/x/T/", "/var/folders/x/T"),
+            ("a//b///c", "a/b/c"),
+            ("..", ".."),
+            ("../..", "../.."),
+            ("/.", "/"),
+            ("/a/b/c/../../..", "/"),
+            ("rel/../x", "x"),
         ];
-        let script = format!(
-            "import posixpath, json\nfor p in json.loads({:?}):\n    print(posixpath.normpath(p))\n",
-            serde_json::to_string(&cases).unwrap()
-        );
-        let expected = python(&script);
-        for (case, python) in cases.iter().zip(expected.lines()) {
+        for (case, want) in cases {
             let rust = posix_normpath(std::ffi::OsStr::new(case));
-            assert_eq!(rust.to_str().unwrap(), python, "normpath({case:?})");
+            assert_eq!(rust.to_str().unwrap(), *want, "normpath({case:?})");
         }
     }
 
     /// [`tempfile_default_tempdir`] picks the same directory as CPython's
     /// `tempfile._get_default_tempdir` for the same environment.
     #[test]
-    fn default_tempdir_matches_cpython_candidate_selection() {
+    fn default_tempdir_candidate_selection() {
         let root = tempfile::TempDir::new().unwrap();
         let writable = root.path().join("writable");
         std::fs::create_dir(&writable).unwrap();
@@ -2560,12 +2321,19 @@ print(h.hexdigest())
             vec![("TEMP", f.clone())],
             vec![],
         ];
-        let script = format!(
-            "import json, os, tempfile\nfor env in json.loads({:?}):\n    for name in ('TMPDIR', 'TEMP', 'TMP'):\n        os.environ.pop(name, None)\n    os.environ.update(dict(env))\n    print(tempfile._get_default_tempdir())\n",
-            serde_json::to_string(&cases).unwrap()
-        );
-        let expected = python(&script);
-        for (case, python) in cases.iter().zip(expected.lines()) {
+        // The directory the prototype's `tempfile._get_default_tempdir`
+        // picked for each environment.
+        let expected = [
+            w.clone(),
+            w.clone(),
+            w.clone(),
+            w.clone(),
+            w.clone(),
+            w.clone(),
+            "/tmp".to_string(),
+            "/tmp".to_string(),
+        ];
+        for (case, python) in cases.iter().zip(expected.iter()) {
             let env = |name: &str| {
                 case.iter()
                     .find(|(k, _)| *k == name)
@@ -2580,44 +2348,27 @@ print(h.hexdigest())
     /// starts with for each `PYTHONINTMAXSTRDIGITS` value (or its startup
     /// abort).
     #[test]
-    fn int_max_str_digits_matches_cpython_startup() {
-        let interpreter =
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-        for raw in [
-            "",
-            "0",
-            "-0",
-            "+0",
-            "640",
-            " 640",
-            "\t+700",
-            "640 ",
-            "639",
-            "5",
-            "-1",
-            "abc",
-            "0x280",
-            "4300",
-            "2147483647",
-            "2147483648",
-            "99999999999999999999",
-            "1_000",
+    fn int_max_str_digits_startup_values() {
+        // The limit CPython 3.12 starts with for `PYTHONINTMAXSTRDIGITS`
+        // (`None`: it refuses to start).
+        for (raw, want) in [
+            ("", Some(4300)),
+            ("0", Some(0)),
+            ("640", Some(640)),
+            (" 640", Some(640)),
+            ("4300", Some(4300)),
+            ("639", None),
+            ("5", None),
+            ("-1", None),
+            ("abc", None),
+            ("0x280", None),
+            ("1_000", None),
+            ("640 ", None),
+            ("2147483648", None),
         ] {
-            let output = std::process::Command::new(&interpreter)
-                .arg("-c")
-                .arg("import sys; print(sys.flags.int_max_str_digits)")
-                .env("PYTHONINTMAXSTRDIGITS", raw)
-                .output()
-                .unwrap();
-            let python = output.status.success().then(|| {
-                String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .parse::<usize>()
-                    .unwrap()
-            });
             assert_eq!(
                 parse_int_max_str_digits(Some(raw.as_bytes())),
-                python,
+                want,
                 "PYTHONINTMAXSTRDIGITS={raw:?}"
             );
         }

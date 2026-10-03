@@ -1,105 +1,123 @@
-//! Integration test: `StateDir::lock`'s `flock` must interoperate with a
-//! Python process holding `fcntl.flock` on the same `<state>/.lock` file
-//! (rust/PORTING.md requires proving this, not just asserting it).
+//! Integration test: `StateDir::lock` takes the same OS-level lock the Python
+//! prototype took -- `flock(LOCK_EX)` on `<state>/.lock`, opened
+//! `O_RDWR | O_CREAT` with mode 0600 -- so it excludes (and is excluded by) any
+//! other process locking a state directory that way, including a prototype
+//! process still running against the same directory during an upgrade.
 //!
-//! This lives under `rust/tests/` (a separate test binary) rather than
-//! inline in `store.rs` because it needs to *overlap in time* with a live
-//! Python subprocess holding the lock, unlike the oracle module's
-//! run-to-completion-then-diff helper (`crate::oracle::python`, which is
-//! `#[cfg(test)] pub(crate)` and so isn't reachable from here anyway).
+//! The other party is this test binary re-executed as a child process that
+//! performs exactly the prototype's `os.open` + `fcntl.flock` sequence with
+//! raw `flock(2)`; the two must overlap in time, so the child signals over
+//! its stdout.
 
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use rustix::fs::{FlockOperation, Mode, OFlags};
 use zeropw::store::StateDir;
 
-fn repo_root() -> PathBuf {
-    // rust/tests/.. -> rust -> repo root
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
+const CHILD_ENV: &str = "ZEROPW_FLOCK_CHILD";
+
+/// The prototype's lock acquisition: `os.makedirs(path, 0o700,
+/// exist_ok=True)`, `os.open(path/.lock, O_RDWR|O_CREAT, 0o600)`,
+/// `fcntl.flock(fd, LOCK_EX)`.
+fn raw_flock(state_path: &Path) -> rustix::fd::OwnedFd {
+    std::fs::create_dir_all(state_path).unwrap();
+    let fd = rustix::fs::open(
+        state_path.join(".lock"),
+        OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .unwrap();
+    rustix::fs::flock(&fd, FlockOperation::LockExclusive).unwrap();
+    fd
 }
 
-fn python_interpreter() -> String {
-    std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string())
+/// Runs in the re-executed child: `hold:<ms>:<path>` takes the lock, prints
+/// `locked`, holds it for `<ms>`; `wait:<path>` measures how long taking the
+/// lock blocks and prints `waited=<seconds>`.
+fn child_main(spec: &str) {
+    if let Some(rest) = spec.strip_prefix("hold:") {
+        let (ms, path) = rest.split_once(':').unwrap();
+        let fd = raw_flock(Path::new(path));
+        println!("locked");
+        std::thread::sleep(Duration::from_millis(ms.parse().unwrap()));
+        rustix::fs::flock(&fd, FlockOperation::Unlock).unwrap();
+    } else if let Some(path) = spec.strip_prefix("wait:") {
+        let start = Instant::now();
+        let fd = raw_flock(Path::new(path));
+        println!("waited={}", start.elapsed().as_secs_f64());
+        rustix::fs::flock(&fd, FlockOperation::Unlock).unwrap();
+    } else {
+        panic!("unknown child spec {spec}");
+    }
 }
 
-/// A Python single-quoted string literal for `p` (test paths are plain
-/// tempdir paths with no quotes/backslashes, so this only needs to escape
-/// what could plausibly show up, not be a general-purpose quoter).
-fn py_str_literal(p: &Path) -> String {
-    let s = p.to_str().expect("utf8 path");
-    let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
-    format!("'{escaped}'")
-}
-
-/// Spawns a Python process that acquires the `fcntl.flock` on `<state>/.lock`
-/// (creating the state dir first, exactly like `StateDir.lock` does), prints
-/// "locked" once it holds it, then holds it for `hold_secs` before releasing
-/// and exiting. Returns the child so the caller can wait for it.
-fn spawn_python_lock_holder(state_path: &Path, hold_secs: f64) -> std::process::Child {
-    let script = format!(
-        r#"
-import fcntl, os, sys, time
-path = {path}
-os.makedirs(path, mode=0o700, exist_ok=True)
-fd = os.open(os.path.join(path, ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
-fcntl.flock(fd, fcntl.LOCK_EX)
-print("locked", flush=True)
-time.sleep({hold_secs})
-fcntl.flock(fd, fcntl.LOCK_UN)
-os.close(fd)
-"#,
-        path = py_str_literal(state_path),
-        hold_secs = hold_secs,
-    );
-    Command::new(python_interpreter())
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
+fn spawn_child(test_name: &str, spec: String) -> Child {
+    Command::new(std::env::current_exe().unwrap())
+        .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, spec)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .expect("spawn python lock holder")
+        .expect("spawn lock child")
+}
+
+/// Reads child stdout lines until one contains `prefix` and returns what
+/// follows it (libtest prints its own banner lines around the child's output).
+fn read_until(reader: &mut impl BufRead, prefix: &str) -> String {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).unwrap();
+        assert!(n > 0, "child exited before printing {prefix:?}");
+        // libtest may print `test <name> ... ` on the same line first.
+        if let Some(at) = line.find(prefix) {
+            return line[at + prefix.len()..].trim().to_string();
+        }
+    }
 }
 
 #[test]
-fn rust_lock_blocks_until_python_flock_releases() {
+fn rust_lock_blocks_until_a_raw_flock_holder_releases() {
+    if let Ok(spec) = std::env::var(CHILD_ENV) {
+        return child_main(&spec);
+    }
     let tmp = tempfile::TempDir::new().unwrap();
     let state_path = tmp.path().join("state");
 
-    let mut child = spawn_python_lock_holder(&state_path, 0.6);
-    let stdout = child.stdout.take().unwrap();
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .expect("python signals it holds the lock");
-    assert_eq!(line.trim(), "locked");
+    let mut child = spawn_child(
+        "rust_lock_blocks_until_a_raw_flock_holder_releases",
+        format!("hold:600:{}", state_path.display()),
+    );
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    read_until(&mut reader, "locked");
 
-    // Python now holds the OS-level flock. StateDir::lock() must block until
-    // it releases -- prove it by timing the acquisition.
+    // The child now holds the OS-level flock. StateDir::lock() must block
+    // until it releases -- prove it by timing the acquisition.
     let state = StateDir::new(&state_path);
     let start = Instant::now();
-    let guard = state.lock().expect("lock acquires after python releases");
+    let guard = state
+        .lock()
+        .expect("lock acquires after the holder releases");
     let waited = start.elapsed();
     drop(guard);
 
-    let status = child.wait().expect("python exits cleanly");
+    let status = child.wait().expect("child exits");
     assert!(status.success());
     assert!(
         waited >= Duration::from_millis(400),
         "Rust acquired the lock after only {waited:?}; it should have blocked \
-         for close to the 600ms Python held the flock (mutual exclusion did not hold)"
+         for close to the 600ms the other process held the flock"
     );
 }
 
 #[test]
-fn python_flock_blocks_until_rust_lock_releases() {
+fn raw_flock_blocks_until_rust_lock_releases() {
+    if let Ok(spec) = std::env::var(CHILD_ENV) {
+        return child_main(&spec);
+    }
     let tmp = tempfile::TempDir::new().unwrap();
     let state_path = tmp.path().join("state");
 
@@ -118,44 +136,19 @@ fn python_flock_blocks_until_rust_lock_releases() {
         .recv()
         .expect("rust thread signals it holds the lock");
 
-    // Python tries to flock the same file: it must block until Rust's
-    // thread above drops its guard (releasing the flock).
-    let script = format!(
-        r#"
-import fcntl, os, time
-path = {path}
-os.makedirs(path, mode=0o700, exist_ok=True)
-fd = os.open(os.path.join(path, ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
-start = time.time()
-fcntl.flock(fd, fcntl.LOCK_EX)
-print(time.time() - start)
-fcntl.flock(fd, fcntl.LOCK_UN)
-os.close(fd)
-"#,
-        path = py_str_literal(&state_path),
+    let mut child = spawn_child(
+        "raw_flock_blocks_until_rust_lock_releases",
+        format!("wait:{}", state_path.display()),
     );
-    let output = Command::new(python_interpreter())
-        .arg("-c")
-        .arg(&script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python flock waiter");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let waited: f64 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .expect("python prints a float");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let waited: f64 = read_until(&mut reader, "waited=").parse().unwrap();
+    assert!(child.wait().unwrap().success());
 
     handle.join().unwrap();
     assert!(
         waited >= 0.4,
-        "python's flock() returned after only {waited}s; it should have blocked for close to \
-         the 600ms Rust held the lock (mutual exclusion did not hold)"
+        "the other process's flock() returned after only {waited}s; it should have \
+         blocked for close to the 600ms Rust held the lock"
     );
 }
 

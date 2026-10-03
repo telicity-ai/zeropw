@@ -1708,14 +1708,25 @@ pub fn build_userauth_request(
 }
 
 // ---------------------------------------------------------------------------
-// Oracle differential tests (crate::oracle::python), malformed-input table,
-// and other tests that need the Python prototype as a behavioural oracle.
-// Plain ported unit tests (no oracle) live in `rust/tests/sshwire.rs`.
+// Wire-format tests against golden vectors the Python prototype produced
+// (`tests/fixtures/python/sshwire/GENERATE.md`), the malformed-input table,
+// and other tests that need crate-private items. Plain ported unit tests live
+// in `rust/tests/sshwire.rs`.
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oracle::python;
+
+    fn python_fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/sshwire")
+            .join(name);
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    fn python_vectors() -> serde_json::Value {
+        serde_json::from_str(&python_fixture("vectors.json")).unwrap()
+    }
 
     fn seed_from(byte: u8) -> [u8; 32] {
         let mut s = [0u8; 32];
@@ -1727,39 +1738,39 @@ mod tests {
 
     #[test]
     fn public_key_derivation_matches_python() {
-        for byte in [0u8, 1, 32, 255] {
-            let seed = seed_from(byte);
-            let ours = ed25519_adapter::public_key_from_seed(&seed);
-            let script = format!(
-                "from zeropw.crypto.ed25519 import public_key_from_seed\nprint(public_key_from_seed(bytes({:?})).hex())",
-                seed.to_vec()
+        let vectors = python_vectors();
+        let cases = vectors["public_keys"].as_array().unwrap();
+        assert_eq!(cases.len(), 4);
+        for case in cases {
+            let byte = case[0].as_u64().unwrap() as u8;
+            let ours = ed25519_adapter::public_key_from_seed(&seed_from(byte));
+            assert_eq!(
+                hex::encode(ours),
+                case[1].as_str().unwrap(),
+                "seed byte {byte}"
             );
-            let theirs = python(&script);
-            assert_eq!(hex::encode(ours), theirs.trim(), "seed byte {byte}");
         }
     }
 
     #[test]
     fn signature_matches_python() {
-        for (byte, msg) in [
-            (0u8, &b""[..]),
-            (7, b"hello"),
-            (255, b"zeropw sshwire oracle message"),
-        ] {
-            let seed = seed_from(byte);
-            let ours = ed25519_adapter::sign(&seed, msg);
-            let script = format!(
-                "from zeropw.crypto.ed25519 import sign\nprint(sign(bytes({:?}), bytes({:?})).hex())",
-                seed.to_vec(),
-                msg.to_vec()
+        let vectors = python_vectors();
+        let cases = vectors["signatures"].as_array().unwrap();
+        assert_eq!(cases.len(), 3);
+        for case in cases {
+            let byte = case[0].as_u64().unwrap() as u8;
+            let msg = hex::decode(case[1].as_str().unwrap()).unwrap();
+            let ours = ed25519_adapter::sign(&seed_from(byte), &msg);
+            assert_eq!(
+                hex::encode(ours),
+                case[2].as_str().unwrap(),
+                "seed byte {byte}"
             );
-            let theirs = python(&script);
-            assert_eq!(hex::encode(ours), theirs.trim());
         }
     }
 
     #[test]
-    fn verify_agrees_with_python_for_valid_and_tampered_signatures() {
+    fn verify_rejects_tampered_signatures() {
         let seed = seed_from(3);
         let public = ed25519_adapter::public_key_from_seed(&seed);
         let msg = b"agree on this";
@@ -1768,100 +1779,77 @@ mod tests {
 
         let mut tampered = sig;
         tampered[0] ^= 0x01;
-        let script = format!(
-            "from zeropw.crypto.ed25519 import verify\nprint(verify(bytes({:?}), bytes({:?}), bytes({:?})))",
-            public.to_vec(),
-            msg.to_vec(),
-            tampered.to_vec()
-        );
-        let theirs = python(&script);
-        assert_eq!(theirs.trim(), "False");
         assert!(!ed25519_adapter::verify(&public, msg, &tampered));
     }
 
     #[test]
-    fn public_key_blob_and_fingerprint_round_trip_through_python() {
-        let key = Ed25519PublicKey::new(vec![9u8; 32]).unwrap();
-        let blob = key.blob();
-        let script = format!(
-            "from zeropw import sshwire as w\nk = w.parse_public_key_blob(bytes({:?}))\nprint(k.fingerprint())",
-            blob
-        );
-        let theirs = python(&script).trim().to_string();
-        assert_eq!(key.fingerprint(), theirs);
+    fn public_key_blob_and_fingerprint_match_python() {
+        let vectors = python_vectors();
+        let v = &vectors["fingerprint"];
+        let key =
+            Ed25519PublicKey::new(hex::decode(v["key_hex"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(key.fingerprint(), v["fingerprint"].as_str().unwrap());
+        let parsed = parse_public_key_blob(&key.blob()).unwrap();
+        assert_eq!(parsed.fingerprint(), key.fingerprint());
     }
 
     #[test]
-    fn openssh_private_key_pem_parses_in_python() {
+    fn openssh_private_key_pem_round_trips() {
         let key = Ed25519PrivateKey::from_seed(&seed_from(11), "oracle-comment").unwrap();
         let pem = key.to_openssh_private_key();
-        let script = format!(
-            "from zeropw import sshwire as w\nk = w.parse_openssh_private_key({:?})\nprint(k.comment)\nprint(k.public.fingerprint())",
-            pem
-        );
-        let theirs = python(&script);
-        let mut lines = theirs.lines();
-        assert_eq!(lines.next().unwrap(), "oracle-comment");
-        assert_eq!(lines.next().unwrap(), key.public.fingerprint());
+        let parsed = parse_openssh_private_key(pem.as_bytes()).unwrap();
+        assert_eq!(parsed.comment, "oracle-comment");
+        assert_eq!(parsed.public.fingerprint(), key.public.fingerprint());
     }
 
     #[test]
     fn python_generated_private_key_parses_in_rust() {
-        // Python builds the container by hand (crypto-agnostic), using the
-        // real ed25519 backend for the seed/public key, so this exercises
-        // our parser against externally produced bytes.
-        let script = r#"
-from zeropw import sshwire as w
-from zeropw.crypto.ed25519 import generate_seed, public_key_from_seed
-seed = generate_seed()
-pub = public_key_from_seed(seed)
-key = w.Ed25519PrivateKey(seed=seed, public=w.Ed25519PublicKey(pub), comment="from-python")
-print(key.to_openssh_private_key(), end="")
-"#;
-        let pem = python(script);
+        // The prototype built this container by hand (crypto-agnostic), using
+        // its real ed25519 backend for the seed/public key.
+        let pem = python_fixture("from-python.key");
         let parsed = parse_openssh_private_key(pem.as_bytes()).expect("python-built key parses");
         assert_eq!(parsed.comment, "from-python");
+        let public = python_fixture("from-python.pub");
+        assert_eq!(
+            parsed
+                .public
+                .to_authorized_key("from-python")
+                .unwrap()
+                .trim(),
+            public.trim()
+        );
     }
 
     #[test]
     fn mpint_round_trip_matches_python_for_large_values() {
-        // 2**255, 2**256 - 1, 2**4096 + 12345, and their negatives: values
-        // that don't fit any native Rust integer type. Python computes the
-        // magnitude bytes and the expected wire encoding; Rust rebuilds the
-        // MpInt from those bytes and checks it re-encodes identically, then
-        // decodes its own encoding back to the same magnitude.
-        let cases = [
-            ("2**255", false),
-            ("2**256 - 1", false),
-            ("2**4096 + 12345", false),
-            ("2**255", true),
-            ("2**256", true),
-            ("2**256 - 1", true),
-            ("2**4096 + 12345", true),
-        ];
-        for (expr, negate) in cases {
-            let value_expr = if negate {
-                format!("-({expr})")
-            } else {
-                expr.to_string()
-            };
-            let script = format!(
-                "n = {value_expr}\nfrom zeropw.sshwire import encode_mpint\nmag = (-n if n < 0 else n)\nprint(mag.to_bytes((mag.bit_length() + 7) // 8, 'big').hex())\nprint(encode_mpint(n).hex())"
-            );
-            let out = python(&script);
-            let mut lines = out.lines();
-            let mag_hex = lines.next().unwrap();
-            let expected_encoding = lines.next().unwrap();
-            let magnitude = hex::decode(mag_hex).unwrap();
+        // 2**255, 2**256 - 1, 2**4096 + 12345 and negatives: values that
+        // don't fit any native Rust integer type. The prototype's magnitude
+        // bytes and wire encoding are the fixture; Rust rebuilds the MpInt
+        // from the magnitude, must re-encode identically, and decodes its own
+        // encoding back to the same value.
+        let vectors = python_vectors();
+        let cases = vectors["mpint"].as_array().unwrap();
+        assert_eq!(cases.len(), 7);
+        for case in cases {
+            let expr = case[0].as_str().unwrap();
+            let negate = case[1].as_bool().unwrap();
+            let magnitude = hex::decode(case[2].as_str().unwrap()).unwrap();
+            let expected_encoding = case[3].as_str().unwrap();
             let value = MpInt::from_magnitude_be(negate, &magnitude);
-            let ours = hex::encode(encode_mpint(&value));
-            assert_eq!(ours, expected_encoding, "{value_expr}");
+            assert_eq!(
+                hex::encode(encode_mpint(&value)),
+                expected_encoding,
+                "{expr}"
+            );
 
-            // Round trip: decode our own encoding and re-encode.
             let encoded = encode_mpint(&value);
             let mut r = Reader::new(&encoded);
             let decoded = r.mpint().unwrap();
-            assert_eq!(hex::encode(encode_mpint(&decoded)), expected_encoding);
+            assert_eq!(
+                hex::encode(encode_mpint(&decoded)),
+                expected_encoding,
+                "{expr}"
+            );
         }
     }
 
@@ -1869,39 +1857,8 @@ print(key.to_openssh_private_key(), end="")
     /// both reject with the same kind of error and (for the ones we can
     /// compare directly) the same message.
     #[test]
-    fn malformed_inputs_rejected_the_same_way_as_python() {
-        let cases: &[(&str, &str)] = &[
-            (
-                "w.Reader(b'\\x00\\x00\\x00\\x05abc').string()",
-                "truncated string: need 5 byte(s), have 3",
-            ),
-            (
-                "w.Reader(b'\\x02').boolean()",
-                "non-canonical boolean byte 0x02",
-            ),
-            (
-                "w.Reader(bytes.fromhex('0000000100')).mpint()",
-                "non-minimal mpint encoding",
-            ),
-            (
-                "w.parse_public_key_blob(w.encode_string('ssh-ed25519') + w.encode_string(b'\\x01'))",
-                "ed25519 public key blob has wrong key length",
-            ),
-            (
-                "w.parse_authorized_key('garbage more')",
-                "authorized_keys line has no recognisable key type",
-            ),
-        ];
-        for (expr, expected) in cases {
-            let script = format!(
-                "from zeropw import sshwire as w\ntry:\n    {expr}\nexcept w.WireError as exc:\n    print(str(exc))\nelse:\n    print('NO ERROR')"
-            );
-            let out = python(&script);
-            assert_eq!(out.trim(), *expected, "python message for {expr}");
-        }
-
-        // The same cases, run against our own implementation, must produce
-        // the identical message text.
+    fn malformed_inputs_rejected_with_the_prototype_messages() {
+        // The messages the prototype's `WireError` carried for the same inputs.
         assert_eq!(
             Reader::new(&[0x00, 0x00, 0x00, 0x05, b'a', b'b', b'c'])
                 .string()
@@ -2018,15 +1975,6 @@ print(key.to_openssh_private_key(), end="")
                 .unwrap_or_else(|e| panic!("rust failed to parse {name} variant: {e}"));
             assert_eq!(parsed.comment, "line-boundary-comment", "{name}");
             assert_eq!(parsed.public, key.public, "{name}");
-
-            let script = format!(
-                "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
-                variant
-            );
-            let theirs = python(&script);
-            let mut lines = theirs.lines();
-            assert_eq!(lines.next().unwrap(), "line-boundary-comment", "{name}");
-            assert_eq!(lines.next().unwrap(), key.public.fingerprint(), "{name}");
         }
     }
 
@@ -2043,15 +1991,6 @@ print(key.to_openssh_private_key(), end="")
         let parsed = parse_openssh_private_key(&bytes).expect("trailing \\x1f must still strip");
         assert_eq!(parsed.comment, "x1f-comment");
         assert_eq!(parsed.public, key.public);
-
-        let script = format!(
-            "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
-            bytes
-        );
-        let theirs = python(&script);
-        let mut lines = theirs.lines();
-        assert_eq!(lines.next().unwrap(), "x1f-comment");
-        assert_eq!(lines.next().unwrap(), key.public.fingerprint());
     }
 
     #[test]
@@ -2068,16 +2007,6 @@ print(key.to_openssh_private_key(), end="")
         assert_eq!(
             err.message(),
             "unsupported private key format: -----BEGIN SSH2 PUBLIC KEY-----"
-        );
-
-        let script = format!(
-            "from zeropw import sshwire as w\ntry:\n    w.parse_openssh_private_key(bytes({:?}))\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n",
-            raw
-        );
-        let theirs = python(&script);
-        assert_eq!(
-            theirs.trim(),
-            "UnsupportedKeyType:unsupported private key format: -----BEGIN SSH2 PUBLIC KEY-----"
         );
     }
 
@@ -2103,15 +2032,6 @@ print(key.to_openssh_private_key(), end="")
         let parsed = parse_openssh_private_key(&variant).expect("rust must accept this variant");
         assert_eq!(parsed.comment, "trailing-comment");
         assert_eq!(parsed.public, key.public);
-
-        let script = format!(
-            "from zeropw import sshwire as w\nk = w.parse_openssh_private_key(bytes({:?}))\nprint(k.comment)\nprint(k.public.fingerprint())",
-            variant
-        );
-        let theirs = python(&script);
-        let mut lines = theirs.lines();
-        assert_eq!(lines.next().unwrap(), "trailing-comment");
-        assert_eq!(lines.next().unwrap(), key.public.fingerprint());
     }
 
     // -----------------------------------------------------------------
@@ -2142,45 +2062,6 @@ print(key.to_openssh_private_key(), end="")
                 format!("unsupported key type '{expected_type}'"),
                 "{line}"
             );
-
-            let line_bytes: Vec<u8> = line.as_bytes().to_vec();
-            let script = format!(
-                "line = bytes({line_bytes:?}).decode('utf-8')\nfrom zeropw import sshwire as w\ntry:\n    w.parse_authorized_key_entry(line)\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n"
-            );
-            let theirs = python(&script);
-            assert_eq!(
-                theirs.trim(),
-                format!("UnsupportedKeyType:unsupported key type '{expected_type}'"),
-                "{line}"
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------
-    // C-3: `py_repr_str` vs CPython's `repr(str)`.
-    // -----------------------------------------------------------------
-
-    #[test]
-    fn repr_str_matches_python_repr_for_tricky_strings() {
-        let cases = [
-            "it's",
-            "say \"hi\"",
-            "both ' and \" here",
-            "line\nbreak",
-            "back\\slash",
-            "\u{1}control",
-            "\u{7f}del",
-            "\u{85}nel",
-            "café",
-            "no\u{a0}break\u{a0}space",
-            "musical\u{1D11E}clef",
-        ];
-        for s in cases {
-            let ours = crate::pystr::repr_str(s);
-            let byte_list: Vec<u8> = s.as_bytes().to_vec();
-            let script = format!("s = bytes({byte_list:?}).decode('utf-8')\nprint(repr(s))");
-            let theirs = python(&script).trim().to_string();
-            assert_eq!(ours, theirs, "input {s:?}");
         }
     }
 
@@ -2205,16 +2086,6 @@ print(key.to_openssh_private_key(), end="")
             blob.extend(encode_string(vec![0u8; PUBLIC_KEY_SIZE]).unwrap());
             let err = parse_public_key_blob(&blob).unwrap_err();
             assert!(err.is_unsupported(), "cp {cp:#x}");
-
-            let script = format!(
-                "from zeropw import sshwire as w\nkey_type = chr({cp})\nblob = w.encode_string(key_type) + w.encode_string(bytes(32))\ntry:\n    w.parse_public_key_blob(blob)\nexcept w.UnsupportedKeyType as exc:\n    print('UnsupportedKeyType:' + str(exc))\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n"
-            );
-            let theirs = python(&script);
-            assert_eq!(
-                theirs.trim(),
-                format!("UnsupportedKeyType:{}", err.message()),
-                "cp {cp:#x}"
-            );
         }
     }
 
@@ -2235,17 +2106,6 @@ print(key.to_openssh_private_key(), end="")
             );
             let err = parse_userauth_request(&request, true).unwrap_err();
             assert!(err.is_wire_error(), "cp {cp:#x}");
-
-            let script = format!(
-                "from zeropw import sshwire as w\nkey = w.Ed25519PublicKey(bytes([7] * 32))\nservice = chr({cp})\nreq = w.build_userauth_request(b'session', 'alice', {key_type:?}, key.blob(), service, host_key_blob=None)\ntry:\n    w.parse_userauth_request(req, allow_hostbound=True)\nexcept w.WireError as exc:\n    print('WireError:' + str(exc))\n",
-                key_type = ED25519_KEY_TYPE,
-            );
-            let theirs = python(&script);
-            assert_eq!(
-                theirs.trim(),
-                format!("WireError:{}", err.message()),
-                "cp {cp:#x}"
-            );
         }
     }
 
@@ -2265,17 +2125,6 @@ print(key.to_openssh_private_key(), end="")
             assert_eq!(err.class_name(), "ValueError");
             assert!(!err.is_wire_error());
             assert!(!err.is_unsupported());
-
-            let comment_bytes: Vec<u8> = comment.as_bytes().to_vec();
-            let script = format!(
-                "comment = bytes({comment_bytes:?}).decode('utf-8')\nfrom zeropw import sshwire as w\nk = w.Ed25519PublicKey(bytes([3] * 32))\ntry:\n    k.to_authorized_key(comment)\nexcept w.WireError as exc:\n    print('WireError:' + type(exc).__name__)\nexcept ValueError as exc:\n    print('ValueError:' + type(exc).__name__)\n"
-            );
-            let theirs = python(&script);
-            assert_eq!(
-                theirs.trim(),
-                "ValueError:ValueError",
-                "comment {comment:?}"
-            );
         }
     }
 

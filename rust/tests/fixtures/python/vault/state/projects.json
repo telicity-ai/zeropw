@@ -1,0 +1,10 @@
+{
+  "demo": {
+    "created_at": "2026-10-03T08:55:34Z",
+    "environments": [
+      "dev",
+      "staging",
+      "prod"
+    ]
+  }
+}

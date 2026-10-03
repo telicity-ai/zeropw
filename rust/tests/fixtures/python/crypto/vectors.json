@@ -1,0 +1,75 @@
+{
+  "chacha20poly1305": {
+    "key": "1212121212121212121212121212121212121212121212121212121212121212",
+    "nonce": "343434343434343434343434",
+    "aad": "7a65726f70772d6f7261636c652d616164",
+    "plaintext": "7a65726f707720727573742f707974686f6e206368616368613230706f6c7931333035206f7261636c6520636865636b",
+    "sealed": "8614304b64b51f7796a2dac738be55108e6bed69e4f23a922970252191cd526dc7d6b9c59b5a20c6b45854bfbcae1e00107614339a41259e19001aed014a43c4"
+  },
+  "ed25519_sign": {
+    "seed": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    "message": "7a65726f707720727573742f707974686f6e2065643235353139206f7261636c6520636865636b",
+    "signature": "e15ac43960c34a80ce88d72e484746463f63acd5c7a09d7a7edc729008cf80b9d44663c980e9dea4c09ed12618229b9f5106806fe46c5673ac8a4c51060ea60c",
+    "public_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+  },
+  "ed25519_forged_identity": {
+    "signature": "edc876d6831fd2105d0b4389ca2e283166469289146e2ce06faefe98b22548df0500000000000000000000000000000000000000000000000000000000000000",
+    "message": "666f7267656420756e6465722061206e6f6e2d63616e6f6e6963616c206964656e7469747920656e636f64696e67",
+    "pk_canonical": "0100000000000000000000000000000000000000000000000000000000000000",
+    "pk_signbit": "0100000000000000000000000000000000000000000000000000000000000080",
+    "pk_p_plus_1": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "pk_p_plus_1_signbit": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "ed25519_forged_order2": {
+    "signature": "58666666666666666666666666666666666666666666666666666666666666660100000000000000000000000000000000000000000000000000000000000000",
+    "message": "6f72646572322d666f7267652d30",
+    "pk_canonical": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "pk_signbit": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "x25519_clamp": [
+    [
+      "",
+      "IndexError"
+    ],
+    [
+      "a5",
+      "IndexError"
+    ],
+    [
+      "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "IndexError"
+    ],
+    [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+    ],
+    [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fff"
+    ],
+    [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    ],
+    [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    ],
+    [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000",
+      "f8ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0000000000000000000000000000000000000000000000000000000000000000"
+    ]
+  ],
+  "x25519_scalarmult": {
+    "k": "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+    "u": "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+    "result": "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"
+  },
+  "x25519_exchange": {
+    "a_priv": "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+    "b_priv": "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb",
+    "a_pub": "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+    "b_pub": "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f",
+    "shared": "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"
+  }
+}

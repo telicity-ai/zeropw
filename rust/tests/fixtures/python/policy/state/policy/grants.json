@@ -1,0 +1,15 @@
+{
+  "g-708f970aa8ca4aa7": {
+    "connection": "gh",
+    "created_at": "2023-11-14T22:13:20Z",
+    "credential_version": null,
+    "expires_at": 1700003600.0,
+    "id": "g-708f970aa8ca4aa7",
+    "max_uses": null,
+    "policy_version": 1,
+    "principal": "agent-1",
+    "revoked_at": null,
+    "status": "active",
+    "uses": 0
+  }
+}
