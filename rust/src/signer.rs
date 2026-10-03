@@ -37,11 +37,10 @@
 //!   creates, scoped to one `SignerManager` instance rather than the whole
 //!   process (so concurrent tests using different managers cannot interfere
 //!   with each other, unlike the Python global).
-//! * Python narrows the process umask to `0o177` around `socket.bind()` so
-//!   the kernel creates the socket file with mode 0600 atomically, then
-//!   `chmod`s redundantly. [`bind_and_listen`] reproduces the atomic 0600
-//!   creation with safe `rustix` calls (see its doc comment), then makes the
-//!   same `chmod`.
+//! * Python narrowed the process umask to `0o177` around `socket.bind()`.
+//!   [`bind_and_listen`] never changes the process-wide umask: on Linux it
+//!   creates the socket file at 0600 atomically, elsewhere it relies on the
+//!   0700 socket directory until its `chmod(0o600)` (see `bind_private`).
 //! * An `OSError` (or a failed thread start) inside `SignerManager`/
 //!   `_BindingServer` escapes Python uncaught; [`escaped_os_error`] models
 //!   it the way this crate models every escaping CPython built-in, so the
@@ -1645,7 +1644,7 @@ fn escaped_thread_start_error() -> Error {
 /// `BindingServer::start` sets the returned listener non-blocking right
 /// after this returns: `accept_loop` waits for it with a bounded `poll`
 /// (Python's `settimeout(0.2)`) and then accepts. See [`bind_private`] for
-/// the atomic 0600 creation (Python's `os.umask(0o177)` around `bind`).
+/// how the socket stays private before the chmod.
 ///
 /// Finding G-R5-1: Python calls `self._sock.listen(16)`, an explicit
 /// backlog, but `std::os::unix::net::UnixListener::bind` has no way to
@@ -1681,19 +1680,20 @@ fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     Ok(listener)
 }
 
-/// `old_umask = os.umask(0o177); try: sock.bind(path) finally:
-/// os.umask(old_umask)`: the socket file never exists with a mode wider than
-/// 0600.
+/// Bind the socket so it is never reachable by another user before
+/// `bind_and_listen`'s `chmod(0o600)`.
 ///
 /// Linux derives the new socket inode's mode from the (unbound) socket's own
-/// inode mode masked by the umask (`unix_bind_bsd`: `S_IFSOCK |
-/// (SOCK_INODE(sock)->i_mode & ~current_umask())`), so a safe `fchmod(fd,
+/// inode mode masked by the umask (`unix_bind_bsd`), so a safe `fchmod(fd,
 /// 0o600)` before `bind` creates the file at 0600 atomically without
-/// touching process-wide state (measured: 0600 under umask 000, 022 and
-/// 077; a plain bind under umask 022 gives 0755). Darwin rejects `fchmod`
-/// on a socket (`EINVAL`) and always creates the file at `0777 & ~umask`,
-/// so there this narrows the process umask around `bind` exactly like
-/// Python does, with `rustix`'s safe `umask` wrapper.
+/// touching process-wide state. Darwin rejects `fchmod` on a socket
+/// (`EINVAL`), so there the socket is bound plainly: every signer socket
+/// lives in a 0700 directory (`choose_socket_dir`), so no other user can
+/// reach it during the moment before the chmod. Narrowing the process umask
+/// around `bind` (what the Python prototype did) is not an option in this
+/// multithreaded server: umask is process-wide, and a concurrent thread's
+/// directory created inside that window lost its search bit, failing
+/// `exec` run directories with `EACCES`/`spawn_failed`.
 #[cfg(target_os = "linux")]
 fn bind_private(socket: &Socket, addr: &SockAddr) -> std::io::Result<()> {
     rustix::fs::fchmod(socket, rustix::fs::Mode::from_raw_mode(0o600))?;
@@ -1702,10 +1702,7 @@ fn bind_private(socket: &Socket, addr: &SockAddr) -> std::io::Result<()> {
 
 #[cfg(not(target_os = "linux"))]
 fn bind_private(socket: &Socket, addr: &SockAddr) -> std::io::Result<()> {
-    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o177));
-    let bound = socket.bind(addr);
-    rustix::process::umask(previous);
-    bound
+    socket.bind(addr)
 }
 
 // ---------------------------------------------------------------------------
@@ -2048,10 +2045,11 @@ mod tests {
         std::fs::remove_dir_all(&candidate).unwrap();
     }
 
-    /// Python's `os.umask(0o177)` around `bind` means the socket file is
-    /// created at 0600 -- there is no moment where it exists wider. Checked
-    /// on the file `bind_private` leaves BEFORE `bind_and_listen`'s own
-    /// `chmod`; a plain `bind` under the usual 022 umask creates 0755.
+    /// On Linux the socket file is created at 0600 -- there is no moment
+    /// where it exists wider. Checked on the file `bind_private` leaves
+    /// BEFORE `bind_and_listen`'s own `chmod`; a plain `bind` under the
+    /// usual 022 umask creates 0755.
+    #[cfg(target_os = "linux")]
     #[test]
     fn bind_private_creates_the_socket_file_at_0600_before_any_chmod() {
         let tmp = TempDir::new().unwrap();
