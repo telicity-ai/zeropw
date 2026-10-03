@@ -12,6 +12,51 @@ local; it is not described as an always-on cloud worker. Independent review
 will explicitly select `gpt-6-astra` and record the code revision reviewed,
 findings, fixes, and rerun evidence. Earlier PASS results do not approve new code.
 
+## Python prototype removed (2026-10-04 KST) — current status
+
+The user changed the acceptance target on 2026-10-03: Rust does not have to
+reproduce CPython's behaviour in general, only stay compatible with what the
+prototype wrote and exchanged (`rust/PORTING.md` §0: persisted state,
+wire/crypto formats, features, security). On that basis the strict-parity
+extras added on 2026-10-03 that only mirrored interpreter quirks were
+reverted (CPython codec tables, the `sys_hostent` resolver FFI, the
+`email`/`http.client` re-implementations, the `str.lower()` table), every
+Rust test that called the prototype live was converted to fixtures the
+prototype generated once (`rust/tests/fixtures/python/<area>/GENERATE.md`)
+or to Rust-native assertions, and the Python package, its test suite,
+`examples/democli.py`, the live oracle and `rust/verify.py` were deleted.
+`rust/verify.sh` replaces the matrix driver; GitHub Actions remains
+disabled, and `.github/workflows/harness-ci.yml` would run it on Linux and
+macOS once re-enabled.
+
+Verification of branch `claude/rust-parity-close` at `f2042c0`, with every
+`python`/`python3`/`python3.12` on PATH replaced by a stub that exits 127
+(no stub invocation was logged):
+
+| Platform | Environment | Result |
+| --- | --- | --- |
+| Linux | isolated `zeropw-parity` Lima VM, ARM64 Ubuntu 24.04, user `parity`, OpenSSL 3.0.13, Rust 1.98.1 | `rust/verify.sh`: 93/93 steps, 1,365 tests passed, 0 failed, 4 ignored timing probes run separately in the `signer-probes` step |
+| macOS | coordinator Mac (user decision 2026-10-03 to run macOS checks there), macOS 26.5 ARM64, Homebrew OpenSSL 3.6.5, Rust 1.98.1 | `rust/verify.sh`: 93/93 steps, 1,368 tests passed, 0 failed, 4 ignored as above |
+
+Logs are kept outside the repository in
+`zeropw-parity-evidence-20261003/` (`isolated-runner/verify-sh-nopython-f2042c0.log`,
+sha256 60ea9625…b438b4; `macos-verify-sh-final.log`, sha256 662462be…f263d0).
+The pre-conversion full matrix with the Python oracle also passed in the VM
+at `116345f` (107 steps, 1,099 prototype tests).
+
+Product fixes found on the way: the macOS signer no longer narrows the
+process-wide umask around `bind` (it made a concurrent thread's new
+directories unsearchable, failing `exec` runs as `spawn_failed`), and Rust
+binaries no longer read `PYTHONINTMAXSTRDIGITS`. The macOS-only test
+failures after conversion were Linux assumptions in the tests (pty pointer
+types, inherited `O_NONBLOCK`, XNU shebang rules, `/usr/bin/sh`, `strftime`
+year padding, `__CF_USER_TEXT_ENCODING`, the renegotiation SCSV).
+
+Known limits: `signer_e2e` needs `perl` and OpenSSH; `rust/DEVIATIONS.md`
+and the sections below are history and cite some tests that were later
+deleted or renamed. Merge to `main`, deployment and production isolation
+remain separate decisions.
+
 ## Current full-equivalence continuation (2026-10-03 KST)
 
 Full equivalence remains unproven. The current candidate branch is
