@@ -33,6 +33,20 @@
 //!   `_normalize_request_id` have no Rust equivalent (compile-time
 //!   impossible), only their *value* validation is ported. See
 //!   `DEVIATIONS.md`.
+//!
+//! ## Exceptions
+//!
+//! Where Python's `relay`/`relay_for_caller` raise instead of returning a
+//! `RelayResult`, [`try_relay`]/[`try_relay_for_caller`] return that
+//! exception as `Err`: a `ZeroPWError` as the matching [`Error`], and a
+//! CPython built-in escaping uncaught (`OverflowError` from a huge negative
+//! chunk size, `ValueError`/`OverflowError` from `settimeout`, the
+//! `TypeError`/`ValueError`/`AttributeError` the request ledger raises on
+//! malformed state, ...) as an [`escaped_builtin`], with the same side
+//! effects already done (and the same ones not done) as in Python.
+//! `server.rs` and `tools.rs` propagate it exactly as `zeropw.server` and
+//! `zeropw.tools` do; [`relay`]/[`relay_for_caller`] are conveniences that
+//! render it as the server's reply.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -2978,9 +2992,9 @@ impl<'a> Relay<'a> {
 
     /// `_annotate_approval`: both `state.read_json`/`state.write_json` calls
     /// are unguarded in Python, so a `StateError` from either propagates
-    /// uncaught out of `_annotate_approval`, out of `run`, to `relay`'s
-    /// top-level fail-closed conversion (`DEVIATIONS.md`'s
-    /// `unexpected_error_result` row). Previously this swallowed both
+    /// uncaught out of `_annotate_approval`, out of `run` and out of `relay`
+    /// (`try_relay`'s `Err`, which `server.rs` answers like
+    /// `zeropw.server`). Previously this swallowed both
     /// failures (`let Ok(..) = .. else { return }` / `let _ = ..`), so a
     /// state failure still returned `428 approval_required` with an
     /// under-annotated approval entry instead of failing closed (finding
@@ -4027,9 +4041,8 @@ mod annotate_approval_tests {
         // Python's `_annotate_approval` has no `try`/`except` around either
         // `state.read_json(CONTROL, None)` or `state.write_json(CONTROL,
         // control)`: a `StateError` from either propagates uncaught out of
-        // `_annotate_approval`, out of `run`, to `relay`'s top-level
-        // fail-closed conversion (`DEVIATIONS.md`'s `unexpected_error_result`
-        // row). This used to `let Ok(..) = .. else { return }` (silently
+        // `_annotate_approval`, out of `run` and out of `relay` (`try_relay`'s
+        // `Err`). This used to `let Ok(..) = .. else { return }` (silently
         // giving up) and `let _ = ..` (silently ignoring a write failure)
         // instead, so a state failure here still returned `428
         // approval_required` with an under-annotated approval entry.
