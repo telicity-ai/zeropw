@@ -51,14 +51,6 @@ struct Allow {
 /// (PORTING.md §3b: "base64 (lenient `b64decode`, urlsafe, encode)").
 const BASE64_DECODE_ALLOWLIST: &[Allow] = &[
     Allow {
-        file: "gateway.rs",
-        marker: "entry[2].as_str().unwrap()",
-        reason: "test-only oracle-comparison harness: decodes base64 that the Python \
-                 oracle subprocess itself produced via its own trusted b64encode call, \
-                 never agent/attacker input, so CPython's lenient-decode leniency is not \
-                 being modelled here at all",
-    },
-    Allow {
         file: "crypto/ed25519.rs",
         marker: ".decode(joined)",
         reason: "kms.rs's `_dearmor` (PEM key armor) calls Python's `base64.b64decode(text, \
