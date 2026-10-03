@@ -1,6 +1,9 @@
 //! Independent gpt-6-astra lifecycle review of product fix d2c87eb at 76e4eed.
 //! Synthetic state, controlled children, and real local PTYs only.
+mod cli_pty;
+
 use std::process::Command;
+use std::time::Duration;
 
 #[test]
 fn terminal_prompt_completion_preserves_later_interrupt_and_termination() {
@@ -14,108 +17,61 @@ fn active_terminal_prompt_restores_modes_on_sigterm() {
 
 fn check_terminal_signals(phase: &str) {
     let temp = tempfile::TempDir::new().unwrap();
-    let script = r#"
-import fcntl,json,os,pathlib,pty,re,select,signal,subprocess,sys,termios,time
-from zeropw.context import Context
-keeper='''
-import json,os,signal,subprocess,sys,termios
-signal.signal(signal.SIGTTOU,signal.SIG_IGN)
-original=termios.tcgetattr(0)
-def child_group():
- # Normalize only this synthetic foreground child's tested signals; ignored
- # dispositions and masks otherwise survive exec from some CI launchers.
- for sig in (signal.SIGINT,signal.SIGTERM):signal.signal(sig,signal.SIG_DFL)
- signal.pthread_sigmask(signal.SIG_UNBLOCK,[signal.SIGINT,signal.SIGTERM])
- os.setpgid(0,0);os.tcsetpgrp(0,os.getpgrp());signal.signal(signal.SIGTTOU,signal.SIG_DFL)
-p=subprocess.Popen(sys.argv[1:],preexec_fn=child_group,close_fds=True)
-print('CHILD_PID='+str(p.pid),flush=True)
-try:
- try:
-  code=p.wait(timeout=4);terminated=True
- except subprocess.TimeoutExpired:
-  code=None;terminated=False
- actual=termios.tcgetattr(0)
- expected=original.copy();observed=actual.copy()
- expected[3]&=~getattr(termios,'PENDIN',0);observed[3]&=~getattr(termios,'PENDIN',0)
- print('RESULT='+json.dumps({'terminated':terminated,'code':code,'restored':expected==observed}),flush=True)
-finally:
- if p.poll() is None:p.kill();p.wait(timeout=2)
- os.tcsetpgrp(0,os.getpgrp());termios.tcsetattr(0,termios.TCSANOW,original)
-'''
-results=[]
-for mode in (('python','rust') if sys.argv[4]=='after' else ('rust',)):
- for sig in ((signal.SIGINT,signal.SIGTERM) if sys.argv[4]=='after' else (signal.SIGTERM,)):
-  state=pathlib.Path(sys.argv[2])/f'{mode}-{sig}'
-  ctx=Context.initialize(state,'synthetic-admin-round4','synthetic-recovery-round4')
-  master,slave=pty.openpty()
-  command=([sys.executable,'-m','zeropw.admin_cli'] if mode=='python' else [sys.argv[1]])
-  env={'PATH':'/usr/bin:/bin','PYTHONPATH':sys.argv[3]}
-  def terminal_session():
-   os.setsid();fcntl.ioctl(0,termios.TIOCSCTTY,0)
-  p=subprocess.Popen([sys.executable,'-I','-c',keeper]+command+['--state-dir',str(state),'restore-ack'],stdin=slave,stdout=slave,stderr=slave,env=env,close_fds=True,preexec_fn=terminal_session)
-  data=b'';anchor=None
-  try:
-   end=time.monotonic()+3
-   while b'Administrator passphrase:' not in data or b'CHILD_PID=' not in data:
-    assert time.monotonic()<end,('prompt timeout',mode,data)
-    if select.select([master],[],[],0.05)[0]:data+=os.read(master,4096)
-   child=int(re.search(rb'CHILD_PID=(\d+)',data)[1])
-   assert not (termios.tcgetattr(slave)[3]&termios.ECHO),('visible prompt had echo',mode)
-   if sys.argv[4]=='after':
-    # Delay only the synthetic verification input after the pre-prompt check.
-    (state/'admin.json').rename(state/'admin.saved')
-    os.mkfifo(state/'admin.json',0o600)
-    anchor=os.open(state/'admin.json',os.O_RDWR|os.O_NONBLOCK)
-    os.write(master,b'synthetic-admin-round4\n')
-    end=time.monotonic()+3
-    while not (termios.tcgetattr(slave)[3]&termios.ECHO):
-     assert time.monotonic()<end,('prompt never restored echo',mode)
-     time.sleep(0.005)
-   time.sleep(0.15)
-   os.kill(child,sig)
-   end=time.monotonic()+7
-   while b'RESULT=' not in data:
-    assert time.monotonic()<end,('result timeout',mode,data)
-    if select.select([master],[],[],0.05)[0]:data+=os.read(master,4096)
-   result=json.loads(re.search(rb'RESULT=(\{[^\r\n]+\})',data)[1])
-   result.update(mode=mode,signal=int(sig));results.append(result)
-   p.wait(timeout=3)
-  finally:
-   if anchor is not None:os.close(anchor)
-   if p.poll() is None:p.kill();p.wait(timeout=2)
-   os.close(master);os.close(slave)
-print(json.dumps(results))
-assert all(r['terminated'] and r['restored'] for r in results),results
-"#;
-    let output = Command::new("python3.12")
-        .args(["-c", script])
-        .arg(env!("CARGO_BIN_EXE_zeropw-admin"))
-        .arg(temp.path())
-        .arg(format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .arg(phase)
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "post-prompt signals: {}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let signals: &[i32] = if phase == "after" {
+        &[libc::SIGINT, libc::SIGTERM]
+    } else {
+        &[libc::SIGTERM]
+    };
+    for &signal in signals {
+        let state = temp.path().join(format!("{phase}-{signal}"));
+        cli_pty::init_state(&state, "synthetic-admin-round4", "synthetic-recovery-round4");
+        let argv: Vec<std::ffi::OsString> = vec![
+            env!("CARGO_BIN_EXE_zeropw-admin").into(),
+            "--state-dir".into(),
+            state.clone().into(),
+            "restore-ack".into(),
+        ];
+        let mut session = cli_pty::start_keeper(
+            &argv,
+            &[("PATH", "/usr/bin:/bin")],
+            4.0,
+            cli_pty::Inherited::Default,
+        );
+        session.wait_for(
+            &["Administrator passphrase:", "CHILD_PID="],
+            Duration::from_secs(3),
+        );
+        let child = session.child_pid();
+        assert!(!session.slave_echo(), "visible prompt had echo");
+        let mut anchor = None;
+        if phase == "after" {
+            // Delay only the synthetic verification input after the prompt.
+            std::fs::rename(state.join("admin.json"), state.join("admin.saved")).unwrap();
+            cli_pty::mkfifo(&state.join("admin.json"));
+            anchor = Some(cli_pty::fifo_anchor(&state.join("admin.json")));
+            session.write(b"synthetic-admin-round4\n");
+            let end = std::time::Instant::now() + Duration::from_secs(3);
+            while !session.slave_echo() {
+                assert!(
+                    std::time::Instant::now() < end,
+                    "prompt never restored echo"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+        cli_pty::kill(child, signal);
+        let result = session.result(Duration::from_secs(7));
+        session.wait_exit(Duration::from_secs(3));
+        drop(anchor);
+        assert_eq!(result["terminated"], true, "{phase} {signal} {result}");
+        assert_eq!(result["restored"], true, "{phase} {signal} {result}");
+    }
 }
 
 #[test]
 fn native_agent_help_is_a_successful_offline_operation() {
     for arguments in [vec!["--help"], vec!["-h"], vec!["request", "--help"]] {
-        let python = Command::new("python3.12")
-            .args(["-m", "zeropw.agent_cli"])
-            .args(&arguments)
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-            .output()
-            .unwrap();
-        assert!(python.status.success());
         let native = Command::new(env!("CARGO_BIN_EXE_zeropw-agent"))
             .args(&arguments)
             .env_clear()
