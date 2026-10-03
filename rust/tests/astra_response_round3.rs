@@ -114,7 +114,10 @@ fn successful_notification_with_hand_edited_numeric_attempts_is_sent() {
         let mut incident = Incident::from_dict(&original).unwrap();
         notify::deliver(&ctx, &mut incident).unwrap();
         worker.join().unwrap();
-        assert_eq!(incident.notification["status"], "sent", "attempts={attempts}");
+        assert_eq!(
+            incident.notification["status"], "sent",
+            "attempts={attempts}"
+        );
     }
 }
 

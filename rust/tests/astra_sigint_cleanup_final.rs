@@ -10,7 +10,11 @@ use cli_pty::{default_signals, kill, names, wait_child};
 fn interrupt_preserves_unowned_same_prefix_directories_and_their_contents() {
     let temp = tempfile::TempDir::new().unwrap();
     let state = temp.path().join("state");
-    cli_pty::init_state(&state, "synthetic-admin-cleanup", "synthetic-recovery-cleanup");
+    cli_pty::init_state(
+        &state,
+        "synthetic-admin-cleanup",
+        "synthetic-recovery-cleanup",
+    );
     let fifo = state.join("synthetic-input");
     cli_pty::mkfifo(&fifo);
     let anchor = cli_pty::fifo_anchor(&fifo);
@@ -19,15 +23,28 @@ fn interrupt_preserves_unowned_same_prefix_directories_and_their_contents() {
     let unowned = ["zeropw-runs-unowned", "zeropw-sockets-unowned"];
     for name in unowned {
         std::fs::create_dir(owned.join(name)).unwrap();
-        std::fs::write(owned.join(name).join("sentinel"), b"synthetic-unowned-content").unwrap();
+        std::fs::write(
+            owned.join(name).join("sentinel"),
+            b"synthetic-unowned-content",
+        )
+        .unwrap();
     }
     let mut command = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"));
     command
         .arg("--state-dir")
         .arg(&state)
         .args([
-            "secret", "put", "--id", "synthetic", "--kind", "api_key", "--project", "demo",
-            "--environment", "dev", "--stdin",
+            "secret",
+            "put",
+            "--id",
+            "synthetic",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
         ])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

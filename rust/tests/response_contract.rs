@@ -1,11 +1,9 @@
 //! Original response boundaries plus byte-for-byte rendering recorded from
 //! the Python prototype.
 use serde_json::{Value, json};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 use zeropw::{
     audit::RecordArgs,

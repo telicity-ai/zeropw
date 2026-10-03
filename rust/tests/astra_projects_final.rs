@@ -24,7 +24,12 @@ fn ordinary_projects_keep_their_environments_and_creation_time() {
     assert_eq!(projects.get("ordinary").unwrap(), created);
     projects.create("another", &["dev"]).unwrap();
     // Project names list sorted.
-    let names: Vec<String> = projects.list().unwrap().into_iter().map(|p| p.name).collect();
+    let names: Vec<String> = projects
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
     assert_eq!(names, ["another", "ordinary"]);
     assert!(projects.require_environment("ordinary", "prod").is_ok());
     assert_eq!(

@@ -51,7 +51,14 @@ impl Fixture {
             .create("demo", zeropw::projects::DEFAULT_ENVIRONMENTS)
             .unwrap();
         ctx.vault
-            .put_secret("gh-token", "api_key", SYNTHETIC.as_bytes(), "demo", "dev", true)
+            .put_secret(
+                "gh-token",
+                "api_key",
+                SYNTHETIC.as_bytes(),
+                "demo",
+                "dev",
+                true,
+            )
             .unwrap();
         let token = ctx.policy.create_principal("agent-1", "default").unwrap();
         let program = root.join("echo.sh");
@@ -70,18 +77,20 @@ impl Fixture {
                     None,
                     "demo",
                     Some(
-                        HttpTarget::new("http", "127.0.0.1", i64::from(upstream.port()), None, false)
-                            .unwrap(),
+                        HttpTarget::new(
+                            "http",
+                            "127.0.0.1",
+                            i64::from(upstream.port()),
+                            None,
+                            false,
+                        )
+                        .unwrap(),
                     ),
                     Some(HttpAuth::bearer()),
                     Some(
                         HttpScope::new(
                             Some(vec!["GET".into(), "POST".into()]),
-                            Some(vec![
-                                "/repos".into(),
-                                "/me".into(),
-                                "/echo-headers".into(),
-                            ]),
+                            Some(vec!["/repos".into(), "/me".into(), "/echo-headers".into()]),
                             Vec::new(),
                         )
                         .unwrap(),
@@ -278,18 +287,27 @@ fn request_through_gateway() {
     let body: Value = serde_json::from_str(result["body"].as_str().unwrap()).unwrap();
     assert_eq!(body["title"], "from file");
     // Only the filtered response headers reach the agent.
-    assert_eq!(result["headers"], json!({"content-type": "application/json"}));
+    assert_eq!(
+        result["headers"],
+        json!({"content-type": "application/json"})
+    );
     let requests = f.upstream.requests();
     assert_eq!(requests.len(), 1);
     let seen = &requests[0];
-    assert_eq!((seen.method.as_str(), seen.path.as_str()), ("POST", "/repos/demo/issues"));
+    assert_eq!(
+        (seen.method.as_str(), seen.path.as_str()),
+        ("POST", "/repos/demo/issues")
+    );
     assert_eq!(seen.body, br#"{"title": "from file"}"#);
     let headers: HashMap<String, String> = seen
         .headers
         .iter()
         .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
         .collect();
-    assert_eq!(headers.get("accept").map(String::as_str), Some("application/json"));
+    assert_eq!(
+        headers.get("accept").map(String::as_str),
+        Some("application/json")
+    );
     // The gateway injected the real credential; the agent never held it.
     assert_eq!(
         headers.get("authorization").map(String::as_str),
@@ -298,13 +316,29 @@ fn request_through_gateway() {
 
     // Each --header reaches the tools API, which validates it.
     let output = f.cli(&[
-        "request", "--connection", "gh", "--method", "GET", "--path", "/me", "--header", "X_Bad: 1",
+        "request",
+        "--connection",
+        "gh",
+        "--method",
+        "GET",
+        "--path",
+        "/me",
+        "--header",
+        "X_Bad: 1",
     ]);
     assert_eq!(f.error(&output)["reason"], "invalid_header_name");
 
     // A literal --body is sent as is.
     let me = f.ok(&[
-        "request", "--connection", "gh", "--method", "GET", "--path", "/me", "--body", "x",
+        "request",
+        "--connection",
+        "gh",
+        "--method",
+        "GET",
+        "--path",
+        "/me",
+        "--body",
+        "x",
     ]);
     assert_eq!(me["status"], 200);
     assert_eq!(f.upstream.requests().last().unwrap().body, b"x");
@@ -384,10 +418,7 @@ fn refused_blocked_or_unsupported_relays_exit_1_on_stderr() {
     // A connection whose target is ZeroPW itself: the gateway refuses it as
     // unsupported (501) before any use.
     let url = f.server.url();
-    let (host, port) = url
-        .trim_start_matches("http://")
-        .rsplit_once(':')
-        .unwrap();
+    let (host, port) = url.trim_start_matches("http://").rsplit_once(':').unwrap();
     f.ctx
         .policy
         .create_connection(
@@ -446,9 +477,20 @@ fn refused_blocked_or_unsupported_relays_exit_1_on_stderr() {
         "--path",
         "/repos/missing/nothing",
     ]);
-    assert_eq!((&relayed["status"], &relayed["reason"]), (&json!(404), &Value::Null));
+    assert_eq!(
+        (&relayed["status"], &relayed["reason"]),
+        (&json!(404), &Value::Null)
+    );
     // Denials decided before the gateway are errors too.
-    let output = f.cli(&["request", "--connection", "nope", "--method", "GET", "--path", "/me"]);
+    let output = f.cli(&[
+        "request",
+        "--connection",
+        "nope",
+        "--method",
+        "GET",
+        "--path",
+        "/me",
+    ]);
     let error = f.error(&output);
     assert_eq!(
         (&error["status"], &error["reason"]),

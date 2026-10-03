@@ -594,8 +594,10 @@ fn finish_listener_can_query_and_cancel_without_publishing_partial_result() {
 fn patterns_match_python_oracle_for_binary_and_alignment_cases() {
     use base64::Engine as _;
     let engine = base64::engine::general_purpose::STANDARD;
-    let fixture: Value =
-        serde_json::from_str(include_str!("fixtures/python/runs/credential_patterns.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/python/runs/credential_patterns.json"
+    ))
+    .unwrap();
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 9);
     for case in cases {

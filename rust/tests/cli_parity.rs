@@ -8,14 +8,19 @@
 //! identifiers and timestamps; see `fixtures/python/cli/GENERATE.md`). Here
 //! the native administrator prepares that state and the native binary must
 //! reproduce the recorded outcome.
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::io::Write;
 
 use regex::Regex;
 use serde_json::Value;
 
-const PROGS: [&str; 4] = ["zeropw-admin", "admin_cli.py", "zeropw-agent", "agent_cli.py"];
+const PROGS: [&str; 4] = [
+    "zeropw-admin",
+    "admin_cli.py",
+    "zeropw-agent",
+    "agent_cli.py",
+];
 
 fn masks() -> Vec<(Regex, &'static str)> {
     [
@@ -75,7 +80,12 @@ impl Masker {
     }
 }
 
-fn run(program: &str, args: &[String], env: &[(String, String)], stdin: &[u8]) -> (i32, String, String) {
+fn run(
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    stdin: &[u8],
+) -> (i32, String, String) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut child = Command::new(program)
         .args(args)
@@ -127,7 +137,10 @@ fn one(case: &Value, masker: &Masker) -> Value {
         ("LC_ALL", "C.UTF-8".to_owned()),
         ("COLUMNS", "80".to_owned()),
         ("ZEROPW_ADMIN_PASSPHRASE", "admin-passphrase-1".to_owned()),
-        ("ZEROPW_RECOVERY_PASSPHRASE", "recovery-passphrase-1".to_owned()),
+        (
+            "ZEROPW_RECOVERY_PASSPHRASE",
+            "recovery-passphrase-1".to_owned(),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v))
@@ -169,8 +182,17 @@ fn one(case: &Value, masker: &Masker) -> Value {
         env!("CARGO_BIN_EXE_zeropw-agent")
     };
     let stdin = case.get("stdin").and_then(Value::as_str).unwrap_or("");
-    let (code, mut out, err) = run(program, &subst(strings(&case["argv"])), &case_env, stdin.as_bytes());
-    for step in case.get("after").map(|a| a.as_array().unwrap().clone()).unwrap_or_default() {
+    let (code, mut out, err) = run(
+        program,
+        &subst(strings(&case["argv"])),
+        &case_env,
+        stdin.as_bytes(),
+    );
+    for step in case
+        .get("after")
+        .map(|a| a.as_array().unwrap().clone())
+        .unwrap_or_default()
+    {
         let (_, after_out, after_err) = run(admin, &subst(strings(&step)), &env, b"");
         out.push_str("\n#after: ");
         out.push_str(&after_out);

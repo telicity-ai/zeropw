@@ -123,7 +123,10 @@ impl Admin {
                 ("PATH".into(), path_env()),
                 ("HOME".into(), root.to_string_lossy().into_owned()),
                 ("ZEROPW_ADMIN_PASSPHRASE".into(), ADMIN_PASSPHRASE.into()),
-                ("ZEROPW_RECOVERY_PASSPHRASE".into(), RECOVERY_PASSPHRASE.into()),
+                (
+                    "ZEROPW_RECOVERY_PASSPHRASE".into(),
+                    RECOVERY_PASSPHRASE.into(),
+                ),
             ],
             outputs: Mutex::new(Vec::new()),
             needles: Mutex::new(Vec::new()),
@@ -533,7 +536,10 @@ impl Processes {
         let out = String::from_utf8_lossy(&output.stdout).into_owned();
         let err = String::from_utf8_lossy(&output.stderr).into_owned();
         if !args.contains(&"reveal") {
-            let who = format!("admin {}", args.iter().take(2).copied().collect::<Vec<_>>().join(" "));
+            let who = format!(
+                "admin {}",
+                args.iter().take(2).copied().collect::<Vec<_>>().join(" ")
+            );
             self.record(&who, &format!("{out}{err}"));
         }
         let code = output.status.code().expect("admin exit status");
@@ -560,7 +566,10 @@ impl Processes {
             .unwrap();
         let out = String::from_utf8_lossy(&output.stdout).into_owned();
         let err = String::from_utf8_lossy(&output.stderr).into_owned();
-        let who = format!("agent {}", args.iter().take(3).copied().collect::<Vec<_>>().join(" "));
+        let who = format!(
+            "agent {}",
+            args.iter().take(3).copied().collect::<Vec<_>>().join(" ")
+        );
         self.record(&who, &format!("{out}{err}"));
         let code = output.status.code().expect("agent exit status");
         if let Some(expect) = expect {
@@ -570,7 +579,8 @@ impl Processes {
         let value = if payload.trim().is_empty() {
             json!({})
         } else {
-            serde_json::from_str(payload).unwrap_or_else(|e| panic!("agent JSON ({e}): {payload:?}"))
+            serde_json::from_str(payload)
+                .unwrap_or_else(|e| panic!("agent JSON ({e}): {payload:?}"))
         };
         (code, value)
     }
@@ -638,7 +648,10 @@ impl Processes {
     }
 
     pub fn agent_home_is_empty(&self) -> bool {
-        std::fs::read_dir(&self.agent_home).unwrap().next().is_none()
+        std::fs::read_dir(&self.agent_home)
+            .unwrap()
+            .next()
+            .is_none()
     }
 }
 
@@ -777,10 +790,10 @@ pub fn find_secret(data: &[u8], secrets: &[Vec<u8>]) -> Option<String> {
         .map(|&b| if b == b'+' { b' ' } else { b })
         .collect();
     let unquoted = unquote_to_bytes(&plus_as_space);
-    if unquoted != data {
-        if let Some(found) = hit(&unquoted, "percent-encoding") {
-            return Some(found);
-        }
+    if unquoted != data
+        && let Some(found) = hit(&unquoted, "percent-encoding")
+    {
+        return Some(found);
     }
     let b64 = regex::bytes::Regex::new(r"[A-Za-z0-9+/_-]{16,}={0,2}").unwrap();
     for token in b64.find_iter(data) {
@@ -821,13 +834,13 @@ pub fn find_secret_in_tree(root: &Path, secrets: &[Vec<u8>]) -> Option<String> {
     }
     files.sort();
     for path in files {
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Some(found) = find_secret(&bytes, secrets) {
-                return Some(format!(
-                    "{}: {found}",
-                    path.strip_prefix(root).unwrap().display()
-                ));
-            }
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Some(found) = find_secret(&bytes, secrets)
+        {
+            return Some(format!(
+                "{}: {found}",
+                path.strip_prefix(root).unwrap().display()
+            ));
         }
     }
     None
@@ -1424,9 +1437,20 @@ pub fn inspector_reports(reports: &Path) -> Vec<InspectorReport> {
 pub fn assert_exec_children_held_no_key(reports: &Path, private_key_pem: &str, minimum: usize) {
     let material = ssh_key_material(private_key_pem);
     let reports = inspector_reports(reports);
-    assert!(reports.len() >= minimum, "the inspector ran {} times", reports.len());
-    let expected_env: BTreeSet<&str> =
-        ["PATH", "HOME", "LANG", "TMPDIR", "ZEROPW_RUN_ID", "SSH_AUTH_SOCK"].into();
+    assert!(
+        reports.len() >= minimum,
+        "the inspector ran {} times",
+        reports.len()
+    );
+    let expected_env: BTreeSet<&str> = [
+        "PATH",
+        "HOME",
+        "LANG",
+        "TMPDIR",
+        "ZEROPW_RUN_ID",
+        "SSH_AUTH_SOCK",
+    ]
+    .into();
     for report in reports {
         let files: BTreeSet<&str> = report.entries.keys().map(String::as_str).collect();
         assert_eq!(
@@ -1436,7 +1460,10 @@ pub fn assert_exec_children_held_no_key(reports: &Path, private_key_pem: &str, m
         );
         for (name, content) in &report.entries {
             let content = content.as_ref().expect("regular file");
-            assert!(find_secret(content, &material).is_none(), "run directory file {name}");
+            assert!(
+                find_secret(content, &material).is_none(),
+                "run directory file {name}"
+            );
         }
         // macOS CoreFoundation adds __CF_* inside the process; the
         // inspector's shell may add its own bookkeeping variables.
@@ -1487,7 +1514,10 @@ fn leakcheck_finds_raw_encoded_and_embedded_secrets() {
             String::from_utf8_lossy(&data)
         );
     }
-    assert_eq!(find_secret(b"nothing to see here at all, really", &secrets), None);
+    assert_eq!(
+        find_secret(b"nothing to see here at all, really", &secrets),
+        None
+    );
 }
 
 #[test]

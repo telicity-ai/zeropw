@@ -16,8 +16,14 @@ fn supported_comments_inside_mailbox_match_python() {
         ("sender@(Internal)example.com", "recipient@example.com"),
         ("sender@example.com", "recipient(Internal)@example.com"),
         ("sender@example.com", "recipient@(Internal)example.com"),
-        ("(Nested (inner)) sender@example.com", "recipient@example.com"),
-        ("sender@example.com(Nested (inner))", "recipient@example.com"),
+        (
+            "(Nested (inner)) sender@example.com",
+            "recipient@example.com",
+        ),
+        (
+            "sender@example.com(Nested (inner))",
+            "recipient@example.com",
+        ),
     ] {
         let (port, worker) = receiver(Receiver {
             enforce: true,

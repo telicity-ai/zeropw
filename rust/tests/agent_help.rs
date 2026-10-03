@@ -25,9 +25,21 @@ fn root_and_each_subcommand_help_match_the_recorded_text_without_gateway_config(
             .unwrap();
         let expected_stdout = case["stdout"].as_str().unwrap();
         let expected_stderr = case["stderr"].as_str().unwrap();
-        assert_eq!(rust.status.code(), case["code"].as_i64().map(|c| c as i32), "{args:?}");
-        assert_eq!(String::from_utf8_lossy(&rust.stdout), expected_stdout, "{args:?}");
-        assert_eq!(String::from_utf8_lossy(&rust.stderr), expected_stderr, "{args:?}");
+        assert_eq!(
+            rust.status.code(),
+            case["code"].as_i64().map(|c| c as i32),
+            "{args:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&rust.stdout),
+            expected_stdout,
+            "{args:?}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&rust.stderr),
+            expected_stderr,
+            "{args:?}"
+        );
     }
 }
 

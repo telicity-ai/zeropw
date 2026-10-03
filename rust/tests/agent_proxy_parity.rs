@@ -116,7 +116,11 @@ fn default_request_headers_match_urllib_value_order_and_multiplicity() {
     let seen = seen.join().unwrap();
     assert_eq!(
         outcome,
-        (Some(0), "{\n  \"connections\": []\n}\n".to_owned(), String::new())
+        (
+            Some(0),
+            "{\n  \"connections\": []\n}\n".to_owned(),
+            String::new()
+        )
     );
     let expected = |port| {
         vec![
@@ -190,7 +194,10 @@ fn https_gateway_is_tunnelled_and_a_refused_tunnel_is_reported_like_urllib() {
     assert!(!seen.iter().any(|h| h.contains("zpwc_")), "{seen:?}");
     assert_eq!(outcome.0, Some(1));
     assert!(outcome.1.is_empty());
-    assert!(outcome.2.contains("Tunnel connection failed: 407"), "{outcome:?}");
+    assert!(
+        outcome.2.contains("Tunnel connection failed: 407"),
+        "{outcome:?}"
+    );
     assert!(outcome.2.contains("gateway_unreachable"), "{outcome:?}");
 }
 

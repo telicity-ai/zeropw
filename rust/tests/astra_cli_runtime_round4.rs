@@ -24,7 +24,11 @@ fn check_terminal_signals(phase: &str) {
     };
     for &signal in signals {
         let state = temp.path().join(format!("{phase}-{signal}"));
-        cli_pty::init_state(&state, "synthetic-admin-round4", "synthetic-recovery-round4");
+        cli_pty::init_state(
+            &state,
+            "synthetic-admin-round4",
+            "synthetic-recovery-round4",
+        );
         let argv: Vec<std::ffi::OsString> = vec![
             env!("CARGO_BIN_EXE_zeropw-admin").into(),
             "--state-dir".into(),

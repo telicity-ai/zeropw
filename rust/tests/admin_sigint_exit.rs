@@ -29,19 +29,19 @@ fn administrator_prompt_signal_status_matches_the_original_and_restores_terminal
     for phase in ["during", "after"] {
         for signal in [libc::SIGINT, libc::SIGTERM] {
             let state = temp.path().join(format!("{phase}-{signal}"));
-            cli_pty::init_state(&state, "synthetic-admin-sigint", "synthetic-recovery-sigint");
+            cli_pty::init_state(
+                &state,
+                "synthetic-admin-sigint",
+                "synthetic-recovery-sigint",
+            );
             let argv: Vec<OsString> = vec![
                 ADMIN.into(),
                 "--state-dir".into(),
                 state.clone().into(),
                 "restore-ack".into(),
             ];
-            let mut session = cli_pty::start_keeper(
-                &argv,
-                &[("PATH", "/usr/bin:/bin")],
-                4.0,
-                Inherited::Default,
-            );
+            let mut session =
+                cli_pty::start_keeper(&argv, &[("PATH", "/usr/bin:/bin")], 4.0, Inherited::Default);
             session.wait_for(
                 &["Administrator passphrase:", "CHILD_PID="],
                 Duration::from_secs(3),
@@ -131,8 +131,17 @@ fn ordinary_non_prompt_command_catches_sigint_as_exit_130() {
             .arg("--state-dir")
             .arg(&state)
             .args([
-                "secret", "put", "--id", "synthetic", "--kind", "api_key", "--project", "demo",
-                "--environment", "dev", "--stdin",
+                "secret",
+                "put",
+                "--id",
+                "synthetic",
+                "--kind",
+                "api_key",
+                "--project",
+                "demo",
+                "--environment",
+                "dev",
+                "--stdin",
             ])
             .env_clear()
             .env("PATH", "/usr/bin:/bin")

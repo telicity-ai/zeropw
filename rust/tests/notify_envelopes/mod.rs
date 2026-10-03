@@ -166,7 +166,11 @@ pub fn check_envelopes(pairs: &[(&str, &str)]) {
         });
         let result = notify_test(&state, port, sender, recipient, 1.0);
         let commands = worker.join().unwrap();
-        assert_eq!(result, json!({"status": "sent"}), "{sender:?} -> {recipient:?}");
+        assert_eq!(
+            result,
+            json!({"status": "sent"}),
+            "{sender:?} -> {recipient:?}"
+        );
         let envelope: Vec<String> = commands
             .iter()
             .filter(|c| {

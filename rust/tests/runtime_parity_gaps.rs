@@ -672,8 +672,10 @@ fn server_framing_matches_python_byte_for_byte() {
 fn credential_patterns_strip_like_bytes_strip() {
     use base64::Engine as _;
     let engine = base64::engine::general_purpose::STANDARD;
-    let fixture: Value =
-        serde_json::from_str(include_str!("fixtures/python/runs/credential_patterns.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/python/runs/credential_patterns.json"
+    ))
+    .unwrap();
     let mut checked = 0;
     for secret in [
         b"\x0bsynthetic-secret\x0b".as_slice(),
@@ -930,7 +932,11 @@ fn resolve_program_matches_python() {
     let r = root.display().to_string();
     let mut cases = vec![
         ("tool".to_string(), String::new(), json!(null)),
-        ("tool".to_string(), ":".to_string(), json!(format!("{r}/tool"))),
+        (
+            "tool".to_string(),
+            ":".to_string(),
+            json!(format!("{r}/tool")),
+        ),
         (
             "tool".to_string(),
             "/nonexistent-zeropw:".to_string(),

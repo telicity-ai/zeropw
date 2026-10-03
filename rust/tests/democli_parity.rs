@@ -56,7 +56,9 @@ fn serve(reply: Vec<u8>) -> (u16, thread::JoinHandle<Value>) {
         socket.write_all(&reply).unwrap();
         let _ = socket.shutdown(std::net::Shutdown::Both);
         // Library-specific framing headers are not part of the CLI contract.
-        headers.retain(|(name, _)| !matches!(name.as_str(), "accept-encoding" | "connection" | "host"));
+        headers.retain(|(name, _)| {
+            !matches!(name.as_str(), "accept-encoding" | "connection" | "host")
+        });
         headers.sort();
         json!([{
             "line": line.trim_end(),
@@ -120,7 +122,11 @@ fn business_output_and_upstream_request_match_the_original_cli() {
         let (status, stdout) = run(&args, &[("ZEROPW_API_BASE_URL", base)]);
         let seen = server.join().unwrap();
         assert_eq!(status, code(case), "exit status for {args:?}");
-        assert_eq!(stdout, case["stdout"].as_str().unwrap(), "stdout for {args:?}");
+        assert_eq!(
+            stdout,
+            case["stdout"].as_str().unwrap(),
+            "stdout for {args:?}"
+        );
         assert_eq!(seen, case["requests"], "upstream request for {args:?}");
     }
 }
@@ -141,7 +147,11 @@ fn usage_and_validation_errors_match_the_original_cli() {
         let args = args(case);
         let (status, stdout) = run(&args, &env);
         assert_eq!(status, code(case), "exit status for {args:?}");
-        assert_eq!(stdout, case["stdout"].as_str().unwrap(), "stdout for {args:?}");
+        assert_eq!(
+            stdout,
+            case["stdout"].as_str().unwrap(),
+            "stdout for {args:?}"
+        );
     }
 }
 

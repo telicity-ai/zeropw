@@ -33,15 +33,7 @@ fn ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child() {
     rustix::io::fcntl_setfd(&file, rustix::io::FdFlags::empty()).unwrap();
     let registry = RunRegistry::new(ctx, 1024, 0.05);
     let run = registry.create(
-        "alice",
-        "service",
-        "grant",
-        "http",
-        "sh",
-        None,
-        "digest",
-        None,
-        None,
+        "alice", "service", "grant", "http", "sh", None, "digest", None, None,
     );
     // The redirection fails (and `closed` is printed) only if the trusted
     // descriptor did not reach the child; an open one would print its value.

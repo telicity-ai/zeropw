@@ -61,8 +61,18 @@ fn prepared() -> (tempfile::TempDir, std::path::PathBuf) {
     checked(
         &state,
         &[
-            "secret", "put", "--id", "x", "--kind", "api_key", "--project", "p",
-            "--environment", "dev", "--value-file", value.to_str().unwrap(),
+            "secret",
+            "put",
+            "--id",
+            "x",
+            "--kind",
+            "api_key",
+            "--project",
+            "p",
+            "--environment",
+            "dev",
+            "--value-file",
+            value.to_str().unwrap(),
         ],
     );
     (temp, state)
@@ -124,7 +134,11 @@ fn operational_failures_keep_the_original_error_json() {
     };
     let denied = io("Permission denied", "PermissionError");
     let cases: [(&str, &[&str], String); 5] = [
-        ("kms", &["backup", "--out", "{tmp}/ro/b.json"], denied.clone()),
+        (
+            "kms",
+            &["backup", "--out", "{tmp}/ro/b.json"],
+            denied.clone(),
+        ),
         (
             "kms",
             &["backup", "--out", "{tmp}/missing/b.json"],
@@ -133,8 +147,18 @@ fn operational_failures_keep_the_original_error_json() {
         (
             "vault",
             &[
-                "secret", "put", "--id", "s", "--kind", "api_key", "--project", "p",
-                "--environment", "dev", "--value-file", "{tmp}/val",
+                "secret",
+                "put",
+                "--id",
+                "s",
+                "--kind",
+                "api_key",
+                "--project",
+                "p",
+                "--environment",
+                "dev",
+                "--value-file",
+                "{tmp}/val",
             ],
             denied.clone(),
         ),
@@ -162,10 +186,7 @@ fn an_unusable_tmpdir_falls_back_and_a_second_init_is_refused() {
     for env in [
         vec![("TMPDIR", "/nonexistent-zeropw".to_owned())],
         vec![("TMPDIR", String::new())],
-        vec![
-            ("TMPDIR", format!("{tmp}/missing")),
-            ("TEMP", tmp.clone()),
-        ],
+        vec![("TMPDIR", format!("{tmp}/missing")), ("TEMP", tmp.clone())],
     ] {
         let output = admin(&state, &["secret", "list"], &env);
         assert_eq!(output.status.code(), Some(0), "{env:?}");
@@ -186,10 +207,22 @@ fn an_unusable_tmpdir_falls_back_and_a_second_init_is_refused() {
 #[test]
 fn damaged_administrator_record_never_reveals_a_secret() {
     for doc in [
-        "{}", "[]", "0", "\"\"", "{\"salt\":1,\"hash\":\"x\"}", "{\"hash\":\"x\"}",
-        "{\"salt\":\"\\u00e9\",\"hash\":\"x\"}", "{\"salt\":\"abc\",\"hash\":\"x\"}",
-        "{\"salt\":\"AAAA\"}", "{\"salt\":null,\"hash\":\"AAAA\"}", "[1]", "\"str\"", "5", "true",
-        "{\"salt\":\"AAAA\",\"hash\":\"@@\"}", "{\"salt\":\"AAAA\",\"hash\":\"AAAA\"}",
+        "{}",
+        "[]",
+        "0",
+        "\"\"",
+        "{\"salt\":1,\"hash\":\"x\"}",
+        "{\"hash\":\"x\"}",
+        "{\"salt\":\"\\u00e9\",\"hash\":\"x\"}",
+        "{\"salt\":\"abc\",\"hash\":\"x\"}",
+        "{\"salt\":\"AAAA\"}",
+        "{\"salt\":null,\"hash\":\"AAAA\"}",
+        "[1]",
+        "\"str\"",
+        "5",
+        "true",
+        "{\"salt\":\"AAAA\",\"hash\":\"@@\"}",
+        "{\"salt\":\"AAAA\",\"hash\":\"AAAA\"}",
         "{\"salt\":\"AAAA\",\"hash\":\"\\u00e9\"}",
     ] {
         let (_temp, state) = prepared();
@@ -201,7 +234,11 @@ fn damaged_administrator_record_never_reveals_a_secret() {
         assert!(!audit.contains("\"event\":\"secret_reveal\""), "{doc}");
     }
     let (_temp, state) = prepared();
-    fs::write(state.join("admin.json"), "{\"salt\":\"abc\",\"hash\":\"x\"}").unwrap();
+    fs::write(
+        state.join("admin.json"),
+        "{\"salt\":\"abc\",\"hash\":\"x\"}",
+    )
+    .unwrap();
     assert_fails_closed(&admin(&state, &["restore-ack"], &[]), "restore-ack");
 }
 
@@ -252,8 +289,5 @@ fn damaged_audit_log_or_lock_file_fails_closed() {
         fs::remove_file(&lock).unwrap();
     }
     fs::create_dir(&lock).unwrap();
-    assert_fails_closed(
-        &admin(&state, &["project", "create", "q"], &[]),
-        "lock dir",
-    );
+    assert_fails_closed(&admin(&state, &["project", "create", "q"], &[]), "lock dir");
 }

@@ -21,7 +21,11 @@ fn ordinary_exit_and_interrupt_remove_only_owned_context_directories() {
         let base = temp.path().join(outcome);
         std::fs::create_dir(&base).unwrap();
         let state = base.join("state");
-        cli_pty::init_state(&state, "synthetic-admin-cleanup", "synthetic-recovery-cleanup");
+        cli_pty::init_state(
+            &state,
+            "synthetic-admin-cleanup",
+            "synthetic-recovery-cleanup",
+        );
         let owned = base.join("temp");
         std::fs::create_dir(&owned).unwrap();
         // Identically prefixed unowned paths must never be removed by a scan.
@@ -42,8 +46,17 @@ fn ordinary_exit_and_interrupt_remove_only_owned_context_directories() {
             command.args(["secret", "list"]);
         } else {
             command.args([
-                "secret", "put", "--id", "synthetic", "--kind", "api_key", "--project", "demo",
-                "--environment", "dev", "--stdin",
+                "secret",
+                "put",
+                "--id",
+                "synthetic",
+                "--kind",
+                "api_key",
+                "--project",
+                "demo",
+                "--environment",
+                "dev",
+                "--stdin",
             ]);
         }
         let mut anchor = None;
@@ -84,7 +97,11 @@ fn ordinary_exit_and_interrupt_remove_only_owned_context_directories() {
 fn active_prompt_sigint_restores_terminal_and_removes_owned_context_directories() {
     let temp = tempfile::TempDir::new().unwrap();
     let state = temp.path().join("state");
-    cli_pty::init_state(&state, "synthetic-admin-cleanup", "synthetic-recovery-cleanup");
+    cli_pty::init_state(
+        &state,
+        "synthetic-admin-cleanup",
+        "synthetic-recovery-cleanup",
+    );
     let owned = temp.path().join("temp");
     std::fs::create_dir(&owned).unwrap();
     for name in SENTINELS {

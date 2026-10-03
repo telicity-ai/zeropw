@@ -49,7 +49,12 @@ pub fn mkfifo(path: &Path) {
 pub fn fifo_anchor(path: &Path) -> OwnedFd {
     let c = CString::new(path.to_str().unwrap()).unwrap();
     // SAFETY: valid path; the returned descriptor is owned below.
-    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    let fd = unsafe {
+        libc::open(
+            c.as_ptr(),
+            libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
     assert!(fd >= 0, "open fifo anchor");
     // SAFETY: freshly opened descriptor.
     unsafe { OwnedFd::from_raw_fd(fd) }
@@ -145,15 +150,14 @@ pub fn start_keeper(
         "timeout": timeout,
     });
     let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "cli_pty::keeper_entry",
-            "--nocapture",
-            "--test-threads",
-            "1",
-            "-q",
-        ]);
+    command.args([
+        "--exact",
+        "cli_pty::keeper_entry",
+        "--nocapture",
+        "--test-threads",
+        "1",
+        "-q",
+    ]);
     let config = config.to_string();
     let mut env = env.to_vec();
     env.push((KEEPER_ENV, &config));
@@ -469,13 +473,19 @@ pub fn check_admin_terminal_abort(input: &str, inherited: Inherited) {
         temp.path().join("state").into(),
         "init".into(),
     ];
-    let mut session =
-        start_keeper(&argv, &[("PATH", "/usr/bin:/bin")], 8.0, inherited);
-    session.wait_for(&["Administrator passphrase:", "CHILD_PID="], Duration::from_secs(5));
+    let mut session = start_keeper(&argv, &[("PATH", "/usr/bin:/bin")], 8.0, inherited);
+    session.wait_for(
+        &["Administrator passphrase:", "CHILD_PID="],
+        Duration::from_secs(5),
+    );
     let mode = termios(session.pty.slave.as_raw_fd());
     assert!(mode.c_lflag & libc::ISIG != 0, "{input}: ISIG off");
     assert!(mode.c_lflag & libc::ECHO == 0, "{input}: ECHO on");
-    session.write(if input == "interrupt" { b"\x03" } else { b"\x04" });
+    session.write(if input == "interrupt" {
+        b"\x03"
+    } else {
+        b"\x04"
+    });
     let result = session.result(Duration::from_secs(12));
     let status = session.wait_exit(Duration::from_secs(2));
     assert!(status.success(), "{input}: keeper {status:?}");
@@ -483,4 +493,3 @@ pub fn check_admin_terminal_abort(input: &str, inherited: Inherited) {
     assert_eq!(result["restored"], true, "{input}: {result}");
     assert!(session.contains("terminal restored"));
 }
-

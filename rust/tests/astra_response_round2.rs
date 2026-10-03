@@ -356,10 +356,8 @@ fn smtp_tls_verified_starttls_smtps_and_untrusted_cert_parity() {
                     assert_eq!(line(&mut tcp).trim().to_ascii_uppercase(), "STARTTLS");
                     tcp.write_all(b"220 start tls\r\n").unwrap();
                 }
-                let mut tls = rustls::StreamOwned::new(
-                    rustls::ServerConnection::new(server).unwrap(),
-                    tcp,
-                );
+                let mut tls =
+                    rustls::StreamOwned::new(rustls::ServerConnection::new(server).unwrap(), tcp);
                 while tls.conn.is_handshaking() {
                     if tls.conn.complete_io(&mut tls.sock).is_err() {
                         return vec![];

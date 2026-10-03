@@ -14,7 +14,11 @@ use cli_pty::{default_signals, kill, names, wait_child};
 fn ordinary_sigint_removes_context_owned_runtime_directories() {
     let temp = tempfile::TempDir::new().unwrap();
     let state = temp.path().join("state");
-    cli_pty::init_state(&state, "synthetic-admin-cleanup", "synthetic-recovery-cleanup");
+    cli_pty::init_state(
+        &state,
+        "synthetic-admin-cleanup",
+        "synthetic-recovery-cleanup",
+    );
     let fifo = state.join("synthetic-input");
     cli_pty::mkfifo(&fifo);
     let anchor = cli_pty::fifo_anchor(&fifo);
@@ -25,8 +29,17 @@ fn ordinary_sigint_removes_context_owned_runtime_directories() {
         .arg("--state-dir")
         .arg(&state)
         .args([
-            "secret", "put", "--id", "synthetic", "--kind", "api_key", "--project", "demo",
-            "--environment", "dev", "--stdin",
+            "secret",
+            "put",
+            "--id",
+            "synthetic",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
         ])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -45,8 +58,14 @@ fn ordinary_sigint_removes_context_owned_runtime_directories() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let before = names(&owned);
-    assert!(before.iter().any(|x| x.starts_with("zeropw-runs-")), "{before:?}");
-    assert!(before.iter().any(|x| x.starts_with("zeropw-sockets-")), "{before:?}");
+    assert!(
+        before.iter().any(|x| x.starts_with("zeropw-runs-")),
+        "{before:?}"
+    );
+    assert!(
+        before.iter().any(|x| x.starts_with("zeropw-sockets-")),
+        "{before:?}"
+    );
     std::thread::sleep(Duration::from_millis(150));
     kill(child.id() as i32, libc::SIGINT);
     let status = wait_child(&mut child, Duration::from_secs(5));

@@ -2543,8 +2543,7 @@ mod message_tests {
         let subject = case["subject"].as_str().unwrap();
         let sender = case["sender"].as_str().unwrap();
         let recipients = strings(&case["recipients"]);
-        let intl =
-            !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
+        let intl = !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
         let message = Message::new(&config(sender, &recipients), subject, body);
         let actual = message.flatten(intl).ok();
         let expected = case["message"].as_str().map(|m| m.as_bytes().to_vec());
@@ -2690,10 +2689,7 @@ mod message_tests {
                 unsupported += 1;
             }
         }
-        assert_eq!(
-            unsupported, 0,
-            "recorded shapes left the supported grammar"
-        );
+        assert_eq!(unsupported, 0, "recorded shapes left the supported grammar");
         let refused = cases.iter().filter(|c| c["message"].is_null()).count();
         assert!(refused > 0 && refused < cases.len(), "{refused}");
         let mismatches: Vec<String> = cases.iter().filter_map(|c| compare(c, body)).collect();
@@ -2713,7 +2709,10 @@ mod hostname_tests {
     #[test]
     fn local_hostname_is_a_dotted_name_or_an_address_literal() {
         let name = super::local_hostname();
-        assert!(!name.is_empty() && !name.contains(char::is_whitespace), "{name:?}");
+        assert!(
+            !name.is_empty() && !name.contains(char::is_whitespace),
+            "{name:?}"
+        );
         if let Some(literal) = name.strip_prefix('[').and_then(|n| n.strip_suffix(']')) {
             assert!(literal.parse::<std::net::IpAddr>().is_ok(), "{name:?}");
         } else {

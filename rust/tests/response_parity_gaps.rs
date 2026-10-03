@@ -109,19 +109,59 @@ fn panic_inside_the_decision_is_counted_and_detection_keeps_working() {
 #[test]
 fn detector_config_reports_each_invalid_field_with_the_original_reason() {
     for (key, value, reason) in [
-        ("strong_thresholds", json!({"unknown_tool": "2"}), "intrusion_strong_threshold_invalid"),
-        ("strong_thresholds", json!({"signer_misuse": 0}), "intrusion_strong_threshold_invalid"),
-        ("weak_points", json!({"burst": 1.5}), "intrusion_weak_points_invalid"),
-        ("weak_points", json!({"revoked_use": -1}), "intrusion_weak_points_invalid"),
+        (
+            "strong_thresholds",
+            json!({"unknown_tool": "2"}),
+            "intrusion_strong_threshold_invalid",
+        ),
+        (
+            "strong_thresholds",
+            json!({"signer_misuse": 0}),
+            "intrusion_strong_threshold_invalid",
+        ),
+        (
+            "weak_points",
+            json!({"burst": 1.5}),
+            "intrusion_weak_points_invalid",
+        ),
+        (
+            "weak_points",
+            json!({"revoked_use": -1}),
+            "intrusion_weak_points_invalid",
+        ),
         ("window_seconds", json!("120"), "intrusion_window_invalid"),
         ("window_seconds", json!(true), "intrusion_window_invalid"),
         ("window_seconds", json!(0), "intrusion_window_invalid"),
-        ("weak_threshold", json!(2.0), "intrusion_weak_threshold_invalid"),
-        ("weak_threshold", json!(0), "intrusion_weak_threshold_invalid"),
-        ("enumeration_min", json!(null), "intrusion_enumeration_min_invalid"),
-        ("enumeration_min", json!(0), "intrusion_enumeration_min_invalid"),
-        ("enumeration_ratio", json!([0.5]), "intrusion_enumeration_ratio_invalid"),
-        ("enumeration_ratio", json!(1.5), "intrusion_enumeration_ratio_invalid"),
+        (
+            "weak_threshold",
+            json!(2.0),
+            "intrusion_weak_threshold_invalid",
+        ),
+        (
+            "weak_threshold",
+            json!(0),
+            "intrusion_weak_threshold_invalid",
+        ),
+        (
+            "enumeration_min",
+            json!(null),
+            "intrusion_enumeration_min_invalid",
+        ),
+        (
+            "enumeration_min",
+            json!(0),
+            "intrusion_enumeration_min_invalid",
+        ),
+        (
+            "enumeration_ratio",
+            json!([0.5]),
+            "intrusion_enumeration_ratio_invalid",
+        ),
+        (
+            "enumeration_ratio",
+            json!(1.5),
+            "intrusion_enumeration_ratio_invalid",
+        ),
         ("burst_count", json!("60"), "intrusion_burst_count_invalid"),
         ("burst_count", json!(-3), "intrusion_burst_count_invalid"),
     ] {
@@ -231,12 +271,7 @@ fn declare_principal_scope_without_principal_matches_original_cli() {
 }
 
 fn ctx_open_incident(state: &Path) -> Option<String> {
-    let ctx = Context::open(
-        state,
-        Config::default(),
-        clock::fixed(1_700_000_000.0),
-    )
-    .unwrap();
+    let ctx = Context::open(state, Config::default(), clock::fixed(1_700_000_000.0)).unwrap();
     ctx.policy.open_incident_id().unwrap()
 }
 
@@ -245,14 +280,21 @@ fn ctx_open_incident(state: &Path) -> Option<String> {
 /// (`fixtures/python/response/incident_emails.json`).
 #[test]
 fn email_rendering_matches_the_original_for_loaded_incidents() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("fixtures/python/response/incident_emails.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/python/response/incident_emails.json"
+    ))
+    .unwrap();
     let now = fixture["now"].as_str().unwrap();
     for case in fixture["cases"].as_array().unwrap() {
         let incident = zeropw::incident::Incident::from_dict(&case["incident"]).unwrap();
         let (subject, body) = zeropw::notify::render_incident_email(&incident, now);
         assert_eq!(subject, case["subject"].as_str().unwrap());
-        assert_eq!(body, case["body"].as_str().unwrap(), "case {}", case["incident"]);
+        assert_eq!(
+            body,
+            case["body"].as_str().unwrap(),
+            "case {}",
+            case["incident"]
+        );
     }
 }
 
@@ -724,7 +766,10 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
                 "{scenario}: password on the wire in clear"
             );
         }
-        if !outcome_matches || audit != expected["audit"] || json!(transcript) != expected["transcript"] {
+        if !outcome_matches
+            || audit != expected["audit"]
+            || json!(transcript) != expected["transcript"]
+        {
             failures.push(format!(
                 "{scenario}:\n  python {} audit={} transcript={}\n  rust   {outcome} audit={audit} transcript={transcript:?}",
                 expected["outcome"], expected["audit"], expected["transcript"]
