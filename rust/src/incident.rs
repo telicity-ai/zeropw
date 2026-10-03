@@ -635,6 +635,8 @@ fn new_secret_entry(meta: &crate::vault::SecretMeta, service: Option<&str>) -> V
                     .is_some_and(|active| active.equals_integer(&v.version))
             })
             .and_then(|v| v.public.get("fingerprint"))
+            // `_fingerprint`: `fingerprint if isinstance(fingerprint, str) else None`.
+            .filter(|fingerprint| fingerprint.is_string())
             .cloned()
             .unwrap_or(Value::Null);
     }

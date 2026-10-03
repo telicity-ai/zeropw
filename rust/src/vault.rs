@@ -93,39 +93,64 @@ fn json_falsy(v: &Value) -> bool {
     }
 }
 
-fn as_obj(v: &Value) -> Result<&Map<String, Value>, Error> {
-    v.as_object()
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+/// `type(exc).__name__` of the built-in exceptions `vault.py` lets escape on a
+/// malformed stored document. `binascii.Error` reports itself as `Error`.
+const KEY_ERROR: &str = "KeyError";
+const TYPE_ERROR: &str = "TypeError";
+const VALUE_ERROR: &str = "ValueError";
+const ATTRIBUTE_ERROR: &str = "AttributeError";
+const BINASCII_ERROR: &str = "Error";
+
+/// A built-in exception `vault.py` lets escape (PORTING.md §3.5): the closest
+/// error a `Vault` caller already handles, `StateError("state_corrupt")`,
+/// carrying the Python exception class name. The administrator CLI catches
+/// exactly these classes and prints `state_corrupt` with that name, so the
+/// native CLI output is identical.
+fn escaped(class: &'static str) -> Error {
+    Error::state("state_corrupt").with_detail(class)
 }
 
-fn as_obj_mut(v: &mut Value) -> Result<&mut Map<String, Value>, Error> {
-    v.as_object_mut()
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+/// `container[key]` on a decoded JSON value: a dict lookup (a missing key is
+/// `KeyError`); every other JSON shape rejects a `str` subscript (`TypeError`).
+fn index<'v>(container: &'v Value, key: &str) -> Result<&'v Value, Error> {
+    match container {
+        Value::Object(map) => map.get(key).ok_or_else(|| escaped(KEY_ERROR)),
+        _ => Err(escaped(TYPE_ERROR)),
+    }
 }
 
-fn get_or_null<'v>(m: &'v Map<String, Value>, key: &str) -> &'v Value {
-    m.get(key).unwrap_or(&Value::Null)
+/// Mutable [`index`].
+fn index_mut<'v>(container: &'v mut Value, key: &str) -> Result<&'v mut Value, Error> {
+    match container {
+        Value::Object(map) => map.get_mut(key).ok_or_else(|| escaped(KEY_ERROR)),
+        _ => Err(escaped(TYPE_ERROR)),
+    }
 }
 
-fn corrupt() -> Error {
-    Error::state("state_corrupt").with_detail("vault")
+/// The receiver of `.get(...)`/`.items()`: only a dict has those methods, every
+/// other JSON shape raises `AttributeError`.
+fn dict_methods(value: &Value) -> Result<&Map<String, Value>, Error> {
+    value.as_object().ok_or_else(|| escaped(ATTRIBUTE_ERROR))
 }
 
-/// A required string field of a `vault/secrets.json` record (`entry["project"]`,
-/// `entry["environment"]`, `entry["kind"]`, `r["status"]`, `r["created_at"]`).
-/// Python reads each of these with direct indexing and stores the raw value,
-/// whatever its type, onto a `SecretMeta`/`VersionMeta` field with no runtime
-/// check; `SecretMeta`/`VersionMeta`'s Rust fields are plain `String`s, which
-/// cannot hold an arbitrary JSON value, so a missing key (Python: uncaught
-/// `KeyError`, PORTING.md §3.5) *and* a present key of the wrong type (Python:
-/// silently returns a `SecretMeta`/`VersionMeta` holding that value) both
-/// become `state_corrupt` here -- finding E-R4-3, `DEVIATIONS.md` (module row,
-/// "vault"). Every writer in this crate (`Vault::initialize`/`put_secret`/
-/// `set_version_status`) only ever writes a JSON string for each of these
-/// fields, so this is unreachable for any state this crate, or the Python
-/// prototype on the matching write paths, produced itself.
-fn require_str_field<'m>(m: &'m Map<String, Value>, key: &str) -> Result<&'m str, Error> {
-    m.get(key).and_then(Value::as_str).ok_or_else(corrupt)
+/// Mutable [`dict_methods`].
+fn dict_methods_mut(value: &mut Value) -> Result<&mut Map<String, Value>, Error> {
+    value
+        .as_object_mut()
+        .ok_or_else(|| escaped(ATTRIBUTE_ERROR))
+}
+
+/// `base64.b64decode(value)` (`vault._b64d`) on a stored JSON value: a
+/// non-`str` raises `TypeError`, a non-ASCII `str` `ValueError`, and malformed
+/// base64 `binascii.Error`. Returns the class name on failure.
+fn b64d_value(value: &Value) -> Result<Vec<u8>, &'static str> {
+    let Value::String(text) = value else {
+        return Err(TYPE_ERROR);
+    };
+    if !text.is_ascii() {
+        return Err(VALUE_ERROR);
+    }
+    pybase64::b64decode(text).map_err(|_| BINASCII_ERROR)
 }
 
 /// `entry["active_version"]`: a missing key is corrupt, JSON `null` is no
@@ -134,7 +159,7 @@ fn require_str_field<'m>(m: &'m Map<String, Value>, key: &str) -> Result<&'m str
 /// numeric equality or `str(version)` according to their own operation.
 fn require_active_version(m: &Map<String, Value>) -> Result<Option<ResolvedVersion>, Error> {
     match m.get("active_version") {
-        None => Err(corrupt()),
+        None => Err(escaped(KEY_ERROR)),
         Some(Value::Null) => Ok(None),
         Some(v) => Ok(Some(
             PyInt::from_json_integer(v)
@@ -237,9 +262,31 @@ fn active_version_values_equal(a: &Value, b: &Value) -> bool {
             | (Some(ActiveVersionNumeric::Float(f)), Some(ActiveVersionNumeric::Int(i))) => {
                 int_equals_float(&i, f)
             }
-            _ => a == b,
+            _ => match (a, b) {
+                // `list.__eq__`/`dict.__eq__`: element-wise Python `==`, so numeric
+                // cross-type equality applies inside containers too (`[1] == [1.0]`).
+                (Value::Array(x), Value::Array(y)) => {
+                    x.len() == y.len()
+                        && x.iter()
+                            .zip(y)
+                            .all(|(p, q)| active_version_values_equal(p, q))
+                }
+                (Value::Object(x), Value::Object(y)) => {
+                    x.len() == y.len()
+                        && x.iter().all(|(k, v)| {
+                            y.get(k).is_some_and(|w| active_version_values_equal(v, w))
+                        })
+                }
+                _ => a == b,
+            },
         },
     }
+}
+
+/// Python `==` between two JSON-decoded values of any shape (see
+/// [`active_version_values_equal`]).
+pub(crate) fn python_eq(a: &Value, b: &Value) -> bool {
+    active_version_values_equal(a, b)
 }
 
 /// `value == version` (Python numeric equality, see
@@ -252,58 +299,153 @@ fn active_version_matches(value: &Value, version: &PyInt) -> bool {
     active_version_values_equal(value, &version.value())
 }
 
+/// `dict.get(key)`: the stored value, or `None` (JSON `null`) when absent.
+fn get_or_null<'v>(m: &'v Map<String, Value>, key: &str) -> &'v Value {
+    m.get(key).unwrap_or(&Value::Null)
+}
+
+/// A Python `dict` built by `dict(r.get("public") or {})` for
+/// [`VersionMeta::public`]. Its keys may be any hashable JSON scalar, not only
+/// strings: `dict([[1, "a"], [True, "b"], [None, "c"], ["1", "d"]])` is
+/// `{1: 'b', None: 'c', '1': 'd'}`. Entries keep Python's insertion order and
+/// its key identity rules: `==`-equal keys (`1`, `1.0`, `True`) are one key that
+/// keeps its first position and spelling and takes the last value, while a
+/// string key never equals a non-string one. [`PublicMetadata::get`] is the
+/// `str`-keyed lookup every product consumer performs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PublicMetadata {
+    entries: Vec<(Value, Value)>,
+}
+
+impl PublicMetadata {
+    /// `public.get(key)` for a `str` key.
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.entries
+            .iter()
+            .find(|(candidate, _)| candidate.as_str() == Some(key))
+            .map(|(_, value)| value)
+    }
+
+    /// `key in public` for a `str` key.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Every `(key, value)` pair in Python's iteration order. A key is a JSON
+    /// string, number, boolean or `null`.
+    pub fn entries(&self) -> &[(Value, Value)] {
+        &self.entries
+    }
+
+    /// `len(public) == 0`.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// `d[key] = value` with Python's hashable-key equality.
+    fn insert(&mut self, key: Value, value: Value) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|(existing, _)| python_key_equal(existing, &key))
+        {
+            entry.1 = value;
+        } else {
+            self.entries.push((key, value));
+        }
+    }
+}
+
+/// `public[key]`: the stored value, or `null` for an absent `str` key (the
+/// same convenience `serde_json::Value` indexing offers).
+impl std::ops::Index<&str> for PublicMetadata {
+    type Output = Value;
+
+    fn index(&self, key: &str) -> &Value {
+        self.get(key).unwrap_or(&Value::Null)
+    }
+}
+
+/// Equal to a JSON object exactly when every key is a string and the
+/// key/value sets agree (a JSON object cannot hold a non-string key).
+impl PartialEq<Value> for PublicMetadata {
+    fn eq(&self, other: &Value) -> bool {
+        let Value::Object(map) = other else {
+            return false;
+        };
+        map.len() == self.entries.len()
+            && self
+                .entries
+                .iter()
+                .all(|(key, value)| key.as_str().is_some_and(|key| map.get(key) == Some(value)))
+    }
+}
+
+/// Python `==` between two hashable dict keys decoded from JSON (`None`,
+/// `bool`, `int`, `float`, `str`): numeric types compare by exact value
+/// across `bool`/`int`/`float`, a `str` equals only an equal `str`.
+fn python_key_equal(a: &Value, b: &Value) -> bool {
+    active_version_values_equal(a, b)
+}
+
 /// `dict(r.get("public") or {})`: Python's `or` first replaces any *falsy*
 /// value (`None`/missing, `false`, `0`, `""`, `[]`, `{}`) with `{}`, then
-/// `dict(...)` accepts an already-a-mapping value unchanged or coerces a
-/// *sequence of pairs* (e.g. `[["a", 1]]` -> `{"a": 1}`); anything else
-/// (a truthy scalar, or a truthy array that isn't a pair sequence) makes
-/// `dict(...)` raise an uncaught `TypeError`/`ValueError` (finding E-R4-3).
-/// A pair element may itself be any two-item JSON iterable: an array, a
-/// two-character string, or a two-key object (whose iteration yields its
-/// keys). Duplicate keys keep their first position and last value, as in a
-/// Python dict. A malformed iterable fails closed as `state_corrupt`, matching
-/// this module's mapping for Python's uncaught `TypeError`/`ValueError` on
-/// malformed state. A hashable non-string scalar key is the remaining
-/// representational gap: Python accepts it, while `serde_json::Map` cannot
-/// preserve its type or its collision rules (`true == 1`, but `"true"` is a
-/// distinct key), so this function fails closed instead of stringifying it.
-fn coerce_public_field(v: Option<&Value>) -> Result<Value, Error> {
+/// `dict(...)` copies a mapping or consumes an iterable of pairs (finding
+/// E-R4-3). A pair element may itself be any two-item JSON iterable: an array,
+/// a two-character string, or a two-key object (whose iteration yields its
+/// keys). The pair's key may be any hashable JSON value (see
+/// [`PublicMetadata`]). Python's failures escape uncaught (PORTING.md §3.5)
+/// with their own class: a non-iterable value or element, or an unhashable
+/// (array/object) key, is `TypeError`; an element of the wrong length is
+/// `ValueError` -- including every character of a non-empty string value.
+fn coerce_public_field(v: Option<&Value>) -> Result<PublicMetadata, Error> {
+    let mut result = PublicMetadata::default();
     match v {
-        None => Ok(json!({})),
-        Some(val) if json_falsy(val) => Ok(json!({})),
-        Some(Value::Object(m)) => Ok(Value::Object(m.clone())),
+        None => Ok(result),
+        Some(val) if json_falsy(val) => Ok(result),
+        Some(Value::Object(m)) => {
+            for (key, value) in m {
+                result.insert(Value::String(key.clone()), value.clone());
+            }
+            Ok(result)
+        }
         Some(Value::Array(items)) => {
-            let mut result = Map::new();
             for item in items {
                 let (key, value) = match item {
-                    Value::Array(pair) if pair.len() == 2 => (pair[0].clone(), pair[1].clone()),
-                    Value::String(pair) if pair.chars().count() == 2 => {
+                    Value::Array(pair) => match pair.as_slice() {
+                        [key, value] => (key.clone(), value.clone()),
+                        _ => return Err(escaped(VALUE_ERROR)),
+                    },
+                    Value::String(pair) => {
                         let mut chars = pair.chars();
-                        let key = chars.next().expect("checked character count").to_string();
-                        let value = Value::String(
-                            chars.next().expect("checked character count").to_string(),
-                        );
-                        result.insert(key, value);
-                        continue;
+                        match (chars.next(), chars.next(), chars.next()) {
+                            (Some(key), Some(value), None) => (
+                                Value::String(key.to_string()),
+                                Value::String(value.to_string()),
+                            ),
+                            _ => return Err(escaped(VALUE_ERROR)),
+                        }
                     }
-                    Value::Object(pair) if pair.len() == 2 => {
+                    Value::Object(pair) => {
                         let mut keys = pair.keys();
-                        let key =
-                            Value::String(keys.next().expect("checked object length").clone());
-                        let value =
-                            Value::String(keys.next().expect("checked object length").clone());
-                        (key, value)
+                        match (keys.next(), keys.next(), keys.next()) {
+                            (Some(key), Some(value), None) => {
+                                (Value::String(key.clone()), Value::String(value.clone()))
+                            }
+                            _ => return Err(escaped(VALUE_ERROR)),
+                        }
                     }
-                    _ => return Err(corrupt()),
+                    _ => return Err(escaped(TYPE_ERROR)),
                 };
-                let Value::String(key) = key else {
-                    return Err(corrupt());
-                };
+                if matches!(key, Value::Array(_) | Value::Object(_)) {
+                    return Err(escaped(TYPE_ERROR));
+                }
                 result.insert(key, value);
             }
-            Ok(Value::Object(result))
+            Ok(result)
         }
-        Some(_) => Err(corrupt()),
+        Some(Value::String(_)) => Err(escaped(VALUE_ERROR)),
+        Some(_) => Err(escaped(TYPE_ERROR)),
     }
 }
 
@@ -331,7 +473,7 @@ fn python_list_over_value(v: &Value) -> Result<Vec<Value>, Error> {
         Value::Array(a) => Ok(a.clone()),
         Value::String(s) => Ok(s.chars().map(|c| Value::String(c.to_string())).collect()),
         Value::Object(m) => Ok(m.keys().map(|k| Value::String(k.clone())).collect()),
-        _ => Err(corrupt()),
+        _ => Err(escaped(TYPE_ERROR)),
     }
 }
 
@@ -367,7 +509,7 @@ fn python_list_over_value(v: &Value) -> Result<Vec<Value>, Error> {
 /// [`crate::pystr::repr_number`], the single canonical implementation
 /// (str() and repr() agree for numbers in Python, so the same function
 /// serves both).
-fn python_str_scalar(v: &Value) -> String {
+pub(crate) fn python_str_scalar(v: &Value) -> String {
     match v {
         Value::Null => "None".to_string(),
         Value::Bool(true) => "True".to_string(),
@@ -393,7 +535,34 @@ fn parse_version_key(k: &str) -> Result<PyInt, Error> {
     crate::pystr::int_from_str_decimal_limited(k)
         .and_then(|value| value.parse().ok())
         .map(PyInt)
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+        .ok_or_else(|| escaped(VALUE_ERROR))
+}
+
+/// `put_secret` on a `versions` value that is not a dict. Python still runs
+/// `max(int(v) for v in versions)`: a `null`/number/bool is not iterable
+/// (`TypeError`); a list iterates its elements and a string its characters,
+/// where `int()` of a non-numeric string is `ValueError` and of a `null`/list/
+/// dict `TypeError` (the first failing element decides). When every element
+/// converts, `versions[str(version)] = record` then fails as item assignment on
+/// a list/str (`TypeError`). Nothing is committed in any case.
+fn non_dict_versions_error(versions: &Value) -> Error {
+    let items: Vec<Value> = match versions {
+        Value::Array(items) => items.clone(),
+        Value::String(text) => text.chars().map(|c| Value::String(c.to_string())).collect(),
+        _ => return escaped(TYPE_ERROR),
+    };
+    for item in &items {
+        match item {
+            Value::String(text) => {
+                if crate::pystr::int_from_str_decimal_limited(text).is_none() {
+                    return escaped(VALUE_ERROR);
+                }
+            }
+            Value::Number(_) | Value::Bool(_) => {}
+            Value::Null | Value::Array(_) | Value::Object(_) => return escaped(TYPE_ERROR),
+        }
+    }
+    escaped(TYPE_ERROR)
 }
 
 /// `key not in versions` (Python's `in` operator), used by
@@ -410,7 +579,8 @@ fn versions_contains(versions: Option<&Value>, key: &str) -> Result<bool, Error>
         Some(Value::Object(m)) => Ok(m.contains_key(key)),
         Some(Value::Array(a)) => Ok(a.iter().any(|v| v.as_str() == Some(key))),
         Some(Value::String(s)) => Ok(s.contains(key)),
-        None | Some(_) => Err(Error::state("state_corrupt").with_detail("vault")),
+        None => Err(escaped(KEY_ERROR)),
+        Some(_) => Err(escaped(TYPE_ERROR)),
     }
 }
 
@@ -476,30 +646,22 @@ impl<'a> AdminCredential<'a> {
         )
     }
 
-    /// `AdminCredential.verify`. A malformed `admin.json` (missing/invalid
-    /// `salt`/`hash`) makes Python's `_b64d(doc["salt"])` raise an uncaught
-    /// `KeyError`/`binascii.Error` -- outside the `except InvalidInput` that
-    /// only guards the short-passphrase case in `derive_key`. Per §3.5 the
-    /// closest handled error is this method's own `AuthFailed`
-    /// (`admin_reauth_failed`); `AdminCredential::initialize` never writes a
-    /// document that could trigger this.
+    /// `AdminCredential.verify`. Only `derive_key`'s short-passphrase
+    /// `InvalidInput` is caught (as `admin_reauth_failed`); a malformed
+    /// `admin.json` makes `doc["salt"]`/`doc["hash"]` or `_b64d(...)` raise a
+    /// built-in exception that escapes (PORTING.md §3.5), reported with its
+    /// class name like every other escaped exception in this module -- in
+    /// Python's order: the salt first, then the passphrase length, then the
+    /// hash.
     pub fn verify(&self, passphrase: &str, now: Option<f64>) -> Result<AdminAuth, Error> {
         let doc = self.state.read_json(ADMIN_DOC, Value::Null)?;
         if json_falsy(&doc) {
             return Err(Error::state("admin_missing"));
         }
         let reauth_failed = || Error::auth_failed("admin_reauth_failed");
-        let salt = doc
-            .get("salt")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(reauth_failed)?;
+        let salt = b64d_value(index(&doc, "salt")?).map_err(escaped)?;
         let key = derive_key(passphrase, &salt).map_err(|_| reauth_failed())?;
-        let expected_hash = doc
-            .get("hash")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(reauth_failed)?;
+        let expected_hash = b64d_value(index(&doc, "hash")?).map_err(escaped)?;
         if !constant_time_eq(&sha256(key.expose()), &expected_hash) {
             return Err(reauth_failed());
         }
@@ -513,11 +675,14 @@ impl<'a> AdminCredential<'a> {
 pub struct VersionMeta {
     pub secret_id: String,
     pub version: PyInt,
-    pub status: String,
-    pub created_at: String,
+    /// `r["status"]` exactly as stored: Python's `str` annotation is not
+    /// enforced, so a hand-edited document's number/list/... is returned as-is.
+    pub status: Value,
+    /// `r["created_at"]` exactly as stored (see `status`).
+    pub created_at: Value,
     /// Non-secret metadata derived from the value (e.g. the SSH public key);
-    /// `{}` for every other kind. See [`Vault::public_metadata`].
-    pub public: Value,
+    /// empty for every other kind. See [`Vault::public_metadata`].
+    pub public: PublicMetadata,
 }
 
 /// A Python version value after `resolve_version`. Stored metadata does not
@@ -604,9 +769,11 @@ impl PartialEq<ResolvedVersion> for PyInt {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SecretMeta {
     pub id: String,
-    pub project: String,
-    pub environment: String,
-    pub kind: String,
+    /// `entry["project"]`, `entry["environment"]` and `entry["kind"]` exactly
+    /// as stored: Python's `str` annotations are not enforced at runtime.
+    pub project: Value,
+    pub environment: Value,
+    pub kind: Value,
     pub active_version: Option<ResolvedVersion>,
     pub versions: Vec<VersionMeta>,
 }
@@ -679,10 +846,7 @@ impl<'a> Vault<'a> {
         if json_falsy(&doc) {
             return Err(Error::state("vault_missing"));
         }
-        let dek_dict = doc
-            .get("dek")
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-        let wrapped = WrappedKey::from_dict(dek_dict)?;
+        let wrapped = WrappedKey::from_dict(index(&doc, "dek")?)?;
         let dek = kms.unwrap(&wrapped)?;
         Ok(Vault {
             state,
@@ -706,36 +870,24 @@ impl<'a> Vault<'a> {
         if json_falsy(&doc) {
             return Err(Error::state("vault_missing"));
         }
-        let corrupt = || Error::state("state_corrupt").with_detail("vault");
-        let rec = doc
-            .get("recovery")
-            .and_then(Value::as_object)
-            .ok_or_else(corrupt)?;
-        let salt = rec
-            .get("salt")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(corrupt)?;
-        // Not wrapped in a try/except in Python: a too-short recovery
-        // passphrase surfaces as `InvalidInput`, uncaught by this method.
+        // Python: `rec = doc["recovery"]`, then `_b64d(rec["salt"])` (evaluated before
+        // `derive_key`'s own passphrase check), `_b64d(rec["nonce"])`, `_b64d(rec["ciphertext"])`;
+        // each lookup or decode failure is a built-in exception that escapes.
+        let rec = index(&doc, "recovery")?;
+        let salt = b64d_value(index(rec, "salt")?).map_err(escaped)?;
         let key = derive_key(recovery_passphrase, &salt)?;
-        let nonce = rec
-            .get("nonce")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(corrupt)?;
-        let ciphertext = rec
-            .get("ciphertext")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(corrupt)?;
+        let nonce = b64d_value(index(rec, "nonce")?).map_err(escaped)?;
+        let ciphertext = b64d_value(index(rec, "ciphertext")?).map_err(escaped)?;
         let dek_bytes = aead::decrypt(key.expose(), &nonce, &ciphertext, b"zeropw-recovery")
             .map_err(|_| Error::auth_failed("recovery_passphrase_invalid"))?;
         {
             let _lock = state.lock()?;
             let mut doc2 = state.read_json(VAULT_DOC, Value::Null)?;
             let wrapped = new_kms.wrap(&dek_bytes)?;
-            as_obj_mut(&mut doc2)?.insert("dek".into(), wrapped.to_dict());
+            // `doc["dek"] = ...`: item assignment needs a dict (`TypeError` otherwise).
+            doc2.as_object_mut()
+                .ok_or_else(|| escaped(TYPE_ERROR))?
+                .insert("dek".into(), wrapped.to_dict());
             state.write_json(VAULT_DOC, &doc2)?;
         }
         Ok(Vault {
@@ -756,10 +908,9 @@ impl<'a> Vault<'a> {
         Ok(v)
     }
 
+    /// `self._doc()["secrets"]` as the receiver of `.items()`/`.get(...)`.
     fn secrets_obj(doc: &Value) -> Result<&Map<String, Value>, Error> {
-        doc.get("secrets")
-            .and_then(Value::as_object)
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))
+        dict_methods(index(doc, "secrets")?)
     }
 
     fn aad(secret_id: &str, version: &ResolvedVersion) -> Vec<u8> {
@@ -795,17 +946,22 @@ impl<'a> Vault<'a> {
         if entry.get("shared_env").is_some_and(|v| !json_falsy(v)) {
             return self.decrypt_shared(secret_id, entry);
         }
+        // Python catches `KeyError`/`ValueError` (including `binascii.Error`) around
+        // `_b64d(entry["nonce"])`/`_b64d(entry["ciphertext"])` as `secret_corrupt`; a present
+        // non-`str` field makes `b64decode` raise `TypeError`, which escapes.
         let corrupt = || Error::state("secret_corrupt").with_detail(secret_id);
-        let nonce = entry
-            .get("nonce")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(corrupt)?;
-        let ciphertext = entry
-            .get("ciphertext")
-            .and_then(Value::as_str)
-            .and_then(|s| pybase64::b64decode(s).ok())
-            .ok_or_else(corrupt)?;
+        let field = |key: &str| -> Result<Vec<u8>, Error> {
+            let value = entry.get(key).ok_or_else(corrupt)?;
+            b64d_value(value).map_err(|class| {
+                if class == TYPE_ERROR {
+                    escaped(TYPE_ERROR)
+                } else {
+                    corrupt()
+                }
+            })
+        };
+        let nonce = field("nonce")?;
+        let ciphertext = field("ciphertext")?;
         aead::decrypt(
             self.dek.expose(),
             &nonce,
@@ -915,14 +1071,40 @@ impl<'a> Vault<'a> {
         environment: &str,
         activate: bool,
     ) -> Result<PyInt, Error> {
+        self.put_secret_values(
+            secret_id,
+            &json!(kind),
+            value,
+            &json!(project),
+            &json!(environment),
+            activate,
+        )
+    }
+
+    /// `Vault.put_secret` for arguments that are stored JSON values rather than
+    /// CLI strings (e.g. `rotation start` passes a [`SecretMeta`]'s raw
+    /// `kind`/`project`/`environment`). `kind not in SECRET_KINDS` admits only
+    /// one of those strings; `project`/`environment` reach
+    /// `Projects.require_environment` and the stored entry unchanged, compared
+    /// with Python `==`.
+    pub fn put_secret_values(
+        &self,
+        secret_id: &str,
+        kind: &Value,
+        value: &[u8],
+        project: &Value,
+        environment: &Value,
+        activate: bool,
+    ) -> Result<PyInt, Error> {
         let secret_id = validate_name(secret_id, "secret_id")?;
-        if !SECRET_KINDS.contains(&kind) {
+        let Some(kind) = kind.as_str().filter(|kind| SECRET_KINDS.contains(kind)) else {
             return Err(Error::invalid_input("invalid_secret_kind"));
-        }
+        };
         if value.is_empty() || value.len() > MAX_SECRET_BYTES {
             return Err(Error::invalid_input("invalid_secret_value"));
         }
-        self.projects.require_environment(project, environment)?;
+        self.projects
+            .require_environment_value(project, environment)?;
         let public = Vault::public_metadata(kind, value)?;
 
         let version;
@@ -930,78 +1112,54 @@ impl<'a> Vault<'a> {
         {
             let _lock = self.state.lock()?;
             let mut doc_val = self.doc()?;
-            let doc_obj = as_obj_mut(&mut doc_val)?;
-            // Python: `doc["secrets"].get(secret_id)`, direct indexing of `doc["secrets"]` itself
-            // first -- a missing or wrong-typed `secrets` field raises an uncaught
-            // `KeyError`/`TypeError` (state_corrupt, PORTING.md §3.5), matching every other
-            // raw-indexed access in this module. Finding E-R5-1 (a round-4 sweep sibling this file's
-            // `set_version_status` already got right): the previous
-            // `.entry("secrets").or_insert_with(|| json!({}))` silently *created* a missing
-            // `secrets` key and proceeded to write a new secret into it, where Python raises and
-            // commits nothing.
-            let secrets_obj = doc_obj
-                .get_mut("secrets")
-                .and_then(Value::as_object_mut)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+            // Python: `doc["secrets"].get(secret_id)` -- a non-dict document cannot be subscripted
+            // (`TypeError`), a missing `secrets` is `KeyError`, and a non-dict `secrets` has no
+            // `.get` (`AttributeError`); nothing is committed (finding E-R5-1).
+            let secrets_obj = dict_methods_mut(index_mut(&mut doc_val, "secrets")?)?;
 
             // Python: `entry = doc["secrets"].get(secret_id); if entry is None: entry = {...}`.
             // `dict.get` returns `None` both when the key is absent *and* when it maps to a JSON
-            // `null` (finding E-R4-2), so a `"secrets": {"ghost": null}` entry must take the
-            // fresh-entry branch below, not the existing-entry branch (where `as_obj` would reject
-            // `Value::Null` as `state_corrupt`, and Python would instead go on to create a fresh
-            // entry successfully -- the closest existing bug class to
-            // `secret_for_trusted_use_treats_explicit_null_secret_entry_as_absent`, E-R2-4a).
-            let mut entry: Map<String, Value> =
-                match secrets_obj.get(&secret_id).filter(|v| !v.is_null()) {
-                    Some(existing) => {
-                        let existing_obj = as_obj(existing)?;
-                        // Python: `(entry["project"], entry["environment"], entry["kind"]) != (project,
-                        // environment, kind)`, direct indexing: a *missing* field raises an uncaught
-                        // `KeyError` (state_corrupt, PORTING.md §3.5), but a *present* field of the
-                        // wrong type just compares unequal to the caller's string, exactly like any
-                        // other mismatch (`secret_identity_mismatch`) -- sweep finding, round 4: the
-                        // previous `.and_then(Value::as_str) == Some(...)` conflated the two, turning a
-                        // missing field into a mismatch instead of `state_corrupt`.
-                        let corrupt = || Error::state("state_corrupt").with_detail("vault");
-                        let field_matches = |key: &str, expected: &str| -> Result<bool, Error> {
-                            match existing_obj.get(key) {
-                                None => Err(corrupt()),
-                                Some(v) => Ok(v.as_str() == Some(expected)),
-                            }
-                        };
-                        let matches = field_matches("project", project)?
-                            && field_matches("environment", environment)?
-                            && field_matches("kind", kind)?;
-                        if !matches {
-                            return Err(Error::invalid_input("secret_identity_mismatch"));
-                        }
-                        existing_obj.clone()
+            // `null` (finding E-R4-2), so a `"secrets": {"ghost": null}` entry takes the
+            // fresh-entry branch.
+            let mut entry: Value = match secrets_obj.get(&secret_id).filter(|v| !v.is_null()) {
+                Some(existing) => {
+                    // Python: `(entry["project"], entry["environment"], entry["kind"]) != (project,
+                    // environment, kind)`: the whole tuple is built first, so any missing field is
+                    // `KeyError` (a non-dict entry `TypeError`) even when an earlier field already
+                    // differs; a present field of another type simply compares unequal.
+                    let fields = [
+                        index(existing, "project")?,
+                        index(existing, "environment")?,
+                        index(existing, "kind")?,
+                    ];
+                    let expected = [project, environment, &json!(kind)];
+                    if fields
+                        .iter()
+                        .zip(expected)
+                        .any(|(field, expected)| !python_eq(field, expected))
+                    {
+                        return Err(Error::invalid_input("secret_identity_mismatch"));
                     }
-                    None => {
-                        let mut m = Map::new();
-                        m.insert("project".into(), json!(project));
-                        m.insert("environment".into(), json!(environment));
-                        m.insert("kind".into(), json!(kind));
-                        m.insert("created_at".into(), json!(iso(None)));
-                        m.insert("active_version".into(), Value::Null);
-                        m.insert("versions".into(), json!({}));
-                        m
-                    }
-                };
+                    existing.clone()
+                }
+                None => json!({
+                    "project": project,
+                    "environment": environment,
+                    "kind": kind,
+                    "created_at": iso(None),
+                    "active_version": null,
+                    "versions": {},
+                }),
+            };
 
-            // Python: `entry["versions"]`, direct indexing -- a missing or wrong-typed `versions`
-            // field raises an uncaught `KeyError`/`TypeError` (state_corrupt, PORTING.md §3.5).
-            // Sweep finding, round 4: the previous `.unwrap_or_default()` silently treated a
-            // malformed `versions` field as an empty one, which would compute `next_version = 1`
-            // and *overwrite* whatever the field actually held instead of failing closed.
-            let mut versions_obj = entry
-                .get("versions")
-                .and_then(Value::as_object)
-                .cloned()
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` uses
-            // arbitrary precision. Keep both the parsed keys and the increment exact so even
-            // a key above every machine-integer boundary produces its true successor.
+            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` is arbitrary
+            // precision, so the parsed keys and the increment stay exact beyond every
+            // machine-integer boundary. A non-dict `versions` fails as Python's iteration,
+            // `int()` and item assignment do ([`non_dict_versions_error`]).
+            let mut versions_obj = match index(&entry, "versions")? {
+                Value::Object(map) => map.clone(),
+                other => return Err(non_dict_versions_error(other)),
+            };
             let next_version = versions_obj
                 .keys()
                 .map(|k| parse_version_key(k))
@@ -1020,39 +1178,33 @@ impl<'a> Vault<'a> {
             versions_obj.insert(next_version.to_string(), Value::Object(record));
 
             if activate {
-                // Python: `previous = entry["active_version"]; ...; if previous is not None and
-                // entry["versions"][str(previous)]["status"] == "active": ...`. `str(previous)` is
-                // computed from whatever raw JSON value `active_version` holds (not necessarily an
-                // `int`), and the subsequent indexing is unguarded: if that key names a version
-                // that doesn't exist (`7`) or isn't a plain int (`1.0`, `str()` -> `"1.0"`), Python
-                // raises an uncaught `KeyError`/`TypeError` *before* `state.write_json` ever runs,
-                // so nothing is committed (finding E-R4-4). The previous
-                // `.and_then(Value::as_i64)` silently treated any non-i64 `active_version` as "no
-                // previous version" and let the write through, leaving two versions marked
-                // `active`.
-                let previous = get_or_null(&entry, "active_version").clone();
-                entry.insert("active_version".into(), next_version.value());
+                // Python: `previous = entry["active_version"]` (`KeyError` when missing); then, for
+                // a non-`None` previous, `entry["versions"][str(previous)]["status"] == "active"`.
+                // `str(previous)` is computed from whatever raw JSON value `active_version` holds;
+                // a key naming no version (`7`, or `1.0` -> `"1.0"`) is `KeyError`, a non-dict
+                // record `TypeError`, a missing status `KeyError` -- all before `write_json`, so
+                // nothing is committed (finding E-R4-4). A present status of another type just
+                // compares unequal to `"active"`.
+                let entry_obj = entry.as_object_mut().ok_or_else(|| escaped(TYPE_ERROR))?;
+                let previous = entry_obj
+                    .get("active_version")
+                    .cloned()
+                    .ok_or_else(|| escaped(KEY_ERROR))?;
+                entry_obj.insert("active_version".into(), next_version.value());
                 if !previous.is_null() {
-                    let prev_key = python_str_scalar(&previous);
                     let prev_rec = versions_obj
-                        .get_mut(&prev_key)
-                        .and_then(Value::as_object_mut)
-                        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-                    // Python: `entry["versions"][str(previous)]["status"]`, direct indexing again
-                    // -- a missing `status` field on the previous record raises an uncaught
-                    // `KeyError` (state_corrupt, sweep finding); a present field of the wrong type
-                    // just compares unequal to `"active"` (skip), like any other mismatch.
-                    let prev_status = match prev_rec.get("status") {
-                        None => return Err(Error::state("state_corrupt").with_detail("vault")),
-                        Some(v) => v.as_str(),
-                    };
-                    if prev_status == Some("active") {
-                        prev_rec.insert("status".into(), json!("retired"));
+                        .get_mut(&python_str_scalar(&previous))
+                        .ok_or_else(|| escaped(KEY_ERROR))?;
+                    if index(prev_rec, "status")?.as_str() == Some("active") {
+                        index_mut(prev_rec, "status")?.clone_from(&json!("retired"));
                     }
                 }
             }
-            entry.insert("versions".into(), Value::Object(versions_obj));
-            secrets_obj.insert(secret_id.clone(), Value::Object(entry));
+            entry
+                .as_object_mut()
+                .ok_or_else(|| escaped(TYPE_ERROR))?
+                .insert("versions".into(), Value::Object(versions_obj));
+            secrets_obj.insert(secret_id.clone(), entry);
 
             self.state.write_json(VAULT_DOC, &doc_val)?;
             version = next_version;
@@ -1122,59 +1274,42 @@ impl<'a> Vault<'a> {
         {
             let _lock = self.state.lock()?;
             let mut doc_val = self.doc()?;
-            let doc_obj = as_obj_mut(&mut doc_val)?;
-            let secrets_obj = doc_obj
-                .get_mut("secrets")
-                .and_then(Value::as_object_mut)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
+            let secrets_obj = dict_methods_mut(index_mut(&mut doc_val, "secrets")?)?;
             // Python: `entry = doc["secrets"].get(secret_id); if entry is None or str(version) not
             // in entry["versions"]: raise NotFound(...)`. `dict.get` returns `None` both when the
-            // key is absent *and* when it maps to a JSON `null` (finding E-R4-2, same shape as
-            // `secret_for_trusted_use`'s E-R2-4a fix): the previous plain `else` branch only
-            // caught the missing-key case, letting an explicit-null entry fall through to `as_obj`
-            // and surface as `state_corrupt` instead of this method's own documented
-            // `NotFound("secret_version_not_found")`.
+            // key is absent *and* when it maps to a JSON `null` (finding E-R4-2), so both are the
+            // documented `NotFound("secret_version_not_found")`; any other non-dict entry cannot
+            // be subscripted (`TypeError`).
             let entry_val = secrets_obj.get(secret_id).filter(|v| !v.is_null()).cloned();
             let Some(entry_val) = entry_val else {
                 return Err(Error::not_found("secret_version_not_found"));
             };
-            let mut entry = as_obj(&entry_val)?.clone();
-            // Python: `str(version) not in entry["versions"]` is an ordinary membership test
-            // (`in`), evaluated as a *separate* statement from the `entry["versions"][str(version)]`
-            // indexing two lines below (finding E-R5-7, correcting DEVIATIONS.md row 52's blanket
-            // claim that every raw-indexed `versions` read here already fails closed identically):
-            // a missing `versions` key, or a present value that is not iterable at all (`null`, a
-            // number, a bool), makes `in` itself raise an uncaught `KeyError`/`TypeError` --
-            // `state_corrupt`. But a `list`/`str` `versions` *is* iterable: `in` checks membership
-            // among elements (`list`) or substring containment (`str`), and only raises the
-            // *documented* `NotFound("secret_version_not_found")` when the key isn't found that
-            // way -- it is the *next* line's `entry["versions"][str(version)]` indexing that then
-            // raises (list/str don't support string-keyed indexing) if the membership test did
-            // find something, which is `state_corrupt` per the usual PORTING.md §3.5 convention. A
-            // previous version of this port required a JSON object here unconditionally, turning an
-            // array/string `versions` that plainly doesn't contain the key into `state_corrupt`
-            // instead of the documented `NotFound`.
+            let Value::Object(mut entry) = entry_val else {
+                return Err(escaped(TYPE_ERROR));
+            };
+            // Python: `str(version) not in entry["versions"]` is an ordinary membership test,
+            // evaluated as a *separate* statement from the `entry["versions"][str(version)]`
+            // indexing below (finding E-R5-7): a missing `versions` is `KeyError` and a
+            // non-iterable one (`null`, a number, a bool) `TypeError`, but a `list`/`str`
+            // `versions` checks element membership / substring containment and only raises the
+            // documented `NotFound` when the key isn't found that way; if it *is* found, the
+            // next line's string subscript of a list/str is `TypeError`.
             let key = version.to_string();
             if !versions_contains(entry.get("versions"), &key)? {
                 return Err(Error::not_found("secret_version_not_found"));
             }
             let mut versions = match entry.get("versions") {
                 Some(Value::Object(m)) => m.clone(),
-                _ => return Err(Error::state("state_corrupt").with_detail("vault")),
+                _ => return Err(escaped(TYPE_ERROR)),
             };
-            {
-                let record = as_obj(versions.get(&key).expect("checked above"))?;
-                // Python: `record["status"]`, direct indexing -- a missing `status` field raises
-                // an uncaught `KeyError` (state_corrupt); a *present* field of the wrong type just
-                // compares unequal to `"revoked"`, like any other mismatch (sweep finding, round
-                // 4: the previous `.and_then(Value::as_str) == Some("revoked")` conflated the two).
-                let record_status = match record.get("status") {
-                    None => return Err(Error::state("state_corrupt").with_detail("vault")),
-                    Some(v) => v.as_str(),
-                };
-                if record_status == Some("revoked") && status != "revoked" {
-                    return Err(Error::invalid_input("version_revoked"));
-                }
+            // Python: `record["status"] == "revoked"` -- a non-dict record is `TypeError`, a
+            // missing status `KeyError`; a present status of another type just compares unequal.
+            let record_status = index(
+                versions.get(&key).ok_or_else(|| escaped(KEY_ERROR))?,
+                "status",
+            )?;
+            if record_status.as_str() == Some("revoked") && status != "revoked" {
+                return Err(Error::invalid_input("version_revoked"));
             }
             if status == "revoked" {
                 let mut fields = Map::new();
@@ -1182,13 +1317,10 @@ impl<'a> Vault<'a> {
                 fields.insert("version".into(), version.value());
                 crate::policy::append_revocation(self.state, "secret_version", fields);
             }
-            {
-                let record = versions
-                    .get_mut(&key)
-                    .and_then(Value::as_object_mut)
-                    .expect("checked above");
-                record.insert("status".into(), json!(status));
-            }
+            *index_mut(
+                versions.get_mut(&key).ok_or_else(|| escaped(KEY_ERROR))?,
+                "status",
+            )? = json!(status);
             // Python: `before_active = entry["active_version"]`, a raw JSON value (not narrowed to
             // `int`), used both for the `!= version` skip and, via `str(previous)`, as a `versions`
             // key (finding E-R4-4: `entry["versions"][str(previous)]["status"]` is unguarded, so a
@@ -1208,25 +1340,23 @@ impl<'a> Vault<'a> {
             // `active_version: true` being explicitly retired wrongly *stayed* `true` instead of
             // being cleared to `null` (Python: `entry["active_version"] == version` is `True`, so it
             // clears) -- a fail-open gap on a revocation-adjacent path.
-            let before_active = get_or_null(&entry, "active_version").clone();
+            // Python: `before_active = entry["active_version"]` -- `KeyError` when missing, after
+            // `append_revocation` above but before anything is written to the vault document.
+            let before_active = entry
+                .get("active_version")
+                .cloned()
+                .ok_or_else(|| escaped(KEY_ERROR))?;
             if status == "active" {
                 entry.insert("active_version".into(), json!(version));
                 if !before_active.is_null() && !active_version_matches(&before_active, version) {
-                    let prev_key = python_str_scalar(&before_active);
+                    // Python: `entry["versions"][str(previous)]["status"]` -- a key naming no
+                    // version is `KeyError`, a non-dict record `TypeError`, a missing status
+                    // `KeyError`; a present status of another type compares unequal (skip).
                     let prev_rec = versions
-                        .get_mut(&prev_key)
-                        .and_then(Value::as_object_mut)
-                        .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-                    // Python: `entry["versions"][str(previous)]["status"]`, direct indexing again
-                    // -- a missing `status` field on the previous record raises an uncaught
-                    // `KeyError` (state_corrupt, sweep finding); a present field of the wrong type
-                    // just compares unequal to `"active"` (skip), like any other mismatch.
-                    let prev_status = match prev_rec.get("status") {
-                        None => return Err(Error::state("state_corrupt").with_detail("vault")),
-                        Some(v) => v.as_str(),
-                    };
-                    if prev_status == Some("active") {
-                        prev_rec.insert("status".into(), json!("retired"));
+                        .get_mut(&python_str_scalar(&before_active))
+                        .ok_or_else(|| escaped(KEY_ERROR))?;
+                    if index(prev_rec, "status")?.as_str() == Some("active") {
+                        *index_mut(prev_rec, "status")? = json!("retired");
                     }
                 }
             } else if active_version_matches(&before_active, version) {
@@ -1277,63 +1407,52 @@ impl<'a> Vault<'a> {
         ids.sort();
         let mut result = Vec::new();
         for secret_id in ids {
-            let entry = as_obj(secrets_obj.get(&secret_id).expect("from keys"))?;
-            // Python: `entry["project"]`/`entry["environment"]`, direct indexing, read
-            // unconditionally further down (`SecretMeta(secret_id, entry["project"], ...)`) even
-            // when no filter is given, so a missing/wrongly-typed field always raises regardless
-            // of whether this entry would end up filtered out -- see `require_str_field`.
-            let p = require_str_field(entry, "project")?;
-            let e = require_str_field(entry, "environment")?;
+            let Some(entry) = secrets_obj.get(&secret_id) else {
+                continue;
+            };
+            // Python: `if project and entry["project"] != project: continue`, then the same for
+            // `environment` -- each field is read only when its filter is given, and an entry a
+            // filter skips is never read further. Every value keeps its stored JSON type.
             if let Some(pf) = project
-                && pf != p
+                && index(entry, "project")?.as_str() != Some(pf)
             {
                 continue;
             }
             if let Some(ef) = environment
-                && ef != e
+                && index(entry, "environment")?.as_str() != Some(ef)
             {
                 continue;
             }
-            let versions_obj = entry
-                .get("versions")
-                .and_then(Value::as_object)
-                .ok_or_else(corrupt)?;
-            let mut vkeys: Vec<(PyInt, &String)> = versions_obj
-                .keys()
-                .map(|k| parse_version_key(k).map(|n| (n, k)))
+            // Python: `sorted(entry["versions"].items(), key=lambda item: int(item[0]))`.
+            let versions_obj = dict_methods(index(entry, "versions")?)?;
+            let mut vkeys: Vec<(PyInt, &Value)> = versions_obj
+                .iter()
+                .map(|(k, r)| parse_version_key(k).map(|n| (n, r)))
                 .collect::<Result<Vec<_>, Error>>()?;
             vkeys.sort_by(|(a, _), (b, _)| a.cmp(b));
             let mut versions = Vec::new();
-            for (n, k) in vkeys {
-                let r = as_obj(versions_obj.get(k).expect("from keys"))?;
+            for (n, r) in vkeys {
+                // Python: `VersionMeta(secret_id, int(v), r["status"], r["created_at"],
+                // dict(r.get("public") or {}))` keeps each stored value as-is (finding E-R4-3);
+                // the dataclass annotations are never enforced.
+                let status = index(r, "status")?.clone();
+                let created_at = index(r, "created_at")?.clone();
+                let public = coerce_public_field(dict_methods(r)?.get("public"))?;
                 versions.push(VersionMeta {
                     secret_id: secret_id.clone(),
                     version: n,
-                    // `status` is deliberately *not* `require_str_field` (unlike every other
-                    // field here): `resolve_version`/`get_meta` route through this same
-                    // `list_secrets` call for the *resolved* version's own record, and
-                    // `secret_for_trusted_use`'s independent `record["status"]` check (below) must
-                    // still run and carry a present-but-wrong-type status into its
-                    // `NotFound("secret_version_unusable")` detail exactly like Python (finding
-                    // E-R4-3) -- hard-erroring here first would make that unreachable. A missing
-                    // key is still `state_corrupt` (Python's uncaught `KeyError`); a present value
-                    // of any type is stringified with `python_str_scalar`, the same best-effort
-                    // representation `Vault::restore` already uses for a raw JSON scalar that must
-                    // live in a Rust `String`.
-                    status: match r.get("status") {
-                        None => return Err(corrupt()),
-                        Some(v) => python_str_scalar(v),
-                    },
-                    created_at: require_str_field(r, "created_at")?.to_string(),
-                    public: coerce_public_field(r.get("public"))?,
+                    status,
+                    created_at,
+                    public,
                 });
             }
+            let entry_obj = entry.as_object().ok_or_else(|| escaped(TYPE_ERROR))?;
             result.push(SecretMeta {
                 id: secret_id.clone(),
-                project: p.to_string(),
-                environment: e.to_string(),
-                kind: require_str_field(entry, "kind")?.to_string(),
-                active_version: require_active_version(entry)?,
+                project: index(entry, "project")?.clone(),
+                environment: index(entry, "environment")?.clone(),
+                kind: index(entry, "kind")?.clone(),
+                active_version: require_active_version(entry_obj)?,
                 versions,
             });
         }
@@ -1388,29 +1507,13 @@ impl<'a> Vault<'a> {
             return Err(Error::not_found("secret_not_found"));
         }
         let resolved = self.resolve_version(secret_id, version)?;
-        let entry = as_obj(secrets_obj.get(secret_id).expect("checked above"))?;
-        let versions_obj = entry
-            .get("versions")
-            .and_then(Value::as_object)
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-        let record = as_obj(
-            versions_obj
-                .get(&resolved.key())
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
-        )?;
-        // Python: `if record["status"] not in ("active", "staged"): raise
-        // NotFound("secret_version_unusable", record["status"])`. Direct indexing: a missing
-        // `status` field raises an uncaught `KeyError` (state_corrupt), but a *present* field of
-        // the wrong type (e.g. the JSON number `5`) is not an error at all -- it simply isn't
-        // `"active"`/`"staged"`, so Python raises the *documented* `NotFound` carrying that raw
-        // value as `detail` (finding E-R4-3). The previous `.and_then(Value::as_str).unwrap_or("")`
-        // conflated "missing" with "present but not a string", turning a missing field into this
-        // `NotFound` with an empty detail instead of `state_corrupt`, and always discarding the
-        // real stored value from a wrongly-typed field's detail.
-        let status_value = match record.get("status") {
-            None => return Err(Error::state("state_corrupt").with_detail("vault")),
-            Some(v) => v,
-        };
+        // Python: `record = entry["versions"][str(resolved)]` (`KeyError` for an active
+        // version naming no stored key), then `record["status"] not in ("active", "staged")`:
+        // a present status of any type is compared (and, if unusable, carried as the
+        // documented `NotFound`'s detail, finding E-R4-3).
+        let entry = secrets_obj.get(secret_id).unwrap_or(&Value::Null);
+        let record = index(index(entry, "versions")?, &resolved.key())?;
+        let status_value = index(record, "status")?;
         if status_value.as_str() != Some("active") && status_value.as_str() != Some("staged") {
             // `ZeroPWError.__init__` suppresses a *falsy* `detail` (`0`, `false`, `null`, `[]`,
             // `{}`): `str(exc)` is just the reason and `to_dict()` omits `detail` entirely --
@@ -1426,7 +1529,7 @@ impl<'a> Vault<'a> {
             };
             return Err(Error::not_found("secret_version_unusable").with_detail(detail));
         }
-        self.decrypt(secret_id, &resolved, record)
+        self.decrypt(secret_id, &resolved, dict_methods(record)?)
     }
 
     /// Plaintext of every version of every secret (any status), for
@@ -1439,19 +1542,24 @@ impl<'a> Vault<'a> {
         ids.sort();
         let mut values = Vec::new();
         for secret_id in ids {
-            let entry = as_obj(secrets_obj.get(&secret_id).expect("from keys"))?;
-            let versions_obj = entry
-                .get("versions")
-                .and_then(Value::as_object)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-            let mut vkeys: Vec<(PyInt, &String)> = versions_obj
-                .keys()
-                .map(|k| parse_version_key(k).map(|n| (n, k)))
+            let Some(entry) = secrets_obj.get(&secret_id) else {
+                continue;
+            };
+            // Python: `sorted(entry["versions"].items(), key=int)`, then
+            // `self._decrypt(secret_id, int(version), record)`, whose `record.get(...)` needs a
+            // dict (`AttributeError`).
+            let versions_obj = dict_methods(index(entry, "versions")?)?;
+            let mut vkeys: Vec<(PyInt, &Value)> = versions_obj
+                .iter()
+                .map(|(k, r)| parse_version_key(k).map(|n| (n, r)))
                 .collect::<Result<Vec<_>, Error>>()?;
             vkeys.sort_by(|(a, _), (b, _)| a.cmp(b));
-            for (n, k) in vkeys {
-                let record = as_obj(versions_obj.get(k).expect("from keys"))?;
-                values.push(self.decrypt(&secret_id, &ResolvedVersion::Integer(n), record)?);
+            for (n, record) in vkeys {
+                values.push(self.decrypt(
+                    &secret_id,
+                    &ResolvedVersion::Integer(n),
+                    dict_methods(record)?,
+                )?);
             }
         }
         Ok(values)
@@ -1490,23 +1598,12 @@ impl<'a> Vault<'a> {
                 ..Default::default()
             },
         )?;
+        // Python: `entry = self._doc()["secrets"][secret_id]`, then
+        // `self._decrypt(secret_id, resolved, entry["versions"][str(resolved)])`.
         let doc = self.doc()?;
-        let secrets_obj = Vault::secrets_obj(&doc)?;
-        let entry = as_obj(
-            secrets_obj
-                .get(secret_id)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
-        )?;
-        let versions_obj = entry
-            .get("versions")
-            .and_then(Value::as_object)
-            .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?;
-        let record = as_obj(
-            versions_obj
-                .get(&resolved.key())
-                .ok_or_else(|| Error::state("state_corrupt").with_detail("vault"))?,
-        )?;
-        self.decrypt(secret_id, &resolved, record)
+        let entry = index(index(&doc, "secrets")?, secret_id)?;
+        let record = index(index(entry, "versions")?, &resolved.key())?;
+        self.decrypt(secret_id, &resolved, dict_methods(record)?)
     }
 
     // backup / restore ------------------------------------------------------
@@ -1650,9 +1747,7 @@ impl<'a> Vault<'a> {
                                 was_revoked = true;
                             }
                         }
-                        Some(_) => {
-                            return Err(Error::state("state_corrupt").with_detail("vault"));
-                        }
+                        Some(_) => return Err(escaped(ATTRIBUTE_ERROR)),
                     }
                     if was_revoked {
                         touched = true;

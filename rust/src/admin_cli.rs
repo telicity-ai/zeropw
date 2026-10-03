@@ -1345,30 +1345,15 @@ fn grant_view(grant: &crate::policy::Grant) -> Value {
         "credential_version":grant.credential_version})
 }
 
-fn check_admin_document(ctx: &Context) -> Result<(), Error> {
-    let doc = ctx.state.read_json(crate::vault::ADMIN_DOC, Value::Null)?;
-    if doc.is_null() {
-        return Ok(()); // Preserve AdminCredential's own admin_missing reason.
-    }
-    let object = doc
-        .as_object()
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("TypeError"))?;
-    for key in ["salt", "hash"] {
-        if !object.contains_key(key) {
-            return Err(Error::state("state_corrupt").with_detail("KeyError"));
-        }
-        if !object[key].is_string() {
-            return Err(Error::state("state_corrupt").with_detail("TypeError"));
-        }
-    }
-    Ok(())
-}
-
+/// `_passphrase(...)` then `ctx.admin.verify(passphrase)`, recording the
+/// failure only for `except AuthFailed`; any other error (`admin_missing`, a
+/// malformed `admin.json`) propagates unrecorded.
 fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
-    check_admin_document(ctx)?;
     let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
     if let Err(error) = ctx.admin.verify(&pass, None) {
-        record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        if error.class == crate::errors::ErrorClass::AuthFailed {
+            record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        }
         return Err(error);
     }
     Ok(())
@@ -1387,20 +1372,23 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     } else {
         &["ssh_private_key"][..]
     };
-    if !kinds.contains(&meta.kind.as_str()) {
+    if !meta.kind.as_str().is_some_and(|kind| kinds.contains(&kind)) {
         return Err(Error::invalid_input("secret_kind_mismatch"));
     }
     let ver = ctx
         .vault
         .resolve_version(&connection.secret_id, connection.secret_version.clone())?;
-    if let Some(version) = meta
+    // Python: `status = next((v.status for v in meta.versions if v.version == resolved), None)`;
+    // an unmatched resolved version (an `active_version` naming no stored version) is `None`,
+    // which is not usable either; the detail is `str(status)`.
+    let status = meta
         .versions
         .iter()
         .find(|v| ver.equals_integer(&v.version))
-        && version.status != "active"
-        && version.status != "staged"
-    {
-        return Err(Error::invalid_input("secret_version_unusable").with_detail(&version.status));
+        .map_or(Value::Null, |v| v.status.clone());
+    if status != "active" && status != "staged" {
+        return Err(Error::invalid_input("secret_version_unusable")
+            .with_detail(crate::vault::python_str_scalar(&status)));
     }
     if crate::tools::profile_env_carries_vault_value(ctx, connection)? {
         return refuse_cli_env(ctx, &connection.id, None, "connection_create");
@@ -1456,14 +1444,23 @@ fn switch_credential(
 ) -> Result<Connection, Error> {
     let before = ctx.policy.get_connection(connection_id)?;
     let meta = ctx.vault.get_meta(&before.secret_id)?;
+    // Python: `status = next(..., None)`; `if status is None` covers a stored JSON `null` status
+    // too. The unusable detail is the raw status, suppressed when falsy (`ZeroPWError`); a
+    // truthy non-string status renders as its `str()` text (`Error::detail` is a string).
     let status = meta
         .versions
         .iter()
         .find(|v| v.version == version)
         .map(|v| v.status.clone())
+        .filter(|status| !status.is_null())
         .ok_or_else(|| Error::not_found("secret_version_not_found"))?;
     if status != "active" && status != "staged" {
-        return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
+        let detail = if python_truthy(&status) {
+            crate::vault::python_str_scalar(&status)
+        } else {
+            String::new()
+        };
+        return Err(Error::invalid_input("secret_version_unusable").with_detail(detail));
     }
     let after = ctx
         .policy
@@ -1564,9 +1561,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     &ctx,
                     &env_id,
                     a.req("id"),
-                    a.req("kind"),
+                    &json!(a.req("kind")),
                     &value,
-                    (a.req("project"), a.req("environment")),
+                    (&json!(a.req("project")), &json!(a.req("environment"))),
                     a.has("staged"),
                 );
             }
@@ -1594,16 +1591,17 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
         ("secret", "reveal") => {
-            check_admin_document(&ctx)?;
             let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
             let auth = match ctx.admin.verify(&pass, None) {
                 Ok(auth) => auth,
                 Err(error) => {
-                    record_auth_failure(
-                        &ctx,
-                        &error.reason,
-                        vec![("secret_id", json!(a.req("id")))],
-                    );
+                    if error.class == crate::errors::ErrorClass::AuthFailed {
+                        record_auth_failure(
+                            &ctx,
+                            &error.reason,
+                            vec![("secret_id", json!(a.req("id")))],
+                        );
+                    }
                     return Err(error);
                 }
             };
@@ -2175,7 +2173,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("rotation", "start") => {
             let meta = ctx.vault.get_meta(a.req("secret-id"))?;
-            let value = read_secret(a, &meta.kind)?;
+            // `_read_secret_value(args, meta.kind)` only tests `kind not in SSH_SECRET_KINDS`.
+            let value = read_secret(a, meta.kind.as_str().unwrap_or(""))?;
             if let Some(env_id) = secret_shared_env(&ctx, &meta.id)? {
                 let result = shared_put(
                     &ctx,
@@ -2202,7 +2201,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     return refuse_cli_env(&ctx, &conn.id, Some(&meta.id), "rotation");
                 }
             }
-            let version = ctx.vault.put_secret(
+            let version = ctx.vault.put_secret_values(
                 &meta.id,
                 &meta.kind,
                 &value,
@@ -2538,16 +2537,16 @@ fn shared_put(
     ctx: &Context,
     env_id: &str,
     id: &str,
-    kind: &str,
+    kind: &Value,
     value: &[u8],
-    location: (&str, &str),
+    location: (&Value, &Value),
     staged: bool,
 ) -> Result<Value, Error> {
     let (generation, dek) = current_dek(ctx, env_id)?;
     let version_id = random_version_id();
     let ciphertext =
         crate::team::envelope::encrypt_secret(dek.expose(), env_id, id, &version_id, value)?;
-    let public = Vault::public_metadata(kind, value)?;
+    let public = Vault::public_metadata(kind.as_str().unwrap_or(""), value)?;
     let mut result = team_commit(
         ctx,
         env_id,
