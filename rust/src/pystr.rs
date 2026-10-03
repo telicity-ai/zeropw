@@ -289,82 +289,21 @@ pub fn int_from_str_decimal(s: &str) -> Option<String> {
     })
 }
 
-/// [`int_from_str_decimal`] plus CPython 3.12's integer-string digit guard.
-/// The limit counts decimal digits in the original input, including leading
-/// zeroes and Unicode Nd digits, but excludes signs, whitespace and
-/// underscores. The limit is [`int_max_str_digits`]; a `PYTHONINTMAXSTRDIGITS`
-/// value CPython refuses to start with never reaches this point in a native
-/// binary ([`python_startup_check`]), and library callers fall back to the
-/// default 4300 for it.
+/// [`int_from_str_decimal`] plus a fixed decimal-digit limit
+/// ([`MAX_INT_STR_DIGITS`], CPython 3.12's default `int()` guard). The limit
+/// counts decimal digits in the original input, including leading zeroes
+/// and Unicode Nd digits, but excludes signs, whitespace and underscores.
 pub fn int_from_str_decimal_limited(s: &str) -> Option<String> {
     let value = int_from_str_decimal(s)?;
-    let limit = int_max_str_digits().unwrap_or(DEFAULT_INT_MAX_STR_DIGITS);
     let digits = s
         .chars()
         .filter(|&c| unicode_decimal_digit(c).is_some())
         .count();
-    (limit == 0 || digits <= limit).then_some(value)
+    (digits <= MAX_INT_STR_DIGITS).then_some(value)
 }
 
-/// `sys.int_info.default_max_str_digits`.
-pub const DEFAULT_INT_MAX_STR_DIGITS: usize = 4300;
-
-/// The fatal start-up error CPython 3.12 prints to stderr (then exits with
-/// status 1) for an invalid `PYTHONINTMAXSTRDIGITS`.
-pub const INT_MAX_STR_DIGITS_FATAL: &str = "Fatal Python error: config_init_int_max_str_digits: PYTHONINTMAXSTRDIGITS: invalid limit; must be >= 640 or 0 for unlimited.\nPython runtime state: preinitialized\n\n";
-
-/// This process's integer-string digit limit, from `PYTHONINTMAXSTRDIGITS`
-/// exactly as CPython start-up reads it ([`parse_int_max_str_digits`]).
-/// `None` is a setting CPython refuses to start with.
-pub fn int_max_str_digits() -> Option<usize> {
-    use std::os::unix::ffi::OsStrExt;
-    let raw = std::env::var_os("PYTHONINTMAXSTRDIGITS");
-    parse_int_max_str_digits(raw.as_deref().map(std::ffi::OsStr::as_bytes))
-}
-
-/// CPython 3.12 `config_init_int_max_str_digits`: an unset or empty variable
-/// is the default; otherwise `_Py_str_to_int` (C `strtol` base 10 -- leading
-/// C-locale whitespace, an optional sign, at least one ASCII digit, nothing
-/// after it, no `long` overflow -- within C `int` range) must give 0
-/// (unlimited) or at least 640.
-pub fn parse_int_max_str_digits(raw: Option<&[u8]>) -> Option<usize> {
-    let Some(raw) = raw.filter(|raw| !raw.is_empty()) else {
-        return Some(DEFAULT_INT_MAX_STR_DIGITS);
-    };
-    let mut rest = raw;
-    while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r', tail @ ..] = rest {
-        rest = tail;
-    }
-    let negative = matches!(rest.first(), Some(b'-'));
-    if matches!(rest.first(), Some(b'+' | b'-')) {
-        rest = &rest[1..];
-    }
-    if rest.is_empty() || !rest.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    let mut value: i64 = 0;
-    for digit in rest {
-        value = value
-            .checked_mul(10)
-            .and_then(|value| value.checked_add(i64::from(digit - b'0')))?;
-    }
-    let value = if negative { -value } else { value };
-    let value = i32::try_from(value).ok()?;
-    match usize::try_from(value) {
-        Ok(0) => Some(0),
-        Ok(value) if value >= 640 => Some(value),
-        _ => None,
-    }
-}
-
-/// What a native entry point must do before anything else to behave like the
-/// CPython interpreter that ran the original program: `Err` carries the
-/// stderr text of a refused start-up (exit status 1).
-pub fn python_startup_check() -> Result<(), &'static str> {
-    int_max_str_digits()
-        .map(|_| ())
-        .ok_or(INT_MAX_STR_DIGITS_FATAL)
-}
+/// The largest number of decimal digits an integer string may carry.
+pub const MAX_INT_STR_DIGITS: usize = 4300;
 
 /// CPython `int(s, base)` for `base` 10 or 16 (the only bases this crate's
 /// callers need: `http.client`'s own `int(status)`, `int(length)`, and
@@ -2341,36 +2280,6 @@ mod tests {
             };
             let rust = tempfile_default_tempdir(&env).unwrap();
             assert_eq!(rust.to_str().unwrap(), python, "{case:?}");
-        }
-    }
-
-    /// [`parse_int_max_str_digits`] against the limit CPython 3.12 actually
-    /// starts with for each `PYTHONINTMAXSTRDIGITS` value (or its startup
-    /// abort).
-    #[test]
-    fn int_max_str_digits_startup_values() {
-        // The limit CPython 3.12 starts with for `PYTHONINTMAXSTRDIGITS`
-        // (`None`: it refuses to start).
-        for (raw, want) in [
-            ("", Some(4300)),
-            ("0", Some(0)),
-            ("640", Some(640)),
-            (" 640", Some(640)),
-            ("4300", Some(4300)),
-            ("639", None),
-            ("5", None),
-            ("-1", None),
-            ("abc", None),
-            ("0x280", None),
-            ("1_000", None),
-            ("640 ", None),
-            ("2147483648", None),
-        ] {
-            assert_eq!(
-                parse_int_max_str_digits(Some(raw.as_bytes())),
-                want,
-                "PYTHONINTMAXSTRDIGITS={raw:?}"
-            );
         }
     }
 }

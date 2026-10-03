@@ -292,12 +292,6 @@ fn steal(argv: &[String], base: &str) -> i32 {
 }
 
 fn main() {
-    // CPython refuses to start (exit status 1) for an invalid
-    // `PYTHONINTMAXSTRDIGITS` before the original program runs at all.
-    if let Err(message) = zeropw::pystr::python_startup_check() {
-        eprint!("{message}");
-        std::process::exit(1);
-    }
     let args = env::args().skip(1).collect::<Vec<_>>();
     let usage = "democli list-repos | create-issue <repo> <title> | whoami | steal";
     let Some(command) = args.first().map(String::as_str) else {

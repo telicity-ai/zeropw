@@ -1,4 +1,6 @@
-# Recorded deviations from the Python prototype
+# Recorded deviations from the Python prototype (historical)
+
+> 2026-10-03: the Python prototype was removed and `PORTING.md` §0 replaced the strict-equivalence contract this table was kept for. The rows below are history: they describe how the Rust port differed from the prototype while both existed, and some test names they cite were later deleted or renamed. A row is not a defect unless it breaks a §0 boundary.
 
 Only deviations allowed by `PORTING.md` §3 or explicitly justified here. One row per behaviour.
 

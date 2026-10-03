@@ -2,8 +2,9 @@
 
 ## 0. Current contract (user decision, 2026-10-03)
 
-The Rust crate is the product. The Python prototype in `../zeropw/` is being
-retired and is **no longer the specification**: Rust does not have to
+The Rust crate is the product. The Python prototype that used to live in
+`../zeropw/` was removed from the repository on 2026-10-03 and is **no longer
+the specification**: Rust does not have to
 reproduce CPython's behaviour in general. Rust must match the Python
 prototype only at these boundaries:
 
@@ -27,8 +28,10 @@ CPython exception classes, `int()`/`float()` grammar corners, Unicode table
 versions, codec coverage, resolver ordering, `urllib` headers) need a clear,
 fail-closed Rust error, not CPython's behaviour. Sections 2-3d below are the
 earlier strict-equivalence contract and are kept as history; where they
-conflict with this section, this section wins. `DEVIATIONS.md` records the
-historical differences; a row there is not a defect unless it breaks one of
+conflict with this section, this section wins. Compatibility with what the prototype
+wrote is pinned by fixtures it generated before removal, in
+`tests/fixtures/python/` (each directory's `GENERATE.md` records how).
+`DEVIATIONS.md` records the historical differences; a row there is not a defect unless it breaks one of
 the four boundaries.
 
 ## 1. Complete-port scope

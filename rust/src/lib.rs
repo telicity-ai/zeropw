@@ -52,7 +52,4 @@ pub mod argparse;
 pub(crate) mod mac_proxies;
 pub mod team;
 
-#[cfg(test)]
-pub(crate) mod oracle;
-
 pub use errors::{Error, ErrorClass, Result};
