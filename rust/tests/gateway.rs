@@ -2648,46 +2648,69 @@ fn replay_status_preserves_out_of_range_magnitudes_exactly() {
     // Finding X-5: Python's `int(v)` (`RequestLedger.replay`,
     // `status = int(response.get("status", 502))`) has no upper/lower
     // bound -- CPython's arbitrary-precision `int` never raises here, so
-    // `relayed=True` for every case below, confirmed against real
-    // `python3.12`: `int(65736) == 65736`, `int(65536) == 65536`,
-    // `int(1000000) == 1000000`, `int(1e300)` is exact to the last digit (a
-    // 303-digit integer), `int("18446744073709551816") ==
-    // 18446744073709551816`, `int(" 65736_0 ") == 657360`.
+    // `relayed=True` for every case below. Derive every expected value by
+    // passing the same JSON-decoded status through the real Python
+    // `RequestLedger.replay`; in particular, `int(1e300)` reflects the exact
+    // binary64 value and must not be replaced with a hand-written power of
+    // ten.
     //
-    // `RelayResult::status` is a fixed `u16` (PORTING.md §3d: every OTHER
-    // status field in this module uses the same type for a real HTTP
-    // status code) -- a genuine representational gap this crate cannot
-    // avoid. The previous three-step lossy path (a saturating parse, `as
-    // i64`, `as u16`) silently wrapped every one of these into a small,
-    // plausible-looking, WRONG status instead of failing: `65736 -> 200`,
-    // `65536 -> 0`, `1000000 -> 16960`, `1e300 -> 65535`,
-    // `"18446744073709551816" -> 200`, `" 65736_0 " -> 2000` -- and the
-    // truncated value reached the audit record too (`self.audit(...,
-    // Some(replayed.status), ...)`). The fix never truncates: any
-    // magnitude Python accepts but this crate's `u16` field cannot hold now
-    // fails closed with `state_corrupt` instead.
+    // The previous fixed-width status path silently wrapped these into
+    // small, plausible-looking values. `RelayResult::status` is now an
+    // unbounded `PyInt`, preserving Python's exact integer through replay,
+    // audit, and the tools response.
     let t = GatewayTest::new();
-    let out_of_range: [(&str, serde_json::Value, &str); 6] = [
-        ("65736", serde_json::json!(65736), "65736"),
-        ("65536", serde_json::json!(65536), "65536"),
-        ("1000000", serde_json::json!(1_000_000), "1000000"),
-        (
-            "1e300",
-            serde_json::json!(1e300),
-            "100000000000000005250476025520442024870446858110815915491585411551180245798890819578637137508044786404370444383579700332569032633574492279965573463466567958765612566513757258112742935702887839829934745776124133290447269462892021640232655351912240858992765120482940850837636027176675812314945834608128",
-        ),
+    let out_of_range: [(&str, serde_json::Value); 6] = [
+        ("65736", serde_json::json!(65736)),
+        ("65536", serde_json::json!(65536)),
+        ("1000000", serde_json::json!(1_000_000)),
+        ("1e300", serde_json::json!(1e300)),
         (
             "numeric_string_huge",
             serde_json::json!("18446744073709551816"),
-            "18446744073709551816",
         ),
         (
             "numeric_string_underscore",
             serde_json::json!(" 65736_0 "),
-            "657360",
         ),
     ];
-    for (label, status, expected) in out_of_range {
+    let oracle_input = serde_json::to_string(
+        &out_of_range
+            .iter()
+            .map(|(_, status)| status)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let oracle_output = run_python_oracle_stdin(
+        r#"import json, sys
+from zeropw.gateway import RequestLedger
+for status in json.load(sys.stdin):
+    replayed = RequestLedger.replay({"response": {
+        "status": status, "headers": [], "reason": None,
+        "body_b64": "YWJj", "body_stored": True,
+    }})
+    print(json.dumps({
+        "status": str(replayed.status),
+        "headers": replayed.headers,
+        "body_hex": replayed.body.hex(),
+        "reason": replayed.reason,
+    }, separators=(",", ":")))
+"#,
+        &oracle_input,
+    );
+    let oracle_results = oracle_output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(oracle_results.len(), out_of_range.len());
+
+    for ((label, status), oracle) in out_of_range.into_iter().zip(oracle_results) {
+        let expected = oracle["status"].as_str().unwrap();
+        assert_eq!(
+            oracle["headers"],
+            serde_json::json!([["X-ZeroPW-Replay", "true"]])
+        );
+        assert_eq!(oracle["body_hex"], "616263");
+        assert_eq!(oracle["reason"], Value::Null);
         let request_id = format!("req-status-oor-{label}");
         assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
         set_ledger_response(
@@ -2702,6 +2725,14 @@ fn replay_status_preserves_out_of_range_magnitudes_exactly() {
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(replayed.status.to_string(), expected, "{label}");
         assert_eq!(replayed.reason, None, "{label}");
+        assert_eq!(replayed.body, b"abc", "{label}");
+        assert!(
+            replayed
+                .headers
+                .iter()
+                .any(|(name, value)| name == "X-ZeroPW-Replay" && value == "true"),
+            "{label}: replay marker must be retained"
+        );
         let expected_value: Value = serde_json::from_str(expected).unwrap();
         assert_eq!(
             t.audit_records().last().unwrap()["status"],

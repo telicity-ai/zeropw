@@ -1111,7 +1111,7 @@ fn python_float_str(text: &str) -> Option<f64> {
 ///
 /// **Finding X-5.** Python's `int(v)` never raises for any of these shapes
 /// -- CPython's arbitrary-precision `int` holds any magnitude, so
-/// `int(1e300)` is a real (if absurd) 303-digit integer, `relayed=True`,
+/// `int(1e300)` is a real (if absurd) 301-digit integer, `relayed=True`,
 /// same as `int(65736)` or `int(" 65736_0 ")`. Measured against real
 /// `python3.12`: `int(65736) == 65736`, `int(65536) == 65536`,
 /// `int(1000000) == 1000000`, `int(1e300)` is exact to the last digit,
