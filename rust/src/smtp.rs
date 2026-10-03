@@ -1386,6 +1386,110 @@ print(json.dumps(out))
         assert_parity(&cases);
     }
 
+    /// Encoded words in the multibyte CJK, UTF-16/32/7, escape, punycode
+    /// and IDNA charsets (and aliases of them): valid text, undecodable and
+    /// truncated bytes (surrogate-escaped, `unknown-8bit` on output),
+    /// errors that make the word invalid, and the `RuntimeError` an
+    /// ISO-2022-JP-2 single shift into a G2 set it cannot use raises, in the
+    /// subject and in display names, compared byte for byte with Python.
+    /// Also empty payloads, which `bytes.decode` turns into '' without a
+    /// codec lookup (no `CharsetError` defect, no `undefined` error).
+    #[test]
+    fn multibyte_charset_encoded_words_match_python_bytes() {
+        fn q(bytes: &[u8]) -> String {
+            bytes.iter().map(|b| format!("={b:02X}")).collect()
+        }
+        let words: &[(&str, &[u8])] = &[
+            ("big5", b"\xa4\xa4\xa4\xe5"),
+            ("big5", b"\xa4\xa4\x80\xa4"),
+            ("big5-hkscs", b"\x88\x62\x87\x40\x88\x66"),
+            ("cp950", b"\xf9\xd6\xa4"),
+            ("gb2312", b"\xd6\xd0\xce\xc4"),
+            ("gbk", b"\x81\x40\xa1\xaa\xff"),
+            (
+                "gb18030",
+                b"\x81\x30\x81\x30\x95\x32\x82\x36\x84\x31\xa4\x39\x81",
+            ),
+            ("hz-gb-2312", b"~{<:Ce~}abc~~"),
+            ("hz", b"~{<:\x80~}"),
+            (
+                "euc-kr",
+                b"\xc7\xd1\xb1\xdb\xa4\xd4\xa4\xa1\xa4\xbf\xa4\xd4",
+            ),
+            ("ks_c_5601-1987", b"\xc7\xd1\x81"),
+            ("cp949", b"\x81\x41\xc7"),
+            ("johab", b"\x88\x61\xd9\x31\x84\x44"),
+            ("shift_jis", b"\x93\xfa\x96\x7b\xb1\x81"),
+            ("cp932", b"\x87\x40\xa0\xfd\xf0\x40"),
+            ("euc-jp", b"\xc6\xfc\xcb\xdc\x8e\xb1\x8f\xb0\xa1\x8f"),
+            ("euc_jis_2004", b"\xa4\xf7\xa9\xa1\xae\xa1"),
+            ("euc_jisx0213", b"\xae\xa1\xa1\xa1"),
+            ("shift_jis_2004", b"\x82\xf5\x84\x92"),
+            ("shift_jisx0213", b"\x82\xf5\xfc\xf4"),
+            ("iso-2022-jp", b"\x1b$BF|K\\\x1b(B ok"),
+            ("iso-2022-jp", b"\x1b$BF|\x80\x1b(B"),
+            ("iso-2022-jp-1", b"\x1b$(D0!\x1b(B"),
+            ("iso-2022-jp-2", b"\x1b.A\x1bNi\x1b$(C0!\x1b(B"),
+            ("iso-2022-jp-2", b"\x1b.J\x1bNa"),
+            ("iso-2022-jp-2004", b"\x1b$(Q.!\x1b(B"),
+            ("iso-2022-jp-3", b"\x1b$(O.!\x1b(B"),
+            ("iso-2022-jp-ext", b"\x1b(I1\x1b(B"),
+            ("iso-2022-kr", b"\x1b$)C\x0e0!\x0f!"),
+            ("iso-2022-kr", b"\x1b$)C\x0e0"),
+            ("utf-16", b"\xff\xfeA\x00\x00\xd8"),
+            ("utf-16le", b"A\x00\xe9\x00"),
+            ("utf-16be", b"\x00A\xd8\x3d\xde\x00\x80"),
+            ("utf-32", b"\x00\x00\xfe\xffA\x00\x00\x00"),
+            ("utf-32le", b"\x80\xdc\x00\x00"),
+            ("utf-32be", b"\x00\x00\x00A\x00\x11\x00\x00"),
+            ("utf-7", b"+AGEAYQ-x+2D3cAA-"),
+            ("utf-7", b"a\x80b"),
+            ("utf-7", b"+AGE"),
+            (
+                "unicode_escape",
+                b"\\N{LATIN SMALL LETTER A}\\u00e9\\x41\\101",
+            ),
+            ("unicode-escape", b"\\N{nope}"),
+            ("unicode_escape", b"\\ud800x\\udcff\\udc80 y"),
+            ("unicode_escape", b"\\U0001F600\\x00\\t\\n\\r z"),
+            ("utf-16le", b"\x3d\xd8 \x00"),
+            ("raw_unicode_escape", b"\\u00e9\\q\xff"),
+            ("punycode", b"mnchen-3ya"),
+            ("punycode", b"mnchen-3y\x80"),
+            ("idna", b"xn--mnchen-3ya.de"),
+            ("idna", b"xn--mnchen-3yb"),
+            // Empty payloads decode to '' before any codec lookup.
+            ("undefined", b""),
+            ("x-nonexistent", b""),
+            ("utf-16", b""),
+        ];
+        let mut cases = vec![];
+        for (charset, bytes) in words {
+            let word = format!("=?{charset}?q?{}?=", q(bytes));
+            cases.push(case(&word, "a@example.com", &["b@example.com"]));
+            cases.push(case(
+                &format!("x {word} y"),
+                "a@example.com",
+                &["b@example.com"],
+            ));
+            cases.push(case(
+                "s",
+                &format!("{word} <a@example.com>"),
+                &["b@example.com"],
+            ));
+            cases.push(case(
+                "s",
+                "a@example.com",
+                &[&format!("\"q\" {word} <b@example.com>")],
+            ));
+        }
+        let outcomes = assert_parity(&cases);
+        // The ISO-2022-JP-2 word stops the build with `RuntimeError`; most
+        // others flatten.
+        assert!(outcomes.iter().any(|o| o["error"] == "RuntimeError"));
+        assert!(outcomes.iter().filter(|o| o.get("bytes").is_some()).count() > 100);
+    }
+
     #[test]
     fn groups_and_domain_literals_match_python_headers_and_envelopes() {
         let cases: Vec<Value> = [
