@@ -1367,7 +1367,7 @@ fn raw_replies_match_the_python_fixture_byte_for_byte() {
         get("/set-cookie"),
         format!("HEAD /me HTTP/1.1\r\n{auth}\r\n").into_bytes(),
         format!("DELETE /repos/demo HTTP/1.1\r\n{auth}\r\n").into_bytes(),
-        format!("GET /me HTTP/1.1\r\n\r\n").into_bytes(),
+        b"GET /me HTTP/1.1\r\n\r\n".to_vec(),
         format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-continue\r\nContent-Length: 14\r\n\r\n{{\"title\": \"t\"}}").into_bytes(),
         format!("POST /repos/demo/issues HTTP/1.1\r\n{auth}Expect: 100-Continue\r\nContent-Length: 1\r\n\r\nx").into_bytes(),
         format!("POST /repos/demo/issues HTTP/1.0\r\n{auth}Expect: 100-continue\r\nContent-Length: 2\r\n\r\n{{}}").into_bytes(),
