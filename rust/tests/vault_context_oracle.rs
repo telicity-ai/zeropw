@@ -1981,12 +1981,11 @@ except RuntimeError as exc:
 /// Reviewer case: `manifest["sha256"]` is a non-ASCII string. Python's `hmac.compare_digest`
 /// only accepts bytes-like objects or *ASCII-only* strings; comparing the (always-ASCII-hex)
 /// computed digest against a non-ASCII string raises an uncaught `TypeError`, escaping
-/// `Vault.restore` entirely (not a `StateError`). Rust's `constant_time_eq` is a plain
-/// constant-time byte comparison with no such restriction: the digests simply don't match, so
-/// `Vault::restore` returns the ordinary `StateError("backup_digest_mismatch")` (DEVIATIONS.md,
-/// finding E-R2-2b; PORTING.md §3.5).
+/// `Vault.restore` entirely (not a `StateError`); the administrator CLI then prints
+/// `StateError`/`state_corrupt`/`TypeError`. `Vault::restore` reproduces that escaped
+/// built-in instead of reporting `backup_digest_mismatch` (finding E-R2-2b).
 #[test]
-fn restore_rejects_non_ascii_manifest_sha256_python_raises_typeerror_rust_fails_closed() {
+fn restore_non_ascii_manifest_sha256_raises_the_python_typeerror() {
     let tmp = TempDir::new().unwrap();
     let archive_path = tmp.path().join("archive.json");
     let archive = json!({
@@ -2013,7 +2012,11 @@ fn restore_rejects_non_ascii_manifest_sha256_python_raises_typeerror_rust_fails_
     let rust_err =
         zeropw::vault::Vault::restore(ctx.state, &archive_path, ctx.audit, Some(ctx.kms))
             .unwrap_err();
-    assert_eq!(rust_err.reason.to_string(), "backup_digest_mismatch");
+    // The escaped `TypeError`, in the shape the administrator CLI prints.
+    assert_eq!(
+        rust_err.to_dict(),
+        json!({"error": "StateError", "reason": "state_corrupt", "detail": "TypeError"})
+    );
 
     let py_state = tmp.path().join("state-py");
     let script = format!(

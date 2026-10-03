@@ -1441,13 +1441,14 @@ fn grant_view(grant: &crate::policy::Grant) -> Value {
         "credential_version":grant.credential_version})
 }
 
-/// `_passphrase(...)` then `ctx.admin.verify(passphrase)`, recording the
-/// failure only for `except AuthFailed`; any other error (`admin_missing`, a
-/// malformed `admin.json`) propagates unrecorded.
+/// `ctx.admin.verify(passphrase)` with `except AuthFailed`: only an
+/// authentication failure is recorded; `admin_missing` and a malformed
+/// `admin.json` (`AdminCredential::verify`'s escaped built-ins) propagate
+/// unrecorded, as in Python.
 fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
     let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
     if let Err(error) = ctx.admin.verify(&pass, None) {
-        if error.class == crate::errors::ErrorClass::AuthFailed {
+        if error.is(crate::errors::ErrorClass::AuthFailed) {
             record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
         }
         return Err(error);
@@ -1693,7 +1694,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let auth = match ctx.admin.verify(&pass, None) {
                 Ok(auth) => auth,
                 Err(error) => {
-                    if error.class == crate::errors::ErrorClass::AuthFailed {
+                    if error.is(crate::errors::ErrorClass::AuthFailed) {
                         record_auth_failure(
                             &ctx,
                             &error.reason,

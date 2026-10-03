@@ -615,6 +615,23 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
                 reply
             }
             Err(DispatchError::Gone) => break,
+            Err(DispatchError::Error(e)) if escaped_builtin(&e) => {
+                mark(inner, id, false);
+                // Not a `ZeroPWError` in Python: `_dispatch` closes the
+                // connection for these three and otherwise answers its fixed
+                // 500 without the exception's text.
+                if matches!(
+                    e.name.as_ref(),
+                    "BrokenPipeError" | "ConnectionResetError" | "TimeoutError"
+                ) {
+                    break;
+                }
+                (
+                    500.into(),
+                    json_body(&json!({"error":"InternalError","reason":"internal_error"})),
+                    json_type(),
+                )
+            }
             Err(DispatchError::Error(e)) => {
                 mark(inner, id, false);
                 (
@@ -658,6 +675,12 @@ fn log_request(inner: &Inner, progress: &Progress) {
         path
     };
     lock(&inner.log_lines).push(format!("{command} {path}"));
+}
+/// An [`Error`] that stands for a built-in exception Python lets escape
+/// (an `OSError` from `store::uncaught_os_error`, a `TypeError` from handle
+/// verification, ...): class `ZeroPW` under a name other than `ZeroPWError`.
+fn escaped_builtin(e: &Error) -> bool {
+    e.is(ErrorClass::ZeroPW) && e.name != "ZeroPWError"
 }
 enum DispatchError {
     Gone,

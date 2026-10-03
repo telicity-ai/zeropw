@@ -81,7 +81,21 @@ impl Base64Error {
     fn new(message: impl Into<String>) -> Self {
         Base64Error(message.into())
     }
+
+    /// `type(exc).__name__` of the exception CPython raises: the `str`
+    /// argument's ASCII precheck in `_bytes_from_decode_data` raises a plain
+    /// `ValueError`; every failure of the decode itself is `binascii.Error`,
+    /// whose `__name__` is `"Error"`.
+    pub fn python_class(&self) -> &'static str {
+        if self.0 == NON_ASCII_MESSAGE {
+            "ValueError"
+        } else {
+            "Error"
+        }
+    }
 }
+
+const NON_ASCII_MESSAGE: &str = "string argument should contain only ASCII characters";
 
 impl fmt::Display for Base64Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -177,9 +191,7 @@ fn require_ascii(s: &str) -> Result<(), Base64Error> {
     if s.is_ascii() {
         Ok(())
     } else {
-        Err(Base64Error::new(
-            "string argument should contain only ASCII characters",
-        ))
+        Err(Base64Error::new(NON_ASCII_MESSAGE))
     }
 }
 
@@ -269,6 +281,36 @@ mod tests {
 
     fn err(s: &str) {
         assert!(b64decode(s).is_err(), "expected Err for {s:?}");
+    }
+
+    /// `Base64Error::python_class` against the exception class CPython's
+    /// `base64.b64decode(str)` actually raises (the ASCII precheck's
+    /// `ValueError` versus the decoder's `binascii.Error`).
+    #[test]
+    fn python_class_matches_cpython_exception_class() {
+        let inputs = [
+            "\u{e9}",
+            "AAAA\u{e9}",
+            "abc",
+            "A",
+            "=",
+            "AAAAA",
+            "A===",
+            "AB=C",
+        ];
+        let script = format!(
+            "import base64\nfor s in {inputs:?}:\n    try:\n        base64.b64decode(s)\n        print('ok')\n    except Exception as e:\n        print(type(e).__name__)\n"
+        );
+        let out = crate::oracle::python(&script);
+        let python: Vec<&str> = out.lines().collect();
+        assert_eq!(python.len(), inputs.len());
+        for (input, want) in inputs.iter().zip(python) {
+            let got = match b64decode(input) {
+                Ok(_) => "ok",
+                Err(e) => e.python_class(),
+            };
+            assert_eq!(got, want, "{input:?}");
+        }
     }
 
     // --- Hand-traced cases from the finding's evidence and the module doc -

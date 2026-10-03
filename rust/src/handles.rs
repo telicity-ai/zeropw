@@ -19,7 +19,7 @@ use sha2::Sha256;
 use std::sync::RwLock;
 use subtle::ConstantTimeEq;
 
-use crate::errors::Error;
+use crate::errors::{Error, ErrorClass};
 use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
 use crate::pystr;
@@ -157,7 +157,19 @@ impl HandleIssuer {
             return Err(Error::auth_failed("handle_malformed"));
         }
         let body = format!("{}.{}", parts[0], parts[1]);
+        // `_sign(body)` encodes the body as ASCII and `hmac.compare_digest`
+        // refuses a non-ASCII `str`: both raise built-in exceptions that
+        // escape `verify` and `gateway.relay` uncaught, so the HTTP server's
+        // catch-all answers 500 `internal_error` without an audit record
+        // (measured on CPython 3.12.14). An agent controls both segments
+        // without the key, so the outcome is reproduced, in Python's order.
+        if !parts[1].is_ascii() {
+            return Err(uncaught_builtin("UnicodeEncodeError"));
+        }
         let expected = self.sign(&body);
+        if !parts[2].is_ascii() {
+            return Err(uncaught_builtin("TypeError"));
+        }
         let ok = expected.len() == parts[2].len()
             && bool::from(expected.as_bytes().ct_eq(parts[2].as_bytes()));
         if !ok {
@@ -173,6 +185,15 @@ impl HandleIssuer {
         }
         Ok(handle)
     }
+}
+
+/// A built-in exception (`type(exc).__name__ == name`) that Python lets
+/// escape `HandleIssuer.verify`. It is not a `ZeroPWError`, so it carries
+/// [`ErrorClass::ZeroPW`] under the built-in's name; the only caller,
+/// `gateway::relay`, turns any non-`AuthFailed` verify error into the
+/// server's fixed 500 `internal_error` reply, as Python's `_dispatch` does.
+fn uncaught_builtin(name: &'static str) -> Error {
+    Error::subclass(ErrorClass::ZeroPW, name, "internal_error", "")
 }
 
 /// Python `str(value)` on a JSON-decoded scalar/container, as
@@ -470,50 +491,57 @@ mod tests {
         assert_eq!(err.reason, "handle_version");
     }
 
-    // A-9: Python's `_sign` calls `body.encode("ascii")` on the dot-joined
-    // `f"{parts[0]}.{parts[1]}"`; a non-ASCII `parts[1]` makes that raise an
-    // uncaught `UnicodeEncodeError` (coordinator ruling, PORTING.md §3.5).
-    // Rust's `sign` has no ASCII restriction, so it always computes some
-    // HMAC; pin that a non-ASCII payload segment still surfaces as an
-    // ordinary `handle_signature` failure, not a panic or a different
-    // reason.
+    /// Rows 39/40: a non-ASCII payload segment makes Python's `_sign` raise
+    /// `UnicodeEncodeError` (checked before the signature), and a non-ASCII
+    /// signature segment with an ASCII payload makes `hmac.compare_digest`
+    /// raise `TypeError`. Each class is compared with the real
+    /// `HandleIssuer.verify`, in Python's evaluation order.
     #[test]
-    fn non_ascii_payload_segment_fails_as_signature_mismatch() {
-        let key = HandleIssuer::generate_key();
-        let issuer = HandleIssuer::new(key.expose()).unwrap();
-        let token = "zpw1.café-not-base64.deadbeef";
-        let err = issuer
-            .verify(token, Some(1_700_000_000.0))
-            .expect_err("non-ASCII payload segment must not verify");
-        assert!(err.is(ErrorClass::AuthFailed));
-        assert_eq!(err.reason, "handle_signature");
-    }
-
-    // A-R2-4: Python's `hmac.compare_digest(expected, parts[2])` raises an
-    // uncaught `TypeError` ("comparing strings with non-ASCII characters is
-    // not supported") when the attacker-supplied signature segment contains
-    // a non-ASCII character -- reachable without the HMAC key, since the
-    // caller controls `parts[2]` directly and the comparison runs before any
-    // key-dependent check could reject it first. Coordinator ruling
-    // PORTING.md §3.5 applies (see `rust/DEVIATIONS.md`): Rust's byte-level
-    // comparison never raises, so this must surface as an ordinary
-    // `handle_signature` failure, exactly like `non_ascii_payload_segment_*`
-    // above but for the signature segment instead of the payload segment.
-    #[test]
-    fn non_ascii_signature_segment_fails_as_signature_mismatch() {
-        let key = HandleIssuer::generate_key();
-        let issuer = HandleIssuer::new(key.expose()).unwrap();
+    fn non_ascii_segments_raise_the_python_builtin_in_python_order() {
+        let issuer = HandleIssuer::new(&[7u8; 32]).unwrap();
         let now = 1_700_000_000.0;
         let token = issuer
             .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
             .unwrap();
         let parts: Vec<&str> = token.split('.').collect();
-        let forged = format!("{}.{}.café-not-hex", parts[0], parts[1]);
-        let err = issuer
-            .verify(&forged, Some(now))
-            .expect_err("non-ASCII signature segment must not verify");
-        assert!(err.is(ErrorClass::AuthFailed));
-        assert_eq!(err.reason, "handle_signature");
+        let tokens = [
+            "zpw1.caf\u{e9}-not-base64.deadbeef".to_string(),
+            "zpw1.caf\u{e9}.si\u{e9}".to_string(),
+            format!("{}.{}.caf\u{e9}-not-hex", parts[0], parts[1]),
+            format!("{}.{}.{}", parts[0], parts[1], "A".repeat(43)),
+        ];
+        let script = format!(
+            "from zeropw.handles import HandleIssuer\n\
+             from zeropw.errors import ZeroPWError\n\
+             issuer = HandleIssuer(bytes([7]) * 32)\n\
+             for token in {tokens:?}:\n\
+             \ttry:\n\
+             \t\tissuer.verify(token, now={now})\n\
+             \t\tprint('ok')\n\
+             \texcept Exception as exc:\n\
+             \t\tprint(type(exc).__name__, exc.reason if isinstance(exc, ZeroPWError) else '')"
+        );
+        let python = crate::oracle::python(&script);
+        let python: Vec<&str> = python.lines().collect();
+        assert_eq!(
+            python,
+            [
+                "UnicodeEncodeError ",
+                "UnicodeEncodeError ",
+                "TypeError ",
+                "AuthFailed handle_signature"
+            ]
+        );
+        for (token, want) in tokens.iter().zip(python) {
+            let err = issuer.verify(token, Some(now)).unwrap_err();
+            let got = if err.is(ErrorClass::AuthFailed) {
+                format!("AuthFailed {}", err.reason)
+            } else {
+                assert!(err.is(ErrorClass::ZeroPW));
+                format!("{} ", err.name)
+            };
+            assert_eq!(got, want, "{token:?}");
+        }
     }
 
     // Python's `int(payload["pv"])` is unbounded and accepts every Unicode

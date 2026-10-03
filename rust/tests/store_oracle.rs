@@ -163,3 +163,157 @@ probe(float("-inf"))
         "-292277022657-01-27T08:29:52Z"
     );
 }
+
+/// `zeropw.store.iso(ts)` outcome lines for a list of float bit patterns or
+/// Python ints: the string itself, or `Class: message` for the exception.
+fn python_store_iso(values: &str, decode: &str) -> Vec<String> {
+    let script = format!(
+        "import struct\nfrom zeropw.store import iso\nfor v in {values}:\n    ts = {decode}\n    try:\n        print(iso(ts))\n    except Exception as e:\n        print(f'{{type(e).__name__}}: {{e}}')\n"
+    );
+    run_python(&script).lines().map(str::to_owned).collect()
+}
+
+fn rust_outcome(result: Result<String, zeropw::store::IsoError>) -> String {
+    match result {
+        Ok(text) => text,
+        Err(error) => format!("{}: {}", error.class_name, error.message),
+    }
+}
+
+/// Row 68 (A-R4-2): `store.iso` RETURNS a string across the whole range
+/// `time.gmtime`/`time.strftime` accept and raises outside it. `try_iso`
+/// must reproduce both: the exact string for every accepted value and the
+/// exact exception class and message for every rejected one. The table
+/// covers each boundary measured on CPython 3.12.14/glibc (time_t, the
+/// `tm_year` C-int limits, the wrapped-year `year out of range` band, the
+/// smallest year `gmtime` accepts) plus randomized values over the whole
+/// `f64` exponent range.
+#[test]
+fn try_iso_matches_python_store_iso_including_exceptions() {
+    let mut values: Vec<f64> = vec![
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        5e-324,
+        -5e-324,
+        1e15,
+        1e17,
+        -1e17,
+        1e18,
+        -1e18,
+        6.7768e16,
+        67_767_976_233_532_799.0,
+        67_767_976_233_532_800.0,
+        67_768_036_191_676_799.0,
+        67_768_036_191_676_800.0,
+        -67_768_040_609_740_800.0,
+        -67_768_040_609_740_808.0,
+        9_223_372_036_854_775_807.0,
+        -9_223_372_036_854_775_808.0,
+        9_223_372_036_854_774_784.0,
+        -9_223_372_036_854_777_856.0,
+        f64::MAX,
+        f64::MIN,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        -62_167_219_200.0,
+        -62_167_219_201.0,
+        -62_135_596_800.0,
+        253_402_300_800.0,
+    ];
+    let mut rng = Xorshift64(0x9E37_79B9_7F4A_7C15);
+    for _ in 0..400 {
+        // Uniform over bit patterns of finite doubles with |x| < 2**64, so
+        // every magnitude band (sub-second through past time_t) is sampled.
+        let bits = rng.next();
+        let exponent = (bits >> 52) & 0x7ff;
+        let value = f64::from_bits((bits & !(0x7ff << 52)) | ((exponent % 1087) << 52));
+        values.push(value);
+    }
+    let bits: Vec<u64> = values.iter().map(|v| v.to_bits()).collect();
+    let python = python_store_iso(
+        &format!("{bits:?}"),
+        "struct.unpack('<d', v.to_bytes(8, 'little'))[0]",
+    );
+    assert_eq!(python.len(), values.len());
+    for (value, want) in values.iter().zip(&python) {
+        let got = rust_outcome(zeropw::store::try_iso(Some(*value)));
+        assert_eq!(&got, want, "try_iso({value:?})");
+        if !want.contains(": ") {
+            assert_eq!(&iso(Some(*value)), want, "iso({value:?})");
+        }
+    }
+}
+
+/// Row 68: the same contract for a Python `int` argument (a JSON integer in
+/// a state document or peer message), where `iso` keeps every second exact
+/// beyond `2**53` and rejects anything outside `time_t` with
+/// `OverflowError` before `gmtime` is reached.
+#[test]
+fn try_iso_int_matches_python_store_iso_for_python_ints() {
+    let values = [
+        "0",
+        "-1",
+        "9007199254740993",
+        "-9007199254740993",
+        "67767976233532799",
+        "67767976233532800",
+        "67768036191676799",
+        "67768036191676800",
+        "-67768040609740800",
+        "-67768040609740801",
+        "9223372036854775807",
+        "9223372036854775808",
+        "-9223372036854775808",
+        "-9223372036854775809",
+        "1000000000000000000000000000000",
+    ];
+    let python = python_store_iso(&format!("[{}]", values.join(",")), "v");
+    assert_eq!(python.len(), values.len());
+    for (value, want) in values.iter().zip(&python) {
+        let integer: num_bigint::BigInt = value.parse().unwrap();
+        let got = rust_outcome(zeropw::store::try_iso_int(&integer));
+        assert_eq!(&got, want, "try_iso_int({value})");
+    }
+}
+
+/// `IsoError::to_error` renders each escaped `store.iso` exception the way
+/// the administrator CLI's handlers print it (checked against the real
+/// exception objects run through the same handler order as `admin_cli.main`).
+#[test]
+fn iso_error_to_error_matches_the_cli_rendering_of_the_python_exception() {
+    let script = r#"
+import json
+from zeropw.store import iso
+def render(exc):
+    if isinstance(exc, FileNotFoundError):
+        return {"error": "FileNotFoundError", "reason": "file_not_found"}
+    if isinstance(exc, OSError):
+        return {"error": type(exc).__name__, "reason": "io_error", "detail": exc.strerror or ""}
+    if isinstance(exc, (KeyError, TypeError, AttributeError, ValueError)):
+        return {"error": "StateError", "reason": "state_corrupt", "detail": type(exc).__name__}
+    return {"error": type(exc).__name__, "reason": "internal_error"}
+for ts in (1e18, float("nan"), float("inf"), 6.7768e16):
+    try:
+        iso(ts)
+        print(json.dumps("ok"))
+    except Exception as exc:
+        print(json.dumps(render(exc), sort_keys=True))
+"#;
+    let python: Vec<serde_json::Value> = run_python(script)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let rust: Vec<serde_json::Value> = [1e18, f64::NAN, f64::INFINITY, 6.7768e16]
+        .into_iter()
+        .map(|ts| {
+            zeropw::store::try_iso(Some(ts))
+                .unwrap_err()
+                .to_error()
+                .to_dict()
+        })
+        .collect();
+    assert_eq!(rust, python);
+}
