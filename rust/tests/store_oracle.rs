@@ -308,7 +308,12 @@ for ts in (1e18, float("nan"), float("inf"), 6.7768e16):
         .collect();
     let rust: Vec<serde_json::Value> = [1e18, f64::NAN, f64::INFINITY, 6.7768e16]
         .into_iter()
-        .map(|ts| zeropw::store::try_iso(Some(ts)).unwrap_err().to_error().to_dict())
+        .map(|ts| {
+            zeropw::store::try_iso(Some(ts))
+                .unwrap_err()
+                .to_error()
+                .to_dict()
+        })
         .collect();
     assert_eq!(rust, python);
 }

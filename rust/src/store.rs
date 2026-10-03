@@ -1051,7 +1051,7 @@ def render(exc):
             "state.read_lines('secret.txt')",
             |_, s| {
                 fs::write(s.path.join("secret.txt"), b"").unwrap();
-                fs::set_permissions(s.path.join("secret.txt"), fs::Permissions::from_mode(0))
+                fs::set_permissions(s.path.join("secret.txt"), fs::Permissions::from_mode(0o000))
                     .unwrap();
             },
             |_, s| s.read_lines("secret.txt", None).map(drop),

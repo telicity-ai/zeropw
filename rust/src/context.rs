@@ -616,13 +616,11 @@ fn mkdir_private_0700(path: &Path) -> std::io::Result<()> {
 /// the administrator CLI prints ([`crate::store::uncaught_os_error`]).
 fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
     for _ in 0..crate::vault::TMP_MAX {
-        let path = base.join(format!(
-            "{prefix}{}",
-            crate::store::tempfile_random_name()
-        ));
+        let path = base.join(format!("{prefix}{}", crate::store::tempfile_random_name()));
         match mkdir_private_0700(&path) {
             Ok(()) => {
-                let path = posixpath_abspath(&path).map_err(|e| crate::store::uncaught_os_error(&e))?;
+                let path =
+                    posixpath_abspath(&path).map_err(|e| crate::store::uncaught_os_error(&e))?;
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
                     .map_err(|e| crate::store::uncaught_os_error(&e))?;
                 return Ok(path);

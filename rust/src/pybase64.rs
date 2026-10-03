@@ -288,7 +288,16 @@ mod tests {
     /// `ValueError` versus the decoder's `binascii.Error`).
     #[test]
     fn python_class_matches_cpython_exception_class() {
-        let inputs = ["\u{e9}", "AAAA\u{e9}", "abc", "A", "=", "AAAAA", "A===", "AB=C"];
+        let inputs = [
+            "\u{e9}",
+            "AAAA\u{e9}",
+            "abc",
+            "A",
+            "=",
+            "AAAAA",
+            "A===",
+            "AB=C",
+        ];
         let script = format!(
             "import base64\nfor s in {inputs:?}:\n    try:\n        base64.b64decode(s)\n        print('ok')\n    except Exception as e:\n        print(type(e).__name__)\n"
         );
