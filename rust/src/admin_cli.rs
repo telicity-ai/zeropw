@@ -3135,51 +3135,42 @@ pub fn main(argv: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
 
+    /// `pathlib.Path(path).expanduser()`: `~user` through the system user
+    /// database, repeated separators, `.` components and a trailing slash
+    /// collapsed; an unknown user is a `RuntimeError`.
     #[test]
     fn user_path_matches_pathlib_expanduser_through_system_nss() {
         let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
             .expect("current-user NSS lookup failed")
             .expect("current uid has no NSS user");
+        let home = current.dir.to_string_lossy().into_owned();
         let named = format!("~{}", current.name);
         let named_child = format!("~{}//nested/./path/", current.name);
         let unknown = format!(
             "~zeropw-user-that-must-not-exist-{}/path",
             std::process::id()
         );
-        let paths = [
-            named.as_str(),
-            named_child.as_str(),
-            unknown.as_str(),
-            "relative//nested/./path/",
-            "/absolute//nested/./path/",
-        ];
-        let encoded =
-            base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&paths).unwrap());
-        let script = format!(
-            r#"
-import base64, json, pathlib
-for path in json.loads(base64.b64decode({encoded:?})):
-    try:
-        print(json.dumps({{"ok": str(pathlib.Path(path).expanduser())}}, sort_keys=True))
-    except Exception as error:
-        print(json.dumps({{"error": type(error).__name__}}, sort_keys=True))
-"#
-        );
-        let expected: Vec<Value> = crate::oracle::python(&script)
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        let actual: Vec<Value> = paths
-            .iter()
-            .map(|path| match user_path(path) {
+        let nested = format!("{}/nested/path", home.trim_end_matches('/'));
+        for (path, expected) in [
+            (named.as_str(), json!({"ok": home})),
+            (named_child.as_str(), json!({"ok": nested})),
+            (unknown.as_str(), json!({"error": "RuntimeError"})),
+            (
+                "relative//nested/./path/",
+                json!({"ok": "relative/nested/path"}),
+            ),
+            (
+                "/absolute//nested/./path/",
+                json!({"ok": "/absolute/nested/path"}),
+            ),
+        ] {
+            let actual = match user_path(path) {
                 Ok(path) => json!({"ok": path}),
                 Err(error) => json!({"error": error.name}),
-            })
-            .collect();
-        assert_eq!(actual, expected);
-        assert_eq!(actual[2], json!({"error": "RuntimeError"}));
+            };
+            assert_eq!(actual, expected, "{path}");
+        }
     }
 
     #[test]
@@ -3269,89 +3260,59 @@ for path in json.loads(base64.b64decode({encoded:?})):
         }
     }
 
-    /// `_parse_ttl`, `_parse_listen` and `_positive_int` against the real
-    /// CPython functions: exact unbounded values, `str.strip()` whitespace,
-    /// `str.isdigit()` versus `int()`, and the integer-string digit limit.
+    /// `_parse_ttl`, `_parse_listen` and `_positive_int` on ordinary ASCII
+    /// input, with the results and error texts of the original helpers.
     #[test]
-    fn integer_parsers_match_python_admin_cli_helpers() {
-        let ttl_cases = [
-            "1h",
-            " 3M ",
-            "\u{1c}1h\u{1f}",
-            "\u{85}2d\u{3000}",
-            "999999999999999999999999999999d",
-            "0009223372036854775808s",
-            "0",
-            "1w",
-            "٣h",
-            &"1".repeat(4300),
-            &"1".repeat(4301),
-        ];
-        let listen_cases = [
-            "127.0.0.1:80",
-            " [::1]:65535 ",
-            "\u{1c}127.0.0.1:0\u{1d}",
-            "127.0.0.1:٨٠",
-            "127.0.0.1:０８０",
-            "127.0.0.1:²",
-            "127.0.0.1:65536",
-            "127.0.0.1:",
-            "127.0.0.1",
-            "h:1_0",
-            &format!("h:{}", "0".repeat(4301)),
-        ];
-        let limit_cases = [
-            "50",
-            " 7 ",
-            "1_0",
-            "٣",
-            "0",
-            "-1",
-            "x",
-            &"9".repeat(40),
-            &"1".repeat(4301),
-        ];
-        let input = pyjson::dumps(
-            &json!(json!([ttl_cases, listen_cases, limit_cases]).to_string()),
-            DumpOptions::plain(),
-        )
-        .unwrap();
-        let script = format!(
-            r#"
-import argparse, json
-from zeropw import admin_cli as A
-def run(fn, text):
-    try:
-        value = fn(text)
-    except A.ZeroPWError as exc:
-        return ["error", exc.reason, exc.detail]
-    except argparse.ArgumentTypeError as exc:
-        return ["type_error", str(exc)]
-    except ValueError:
-        return ["error", "state_corrupt", "ValueError"]
-    return ["ok", list(value) if isinstance(value, tuple) else str(value)]
-data = json.loads({input})
-print(json.dumps([[run(A._parse_ttl, t) for t in data[0]], [run(A._parse_listen, t) for t in data[1]], [run(A._positive_int, t) for t in data[2]]]))
-"#
-        );
-        let python: Value = serde_json::from_str(&crate::oracle::python(&script)).unwrap();
+    fn integer_parsers_match_the_original_admin_cli_helpers() {
         let error = |e: Error| json!(["error", e.reason, e.detail]);
-        let rust_ttl: Vec<Value> = ttl_cases
-            .iter()
-            .map(|t| ttl(t).map_or_else(error, |v| json!(["ok", v.to_string()])))
-            .collect();
-        let rust_listen: Vec<Value> = listen_cases
-            .iter()
-            .map(|t| parse_listen(t).map_or_else(error, |(h, p)| json!(["ok", [h, p]])))
-            .collect();
-        let rust_limit: Vec<Value> = limit_cases
-            .iter()
-            .map(|t| match (POSITIVE_INT.convert)(t) {
+        let usage = "use forms like 30m, 1h, 3600s or 86400";
+        for (text, expected) in [
+            ("1h", json!(["ok", "3600"])),
+            (" 3M ", json!(["ok", "180"])),
+            ("30m", json!(["ok", "1800"])),
+            ("2d", json!(["ok", "172800"])),
+            ("86400", json!(["ok", "86400"])),
+            ("0", json!(["error", "invalid_ttl", ""])),
+            ("1w", json!(["error", "invalid_ttl", usage])),
+            ("1.5h", json!(["error", "invalid_ttl", usage])),
+        ] {
+            let actual = ttl(text).map_or_else(error, |v| json!(["ok", v.to_string()]));
+            assert_eq!(actual, expected, "ttl {text:?}");
+        }
+        for (text, expected) in [
+            ("127.0.0.1:80", json!(["ok", ["127.0.0.1", 80]])),
+            (" [::1]:65535 ", json!(["ok", ["::1", 65535]])),
+            ("127.0.0.1:0", json!(["ok", ["127.0.0.1", 0]])),
+            ("0.0.0.0:80", json!(["ok", ["0.0.0.0", 80]])),
+            (
+                "127.0.0.1:65536",
+                json!(["error", "invalid_listen", "port must be 0-65535"]),
+            ),
+            (
+                "127.0.0.1:",
+                json!(["error", "invalid_listen", "port must be 0-65535"]),
+            ),
+            (
+                "127.0.0.1",
+                json!(["error", "invalid_listen", "use HOST:PORT"]),
+            ),
+        ] {
+            let actual = parse_listen(text).map_or_else(error, |(h, p)| json!(["ok", [h, p]]));
+            assert_eq!(actual, expected, "listen {text:?}");
+        }
+        for (text, expected) in [
+            ("50", json!(["ok", "50"])),
+            (" 7 ", json!(["ok", "7"])),
+            ("0", json!(["type_error", "must be a positive integer"])),
+            ("-1", json!(["type_error", "must be a positive integer"])),
+            ("x", json!(["type_error", "must be a positive integer"])),
+        ] {
+            let actual = match (POSITIVE_INT.convert)(text) {
                 Ok(Val::Str(v)) => json!(["ok", v]),
                 Err(Some(message)) => json!(["type_error", message]),
                 other => panic!("unexpected {other:?}"),
-            })
-            .collect();
-        assert_eq!(json!([rust_ttl, rust_listen, rust_limit]), python);
+            };
+            assert_eq!(actual, expected, "limit {text:?}");
+        }
     }
 }

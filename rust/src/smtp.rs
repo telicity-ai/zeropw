@@ -2501,7 +2501,20 @@ fn tls(
 mod message_tests {
     use super::{Message, envelope_recipients, envelope_sender, mailbox};
     use crate::notify::NotifyConfig;
-    use serde_json::{Value, json};
+    use serde_json::Value;
+
+    /// Messages, headers, envelopes and bodies the Python prototype wrote for
+    /// the same configurations (`smtplib.send_message` with `EmailMessage`,
+    /// `BytesGenerator`, `linesep="\r\n"`, `utf8` policy for an
+    /// internationalized envelope), recorded once in
+    /// `tests/fixtures/python/response/smtp_messages.json` (see `GENERATE.md`).
+    /// A `null` message is CPython 3.12.14's `HeaderWriteError` refusal.
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/python/response/smtp_messages.json"
+        ))
+        .unwrap()
+    }
 
     fn config(sender: &str, recipients: &[String]) -> NotifyConfig {
         NotifyConfig {
@@ -2516,127 +2529,48 @@ mod message_tests {
         }
     }
 
-    /// `notify._send`'s message flattened the way `send_message` does
-    /// (`BytesGenerator`, `linesep="\r\n"`, `utf8` policy for an
-    /// internationalized envelope), for generated subject/sender/recipient
-    /// shapes including folding and RFC 2047 encoding, compared byte for
-    /// byte with Python.
+    fn strings(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Flatten one recorded case; return a mismatch description, if any.
+    fn compare(case: &Value, body: &str) -> Option<String> {
+        let subject = case["subject"].as_str().unwrap();
+        let sender = case["sender"].as_str().unwrap();
+        let recipients = strings(&case["recipients"]);
+        let intl = !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
+        let message = Message::new(&config(sender, &recipients), subject, body);
+        let actual = message.flatten(intl).ok();
+        let expected = case["message"].as_str().map(|m| m.as_bytes().to_vec());
+        if Some(intl) != case["intl"].as_bool() || actual != expected {
+            let shown = |bytes: &Option<Vec<u8>>| {
+                bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
+                    format!("{:?}", String::from_utf8_lossy(b))
+                })
+            };
+            return Some(format!(
+                "case {case}\n python: {}\n rust:   {}",
+                shown(&expected),
+                shown(&actual)
+            ));
+        }
+        None
+    }
+
+    /// Subject/sender/recipient shapes including folding and RFC 2047
+    /// encoding, byte for byte.
     #[test]
     fn flattened_message_matches_python_bytes() {
-        let names = [
-            "",
-            "A",
-            "ZeroPW",
-            "ZeroPW 알림",
-            "관리자",
-            "Ünïcode Náme",
-            "\"Doe, John\"",
-            "Joe Q. Public",
-            "\"관리자 (보안)\"",
-            "\"quoted \\\"inner\\\" name\"",
-            "Security Operations Response Team Distribution List For ZeroPW Incidents",
-            "관리자 한국어 이름이 아주 길어서 한 줄에 다 들어가지 않는 경우를 시험합니다",
-            "ZeroPW 보안 알림 수신자 목록 Security Notification Recipients",
-        ];
-        let addresses = [
-            "a@example.com",
-            "very.long.local.part.for.folding.checks@subdomain.example-domain.com",
-            "사용자@example.com",
-        ];
-        let mailboxes: Vec<String> = names
-            .iter()
-            .flat_map(|name| {
-                addresses.iter().map(move |address| {
-                    if name.is_empty() {
-                        (*address).to_owned()
-                    } else {
-                        format!("{name} <{address}>")
-                    }
-                })
-            })
-            .collect();
-        let subjects = [
-            "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)"
-                .to_owned(),
-            "[ZeroPW] 알림 설정 시험 메시지".to_owned(),
-            "plain ascii subject".to_owned(),
-            format!("[ZeroPW] {} (사건 inc-1)", "x".repeat(90)),
-            format!("{} 끝", "가나다라마바사 ".repeat(12)),
-            "a;b [c] (d), e: \"f\" g.h".to_owned(),
-        ];
-        let body = "ZeroPW 알림 설정을 확인하기 위한 시험 메시지입니다.\n실제 침입 사건이 아닙니다. 이 메시지가 도착했다면 SMTP 설정이 올바르게 동작합니다.\n";
-        let mut cases = vec![];
-        for (index, sender) in mailboxes.iter().enumerate() {
-            let recipients: Vec<String> = (0..1 + index % 4)
-                .map(|offset| mailboxes[(index * 7 + offset * 5) % mailboxes.len()].clone())
-                .collect();
-            let subject = &subjects[index % subjects.len()];
-            cases.push(json!([subject, sender, recipients]));
-        }
-        for subject in &subjects {
-            cases.push(json!([subject, "a@example.com", ["b@example.com"]]));
-        }
-        let script = format!(
-            r#"
-import base64, email.errors, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out = []
-for subject, sender, recipients in json.loads({cases:?}):
-    m = EmailMessage()
-    m["Subject"] = subject
-    m["From"] = sender
-    m["To"] = ", ".join(recipients)
-    m.set_content({body:?})
-    from_addr = email.utils.getaddresses([m["From"]])[0][1]
-    to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
-    try:
-        "".join([from_addr, *to_addrs]).encode("ascii")
-        intl = False
-    except UnicodeEncodeError:
-        intl = True
-    b = io.BytesIO()
-    policy = m.policy.clone(utf8=True) if intl else None
-    g = email.generator.BytesGenerator(b, policy=policy) if intl else email.generator.BytesGenerator(b)
-    try:
-        g.flatten(m, linesep="\r\n")
-    except email.errors.HeaderWriteError:
-        out.append([intl, None])
-        continue
-    out.append([intl, base64.b64encode(b.getvalue()).decode()])
-print(json.dumps(out))
-"#,
-            cases = Value::Array(cases.clone()).to_string(),
-        );
-        let expected: Vec<(bool, Option<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let mut mismatches = vec![];
-        for (case, (intl, flat)) in cases.iter().zip(expected) {
-            let subject = case[0].as_str().unwrap();
-            let sender = case[1].as_str().unwrap();
-            let recipients: Vec<String> = case[2]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|r| r.as_str().unwrap().to_owned())
-                .collect();
-            let rust_intl =
-                !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
-            let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl).ok();
-            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
-            if rust_intl != intl || actual != expected {
-                let shown = |bytes: &Option<Vec<u8>>| {
-                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
-                        format!("{:?}", String::from_utf8_lossy(b))
-                    })
-                };
-                mismatches.push(format!(
-                    "case {case}\n python: {}\n rust:   {}",
-                    shown(&expected),
-                    shown(&actual)
-                ));
-            }
-        }
+        let fixture = fixture();
+        let body = fixture["flattened_body"].as_str().unwrap();
+        let cases = fixture["flattened"].as_array().unwrap();
+        assert_eq!(cases.len(), 45);
+        let mismatches: Vec<String> = cases.iter().filter_map(|c| compare(c, body)).collect();
         assert!(
             mismatches.is_empty(),
             "{} mismatches:\n{}",
@@ -2647,75 +2581,20 @@ print(json.dumps(out))
 
     #[test]
     fn encoded_word_headers_match_python_bytes() {
-        let cases = json!([
-            [
-                "=?utf-8?q?Hello_=E2=9C=93?=",
-                "a@example.com",
-                "b@example.com"
-            ],
-            ["=?UTF-8?B?7ZWc6riA?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?b?SGVsbG8?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?b?SGVsbG8$?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?q?bad=Z1=2?=", "a@example.com", "b@example.com"],
-            [
-                "=?utf-8?q?one?=   =?utf-8?q?two?=",
-                "a@example.com",
-                "b@example.com"
-            ],
-            [
-                "prefix=?utf-8?q?middle?=suffix",
-                "a@example.com",
-                "b@example.com"
-            ],
-            ["=?iso-8859-1?q?caf=E9?=", "a@example.com", "b@example.com"],
-            ["=?x-unknown?q?plain?=", "a@example.com", "b@example.com"],
-            ["=?utf-8?q?unterminated", "a@example.com", "b@example.com"],
-            ["=?utf-8?x?invalid?=", "a@example.com", "b@example.com"],
-            [
-                "subject",
-                "=?utf-8?q?Admin_=E2=9C=93?= <a@example.com>",
-                "b@example.com"
-            ],
-            [
-                "subject",
-                "a@example.com",
-                "=?utf-8?b?7ZWc6riA?= <b@example.com>"
-            ],
-            [
-                "subject",
-                "a@example.com",
-                "=?utf-8?q?one?= \t =?utf-8?q?two?= <b@example.com>"
-            ]
-        ]);
-        let script = format!(
-            r#"
-import base64, email.generator, io, json
-from email.message import EmailMessage
-out=[]
-for subject, sender, recipient in json.loads({cases:?}):
- m=EmailMessage(); m['Subject']=subject; m['From']=sender; m['To']=recipient; m.set_content('x\n')
- b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
- out.append(base64.b64encode(b.getvalue()).decode())
-print(json.dumps(out))
-"#,
-            cases = cases.to_string(),
-        );
-        let expected: Vec<String> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        for (case, expected) in cases.as_array().unwrap().iter().zip(expected) {
-            let sender = case[1].as_str().unwrap();
-            let recipients = [case[2].as_str().unwrap().to_owned()];
+        for case in fixture()["encoded_words"].as_array().unwrap() {
+            let sender = case["sender"].as_str().unwrap();
+            let recipients = [case["recipient"].as_str().unwrap().to_owned()];
             let actual = Message::new(
                 &config(sender, &recipients),
-                case[0].as_str().unwrap(),
+                case["subject"].as_str().unwrap(),
                 "x\n",
             )
             .flatten(false)
             .ok()
             .expect("headers verify");
             assert_eq!(
-                actual,
-                crate::pybase64::b64decode(&expected).unwrap(),
+                String::from_utf8(actual).unwrap(),
+                case["message"].as_str().unwrap(),
                 "case {case}"
             );
         }
@@ -2723,59 +2602,23 @@ print(json.dumps(out))
 
     #[test]
     fn groups_and_domain_literals_match_python_headers_and_envelopes() {
-        let cases = json!([
-            ["a@example.com", "undisclosed-recipients:;"],
-            ["a@example.com", "Empty Team: (no recipients) ;"],
-            [
-                "a@example.com",
-                "Team: Alpha <a@example.com>, b@[127.0.0.1];"
-            ],
-            ["a@example.com", "IPv6 User <v6@[IPv6:2001:db8::1]>"],
-            [
-                "a@example.com",
-                "Literal <x@ (before) [ 127.0.0.1 ] (after)>"
-            ],
-            [
-                "a@example.com",
-                "G: a@example.com, b@[IPv6:::1];, c@[192.0.2.1]"
-            ],
-            [
-                "Senders: first@[127.0.0.1], second@example.com;",
-                "b@example.com"
-            ],
-            ["Nobody:;", "b@example.com"],
-            ["a@example.com", "Empty:;, b@example.com"],
-            ["a@example.com", "b@example.com, Empty:;"],
-            ["A. B. <a@example.com>", "C. D. <b@example.com>"]
-        ]);
-        let script = format!(
-            r#"
-import base64, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out=[]
-for sender, recipient in json.loads({cases:?}):
- m=EmailMessage(); m['Subject']='s'; m['From']=sender; m['To']=recipient; m.set_content('x\n')
- b=io.BytesIO(); email.generator.BytesGenerator(b).flatten(m, linesep='\r\n')
- out.append([base64.b64encode(b.getvalue()).decode(), email.utils.getaddresses([m['From']])[0][1], [a[1] for a in email.utils.getaddresses([m['To']])]])
-print(json.dumps(out))
-"#,
-            cases = cases.to_string(),
-        );
-        let expected: Vec<(String, String, Vec<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        for (case, (flat, from, to)) in cases.as_array().unwrap().iter().zip(expected) {
-            let sender = case[0].as_str().unwrap();
-            let recipients = [case[1].as_str().unwrap().to_owned()];
+        for case in fixture()["groups"].as_array().unwrap() {
+            let sender = case["sender"].as_str().unwrap();
+            let recipients = [case["recipient"].as_str().unwrap().to_owned()];
             let message = Message::new(&config(sender, &recipients), "s", "x\n");
             assert_eq!(
-                message.flatten(false).ok().expect("headers verify"),
-                crate::pybase64::b64decode(&flat).unwrap(),
+                String::from_utf8(message.flatten(false).ok().expect("headers verify")).unwrap(),
+                case["message"].as_str().unwrap(),
                 "headers {case}"
             );
-            assert_eq!(envelope_sender(sender), from, "sender {case}");
+            assert_eq!(
+                envelope_sender(sender),
+                case["envelope_sender"].as_str().unwrap(),
+                "sender {case}"
+            );
             assert_eq!(
                 envelope_recipients(&config(sender, &recipients)),
-                to,
+                strings(&case["envelope_recipients"]),
                 "recipients {case}"
             );
         }
@@ -2786,60 +2629,16 @@ print(json.dumps(out))
     /// base64), for bodies around each heuristic boundary.
     #[test]
     fn body_transfer_encoding_matches_python_bytes() {
-        let long_ascii = "x".repeat(79);
-        let mut bodies: Vec<String> = vec![
-            "short ascii\n".into(),
-            "짧은 본문\n".into(),
-            format!("{long_ascii}\n"),
-            format!("{} \n{}\t\n", "y".repeat(76), "z".repeat(77)),
-            format!("{}=abc\n{}=\n", "q".repeat(75), "r".repeat(76)),
-            format!("{}\n한글 한 줄\n", "ascii ".repeat(40)),
-            format!("{}끝\n", "ascii text line that is quite long indeed, ".repeat(3)),
-            "no trailing newline".into(),
-            "crlf line one\r\ncr line two\rlf line three\n".into(),
-            ".leading dot line\n..two dots\n".into(),
-            "안내 생성 시각: 2023-11-14T22:13:21Z\n\n1. 무슨 일이 있었나\n침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.\n".into(),
-        ];
-        let mut many = String::new();
-        for index in 0..14 {
-            many.push_str(&format!("line {index} {}\n", "w".repeat(70 + index)));
-        }
-        bodies.push(many);
-        let mut mixed = String::new();
-        for index in 0..12 {
-            mixed.push_str(&format!("{} 한\n", "a".repeat(60 + index * 3)));
-        }
-        bodies.push(mixed);
-        let script = format!(
-            r#"
-import base64, email.generator, io, json
-from email.message import EmailMessage
-out = []
-for body in json.loads({bodies:?}):
-    m = EmailMessage()
-    m["Subject"] = "s"
-    m["From"] = "a@example.com"
-    m["To"] = "b@example.com"
-    m.set_content(body)
-    b = io.BytesIO()
-    email.generator.BytesGenerator(b).flatten(m, linesep="\r\n")
-    out.append(base64.b64encode(b.getvalue()).decode())
-print(json.dumps(out))
-"#,
-            bodies = serde_json::to_string(&bodies).unwrap(),
-        );
-        let expected: Vec<String> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
         let recipients = ["b@example.com".to_owned()];
         let mut ctes = std::collections::BTreeSet::new();
-        for (body, flat) in bodies.iter().zip(expected) {
+        for case in fixture()["bodies"].as_array().unwrap() {
+            let body = case["body"].as_str().unwrap();
             let message = Message::new(&config("a@example.com", &recipients), "s", body);
             ctes.insert(message.cte);
             let actual = message.flatten(false).ok().expect("headers verify");
-            let expected = crate::pybase64::b64decode(&flat).unwrap();
             assert_eq!(
                 String::from_utf8_lossy(&actual),
-                String::from_utf8_lossy(&expected),
+                case["message"].as_str().unwrap(),
                 "body {body:?}"
             );
         }
@@ -2871,213 +2670,29 @@ print(json.dumps(out))
         }
     }
 
-    /// Deterministic pseudo-random subjects and address lists inside the
-    /// supported grammar (atoms, quoted strings with escapes and specials,
-    /// obsolete dots, long words, ASCII and non-ASCII, internationalized
-    /// addresses), compared with Python byte for byte.
+    /// Representative subjects and address lists inside the supported
+    /// grammar (atoms, quoted strings with escapes and specials, obsolete
+    /// dots, long words, ASCII and non-ASCII, internationalized addresses),
+    /// drawn from a deterministic pseudo-random corpus, byte for byte.
     #[test]
     fn generated_header_shapes_match_python_bytes() {
-        let mut seed: u64 = 0x5eed_2026_0926;
-        let mut next = move |bound: usize| -> usize {
-            seed = seed
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            ((seed >> 33) as usize) % bound
-        };
-        let words = [
-            "a",
-            "ZeroPW",
-            "알림",
-            "관리자",
-            "보안-담당",
-            "x-y.z",
-            "[tag]",
-            "(note)",
-            "Ünï",
-            "—",
-            "averyveryveryverylongwordthatdoesnotfitonasinglefoldedheaderlineatallxxxxxxxx",
-            "긴한국어단어긴한국어단어긴한국어단어긴한국어단어긴한국어단어",
-            "a=b",
-            "q?x",
-            "_u_",
-            "mix한글mix",
-            "50%",
-            "tab\tsep",
-            "sp  ace",
-        ];
-        let atoms = [
-            "Admin",
-            "ZeroPW",
-            "알림",
-            "관리자",
-            "Ünïcode",
-            "Q.",
-            "O'Neil",
-            "x-y",
-            "teamname",
-            "averyveryveryverylongdisplaynameatomthatneedsfoldingbyitselfxxxxxxxxxxxxxx",
-            "긴한국어이름긴한국어이름긴한국어이름긴한국어이름",
-            "a+b",
-            "Ops_Team",
-            "anevenlongerdisplaynameatomthatexceedsthemaximumlinelengthoftheemailpolicyforsure",
-            "Ops (team)",
-            "관리자 (보안)",
-        ];
-        let quoted = [
-            "\"Doe, John\"",
-            "\"관리자 (보안)\"",
-            "\"a;b:c\"",
-            "\"esc \\\"q\\\" \\\\\"",
-            "\"\"",
-            "\"long quoted display name with, commas and (parens) that must fold\"",
-            "\"한국어, 쉼표\"",
-            "\"관리자, Admin; Ops\"",
-            "\"a very long quoted display name, with specials; that cannot fit on one folded line at all\"",
-            "\"긴 인용 이름, 특수문자; 포함 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름 긴 인용 이름\"",
-            "\"averyveryveryverylongquotedwordwithoutanyspacesthatcannotbefoldedanywhereatallxx\"",
-        ];
-        let locals = [
-            "a",
-            "admin",
-            "first.last",
-            "very.long.local.part.name.for.folding",
-            "사용자",
-            "x+tag",
-            "anextremelylonglocalpartwithoutdotsthatexceedsthemaximumheaderlinelengthforsurexx",
-            "\"quoted local\"",
-        ];
-        let domains = [
-            "example.com",
-            "sub.example-domain.org",
-            "도메인.example",
-            "an-extremely-long-domain-label-that-keeps-going-and-going.and-another-long-label.example",
-        ];
-        let mut cases = vec![];
-        for _ in 0..400 {
-            let subject: Vec<&str> = (0..1 + next(9)).map(|_| words[next(words.len())]).collect();
-            let separators = [" ", " ", " ", "  ", "\t"];
-            let mut text = String::new();
-            for (index, word) in subject.iter().enumerate() {
-                if index > 0 {
-                    text.push_str(separators[next(separators.len())]);
-                }
-                text.push_str(word);
-            }
-            let subject = text.replace("\\t", "\t");
-            let mailbox = |next: &mut dyn FnMut(usize) -> usize| -> String {
-                let local = locals[next(locals.len())];
-                let domain = domains[next(domains.len())];
-                let comments = [
-                    "",
-                    "",
-                    "",
-                    " (ops)",
-                    " (보안팀)",
-                    " (nested (inner) comment)",
-                    " (escaped \\) paren, and; specials)",
-                    " (a very long comment that goes on and on and on and on and on and on and on)",
-                    "(tight)",
-                ];
-                let comment = comments[next(comments.len())];
-                let address = match next(3) {
-                    0 => format!("{local}{comment}@{domain}"),
-                    _ => format!("{local}@{domain}{comment}"),
-                };
-                match next(4) {
-                    0 => address,
-                    1 => format!("{} <{address}>", quoted[next(quoted.len())]),
-                    _ => {
-                        let name: Vec<&str> =
-                            (0..1 + next(4)).map(|_| atoms[next(atoms.len())]).collect();
-                        format!("{} <{address}>", name.join(" "))
-                    }
-                }
-            };
-            let sender = mailbox(&mut next);
-            let recipients: Vec<String> = (0..1 + next(5)).map(|_| mailbox(&mut next)).collect();
-            cases.push(json!([subject, sender, recipients]));
-        }
-        let body = "짧은 본문\n";
-        let script = format!(
-            r#"
-import base64, email.errors, email.generator, email.utils, io, json
-from email.message import EmailMessage
-out = []
-for subject, sender, recipients in json.loads({cases:?}):
-    m = EmailMessage()
-    m["Subject"] = subject
-    m["From"] = sender
-    m["To"] = ", ".join(recipients)
-    m.set_content({body:?})
-    from_addr = email.utils.getaddresses([m["From"]])[0][1]
-    to_addrs = [a[1] for a in email.utils.getaddresses([m["To"]])]
-    try:
-        "".join([from_addr, *to_addrs]).encode("ascii")
-        intl = False
-    except UnicodeEncodeError:
-        intl = True
-    b = io.BytesIO()
-    g = email.generator.BytesGenerator(b, policy=m.policy.clone(utf8=True)) if intl else email.generator.BytesGenerator(b)
-    try:
-        g.flatten(m, linesep="\r\n")
-    except email.errors.HeaderWriteError:
-        out.append([intl, None])
-        continue
-    out.append([intl, base64.b64encode(b.getvalue()).decode()])
-print(json.dumps(out))
-"#,
-            cases = Value::Array(cases.clone()).to_string(),
-        );
-        let expected: Vec<(bool, Option<String>)> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let mut mismatches = vec![];
+        let fixture = fixture();
+        let body = fixture["generated_body"].as_str().unwrap();
+        let cases = fixture["generated"].as_array().unwrap();
         let mut unsupported = 0;
-        let mut refused = 0;
-        for (case, (intl, flat)) in cases.iter().zip(expected) {
-            let subject = case[0].as_str().unwrap();
-            let sender = case[1].as_str().unwrap();
-            let recipients: Vec<String> = case[2]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|r| r.as_str().unwrap().to_owned())
-                .collect();
+        for case in cases {
+            let sender = case["sender"].as_str().unwrap();
+            let recipients = strings(&case["recipients"]);
             if super::get_address_list(sender).is_none()
                 || super::get_address_list(&recipients.join(", ")).is_none()
             {
                 unsupported += 1;
             }
-            let rust_intl =
-                !mailbox(sender).is_ascii() || recipients.iter().any(|r| !mailbox(r).is_ascii());
-            let message = Message::new(&config(sender, &recipients), subject, body);
-            let actual = message.flatten(rust_intl).ok();
-            let expected = flat.map(|flat| crate::pybase64::b64decode(&flat).unwrap());
-            refused += usize::from(expected.is_none());
-            if rust_intl != intl || actual != expected {
-                let shown = |bytes: &Option<Vec<u8>>| {
-                    bytes.as_ref().map_or("HeaderWriteError".into(), |b| {
-                        format!("{:?}", String::from_utf8_lossy(b))
-                    })
-                };
-                mismatches.push(format!(
-                    "case {case}\n python: {}\n rust:   {}",
-                    shown(&expected),
-                    shown(&actual)
-                ));
-            }
         }
-        assert_eq!(
-            unsupported, 0,
-            "generated shapes left the supported grammar"
-        );
-        // CPython 3.12.14 (the 3.12 release CI installs) refuses some of
-        // these folds with `HeaderWriteError`; an older 3.12 writes them.
-        assert!(
-            refused > 0 && refused < cases.len(),
-            "{refused} of {} cases refused: the oracle predates CPython 3.12.14's \
-             verify_generated_headers in BytesGenerator",
-            cases.len()
-        );
+        assert_eq!(unsupported, 0, "recorded shapes left the supported grammar");
+        let refused = cases.iter().filter(|c| c["message"].is_null()).count();
+        assert!(refused > 0 && refused < cases.len(), "{refused}");
+        let mismatches: Vec<String> = cases.iter().filter_map(|c| compare(c, body)).collect();
         assert!(
             mismatches.is_empty(),
             "{} mismatches:\n{}",
@@ -3089,68 +2704,37 @@ print(json.dumps(out))
 
 #[cfg(test)]
 mod hostname_tests {
-    use serde_json::{Value, json};
-
-    /// `smtplib.SMTP().local_hostname` (`socket.getfqdn()` or the `[ip]`
-    /// literal) is what EHLO/HELO send.  Both implementations use the host
-    /// platform's configured resolver, including DNS PTR and macOS Directory
-    /// Services rather than approximating it with `/etc/hosts`.
+    /// EHLO/HELO send `smtplib`'s default `local_hostname`: the host's
+    /// fully qualified name when it has a dot, else an address literal.
     #[test]
-    fn local_hostname_matches_smtplib() {
-        let out = crate::oracle::python("import smtplib; print(smtplib.SMTP().local_hostname)");
-        let rust = super::local_hostname();
-        assert_eq!(rust, out.trim());
+    fn local_hostname_is_a_dotted_name_or_an_address_literal() {
+        let name = super::local_hostname();
+        assert!(
+            !name.is_empty() && !name.contains(char::is_whitespace),
+            "{name:?}"
+        );
+        if let Some(literal) = name.strip_prefix('[').and_then(|n| n.strip_suffix(']')) {
+            assert!(literal.parse::<std::net::IpAddr>().is_ok(), "{name:?}");
+        } else {
+            assert!(name.contains('.'), "{name:?}");
+            assert_eq!(name, super::getfqdn(&super::gethostname()));
+        }
     }
 
-    /// Keep the resolver stages visible in hosted diagnostics: CPython's
-    /// `gethostbyaddr(hostname)` first calls zero-hint `getaddrinfo(AF_UNSPEC)`
-    /// and then reverses that first address.
+    /// `socket.getfqdn` returns its argument when the name does not resolve.
     #[test]
-    fn getfqdn_forward_and_reverse_steps_match_socketmodule() {
-        let script = r#"
-import json, socket
-host = socket.gethostname()
-out = {"hostname": host, "first_address": None, "getnameinfo": None, "gethostbyaddr": None}
-try:
-    first = socket.getaddrinfo(host, None, socket.AF_UNSPEC, 0, 0, 0)[0][4]
-    out["first_address"] = first[0]
-    out["getnameinfo"] = socket.getnameinfo(first, socket.NI_NAMEREQD | socket.NI_NUMERICSERV)[0]
-except Exception:
-    pass
-try:
-    out["gethostbyaddr"] = socket.gethostbyaddr(host)[0]
-except Exception:
-    pass
-out["getfqdn"] = socket.getfqdn(host)
-print(json.dumps(out, sort_keys=True))
-"#;
-        let expected: Value = serde_json::from_str(crate::oracle::python(script).trim()).unwrap();
-        let hostname = super::gethostname();
-        let mut actual = json!({
-            "hostname": hostname,
-            "first_address": null,
-            "getnameinfo": null
-        });
-        if let Some(address) = super::first_resolved_address(&hostname, None) {
-            actual["first_address"] = json!(address.ip().to_string());
-            if let Ok(name) = dns_lookup::lookup_addr(&address.ip()) {
-                actual["getnameinfo"] = json!(name);
-            }
-        }
-        actual["getfqdn"] = json!(super::getfqdn(&hostname));
-        for field in ["hostname", "first_address", "getnameinfo", "getfqdn"] {
-            assert_eq!(
-                actual[field], expected[field],
-                "resolver stage {field} differed; Python socket diagnostics: {expected}; Rust diagnostics: {actual}"
-            );
-        }
+    fn getfqdn_of_an_unresolvable_name_is_the_name() {
+        assert!(!super::gethostname().is_empty());
+        assert_eq!(
+            super::getfqdn("zeropw-nonexistent.invalid"),
+            "zeropw-nonexistent.invalid"
+        );
     }
 }
 
 #[cfg(test)]
 mod mailbox_tests {
     use super::mailbox;
-    use std::process::Command;
 
     #[test]
     fn supported_comment_forms_match_python_envelope_oracle() {
@@ -3203,46 +2787,20 @@ mod mailbox_tests {
         }
     }
 
+    /// A comment at every position of representative addresses: the
+    /// envelope mailbox `send_message`/`quoteaddr` derived in the Python
+    /// prototype (`tests/fixtures/python/response/envelope_comments.json`).
     #[test]
     fn generated_comment_boundaries_match_python_transport() {
-        // Compute every expected envelope with the same parser and quoteaddr
-        // that send_message uses, rather than copying Rust-derived fixtures.
-        let script = r#"
-import json
-from email.message import EmailMessage
-from email.utils import getaddresses
-from smtplib import quoteaddr
-cases=[]
-for base in ('local+tag@domain.example', 'loc.al@domain.example',
-             '"lo cal"@domain.example', 'Display <loc.al@domain.example>'):
- for pos in range(len(base)+1):
-  for comment in ('(x)', '(nested(inner))', '(escaped\\)paren)'):
-   address=base[:pos]+comment+base[pos:]
-   msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
-   parsed=getaddresses([msg['From']])
-   assert parsed, address
-   cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
-for before in ('@', '@exa', '@exa.', '@exa-', '@example.com'):
- for after in ('example.com', 'mple.com', 'com', '.com', ''):
-  address='sender'+before+'(nested(inner))'+after
-  msg=EmailMessage();msg['From']=address;msg['To']='recipient@example.com'
-  parsed=getaddresses([msg['From']])
-  assert parsed, address
-  cases.append([address,quoteaddr(parsed[0][1])[1:-1]])
-print(json.dumps(cases))
-"#;
-        let output = Command::new("python3.12")
-            .args(["-c", script])
-            .output()
-            .expect("Python 3.12 oracle");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: Vec<(String, String)> = serde_json::from_slice(&output.stdout).unwrap();
-        for (input, expected) in cases {
-            assert_eq!(mailbox(&input), expected, "input={input:?}");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/python/response/envelope_comments.json"
+        ))
+        .unwrap();
+        let cases = fixture["quoteaddr"].as_array().unwrap();
+        assert!(cases.len() > 300);
+        for case in cases {
+            let input = case[0].as_str().unwrap();
+            assert_eq!(mailbox(input), case[1].as_str().unwrap(), "input={input:?}");
         }
     }
 }

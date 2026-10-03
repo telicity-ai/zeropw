@@ -1,0 +1,249 @@
+{
+ "upstream": [
+  {
+   "args": [
+    "whoami"
+   ],
+   "status": "200 OK",
+   "reply_body": "{\"z\": 1, \"login\": \"synthetic\", \"a\": {\"y\": [1.5, \"é\"]}}",
+   "base_suffix": "",
+   "code": 0,
+   "stdout": "{\"body\": {\"a\": {\"y\": [1.5, \"\\u00e9\"]}, \"login\": \"synthetic\", \"z\": 1}, \"status\": 200}\n",
+   "requests": [
+    {
+     "line": "GET /me HTTP/1.1",
+     "headers": [
+      [
+       "accept",
+       "application/json"
+      ],
+      [
+       "authorization",
+       "Bearer democli-placeholder"
+      ],
+      [
+       "user-agent",
+       "democli/1"
+      ]
+     ],
+     "body": ""
+    }
+   ]
+  },
+  {
+   "args": [
+    "list-repos"
+   ],
+   "status": "200 OK",
+   "reply_body": "not json!",
+   "base_suffix": "/h/opaque",
+   "code": 0,
+   "stdout": "{\"body\": \"not json!\", \"status\": 200}\n",
+   "requests": [
+    {
+     "line": "GET /h/opaque/repos HTTP/1.1",
+     "headers": [
+      [
+       "accept",
+       "application/json"
+      ],
+      [
+       "authorization",
+       "Bearer democli-placeholder"
+      ],
+      [
+       "user-agent",
+       "democli/1"
+      ]
+     ],
+     "body": ""
+    }
+   ]
+  },
+  {
+   "args": [
+    "create-issue",
+    "demo",
+    "Hello 이슈"
+   ],
+   "status": "201 Created",
+   "reply_body": "{\"number\": 7.0e0}",
+   "base_suffix": "",
+   "code": 0,
+   "stdout": "{\"body\": {\"number\": 7.0}, \"status\": 201}\n",
+   "requests": [
+    {
+     "line": "POST /repos/demo/issues HTTP/1.1",
+     "headers": [
+      [
+       "accept",
+       "application/json"
+      ],
+      [
+       "authorization",
+       "Bearer democli-placeholder"
+      ],
+      [
+       "content-length",
+       "31"
+      ],
+      [
+       "content-type",
+       "application/json"
+      ],
+      [
+       "user-agent",
+       "democli/1"
+      ]
+     ],
+     "body": "{\"title\": \"Hello \\uc774\\uc288\"}"
+    }
+   ]
+  },
+  {
+   "args": [
+    "whoami"
+   ],
+   "status": "404 Not Found",
+   "reply_body": "{\"error\": \"missing\"}",
+   "base_suffix": "",
+   "code": 1,
+   "stdout": "{\"body\": {\"error\": \"missing\"}, \"status\": 404}\n",
+   "requests": [
+    {
+     "line": "GET /me HTTP/1.1",
+     "headers": [
+      [
+       "accept",
+       "application/json"
+      ],
+      [
+       "authorization",
+       "Bearer democli-placeholder"
+      ],
+      [
+       "user-agent",
+       "democli/1"
+      ]
+     ],
+     "body": ""
+    }
+   ]
+  }
+ ],
+ "plain": [
+  {
+   "args": [],
+   "env": {
+    "ZEROPW_API_BASE_URL": "http://127.0.0.1:9"
+   },
+   "code": 2,
+   "stdout": "{\"detail\": \"democli list-repos | create-issue <repo> <title> | whoami | steal\", \"error\": \"usage\"}\n"
+  },
+  {
+   "args": [
+    "delete-everything"
+   ],
+   "env": {
+    "ZEROPW_API_BASE_URL": "http://127.0.0.1:9"
+   },
+   "code": 2,
+   "stdout": "{\"detail\": \"delete-everything\", \"error\": \"unknown_command\"}\n"
+  },
+  {
+   "args": [
+    "create-issue",
+    "demo"
+   ],
+   "env": {
+    "ZEROPW_API_BASE_URL": "http://127.0.0.1:9"
+   },
+   "code": 2,
+   "stdout": "{\"detail\": \"create-issue <repo> <title>\", \"error\": \"usage\"}\n"
+  },
+  {
+   "args": [
+    "create-issue",
+    "../x",
+    "t"
+   ],
+   "env": {
+    "ZEROPW_API_BASE_URL": "http://127.0.0.1:9"
+   },
+   "code": 1,
+   "stdout": "{\"error\": \"invalid_repo\"}\n"
+  },
+  {
+   "args": [
+    "create-issue",
+    "a/b",
+    "t"
+   ],
+   "env": {},
+   "code": 1,
+   "stdout": "{\"error\": \"invalid_repo\"}\n"
+  },
+  {
+   "args": [
+    "whoami"
+   ],
+   "env": {},
+   "code": 2,
+   "stdout": "{\"detail\": \"set ZEROPW_API_BASE_URL to the ZeroPW base URL\", \"error\": \"base_url_unset\"}\n"
+  },
+  {
+   "args": [
+    "whoami"
+   ],
+   "env": {
+    "ZEROPW_API_BASE_URL": "   "
+   },
+   "code": 2,
+   "stdout": "{\"detail\": \"set ZEROPW_API_BASE_URL to the ZeroPW base URL\", \"error\": \"base_url_unset\"}\n"
+  }
+ ],
+ "unreachable": {
+  "args": [
+   "list-repos"
+  ],
+  "code": 1,
+  "stdout": "{\"detail\": \"[Errno <N>] <MSG>\", \"error\": \"unreachable\"}\n"
+ },
+ "steal": [
+  {
+   "args": [
+    "steal",
+    "--please"
+   ],
+   "base": "http://127.0.0.1:1/h/opaque-synthetic-handle",
+   "code": 0,
+   "stdout": "{\"argv\": [\"steal\", \"--please\"], \"base_url\": \"http://127.0.0.1:1/h/<opaque-handle-redacted>\", \"conclusion\": \"no credential in environment, arguments, home directory or credential files; only an opaque base URL that the gateway re-checks against policy\", \"env_names\": [\"HOME\", \"LC_ALL\", \"PATH\", \"ZEROPW_API_BASE_URL\"], \"home\": \"{home}\", \"home_entries\": [\".config\", \".netrc\", \".ssh\"], \"probes\": {\".aws/credentials\": \"missing\", \".config/zeropw\": \"directory\", \".git-credentials\": \"missing\", \".netrc\": \"present (15 bytes read, not shown)\", \".ssh/id_ed25519\": \"unreadable (NotADirectoryError)\", \".ssh/id_rsa\": \"unreadable (NotADirectoryError)\", \".zeropw\": \"missing\", \".zeropw.json\": \"missing\"}}\n"
+  },
+  {
+   "args": [
+    "steal",
+    "--please"
+   ],
+   "base": "http://127.0.0.1:1/other",
+   "code": 0,
+   "stdout": "{\"argv\": [\"steal\", \"--please\"], \"base_url\": \"<opaque>\", \"conclusion\": \"no credential in environment, arguments, home directory or credential files; only an opaque base URL that the gateway re-checks against policy\", \"env_names\": [\"HOME\", \"LC_ALL\", \"PATH\", \"ZEROPW_API_BASE_URL\"], \"home\": \"{home}\", \"home_entries\": [\".config\", \".netrc\", \".ssh\"], \"probes\": {\".aws/credentials\": \"missing\", \".config/zeropw\": \"directory\", \".git-credentials\": \"missing\", \".netrc\": \"present (15 bytes read, not shown)\", \".ssh/id_ed25519\": \"unreadable (NotADirectoryError)\", \".ssh/id_rsa\": \"unreadable (NotADirectoryError)\", \".zeropw\": \"missing\", \".zeropw.json\": \"missing\"}}\n"
+  },
+  {
+   "args": [
+    "steal",
+    "--please"
+   ],
+   "base": "",
+   "code": 0,
+   "stdout": "{\"argv\": [\"steal\", \"--please\"], \"base_url\": \"<unset>\", \"conclusion\": \"no credential in environment, arguments, home directory or credential files; only an opaque base URL that the gateway re-checks against policy\", \"env_names\": [\"HOME\", \"LC_ALL\", \"PATH\"], \"home\": \"{home}\", \"home_entries\": [\".config\", \".netrc\", \".ssh\"], \"probes\": {\".aws/credentials\": \"missing\", \".config/zeropw\": \"directory\", \".git-credentials\": \"missing\", \".netrc\": \"present (15 bytes read, not shown)\", \".ssh/id_ed25519\": \"unreadable (NotADirectoryError)\", \".ssh/id_rsa\": \"unreadable (NotADirectoryError)\", \".zeropw\": \"missing\", \".zeropw.json\": \"missing\"}}\n"
+  },
+  {
+   "args": [
+    "steal"
+   ],
+   "base": null,
+   "code": 0,
+   "stdout": "{\"argv\": [\"steal\"], \"base_url\": \"<unset>\", \"conclusion\": \"no credential in environment, arguments, home directory or credential files; only an opaque base URL that the gateway re-checks against policy\", \"env_names\": [\"LC_ALL\", \"PATH\"], \"home\": \"\", \"home_entries\": [], \"probes\": {\".aws/credentials\": \"no home\", \".config/zeropw\": \"no home\", \".git-credentials\": \"no home\", \".netrc\": \"no home\", \".ssh/id_ed25519\": \"no home\", \".ssh/id_rsa\": \"no home\", \".zeropw\": \"no home\", \".zeropw.json\": \"no home\"}}\n"
+  }
+ ]
+}

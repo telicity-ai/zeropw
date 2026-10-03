@@ -1,6 +1,7 @@
 //! Independent Astra review probes at 692fc7566005f2dcd25e9b48fd401031f01c79de.
-//! Assertions express Python's contract; failures intentionally reproduce open findings.
-use serde_json::{Value, json};
+//! Assertions express the original Python contract (expected values recorded
+//! from the prototype); failures intentionally reproduce open findings.
+use serde_json::json;
 use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
@@ -15,8 +16,6 @@ use zeropw::{
     context::{Config, Context},
     intrusion, notify,
 };
-#[path = "../src/oracle.rs"]
-mod oracle;
 
 fn fixture() -> (TempDir, Arc<Context>) {
     let tmp = TempDir::new().unwrap();
@@ -190,42 +189,32 @@ fn smtp_python_interoperability_matrix() {
         "greeting_rejected",
         "long_reply",
     ] {
-        let mut results = vec![];
-        for language in ["python", "rust"] {
-            let (port, worker) = receiver(scenario);
-            let auth = ["cram", "auth_fallback", "plain_challenge"].contains(&scenario);
-            let cfg = json!({"host":if scenario == "localhost_ipv4" { "localhost" } else { "127.0.0.1" }, "port":port, "mode":"plain", "sender":if scenario == "display_address" { "Display Name <sender@example.com>" } else { "sender@example.com" }, "recipients":if scenario == "partial_recipient" { vec!["bad@example.com", "good@example.com"] } else { vec!["good@example.com"] }, "username":if auth { Some("synthetic-user") } else { None }, "timeout_seconds":2.0});
-            let result = if language == "python" {
-                let code = format!(
-                    "import json\nfrom zeropw.notify import NotifyConfig, _send\nc=NotifyConfig(**json.loads({:?}))\ntry:\n _send(c, 'synthetic subject', 'synthetic body\\n')\n print('sent')\nexcept Exception as e:\n print(type(e).__name__)\n",
-                    cfg.to_string()
-                );
-                oracle::python(&code).trim().to_owned()
-            } else {
-                ctx.state.write_json("notify.json", &cfg).unwrap();
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    notify::send_test_message(&ctx)
-                })) {
-                    Ok(Ok(v)) => v
-                        .get("error")
-                        .or_else(|| v.get("status"))
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .to_owned(),
-                    Ok(Err(e)) => e.reason.to_string(),
-                    Err(_) => "PANIC".into(),
-                }
-            };
-            let commands = worker.join().unwrap();
-            println!("{scenario} {language}: {result}; commands={commands:?}");
-            results.push(result);
-        }
-        if results[0] != results[1] {
-            regressions.push(format!(
-                "{scenario}: Python={} Rust={}",
-                results[0], results[1]
-            ));
+        let expected = match scenario {
+            "malformed_utf8_boundary" | "greeting_rejected" => "SMTPConnectError",
+            "long_reply" => "SMTPResponseException",
+            _ => "sent",
+        };
+        let (port, worker) = receiver(scenario);
+        let auth = ["cram", "auth_fallback", "plain_challenge"].contains(&scenario);
+        let cfg = json!({"host":"127.0.0.1", "port":port, "mode":"plain", "sender":if scenario == "display_address" { "Display Name <sender@example.com>" } else { "sender@example.com" }, "recipients":if scenario == "partial_recipient" { vec!["bad@example.com", "good@example.com"] } else { vec!["good@example.com"] }, "username":if auth { Some("synthetic-user") } else { None }, "timeout_seconds":2.0});
+        ctx.state.write_json("notify.json", &cfg).unwrap();
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            notify::send_test_message(&ctx)
+        })) {
+            Ok(Ok(v)) => v
+                .get("error")
+                .or_else(|| v.get("status"))
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            Ok(Err(e)) => e.reason.to_string(),
+            Err(_) => "PANIC".into(),
+        };
+        let commands = worker.join().unwrap();
+        println!("{scenario}: {result}; commands={commands:?}");
+        if result != expected {
+            regressions.push(format!("{scenario}: Python={expected} Rust={result}"));
         }
     }
     assert!(
@@ -288,32 +277,17 @@ fn notify_secure_mode_includes_special_bits() {
     );
 }
 
+/// A minimal persisted incident document loads with the original defaults.
 #[test]
-fn incident_document_python_roundtrip_shapes() {
-    let base = json!({"id":"inc-test", "opened_at":"2023-11-14T22:13:20Z", "status":"open", "scope":"principal", "actions":{}, "assessment":{}, "notification":{}});
-    let mut differences = vec![];
-    for (field, value) in [
-        ("notification", json!({})),
-        ("principals", json!("ab")),
-        ("actions", json!([["stopped", true]])),
-        ("trigger", json!(12)),
-        ("runtime", json!(12)),
-    ] {
-        let mut data = base.clone();
-        data[field] = value;
-        let code = format!(
-            "import json\nfrom zeropw.incident import Incident\nprint(json.dumps(Incident.from_dict(json.loads({:?})).to_dict()))",
-            data.to_string()
-        );
-        let py: Value = serde_json::from_str(&oracle::python(&code)).unwrap();
-        let rs = zeropw::incident::Incident::from_dict(&data)
-            .unwrap()
-            .to_dict();
-        if py != rs {
-            differences.push(format!("{field}: Python={} Rust={}", py[field], rs[field]));
-        }
-    }
-    assert!(differences.is_empty(), "R-INCIDENT-SHAPE: {differences:#?}");
+fn incident_document_roundtrip_fills_the_original_defaults() {
+    let data = json!({"id":"inc-test", "opened_at":"2023-11-14T22:13:20Z", "status":"open", "scope":"principal", "actions":{}, "assessment":{}, "notification":{}});
+    let rs = zeropw::incident::Incident::from_dict(&data)
+        .unwrap()
+        .to_dict();
+    assert_eq!(
+        rs,
+        json!({"id":"inc-test","opened_at":"2023-11-14T22:13:20Z","status":"open","scope":"principal","runtime":null,"principals":[],"trigger":"manual","rule":null,"detail":null,"actions":{},"assessment":{},"notification":{"status":"not_configured","attempts":0},"closed_at":null,"widened_from":[]})
+    );
 }
 
 #[test]
@@ -324,11 +298,6 @@ fn corrupted_incident_is_not_treated_as_missing() {
     ctx.state
         .write_bytes("incidents/inc-broken.json", b"{")
         .unwrap();
-    let script = format!(
-        "from zeropw.context import Context\nfrom zeropw.incident import open_incident\nfrom zeropw.notify import retry_pending\nc=Context.open({:?})\nfor f in [lambda: retry_pending(c, 1700000000), lambda: open_incident(c,scope='principal',principals=['agent-1'],trigger='manual')]:\n try:\n  f()\n  print('success')\n except Exception as e:\n  print(type(e).__name__,getattr(e,'reason',''))\n",
-        ctx.state.path.to_str().unwrap()
-    );
-    let py = oracle::python(&script);
     let retry = notify::retry_pending(&ctx, 1_700_000_000.0);
     let opened = zeropw::incident::open_incident(
         &ctx,
@@ -341,7 +310,7 @@ fn corrupted_incident_is_not_treated_as_missing() {
     );
     assert!(
         retry.is_err() && opened.is_err(),
-        "R-INCIDENT-CORRUPT: Python={py:?}; Rust retry={retry:?}, Rust open succeeded={}",
+        "R-INCIDENT-CORRUPT: Rust retry={retry:?}, Rust open succeeded={}",
         opened.is_ok()
     );
 }

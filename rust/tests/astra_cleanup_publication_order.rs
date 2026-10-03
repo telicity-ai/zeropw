@@ -2,7 +2,6 @@
 use std::{
     collections::HashMap,
     os::unix::net::UnixListener,
-    process::Command,
     sync::{Arc, mpsc},
     time::Duration,
 };
@@ -13,49 +12,6 @@ use zeropw::{
 
 #[test]
 fn cancelled_run_can_still_be_running_after_cleanup_closes_resource() {
-    let python = r#"
-import json,os,socket,tempfile,threading
-from pathlib import Path
-from zeropw.context import Context,Config
-from zeropw.runs import RunRegistry
-with tempfile.TemporaryDirectory() as tmp:
- root=Path(tmp);ctx=Context.initialize(root/'state','synthetic-admin-passphrase','synthetic-recovery-passphrase',Config())
- registry=RunRegistry(ctx,grace_seconds=0.05)
- path=root/'synthetic.sock';listener=socket.socket(socket.AF_UNIX);listener.bind(str(path));listener.listen()
- entered=threading.Event();release=threading.Event();released=[]
- def cleanup():
-  listener.close();path.unlink();entered.set();released.append(release.wait(5))
- run=registry.create('alice','conn','grant','ssh','sleep')
- thread=None
- try:
-  registry.start(run,['/bin/sleep','4'],{},str(root),cleanup=cleanup,timeout=4)
-  assert registry.view(run)['state']=='running'
-  thread=threading.Thread(target=lambda:registry.cancel(run.id,'alice','synthetic-withdrawal'))
-  thread.start();assert entered.wait(5)
-  assert not path.exists()
-  assert registry.view(run)['state']=='running'
-  assert run.cancel_requested
-  release.set();thread.join(5);assert not thread.is_alive()
-  assert released==[True]
-  assert registry.wait(run,5).state=='cancelled'
-  print(json.dumps({'resource_absent_while_running':True,'final':'cancelled'}))
- finally:
-  release.set()
-  if thread:thread.join(5)
-  registry.shutdown();ctx.close()
-"#;
-    let oracle = Command::new("python3.12")
-        .args(["-c", python])
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .output()
-        .unwrap();
-    assert!(
-        oracle.status.success(),
-        "{}",
-        String::from_utf8_lossy(&oracle.stderr)
-    );
-    assert!(String::from_utf8_lossy(&oracle.stdout).contains("resource_absent_while_running"));
-
     let root = tempfile::TempDir::new().unwrap();
     let ctx = Arc::new(
         Context::initialize(
