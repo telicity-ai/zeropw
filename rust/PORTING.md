@@ -1,11 +1,35 @@
-# ZeroPW Rust port — equivalence contract
+# ZeroPW Rust implementation — compatibility contract
 
-The Python prototype in `../zeropw/` is the specification. This crate reimplements it in Rust with
-**the same functionality and the same observable behaviour**. A reviewer checks every ported module
-against its Python source and its Python tests; "looks reasonable" is not the bar, "behaves the same" is.
+## 0. Current contract (user decision, 2026-10-03)
 
-Read first: `../docs/security-design.md`, `../docs/implementation.md`, then the Python module you port
-and its tests.
+The Rust crate is the product. The Python prototype in `../zeropw/` is being
+retired and is **no longer the specification**: Rust does not have to
+reproduce CPython's behaviour in general. Rust must match the Python
+prototype only at these boundaries:
+
+1. **Persisted state.** Every state directory, document, audit log, backup
+   and team snapshot/commit the Python prototype could write in normal
+   operation loads in Rust and keeps its meaning. Rust-written JSON keeps the
+   same layout, modes, locking and atomic replacement.
+2. **Wire and cryptographic formats.** Anything another party verifies or
+   parses stays byte-compatible: canonical JSON used for signatures, digests
+   and AEAD associated data; handle tokens; team transport/sync messages;
+   SSH agent protocol; gateway upstream requests; backup archives.
+3. **Features.** Every command, API, tool and process the prototype offered
+   works in Rust with the same intent and outputs a user or agent relies on.
+4. **Security requirements** in `../docs/security-design.md`: secrets never
+   reach agent-controlled processes, outputs, errors or logs; unsupported or
+   malformed input fails closed.
+
+Outside those boundaries Rust may differ. In particular, malformed or
+hand-edited state, adversarial inputs and interpreter quirks (uncaught
+CPython exception classes, `int()`/`float()` grammar corners, Unicode table
+versions, codec coverage, resolver ordering, `urllib` headers) need a clear,
+fail-closed Rust error, not CPython's behaviour. Sections 2-3d below are the
+earlier strict-equivalence contract and are kept as history; where they
+conflict with this section, this section wins. `DEVIATIONS.md` records the
+historical differences; a row there is not a defect unless it breaks one of
+the four boundaries.
 
 ## 1. Complete-port scope
 
