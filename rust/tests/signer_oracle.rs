@@ -1,48 +1,28 @@
-//! Differential tests for `zeropw::signer` against the Python prototype
-//! (`zeropw/signer.py`), per `rust/PORTING.md`'s "add oracle differential
-//! tests ... for every cross-language format you own" rule for work unit G.
+//! SSH agent wire tests for `zeropw::signer` against a golden fixture the
+//! Python prototype's signer produced once
+//! (`tests/fixtures/python/signer/GENERATE.md`). The SSH agent protocol is a
+//! wire format another party parses (`PORTING.md` §0 boundary 2).
 //!
-//! Lives under `rust/tests/` as a standalone test binary (like
-//! `policy_oracle.rs`/`vault_context_oracle.rs`): `crate::oracle` is
-//! `#[cfg(test)] pub(crate)` and not reachable from here, so this file has
-//! its own tiny Python-running helper.
-//!
-//! Approach: one Rust process hosts a real signer socket (`Context` +
-//! `signer::install`, exactly like the crate's own unit tests). Two
-//! identical grants are issued against the same connection/key material —
-//! one bound for a Python-driven client, one for a Rust-driven client — so
-//! both drives start from byte-identical policy/vault state and cannot
-//! interfere with each other's grant usage count. For each named scenario
-//! in the table below, the Python side builds its request messages with
-//! `zeropw.sshwire`'s own encoders and sends them over a real
-//! `AF_UNIX` socket to the Rust-hosted signer; the Rust side builds the
-//! *same* logical messages with `zeropw::sshwire`'s encoders and sends them
-//! to the same signer over its own socket. The two reply sequences (hex
-//! encoded, one per request) are asserted byte-for-byte identical — since
-//! Ed25519 signing is deterministic and both grants/keys/session ids are
-//! identical, a successful sign reply is expected to match exactly, not
-//! just structurally.
+//! The fixture holds, for fixed key seeds and session identifiers, every
+//! request message of a scenario table as built by `zeropw.sshwire`'s
+//! encoders, and the replies the prototype's `zeropw.signer` sent back. Two
+//! checks follow: Rust's encoders build byte-identical request messages, and
+//! the Rust signer -- bound to the same connection, key and host keys --
+//! answers every message with byte-identical replies (Ed25519 signing is
+//! deterministic, so a successful sign reply matches exactly, and its
+//! signature verifies).
 //!
 //! Table: valid flow, wrong user, wrong session id, second bind (on one
 //! client connection), forwarding bind, unknown host key, arbitrary-data
-//! sign, add/remove key, lock.
-//!
-//! "a Python signer with Rust helpers if practical" (PORTING.md's wording
-//! for this unit): see `python_signer_rust_client_valid_flow_matches` below
-//! for a smaller check in that direction — a full table in that direction
-//! would require driving a *separate*, long-lived Python signer process
-//! from Rust, which is a large amount of additional process-lifecycle
-//! machinery for marginal extra coverage once the Rust-signer direction
-//! above already cross-checks every scenario in the table against both
-//! languages' encoders.
+//! sign, add/remove key, lock, identities.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::Value;
 use zeropw::clock;
 use zeropw::context::{Config, Context};
 use zeropw::policy as P;
@@ -50,32 +30,14 @@ use zeropw::projects::DEFAULT_ENVIRONMENTS;
 use zeropw::signer;
 use zeropw::sshwire;
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
+const AGENT_REPLIES: &str = include_str!("fixtures/python/signer/agent_replies.json");
+
+fn fixture_json() -> Value {
+    serde_json::from_str(AGENT_REPLIES).unwrap()
 }
 
-fn run_python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let output = Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
-}
-
-fn py_path(p: &Path) -> String {
-    format!("{:?}", p.to_str().expect("utf8 path"))
+fn fixture_bytes(value: &Value) -> Vec<u8> {
+    hex::decode(value.as_str().unwrap()).unwrap()
 }
 
 // --------------------------------------------------------------- fixtures
@@ -88,45 +50,28 @@ struct Fixture {
     other_host_key: sshwire::Ed25519PrivateKey,
     session_id: Vec<u8>,
     other_session_id: Vec<u8>,
-    socket_py: PathBuf,
-    socket_rs: PathBuf,
+    socket: PathBuf,
 }
 
-/// Port of `tests/test_signer.py`'s `SignerTestCase.tearDown`, which calls
-/// `shutdown()` on every case (finding G-R3-4). Harmless to call again on top
-/// of a test's own explicit `manager.shutdown()` (`release_for_grant` is
-/// idempotent once every server is already removed from the registry).
-///
-/// Does not call `Context::close()` explicitly: `signer::install` takes an owned
-/// `Arc<Context>` (finding E-R7-1), not `&'static Context`/`Box::leak`, so `ctx`'s last clone
-/// (held inside `manager`'s `SignerManager`, since this fixture does not keep its own `ctx`
-/// field) drops -- running `Context::drop`/`close()` for real -- once `shutdown()` above has
-/// torn down every `BindingServer` and `manager` itself is dropped alongside the rest of
-/// `Fixture`. `build_fixture` also gives `Context` explicit `socket_dir`/`run_dir` under `_tmp`
-/// so it never allocates anything outside `_tmp` in the first place; `_tmp`'s own ordinary
-/// `Drop` (after this impl's body, since fields drop after a type's own `Drop::drop`) removes
-/// it all.
+/// `shutdown()` on every case, like the prototype's `tearDown`.
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.manager.shutdown();
     }
 }
 
-fn random_bytes(n: usize) -> Vec<u8> {
-    use rand::RngCore;
-    let mut buf = vec![0u8; n];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
-    buf
-}
-
 fn build_fixture() -> Fixture {
+    let data = fixture_json();
+    let key = |field: &str, comment: &str| {
+        sshwire::Ed25519PrivateKey::from_seed(&fixture_bytes(&data[field]), comment).unwrap()
+    };
+    let user_key = key("user_seed", "agent-key");
+    let host_key = key("host_seed", "host");
+    let other_host_key = key("other_host_seed", "other-host");
+
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
-    // Explicit `socket_dir`/`run_dir` under `root`, kept alive as `_tmp` in
-    // the returned `Fixture` (not forgotten): otherwise `Context::initialize`
-    // would default them to fresh private temp dirs under the *system* temp
-    // dir -- harmless now that `ctx` is a properly-dropped `Arc<Context>`
-    // (finding E-R7-1), but still worth keeping self-contained under `root`.
+    // Explicit `socket_dir`/`run_dir` under `root`, kept alive as `_tmp`.
     let config = Config {
         socket_dir: Some(root.join("ctx-sockets")),
         run_dir: Some(root.join("ctx-run")),
@@ -143,10 +88,6 @@ fn build_fixture() -> Fixture {
         .unwrap(),
     );
     ctx.projects.create("demo", DEFAULT_ENVIRONMENTS).unwrap();
-
-    let user_key = sshwire::generate_ed25519_private_key("agent-key");
-    let host_key = sshwire::generate_ed25519_private_key("host");
-    let other_host_key = sshwire::generate_ed25519_private_key("other-host");
     ctx.vault
         .put_secret(
             "box-key",
@@ -176,7 +117,7 @@ fn build_fixture() -> Fixture {
                     P::SshTarget::new(
                         "127.0.0.1",
                         2222,
-                        "deploy",
+                        data["username"].as_str().unwrap(),
                         vec![host_key.public.to_authorized_key("host").unwrap()],
                     )
                     .unwrap(),
@@ -190,17 +131,12 @@ fn build_fixture() -> Fixture {
             .unwrap(),
         )
         .unwrap();
-    let grant_py = ctx
-        .policy
-        .create_grant("agent-1", "box", Some(3600), Some(20))
-        .unwrap();
-    let grant_rs = ctx
+    let grant = ctx
         .policy
         .create_grant("agent-1", "box", Some(3600), Some(20))
         .unwrap();
     let manager = signer::install(ctx, None).unwrap();
-    let binding_py = manager.bind("agent-1", "box", &grant_py.id).unwrap();
-    let binding_rs = manager.bind("agent-1", "box", &grant_rs.id).unwrap();
+    let binding = manager.bind("agent-1", "box", &grant.id).unwrap();
 
     Fixture {
         _tmp: tmp,
@@ -208,10 +144,9 @@ fn build_fixture() -> Fixture {
         user_key,
         host_key,
         other_host_key,
-        session_id: random_bytes(32),
-        other_session_id: random_bytes(32),
-        socket_py: binding_py.socket_path,
-        socket_rs: binding_rs.socket_path,
+        session_id: fixture_bytes(&data["session_id"]),
+        other_session_id: fixture_bytes(&data["other_session_id"]),
+        socket: binding.socket_path,
     }
 }
 
@@ -227,10 +162,8 @@ fn connect(path: &Path) -> sshwire::AgentConnection<UnixStream> {
 
 /// Send `messages` in order over one fresh connection to `path`; returns one
 /// hex-encoded reply per message (or `ERR` if the connection itself failed,
-/// matching the Python driver's own error marker so a transport-level
-/// refusal -- e.g. the oversized-message case, which closes the connection
-/// without a reply -- compares equal across languages too).
-fn drive_rust(path: &Path, messages: &[Vec<u8>]) -> Vec<String> {
+/// the generator's own marker).
+fn drive(path: &Path, messages: &[Vec<u8>]) -> Vec<String> {
     let mut conn = connect(path);
     let mut out = Vec::with_capacity(messages.len());
     for m in messages {
@@ -240,60 +173,6 @@ fn drive_rust(path: &Path, messages: &[Vec<u8>]) -> Vec<String> {
         }
     }
     out
-}
-
-/// Mirrors `drive_rust`, but from a Python subprocess using
-/// `zeropw.sshwire`'s own client helpers.
-fn drive_python(path: &Path, key_setup: &str, messages_expr: &str) -> Vec<String> {
-    let script = format!(
-        r#"
-import socket
-from zeropw import sshwire as w
-
-{key_setup}
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(5)
-sock.connect({path})
-conn = w.AgentConnection(sock)
-messages = {messages_expr}
-for m in messages:
-    try:
-        reply = conn.request(m)
-        print(reply.hex())
-    except Exception:
-        print("ERR")
-"#,
-        path = py_path(path),
-    );
-    run_python(&script).lines().map(str::to_string).collect()
-}
-
-/// Python source reconstructing `user_key`/`host_key`/`other_host_key` and
-/// `session_id`/`other_session_id` from the same seeds/bytes the Rust side
-/// used, so both languages sign over byte-identical material.
-fn python_key_setup(f: &Fixture) -> String {
-    format!(
-        r#"
-from zeropw.crypto.ed25519 import public_key_from_seed
-
-def key_from_seed(seed_hex, comment):
-    seed = bytes.fromhex(seed_hex)
-    pub = w.Ed25519PublicKey(public_key_from_seed(seed))
-    return w.Ed25519PrivateKey(seed=seed, public=pub, comment=comment)
-
-user_key = key_from_seed({user_seed:?}, "agent-key")
-host_key = key_from_seed({host_seed:?}, "host")
-other_host_key = key_from_seed({other_seed:?}, "other-host")
-session_id = bytes.fromhex({session:?})
-other_session_id = bytes.fromhex({other_session:?})
-"#,
-        user_seed = hex::encode(f.user_key.seed().expose()),
-        host_seed = hex::encode(f.host_key.seed().expose()),
-        other_seed = hex::encode(f.other_host_key.seed().expose()),
-        session = hex::encode(&f.session_id),
-        other_session = hex::encode(&f.other_session_id),
-    )
 }
 
 // ------------------------------------------------------- scenario builders
@@ -308,20 +187,14 @@ fn bind_msg(key: &sshwire::Ed25519PrivateKey, session_id: &[u8], forwarding: boo
     )
 }
 
-fn userauth_msg(
-    username: &str,
-    session_id: &[u8],
-    algorithm: &str,
-    key_blob: &[u8],
-    hostbound: Option<&[u8]>,
-) -> Vec<u8> {
+fn userauth_msg(username: &str, session_id: &[u8], key_blob: &[u8]) -> Vec<u8> {
     sshwire::build_userauth_request(
         session_id,
         username,
-        algorithm,
+        signer::SSH_ED25519,
         key_blob,
         sshwire::SSH_CONNECTION_SERVICE,
-        hostbound,
+        None,
     )
 }
 
@@ -329,199 +202,155 @@ fn sign_msg(key_blob: &[u8], data: &[u8], flags: u32) -> Vec<u8> {
     sshwire::build_sign_request(key_blob, data, flags)
 }
 
-/// One `(name, rust_messages, python_messages_expr)` row of the table.
-struct Scenario {
-    name: &'static str,
-    rust: Vec<Vec<u8>>,
-    python_expr: String,
-}
-
-fn scenarios(f: &Fixture) -> Vec<Scenario> {
-    let valid_userauth = userauth_msg(
-        "deploy",
-        &f.session_id,
-        signer::SSH_ED25519,
-        &f.user_key.public.blob(),
-        None,
-    );
+/// The scenario table, built with Rust's own encoders, in fixture order.
+fn scenarios(f: &Fixture) -> Vec<(&'static str, Vec<Vec<u8>>)> {
+    let user_blob = f.user_key.public.blob();
+    let bind = bind_msg(&f.host_key, &f.session_id, false);
     vec![
-        Scenario {
-            name: "valid_flow",
-            rust: vec![
-                bind_msg(&f.host_key, &f.session_id, false),
-                sign_msg(&f.user_key.public.blob(), &valid_userauth, 0),
-            ],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-    w.build_sign_request(user_key.public.blob(),
-        w.build_userauth_request(session_id, "deploy", "ssh-ed25519", user_key.public.blob(), host_key_blob=None), 0),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "wrong_user",
-            rust: vec![
-                bind_msg(&f.host_key, &f.session_id, false),
+        (
+            "valid_flow",
+            vec![
+                bind.clone(),
                 sign_msg(
-                    &f.user_key.public.blob(),
-                    &userauth_msg("root", &f.session_id, signer::SSH_ED25519, &f.user_key.public.blob(), None),
+                    &user_blob,
+                    &userauth_msg("deploy", &f.session_id, &user_blob),
                     0,
                 ),
             ],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-    w.build_sign_request(user_key.public.blob(),
-        w.build_userauth_request(session_id, "root", "ssh-ed25519", user_key.public.blob(), host_key_blob=None), 0),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "wrong_session_id",
-            rust: vec![
-                bind_msg(&f.host_key, &f.session_id, false),
+        ),
+        (
+            "wrong_user",
+            vec![
+                bind.clone(),
                 sign_msg(
-                    &f.user_key.public.blob(),
-                    &userauth_msg(
-                        "deploy",
-                        &f.other_session_id,
-                        signer::SSH_ED25519,
-                        &f.user_key.public.blob(),
-                        None,
-                    ),
+                    &user_blob,
+                    &userauth_msg("root", &f.session_id, &user_blob),
                     0,
                 ),
             ],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-    w.build_sign_request(user_key.public.blob(),
-        w.build_userauth_request(other_session_id, "deploy", "ssh-ed25519", user_key.public.blob(), host_key_blob=None), 0),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "second_bind",
-            rust: vec![
-                bind_msg(&f.host_key, &f.session_id, false),
-                bind_msg(&f.host_key, &f.session_id, false),
+        ),
+        (
+            "wrong_session_id",
+            vec![
+                bind.clone(),
+                sign_msg(
+                    &user_blob,
+                    &userauth_msg("deploy", &f.other_session_id, &user_blob),
+                    0,
+                ),
             ],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "forwarding_bind",
-            rust: vec![bind_msg(&f.host_key, &f.session_id, true)],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), True),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "unknown_host_key",
-            rust: vec![bind_msg(&f.other_host_key, &f.session_id, false)],
-            python_expr: r#"[
-    w.build_session_bind(other_host_key.public.blob(), session_id, w.encode_ssh_signature(other_host_key.sign(session_id)), False),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "arbitrary_data_sign",
-            rust: vec![
-                bind_msg(&f.host_key, &f.session_id, false),
-                sign_msg(&f.user_key.public.blob(), b"not a userauth request at all", 0),
+        ),
+        ("second_bind", vec![bind.clone(), bind.clone()]),
+        (
+            "forwarding_bind",
+            vec![bind_msg(&f.host_key, &f.session_id, true)],
+        ),
+        (
+            "unknown_host_key",
+            vec![bind_msg(&f.other_host_key, &f.session_id, false)],
+        ),
+        (
+            "arbitrary_data_sign",
+            vec![
+                bind,
+                sign_msg(&user_blob, b"not a userauth request at all", 0),
             ],
-            python_expr: r#"[
-    w.build_session_bind(host_key.public.blob(), session_id, w.encode_ssh_signature(host_key.sign(session_id)), False),
-    w.build_sign_request(user_key.public.blob(), b"not a userauth request at all", 0),
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "add_remove_key",
-            rust: vec![
+        ),
+        (
+            "add_remove_key",
+            vec![
                 [&[sshwire::SSH_AGENTC_ADD_IDENTITY][..], &[0u8; 8]].concat(),
                 [&[sshwire::SSH_AGENTC_REMOVE_IDENTITY][..], &[0u8; 8]].concat(),
             ],
-            python_expr: r#"[
-    bytes([w.SSH_AGENTC_ADD_IDENTITY]) + b"\x00" * 8,
-    bytes([w.SSH_AGENTC_REMOVE_IDENTITY]) + b"\x00" * 8,
-]"#
-            .to_string(),
-        },
-        Scenario {
-            name: "lock",
-            rust: vec![[&[sshwire::SSH_AGENTC_LOCK][..], &[0u8; 4]].concat()],
-            python_expr: r#"[
-    bytes([w.SSH_AGENTC_LOCK]) + b"\x00" * 4,
-]"#
-            .to_string(),
-        },
+        ),
+        (
+            "lock",
+            vec![[&[sshwire::SSH_AGENTC_LOCK][..], &[0u8; 4]].concat()],
+        ),
+        (
+            "request_identities",
+            vec![vec![sshwire::SSH_AGENTC_REQUEST_IDENTITIES]],
+        ),
     ]
 }
 
 #[test]
-fn table_driven_scenarios_match_between_python_client_and_rust_client() {
+fn rust_encoders_build_the_python_request_messages() {
     let f = build_fixture();
-    let key_setup = python_key_setup(&f);
-    for scenario in scenarios(&f) {
-        let rust_replies = drive_rust(&f.socket_rs, &scenario.rust);
-        let python_replies = drive_python(&f.socket_py, &key_setup, &scenario.python_expr);
+    let data = fixture_json();
+    let expected = data["scenarios"].as_array().unwrap();
+    let actual = scenarios(&f);
+    assert_eq!(actual.len(), expected.len());
+    for ((name, messages), want) in actual.iter().zip(expected) {
+        assert_eq!(want["name"], *name);
+        let hex: Vec<String> = messages.iter().map(hex::encode).collect();
         assert_eq!(
-            rust_replies, python_replies,
-            "scenario {} produced different replies",
-            scenario.name
+            Value::from(hex),
+            want["messages"],
+            "scenario {name}: request bytes"
         );
     }
-    // `Fixture::drop` also calls `shutdown()`; this explicit call just makes
-    // the ordering relative to the assertions above obvious at the call
-    // site, and is harmless to repeat (`release_for_grant` is idempotent).
+}
+
+#[test]
+fn signer_replies_match_the_python_signer() {
+    let f = build_fixture();
+    let data = fixture_json();
+    for scenario in data["scenarios"].as_array().unwrap() {
+        let name = scenario["name"].as_str().unwrap();
+        let messages: Vec<Vec<u8>> = scenario["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(fixture_bytes)
+            .collect();
+        let replies = drive(&f.socket, &messages);
+        assert_eq!(
+            Value::from(replies),
+            scenario["replies"],
+            "scenario {name} produced different replies"
+        );
+    }
+    // The fixture's valid-flow signature verifies against the bound key.
+    let valid = &data["scenarios"][0];
+    assert_eq!(valid["name"], "valid_flow");
+    let reply = fixture_bytes(&valid["replies"][1]);
+    assert_eq!(reply[0], sshwire::SSH_AGENT_SIGN_RESPONSE);
+    let sig =
+        sshwire::parse_ssh_signature(&sshwire::parse_sign_response(&reply[1..]).unwrap()).unwrap();
+    let data_signed = userauth_msg("deploy", &f.session_id, &f.user_key.public.blob());
+    assert!(zeropw::crypto::ed25519::verify(
+        f.user_key.public.key_bytes(),
+        &data_signed,
+        &sig
+    ));
     f.manager.shutdown();
 }
 
-/// The oversized-message case (`sshwire::MAX_AGENT_MESSAGE`) closes the
-/// connection without any reply at all, in both languages: a transport-level
-/// refusal rather than a `SSH_AGENT_FAILURE` reply. Exercised separately
-/// since it needs to write a raw length prefix rather than a well-formed
-/// agent message `AgentConnection` would refuse to build.
+/// An oversized message (`sshwire::MAX_AGENT_MESSAGE` + 1) closes the
+/// connection without any reply at all, as the prototype's signer did: a
+/// transport-level refusal rather than a `SSH_AGENT_FAILURE` reply.
 #[test]
-fn oversized_message_closes_connection_without_a_reply_in_both_languages() {
+fn oversized_message_closes_connection_without_a_reply() {
     let f = build_fixture();
+    let data = fixture_json();
+    assert_eq!(
+        data["max_agent_message"].as_u64().unwrap(),
+        sshwire::MAX_AGENT_MESSAGE as u64
+    );
+    assert_eq!(data["oversized_reply"], "");
 
-    let mut rust_sock = UnixStream::connect(&f.socket_rs).unwrap();
-    rust_sock
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    let mut sock = UnixStream::connect(&f.socket).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let oversized = sshwire::encode_uint32((sshwire::MAX_AGENT_MESSAGE + 1) as u32);
-    rust_sock.write_all(&oversized).unwrap();
-    rust_sock.write_all(&[0x0d]).unwrap();
+    sock.write_all(&oversized).unwrap();
+    sock.write_all(&[0x0d]).unwrap();
     let mut buf = [0u8; 16];
-    let rust_reply = match rust_sock.read(&mut buf) {
+    let reply = match sock.read(&mut buf) {
         Ok(n) => buf[..n].to_vec(),
         Err(_) => Vec::new(),
     };
-    assert!(rust_reply.is_empty());
-
-    let script = format!(
-        r#"
-import socket
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(5)
-sock.connect({path})
-sock.sendall(({length}).to_bytes(4, "big") + b"\x0d")
-try:
-    reply = sock.recv(1024)
-except (ConnectionResetError, OSError):
-    reply = b""
-print(reply.hex())
-"#,
-        path = py_path(&f.socket_py),
-        length = sshwire::MAX_AGENT_MESSAGE + 1,
-    );
-    let python_reply = run_python(&script).trim().to_string();
-    assert_eq!(python_reply, "");
-
+    assert!(reply.is_empty());
     f.manager.shutdown();
 }
 
@@ -536,10 +365,9 @@ print(reply.hex())
 /// byte-counting code silently replaced it with a private fallback temp dir
 /// and then refused to bind inside it at all (`socket_path_too_long`), while
 /// Python (and this crate, after the fix) use the configured directory
-/// directly. Cross-checked against a real `python3.12`
-/// `SignerManager._choose_socket_dir` and its `bind`-time length check.
+/// directly.
 #[test]
-fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
+fn non_ascii_socket_dir_length_is_measured_in_characters() {
     let tmp = tempfile::TempDir::new().unwrap();
     // A short, literal `/tmp`-rooted base (unlike `tempfile::TempDir`, whose
     // own directory can itself already be a long per-process path, e.g. on
@@ -681,151 +509,7 @@ fn non_ascii_socket_dir_length_is_measured_in_characters_like_python() {
         }
     }
 
-    // Python oracle: the same directory, measured the same way Python's own
-    // `SignerManager` does.
-    let script = format!(
-        r#"
-from pathlib import Path
-from zeropw.signer import SignerManager, MAX_UNIX_PATH
-
-candidate = Path({candidate:?})
-chosen = SignerManager._choose_socket_dir(candidate)
-print(str(chosen) == str(candidate))
-full = chosen / ("a" + "0" * 12 + ".sock")
-print(len(str(full)) <= MAX_UNIX_PATH + 3)
-"#,
-        candidate = candidate.to_str().expect("utf8 path"),
-    );
-    let output = run_python(&script);
-    let mut lines = output.lines();
-    assert_eq!(
-        lines.next(),
-        Some("True"),
-        "python must also use the configured directory directly"
-    );
-    assert_eq!(
-        lines.next(),
-        Some("True"),
-        "python's own bind-time length check must accept this path too"
-    );
-
     manager.shutdown();
     let _ = std::fs::remove_dir_all(&base);
     let _ = tmp; // kept alive until here
-}
-
-// ---------------------------------------------- Python signer, Rust client
-
-/// PORTING.md asks for "a Python signer with Rust helpers if practical".
-/// This drives a real, separately-started Python `zeropw.signer` server
-/// with Rust's own `sshwire::AgentConnection` client for the valid
-/// bind-then-sign flow, and checks the signature Rust receives verifies
-/// against the same public key -- proving Rust's *client* encoding
-/// (`build_session_bind`/`build_userauth_request`/`build_sign_request`) is
-/// something a real Python-hosted signer accepts, the reverse direction
-/// from every other test in this file.
-#[test]
-fn python_signer_rust_client_valid_flow_matches() {
-    let user_key = zeropw::sshwire::generate_ed25519_private_key("agent-key");
-    let host_key = zeropw::sshwire::generate_ed25519_private_key("host");
-    let session_id = random_bytes(32);
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    let root = tmp.path().to_path_buf();
-
-    // A short-lived Python process: build state, install the signer, bind
-    // one socket, print its path once ready, then block until stdin closes
-    // (so the Rust test controls its lifetime). `SignerManager.bind` always
-    // generates its own `a<uuid>.sock` name (`MAX_UNIX_PATH`-bounded), so
-    // the actual path is read back from stdout rather than dictated here.
-    let script = format!(
-        r#"
-import sys
-from zeropw.context import Config, Context
-from zeropw import policy as P, signer as S, sshwire as w
-from zeropw.crypto.ed25519 import public_key_from_seed
-
-def key_from_seed(seed_hex, comment):
-    seed = bytes.fromhex(seed_hex)
-    pub = w.Ed25519PublicKey(public_key_from_seed(seed))
-    return w.Ed25519PrivateKey(seed=seed, public=pub, comment=comment)
-
-user_key = key_from_seed({user_seed:?}, "agent-key")
-host_key = key_from_seed({host_seed:?}, "host")
-
-ctx = Context.initialize({state}, "admin-passphrase-1", "recovery-passphrase-1", Config(), lambda: 1700000000.0)
-ctx.projects.create("demo")
-ctx.vault.put_secret("box-key", "ssh_private_key", user_key.to_openssh_private_key().encode(), "demo", "dev")
-ctx.policy.create_principal("agent-1")
-ctx.policy.create_connection(P.Connection(
-    id="box", project="demo", environment="dev", service="ssh-box", kind="ssh", secret_id="box-key",
-    secret_version=None, description="", http_target=None, http_auth=None, http_scope=None,
-    ssh_target=P.SshTarget("127.0.0.1", 2222, "deploy", (host_key.public.to_authorized_key("host"),)),
-    cli=None, policy_version=0, status="active", created_at="", updated_at=""))
-grant = ctx.policy.create_grant("agent-1", "box", 3600, 5)
-manager = S.install(ctx)
-binding = manager.bind("agent-1", "box", grant.id)
-print(str(binding.socket_path), flush=True)
-sys.stdin.readline()
-manager.shutdown()
-ctx.close()
-"#,
-        user_seed = hex::encode(user_key.seed().expose()),
-        host_seed = hex::encode(host_key.seed().expose()),
-        state = py_path(&root.join("state")),
-    );
-
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let mut child = Command::new(&interpreter)
-        .arg("-c")
-        .arg(&script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("spawn python signer");
-
-    let stdout = child.stdout.take().unwrap();
-    let mut reader = std::io::BufReader::new(stdout);
-    let mut line = String::new();
-    // Blocking read of the socket path line; the process prints it right
-    // after `manager.bind(...)` returns, well before any timeout budget
-    // this test needs.
-    std::io::BufRead::read_line(&mut reader, &mut line)
-        .expect("python signer did not become ready");
-    let socket_path = PathBuf::from(line.trim());
-    assert!(
-        !socket_path.as_os_str().is_empty(),
-        "python signer printed no socket path"
-    );
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut conn = connect(&socket_path);
-        let bind = bind_msg(&host_key, &session_id, false);
-        assert_eq!(conn.request(&bind).unwrap(), sshwire::build_success());
-        let data = userauth_msg(
-            "deploy",
-            &session_id,
-            signer::SSH_ED25519,
-            &user_key.public.blob(),
-            None,
-        );
-        let reply = conn
-            .request(&sign_msg(&user_key.public.blob(), &data, 0))
-            .unwrap();
-        assert_eq!(reply[0], sshwire::SSH_AGENT_SIGN_RESPONSE);
-        let sig = sshwire::parse_ssh_signature(&sshwire::parse_sign_response(&reply[1..]).unwrap())
-            .unwrap();
-        assert!(zeropw::crypto::ed25519::verify(
-            user_key.public.key_bytes(),
-            &data,
-            &sig
-        ));
-    }));
-
-    let _ = child.stdin.take(); // close stdin: unblocks the python process's readline()
-    let _ = child.wait();
-    result.expect("python-signer/rust-client flow failed");
 }

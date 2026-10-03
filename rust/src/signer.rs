@@ -2103,10 +2103,9 @@ mod tests {
         assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
     }
 
-    /// The `OSError` escaping `_BindingServer.__init__` (here: binding inside
-    /// a directory that does not exist) surfaces like Python's: the CLI
-    /// mapping's `FileNotFoundError` shape, and an escaped built-in at the
-    /// server/tools boundary.
+    /// A bind failure (here: binding inside a directory that does not exist)
+    /// fails closed: the CLI mapping's `FileNotFoundError` shape, and an
+    /// escaped built-in at the server/tools boundary.
     #[test]
     fn bind_failure_is_the_escaping_python_os_error() {
         let tmp = TempDir::new().unwrap();
@@ -2116,30 +2115,17 @@ mod tests {
             json!({"error": "FileNotFoundError", "reason": "file_not_found"})
         );
         assert!(crate::gateway::is_escaped_builtin(&error));
-        let output = crate::oracle::python(&format!(
-            "import socket, os\ns = socket.socket(socket.AF_UNIX)\ntry:\n    s.bind({:?})\nexcept OSError as exc:\n    print(type(exc).__name__)\n",
-            tmp.path().join("missing").join("s.sock").to_string_lossy()
-        ));
-        assert_eq!(output.trim(), "FileNotFoundError");
     }
 
     // Regression test for finding G-3: the fallback branch's random
-    // directory suffix used to be 8 raw bytes hex-encoded (16 characters),
-    // 8 bytes longer than Python's `tempfile.mkdtemp(prefix="zpws-")` own
-    // 8-character suffix, which shifts exactly where the `MAX_UNIX_PATH`
-    // bind-time length check trips relative to Python. Also covers G-2 for
-    // this branch: mode 0700 immediately after creation.
+    // directory suffix is 8 characters from `tempfile`'s
+    // `_RandomNameSequence` alphabet (the prototype's
+    // `tempfile.mkdtemp(prefix="zpws-")`), which fixes exactly where the
+    // `MAX_UNIX_PATH` bind-time length check trips. Also covers G-2 for this
+    // branch: mode 0700 immediately after creation, under the system
+    // temporary directory.
     #[test]
-    fn make_temp_dir_suffix_length_matches_python_mkdtemp() {
-        let python_suffix_len: usize = crate::oracle::python(
-            "import tempfile, os\n\
-             path = tempfile.mkdtemp(prefix='zpws-')\n\
-             print(len(os.path.basename(path)) - len('zpws-'))\n\
-             os.rmdir(path)",
-        )
-        .trim()
-        .parse()
-        .expect("python prints an integer suffix length");
+    fn make_temp_dir_suffix_matches_mkdtemp() {
         let dir = choose_socket_dir(None).unwrap();
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(
@@ -2148,64 +2134,49 @@ mod tests {
         );
         let name = dir.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("zpws-"), "{name}");
-        let rust_suffix_len = name.len() - "zpws-".len();
-        assert_eq!(rust_suffix_len, python_suffix_len);
+        assert_eq!(name.len() - "zpws-".len(), 8, "{name}");
         assert!(
             name["zpws-".len()..]
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
             "{name}: _RandomNameSequence alphabet"
         );
-        // Same parent as `tempfile.gettempdir()` in this environment.
-        let python_parent = crate::oracle::python("import tempfile\nprint(tempfile.gettempdir())");
         assert_eq!(
-            dir.parent().unwrap().to_str().unwrap(),
-            python_parent.trim()
+            dir.parent().unwrap().canonicalize().unwrap(),
+            std::env::temp_dir().canonicalize().unwrap()
         );
         std::fs::remove_dir(&dir).unwrap();
     }
 
-    // Regression test for finding G-R6-2: `normalize_pathlib_string` must
-    // reproduce CPython's `pathlib` string normalization exactly --
+    // Regression test for finding G-R6-2: `normalize_pathlib_string`
+    // normalizes a configured socket directory the way the prototype's
+    // `str(pathlib.Path(x))` did (expected values measured there) --
     // collapsing repeated `/` separators and dropping `.` components (but
     // never resolving `..`), including pathlib's own leading-slash-run
     // special case (exactly two slashes preserved, one or three-or-more
-    // collapsed to one). Compares directly against real `python3.12`'s
-    // `str(pathlib.Path(x))` for the shapes the equivalence review named:
-    // `//`, `/./`, a trailing slash, and `..`.
+    // collapsed to one).
     #[test]
-    fn normalize_pathlib_string_matches_python_pathlib_str() {
-        let cases = [
-            "/tmp/zpw//aaa",
-            "/tmp/zpw/./aaa",
-            "/tmp/zpw/aaa/",
-            "/tmp/zpw/b/../aaa",
-            "/tmp/zpw//",
-            "/tmp/zpw///.",
-            "//tmp/zpw",
-            "///tmp/zpw",
-            "////tmp/zpw",
-            "/",
-            "//",
-            "///",
-            "a//b",
-            "a/./b",
-            "./a/b",
-            "../a/b",
-            "",
-        ];
-        let script = format!(
-            "from pathlib import Path\n\
-             import json\n\
-             cases = {cases:?}\n\
-             print(json.dumps([str(Path(c)) for c in cases]))",
-        );
-        let python_json = crate::oracle::python(&script);
-        let python_results: Vec<String> =
-            serde_json::from_str(python_json.trim()).expect("python prints a JSON string array");
-        assert_eq!(python_results.len(), cases.len());
-        for (case, expected) in cases.iter().zip(python_results.iter()) {
-            assert_eq!(&normalize_pathlib_string(case), expected, "input: {case:?}");
+    fn normalize_pathlib_string_matches_pathlib_str() {
+        for (case, expected) in [
+            ("/tmp/zpw//aaa", "/tmp/zpw/aaa"),
+            ("/tmp/zpw/./aaa", "/tmp/zpw/aaa"),
+            ("/tmp/zpw/aaa/", "/tmp/zpw/aaa"),
+            ("/tmp/zpw/b/../aaa", "/tmp/zpw/b/../aaa"),
+            ("/tmp/zpw//", "/tmp/zpw"),
+            ("/tmp/zpw///.", "/tmp/zpw"),
+            ("//tmp/zpw", "//tmp/zpw"),
+            ("///tmp/zpw", "/tmp/zpw"),
+            ("////tmp/zpw", "/tmp/zpw"),
+            ("/", "/"),
+            ("//", "//"),
+            ("///", "/"),
+            ("a//b", "a/b"),
+            ("a/./b", "a/b"),
+            ("./a/b", "a/b"),
+            ("../a/b", "../a/b"),
+            ("", "."),
+        ] {
+            assert_eq!(normalize_pathlib_string(case), expected, "input: {case:?}");
         }
     }
 
@@ -2236,26 +2207,12 @@ mod tests {
             format!("{base}/./{padding}"),  // "." component
             format!("{base}/{padding}///"), // trailing separators
         ] {
-            let script = format!(
-                "import shutil\n\
-                 from zeropw.signer import SignerManager\n\
-                 d = SignerManager._choose_socket_dir({raw:?})\n\
-                 print(str(d))\n\
-                 shutil.rmtree(str(d), ignore_errors=True)\n",
-            );
-            let python_dir = crate::oracle::python(&script).trim().to_string();
-            assert_eq!(
-                python_dir, normalized,
-                "python3.12 should normalize {raw:?} to the configured directory, \
-                 not fall back to a temp dir"
-            );
-
             let dir = choose_socket_dir(Some(PathBuf::from(&raw))).unwrap();
             assert_eq!(
                 dir,
                 PathBuf::from(&normalized),
                 "rust should normalize {raw:?} to the configured directory, not \
-                 fall back to a temp dir, matching python3.12 above"
+                 fall back to a temp dir"
             );
             let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o700);
