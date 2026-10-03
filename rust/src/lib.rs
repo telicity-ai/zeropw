@@ -44,6 +44,7 @@ pub mod incident;
 pub mod intrusion;
 pub mod notify;
 mod smtp;
+mod sys_hostent;
 
 pub mod admin_cli;
 pub mod agent_cli;

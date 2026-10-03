@@ -12,18 +12,18 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use dns_lookup::{AddrFamily, AddrInfoHints, getaddrinfo, lookup_addr};
 use hmac::Mac;
 use md5::Md5;
 
 use crate::errors::{Error, ErrorClass};
 use crate::notify::NotifyConfig;
 use crate::secret::SecretBytes;
+use crate::sys_hostent;
 
 mod header;
 
@@ -291,7 +291,7 @@ impl Client {
             client.close();
             return Err(caught("SMTPConnectError"));
         }
-        client.local_hostname = local_hostname();
+        client.local_hostname = local_hostname()?;
         Ok(client)
     }
 
@@ -774,17 +774,31 @@ fn b64_secret(bytes: &[u8]) -> Result<SecretBytes, SendError> {
 
 /// `smtplib.SMTP.__init__`'s default `local_hostname`: `socket.getfqdn()`
 /// when it contains a dot, else `'[%s]' % gethostbyname(gethostname())`
-/// (`127.0.0.1` when that lookup fails).
-fn local_hostname() -> String {
-    let hostname = gethostname();
-    let fqdn = getfqdn(&hostname);
+/// (`127.0.0.1` when that lookup raises `gaierror`). Any other exception
+/// escapes `SMTP()` the way it escapes the constructor in Python.
+fn local_hostname() -> Result<String, SendError> {
+    let fqdn = getfqdn("").map_err(|e| socket_exception(&e))?;
     if fqdn.contains('.') {
-        return fqdn;
+        return Ok(fqdn);
     }
-    let lookup_name = idna_hostname(&hostname).unwrap_or(hostname);
-    let address = first_resolved_address(&lookup_name, Some(AddrFamily::Inet))
-        .map_or_else(|| "127.0.0.1".to_owned(), |a| a.ip().to_string());
-    format!("[{address}]")
+    let address = match gethostname().and_then(|name| sys_hostent::gethostbyname(&name)) {
+        Ok(address) => address.to_string(),
+        Err(e) if sys_hostent::exception_class(&e) == "gaierror" => "127.0.0.1".to_owned(),
+        Err(e) => return Err(socket_exception(&e)),
+    };
+    Ok(format!("[{address}]"))
+}
+
+/// How an exception from the socket name functions leaves `notify._send`:
+/// `OSError` subclasses are caught by `deliver`/`send_test_message`; the
+/// `ValueError` subclasses (`UnicodeError`, `UnicodeDecodeError`) and
+/// `TypeError` escape.
+fn socket_exception(error: &io::Error) -> SendError {
+    match sys_hostent::exception_class(error) {
+        class @ ("UnicodeError" | "UnicodeDecodeError") => escaped_value(class),
+        "TypeError" => escaped_other("TypeError"),
+        class => caught(class),
+    }
 }
 
 /// The IDNA 2003 conversion performed by CPython's socket module.
@@ -792,71 +806,37 @@ fn idna_hostname(hostname: &str) -> Result<String, SendError> {
     crate::pyidna::encode(hostname).map_err(|_| escaped_value("UnicodeError"))
 }
 
-/// `socket.gethostname()`: `uname().nodename` on every POSIX platform.
-fn gethostname() -> String {
+/// `socket.gethostname()`: `uname().nodename` on every POSIX platform,
+/// decoded with the filesystem encoding (UTF-8, `surrogateescape`). A
+/// name that is not valid UTF-8 decodes to lone surrogates, which the
+/// `idna` codec of every function this module passes it to rejects with
+/// `UnicodeError`; that error is reported here, before the lookup.
+fn gethostname() -> io::Result<String> {
     rustix::system::uname()
         .nodename()
-        .to_string_lossy()
-        .into_owned()
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| sys_hostent::HostError::Unicode.into())
 }
 
-/// `socket.getfqdn(hostname)`: `gethostbyaddr` of the host name's first
-/// address through the platform resolver/NSS.  `getnameinfo(NI_NAMEREQD)`
-/// runs the same reverse lookup (`gethostbyaddr_r` in glibc, Libinfo on
-/// macOS) and gives its canonical name; when it fails, so does Python's
-/// `gethostbyaddr`, and `getfqdn` returns the name unchanged.  No safe API
-/// exposes the `hostent` alias list, so aliases are taken from the hosts
-/// file only when its entry for the address names the same canonical host
-/// (`DEVIATIONS.md`).
-fn getfqdn(hostname: &str) -> String {
-    let lookup_name = idna_hostname(hostname).unwrap_or_else(|_| hostname.to_owned());
-    let Some(address) = first_resolved_address(&lookup_name, None) else {
-        return hostname.to_owned();
-    };
-    let Ok(canonical) = lookup_addr(&address.ip()) else {
-        return hostname.to_owned();
-    };
-    let aliases = hosts_entry(address.ip())
-        .filter(|(name, _)| *name == canonical)
-        .map_or_else(Vec::new, |entry| entry.1);
-    std::iter::once(&canonical)
-        .chain(aliases.iter())
-        .find(|name| name.contains('.'))
-        .unwrap_or(&canonical)
-        .clone()
-}
-
-/// CPython `setipaddr`: `getaddrinfo(name, NULL)` with an otherwise-zeroed
-/// hints struct. `gethostbyaddr` uses `AF_UNSPEC`; `gethostbyname` uses
-/// `AF_INET`. In particular, no socket type is requested, so libc's native
-/// IPv4/IPv6 ordering is preserved instead of `ToSocketAddrs`' stream order.
-fn first_resolved_address(
-    hostname: &str,
-    family: Option<AddrFamily>,
-) -> Option<std::net::SocketAddr> {
-    let hints = AddrInfoHints {
-        address: family.map_or(0, i32::from),
-        ..AddrInfoHints::default()
-    };
-    getaddrinfo(Some(hostname), None, Some(hints))
-        .ok()?
-        .next()?
-        .ok()
-        .map(|info| info.sockaddr)
-}
-
-fn hosts_entry(address: IpAddr) -> Option<(String, Vec<String>)> {
-    let hosts = fs::read_to_string("/etc/hosts").ok()?;
-    hosts.lines().find_map(|line| {
-        let line = line.split('#').next().unwrap_or_default();
-        let mut fields = line.split_ascii_whitespace();
-        let entry: IpAddr = fields.next()?.parse().ok()?;
-        if entry != address {
-            return None;
-        }
-        let canonical = fields.next()?.to_owned();
-        Some((canonical, fields.map(str::to_owned).collect()))
-    })
+/// `socket.getfqdn(name)` (Lib/socket.py): `gethostbyaddr(name)`, then the
+/// first of `[hostname] + aliases` containing a dot, else `hostname`; the
+/// name unchanged when the lookup raises `OSError`. Other exceptions
+/// (`UnicodeError`, `TypeError`, `UnicodeDecodeError`) propagate.
+fn getfqdn(name: &str) -> io::Result<String> {
+    let mut name = name.trim_matches(crate::pystr::is_space).to_owned();
+    if name.is_empty() || name == "0.0.0.0" || name == "::" {
+        name = gethostname()?;
+    }
+    match sys_hostent::gethostbyaddr(&name) {
+        Ok((hostname, aliases, _)) => Ok(std::iter::once(&hostname)
+            .chain(aliases.iter())
+            .find(|candidate| candidate.contains('.'))
+            .unwrap_or(&hostname)
+            .clone()),
+        Err(e) if sys_hostent::is_os_error(&e) => Ok(name),
+        Err(e) => Err(e),
+    }
 }
 
 /// `EmailMessage` as built by `notify._send`: Subject, From, To, then
@@ -1865,60 +1845,42 @@ print(json.dumps(out))
 
 #[cfg(test)]
 mod hostname_tests {
-    use serde_json::{Value, json};
+    use serde_json::json;
+
+    use crate::sys_hostent::tests::{assert_parity, cases, rust_error, rust_outcomes};
 
     /// `smtplib.SMTP().local_hostname` (`socket.getfqdn()` or the `[ip]`
-    /// literal) is what EHLO/HELO send.  Both implementations use the host
-    /// platform's configured resolver, including DNS PTR and macOS Directory
-    /// Services rather than approximating it with `/etc/hosts`.
+    /// literal) is what EHLO/HELO send. Both implementations use the host
+    /// platform's resolver through the same `gethostbyaddr` call, including
+    /// its alias list.
     #[test]
     fn local_hostname_matches_smtplib() {
         let out = crate::oracle::python("import smtplib; print(smtplib.SMTP().local_hostname)");
-        let rust = super::local_hostname();
+        let Ok(rust) = super::local_hostname() else {
+            panic!("local_hostname raised where smtplib returned {out:?}");
+        };
         assert_eq!(rust, out.trim());
     }
 
-    /// Keep the resolver stages visible in hosted diagnostics: CPython's
-    /// `gethostbyaddr(hostname)` first calls zero-hint `getaddrinfo(AF_UNSPEC)`
-    /// and then reverses that first address.
+    /// `socket.getfqdn(name)` over the `gethostbyaddr` cases (empty and
+    /// whitespace names fall back to this host's name).
     #[test]
-    fn getfqdn_forward_and_reverse_steps_match_socketmodule() {
-        let script = r#"
-import json, socket
-host = socket.gethostname()
-out = {"hostname": host, "first_address": None, "getnameinfo": None, "gethostbyaddr": None}
-try:
-    first = socket.getaddrinfo(host, None, socket.AF_UNSPEC, 0, 0, 0)[0][4]
-    out["first_address"] = first[0]
-    out["getnameinfo"] = socket.getnameinfo(first, socket.NI_NAMEREQD | socket.NI_NUMERICSERV)[0]
-except Exception:
-    pass
-try:
-    out["gethostbyaddr"] = socket.gethostbyaddr(host)[0]
-except Exception:
-    pass
-out["getfqdn"] = socket.getfqdn(host)
-print(json.dumps(out, sort_keys=True))
-"#;
-        let expected: Value = serde_json::from_str(crate::oracle::python(script).trim()).unwrap();
-        let hostname = super::gethostname();
-        let mut actual = json!({
-            "hostname": hostname,
-            "first_address": null,
-            "getnameinfo": null
+    fn getfqdn_matches_socket_getfqdn() {
+        let cases = cases();
+        let rust = rust_outcomes(&cases, |case| match super::getfqdn(case) {
+            Ok(name) => json!({"ok": name}),
+            Err(error) => rust_error(&error),
         });
-        if let Some(address) = super::first_resolved_address(&hostname, None) {
-            actual["first_address"] = json!(address.ip().to_string());
-            if let Ok(name) = dns_lookup::lookup_addr(&address.ip()) {
-                actual["getnameinfo"] = json!(name);
-            }
-        }
-        actual["getfqdn"] = json!(super::getfqdn(&hostname));
-        for field in ["hostname", "first_address", "getnameinfo", "getfqdn"] {
-            assert_eq!(
-                actual[field], expected[field],
-                "resolver stage {field} differed; Python socket diagnostics: {expected}; Rust diagnostics: {actual}"
-            );
-        }
+        assert_parity("getfqdn", &cases, &rust);
+    }
+
+    /// `socket.gethostname()`.
+    #[test]
+    fn gethostname_matches_socket_gethostname() {
+        let out = crate::oracle::python("import socket; print(socket.gethostname())");
+        assert_eq!(
+            super::gethostname().ok().as_deref(),
+            Some(out.trim_end_matches('\n'))
+        );
     }
 }
