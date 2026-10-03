@@ -1,4 +1,6 @@
-//! DEVIATIONS rows 39/40, measured end to end (PORTING.md §3c/§3d): a handle
+//! Built-in exceptions that escape to the HTTP server (PORTING.md §3c/§3d).
+//!
+//! DEVIATIONS rows 39/40, measured end to end: a handle
 //! whose payload or signature segment holds a non-ASCII character makes
 //! Python's `HandleIssuer.verify` raise a built-in exception
 //! (`UnicodeEncodeError` from `_sign`, `TypeError` from
@@ -147,4 +149,78 @@ srv.shutdown(); srv.server_close(); ctx.close()
         python["events"],
         "audit records written by the requests"
     );
+}
+
+/// PORTING.md §3d for the store rows (62-70): an `OSError` that escapes a
+/// `StateDir` call made while serving a tool request is caught only by
+/// `_dispatch`'s final `except Exception`, which answers the fixed 500
+/// without the exception text. Here `.lock` is a directory, so the lock's
+/// `os.open` raises `IsADirectoryError` inside `list_connections`.
+#[test]
+fn escaped_os_error_in_a_tool_call_answers_the_fixed_500() {
+    let script = r#"
+import os, socket, tempfile
+from pathlib import Path
+from zeropw.context import Context
+from zeropw.server import ZeroPWServer
+tmp = tempfile.mkdtemp()
+ctx = Context.initialize(Path(tmp) / "state", "admin-passphrase-123456", "recovery-passphrase-123456")
+token = ctx.policy.create_principal("alice", "cli")
+srv = ZeroPWServer(ctx).serve_in_thread()
+host, port = srv.server_address[:2]
+lock = Path(tmp) / "state" / ".lock"
+if lock.exists():
+    lock.unlink()
+lock.mkdir()
+s = socket.create_connection((host, port))
+s.sendall(("POST /v1/tools/list_connections HTTP/1.1\r\nHost: a\r\nAuthorization: Bearer %s\r\n"
+           "Content-Length: 2\r\nConnection: close\r\n\r\n{}" % token).encode())
+data = b""
+while True:
+    chunk = s.recv(65536)
+    if not chunk:
+        break
+    data += chunk
+print(data.hex())
+srv.shutdown(); srv.server_close()
+"#;
+    let python = hex::decode(run_python(script).trim()).unwrap();
+
+    let temp = TempDir::new().unwrap();
+    let ctx = Arc::new(
+        Context::initialize(
+            temp.path().join("state"),
+            "admin-passphrase-123456",
+            "recovery-passphrase-123456",
+            Config::default(),
+            zeropw::clock::system(),
+        )
+        .unwrap(),
+    );
+    let token = ctx.policy.create_principal("alice", "cli").unwrap();
+    let server = ZeroPWServer::new(ctx.clone(), None, None).unwrap();
+    server.serve_in_thread().unwrap();
+    let lock = temp.path().join("state").join(".lock");
+    if lock.exists() {
+        std::fs::remove_file(&lock).unwrap();
+    }
+    std::fs::create_dir(&lock).unwrap();
+    let mut socket = TcpStream::connect(server.url().trim_start_matches("http://")).unwrap();
+    socket
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    socket
+        .write_all(
+            format!(
+                "POST /v1/tools/list_connections HTTP/1.1\r\nHost: a\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).unwrap();
+    std::fs::remove_dir(&lock).unwrap();
+    server.stop();
+    assert!(normalise(&python).starts_with("HTTP/1.1 500 "));
+    assert_eq!(normalise(&response), normalise(&python));
 }
