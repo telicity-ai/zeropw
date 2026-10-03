@@ -1,0 +1,194 @@
+{
+ "cases": [
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: close\r\n\r\n{\"login\": \"synthetic-user\"}",
+   "request": "GET /me HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 37\r\nConnection: close\r\n\r\n[{\"name\": \"demo\"}, {\"name\": \"tools\"}]",
+   "request": "GET /repos HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: close\r\n\r\n{\"login\": \"synthetic-user\"}",
+   "request": "GET http://example.invalid/me?ignored=1 HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 37\r\nConnection: close\r\n\r\n[{\"name\": \"demo\"}, {\"name\": \"tools\"}]",
+   "request": "GET https://example.invalid:8443/repos HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n7\r\npart-1\n\r\n7\r\npart-2\n\r\n7\r\npart-3\n\r\n0\r\n\r\n",
+   "request": "GET /stream HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 302 Found\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: text/html\r\nContent-Length: 71\r\nLocation: /leak?auth=synthetic-token-fake-upstream-0123456789\r\nConnection: close\r\n\r\n<a href=\"/leak?auth=synthetic-token-fake-upstream-0123456789\">moved</a>",
+   "request": "GET /redirect HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 12\r\nSet-Cookie: session=synthetic-token-fake-upstream-0123456789; Path=/; HttpOnly\r\nConnection: close\r\n\r\n{\"ok\": true}",
+   "request": "GET /set-cookie HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: close\r\n\r\n",
+   "request": "HEAD /me HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 204 No Content\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+   "request": "DELETE /repos/demo HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 401 Unauthorized\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 25\r\nWWW-Authenticate: Bearer realm=\"fake-upstream\"\r\nConnection: close\r\n\r\n{\"error\": \"unauthorized\"}",
+   "request": "GET /me HTTP/1.1\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 201 Created\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 43\r\nConnection: close\r\n\r\n{\"number\": 1, \"repo\": \"demo\", \"title\": \"t\"}",
+   "request": "POST /repos/demo/issues HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\nContent-Type: application/json\r\nContent-Length: 14\r\n\r\n{\"title\": \"t\"}"
+  },
+  {
+   "reply": "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 201 Created\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 43\r\nConnection: close\r\n\r\n{\"number\": 2, \"repo\": \"demo\", \"title\": \"t\"}",
+   "request": "POST /repos/demo/issues HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\nExpect: 100-continue\r\nContent-Length: 14\r\n\r\n{\"title\": \"t\"}"
+  },
+  {
+   "reply": "HTTP/1.1 400 Bad Request\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: close\r\n\r\n{\"error\": \"title_required\"}",
+   "request": "POST /repos/demo/issues HTTP/1.0\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\n{}"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 117\r\nConnection: close\r\n\r\n{\"headers\": {\"Accept\": \"*/*\", \"Authorization\": \"Bearer synthetic-token-fake-upstream-0123456789\", \"X-Test\": \"value\"}}",
+   "request": "GET /echo-headers HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\nX-Test: value\r\nAccept: */*\r\n\r\n"
+  },
+  {
+   "reply": "HTTP/1.1 200 OK\r\nServer: fake-upstream \r\nDate: <date>\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: close\r\n\r\n{\"login\": \"synthetic-user\"}",
+   "request": "GET /me HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\nConnection: keep-alive\r\n\r\nGET /me HTTP/1.1\r\nAuthorization: Bearer synthetic-token-fake-upstream-0123456789\r\n\r\n"
+  }
+ ],
+ "recorded": [
+  [
+   "GET",
+   "/me",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/repos",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "http://example.invalid/me?ignored=1",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "https://example.invalid:8443/repos",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/stream",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/redirect",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/set-cookie",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "HEAD",
+   "/me",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "DELETE",
+   "/repos/demo",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/me",
+   {},
+   ""
+  ],
+  [
+   "POST",
+   "/repos/demo/issues",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789",
+    "content-length": "14",
+    "content-type": "application/json"
+   },
+   "eyJ0aXRsZSI6ICJ0In0="
+  ],
+  [
+   "POST",
+   "/repos/demo/issues",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789",
+    "content-length": "14",
+    "expect": "100-continue"
+   },
+   "eyJ0aXRsZSI6ICJ0In0="
+  ],
+  [
+   "POST",
+   "/repos/demo/issues",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789",
+    "content-length": "2",
+    "expect": "100-continue"
+   },
+   "e30="
+  ],
+  [
+   "GET",
+   "/echo-headers",
+   {
+    "accept": "*/*",
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789",
+    "x-test": "value"
+   },
+   ""
+  ],
+  [
+   "GET",
+   "/me",
+   {
+    "authorization": "Bearer synthetic-token-fake-upstream-0123456789",
+    "connection": "keep-alive"
+   },
+   ""
+  ]
+ ],
+ "secret": "synthetic-token-fake-upstream-0123456789"
+}
