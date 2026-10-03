@@ -202,6 +202,58 @@ fn validate_document_shape(doc: &Value, commits: &[Commit]) -> Result<Map<String
     if commits.iter().all(|commit| commit.ops.is_empty()) {
         return Ok(obj);
     }
+    let recognized: Vec<(&Commit, &str)> = commits
+        .iter()
+        .flat_map(|commit| commit.ops.iter().map(move |op| (commit, op)))
+        .filter_map(|(commit, op)| {
+            let name = op.get("op").and_then(Value::as_str)?;
+            op_handler(name).map(|_| (commit, name))
+        })
+        .collect();
+    // Unknown operations never inspect the document in Python.
+    if recognized.is_empty() {
+        return Ok(obj);
+    }
+    // Restrict the shortcut to settings.update: it always checks `_is_admin`
+    // first and cannot change membership between operations. Other handlers
+    // have distinct gates (`_is_owner`, or self-removal after an admin miss)
+    // and retain the conservative validation below.
+    let only_settings_updates = recognized
+        .iter()
+        .all(|(_, name)| *name == "settings.update");
+    if only_settings_updates {
+        let members = obj
+            .get("members")
+            .and_then(Value::as_object)
+            .ok_or_else(corrupt)?;
+        let authors: HashSet<&str> = recognized
+            .iter()
+            .map(|(commit, _)| commit.author.as_str())
+            .collect();
+        for fingerprint in &authors {
+            let Some(entry) = members.get(*fingerprint) else {
+                continue;
+            };
+            if json_falsy(entry) {
+                continue;
+            }
+            let entry_obj = entry.as_object().ok_or_else(corrupt)?;
+            let status = entry_obj.get("status").ok_or_else(corrupt)?;
+            if status.as_str() == Some("active") {
+                let owner = obj.get("owner").ok_or_else(corrupt)?;
+                if owner.as_str() != Some(fingerprint) && !entry_obj.contains_key("role") {
+                    return Err(corrupt());
+                }
+            }
+        }
+        if authors.iter().all(|author| !is_admin(&obj, author)) {
+            return Ok(obj);
+        }
+        if !matches!(obj.get("settings"), Some(Value::Object(_))) {
+            return Err(corrupt());
+        }
+        return Ok(obj);
+    }
     for key in [
         "env_id",
         "members",
@@ -351,7 +403,7 @@ pub struct FoldResult {
     pub document: Value,
     /// One entry per skipped op: `(commit_hash, op_index, reason)`.
     pub skipped: Vec<(String, usize, String)>,
-    pub version_order: BTreeMap<String, Vec<Value>>,
+    pub version_order: Value,
     /// Widened to `i128` (finding H-R2-6): `commit.author_seq` is `i128`
     /// (see `commit.rs`'s `Commit` and `rust/DEVIATIONS.md`), and Python's
     /// own `vector[commit.author] = max(vector.get(commit.author, 0),
@@ -384,6 +436,40 @@ pub struct FoldResult {
     /// so it can reproduce the distinction explicitly instead of guessing
     /// from the key name (the round-1 fix's bug).
     pub fresh_connections: BTreeSet<String>,
+}
+
+enum VersionOrderState {
+    Map(BTreeMap<String, Vec<Value>>),
+    Raw(Value),
+}
+
+impl VersionOrderState {
+    fn append(&mut self, secret_id: String, version_id: String) -> Result<()> {
+        match self {
+            Self::Map(order) => {
+                order.entry(secret_id).or_default().push(json!(version_id));
+                Ok(())
+            }
+            Self::Raw(value) => {
+                let order = value
+                    .as_object_mut()
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("team_document"))?;
+                let target = order.entry(secret_id).or_insert_with(|| json!([]));
+                target
+                    .as_array_mut()
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("team_document"))?
+                    .push(json!(version_id));
+                Ok(())
+            }
+        }
+    }
+
+    fn into_value(self) -> Value {
+        match self {
+            Self::Map(order) => json!(order),
+            Self::Raw(value) => value,
+        }
+    }
 }
 
 /// Largest whole-second Unix timestamp this port has directly confirmed
@@ -583,7 +669,7 @@ fn op_connection_create(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -634,7 +720,7 @@ fn op_connection_update(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -705,7 +791,7 @@ fn op_connection_switch_credential(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -768,7 +854,7 @@ fn op_connection_disable(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -810,7 +896,7 @@ fn op_secret_put_version(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    vo: &mut BTreeMap<String, Vec<Value>>,
+    vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -911,7 +997,7 @@ fn op_secret_put_version(
             "public": Value::Object(public),
         }),
     );
-    vo.entry(secret_id).or_default().push(json!(version_id));
+    vo.append(secret_id, version_id)?;
     Ok(None)
 }
 
@@ -994,7 +1080,7 @@ fn op_secret_set_status(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1010,7 +1096,7 @@ fn op_secret_activate(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1028,7 +1114,7 @@ fn op_member_add(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1093,7 +1179,7 @@ fn op_member_set_role(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1126,7 +1212,7 @@ fn op_member_remove(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     let fp = op
@@ -1159,7 +1245,7 @@ fn op_owner_transfer(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_owner(doc, &commit.author) {
@@ -1190,7 +1276,7 @@ fn op_dek_rotate(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1222,7 +1308,7 @@ fn op_settings_update(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !is_admin(doc, &commit.author) {
@@ -1244,7 +1330,7 @@ fn op_env_init(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     _facts: &mut Facts,
-    _vo: &mut BTreeMap<String, Vec<Value>>,
+    _vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     if !matches!(doc.get("owner"), None | Some(Value::Null)) {
@@ -1295,7 +1381,7 @@ type OpHandler = fn(
     &mut Map<String, Value>,
     &Commit,
     &mut Facts,
-    &mut BTreeMap<String, Vec<Value>>,
+    &mut VersionOrderState,
     &Map<String, Value>,
 ) -> Result<Option<String>>;
 
@@ -1323,7 +1409,7 @@ fn apply_op(
     doc: &mut Map<String, Value>,
     commit: &Commit,
     facts: &mut Facts,
-    vo: &mut BTreeMap<String, Vec<Value>>,
+    vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
     let name = op.get("op").and_then(Value::as_str).unwrap_or("");
@@ -1491,8 +1577,11 @@ pub fn fold(
         Some(v) => validate_document_shape(&v, &ordered)?,
     };
     let mut version_order = match doc.remove("_version_order") {
-        Some(stray) => parse_stray_version_order(&stray)?,
-        None => base_version_order.unwrap_or_default(),
+        Some(stray) => match parse_stray_version_order(&stray) {
+            Ok(order) => VersionOrderState::Map(order),
+            Err(_) => VersionOrderState::Raw(stray),
+        },
+        None => VersionOrderState::Map(base_version_order.unwrap_or_default()),
     };
     let mut working_facts = facts.cloned().unwrap_or_default();
     let mut skipped: Vec<(String, usize, String)> = Vec::new();
@@ -1586,7 +1675,7 @@ pub fn fold(
     Ok(FoldResult {
         document: Value::Object(doc),
         skipped,
-        version_order,
+        version_order: version_order.into_value(),
         vector,
         overridden,
         fresh_connections,
@@ -1605,17 +1694,12 @@ pub fn save_snapshot(
     number: i64,
     result: &FoldResult,
 ) -> Result<()> {
-    let version_order: Map<String, Value> = result
-        .version_order
-        .iter()
-        .map(|(k, v)| (k.clone(), json!(v)))
-        .collect();
     let vector: Map<String, Value> = result
         .vector
         .iter()
         .map(|(k, v)| (k.clone(), json_int128(*v)))
         .collect();
-    let doc = json!({"document": result.document, "version_order": Value::Object(version_order),
+    let doc = json!({"document": result.document, "version_order": result.version_order,
                      "vector": Value::Object(vector)});
     state.write_json(&format!("{}/{}.json", snapshot_dir(env_id), number), &doc)?;
     Ok(())
@@ -2313,28 +2397,7 @@ pub fn derive_local(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let mut version_index: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
-    for (sid, order) in &fold_result.version_order {
-        let mut m = BTreeMap::new();
-        for (i, vid) in order.iter().enumerate() {
-            match vid {
-                Value::String(vid) => {
-                    m.insert(vid.clone(), (i + 1) as i64);
-                }
-                Value::Array(_) | Value::Object(_) => {
-                    // Python's dict comprehension uses each item as a key;
-                    // list/dict keys are unhashable and abort derive before
-                    // its state lock or any persisted write.
-                    return Err(Error::state("state_corrupt").with_detail("team_version_order"));
-                }
-                // Numeric/bool/null keys are hashable in Python. Product
-                // version ids are strings, so these entries affect later
-                // indices but can never match a document version id.
-                Value::Null | Value::Bool(_) | Value::Number(_) => {}
-            }
-        }
-        version_index.insert(sid.clone(), m);
-    }
+    let version_index = version_index_from_order(&fold_result.version_order)?;
     {
         let _lock = state.lock()?;
         // F1: derive this node's local copies of every DEK generation it
@@ -2356,30 +2419,9 @@ pub fn derive_local(
         derive_connections(document, state, &env_id, &version_index, policy, audit)?;
     }
     if let Some(audit) = audit {
-        // F6: count commits folded, not ops skipped (which get their own
-        // `team_op_skipped` records). Finding H-R2-6 (round 2): Python's
-        // `sum(fold_result.vector.values())` is arbitrary-precision and
-        // never overflows; summing `FoldResult::vector`'s now-`i128`
-        // entries into an `i64` PANICKED (`attempt to add with overflow`)
-        // for as few as two authors each holding a large `author_seq` --
-        // a panic on file-supplied data (an `all_commits()`-read
-        // `author_seq`, or a snapshot `vector` entry), which PORTING.md
-        // forbids. Widened `count` to `i128` to fix it.
-        //
-        // **Round-3 correction (finding H-R3-7):** that fix was incomplete,
-        // and its own reasoning above ("the sum cannot overflow for any
-        // input this crate's own `i128`-bounded `author_seq` can produce")
-        // was wrong: TWO values that are each individually within `i128`
-        // can still overflow `i128` when ADDED together -- two authors each
-        // at `author_seq == i128::MAX` (reachable from two real commit
-        // files, since `author_seq` is read verbatim at `i128` width) still
-        // panicked on `.sum()`'s plain `+`. The round-2 test only probed
-        // `i64::MAX`-sized values, which fit comfortably in `i128` and never
-        // exercised this. `saturating_add` (via `fold`, not `.sum()`)
-        // removes the panic unconditionally; the audited `count` saturates
-        // at `i128::MAX` in the (astronomically unrealistic) case where the
-        // true arbitrary-precision sum would exceed it, same as every other
-        // `i128`-bounded field in this crate.
+        // Count commits folded, rather than operations skipped. Use
+        // saturating addition because two individually valid i128 sequence
+        // values can overflow when combined.
         let count: i128 = fold_result
             .vector
             .values()
@@ -2392,6 +2434,46 @@ pub fn derive_local(
                 ..Default::default()
             },
         )?;
+    }
+    Ok(version_index)
+}
+
+fn version_index_from_order(raw: &Value) -> Result<BTreeMap<String, BTreeMap<String, i64>>> {
+    let mut version_index = BTreeMap::new();
+    let version_order = raw
+        .as_object()
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("team_version_order"))?;
+    for (sid, order) in version_order {
+        // Python enumerates any iterable here: arrays yield their elements,
+        // strings yield Unicode characters, and dicts yield keys. Only
+        // non-iterable scalar values fail at this later derive boundary.
+        let order: Vec<Value> = match order {
+            Value::Array(items) => items.clone(),
+            Value::String(text) => text.chars().map(|c| json!(c.to_string())).collect(),
+            Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {
+                return Err(Error::state("state_corrupt").with_detail("team_version_order"));
+            }
+        };
+        let mut m = BTreeMap::new();
+        for (i, vid) in order.iter().enumerate() {
+            match vid {
+                Value::String(vid) => {
+                    m.insert(vid.clone(), (i + 1) as i64);
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    // Python's dict comprehension uses each item as a key;
+                    // list/dict keys are unhashable and abort derive before
+                    // its state lock or any persisted write.
+                    return Err(Error::state("state_corrupt").with_detail("team_version_order"));
+                }
+                // Numeric/bool/null keys are hashable in Python. Product
+                // version ids are strings, so these entries affect later
+                // indices but can never match a document version id.
+                Value::Null | Value::Bool(_) | Value::Number(_) => {}
+            }
+        }
+        version_index.insert(sid.clone(), m);
     }
     Ok(version_index)
 }
@@ -2789,7 +2871,7 @@ print(json.dumps(r.document.get("secrets"), sort_keys=True, separators=(",", ":"
             );
             doc.insert(
                 "dek".into(),
-                json!({"current": "g0", "generations": {"g0": {"wraps": {}}}}),
+                json!({"current": GEN0, "generations": {GEN0: {"wraps": {}}}}),
             );
             doc
         }
@@ -3089,25 +3171,23 @@ except Exception as e:
     /// Finding H-R5-6: `parse_stray_version_order` (used only when a
     /// `base_document` ITSELF already carries a stray `_version_order` key
     /// -- see [`fold`]'s own H-R4-5 doc comment) had no `DEVIATIONS.md`
-    /// row. Its fail-closed posture for a non-object `_version_order`, or a
-    /// per-secret value that isn't an array, is real and load-bearing (a
-    /// LATER op that actually appends to that secret id would otherwise hit
-    /// `.setdefault`/`.append` on the wrong Python type -- an uncaught
-    /// `AttributeError`, confirmed against real `python3.12` below). Arrays
-    /// with non-string elements are now retained verbatim, matching Python;
-    /// the differential snapshot test pins their saved bytes.
+    /// row. Python preserves a non-object `_version_order`, or a per-secret
+    /// value that isn't an array, until a later operation touches it. At that
+    /// point `.setdefault`/`.append` raises an uncaught `AttributeError`,
+    /// mapped here to `state_corrupt`. Arrays with non-string elements are
+    /// retained verbatim; the differential snapshot test pins their bytes.
     #[test]
     fn parse_stray_version_order_fails_closed_matching_pythons_touched_behaviour() {
-        fn base_doc() -> Map<String, Value> {
+        fn base_doc(owner: &str) -> Map<String, Value> {
             let mut doc = new_document("env");
-            doc.insert("owner".into(), json!("owner-fp"));
+            doc.insert("owner".into(), json!(owner));
             doc.insert(
                 "members".into(),
-                json!({"owner-fp": {"name": "o", "role": "admin", "status": "active", "device": {}}}),
+                json!({owner: {"name": "o", "role": "admin", "status": "active", "device": {}}}),
             );
             doc.insert(
                 "dek".into(),
-                json!({"current": "g0", "generations": {"g0": {"wraps": {}}}}),
+                json!({"current": GEN0, "generations": {"0000000000000000": {"wraps": {}}}}),
             );
             doc.insert(
                 "secrets".into(),
@@ -3120,11 +3200,37 @@ except Exception as e:
         // raises `AttributeError` once an op actually appends) and a
         // per-key non-array value (Python: `.append` on an int raises)
         // both fail closed here, confirmed against a real touching op.
+        let owner = DeviceKey::generate();
+        let owner_fp = owner.fingerprint().unwrap();
         for stray in [json!(5), json!({"s1": 5})] {
-            let mut doc = base_doc();
+            let mut doc = base_doc(&owner_fp);
             doc.insert("_version_order".into(), stray.clone());
-            let err = fold("env", vec![], None, Some(Value::Object(doc)), None, None)
-                .expect_err(&format!("stray _version_order={stray:?} must fail closed"));
+            let untouched = fold(
+                "env",
+                vec![],
+                None,
+                Some(Value::Object(doc.clone())),
+                None,
+                None,
+            )
+            .expect("untouched raw order must be preserved");
+            assert_eq!(untouched.version_order, stray);
+            assert!(untouched.document.get("_version_order").is_none());
+
+            let op = json!({"op": "secret.put_version", "secret_id": "s1", "version_id": "1111111111111111",
+                            "generation_id": GEN0, "kind": "api_key",
+                            "ciphertext": {"nonce": "n", "ciphertext": "c"}});
+            let commit =
+                commit::sign_commit(&owner, "env", 1, "1000-0000", &Map2::new(), vec![op]).unwrap();
+            let err = fold(
+                "env",
+                vec![commit.clone()],
+                None,
+                Some(Value::Object(doc.clone())),
+                None,
+                None,
+            )
+            .expect_err(&format!("stray _version_order={stray:?} must fail closed"));
             assert!(err.is(crate::errors::ErrorClass::StateError));
             assert_eq!(err.reason, "state_corrupt");
 
@@ -3132,26 +3238,19 @@ except Exception as e:
             // real op touches this secret id.
             let script = format!(
                 r#"
-from types import SimpleNamespace
+import json
+from zeropw.team import commit as C
 from zeropw.team import fold as F
-doc = F.new_document("env")
-doc["owner"] = "owner-fp"
-doc["members"]["owner-fp"] = {{"name": "o", "role": "admin", "status": "active", "device": {{}}}}
-doc["dek"] = {{"current": "g0", "generations": {{"g0": {{"wraps": {{}}}}}}}}
-doc["secrets"] = {{"s1": {{"kind": "api_key", "active_version": None, "versions": {{}}}}}}
-doc["_version_order"] = {stray}
-commit = SimpleNamespace(author="owner-fp", hlc="1000-0000")
-facts = F.Facts()
-op = {{"op": "secret.put_version", "secret_id": "s1", "version_id": "v1",
-      "generation_id": "g0", "kind": "api_key",
-      "ciphertext": {{"nonce": "n", "ciphertext": "c"}}}}
+doc = json.loads({doc:?})
+commit = C.Commit.from_dict(json.loads({commit:?}))
 try:
-    F._op_secret_put_version(doc, commit, facts, op)
+    F.fold("env", [commit], base_document=doc)
     print("OK")
 except Exception as e:
     print(f"ERR {{type(e).__name__}}")
 "#,
-                stray = pyjson::dumps(&stray, pyjson::DumpOptions::plain()).unwrap(),
+                doc = pyjson::dumps(&Value::Object(doc), pyjson::DumpOptions::plain()).unwrap(),
+                commit = pyjson::dumps(&commit.to_dict(), pyjson::DumpOptions::plain()).unwrap(),
             );
             let py_out = crate::oracle::python(&script);
             assert_eq!(
@@ -3159,6 +3258,29 @@ except Exception as e:
                 "ERR AttributeError",
                 "real python3.12 must raise for stray _version_order={stray:?} once touched"
             );
+        }
+    }
+
+    #[test]
+    fn derive_version_index_iterates_raw_strings_and_objects_like_python() {
+        for raw in [
+            json!({"sid": "a🙂"}),
+            json!({"sid": {"second": 2, "first": 1}}),
+        ] {
+            let rust = version_index_from_order(&raw).unwrap();
+            let script = format!(
+                r#"
+import json
+order = json.loads({raw:?})
+result = {{sid: {{vid: i + 1 for i, vid in enumerate(items)}}
+          for sid, items in order.items()}}
+print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+"#,
+                raw = pyjson::dumps(&raw, pyjson::DumpOptions::plain()).unwrap(),
+            );
+            let python: Value =
+                serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+            assert_eq!(json!(rust), python, "raw version_order={raw}");
         }
     }
 
@@ -3363,7 +3485,7 @@ print(f"written_is_none:{state.written is None}")
         // `["arg-v0", "2222222222222222"]`.
         assert_eq!(
             result.version_order.get("gh-token"),
-            Some(&vec![json!("stray-v0"), json!("2222222222222222")])
+            Some(&json!(["stray-v0", "2222222222222222"]))
         );
         // The returned document must never contain `_version_order`.
         assert!(
@@ -4241,12 +4363,13 @@ with tempfile.TemporaryDirectory() as tmp:
             vec![json!({"op":"settings.update","sync_interval_seconds":7})],
         )
         .unwrap();
+        let base_version_order = parse_snapshot_version_order(Some(&base.version_order)).unwrap();
         let rust = fold(
             &env_id,
             vec![c2.clone()],
             None,
             Some(document.clone()),
-            Some(base.version_order),
+            base_version_order,
             None,
         )
         .unwrap();
