@@ -121,6 +121,8 @@ struct Case {
     ledger: Option<Value>,
     /// Overwrite `policy/connections.json` with invalid JSON after setup.
     corrupt_connections: bool,
+    /// Hand-edit the stored connection's `http_auth.mode` after setup.
+    auth_mode: Option<&'static str>,
 }
 
 impl Case {
@@ -132,6 +134,7 @@ impl Case {
             response: response.to_vec(),
             ledger: None,
             corrupt_connections: false,
+            auth_mode: None,
         }
     }
 }
@@ -272,6 +275,16 @@ fn rust_case(case: &Case, port: u16) -> Value {
     if case.corrupt_connections {
         std::fs::write(ctx.state.path.join("policy/connections.json"), b"{").unwrap();
     }
+    if let Some(mode) = case.auth_mode {
+        let mut doc = ctx
+            .state
+            .read_json("policy/connections.json", json!({}))
+            .unwrap();
+        doc["svc"]["http_auth"]["mode"] = json!(mode);
+        ctx.state
+            .write_json("policy/connections.json", &doc)
+            .unwrap();
+    }
     let outcome = match case.mode {
         Mode::Direct => {
             match gateway::try_relay_for_caller(
@@ -380,6 +393,10 @@ for case in spec["cases"]:
             ctx.state.write_json(gateway.LEDGER_DOC, substitute(case["ledger"], digest))
         if case["corrupt_connections"]:
             (Path(tmp) / "state" / "policy" / "connections.json").write_bytes(b"{")
+        if case["auth_mode"] is not None:
+            doc = ctx.state.read_json("policy/connections.json", {})
+            doc["svc"]["http_auth"]["mode"] = case["auth_mode"]
+            ctx.state.write_json("policy/connections.json", doc)
         if case["mode"] == "direct":
             try:
                 result = gateway.relay_for_caller(ctx, "agent", "svc", "GET", "/x", {}, b"", "rid-1")
@@ -428,6 +445,7 @@ fn python_cases(cases: &[(Case, u16)]) -> Vec<Value> {
             "port": port,
             "ledger": case.ledger,
             "corrupt_connections": case.corrupt_connections,
+            "auth_mode": case.auth_mode,
         })).collect::<Vec<_>>(),
     });
     let mut child = Command::new(interpreter)
@@ -690,6 +708,18 @@ fn zeropw_errors_escaping_relay_match_python_at_every_boundary() {
     let mut handle = Case::new("handle corrupt connections", Mode::Handle, OK_RESPONSE);
     handle.corrupt_connections = true;
     cases.push(handle);
+    let mut tools = Case::new("tools corrupt connections", Mode::Tools, OK_RESPONSE);
+    tools.corrupt_connections = true;
+    cases.push(tools);
+    for (name, mode) in [
+        ("direct stored auth mode digest", Mode::Direct),
+        ("handle stored auth mode digest", Mode::Handle),
+        ("tools stored auth mode digest", Mode::Tools),
+    ] {
+        let mut case = Case::new(name, mode, OK_RESPONSE);
+        case.auth_mode = Some("digest");
+        cases.push(case);
+    }
     let mut ledger = Case::new("direct non-dict ledger document", Mode::Direct, OK_RESPONSE);
     ledger.ledger = Some(json!("not a document"));
     cases.push(ledger);
@@ -701,5 +731,13 @@ fn zeropw_errors_escaping_relay_match_python_at_every_boundary() {
     assert_eq!(
         raw_status_line(&seen["handle corrupt connections"]),
         "HTTP/1.1 503 Service Unavailable"
+    );
+    assert_eq!(
+        seen["direct stored auth mode digest"]["outcome"]["dict"],
+        json!({"error": "InvalidInput", "reason": "unsupported_auth_mode"})
+    );
+    assert_eq!(
+        raw_status_line(&seen["handle stored auth mode digest"]),
+        "HTTP/1.1 400 Bad Request"
     );
 }
