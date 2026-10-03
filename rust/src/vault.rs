@@ -1096,7 +1096,7 @@ impl<'a> Vault<'a> {
                 RecordArgs {
                     connection: Some(&c.id),
                     result: Some("ok"),
-                    policy_version: Some(c.policy_version),
+                    policy_version: Some(c.policy_version.clone()),
                     extra: vec![
                         ("detail", json!("credential_version")),
                         ("secret_id", json!(secret_id)),

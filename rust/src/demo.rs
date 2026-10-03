@@ -474,7 +474,8 @@ fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
         .next()
         .and_then(|p| p.parse::<u16>().ok())
         .ok_or_else(|| Error::state("demo_server_url"))?;
-    let policy_version = r.ctx.policy.get_connection("gh")?.policy_version;
+    let policy_version = i64::try_from(&r.ctx.policy.get_connection("gh")?.policy_version.0)
+        .map_err(|_| Error::state("state_corrupt").with_detail("policy_version"))?;
     let handle = r
         .ctx
         .handles

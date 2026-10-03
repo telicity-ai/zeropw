@@ -4062,7 +4062,7 @@ shutil.rmtree(d, ignore_errors=True)"#;
             Some("agent-1"),
             Some("gh"),
             Some(Action::http("GET", "/repos")),
-            Some(3),
+            Some(3.into()),
         )
         .unwrap();
     assert_eq!(consumed.uses, 1);

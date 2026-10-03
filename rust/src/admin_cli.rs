@@ -769,7 +769,7 @@ fn admin_record_for(
     ctx: &Context,
     event: &str,
     connection: Option<&str>,
-    policy_version: Option<i64>,
+    policy_version: Option<crate::pyint::PyInt>,
     extra: Vec<(&str, Value)>,
 ) -> Result<(), Error> {
     ctx.audit.record(
@@ -1392,7 +1392,7 @@ fn create_connection(
             connection: Some(&stamped.id),
             target: Some(target),
             result: Some("ok"),
-            policy_version: Some(stamped.policy_version),
+            policy_version: Some(stamped.policy_version.clone()),
             extra: fields,
             ..Default::default()
         },
@@ -1428,7 +1428,7 @@ fn switch_credential(
             caller: Some("admin"),
             connection: Some(&after.id),
             result: Some("ok"),
-            policy_version: Some(after.policy_version),
+            policy_version: Some(after.policy_version.clone()),
             extra: vec![
                 ("secret_id", json!(after.secret_id)),
                 ("version", json!(version)),
@@ -1921,7 +1921,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "connection_update",
                 Some(&after.id),
-                Some(after.policy_version),
+                Some(after.policy_version.clone()),
                 vec![
                     ("detail", json!("scope")),
                     ("state", json!(if widened { "widened" } else { "narrowed" })),
@@ -1975,7 +1975,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     caller: Some("admin"),
                     connection: Some(&c.id),
                     result: Some("ok"),
-                    policy_version: Some(c.policy_version),
+                    policy_version: Some(c.policy_version.clone()),
                     ..Default::default()
                 },
             )?;
@@ -2021,7 +2021,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_create",
                 Some(&grant.connection),
-                Some(grant.policy_version),
+                Some(grant.policy_version.clone()),
                 vec![
                     ("grant", json!(grant.id)),
                     ("principal", json!(grant.principal)),
@@ -2051,7 +2051,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_regrant",
                 Some(&g.connection),
-                Some(g.policy_version),
+                Some(g.policy_version.clone()),
                 vec![
                     ("grant", json!(g.id)),
                     ("principal", json!(g.principal)),

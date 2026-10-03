@@ -366,7 +366,7 @@ pub fn request(
                 None
             },
             request_id,
-            policy_version: Some(known.policy_version),
+            policy_version: Some(known.policy_version.clone()),
             extra: if mismatch {
                 vec![("method", json!(method)), ("path", json!(path))]
             } else {
@@ -577,7 +577,7 @@ fn refuse_exec(
             result: Some(result),
             reason: Some(reason),
             request_id: req,
-            policy_version: c.map(|c| c.policy_version),
+            policy_version: c.map(|c| c.policy_version.clone()),
             ..Default::default()
         },
     )?;
@@ -684,7 +684,7 @@ pub fn exec(
         req,
         &digest,
         target.as_deref(),
-        Some(known.policy_version),
+        Some(known.policy_version.clone()),
     )?;
     if !created {
         return Ok(exec_view(&registry, &run));
@@ -702,7 +702,7 @@ pub fn exec(
                 action: Some("exec"),
                 result: Some("ok"),
                 request_id: req,
-                policy_version: Some(known.policy_version),
+                policy_version: Some(known.policy_version.clone()),
                 extra: vec![
                     ("program", json!(program_text)),
                     ("kind", json!(known.kind)),
@@ -749,7 +749,7 @@ pub fn exec(
                     target: target.as_deref(),
                     run_id: Some(&run.id),
                     request_id: req,
-                    policy_version: Some(known.policy_version),
+                    policy_version: Some(known.policy_version.clone()),
                     result: Some("ok"),
                     extra: vec![
                         ("grant", json!(grant.id)),
@@ -761,9 +761,19 @@ pub fn exec(
                     ..Default::default()
                 },
             )?;
-            let handle =
-                ctx.handles
-                    .issue(caller, id, &grant.id, known.policy_version, ttl, None)?;
+            // `handles.rs` still types the handle's `pv` as `i64`; fail
+            // closed for a connection policy version beyond it rather than
+            // embedding a truncated one.
+            let handle_policy_version = i64::try_from(&known.policy_version.0)
+                .map_err(|_| Error::state("state_corrupt").with_detail("policy_version"))?;
+            let handle = ctx.handles.issue(
+                caller,
+                id,
+                &grant.id,
+                handle_policy_version,
+                ttl,
+                None,
+            )?;
             sensitive.push(handle.as_bytes().to_vec());
             let env = child_env(
                 &path,
@@ -923,7 +933,7 @@ pub fn status(ctx: &Context, caller: &str, id: &str) -> Result<Value, Error> {
             run_id: Some(id),
             action: Some("status"),
             result: Some("ok"),
-            policy_version: run.policy_version,
+            policy_version: run.policy_version.clone(),
             extra: vec![("run_state", json!(run.state))],
             ..Default::default()
         },
@@ -942,7 +952,7 @@ pub fn cancel(ctx: &Context, caller: &str, id: &str) -> Result<Value, Error> {
             run_id: Some(id),
             action: Some("cancel"),
             result: Some("ok"),
-            policy_version: run.policy_version,
+            policy_version: run.policy_version.clone(),
             extra: vec![("run_state", json!(run.state))],
             ..Default::default()
         },

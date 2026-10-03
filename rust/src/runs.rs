@@ -202,7 +202,7 @@ pub struct Run {
     pub input_digest: String,
     pub created_at: String,
     pub target: Option<String>,
-    pub policy_version: Option<i64>,
+    pub policy_version: Option<crate::pyint::PyInt>,
     pub state: String,
     pub reason: Option<String>,
     pub exit_code: Option<i32>,
@@ -347,7 +347,7 @@ impl RunRegistry {
         request_id: Option<&str>,
         input_digest: &str,
         target: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<crate::pyint::PyInt>,
     ) -> Run {
         let mut state = self.state.lock().unwrap();
         self.create_locked(
@@ -374,7 +374,7 @@ impl RunRegistry {
         request_id: Option<&str>,
         input_digest: &str,
         target: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<crate::pyint::PyInt>,
     ) -> Result<(Run, bool), Error> {
         let mut state = self.state.lock().unwrap();
         if let Some(request_id) = request_id
@@ -417,7 +417,7 @@ impl RunRegistry {
         request_id: Option<&str>,
         input_digest: &str,
         target: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<crate::pyint::PyInt>,
     ) -> Run {
         let id = loop {
             let mut bytes = [0; 8];
@@ -517,7 +517,7 @@ impl RunRegistry {
                     action: Some("exec"),
                     result: Some(result),
                     reason,
-                    policy_version: run.policy_version,
+                    policy_version: run.policy_version.clone(),
                     extra,
                 },
             )

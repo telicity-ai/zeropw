@@ -36,7 +36,7 @@ fn queued(r: &RunRegistry) -> Run {
         None,
         "digest",
         Some("http://127.0.0.1:9999"),
-        Some(4),
+        Some(4.into()),
     )
 }
 fn start(

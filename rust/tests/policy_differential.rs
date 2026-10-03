@@ -887,24 +887,6 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
         judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
         skip_doc_compare: true,
     },
-    NamedException {
-        description: "DEVIATIONS.md row (policy, `Connection.policy_version`): \
-            a magnitude too large for `i64` is representable in Python's \
-            arbitrary-precision `int` (`int(data[\"policy_version\"])` \
-            succeeds and keeps the huge value) but `python_int_coerce` \
-            explicitly rejects an integer-shaped literal outside `i64` \
-            range, `state_corrupt` in `Connection::from_value`.",
-        applies: |doc, path, missing, label, _op| {
-            doc == "connections"
-                && !missing
-                && label == "huge_int"
-                && path.last().map(String::as_str) == Some("policy_version")
-        },
-        judge: |py, rust| {
-            matches!(py, Outcome::Ok(_) | Outcome::ZeroPwErr(..)) && is_state_corrupt(rust)
-        },
-        skip_doc_compare: true,
-    },
     // This `huge_int`-only exception is listed *before* the (removed, round
     // 6) general Grant-field one used to sit so `matching_exception`'s
     // first-match lookup would reach it for `expires_at` at that specific
@@ -1088,39 +1070,6 @@ const NAMED_EXCEPTIONS: &[NamedException] = &[
         // judge accepts any Python outcome paired with Rust's
         // `state_corrupt`, not just an outright Python success.
         judge: |_py, rust| is_state_corrupt(rust),
-        skip_doc_compare: true,
-    },
-    NamedException {
-        // Finding D-R7-1's own deliberate, documented residual: see
-        // `DEVIATIONS.md`'s `policy (Connection::policy_version/approval
-        // cycle i64 counter overflow, finding D-R7-1)` row. Measured
-        // directly against `python3.12`: with `connections["gh-bearer"]
-        // ["policy_version"] = 2**63 - 1` (`i64::MAX`), `update_connection`/
-        // `credential_versions_changed`/`reapply_revocations` all succeed
-        // and persist `9223372036854775808` (one past `i64::MAX`) --
-        // Python's `int` never overflows. This crate's `Connection::
-        // policy_version` stays a plain `i64` (relied on outside this
-        // work unit's files), so `checked_add(1)` fails closed with
-        // `state_corrupt` instead of panicking or silently wrapping to
-        // `i64::MIN` and persisting it -- a deliberate divergence at an
-        // astronomically unreachable boundary, not a bug (unlike the
-        // panic/silent-wrap this same finding fixed).
-        description: "DEVIATIONS.md row (policy, Connection::policy_version/\
-            approval cycle i64 counter overflow, finding D-R7-1): Python's \
-            arbitrary-precision `int` never overflows at `i64::MAX`; this \
-            crate's `policy_version`/`cycle` stay plain `i64` (no exact- \
-            widening representation available outside this work unit's \
-            files) and fail closed with `state_corrupt` via `checked_add` \
-            instead of panicking or silently wrapping to a negative value \
-            and persisting it.",
-        applies: |doc, path, missing, label, _op| {
-            !missing
-                && matches!(label, "i64_max")
-                && ((doc == "connections"
-                    && path.last().map(String::as_str) == Some("policy_version"))
-                    || (doc == "control" && path.last().map(String::as_str) == Some("cycle")))
-        },
-        judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
         skip_doc_compare: true,
     },
 ];

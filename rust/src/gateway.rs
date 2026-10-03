@@ -2735,7 +2735,7 @@ impl<'a> Relay<'a> {
                 action: Some(&self.method),
                 result: Some(result),
                 reason,
-                policy_version: self.connection.as_ref().map(|c| c.policy_version),
+                policy_version: self.connection.as_ref().map(|c| c.policy_version.clone()),
                 request_id: self.request_id.as_deref(),
                 extra: fields,
                 ..Default::default()
@@ -3169,7 +3169,7 @@ impl<'a> Relay<'a> {
             );
         }
         if let Some(handle_pv) = self.handle_policy_version
-            && handle_pv != connection.policy_version
+            && connection.policy_version != handle_pv
         {
             return self.refuse(403, "grant_stale", "denied", None, None, Vec::new(), true);
         }

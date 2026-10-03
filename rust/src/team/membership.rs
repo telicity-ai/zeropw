@@ -807,7 +807,8 @@ pub fn share_environment(
             let version = updated[cid]["policy_version"].as_i64().unwrap_or(0) + 1;
             updated[cid]["policy_version"] = json!(version);
             ctx.state.write_json(crate::policy::CONNECTIONS, &updated)?;
-            ctx.policy.reevaluate_grants(cid, version, true, None)?;
+            ctx.policy
+                .reevaluate_grants(cid, &crate::pyint::PyInt::from(version), true, None)?;
             ctx.policy.invalidate_approvals(
                 |e| e.get("connection").and_then(Value::as_str) == Some(cid),
                 "policy_changed",

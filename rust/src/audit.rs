@@ -310,7 +310,7 @@ pub struct RecordArgs<'a> {
     /// Defaults to `"ok"`, like Python's `result: str = "ok"`.
     pub result: Option<&'a str>,
     pub reason: Option<&'a str>,
-    pub policy_version: Option<i64>,
+    pub policy_version: Option<crate::pyint::PyInt>,
     pub run_id: Option<&'a str>,
     pub request_id: Option<&'a str>,
     /// `extra`: keys must be in [`EXTRA_KEYS`]; values must already be
@@ -399,7 +399,11 @@ impl<'a> Audit<'a> {
         record.insert("reason".into(), clean(opt_str(args.reason))?);
         record.insert(
             "policy_version".into(),
-            clean(args.policy_version.map(|v| json!(v)).unwrap_or(Value::Null))?,
+            clean(
+                args.policy_version
+                    .as_ref()
+                    .map_or(Value::Null, crate::pyint::PyInt::value),
+            )?,
         );
         record.insert("run_id".into(), clean(opt_str(args.run_id))?);
         record.insert("request_id".into(), clean(opt_str(args.request_id))?);
@@ -677,7 +681,7 @@ mod tests {
                     target: Some("127.0.0.1:8080"),
                     action: Some("GET"),
                     result: Some("ok"),
-                    policy_version: Some(3),
+                    policy_version: Some(3.into()),
                     extra: extra(&[
                         ("path", json!("/repos?token=synthetic-secret")),
                         ("status", json!(200)),
@@ -1264,7 +1268,7 @@ shutil.rmtree(tmp, ignore_errors=True)
                     target: Some("127.0.0.1:8080"),
                     action: Some("GET"),
                     result: Some("ok"),
-                    policy_version: Some(3),
+                    policy_version: Some(3.into()),
                     extra: vec![("path", json!("/repos?token=x")), ("status", json!(200))],
                     ..Default::default()
                 },

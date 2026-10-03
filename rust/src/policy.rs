@@ -2020,7 +2020,8 @@ pub struct Connection {
     pub http_scope: Option<HttpScope>,
     pub ssh_target: Option<SshTarget>,
     pub cli: Option<CliProfile>,
-    pub policy_version: i64,
+    /// `int(data["policy_version"])`: an arbitrary-precision Python `int`.
+    pub policy_version: PyInt,
     /// `"active"` or `"disabled"`.
     pub status: String,
     pub created_at: String,
@@ -2128,11 +2129,12 @@ impl Connection {
         http_scope: Option<HttpScope>,
         ssh_target: Option<SshTarget>,
         cli: Option<CliProfile>,
-        policy_version: i64,
+        policy_version: impl Into<PyInt>,
         status: impl Into<String>,
         created_at: impl Into<String>,
         updated_at: impl Into<String>,
     ) -> Result<Self, Error> {
+        let policy_version = policy_version.into();
         let id = validate_name(&id.into(), "connection_id")?;
         let kind = kind.into();
         let status = status.into();
@@ -2214,7 +2216,7 @@ impl Connection {
                 .clone()
                 .unwrap_or_else(|| self.ssh_target.clone()),
             changes.cli.clone().unwrap_or_else(|| self.cli.clone()),
-            self.policy_version,
+            self.policy_version.clone(),
             changes
                 .status
                 .clone()
@@ -2227,6 +2229,31 @@ impl Connection {
                 .raw_secret_version
                 .clone_from(&self.raw_secret_version);
         }
+        Ok(updated)
+    }
+
+    /// `dataclasses.replace(c, policy_version=..., [status=...,]
+    /// created_at=..., updated_at=...)` as `team/fold.py` applies it: only
+    /// these bookkeeping fields change, every other field (including any
+    /// raw JSON shape Python keeps verbatim) is carried over unchanged, and
+    /// `__post_init__` re-runs -- of its checks only `status` can newly fail.
+    pub(crate) fn replaced_bookkeeping(
+        &self,
+        policy_version: PyInt,
+        status: Option<&str>,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<Connection, Error> {
+        let mut updated = self.clone();
+        updated.policy_version = policy_version;
+        if let Some(status) = status {
+            if status != "active" && status != "disabled" {
+                return Err(Error::invalid_input("invalid_status"));
+            }
+            updated.status = status.to_string();
+        }
+        updated.created_at = created_at.to_string();
+        updated.updated_at = updated_at.to_string();
         Ok(updated)
     }
 
@@ -2361,11 +2388,13 @@ impl Connection {
         // Kwarg order 14: `policy_version=int(data["policy_version"])`. A
         // missing key is an uncaught `KeyError`, and any shape `int()`
         // itself would raise on is an uncaught `TypeError`/`ValueError` --
-        // both §3.5, `state_corrupt` either way. [`python_int_coerce`]
-        // reproduces exactly the shapes `int()` *does* accept.
+        // both §3.5, `state_corrupt` either way. [`PyInt::coerce_from_json`]
+        // reproduces exactly the shapes `int()` *does* accept, at Python's
+        // unbounded precision (an integer literal, numeric string or float
+        // of any magnitude stays exact).
         let policy_version = obj
             .get("policy_version")
-            .and_then(python_int_coerce)
+            .and_then(PyInt::coerce_from_json)
             .ok_or_else(bad)?;
         // Kwarg order 15-17: status, created_at, updated_at.
         let status_raw = obj.get("status").ok_or_else(bad)?.clone();
@@ -2489,7 +2518,7 @@ pub struct Principal {
 /// allow; two stored strings for `max_uses`/`uses` compare
 /// *lexicographically* in Python (`"2" >= "10"` is `True`, `"10" >= "9"`
 /// is `False`), the opposite of their coerced-`i64` numeric comparison.
-/// See [`grant_num_ne_i64`]/[`grant_num_ge`]/[`grant_num_sub`]/
+/// See [`grant_num_ne_pyint`]/[`grant_num_ge`]/[`grant_num_sub`]/
 /// [`grant_num_add_one`] for the specific operations these fields are put
 /// through, each reproducing Python's exact cross-type behaviour
 /// (including raising the closest handled error, `state_corrupt`, for a
@@ -2602,31 +2631,23 @@ fn cmp_numeric(a: &GrantNum, b: &GrantNum) -> Option<std::cmp::Ordering> {
     }
 }
 
-/// `f == i` compared exactly (no precision loss for `i` near the `i64`
-/// boundary): `f` must be an integer-valued `f64` within the exact `i64`
-/// range (see [`I64_MIN_AS_F64`]/[`I64_MAX_EXCLUSIVE_AS_F64`]) whose
-/// truncation equals `i`.
-fn float_eq_i64_exact(f: f64, i: i64) -> bool {
-    f.fract() == 0.0 && (I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&f) && (f as i64) == i
-}
-
 /// `grant.policy_version != connection.policy_version` (`_grant_state`):
-/// `connection.policy_version` is always a plain, already-`int()`-coerced
-/// `i64` (`Connection::from_value` routes it through `python_int_coerce`),
-/// so this only needs the other side's shape. A `str` never equals an
-/// `int` in Python (`!=` is `True` unconditionally, never raises); a bool
-/// compares via `int(bool)`; a float compares exactly, not by casting both
-/// sides to `f64` (see [`float_eq_i64_exact`]).
-fn grant_num_ne_i64(a: &GrantNum, b: i64) -> bool {
+/// `connection.policy_version` is always an already-`int()`-coerced Python
+/// `int` of any magnitude (`Connection::from_value` routes it through
+/// [`PyInt::coerce_from_json`]), so this only needs the other side's shape.
+/// A `str` (or any container/`None`) never equals an `int` in Python (`!=`
+/// is `True` unconditionally, never raises); a bool compares via
+/// `int(bool)`; an integer compares exactly at any magnitude; a float
+/// compares exactly (CPython's int/float comparison never rounds the int).
+fn grant_num_ne_pyint(a: &GrantNum, b: &PyInt) -> bool {
     match a {
         GrantNum::Str(_) | GrantNum::Other(_) => true,
-        GrantNum::Bool(x) => i64::from(*x) != b,
-        GrantNum::Int(x) => *x != b,
-        // Constructed only for a magnitude outside `i64` range, so this is
-        // never equal to any representable `i64` -- exact, not an
-        // approximation.
-        GrantNum::BigInt(_) => true,
-        GrantNum::Float(f) => !float_eq_i64_exact(*f, b),
+        GrantNum::Float(f) => {
+            crate::pyint::cmp_bigint_f64(&b.0, *f) != Some(std::cmp::Ordering::Equal)
+        }
+        GrantNum::Bool(_) | GrantNum::Int(_) | GrantNum::BigInt(_) => {
+            a.as_bigint().as_ref() != Some(&b.0)
+        }
     }
 }
 
@@ -2846,7 +2867,9 @@ pub struct Grant {
     pub id: String,
     pub principal: String,
     pub connection: String,
-    pub policy_version: i64,
+    /// Best-effort integer reading (see `raw_policy_version`); exact for
+    /// every grant this crate or Python writes.
+    pub policy_version: PyInt,
     pub expires_at: Option<f64>,
     pub max_uses: Option<i64>,
     pub uses: i64,
@@ -3154,6 +3177,11 @@ impl Grant {
         // decisions.
         let int_field =
             |key: &str| -> i64 { obj.get(key).and_then(python_int_coerce).unwrap_or(0) };
+        let pyint_field = |key: &str| -> PyInt {
+            obj.get(key)
+                .and_then(PyInt::coerce_from_json)
+                .unwrap_or_else(|| PyInt::from(0))
+        };
         // Presence is still required for `policy_version`/`uses` (no
         // dataclass default in Python -- a missing key is an uncaught
         // `TypeError`); `GrantNum::from_value` itself never fails once the
@@ -3211,7 +3239,7 @@ impl Grant {
             id: str_field("id")?,
             principal: str_field("principal")?,
             connection: str_field("connection")?,
-            policy_version: int_field("policy_version"),
+            policy_version: pyint_field("policy_version"),
             expires_at,
             max_uses,
             uses: int_field("uses"),
@@ -3287,8 +3315,8 @@ impl Decision {
         Decision::new(false, reason, None, Some(connection))
     }
 
-    pub fn policy_version(&self) -> Option<i64> {
-        self.connection.as_ref().map(|c| c.policy_version)
+    pub fn policy_version(&self) -> Option<PyInt> {
+        self.connection.as_ref().map(|c| c.policy_version.clone())
     }
 
     pub fn require(self) -> Result<Decision, Error> {
@@ -3462,57 +3490,17 @@ fn as_obj(v: &Value) -> Result<&Map<String, Value>, Error> {
         .ok_or_else(|| Error::state("state_corrupt").with_detail("policy_document"))
 }
 
-/// `raw != resolved` where `raw` is a *stored* JSON value compared against a
-/// resolved Rust `i64` (`g.get("credential_version") != resolved` in
+/// `stored == resolved` with CPython's cross-type numeric equality, for a
+/// raw stored JSON value against a resolved numeric value
+/// (`g.get("credential_version") != resolved` in
 /// `credential_versions_changed`, `entry.get("policy_version") !=
-/// connection.policy_version` in `_approval_mismatch`): Python compares
-/// using ordinary numeric equality across types -- a stored float (`2.0`)
-/// or bool (`True`/`False`, via `int(bool)`) compares equal to an
-/// equal-valued int, so nothing changes. `Value::as_i64` alone would treat
-/// a float-shaped number (even one with no fractional part) as a mismatch,
-/// silently bumping the connection's policy version / reporting a spurious
-/// `policy_changed` for no real change (finding D-R3-9). Any non-numeric
-/// stored value (a string, array, object, `null`) never compares equal to
-/// an int in Python either.
-///
-/// The `n.as_i64() == Some(resolved) || n.as_f64() == Some(resolved as
-/// f64)` form previously used here compared *both* sides through the `||`,
-/// so even when the exact `as_i64` comparison already correctly found two
-/// distinct integers unequal, the `f64` fallback still ran and could
-/// report them equal anyway: two distinct `i64`s whose magnitude exceeds
-/// 2**53 (`9007199254740993` and `9007199254740992`, say) both round to
-/// the *same* `f64`, so the fallback alone would call them equal (finding
-/// D-R5-7) -- silently missing a real credential-version change (no policy
-/// version bump, so a handle for the old credential keeps working) or a
-/// real approval `policy_version` change (an approval that should have
-/// been invalidated stays open). Fixed by using the `f64` path only for a
-/// stored value that is *genuinely* float-shaped in the JSON source
-/// (`number_is_python_int` false, i.e. it has a `.`/`e`/`E`); an
-/// integer-shaped literal is compared exactly via `as_i64`, and one
-/// outside `i64` range (`as_i64` is `None`) is correctly unequal to any
-/// representable `resolved`.
-fn python_numeric_eq(stored: Option<&Value>, resolved: i64) -> bool {
-    match stored {
-        Some(Value::Bool(b)) => i64::from(*b) == resolved,
-        Some(Value::Number(n)) => {
-            if number_is_python_int(n) {
-                n.as_i64() == Some(resolved)
-            } else {
-                n.as_f64().is_some_and(|f| float_eq_i64_exact(f, resolved))
-            }
-        }
-        _ => false,
-    }
-}
-
-/// Same cross-type numeric equality as [`python_numeric_eq`], but for a
-/// `resolved` value that may itself be an integer-shaped literal beyond
-/// `i64` range (`credential_versions_changed`'s `resolved_credential_version`,
-/// round 6, once a vault secret's `active_version` is kept exact rather
-/// than collapsing to `None` past `i64`): two integer-shaped values of any
-/// magnitude compare as `BigInt`; a mixed integer/float pair uses the exact
-/// binary64 ratio through [`crate::pyint::cmp_bigint_f64`], matching
-/// CPython beyond 2**53 rather than rounding the integer first.
+/// connection.policy_version` in `_approval_mismatch`): a stored float or
+/// bool compares equal to an equal-valued int (finding D-R3-9); two
+/// integer-shaped values of any magnitude compare as `BigInt`; a mixed
+/// integer/float pair uses the exact binary64 ratio through
+/// [`crate::pyint::cmp_bigint_f64`], matching CPython beyond 2**53 rather
+/// than rounding the integer first (finding D-R5-7). Any non-numeric stored
+/// value never compares equal to a number.
 fn python_numeric_eq_value(stored: Option<&Value>, resolved: &Value) -> bool {
     fn integer(v: &Value) -> Option<BigInt> {
         match v {
@@ -3572,7 +3560,7 @@ struct Evaluated {
     connection: String,
     grant: String,
     action: Action,
-    policy_version: i64,
+    policy_version: PyInt,
 }
 
 /// One thread's remembered evaluations for one [`Policy`] instance. Mirrors
@@ -3740,7 +3728,7 @@ impl<'a> Policy<'a> {
                 connection: connection.id.clone(),
                 grant: grant.id.clone(),
                 action: action.clone(),
-                policy_version: connection.policy_version,
+                policy_version: connection.policy_version.clone(),
             },
         );
     }
@@ -3912,26 +3900,11 @@ impl<'a> Policy<'a> {
                 continue;
             }
             let after = Connection {
-                // Finding D-R7-1: `connection.policy_version + 1` panics
-                // (debug) / silently wraps to `i64::MIN` (release, since
-                // `Cargo.toml` has no `overflow-checks` override) at the
-                // `i64` boundary, where Python's arbitrary-precision `int`
-                // just keeps counting (measured: `policy_version: 2**63-1`
-                // succeeds and writes `9223372036854775808`). Rust's
-                // `Connection::policy_version` is a plain `i64` relied on
-                // by files outside this work unit (gateway, handles,
-                // signer), so there is no exact-widening escape hatch the
-                // way `GrantNum::BigInt` gives the grant fields; `checked_add`
-                // fails closed with the error a caller of `update_connection`/
-                // `credential_versions_changed` already handles instead of
-                // panicking or corrupting the monotonic counter
-                // `grant_num_ne_i64`'s `grant_stale` check depends on. See
-                // `DEVIATIONS.md`'s `policy (policy_version/cycle i64
-                // counter overflow, finding D-R7-1)` row.
-                policy_version: connection
-                    .policy_version
-                    .checked_add(1)
-                    .ok_or_else(|| Error::state("state_corrupt").with_detail(CONNECTIONS))?,
+                // `connection.policy_version + 1`: Python's `int` is
+                // arbitrary-precision, so this never overflows (measured:
+                // `policy_version: 2**63-1` succeeds and writes
+                // `9223372036854775808`); `PyInt` keeps it exact.
+                policy_version: PyInt(&connection.policy_version.0 + 1),
                 updated_at: iso(Some(self.now())),
                 ..connection
             };
@@ -3943,7 +3916,7 @@ impl<'a> Policy<'a> {
             for (after, resolved) in &changed {
                 self.reevaluate_grants_value(
                     &after.id,
-                    after.policy_version,
+                    &after.policy_version,
                     false,
                     Some(resolved.clone()),
                 )?;
@@ -4178,7 +4151,7 @@ impl<'a> Policy<'a> {
         }
         let now = iso(Some(self.now()));
         let stamped = Connection {
-            policy_version: 1,
+            policy_version: PyInt::from(1),
             created_at: now.clone(),
             updated_at: now,
             ..connection
@@ -4227,14 +4200,8 @@ impl<'a> Policy<'a> {
             let before = Connection::from_value(&entry)?;
             let updated = before.with_changes(&changes)?;
             widened = Policy::widens(&before, &updated);
-            // Finding D-R7-1: see the matching comment on
-            // `credential_versions_changed`'s policy-version bump --
-            // `checked_add` fails closed instead of panicking (debug) or
-            // wrapping to `i64::MIN` (release) at the `i64` boundary.
-            let after_version = before
-                .policy_version
-                .checked_add(1)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail(CONNECTIONS))?;
+            // `before.policy_version + 1`, unbounded like Python's `int`.
+            let after_version = PyInt(&before.policy_version.0 + 1);
             after = Connection {
                 policy_version: after_version,
                 updated_at: iso(Some(self.now())),
@@ -4252,7 +4219,7 @@ impl<'a> Policy<'a> {
             doc.insert(connection_id.to_string(), after.to_value());
             self.state.write_json(CONNECTIONS, &Value::Object(doc))?;
             let resolved = self.resolved_credential_version(&after, None)?;
-            self.reevaluate_grants_value(connection_id, after.policy_version, widened, resolved)?;
+            self.reevaluate_grants_value(connection_id, &after.policy_version, widened, resolved)?;
             // Approvals are bound to the policy version they were requested under.
             let reason = if after.status == "disabled" {
                 "connection_disabled"
@@ -4369,7 +4336,7 @@ impl<'a> Policy<'a> {
     pub(crate) fn reevaluate_grants(
         &self,
         connection_id: &str,
-        new_version: i64,
+        new_version: &PyInt,
         widened: bool,
         credential_version: Option<PyInt>,
     ) -> Result<(), Error> {
@@ -4384,7 +4351,7 @@ impl<'a> Policy<'a> {
     pub(crate) fn reevaluate_grants_value(
         &self,
         connection_id: &str,
-        new_version: i64,
+        new_version: &PyInt,
         widened: bool,
         credential_version: Option<Value>,
     ) -> Result<(), Error> {
@@ -4419,7 +4386,7 @@ impl<'a> Policy<'a> {
             if widened {
                 obj.insert("status".into(), json!("stale"));
             } else {
-                obj.insert("policy_version".into(), json!(new_version));
+                obj.insert("policy_version".into(), new_version.value());
                 obj.insert(
                     "credential_version".into(),
                     credential_version.clone().unwrap_or(Value::Null),
@@ -4563,7 +4530,7 @@ impl<'a> Policy<'a> {
             id: format!("g-{}", &uuid::Uuid::new_v4().simple().to_string()[..16]),
             principal: principal_id.to_string(),
             connection: connection_id.to_string(),
-            policy_version: connection.policy_version,
+            policy_version: connection.policy_version.clone(),
             expires_at: ttl_seconds.map(|t| now + t as f64),
             max_uses,
             uses: 0,
@@ -4571,7 +4538,7 @@ impl<'a> Policy<'a> {
             created_at: iso(Some(now)),
             revoked_at: None,
             credential_version,
-            raw_policy_version: GrantNum::Int(connection.policy_version),
+            raw_policy_version: GrantNum::from_value(&connection.policy_version.value()),
             raw_max_uses,
             raw_uses: GrantNum::Int(0),
             raw_credential_version,
@@ -5294,7 +5261,7 @@ impl<'a> Policy<'a> {
         let _lock = self.state.lock()?;
         let mut control = self.control()?;
         setdefault_obj(&mut control, "approvals")?;
-        let mut cycle: i64 = 1;
+        let mut cycle = PyInt::from(1);
         let existing = control
             .get("approvals")
             .and_then(Value::as_object)
@@ -5327,18 +5294,14 @@ impl<'a> Policy<'a> {
             // and completing the write (finding D-R3-8).
             let raw_cycle = entry_mut.get("cycle").cloned();
             let base = if json_truthy(raw_cycle.as_ref()) {
-                python_int_coerce(raw_cycle.as_ref().expect("truthy implies present"))
+                PyInt::coerce_from_json(raw_cycle.as_ref().expect("truthy implies present"))
                     .ok_or_else(|| Error::state("state_corrupt").with_detail(CONTROL))?
             } else {
-                1
+                PyInt::from(1)
             };
-            // Finding D-R7-1: `base + 1` panics (debug) / wraps (release)
-            // at the `i64` boundary, where Python's arbitrary-precision
-            // `int` succeeds (measured: `cycle: 2**63-1` writes `cycle:
-            // 9223372036854775808`). `checked_add` fails closed instead.
-            cycle = base
-                .checked_add(1)
-                .ok_or_else(|| Error::state("state_corrupt").with_detail(CONTROL))?;
+            // `int(...) + 1` never overflows a Python `int` (measured:
+            // `cycle: 2**63-1` writes `cycle: 9223372036854775808`).
+            cycle = PyInt(base.0 + 1);
         }
         let evaluated = self.recall_pair(caller, connection);
         let mut policy_version = match self.get_connection(connection) {
@@ -5347,9 +5310,9 @@ impl<'a> Policy<'a> {
             Err(e) => return Err(e),
         };
         if let Some(ev) = &evaluated
-            && Some(ev.policy_version) != policy_version
+            && Some(&ev.policy_version) != policy_version.as_ref()
         {
-            policy_version = Some(ev.policy_version);
+            policy_version = Some(ev.policy_version.clone());
         }
         let grant = match &evaluated {
             Some(ev) => Some(ev.grant.clone()),
@@ -5416,7 +5379,7 @@ impl<'a> Policy<'a> {
         caller: &str,
         connection: &str,
         grant_id: Option<&str>,
-        policy_version: Option<i64>,
+        policy_version: Option<PyInt>,
     ) -> Result<bool, Error> {
         let now = self.now();
         let _lock = self.state.lock()?;
@@ -5447,14 +5410,14 @@ impl<'a> Policy<'a> {
         let in_use_grant: Option<String> = grant_id
             .map(str::to_string)
             .or_else(|| evaluated.as_ref().map(|e| e.grant.clone()));
-        let in_use_version: Option<i64> =
-            policy_version.or_else(|| evaluated.as_ref().map(|e| e.policy_version));
+        let in_use_version: Option<PyInt> =
+            policy_version.or_else(|| evaluated.as_ref().map(|e| e.policy_version.clone()));
         let reason = self.approval_mismatch(
             entry_obj,
             caller,
             connection,
             in_use_grant.as_deref(),
-            in_use_version,
+            in_use_version.as_ref(),
             now,
         )?;
         if let Some(reason) = reason {
@@ -5482,7 +5445,7 @@ impl<'a> Policy<'a> {
         caller: &str,
         connection_id: &str,
         in_use_grant: Option<&str>,
-        in_use_version: Option<i64>,
+        in_use_version: Option<&PyInt>,
         now: f64,
     ) -> Result<Option<&'static str>, Error> {
         if Self::approval_expired(entry, now) {
@@ -5495,14 +5458,18 @@ impl<'a> Policy<'a> {
         };
         // `recorded_version != connection.policy_version`: Python compares
         // the raw stored value using numeric equality (see
-        // [`python_numeric_eq`]), not `as_i64` (finding D-R3-9's sweep) --
-        // a stored float/bool `policy_version` that is numerically equal
-        // must not be reported as a mismatch.
-        if !python_numeric_eq(entry.get("policy_version"), connection.policy_version) {
+        // [`python_numeric_eq_value`]), not `as_i64` (finding D-R3-9's
+        // sweep) -- a stored float/bool `policy_version` that is
+        // numerically equal must not be reported as a mismatch, and an
+        // integer of any magnitude compares exactly.
+        if !python_numeric_eq_value(
+            entry.get("policy_version"),
+            &connection.policy_version.value(),
+        ) {
             return Ok(Some("policy_changed"));
         }
         if let Some(v) = in_use_version
-            && v != connection.policy_version
+            && *v != connection.policy_version
         {
             return Ok(Some("policy_changed"));
         }
@@ -5697,21 +5664,16 @@ impl<'a> Policy<'a> {
                     // handled error for a value `int()` itself would reject,
                     // not a silently substituted default that completes the
                     // write (finding D-R3-8).
-                    // Finding D-R7-1: the trailing `+ 1` panics (debug) /
-                    // wraps (release) at the `i64` boundary, where Python's
-                    // arbitrary-precision `int` succeeds (measured:
-                    // `policy_version: 2**63-1` -> `reapply` succeeds,
-                    // writing `9223372036854775808`). `checked_add` fails
-                    // closed instead.
+                    // The trailing `+ 1` never overflows a Python `int`
+                    // (measured: `policy_version: 2**63-1` -> `reapply`
+                    // succeeds, writing `9223372036854775808`).
                     let pv = match entry.get("policy_version") {
-                        None => 0,
-                        Some(v) => python_int_coerce(v).ok_or_else(|| {
+                        None => PyInt::from(0),
+                        Some(v) => PyInt::coerce_from_json(v).ok_or_else(|| {
                             Error::state("state_corrupt").with_detail("connection")
                         })?,
-                    }
-                    .checked_add(1)
-                    .ok_or_else(|| Error::state("state_corrupt").with_detail("connection"))?;
-                    entry.insert("policy_version".into(), json!(pv));
+                    };
+                    entry.insert("policy_version".into(), PyInt(pv.0 + 1).value());
                     entry.insert("updated_at".into(), json!(now.clone()));
                     *counts.get_mut("connections").unwrap() += 1;
                 }
@@ -5750,7 +5712,7 @@ impl<'a> Policy<'a> {
             return Ok(Some("grant_revoked"));
         }
         if grant.status_is("stale")
-            || grant_num_ne_i64(&grant.raw_policy_version, connection.policy_version)
+            || grant_num_ne_pyint(&grant.raw_policy_version, &connection.policy_version)
         {
             return Ok(Some("grant_stale"));
         }
@@ -5968,7 +5930,7 @@ impl<'a> Policy<'a> {
         caller: Option<&str>,
         connection_id: Option<&str>,
         action: Option<Action>,
-        policy_version: Option<i64>,
+        policy_version: Option<PyInt>,
     ) -> Result<Grant, Error> {
         let evaluated = self.recall_pop(grant_id);
         let mut action = action;
@@ -5978,7 +5940,7 @@ impl<'a> Policy<'a> {
                 action = Some(ev.action.clone());
             }
             if policy_version.is_none() {
-                policy_version = Some(ev.policy_version);
+                policy_version = Some(ev.policy_version.clone());
             }
         }
         let _lock = self.state.lock()?;
@@ -6130,7 +6092,7 @@ mod tests {
         caller: Option<&str>,
         connection_id: Option<&str>,
         action: Option<Action>,
-        policy_version: Option<i64>,
+        policy_version: Option<PyInt>,
         reason: &str,
     ) {
         let err = policy
@@ -7210,7 +7172,7 @@ mod tests {
             None,
             None,
             None,
-            Some(current - 1),
+            Some(&current - 1),
             "grant_stale",
         );
         assert_consume_denied(
@@ -7555,7 +7517,7 @@ mod tests {
         policy.approve(&digest).unwrap();
         assert!(
             !policy
-                .consume_approval(&digest, "agent-1", "gh", None, Some(7))
+                .consume_approval(&digest, "agent-1", "gh", None, Some(7.into()))
                 .unwrap()
         );
         assert_eq!(
@@ -7571,7 +7533,7 @@ mod tests {
         );
         assert!(
             policy
-                .consume_approval(&digest, "agent-1", "gh", Some(&recorded), Some(1))
+                .consume_approval(&digest, "agent-1", "gh", Some(&recorded), Some(1.into()))
                 .unwrap()
         );
     }
@@ -7726,9 +7688,9 @@ mod tests {
         assert_eq!(
             changed
                 .iter()
-                .map(|c| (c.id.as_str(), c.policy_version))
+                .map(|c| (c.id.as_str(), c.policy_version.clone()))
                 .collect::<Vec<_>>(),
-            vec![("gh", 2)]
+            vec![("gh", PyInt::from(2))]
         );
         let after = policy.get_grant(&grant.id).unwrap();
         assert_eq!(
@@ -7737,7 +7699,7 @@ mod tests {
                 after.policy_version,
                 after.credential_version
             ),
-            ("active", 2, Some(2.into()))
+            ("active", PyInt::from(2), Some(2.into()))
         );
         assert_eq!(policy.get_connection("pinned").unwrap().policy_version, 1);
         let vault3 = json!({"secrets": {"gh-token": {"active_version": null, "versions": {}}}});
@@ -8024,36 +7986,30 @@ mod tests {
         assert_eq!(raw[&grant.id]["uses"], json!(9_223_372_036_854_775_808i128));
     }
 
-    /// Finding D-R7-1: unlike `uses` above, `Connection::policy_version`
-    /// stays a plain `i64` (relied on outside this work unit's files), so
-    /// there is no exact-widening escape hatch here -- `checked_add`
-    /// fails closed with `state_corrupt` instead of panicking (debug) or
-    /// silently wrapping to `i64::MIN` and persisting it (release),
-    /// which would have broken `grant_num_ne_i64`'s monotonicity
-    /// assumption. This is a deliberate, documented divergence from
-    /// Python's continued success at this astronomically unreachable
-    /// boundary (`DEVIATIONS.md`'s `policy_version`/`cycle` i64-counter-
-    /// overflow row) -- the pinned behaviour is "does not panic or
-    /// corrupt state", not "matches Python's success".
+    /// Finding D-R7-1, now closed: `Connection.policy_version` is an
+    /// unbounded Python `int`, so `update_connection` on a connection at
+    /// `policy_version: 2**63 - 1` succeeds and persists
+    /// `9223372036854775808` (measured against `python3.12`; the
+    /// differential form is `rust/tests/policy_parity_close.rs`).
     #[test]
-    fn update_connection_at_i64_max_policy_version_fails_closed_without_panicking() {
+    fn update_connection_past_i64_max_policy_version_continues_like_python() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         let mut doc = state.read_json(CONNECTIONS, json!({})).unwrap();
         doc.as_object_mut().unwrap()["gh"]["policy_version"] = json!(i64::MAX);
         state.write_json(CONNECTIONS, &doc).unwrap();
 
-        let err = policy
+        let (after, _) = policy
             .update_connection("gh", ConnectionChanges::new().description("x".to_string()))
-            .unwrap_err();
-        assert!(err.is(ErrorClass::StateError), "{err:?}");
-        assert_eq!(err.reason, "state_corrupt");
+            .unwrap();
+        assert_eq!(after.policy_version.to_string(), "9223372036854775808");
+        let raw = state.read_json(CONNECTIONS, json!({})).unwrap();
+        assert_eq!(raw["gh"]["policy_version"].to_string(), "9223372036854775808");
     }
 
-    /// Same shape as `update_connection` above, for `request_approval`'s
-    /// `cycle = base + 1` (finding D-R7-1).
+    /// Same as above for `request_approval`'s `cycle = int(...) + 1`.
     #[test]
-    fn request_approval_at_i64_max_cycle_fails_closed_without_panicking() {
+    fn request_approval_past_i64_max_cycle_continues_like_python() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         let digest = approval_helper(&policy, "/repos/demo");
@@ -8062,11 +8018,10 @@ mod tests {
         control.as_object_mut().unwrap()["approvals"][&digest]["cycle"] = json!(i64::MAX);
         state.write_json(CONTROL, &control).unwrap();
 
-        let err = policy
+        let entry = policy
             .request_approval(&digest, "agent-1", "gh", "DELETE", "/repos/demo")
-            .unwrap_err();
-        assert!(err.is(ErrorClass::StateError), "{err:?}");
-        assert_eq!(err.reason, "state_corrupt");
+            .unwrap();
+        assert_eq!(entry["cycle"].to_string(), "9223372036854775808");
     }
 
     /// Finding D-R7-6: `[] >= [1]` is `False`, `[] >= []` is `True` in
