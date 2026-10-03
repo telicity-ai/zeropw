@@ -1684,10 +1684,21 @@ impl SurrogateEscape {
     /// [`repr_str`] spells them), as CPython writes it to `sys.stderr`
     /// (`backslashreplace`): every escaped byte becomes `\udcXX`.
     pub fn stderr_text(&self, text: &str) -> String {
+        self.rewrite(text, true)
+    }
+
+    /// Text with escaped bytes inside `repr()`s: each `repr` spelling of an
+    /// escaped byte becomes CPython's `\udcXX`; raw escaped bytes are kept
+    /// (for a caller that serializes the text next, see [`Self::json_text`]).
+    pub fn repr_text(&self, text: &str) -> String {
+        self.rewrite(text, false)
+    }
+
+    fn rewrite(&self, text: &str, raw: bool) -> String {
         let mut out = String::with_capacity(text.len());
         let mut rest = text;
         while let Some(c) = rest.chars().next() {
-            if let Some(surrogate) = self.surrogate(c) {
+            if raw && let Some(surrogate) = self.surrogate(c) {
                 out.push_str(&format!("\\u{surrogate:04x}"));
                 rest = &rest[c.len_utf8()..];
                 continue;

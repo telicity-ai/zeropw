@@ -36,9 +36,41 @@ struct Args {
     action: String,
     options: BTreeMap<String, Vec<String>>,
     positional: Vec<String>,
+    /// How argv's undecodable bytes are carried (`surrogateescape`).
+    esc: Option<crate::pystr::SurrogateEscape>,
 }
 
+/// The options that name files (`open(path)`/`Path(path).expanduser()`
+/// only): their non-UTF-8 bytes reach the file system unchanged, as
+/// CPython's `surrogateescape` argv does.
+const PATH_OPTIONS: [&str; 3] = ["value-file", "out", "in"];
+
 impl Args {
+    /// `os.fsencode(text)`: an argument's original bytes.
+    fn os_bytes(&self, text: &str) -> Vec<u8> {
+        self.esc
+            .map_or_else(|| text.as_bytes().to_vec(), |esc| esc.encode(text))
+    }
+
+    /// `Path(text).expanduser()` of a path argument.
+    fn user_path(&self, text: &str) -> Result<PathBuf, Error> {
+        user_path_bytes(&self.os_bytes(text)).map(path_from_bytes)
+    }
+
+    /// Whether a value that is not a file name holds undecodable bytes.
+    fn non_path_escape(&self) -> bool {
+        let Some(esc) = self.esc else {
+            return false;
+        };
+        self.options
+            .iter()
+            .filter(|(key, _)| !PATH_OPTIONS.contains(&key.as_str()))
+            .flat_map(|(_, values)| values)
+            .chain(&self.positional)
+            .chain([&self.command, &self.action])
+            .any(|value| esc.contains_escape(value))
+    }
+
     fn get(&self, key: &str) -> Option<&str> {
         self.options
             .get(key)
@@ -735,15 +767,14 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
 }
 
 fn output(v: &Value, stderr: bool) {
-    let text = pyjson::dumps(
+    let text = dumps_output(
         v,
         if stderr {
             DumpOptions::default_sorted()
         } else {
             DumpOptions::pretty_sorted()
         },
-    )
-    .unwrap_or_else(|_| "{}".into());
+    );
     if stderr {
         eprintln!("{text}");
     } else {
@@ -858,73 +889,137 @@ fn python_truthy(value: &Value) -> bool {
 }
 
 /// `str(pathlib.PurePosixPath(path))`: repeated and trailing separators and
-/// `.` components dropped (a leading `//` is kept, as POSIX allows).
-fn pathlib_str(path: &str) -> String {
-    let (root, rel) = if !path.starts_with('/') {
-        ("", path)
-    } else if path[1..].starts_with('/') && !path[2..].starts_with('/') {
-        ("//", &path[2..])
+/// `.` components dropped (a leading `//` is kept, as POSIX allows), over the
+/// path's bytes.
+fn pathlib_bytes(path: &[u8]) -> Vec<u8> {
+    let (root, rel): (&[u8], &[u8]) = if !path.starts_with(b"/") {
+        (b"", path)
+    } else if path[1..].starts_with(b"/") && !path[2..].starts_with(b"/") {
+        (b"//", &path[2..])
     } else {
-        ("/", &path[1..])
+        (b"/", &path[1..])
     };
-    let tail: Vec<&str> = rel
-        .split('/')
-        .filter(|p| !p.is_empty() && *p != ".")
+    let tail: Vec<&[u8]> = rel
+        .split(|b| *b == b'/')
+        .filter(|p| !p.is_empty() && *p != b".")
         .collect();
-    let text = format!("{root}{}", tail.join("/"));
-    if text.is_empty() {
-        ".".to_owned()
-    } else {
-        text
-    }
+    let mut text = root.to_vec();
+    text.extend(tail.join(&b'/'));
+    if text.is_empty() { b".".to_vec() } else { text }
+}
+
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(std::ffi::OsString::from_vec(bytes))
 }
 
 /// The home directory `pwd` reports for `user` (or the current uid), resolved
-/// through the system's NSS path (`getpwnam`/`getpwuid`).
-fn passwd_home(user: Option<&str>) -> Option<String> {
+/// through the system's NSS path (`getpwnam`/`getpwuid`).  A name that is not
+/// UTF-8 is looked up as no user (`KeyError`).
+fn passwd_home(user: Option<&[u8]>) -> Option<Vec<u8>> {
+    use std::os::unix::ffi::OsStringExt;
     let record = match user {
-        Some(name) => nix::unistd::User::from_name(name),
+        Some(name) => nix::unistd::User::from_name(std::str::from_utf8(name).ok()?),
         None => nix::unistd::User::from_uid(nix::unistd::Uid::current()),
     }
     .ok()
     .flatten()?;
-    Some(record.dir.to_string_lossy().into_owned())
+    Some(record.dir.into_os_string().into_vec())
 }
 
-/// `str(pathlib.Path(path).expanduser())`; `pathlib` raises
-/// `RuntimeError("Could not determine home directory.")` when `~` or `~user`
-/// cannot be resolved, which the CLI reports as an internal error.
-fn user_path(path: &str) -> Result<String, Error> {
-    let normalized = pathlib_str(path);
-    let (first, rest) = match normalized.split_once('/') {
-        Some((first, rest)) => (first, Some(rest)),
-        None => (normalized.as_str(), None),
+/// `bytes(pathlib.Path(path).expanduser())` over the path's original bytes:
+/// `~` is `$HOME` (or the current uid's `pw_dir`) and `~user` that user's
+/// `pw_dir`, right-stripped of `/` (`/` when empty).  `pathlib` raises
+/// `RuntimeError("Could not determine home directory.")` when the result
+/// still starts with `~` (an unknown user, or a home that is itself `~...`),
+/// which the CLI reports as an internal error.
+fn user_path_bytes(path: &[u8]) -> Result<Vec<u8>, Error> {
+    let normalized = pathlib_bytes(path);
+    let (first, rest) = match normalized.iter().position(|b| *b == b'/') {
+        Some(i) => (&normalized[..i], Some(&normalized[i + 1..])),
+        None => (&normalized[..], None),
     };
-    if normalized.starts_with('/') || !first.starts_with('~') {
+    if normalized.starts_with(b"/") || !first.starts_with(b"~") {
         return Ok(normalized);
     }
-    let home = if first == "~" {
+    let home = if first == b"~" {
         match env::var_os("HOME") {
-            Some(home) => Some(home.to_string_lossy().into_owned()),
+            Some(home) => {
+                use std::os::unix::ffi::OsStringExt;
+                Some(home.into_vec())
+            }
             None => passwd_home(None),
         }
     } else {
         passwd_home(Some(&first[1..]))
     };
-    let Some(home) = home else {
+    // `os.path.expanduser` returns the component unchanged when unresolved.
+    let homedir = match home {
+        Some(home) => {
+            let end = home.iter().rposition(|b| *b != b'/').map_or(0, |i| i + 1);
+            if end == 0 {
+                b"/".to_vec()
+            } else {
+                home[..end].to_vec()
+            }
+        }
+        None => first.to_vec(),
+    };
+    if homedir.starts_with(b"~") {
         return Err(Error::subclass(
             crate::errors::ErrorClass::ZeroPW,
             "RuntimeError",
             "internal_error",
             "",
         ));
-    };
-    let home = home.trim_end_matches('/');
-    let home = if home.is_empty() { "/" } else { home };
-    Ok(pathlib_str(&match rest {
-        Some(rest) => format!("{home}/{rest}"),
-        None => home.to_owned(),
-    }))
+    }
+    let mut joined = homedir;
+    if let Some(rest) = rest {
+        joined.push(b'/');
+        joined.extend_from_slice(rest);
+    }
+    Ok(pathlib_bytes(&joined))
+}
+
+/// [`user_path_bytes`] of a UTF-8 path, as text.
+fn user_path(path: &str) -> Result<String, Error> {
+    user_path_bytes(path.as_bytes()).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+thread_local! {
+    /// The `SurrogateEscape` [`output`] renders as lone surrogate escapes.
+    static OUTPUT_ESCAPE: std::cell::Cell<Option<crate::pystr::SurrogateEscape>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// `value` with `key` set to `str(path)`.  A path that is not UTF-8 is held
+/// as surrogate escapes (in a block no other part of the output uses) that
+/// [`output`] writes the way `json.dumps` writes the surrogates.
+fn with_path(mut value: Value, key: &str, path: &Path) -> Value {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        value[key] = json!(text);
+        return value;
+    }
+    let others = pyjson::dumps(&value, DumpOptions::plain()).unwrap_or_default();
+    match crate::pystr::SurrogateEscape::avoiding([bytes, others.as_bytes()]) {
+        Some(esc) => {
+            value[key] = json!(esc.decode(bytes));
+            OUTPUT_ESCAPE.with(|cell| cell.set(Some(esc)));
+        }
+        None => value[key] = json!(String::from_utf8_lossy(bytes)),
+    }
+    value
+}
+
+/// `json.dumps(...)` text of `value`, rendering any pending surrogate escapes.
+fn dumps_output(value: &Value, options: DumpOptions) -> String {
+    let text = pyjson::dumps(value, options).unwrap_or_else(|_| "{}".into());
+    match OUTPUT_ESCAPE.with(std::cell::Cell::take) {
+        Some(esc) => esc.json_text(&text),
+        None => text,
+    }
 }
 
 /// The CLI's `except OSError` mapping for a file named on the command line:
@@ -944,7 +1039,7 @@ fn os_error(error: &io::Error) -> Error {
 
 fn open(a: &Args, mutating: bool) -> Result<Context, Error> {
     let ctx = Context::open_with_tempdir_cleanup(
-        user_path(&a.state_dir)?,
+        a.user_path(&a.state_dir)?,
         Config::default(),
         crate::clock::system(),
         admin_owned_dir_registry(),
@@ -1144,7 +1239,7 @@ fn passphrase(name: &str) -> Result<String, Error> {
 
 fn read_secret(a: &Args, kind: &str) -> Result<Vec<u8>, Error> {
     let mut data = if let Some(path) = a.get("value-file").filter(|p| !p.is_empty()) {
-        let file = fs::File::open(path).map_err(|e| os_error(&e))?;
+        let file = fs::File::open(path_from_bytes(a.os_bytes(path))).map_err(|e| os_error(&e))?;
         let mut data = Vec::new();
         file.take((MAX_SECRET_BYTES + 1) as u64)
             .read_to_end(&mut data)
@@ -1458,16 +1553,18 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .with_detail("the recovery passphrase must be independent of the admin one"));
         }
         let ctx = Context::initialize_with_tempdir_cleanup(
-            user_path(&a.state_dir)?,
+            a.user_path(&a.state_dir)?,
             &admin,
             &recovery,
             Config::default(),
             crate::clock::system(),
             admin_owned_dir_registry(),
         )?;
-        return Ok(
-            json!({"state_dir":ctx.state.path.to_string_lossy(),"kms_key_id":ctx.kms.key_id()}),
-        );
+        return Ok(with_path(
+            json!({"kms_key_id":ctx.kms.key_id()}),
+            "state_dir",
+            &ctx.state.path,
+        ));
     }
     let mutating = !matches!(
         (a.command.as_str(), a.action.as_str()),
@@ -2233,7 +2330,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("backup", "") => {
-            let path = PathBuf::from(user_path(a.req("out"))?);
+            let path = a.user_path(a.req("out"))?;
             if path
                 .parent()
                 .is_some_and(|parent| !parent.as_os_str().is_empty() && !parent.exists())
@@ -2241,14 +2338,16 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 return Err(Error::invalid_input("file_not_found"));
             }
             let manifest = ctx.vault.backup(&path)?;
-            Ok(
-                json!({"out":path.to_string_lossy(),"manifest":manifest,"note":"encrypted archive; needs the KMS key or recovery passphrase"}),
-            )
+            Ok(with_path(
+                json!({"manifest":manifest,"note":"encrypted archive; needs the KMS key or recovery passphrase"}),
+                "out",
+                &path,
+            ))
         }
         ("restore", "") => {
             let manifest = Vault::restore(
                 ctx.state,
-                Path::new(&user_path(a.req("in"))?),
+                &a.user_path(a.req("in"))?,
                 ctx.audit,
                 Some(ctx.kms),
             )?;
@@ -2856,6 +2955,17 @@ pub fn run_serve(
     team_listen: Option<&str>,
     stop: Arc<AtomicBool>,
 ) -> Result<Value, Error> {
+    serve(state_dir.as_bytes(), listen, quiet, team_listen, stop)
+}
+
+/// [`run_serve`] for a state directory given by its bytes.
+fn serve(
+    state_dir: &[u8],
+    listen: &str,
+    quiet: bool,
+    team_listen: Option<&str>,
+    stop: Arc<AtomicBool>,
+) -> Result<Value, Error> {
     use std::io::Write;
     let (host, port) = parse_listen(listen)?;
     let host = require_loopback(&host)?;
@@ -2868,7 +2978,7 @@ pub fn run_serve(
         ..Config::default()
     };
     let ctx = Arc::new(Context::open(
-        user_path(state_dir)?,
+        path_from_bytes(user_path_bytes(state_dir)?),
         config,
         crate::clock::system(),
     )?);
@@ -2887,13 +2997,14 @@ pub fn run_serve(
     let server =
         crate::server::ZeroPWServer::new_with_quiet(ctx.clone(), Some(&host), Some(port), quiet)?;
     server.serve_in_thread()?;
-    let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","state_dir":ctx.state.path.to_string_lossy(),"team_listen":team_listen});
+    let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","team_listen":team_listen});
     if let Some(obj) = control(&ctx)?.as_object() {
         for (k, v) in obj {
             payload[k] = v.clone();
         }
     }
-    let text = pyjson::dumps(&payload, DumpOptions::compact_sorted())?;
+    let payload = with_path(payload, "state_dir", &ctx.state.path);
+    let text = dumps_output(&payload, DumpOptions::compact_sorted());
     println!("{text}");
     let _ = io::stdout().flush();
     let mut was_stopped = payload["stopped"] == true;
@@ -2940,31 +3051,41 @@ pub fn run_serve(
     Ok(payload)
 }
 
-/// Process entry point taking the raw OS arguments. Python decodes a
-/// non-UTF-8 argument with `surrogateescape`; a Rust `String` cannot hold
-/// the resulting lone surrogates (PORTING.md §3.6), so such an argument is a
-/// usage error -- and, like every unrecognized token, it is never echoed.
+/// Entry point taking the raw OS arguments.  CPython decodes argv with
+/// `surrogateescape`: the file-name options and `--state-dir` keep their
+/// original bytes on the file system (and print as lone surrogate escapes),
+/// and an undecodable byte inside an argparse error message prints the way
+/// `json.dumps` writes the surrogate.  Any other value with undecodable bytes
+/// is refused as a usage error (PORTING.md §3.6): Python would store or
+/// compare the lone surrogate, which no Rust `String` or state document can
+/// hold.
 pub fn main_os(argv: Vec<std::ffi::OsString>) -> i32 {
-    match argv
-        .into_iter()
-        .map(std::ffi::OsString::into_string)
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(argv) => main(&argv),
-        Err(_) => {
-            eprint!("{}", build_parser().format_usage());
-            output(
-                &json!({"error":"UsageError","reason":"usage","detail":"argument is not valid UTF-8; values are not echoed"}),
-                true,
-            );
-            2
-        }
-    }
+    use std::os::unix::ffi::OsStrExt;
+    let Some(esc) = crate::pystr::SurrogateEscape::avoiding(argv.iter().map(|a| a.as_bytes()))
+    else {
+        return refuse_undecodable();
+    };
+    let argv: Vec<String> = argv.iter().map(|a| esc.decode(a.as_bytes())).collect();
+    run_main(&argv, esc)
+}
+
+/// The §3.6 refusal of an undecodable non-path argument value.
+fn refuse_undecodable() -> i32 {
+    eprint!("{}", build_parser().format_usage());
+    output(
+        &json!({"error":"UsageError","reason":"usage","detail":"argument is not valid UTF-8; values are not echoed"}),
+        true,
+    );
+    2
 }
 
 /// Process entry point for the trusted administrator CLI.
 pub fn main(argv: &[String]) -> i32 {
-    let args = match parse(argv) {
+    main_os(argv.iter().map(std::ffi::OsString::from).collect())
+}
+
+fn run_main(argv: &[String], esc: crate::pystr::SurrogateEscape) -> i32 {
+    let mut args = match parse(argv) {
         Ok(a) => a,
         Err(ParseFail::Help(text)) => {
             print!("{text}");
@@ -2973,13 +3094,18 @@ pub fn main(argv: &[String]) -> i32 {
         }
         Err(ParseFail::Usage { usage, detail }) => {
             eprint!("{usage}");
+            OUTPUT_ESCAPE.with(|cell| cell.set(Some(esc)));
             output(
-                &json!({"error":"UsageError","reason":"usage","detail":detail}),
+                &json!({"error":"UsageError","reason":"usage","detail":esc.repr_text(&detail)}),
                 true,
             );
             return 2;
         }
     };
+    args.esc = Some(esc);
+    if args.non_path_escape() {
+        return refuse_undecodable();
+    }
     if args.command == "serve" {
         let stop = Arc::new(AtomicBool::new(false));
         for signal in [
@@ -2991,8 +3117,8 @@ pub fn main(argv: &[String]) -> i32 {
                 return 1;
             }
         }
-        return match run_serve(
-            &args.state_dir,
+        return match serve(
+            &args.os_bytes(&args.state_dir),
             args.get("listen").unwrap_or("127.0.0.1:0"),
             args.has("quiet"),
             args.get("team-listen"),
@@ -3000,7 +3126,7 @@ pub fn main(argv: &[String]) -> i32 {
         ) {
             Ok(_) => 0,
             Err(error) => {
-                output(&error.to_dict(), true);
+                output(&error_dict(&error, &args), true);
                 1
             }
         };
@@ -3046,7 +3172,8 @@ pub fn main(argv: &[String]) -> i32 {
                     ]
                     .contains(&error.detail.as_str())
                         && fs::read_to_string(
-                            Path::new(&user_path(&args.state_dir).unwrap_or_default())
+                            args.user_path(&args.state_dir)
+                                .unwrap_or_default()
                                 .join(&error.detail),
                         )
                         .ok()
@@ -3059,11 +3186,34 @@ pub fn main(argv: &[String]) -> i32 {
                     true,
                 );
             } else {
-                output(&error.to_dict(), true);
+                output(&error_dict(&error, &args), true);
             }
             1
         }
     }
+}
+
+/// `exc.to_dict()` for the CLI's report.  An error naming a file under a
+/// state directory that is not UTF-8 (`state_missing`, `state_exists`,
+/// `kms_missing`, ...) carries `str(path)`, which CPython prints with the
+/// directory's lone surrogate escapes.
+fn error_dict(error: &Error, args: &Args) -> Value {
+    let dict = error.to_dict();
+    let Ok(state) = args.user_path(&args.state_dir) else {
+        return dict;
+    };
+    use std::os::unix::ffi::OsStrExt;
+    let state = state.as_os_str().as_bytes();
+    if std::str::from_utf8(state).is_ok() {
+        return dict;
+    }
+    let lossy = String::from_utf8_lossy(state);
+    let Some(rest) = error.detail.strip_prefix(lossy.as_ref()) else {
+        return dict;
+    };
+    let mut bytes = state.to_vec();
+    bytes.extend_from_slice(rest.as_bytes());
+    with_path(dict, "detail", &path_from_bytes(bytes))
 }
 
 #[cfg(test)]
