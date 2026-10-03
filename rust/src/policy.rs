@@ -1085,12 +1085,27 @@ impl HttpTarget {
         format!("{}://{}:{}", self.scheme, self.host, self.port)
     }
 
-    fn to_value(&self) -> Value {
-        let ca_file = self.raw_ca_file.clone().unwrap_or_else(|| {
+    /// The `ca_file` value Python holds: the raw stored value when it was
+    /// not a string, else the typed one.
+    fn ca_file_value(&self) -> Value {
+        self.raw_ca_file.clone().unwrap_or_else(|| {
             self.ca_file
                 .as_ref()
                 .map_or(Value::Null, |path| Value::String(path.clone()))
-        });
+        })
+    }
+
+    /// Python's dataclass `==` (field-wise `==`, any `ca_file` shape).
+    fn python_eq(&self, other: &HttpTarget) -> bool {
+        self.scheme == other.scheme
+            && self.host == other.host
+            && self.port == other.port
+            && python_value_eq(&self.ca_file_value(), &other.ca_file_value())
+            && self.allow_private_network == other.allow_private_network
+    }
+
+    fn to_value(&self) -> Value {
+        let ca_file = self.ca_file_value();
         json!({
             "scheme": self.scheme, "host": self.host, "port": self.port,
             "ca_file": ca_file, "allow_private_network": self.allow_private_network,
@@ -1345,6 +1360,16 @@ impl HttpAuth {
             raw_header_name: None,
             raw_value_prefix: None,
         }
+    }
+
+    /// Python's dataclass `==` over `(mode, header_name, value_prefix,
+    /// basic_username)` with the values Python holds (raw when not a
+    /// string).
+    fn python_eq(&self, other: &HttpAuth) -> bool {
+        let (a, b) = (self.to_value(), other.to_value());
+        ["mode", "header_name", "value_prefix", "basic_username"]
+            .iter()
+            .all(|k| python_value_eq(&a[*k], &b[*k]))
     }
 
     fn to_value(&self) -> Value {
@@ -1644,26 +1669,41 @@ impl HttpScope {
             None | Some(Value::Null) => None,
             Some(v) => Some(method_group(v)?),
         };
-        // `path_prefixes`: unlike `methods`, Python's per-element check is
-        // `prefix.startswith("/")`, which raises an uncaught
-        // `AttributeError` for a non-string element (state_corrupt,
-        // PORTING.md §3.5) -- it cannot tolerate one the way the
-        // membership test above does.
-        let path_prefixes = match obj.get("path_prefixes") {
+        let path_prefix_values = match obj.get("path_prefixes") {
             None | Some(Value::Null) => None,
-            Some(v) => {
-                let mut out = Vec::new();
-                for item in python_tuple_iter(v, bad)? {
-                    out.push(item.as_str().map(str::to_string).ok_or_else(bad)?);
-                }
-                Some(out)
-            }
+            Some(v) => Some(python_tuple_iter(v, bad)?),
         };
         let confirm_raw = obj.get("confirm_methods");
         let confirm_methods = if json_truthy(confirm_raw) {
             method_group(confirm_raw.expect("truthy implies present"))?
         } else {
             Vec::new()
+        };
+        // `__post_init__`, in Python's order: every method of `methods`
+        // then `confirm_methods`, then `path_prefixes` -- whose per-element
+        // `prefix.startswith("/")` raises an uncaught `AttributeError` for a
+        // non-string element (PORTING.md §3.5), only once it is reached.
+        for method in methods.iter().flatten().chain(confirm_methods.iter()) {
+            if !HTTP_METHODS.contains(&method.as_str()) {
+                return Err(Error::invalid_input("invalid_method"));
+            }
+        }
+        let path_prefixes = match path_prefix_values {
+            None => None,
+            Some(values) => {
+                if values.is_empty() {
+                    return Err(Error::invalid_input("empty_path_prefixes"));
+                }
+                let mut out = Vec::with_capacity(values.len());
+                for item in values {
+                    let prefix = item.as_str().ok_or_else(bad)?;
+                    if !prefix.starts_with('/') || prefix.contains("..") || prefix.contains('?') {
+                        return Err(Error::invalid_input("invalid_path_prefix"));
+                    }
+                    out.push(prefix.to_string());
+                }
+                Some(out)
+            }
         };
         HttpScope::new(methods, path_prefixes, confirm_methods)
     }
@@ -1907,6 +1947,15 @@ impl CliProfile {
         })
     }
 
+    /// Python's dataclass `==` (`program` compared as the value Python
+    /// holds, any shape).
+    fn python_eq(&self, other: &CliProfile) -> bool {
+        python_value_eq(&self.program_value(), &other.program_value())
+            && self.kind == other.kind
+            && self.base_url_env == other.base_url_env
+            && self.extra_env == other.extra_env
+    }
+
     /// `CliProfile(value["program"], value["kind"], value.get("base_url_env",
     /// "ZEROPW_API_BASE_URL"), dict(value.get("extra_env") or {}))` in
     /// `Connection.from_dict`, followed by `CliProfile.__post_init__`.
@@ -2080,27 +2129,58 @@ pub struct Connection {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    /// The stored value of a text field (`project`, `environment`,
+    /// `service`, `secret_id`, `description`, `created_at`, `updated_at`)
+    /// that was not a string: Python's `Connection.from_dict` never
+    /// validates these, so any JSON shape loads and is kept verbatim. The
+    /// typed field then holds a placeholder (`""`, or
+    /// [`NON_STRING_SECRET_ID`] for `secret_id`, which never names a vault
+    /// secret), and every view, document and comparison reads this value.
+    raw_text: std::collections::BTreeMap<&'static str, Value>,
+}
+
+/// Placeholder `Connection::secret_id` for a stored non-string `secret_id`:
+/// Python's `vault` lookups (`dict.get`) never find a non-string key, and
+/// no vault secret id can contain a NUL.
+const NON_STRING_SECRET_ID: &str = "\u{0}non-string-secret-id";
+
+/// `Connection`'s unvalidated text fields, in `from_dict` keyword order.
+const CONNECTION_TEXT_FIELDS: &[&str] = &[
+    "project",
+    "environment",
+    "service",
+    "secret_id",
+    "description",
+    "created_at",
+    "updated_at",
+];
+
+/// Python's dataclass `==` for two optional nested models.
+fn python_eq_opt<T>(a: &Option<T>, b: &Option<T>, eq: impl Fn(&T, &T) -> bool) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => eq(x, y),
+        _ => false,
+    }
 }
 
 impl PartialEq for Connection {
+    /// Python's dataclass `==`: field-wise `==` over the values Python
+    /// holds.
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
-            && self.project == other.project
-            && self.environment == other.environment
-            && self.service == other.service
             && self.kind == other.kind
-            && self.secret_id == other.secret_id
-            && self.secret_version == other.secret_version
-            && self.description == other.description
-            && self.http_target == other.http_target
-            && self.http_auth == other.http_auth
-            && self.http_scope == other.http_scope
-            && self.ssh_target == other.ssh_target
-            && self.cli == other.cli
             && self.policy_version == other.policy_version
             && self.status == other.status
-            && self.created_at == other.created_at
-            && self.updated_at == other.updated_at
+            && CONNECTION_TEXT_FIELDS
+                .iter()
+                .all(|k| python_value_eq(&self.text_value(k), &other.text_value(k)))
+            && self.secret_version == other.secret_version
+            && python_eq_opt(&self.http_target, &other.http_target, HttpTarget::python_eq)
+            && python_eq_opt(&self.http_auth, &other.http_auth, HttpAuth::python_eq)
+            && self.http_scope == other.http_scope
+            && self.ssh_target == other.ssh_target
+            && python_eq_opt(&self.cli, &other.cli, CliProfile::python_eq)
     }
 }
 
@@ -2228,7 +2308,71 @@ impl Connection {
             status,
             created_at: created_at.into(),
             updated_at: updated_at.into(),
+            raw_text: std::collections::BTreeMap::new(),
         })
+    }
+
+    /// The value Python holds for one of [`CONNECTION_TEXT_FIELDS`].
+    pub fn text_value(&self, key: &str) -> Value {
+        if let Some(raw) = self.raw_text.get(key) {
+            return raw.clone();
+        }
+        let text = match key {
+            "project" => &self.project,
+            "environment" => &self.environment,
+            "service" => &self.service,
+            "secret_id" => &self.secret_id,
+            "description" => &self.description,
+            "created_at" => &self.created_at,
+            "updated_at" => &self.updated_at,
+            _ => return Value::Null,
+        };
+        Value::String(text.clone())
+    }
+
+    /// Sets one of [`CONNECTION_TEXT_FIELDS`] to `value` of any JSON shape
+    /// (a string goes into the typed field; anything else is kept raw
+    /// behind the field's placeholder).
+    fn set_text_value(&mut self, key: &'static str, value: Value) {
+        let typed = match &value {
+            Value::String(s) => s.clone(),
+            _ if key == "secret_id" => NON_STRING_SECRET_ID.to_string(),
+            _ => String::new(),
+        };
+        if value.is_string() {
+            self.raw_text.remove(key);
+        } else {
+            self.raw_text.insert(key, value);
+        }
+        match key {
+            "project" => self.project = typed,
+            "environment" => self.environment = typed,
+            "service" => self.service = typed,
+            "secret_id" => self.secret_id = typed,
+            "description" => self.description = typed,
+            "created_at" => self.created_at = typed,
+            "updated_at" => self.updated_at = typed,
+            _ => {}
+        }
+    }
+
+    /// `team/fold.py`'s `_connection_changed(before, after)`: Python `!=`
+    /// over `(project, environment, service, kind, secret_id,
+    /// secret_version, description, http_target, http_auth, http_scope,
+    /// ssh_target, cli, status)`.
+    pub(crate) fn derive_fields_differ(&self, other: &Connection) -> bool {
+        let text_differs = ["project", "environment", "service", "secret_id", "description"]
+            .iter()
+            .any(|k| !python_value_eq(&self.text_value(k), &other.text_value(k)));
+        text_differs
+            || self.kind != other.kind
+            || self.secret_version != other.secret_version
+            || !python_eq_opt(&self.http_target, &other.http_target, HttpTarget::python_eq)
+            || !python_eq_opt(&self.http_auth, &other.http_auth, HttpAuth::python_eq)
+            || self.http_scope != other.http_scope
+            || self.ssh_target != other.ssh_target
+            || !python_eq_opt(&self.cli, &other.cli, CliProfile::python_eq)
+            || self.status != other.status
     }
 
     /// `replace(before, **changes)` then re-run `__post_init__` (Python's
@@ -2278,6 +2422,13 @@ impl Connection {
             Some(version) => version.clone().map(SecretVersion::from),
             None => self.secret_version.clone(),
         };
+        updated.raw_text = self.raw_text.clone();
+        if changes.secret_id.is_some() {
+            updated.raw_text.remove("secret_id");
+        }
+        if changes.description.is_some() {
+            updated.raw_text.remove("description");
+        }
         Ok(updated)
     }
 
@@ -2290,8 +2441,8 @@ impl Connection {
         &self,
         policy_version: PyInt,
         status: Option<&str>,
-        created_at: &str,
-        updated_at: &str,
+        created_at: Value,
+        updated_at: Value,
     ) -> Result<Connection, Error> {
         let mut updated = self.clone();
         updated.policy_version = policy_version;
@@ -2301,8 +2452,8 @@ impl Connection {
             }
             updated.status = status.to_string();
         }
-        updated.created_at = created_at.to_string();
-        updated.updated_at = updated_at.to_string();
+        updated.set_text_value("created_at", created_at);
+        updated.set_text_value("updated_at", updated_at);
         Ok(updated)
     }
 
@@ -2347,16 +2498,18 @@ impl Connection {
             .as_ref()
             .map_or(Value::Null, |v| v.value().clone());
         json!({
-            "id": self.id, "project": self.project, "environment": self.environment,
-            "service": self.service, "kind": self.kind, "secret_id": self.secret_id,
-            "secret_version": secret_version, "description": self.description,
+            "id": self.id, "project": self.text_value("project"),
+            "environment": self.text_value("environment"),
+            "service": self.text_value("service"), "kind": self.kind,
+            "secret_id": self.text_value("secret_id"),
+            "secret_version": secret_version, "description": self.text_value("description"),
             "http_target": self.http_target.as_ref().map(HttpTarget::to_value),
             "http_auth": self.http_auth.as_ref().map(HttpAuth::to_value),
             "http_scope": self.http_scope.as_ref().map(HttpScope::to_value),
             "ssh_target": self.ssh_target.as_ref().map(SshTarget::to_value),
             "cli": self.cli.as_ref().map(CliProfile::to_value),
             "policy_version": self.policy_version, "status": self.status,
-            "created_at": self.created_at, "updated_at": self.updated_at,
+            "created_at": self.text_value("created_at"), "updated_at": self.text_value("updated_at"),
         })
     }
 
@@ -2395,38 +2548,24 @@ impl Connection {
     pub fn from_value(v: &Value) -> Result<Self, Error> {
         let bad = || Error::state("state_corrupt").with_detail("connection");
         let obj = v.as_object().ok_or_else(bad)?;
-        let mut corrupt = false;
-        let required_str = |key: &str, corrupt: &mut bool| -> Result<String, Error> {
-            match obj.get(key) {
-                None => Err(bad()),
-                Some(Value::String(s)) => Ok(s.clone()),
-                Some(_) => {
-                    *corrupt = true;
-                    Ok(String::new())
-                }
-            }
-        };
+        // `data[key]` for an unvalidated text field: a missing key is an
+        // uncaught `KeyError` right here (§3.5); any present value is kept.
+        let required = |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
 
         // Kwarg order 1-4: id, project, environment, service.
         let id_raw = obj.get("id").ok_or_else(bad)?.clone();
-        let project = required_str("project", &mut corrupt)?;
-        let environment = required_str("environment", &mut corrupt)?;
-        let service = required_str("service", &mut corrupt)?;
+        let project = required("project")?;
+        let environment = required("environment")?;
+        let service = required("service")?;
         // Kwarg order 5-6: kind, secret_id.
         let kind_raw = obj.get("kind").ok_or_else(bad)?.clone();
-        let secret_id = required_str("secret_id", &mut corrupt)?;
+        let secret_id = required("secret_id")?;
         // Kwarg order 7-8: secret_version, description (both untyped in
         // Python -- see the doc comment above).
         // `data.get("secret_version")`: any JSON shape, kept verbatim.
         let secret_version = obj.get("secret_version").and_then(SecretVersion::from_value);
-        let description = match obj.get("description") {
-            None => String::new(),
-            Some(Value::String(s)) => s.clone(),
-            Some(_) => {
-                corrupt = true;
-                String::new()
-            }
-        };
+        // `data.get("description", "")`.
+        let description = obj.get("description").cloned().unwrap_or_else(|| json!(""));
         // Kwarg order 9-13: the nested `build()` calls, each with its own
         // real Python validation.
         let opt_val = |key: &str| -> Option<&Value> {
@@ -2459,8 +2598,8 @@ impl Connection {
             .ok_or_else(bad)?;
         // Kwarg order 15-17: status, created_at, updated_at.
         let status_raw = obj.get("status").ok_or_else(bad)?.clone();
-        let created_at = required_str("created_at", &mut corrupt)?;
-        let updated_at = required_str("updated_at", &mut corrupt)?;
+        let created_at = required("created_at")?;
+        let updated_at = required("updated_at")?;
 
         // `Connection.__post_init__` runs only now, on the fully
         // constructed instance, via `Connection::new`: `validate_name(id)`
@@ -2475,13 +2614,13 @@ impl Connection {
         let status = status_raw.as_str().unwrap_or("").to_string();
         let mut connection = Connection::new(
             id,
-            project,
-            environment,
-            service,
+            "",
+            "",
+            "",
             kind,
-            secret_id,
+            "",
             None,
-            description,
+            "",
             http_target,
             http_auth,
             http_scope,
@@ -2489,12 +2628,20 @@ impl Connection {
             cli,
             policy_version,
             status,
-            created_at,
-            updated_at,
+            "",
+            "",
         )?;
         connection.secret_version = secret_version;
-        if corrupt {
-            return Err(bad());
+        for (key, value) in [
+            ("project", project),
+            ("environment", environment),
+            ("service", service),
+            ("secret_id", secret_id),
+            ("description", description),
+            ("created_at", created_at),
+            ("updated_at", updated_at),
+        ] {
+            connection.set_text_value(key, value);
         }
         Ok(connection)
     }
@@ -2503,11 +2650,11 @@ impl Connection {
     pub fn public_view(&self) -> Value {
         let mut view = Map::new();
         view.insert("id".into(), json!(self.id));
-        view.insert("project".into(), json!(self.project));
-        view.insert("environment".into(), json!(self.environment));
-        view.insert("service".into(), json!(self.service));
+        view.insert("project".into(), self.text_value("project"));
+        view.insert("environment".into(), self.text_value("environment"));
+        view.insert("service".into(), self.text_value("service"));
         view.insert("kind".into(), json!(self.kind));
-        view.insert("description".into(), json!(self.description));
+        view.insert("description".into(), self.text_value("description"));
         view.insert("policy_version".into(), json!(self.policy_version));
         view.insert(
             "cli".into(),
@@ -2554,13 +2701,62 @@ impl Connection {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `policy.Principal(pid, entry["token_hash"], entry["status"],
+/// entry["created_at"], entry.get("runtime", "default"))`: a plain dataclass
+/// with no validation, so every field keeps whatever JSON value the stored
+/// entry holds. The public `String` fields are best-effort readings (`""`
+/// for a non-string value, which never equals any real status, runtime or
+/// token hash); the private raw values drive every Python-equivalent
+/// comparison and view.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Principal {
     pub id: String,
     pub token_hash: String,
     pub status: String,
     pub created_at: String,
     pub runtime: String,
+    raw_token_hash: Value,
+    raw_status: Value,
+    raw_created_at: Value,
+    raw_runtime: Value,
+}
+
+impl Principal {
+    /// Python `principal.status == s`.
+    pub fn status_is(&self, s: &str) -> bool {
+        value_eq_str(&self.raw_status, s)
+    }
+
+    /// Python `principal.runtime == runtime`.
+    pub fn runtime_is(&self, runtime: &str) -> bool {
+        value_eq_str(&self.raw_runtime, runtime)
+    }
+
+    /// Python `principal.runtime == runtime` for an optional runtime
+    /// (`None` equals only a stored `null`).
+    pub fn runtime_eq(&self, runtime: Option<&str>) -> bool {
+        match runtime {
+            Some(r) => self.runtime_is(r),
+            None => self.raw_runtime.is_null(),
+        }
+    }
+
+    /// The stored `created_at` value, verbatim.
+    pub fn created_at_value(&self) -> &Value {
+        &self.raw_created_at
+    }
+
+    /// The stored `runtime` value, verbatim.
+    pub fn runtime_value(&self) -> &Value {
+        &self.raw_runtime
+    }
+
+    /// The administrator CLI's `_principal_view`: `{"id", "status",
+    /// "created_at", "runtime"}` with the stored values verbatim.
+    pub fn view(&self) -> Value {
+        json!({"id": self.id, "status": self.raw_status,
+               "created_at": self.raw_created_at, "runtime": self.raw_runtime})
+    }
 }
 
 /// Runtime shape of a `Grant` field Python's `Grant` dataclass applies
@@ -2984,6 +3180,34 @@ pub struct Grant {
     raw_status: Value,
     raw_revoked_at: Value,
     raw_expires_at: Option<Value>,
+    // `id`/`principal`/`connection`/`created_at` are never validated by
+    // Python's `Grant` dataclass either: the public `String` fields above are
+    // best-effort readings (`""` for a non-string value, which never equals
+    // any real id), and these raw values drive every Python-equivalent
+    // comparison, lookup and view.
+    raw_id: Value,
+    raw_principal: Value,
+    raw_connection: Value,
+    raw_created_at: Value,
+}
+
+/// `d.get(key)` on a JSON-object-backed Python `dict` for a key of any JSON
+/// shape: a string looks up normally; a hashable non-string (`None`, a bool,
+/// a number) is never a key of a JSON object, so the result is `None`; an
+/// unhashable list/dict makes `dict.get` raise an uncaught `TypeError`
+/// (PORTING.md §3.5, `state_corrupt`).
+fn dict_get_value<'m>(
+    doc: &'m Map<String, Value>,
+    key: &Value,
+    detail: &str,
+) -> Result<Option<&'m Value>, Error> {
+    match key {
+        Value::String(k) => Ok(doc.get(k)),
+        Value::Array(_) | Value::Object(_) => {
+            Err(Error::state("state_corrupt").with_detail(detail))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Python's `==`/`!=` against a string literal for a value of any JSON
@@ -3139,7 +3363,7 @@ impl Grant {
             _ => Value::Null,
         };
         Ok(json!({
-            "id": self.id, "connection": self.connection, "status": self.raw_status,
+            "id": self.raw_id, "connection": self.raw_connection, "status": self.raw_status,
             "expires_at": expires_at,
             "remaining_uses": remaining_uses,
         }))
@@ -3150,16 +3374,42 @@ impl Grant {
     /// fields, so a grant that round-trips through this (currently only
     /// fresh grants from `create_grant`, always plain well-typed values
     /// either way) keeps the exact JSON shape it was loaded with.
-    fn to_value(&self) -> Value {
+    ///
+    /// `dataclasses.asdict(grant)`, which the administrator CLI's
+    /// `_grant_view` also starts from.
+    pub fn to_value(&self) -> Value {
         json!({
-            "id": self.id, "principal": self.principal, "connection": self.connection,
+            "id": self.raw_id, "principal": self.raw_principal, "connection": self.raw_connection,
             "policy_version": self.raw_policy_version.to_value(),
             "expires_at": self.raw_expires_at.clone().unwrap_or(Value::Null),
             "max_uses": self.raw_max_uses.as_ref().map(GrantNum::to_value),
             "uses": self.raw_uses.to_value(), "status": self.raw_status,
-            "created_at": self.created_at, "revoked_at": self.raw_revoked_at,
+            "created_at": self.raw_created_at, "revoked_at": self.raw_revoked_at,
             "credential_version": self.raw_credential_version.as_ref().map(GrantNum::to_value),
         })
+    }
+
+    /// `iso(grant.expires_at) if grant.expires_at is not None else None`
+    /// (the administrator CLI's `_grant_view`): a non-numeric non-`None`
+    /// value reaches `iso()` and raises its uncaught `TypeError` (PORTING.md
+    /// §3.5).
+    pub fn expires_at_iso(&self) -> Result<Value, Error> {
+        match &self.raw_expires_at {
+            None => Ok(Value::Null),
+            Some(v) => iso_for_raw_value(v)
+                .map(Value::String)
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("grant")),
+        }
+    }
+
+    /// Python `grant.principal == s`.
+    pub fn principal_is(&self, s: &str) -> bool {
+        value_eq_str(&self.raw_principal, s)
+    }
+
+    /// Python `grant.connection == s`.
+    pub fn connection_is(&self, s: &str) -> bool {
+        value_eq_str(&self.raw_connection, s)
     }
 
     /// `Grant(**entry)` in `get_grant`/`list_grants`/`revoke_grant`/`consume`.
@@ -3217,12 +3467,14 @@ impl Grant {
         if obj.keys().any(|k| !KNOWN_KEYS.contains(&k.as_str())) {
             return Err(bad());
         }
-        let str_field = |key: &str| -> Result<String, Error> {
-            obj.get(key)
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(bad)
-        };
+        // `id`/`principal`/`connection`/`created_at`: required keys (no
+        // dataclass default), any JSON shape kept verbatim.
+        let raw_text = |key: &str| -> Result<Value, Error> { obj.get(key).cloned().ok_or_else(bad) };
+        let raw_id = raw_text("id")?;
+        let raw_principal = raw_text("principal")?;
+        let raw_connection = raw_text("connection")?;
+        let raw_created_at = raw_text("created_at")?;
+        let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
         // The public `i64` field is a *best-effort* reading (see the
         // struct's own doc comment): it must never be the reason the whole
         // grant fails to load, since Python's dataclass never validates
@@ -3297,15 +3549,15 @@ impl Grant {
             _ => None,
         };
         Ok(Grant {
-            id: str_field("id")?,
-            principal: str_field("principal")?,
-            connection: str_field("connection")?,
+            id: text(&raw_id),
+            principal: text(&raw_principal),
+            connection: text(&raw_connection),
             policy_version: pyint_field("policy_version"),
             expires_at,
             max_uses,
             uses: int_field("uses"),
             status,
-            created_at: str_field("created_at")?,
+            created_at: text(&raw_created_at),
             revoked_at,
             credential_version,
             raw_policy_version: raw_field("policy_version")?,
@@ -3315,6 +3567,10 @@ impl Grant {
             raw_status,
             raw_revoked_at,
             raw_expires_at,
+            raw_id,
+            raw_principal,
+            raw_connection,
+            raw_created_at,
         })
     }
 }
@@ -3619,7 +3875,9 @@ fn value_in_str_set(v: Option<&Value>, set: &HashSet<String>) -> Result<bool, Er
 struct Evaluated {
     caller: String,
     connection: String,
-    grant: String,
+    /// `decision.grant.id`, verbatim (any JSON shape the stored grant's
+    /// `id` holds).
+    grant: Value,
     action: Action,
     policy_version: PyInt,
 }
@@ -3629,18 +3887,27 @@ struct Evaluated {
 /// moves a re-inserted key to the end (like `dict.pop` + reassignment), and
 /// hitting [`EVALUATED_MEMO_LIMIT`] wipes the whole memo before inserting
 /// the new entry (not a real LRU -- this is what Python's `_remember` does).
+/// Keys are the raw grant ids (hashable JSON scalars), compared with
+/// Python's `==`, so `5`, `5.0` and a differently-typed `"5"` behave as
+/// Python's dictionary keys do.
 #[derive(Default)]
 struct EvaluatedMemo {
-    entries: Vec<(String, Evaluated)>,
+    entries: Vec<(Value, Evaluated)>,
 }
 
 impl EvaluatedMemo {
-    fn remember(&mut self, grant_id: String, ev: Evaluated) {
+    /// `memo.pop(id, None); memo[id] = ev`: an unhashable id (a list or a
+    /// dict) makes the `pop` raise an uncaught `TypeError` (PORTING.md §3.5).
+    fn remember(&mut self, grant_id: Value, ev: Evaluated) -> Result<(), Error> {
+        if matches!(grant_id, Value::Array(_) | Value::Object(_)) {
+            return Err(Error::state("state_corrupt").with_detail("grant"));
+        }
         if self.entries.len() >= EVALUATED_MEMO_LIMIT {
             self.entries.clear();
         }
-        self.entries.retain(|(k, _)| k != &grant_id);
+        self.entries.retain(|(k, _)| !python_value_eq(k, &grant_id));
         self.entries.push((grant_id, ev));
+        Ok(())
     }
     /// Port of `Policy._recall(grant_id, pop=False)`; unused in this half
     /// too (Python's own `_recall` is only ever called with `pop=True`, in
@@ -3649,11 +3916,14 @@ impl EvaluatedMemo {
     fn get(&self, grant_id: &str) -> Option<&Evaluated> {
         self.entries
             .iter()
-            .find(|(k, _)| k == grant_id)
+            .find(|(k, _)| value_eq_str(k, grant_id))
             .map(|(_, v)| v)
     }
     fn pop(&mut self, grant_id: &str) -> Option<Evaluated> {
-        let pos = self.entries.iter().position(|(k, _)| k == grant_id)?;
+        let pos = self
+            .entries
+            .iter()
+            .position(|(k, _)| value_eq_str(k, grant_id))?;
         Some(self.entries.remove(pos).1)
     }
     /// `reversed(list(memo.values()))`, first match.
@@ -3773,25 +4043,25 @@ impl<'a> Policy<'a> {
     }
 
     // ------------------------------------- per-thread evaluated-grant memo
-    fn remember(&self, caller: &str, action: &Action, decision: &Decision) {
+    fn remember(&self, caller: &str, action: &Action, decision: &Decision) -> Result<(), Error> {
         if !decision.allowed {
-            return;
+            return Ok(());
         }
         let (Some(grant), Some(connection)) = (&decision.grant, &decision.connection) else {
-            return;
+            return Ok(());
         };
         let tid = thread::current().id();
         let mut map = self.evaluated.lock().unwrap();
         map.entry(tid).or_default().remember(
-            grant.id.clone(),
+            grant.raw_id.clone(),
             Evaluated {
                 caller: caller.to_string(),
                 connection: connection.id.clone(),
-                grant: grant.id.clone(),
+                grant: grant.raw_id.clone(),
                 action: action.clone(),
                 policy_version: connection.policy_version.clone(),
             },
-        );
+        )
     }
     /// Port of `Policy._recall(grant_id, pop=False)`; see the note on
     /// `EvaluatedMemo::get`.
@@ -3865,11 +4135,16 @@ impl<'a> Policy<'a> {
                 &owned
             }
         };
-        let entry = doc
-            .get("secrets")
-            .and_then(Value::as_object)
-            .and_then(|m| m.get(&connection.secret_id))
-            .and_then(Value::as_object);
+        // `(doc.get("secrets") or {}).get(connection.secret_id) if
+        // isinstance(doc.get("secrets"), dict) else None`: the stored
+        // `secret_id` of any shape is the key (see [`dict_get_value`]).
+        let entry = match doc.get("secrets").and_then(Value::as_object) {
+            Some(secrets) => {
+                dict_get_value(secrets, &connection.text_value("secret_id"), VAULT_SECRETS)?
+                    .and_then(Value::as_object)
+            }
+            None => None,
+        };
         Ok(entry
             .and_then(|e| e.get("active_version"))
             .filter(|v| matches!(v, Value::Number(n) if number_is_python_int(n)))
@@ -3960,15 +4235,15 @@ impl<'a> Policy<'a> {
             if !any_active_recorded_mismatch {
                 continue;
             }
-            let after = Connection {
+            let mut after = Connection {
                 // `connection.policy_version + 1`: Python's `int` is
                 // arbitrary-precision, so this never overflows (measured:
                 // `policy_version: 2**63-1` succeeds and writes
                 // `9223372036854775808`); `PyInt` keeps it exact.
                 policy_version: PyInt(&connection.policy_version.0 + 1),
-                updated_at: iso(Some(self.now())),
                 ..connection
             };
+            after.set_text_value("updated_at", json!(iso(Some(self.now()))));
             doc.insert(connection_id.clone(), after.to_value());
             changed.push((after, resolved));
         }
@@ -4059,11 +4334,16 @@ impl<'a> Policy<'a> {
     }
 
     pub fn get_principal(&self, principal_id: &str) -> Result<Principal, Error> {
+        self.get_principal_value(&json!(principal_id))
+    }
+
+    /// `get_principal(principal_id)` for an id of any JSON shape (a stored
+    /// grant's unvalidated `principal`): see [`dict_get_value`].
+    fn get_principal_value(&self, principal_id: &Value) -> Result<Principal, Error> {
         let doc = self.principals()?;
-        let entry = doc
-            .get(principal_id)
+        let entry = dict_get_value(&doc, principal_id, PRINCIPALS)?
             .ok_or_else(|| Error::not_found("principal_not_found"))?;
-        principal_from_entry(principal_id, entry)
+        principal_from_entry(principal_id.as_str().unwrap_or_default(), entry)
     }
 
     pub fn list_principals(&self) -> Result<Vec<Principal>, Error> {
@@ -4079,7 +4359,7 @@ impl<'a> Policy<'a> {
         Ok(self
             .list_principals()?
             .into_iter()
-            .filter(|p| p.runtime == runtime)
+            .filter(|p| p.runtime_is(runtime))
             .collect())
     }
 
@@ -4107,6 +4387,9 @@ impl<'a> Policy<'a> {
         let doc = self.principals()?;
         for (id, entry) in &doc {
             let obj = as_obj(entry)?;
+            // `entry["token_hash"]`: a missing key is an uncaught `KeyError`
+            // and a non-string value makes `secrets.compare_digest(value,
+            // digest)` raise an uncaught `TypeError` (PORTING.md §3.5).
             let stored_hash = obj
                 .get("token_hash")
                 .and_then(Value::as_str)
@@ -4127,11 +4410,15 @@ impl<'a> Policy<'a> {
                 return Err(Error::state("state_corrupt").with_detail("principal"));
             }
             if constant_time_eq(stored_hash.as_bytes(), digest.as_bytes()) {
-                let principal = principal_from_entry(id, entry)?;
-                if principal.status != "active" {
+                // `entry["status"] != "active"` (a missing `status` is an
+                // uncaught `KeyError`), then the `Principal(...)` build.
+                let status = obj
+                    .get("status")
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail("principal"))?;
+                if !value_eq_str(status, "active") {
                     return Err(Error::auth_failed("principal_disabled"));
                 }
-                return Ok(principal);
+                return principal_from_entry(id, entry);
             }
         }
         Err(Error::auth_failed("caller_token_invalid"))
@@ -4146,40 +4433,29 @@ fn default_control() -> Map<String, Value> {
     m
 }
 
+/// `Principal(pid, entry["token_hash"], entry["status"], entry["created_at"],
+/// entry.get("runtime", "default"))`: a non-object entry (`TypeError`) or a
+/// missing required key (`KeyError`) is uncaught in Python (PORTING.md §3.5,
+/// `state_corrupt`); any present value of any type loads verbatim.
 fn principal_from_entry(id: &str, entry: &Value) -> Result<Principal, Error> {
     let obj = as_obj(entry)?;
     let bad = || Error::state("state_corrupt").with_detail("principal");
+    let required = |key: &str| obj.get(key).cloned().ok_or_else(bad);
+    let raw_token_hash = required("token_hash")?;
+    let raw_status = required("status")?;
+    let raw_created_at = required("created_at")?;
+    let raw_runtime = obj.get("runtime").cloned().unwrap_or_else(|| json!("default"));
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
     Ok(Principal {
         id: id.to_string(),
-        token_hash: obj
-            .get("token_hash")
-            .and_then(Value::as_str)
-            .ok_or_else(bad)?
-            .to_string(),
-        status: obj
-            .get("status")
-            .and_then(Value::as_str)
-            .ok_or_else(bad)?
-            .to_string(),
-        created_at: obj
-            .get("created_at")
-            .and_then(Value::as_str)
-            .ok_or_else(bad)?
-            .to_string(),
-        // `entry.get("runtime", "default")`: defaults only when the key is
-        // *absent*; a present value of any type (including `null`) is kept
-        // verbatim, with no check anywhere -- `principals_in_runtime`
-        // compares it by equality, so a stored non-string `runtime` would
-        // never match any `str` runtime name in Python either. Silently
-        // substituting `"default"` here would instead make a
-        // corrupt-`runtime` principal match `principals_in_runtime("default")`,
-        // which incident/intrusion scoping relies on; keep it consistent
-        // with the sibling fields above (finding D-R2-7).
-        runtime: match obj.get("runtime") {
-            None => "default".to_string(),
-            Some(Value::String(s)) => s.clone(),
-            Some(_) => return Err(bad()),
-        },
+        token_hash: text(&raw_token_hash),
+        status: text(&raw_status),
+        created_at: text(&raw_created_at),
+        runtime: text(&raw_runtime),
+        raw_token_hash,
+        raw_status,
+        raw_created_at,
+        raw_runtime,
     })
 }
 
@@ -4211,21 +4487,26 @@ impl<'a> Policy<'a> {
             return Err(Error::invalid_input("connection_exists"));
         }
         let now = iso(Some(self.now()));
-        let stamped = Connection {
+        let mut stamped = Connection {
             policy_version: PyInt::from(1),
-            created_at: now.clone(),
-            updated_at: now,
             ..connection
         };
+        stamped.set_text_value("created_at", json!(now));
+        stamped.set_text_value("updated_at", json!(now));
         doc.insert(stamped.id.clone(), stamped.to_value());
         self.state.write_json(CONNECTIONS, &Value::Object(doc))?;
         Ok(stamped)
     }
 
     pub fn get_connection(&self, connection_id: &str) -> Result<Connection, Error> {
+        self.get_connection_value(&json!(connection_id))
+    }
+
+    /// `get_connection(connection_id)` for an id of any JSON shape (a
+    /// stored grant's unvalidated `connection`): see [`dict_get_value`].
+    fn get_connection_value(&self, connection_id: &Value) -> Result<Connection, Error> {
         let doc = self.connections()?;
-        let entry = doc
-            .get(connection_id)
+        let entry = dict_get_value(&doc, connection_id, CONNECTIONS)?
             .ok_or_else(|| Error::not_found("connection_not_found"))?;
         Connection::from_value(entry)
     }
@@ -4263,11 +4544,12 @@ impl<'a> Policy<'a> {
             widened = Policy::widens(&before, &updated);
             // `before.policy_version + 1`, unbounded like Python's `int`.
             let after_version = PyInt(&before.policy_version.0 + 1);
-            after = Connection {
+            let mut bumped = Connection {
                 policy_version: after_version,
-                updated_at: iso(Some(self.now())),
                 ..updated
             };
+            bumped.set_text_value("updated_at", json!(iso(Some(self.now()))));
+            after = bumped;
             if after.status == "disabled" && before.status != "disabled" {
                 let mut fields = Map::new();
                 fields.insert("id".into(), json!(connection_id));
@@ -4309,7 +4591,7 @@ impl<'a> Policy<'a> {
         // Another secret is another credential (possibly with broader
         // rights); only a version switch within the same secret is
         // re-evaluated in place.
-        if before.secret_id != after.secret_id {
+        if !python_value_eq(&before.text_value("secret_id"), &after.text_value("secret_id")) {
             return true;
         }
         if before.kind == "http" {
@@ -4329,7 +4611,7 @@ impl<'a> Policy<'a> {
             }
             // A different TLS trust anchor (another CA file, or the system
             // store) can authenticate servers the old one did not.
-            if bt.ca_file != at.ca_file || bt.raw_ca_file != at.raw_ca_file {
+            if !python_value_eq(&bt.ca_file_value(), &at.ca_file_value()) {
                 return true;
             }
             // Opening private networks lets the credential reach addresses
@@ -4337,7 +4619,7 @@ impl<'a> Policy<'a> {
             if at.allow_private_network && !bt.allow_private_network {
                 return true;
             }
-            if ba != aa {
+            if !ba.python_eq(aa) {
                 return true;
             }
             if bs.widens(aus) {
@@ -4363,7 +4645,7 @@ impl<'a> Policy<'a> {
             return true;
         }
         if let (Some(bc), Some(ac)) = (&before.cli, &after.cli)
-            && bc != ac
+            && !bc.python_eq(ac)
         {
             return true;
         }
@@ -4491,8 +4773,8 @@ impl<'a> Policy<'a> {
         max_uses: Option<i64>,
     ) -> Result<Grant, Error> {
         self.create_grant_exact(
-            principal_id,
-            connection_id,
+            &json!(principal_id),
+            &json!(connection_id),
             ttl_seconds,
             max_uses.map(|m| json!(m)),
         )
@@ -4508,7 +4790,12 @@ impl<'a> Policy<'a> {
         ttl_seconds: Option<i64>,
         max_uses: Option<Value>,
     ) -> Result<Grant, Error> {
-        self.create_grant_exact(principal_id, connection_id, ttl_seconds, max_uses)
+        self.create_grant_exact(
+            &json!(principal_id),
+            &json!(connection_id),
+            ttl_seconds,
+            max_uses,
+        )
     }
 
     /// Shared grant-construction core for [`Policy::create_grant`] (always
@@ -4538,8 +4825,8 @@ impl<'a> Policy<'a> {
     /// such check at all).
     fn create_grant_exact(
         &self,
-        principal_id: &str,
-        connection_id: &str,
+        principal_id: &Value,
+        connection_id: &Value,
         ttl_seconds: Option<i64>,
         max_uses_raw: Option<Value>,
     ) -> Result<Grant, Error> {
@@ -4568,11 +4855,15 @@ impl<'a> Policy<'a> {
             }
         }
         let _lock = self.state.lock()?;
-        let principal = self.get_principal(principal_id)?;
-        if principal.status != "active" {
+        // `regrant` passes the old grant's unvalidated `principal`/
+        // `connection` straight through; a non-string is never found
+        // (`NotFound`) or is unhashable (§3.5), so only strings get past
+        // these two lookups.
+        let principal = self.get_principal_value(principal_id)?;
+        if !principal.status_is("active") {
             return Err(Error::invalid_input("principal_disabled"));
         }
-        let connection = self.get_connection(connection_id)?;
+        let connection = self.get_connection_value(connection_id)?;
         if connection.status != "active" {
             return Err(Error::invalid_input("connection_disabled"));
         }
@@ -4589,8 +4880,8 @@ impl<'a> Policy<'a> {
         let raw_max_uses = max_uses_raw.as_ref().map(GrantNum::from_value);
         let grant = Grant {
             id: format!("g-{}", &uuid::Uuid::new_v4().simple().to_string()[..16]),
-            principal: principal_id.to_string(),
-            connection: connection_id.to_string(),
+            principal: principal_id.as_str().unwrap_or_default().to_string(),
+            connection: connection_id.as_str().unwrap_or_default().to_string(),
             policy_version: connection.policy_version.clone(),
             expires_at: ttl_seconds.map(|t| now + t as f64),
             max_uses,
@@ -4606,6 +4897,14 @@ impl<'a> Policy<'a> {
             raw_status: json!("active"),
             raw_revoked_at: Value::Null,
             raw_expires_at: ttl_seconds.map(|t| json!(now + t as f64)),
+            raw_id: Value::Null,
+            raw_principal: principal_id.clone(),
+            raw_connection: connection_id.clone(),
+            raw_created_at: json!(iso(Some(now))),
+        };
+        let grant = Grant {
+            raw_id: json!(grant.id),
+            ..grant
         };
         let mut doc = self.grants()?;
         doc.insert(grant.id.clone(), grant.to_value());
@@ -4614,9 +4913,14 @@ impl<'a> Policy<'a> {
     }
 
     pub fn get_grant(&self, grant_id: &str) -> Result<Grant, Error> {
+        self.get_grant_value(&json!(grant_id))
+    }
+
+    /// `get_grant(grant_id)` for an id of any JSON shape (an approval's
+    /// unvalidated `grant`): see [`dict_get_value`].
+    fn get_grant_value(&self, grant_id: &Value) -> Result<Grant, Error> {
         let doc = self.grants()?;
-        let entry = doc
-            .get(grant_id)
+        let entry = dict_get_value(&doc, grant_id, GRANTS)?
             .ok_or_else(|| Error::not_found("grant_not_found"))?;
         Grant::from_value(entry)
     }
@@ -4638,6 +4942,12 @@ impl<'a> Policy<'a> {
     /// .and_then(Value::as_str) == Some(p)` chain silently treated both of
     /// those shapes as "does not match" and moved on.
     pub fn list_grants(&self, principal_id: Option<&str>) -> Result<Vec<Grant>, Error> {
+        self.list_grants_value(principal_id.map(|p| json!(p)).as_ref())
+    }
+
+    /// [`Policy::list_grants`] for a principal id of any JSON shape,
+    /// compared with Python's `==`.
+    fn list_grants_value(&self, principal_id: Option<&Value>) -> Result<Vec<Grant>, Error> {
         let doc = self.grants()?;
         let mut ids: Vec<&String> = doc.keys().collect();
         ids.sort();
@@ -4651,7 +4961,7 @@ impl<'a> Policy<'a> {
                 let principal = obj
                     .get("principal")
                     .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
-                if principal.as_str() != Some(p) {
+                if !python_value_eq(principal, p) {
                     continue;
                 }
             }
@@ -4664,38 +4974,34 @@ impl<'a> Policy<'a> {
     /// its caller and connection.
     ///
     /// `entry.get("caller") == grant.get("principal") and entry.get(
-    /// "connection") == grant.get("connection")`: both are `.get()` calls on
-    /// the *raw stored grant dict* (`grant` here is `revoke_grant`'s own
-    /// `entry`/`regrant`'s `doc[grant_id]`, not the parsed `Grant`), so a
-    /// missing `principal`/`connection` key on the grant compares as `None`,
-    /// which *matches* an approval whose own `caller`/`connection` is
-    /// likewise absent (`None == None` is `True` in Python) -- closing that
-    /// approval. The previous `grant_principal: &str`/`grant_connection:
-    /// &str` parameters collapsed "missing or non-string" to `""` at the two
-    /// call sites (`.unwrap_or("")`), so `Some("")` never matched the
-    /// approval's absent `caller`/`connection` (`None`), leaving a usable
-    /// approved approval where Python invalidates it (finding D-R4-6, a
-    /// fail-open state divergence). Taking `Option<&str>` here instead and
-    /// comparing it directly against the approval's own
-    /// `.and_then(Value::as_str)` (which is `None` for both "missing" and
-    /// "present but non-string", exactly as `grant_principal`/
-    /// `grant_connection` now are) reproduces the None-to-None match.
-    /// (`regrant`'s call site is unaffected in practice -- `get_grant` runs
-    /// first there and already requires `principal`/`connection` to be
-    /// non-empty strings, so its `entry_snapshot` values are never actually
-    /// missing/non-string by the time this runs; see `rust/DEVIATIONS.md`.)
-    fn approval_matches_grant<'g>(
-        grant_principal: Option<&'g str>,
-        grant_connection: Option<&'g str>,
-        grant_id: &'g str,
-    ) -> impl Fn(&Map<String, Value>) -> bool + 'g {
-        move |entry: &Map<String, Value>| match entry.get("grant") {
-            Some(Value::Null) | None => {
-                entry.get("caller").and_then(Value::as_str) == grant_principal
-                    && entry.get("connection").and_then(Value::as_str) == grant_connection
+    /// "connection") == grant.get("connection")`: both sides are raw
+    /// `.get()` results on stored dicts (`None` for an absent key or a
+    /// stored `null`), compared with Python's `==` across any JSON shape
+    /// ([`python_value_eq`]), never raising. An absent `principal` on the
+    /// grant matches an approval with no `caller` (`None == None`, finding
+    /// D-R4-6); a present non-string `principal` (`5`) matches only an
+    /// approval whose `caller` is Python-equal to it (`5`, `5.0`), never an
+    /// absent one.
+    fn approval_matches_grant(
+        grant_principal: Option<Value>,
+        grant_connection: Option<Value>,
+        grant_id: &str,
+    ) -> impl Fn(&Map<String, Value>) -> bool + '_ {
+        move |entry: &Map<String, Value>| {
+            let get = |m: &Map<String, Value>, key: &str| m.get(key).cloned().unwrap_or(Value::Null);
+            match entry.get("grant") {
+                Some(Value::Null) | None => {
+                    python_value_eq(
+                        &get(entry, "caller"),
+                        grant_principal.as_ref().unwrap_or(&Value::Null),
+                    ) && python_value_eq(
+                        &get(entry, "connection"),
+                        grant_connection.as_ref().unwrap_or(&Value::Null),
+                    )
+                }
+                Some(Value::String(g)) => g == grant_id,
+                Some(_) => false,
             }
-            Some(Value::String(g)) => g == grant_id,
-            Some(_) => false,
         }
     }
 
@@ -4727,17 +5033,11 @@ impl<'a> Policy<'a> {
                 .ok_or_else(|| Error::state("state_corrupt").with_detail("grant"))?;
             entry.insert("status".into(), json!("revoked"));
             entry.insert("revoked_at".into(), json!(iso(Some(self.now()))));
-            let principal = entry
-                .get("principal")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let connection = entry
-                .get("connection")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let principal = entry.get("principal").cloned();
+            let connection = entry.get("connection").cloned();
             self.state.write_json(GRANTS, &Value::Object(doc))?;
             self.invalidate_approvals(
-                Self::approval_matches_grant(principal.as_deref(), connection.as_deref(), grant_id),
+                Self::approval_matches_grant(principal, connection, grant_id),
                 "grant_revoked",
             )?;
             grant = self.get_grant(grant_id)?;
@@ -4923,23 +5223,15 @@ impl<'a> Policy<'a> {
         entry.insert("revoked_at".into(), json!(iso(Some(self.now()))));
         let entry_snapshot = entry.clone();
         self.state.write_json(GRANTS, &Value::Object(doc))?;
-        // `.unwrap_or("")` here (unlike `revoke_grant`'s equivalent, finding
-        // D-R4-6) can never actually collapse a missing/non-string value:
-        // `old = self.get_grant(grant_id)?` above already ran `Grant::from_
-        // value` on this same entry and requires `principal`/`connection`
-        // to be present, non-empty strings, so `entry_snapshot` is
-        // guaranteed to have both as strings by the time we get here. Passed
-        // through as `Option<&str>` only to match `approval_matches_grant`'s
-        // signature.
-        let principal = entry_snapshot.get("principal").and_then(Value::as_str);
-        let connection = entry_snapshot.get("connection").and_then(Value::as_str);
+        let principal = entry_snapshot.get("principal").cloned();
+        let connection = entry_snapshot.get("connection").cloned();
         self.invalidate_approvals(
             Self::approval_matches_grant(principal, connection, grant_id),
             "grant_revoked",
         )?;
         self.create_grant_exact(
-            &old.principal,
-            &old.connection,
+            &old.raw_principal,
+            &old.raw_connection,
             remaining_ttl,
             remaining_uses_raw,
         )
@@ -5294,10 +5586,10 @@ impl<'a> Policy<'a> {
     /// let `request_approval` silently write an approval with `"grant":
     /// null` instead of failing (matching Python's `AttributeError`-adjacent
     /// crash-and-write-nothing behaviour).
-    fn usable_grant_id(&self, caller: &str, connection_id: &str) -> Result<Option<String>, Error> {
+    fn usable_grant_id(&self, caller: &str, connection_id: &str) -> Result<Option<Value>, Error> {
         let decision = self.decide(caller, connection_id, None, None)?;
         Ok(if decision.allowed {
-            decision.grant.map(|g| g.id)
+            decision.grant.map(|g| g.raw_id)
         } else {
             None
         })
@@ -5468,8 +5760,8 @@ impl<'a> Policy<'a> {
             return Ok(false);
         }
         let evaluated = self.recall_pair(caller, connection);
-        let in_use_grant: Option<String> = grant_id
-            .map(str::to_string)
+        let in_use_grant: Option<Value> = grant_id
+            .map(|g| json!(g))
             .or_else(|| evaluated.as_ref().map(|e| e.grant.clone()));
         let in_use_version: Option<PyInt> =
             policy_version.or_else(|| evaluated.as_ref().map(|e| e.policy_version.clone()));
@@ -5477,7 +5769,7 @@ impl<'a> Policy<'a> {
             entry_obj,
             caller,
             connection,
-            in_use_grant.as_deref(),
+            in_use_grant.as_ref(),
             in_use_version.as_ref(),
             now,
         )?;
@@ -5494,7 +5786,7 @@ impl<'a> Policy<'a> {
         entry_obj.insert("status".into(), json!("consumed"));
         entry_obj.insert("consumed_at".into(), json!(iso(Some(now))));
         if let Some(g) = &in_use_grant {
-            entry_obj.insert("consumed_grant".into(), json!(g));
+            entry_obj.insert("consumed_grant".into(), g.clone());
         }
         self.state.write_json(CONTROL, &Value::Object(control))?;
         Ok(true)
@@ -5505,7 +5797,7 @@ impl<'a> Policy<'a> {
         entry: &Map<String, Value>,
         caller: &str,
         connection_id: &str,
-        in_use_grant: Option<&str>,
+        in_use_grant: Option<&Value>,
         in_use_version: Option<&PyInt>,
         now: f64,
     ) -> Result<Option<&'static str>, Error> {
@@ -5534,65 +5826,33 @@ impl<'a> Policy<'a> {
         {
             return Ok(Some("policy_changed"));
         }
-        // `recorded_grant = entry.get("grant")`: Python checks `is not
-        // None`, so a present *non-string* value (e.g. `5`) is not skipped
-        // -- it reaches `self.get_grant(recorded_grant)` ->
-        // `self._grants().get(recorded_grant)`, a `dict.get()` call.
-        //
-        // **Round-7 correction (finding D-R7-4):** the previous single
-        // `Some(_) => return Ok(Some("grant_changed"))` arm treated every
-        // non-string, non-null shape alike, but Python's `dict.get()`
-        // behaves very differently depending on whether the value is
-        // *hashable*. A hashable non-string (a JSON number or bool, `int`/
-        // `bool` in Python) can be looked up like any other key: it is
-        // never found (grant ids are strings), so `.get()` returns `None`,
-        // `get_grant` raises the documented `NotFound`, and
-        // `_approval_mismatch` maps that to `"grant_changed"` -- this
-        // crate's existing behaviour for that shape is correct.  An
-        // *unhashable* value (a JSON array or object, `list`/`dict` in
-        // Python) makes `dict.get()` itself raise an uncaught `TypeError:
-        // unhashable type`, propagating straight out of `consume_approval`
-        // -- Python writes nothing. Measured directly: a stored `"grant":
-        // [1]` gives `py=BuiltinErr` where this crate previously gave
-        // `rust=Ok(Bool(false))` *and* persisted a closed
-        // `invalidated`/`grant_changed` approval to `control.json` --
-        // PORTING.md §3.5 permits mapping Python's uncaught `TypeError` to
-        // a handled *error*, never to a successful `Ok(false)` plus a
-        // state write. (`Policy::approval_matches_grant`, `rust/src/
-        // policy.rs`'s other `entry.get("grant")` reader, is unaffected:
-        // it compares with plain `==`, which never raises for any type in
-        // Python, so its existing `Some(_) => false` arm was already
-        // correct and needs no change.)
+        // `recorded_grant = entry.get("grant")`; when not `None`: an
+        // in-use grant that differs (`!=`, any shape, never raises) is
+        // `grant_changed` first; then `self.get_grant(recorded_grant)`, whose
+        // `dict.get` finds nothing for a hashable non-string (`NotFound` ->
+        // `grant_changed`) and raises an uncaught `TypeError` for an
+        // unhashable list/dict (finding D-R7-4: PORTING.md §3.5, nothing
+        // written); then the loaded grant's raw `principal`/`connection`
+        // against the caller and connection, then its state.
         match entry.get("grant") {
             None | Some(Value::Null) => {}
-            Some(Value::String(recorded_grant)) => {
+            Some(recorded_grant) => {
                 if let Some(iug) = in_use_grant
-                    && iug != recorded_grant
+                    && !python_value_eq(iug, recorded_grant)
                 {
                     return Ok(Some("grant_changed"));
                 }
-                let grant = match self.get_grant(recorded_grant) {
+                let grant = match self.get_grant_value(recorded_grant) {
                     Ok(g) => g,
                     Err(e) if e.is(ErrorClass::NotFound) => return Ok(Some("grant_changed")),
                     Err(e) => return Err(e),
                 };
-                if grant.principal != caller || grant.connection != connection_id {
+                if !grant.principal_is(caller) || !grant.connection_is(connection_id) {
                     return Ok(Some("grant_changed"));
                 }
                 if let Some(state) = self.grant_state(&grant, &connection)? {
                     return Ok(Some(state));
                 }
-            }
-            // Hashable, never found: `NotFound` -> `"grant_changed"`.
-            Some(Value::Number(_)) | Some(Value::Bool(_)) => {
-                return Ok(Some("grant_changed"));
-            }
-            // Unhashable: Python's `dict.get()` itself raises uncaught
-            // `TypeError`, not caught anywhere between there and
-            // `consume_approval`'s caller -- the closest handled error
-            // (§3.5), propagated via `?` so nothing is written.
-            Some(Value::Array(_)) | Some(Value::Object(_)) => {
-                return Err(Error::state("state_corrupt").with_detail(CONTROL));
             }
         }
         Ok(None)
@@ -5814,7 +6074,7 @@ impl<'a> Policy<'a> {
         grant_id: Option<&str>,
     ) -> Result<Decision, Error> {
         let decision = self.decide(caller, connection_id, Some(action), grant_id)?;
-        self.remember(caller, action, &decision);
+        self.remember(caller, action, &decision)?;
         Ok(decision)
     }
 
@@ -5876,6 +6136,20 @@ impl<'a> Policy<'a> {
         action: Option<&Action>,
         grant_id: Option<&str>,
     ) -> Result<Decision, Error> {
+        self.decide_value(&json!(caller), &json!(connection_id), action, grant_id)
+    }
+
+    /// `_decide(caller, connection_id, ...)` where `caller`/`connection_id`
+    /// may be any JSON shape: `consume` passes a stored grant's unvalidated
+    /// `principal`/`connection` straight through. Lookups follow
+    /// [`dict_get_value`]; comparisons use Python's `==`.
+    fn decide_value(
+        &self,
+        caller: &Value,
+        connection_id: &Value,
+        action: Option<&Action>,
+        grant_id: Option<&str>,
+    ) -> Result<Decision, Error> {
         let control = self.control()?;
         if json_truthy(control.get("restore_pending")) {
             return Ok(Decision::denied("restore_pending"));
@@ -5883,17 +6157,17 @@ impl<'a> Policy<'a> {
         if json_truthy(control.get("stopped")) {
             return Ok(Decision::denied("global_stop"));
         }
-        let principal = match self.get_principal(caller) {
+        let principal = match self.get_principal_value(caller) {
             Ok(p) => p,
             Err(e) if e.is(ErrorClass::NotFound) => {
                 return Ok(Decision::denied("principal_unknown"));
             }
             Err(e) => return Err(e),
         };
-        if principal.status != "active" {
+        if !principal.status_is("active") {
             return Ok(Decision::denied("principal_disabled"));
         }
-        let connection = match self.get_connection(connection_id) {
+        let connection = match self.get_connection_value(connection_id) {
             Ok(c) => c,
             Err(e) if e.is(ErrorClass::NotFound) => {
                 return Ok(Decision::denied("connection_unknown"));
@@ -5925,7 +6199,9 @@ impl<'a> Policy<'a> {
                 }
                 Err(e) => return Err(e),
             };
-            if grant.principal != caller || grant.connection != connection_id {
+            if !python_value_eq(&grant.raw_principal, caller)
+                || !python_value_eq(&grant.raw_connection, connection_id)
+            {
                 return Ok(Decision::denied_with_connection(
                     "grant_mismatch",
                     connection,
@@ -5933,10 +6209,10 @@ impl<'a> Policy<'a> {
             }
             vec![grant]
         } else {
-            let all = self.list_grants(Some(caller))?;
+            let all = self.list_grants_value(Some(caller))?;
             let candidates: Vec<Grant> = all
                 .into_iter()
-                .filter(|g| g.connection == connection_id)
+                .filter(|g| python_value_eq(&g.raw_connection, connection_id))
                 .collect();
             if candidates.is_empty() {
                 return Ok(Decision::denied_with_connection("no_grant", connection));
@@ -6011,18 +6287,18 @@ impl<'a> Policy<'a> {
             .ok_or_else(|| Error::policy_denied("grant_unknown"))?;
         let grant = Grant::from_value(entry)?;
         if let Some(c) = caller
-            && c != grant.principal
+            && !grant.principal_is(c)
         {
             return Err(Error::policy_denied("grant_mismatch"));
         }
         if let Some(cid) = connection_id
-            && cid != grant.connection
+            && !grant.connection_is(cid)
         {
             return Err(Error::policy_denied("grant_mismatch"));
         }
-        let decision = self.decide(
-            &grant.principal,
-            &grant.connection,
+        let decision = self.decide_value(
+            &grant.raw_principal,
+            &grant.raw_connection,
             action.as_ref(),
             Some(grant_id),
         )?;
@@ -6056,7 +6332,7 @@ impl<'a> Policy<'a> {
         }
         let mut result = Vec::new();
         for grant in self.list_grants(Some(caller))? {
-            let connection = match self.get_connection(&grant.connection) {
+            let connection = match self.get_connection_value(&grant.raw_connection) {
                 Ok(c) => c,
                 Err(e) if e.is(ErrorClass::NotFound) => continue,
                 Err(e) => return Err(e),
@@ -7003,8 +7279,8 @@ mod tests {
         let policy = Policy::new(&state, make_clock(&clock_val));
         for invalid in [json!(true), json!(false), json!(0), json!(-1)] {
             assert_invalid_input(policy.create_grant_exact(
-                "agent-1",
-                "gh",
+                &json!("agent-1"),
+                &json!("gh"),
                 Some(3600),
                 Some(invalid),
             ));
@@ -7015,7 +7291,7 @@ mod tests {
                 .unwrap(),
         );
         let grant = policy
-            .create_grant_exact("agent-1", "gh", Some(3600), Some(huge.clone()))
+            .create_grant_exact(&json!("agent-1"), &json!("gh"), Some(3600), Some(huge.clone()))
             .unwrap();
         assert_eq!(grant.max_uses_value(), huge);
         assert_eq!(grant.public_view().unwrap()["remaining_uses"], huge);
@@ -7774,27 +8050,17 @@ mod tests {
         assert_eq!(policy.get_connection("gh").unwrap().policy_version, 2);
     }
 
-    /// Finding D-R7-9 / `DEVIATIONS.md`'s row-95 round-7 addendum: with
-    /// `connections["gh"]["secret_id"] = [1]` and a populated `vault/
-    /// secrets.json` (`{"secrets": {"sec1": {"active_version": 1}}}`, so
-    /// `_resolved_credential_version`'s `.get(secret_id)` is actually
-    /// reached -- without it Python's own `isinstance(doc.get("secrets"),
-    /// dict)` guard short-circuits before ever touching `secret_id`, and
-    /// no exception happens at all), `python3.12` confirms `Policy.
-    /// update_connection("gh", status="disabled")` writes `connections.
-    /// json`, appends a `connection`/`connection_enable` revocation-ledger
-    /// line, and only *then* raises `TypeError: unhashable type: 'list'`
-    /// (probed directly against `zeropw/policy.py`: `doc changed: True`,
-    /// `ledger changed: True`, ledger line
-    /// `{"id":"gh","kind":"connection", ...}`). Rust's `Connection::
-    /// from_value` cannot produce a `Connection` at all for a non-string
-    /// `secret_id` (a plain typed `String` field, not a raw-`Value`-
-    /// carrying one), so its deferred `corrupt` flag rejects the record
-    /// the moment `before` is loaded -- before any write. This test pins
-    /// that Rust's own failure is atomic: unlike Python, neither
-    /// `connections.json` nor the revocation ledger change at all.
+    /// Finding D-R7-9, now closed: with `connections["gh"]["secret_id"] =
+    /// [1]` and a populated `vault/secrets.json` (so
+    /// `_resolved_credential_version`'s `.get(secret_id)` is reached),
+    /// `python3.12` writes `connections.json`, appends the `connection`
+    /// revocation-ledger line, and only then raises `TypeError: unhashable
+    /// type: 'list'`. `Connection` now keeps the stored `secret_id`
+    /// verbatim, so Rust reaches the same lookup at the same point: the
+    /// call fails (PORTING.md §3.5) after the same writes. The byte-level
+    /// differential form is `rust/tests/policy_parity_close.rs`.
     #[test]
-    fn update_connection_on_unhashable_secret_id_fails_atomically_unlike_pythons_partial_write() {
+    fn update_connection_on_unhashable_secret_id_writes_then_fails_like_python() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         state
@@ -7806,7 +8072,6 @@ mod tests {
         let mut doc = state.read_json(CONNECTIONS, json!({})).unwrap();
         doc.as_object_mut().unwrap()["gh"]["secret_id"] = json!([1]);
         state.write_json(CONNECTIONS, &doc).unwrap();
-        let before_doc = state.read_json(CONNECTIONS, json!({})).unwrap();
         let before_ledger = state.read_lines(REVOCATIONS, None).unwrap_or_default();
 
         let err = policy
@@ -7818,22 +8083,16 @@ mod tests {
         assert!(err.is(ErrorClass::StateError), "{err:?}");
 
         let after_doc = state.read_json(CONNECTIONS, json!({})).unwrap();
+        assert_eq!(after_doc["gh"]["status"], json!("disabled"));
+        assert_eq!(after_doc["gh"]["secret_id"], json!([1]));
         let after_ledger = state.read_lines(REVOCATIONS, None).unwrap_or_default();
-        assert_eq!(
-            before_doc, after_doc,
-            "Rust's failure must not partially write connections.json"
-        );
-        assert_eq!(
-            before_ledger, after_ledger,
-            "Rust's failure must not append a ledger line (Python's does)"
-        );
+        assert_eq!(after_ledger.len(), before_ledger.len() + 1);
     }
 
-    /// Same shape as the `update_connection` test above (finding D-R7-9),
-    /// for `disable_connection` -- which calls `update_connection`
-    /// internally, so the same atomic-failure property holds.
+    /// Same as above for `disable_connection` (which calls
+    /// `update_connection`).
     #[test]
-    fn disable_connection_on_unhashable_secret_id_fails_atomically_unlike_pythons_partial_write() {
+    fn disable_connection_on_unhashable_secret_id_writes_then_fails_like_python() {
         let (_tmp, state, clock_val, _token) = setup();
         let policy = Policy::new(&state, make_clock(&clock_val));
         state
@@ -7845,16 +8104,15 @@ mod tests {
         let mut doc = state.read_json(CONNECTIONS, json!({})).unwrap();
         doc.as_object_mut().unwrap()["gh"]["secret_id"] = json!([1]);
         state.write_json(CONNECTIONS, &doc).unwrap();
-        let before_doc = state.read_json(CONNECTIONS, json!({})).unwrap();
         let before_ledger = state.read_lines(REVOCATIONS, None).unwrap_or_default();
 
         let err = policy.disable_connection("gh").unwrap_err();
         assert!(err.is(ErrorClass::StateError), "{err:?}");
 
         let after_doc = state.read_json(CONNECTIONS, json!({})).unwrap();
+        assert_eq!(after_doc["gh"]["status"], json!("disabled"));
         let after_ledger = state.read_lines(REVOCATIONS, None).unwrap_or_default();
-        assert_eq!(before_doc, after_doc);
-        assert_eq!(before_ledger, after_ledger);
+        assert_eq!(after_ledger.len(), before_ledger.len() + 1);
     }
 
     /// Finding D-PO-1: `resume`'s `InvalidInput("incident_open",

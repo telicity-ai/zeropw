@@ -1291,12 +1291,12 @@ fn control(ctx: &Context) -> Result<Value, Error> {
     )
 }
 
-fn grant_view(grant: &crate::policy::Grant) -> Value {
-    json!({"id":grant.id,"principal":grant.principal,"connection":grant.connection,
-        "policy_version":grant.policy_version,"expires_at":grant.expires_at.map(|t| iso(Some(t))),
-        "max_uses":grant.max_uses_value(),"uses":grant.uses,"status":grant.status,
-        "created_at":grant.created_at,"revoked_at":grant.revoked_at,
-        "credential_version":grant.credential_version})
+/// `_grant_view`: `asdict(grant)` with `expires_at` rendered through `iso()`
+/// when it is not `None`.
+fn grant_view(grant: &crate::policy::Grant) -> Result<Value, Error> {
+    let mut view = grant.to_value();
+    view["expires_at"] = grant.expires_at_iso()?;
+    Ok(view)
 }
 
 fn check_admin_document(ctx: &Context) -> Result<(), Error> {
@@ -1997,7 +1997,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("principal", "list") => Ok(
-            json!({"principals":ctx.policy.list_principals()?.into_iter().map(|p|json!({"id":p.id,"status":p.status,"created_at":p.created_at,"runtime":p.runtime})).collect::<Vec<_>>()}),
+            json!({"principals":ctx.policy.list_principals()?.iter().map(crate::policy::Principal::view).collect::<Vec<_>>()}),
         ),
         ("principal", "disable") => {
             ctx.policy.disable_principal(a.req("id"), true)?;
@@ -2029,10 +2029,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     ("expires_at", json!(grant.expires_at.map(|t| iso(Some(t))))),
                 ],
             )?;
-            Ok(grant_view(&grant))
+            grant_view(&grant)
         }
         ("grant", "list") => Ok(
-            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Vec<_>>()}),
+            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Result<Vec<_>, Error>>()?}),
         ),
         ("grant", "revoke") => {
             let g = ctx.policy.revoke_grant(a.req("id"))?;
@@ -2043,7 +2043,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 None,
                 vec![("grant", json!(g.id)), ("principal", json!(g.principal))],
             )?;
-            Ok(grant_view(&g))
+            grant_view(&g)
         }
         ("grant", "regrant") => {
             let g = ctx.policy.regrant(a.req("id"))?;
@@ -2058,7 +2058,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     ("detail", json!(a.req("id"))),
                 ],
             )?;
-            let mut v = grant_view(&g);
+            let mut v = grant_view(&g)?;
             v["replaces"] = json!(a.req("id"));
             Ok(v)
         }
