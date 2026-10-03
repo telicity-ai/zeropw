@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::argparse::{Arg, INT, Outcome, Parser, TypeFn, Val};
+use crate::argparse::{Arg, Outcome, Parser, TypeFn, Val};
 use crate::audit::RecordArgs;
 use crate::context::{Config, Context, OwnedTempDirRegistry};
 use crate::errors::Error;
@@ -51,18 +51,11 @@ impl Args {
     fn req(&self, key: &str) -> &str {
         self.get(key).unwrap_or("")
     }
-    /// An argparse `type=int` value narrowed to `i64` by saturation: a
-    /// port or bounded operational limit beyond the range behaves like the (never
-    /// existing / always exceeding) value Python's arbitrary-precision int
-    /// would have been.
-    fn integer(&self, key: &str) -> Result<Option<i64>, Error> {
-        self.get(key)
-            .map(|s| {
-                s.parse::<i128>()
-                    .map(|n| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
-                    .map_err(|_| Error::invalid_input("invalid_arguments"))
-            })
-            .transpose()
+    /// An argparse `type=int` value as the exact Python integer. The parser
+    /// stores the canonical decimal text (see [`EXACT_INT`]), never a narrowed
+    /// machine integer.
+    fn py_int(&self, key: &str) -> Result<Option<PyInt>, Error> {
+        self.version(key)
     }
     fn version(&self, key: &str) -> Result<Option<PyInt>, Error> {
         self.get(key)
@@ -89,11 +82,13 @@ impl Args {
     }
 }
 
-/// `_positive_int`.
+/// `_positive_int`: `int(text)` (including CPython's integer-string digit
+/// limit, whose `ValueError` is reported like any other parse failure), then
+/// `value < 1` rejected. The exact value is kept as canonical decimal text.
 const POSITIVE_INT: TypeFn = TypeFn {
     name: "_positive_int",
-    convert: |text| match crate::pystr::int_from_str(text) {
-        Some(value) if value >= 1 => Ok(Val::Int(value)),
+    convert: |text| match crate::pystr::int_from_str_decimal_limited(text) {
+        Some(value) if !value.starts_with('-') && value != "0" => Ok(Val::Str(value)),
         _ => Err(Some("must be a positive integer".into())),
     },
 };
@@ -300,7 +295,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--secret-id").required())
     .arg(Arg::opt("--secret-version").ty(EXACT_INT))
     .arg(Arg::opt("--host").required())
-    .arg(Arg::opt("--port").ty(INT).default(Val::Int(22)))
+    .arg(Arg::opt("--port").ty(EXACT_INT).default(Val::Int(22)))
     .arg(Arg::opt("--username").required())
     .arg(
         Arg::opt("--host-key")
@@ -414,7 +409,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--secret-id").required())
     .arg(
         Arg::opt("--version")
-            .ty(INT)
+            .ty(EXACT_INT)
             .required()
             .help("the OLD version to retire"),
     );
@@ -1225,29 +1220,80 @@ fn confirmations(v: Option<&str>, default: Vec<String>) -> Vec<String> {
     }
     csv(Some(v)).into_iter().map(|s| s.to_uppercase()).collect()
 }
-fn ttl(v: &str) -> Result<i64, Error> {
-    let s = v.trim().to_ascii_lowercase();
+/// `_parse_ttl`: `TTL_RE.fullmatch(text.strip().lower())`, then the exact
+/// (unbounded) `int(digits) * unit`. CPython's integer-string digit limit makes
+/// `int()` raise `ValueError` there, which the CLI reports as
+/// `state_corrupt`/`ValueError`.
+fn ttl(v: &str) -> Result<PyInt, Error> {
+    let s = v.trim_matches(crate::pystr::is_space).to_lowercase();
+    let no_match = || {
+        Error::invalid_input("invalid_ttl").with_detail("use forms like 30m, 1h, 3600s or 86400")
+    };
     let digits_end = s.bytes().take_while(u8::is_ascii_digit).count();
     let (digits, unit) = s.split_at(digits_end);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(Error::invalid_input("invalid_ttl"));
+    if digits.is_empty() {
+        return Err(no_match());
     }
     let factor: i64 = match unit {
         "" | "s" => 1,
         "m" => 60,
         "h" => 3600,
         "d" => 86400,
-        _ => return Err(Error::invalid_input("invalid_ttl")),
+        _ => return Err(no_match()),
     };
-    let seconds = digits
-        .parse::<i64>()
-        .ok()
-        .and_then(|n| n.checked_mul(factor))
-        .ok_or_else(|| Error::invalid_input("invalid_ttl"))?;
-    if seconds <= 0 {
+    let value = crate::pystr::int_from_str_decimal_limited(digits)
+        .and_then(|digits| digits.parse::<num_bigint::BigInt>().ok())
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"))?;
+    let seconds = value * factor;
+    if seconds <= num_bigint::BigInt::from(0) {
         return Err(Error::invalid_input("invalid_ttl"));
     }
-    Ok(seconds)
+    Ok(PyInt(seconds))
+}
+
+/// A positive parsed TTL for a consumer that range-checks it before any other
+/// use (`create_grant`'s and `create_invite`'s `invalid_ttl` bound): a value
+/// beyond `i64` is as out of range there as `i64::MAX`.
+fn ttl_seconds_for_bounded_consumer(seconds: &PyInt) -> i64 {
+    i64::try_from(&seconds.0).unwrap_or(i64::MAX)
+}
+
+/// `_local_version_for`: the local vault version number whose record carries
+/// `version_id`. Each `x or {}` step replaces only a falsy value; a truthy
+/// non-dict then has no `.get`/`.items()` (`AttributeError`), and a matching
+/// key `int()` cannot parse raises `ValueError` -- both reported by the CLI as
+/// `state_corrupt` with the exception class name.
+fn local_version_for(
+    ctx: &Context,
+    secret_id: &str,
+    version_id: &str,
+) -> Result<Option<PyInt>, Error> {
+    fn mapping(value: Value) -> Result<serde_json::Map<String, Value>, Error> {
+        match value {
+            Value::Object(map) => Ok(map),
+            other if !python_truthy(&other) => Ok(serde_json::Map::new()),
+            _ => Err(Error::state("state_corrupt").with_detail("AttributeError")),
+        }
+    }
+    let field = |map: &serde_json::Map<String, Value>, key: &str| {
+        map.get(key).cloned().unwrap_or(Value::Null)
+    };
+    let doc = mapping(ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?)?;
+    let secrets = mapping(field(&doc, "secrets"))?;
+    let entry = mapping(field(&secrets, secret_id))?;
+    let versions = mapping(field(&entry, "versions"))?;
+    for (key, record) in &versions {
+        let matches = record.as_object().is_some_and(|record| {
+            record.get("version_id").and_then(Value::as_str) == Some(version_id)
+        });
+        if matches {
+            return crate::pystr::int_from_str_decimal_limited(key)
+                .and_then(|value| value.parse().ok())
+                .map(|value| Some(PyInt(value)))
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"));
+        }
+    }
+    Ok(None)
 }
 
 /// `_parse_target`: `scheme://host[:port]` with no path, query, fragment or
@@ -1786,7 +1832,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             .to_value())
         }
         ("connection", "create-ssh") => {
-            let port = a.integer("port")?.unwrap_or(22);
+            // `type=int` is unbounded; `SshTarget` then rejects every value outside 1..=65535
+            // with `invalid_port`, so an out-of-`i64` value is passed on as 0 (equally invalid).
+            let port = a
+                .py_int("port")?
+                .map_or(22, |port| i64::try_from(&port.0).unwrap_or(0));
             let host_keys = a
                 .list("host-key")
                 .iter()
@@ -2009,7 +2059,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(json!({"id":a.req("id"),"status":"disabled"}))
         }
         ("grant", "create") => {
-            let seconds = ttl(a.get("ttl").unwrap_or("1h"))?;
+            let seconds = ttl_seconds_for_bounded_consumer(&ttl(a.get("ttl").unwrap_or("1h"))?);
             let max_uses = a.exact_integer("max-uses")?;
             let grant = ctx.policy.create_grant_with_exact_max_uses(
                 a.req("principal"),
@@ -2137,12 +2187,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     true,
                 )?;
                 let version_id = result["version_id"].as_str().unwrap_or("");
-                let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-                let version = doc["secrets"][&meta.id]["versions"]
-                    .as_object()
-                    .and_then(|m| m.iter().find(|(_, v)| v["version_id"] == version_id))
-                    .and_then(|(k, _)| k.parse::<i64>().ok());
+                let version = local_version_for(&ctx, &meta.id, version_id)?;
                 let next_version = version
+                    .as_ref()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| version_id.to_owned());
                 return Ok(
@@ -2316,8 +2363,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("audit", "tail") | ("alerts", "") => {
-            let limit = a.integer("limit")?.unwrap_or(50);
-            if limit < 1 {
+            let limit = a.py_int("limit")?.unwrap_or_else(|| PyInt::from(50_i64));
+            if limit.0 < num_bigint::BigInt::from(1) {
                 return Err(Error::invalid_input("invalid_arguments"));
             }
             let name = if a.command == "audit" {
@@ -2336,7 +2383,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     _ => unparseable += 1,
                 }
             }
-            let start = entries.len().saturating_sub(limit as usize);
+            // `records[-limit:]`: a limit beyond the record count keeps every record.
+            let start =
+                usize::try_from(&limit.0).map_or(0, |limit| entries.len().saturating_sub(limit));
             Ok(
                 json!({if a.command=="audit" {"records"} else {"alerts"}:entries[start..],"unparseable_lines":unparseable}),
             )
@@ -2598,7 +2647,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         "invite" => {
             // `_parse_ttl(args.ttl) if args.ttl else DEFAULT_INVITE_TTL_SECONDS`.
             let ttl = match a.get("ttl").filter(|t| !t.is_empty()) {
-                Some(text) => ttl(text)?,
+                Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
             let invite = M::create_invite(
@@ -2771,17 +2820,25 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     Ok(Some(out))
 }
 
+/// `_parse_listen`: `text.strip()`, `rpartition(":")`, `host.strip("[]")`,
+/// then `port_text.isdigit()` and `0 <= int(port_text) <= 65535`. A
+/// non-decimal `isdigit()` character (e.g. a superscript) or a digit string
+/// beyond CPython's integer-string limit makes that `int()` raise
+/// `ValueError`, reported by the CLI as `state_corrupt`/`ValueError`.
 fn parse_listen(raw: &str) -> Result<(String, u16), Error> {
     let (host, port) = raw
-        .trim()
+        .trim_matches(crate::pystr::is_space)
         .rsplit_once(':')
         .ok_or_else(|| Error::invalid_input("invalid_listen").with_detail("use HOST:PORT"))?;
-    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"));
+    let out_of_range =
+        || Error::invalid_input("invalid_listen").with_detail("port must be 0-65535");
+    if port.is_empty() || !port.chars().all(crate::pystr::is_digit) {
+        return Err(out_of_range());
     }
-    let port = port
+    let port = crate::pystr::int_from_str_decimal_limited(port)
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"))?
         .parse::<u16>()
-        .map_err(|_| Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"))?;
+        .map_err(|_| out_of_range())?;
     Ok((host.trim_matches(['[', ']']).to_owned(), port))
 }
 fn require_loopback(host: &str) -> Result<String, Error> {
@@ -3196,20 +3253,95 @@ for path in json.loads(base64.b64decode({encoded:?})):
             assert_eq!(ttl(text).unwrap(), expected, "{text}");
         }
         for text in [
-            "",
-            "0",
-            "0h",
-            "-1h",
-            "+1h",
-            "1w",
-            "1hour",
-            "1.5h",
-            "٣h",
-            "²h",
-            "1é",
-            "999999999999999999999999999999d",
+            "", "0", "0h", "-1h", "+1h", "1w", "1hour", "1.5h", "٣h", "²h", "1é",
         ] {
             assert_eq!(ttl(text).unwrap_err().reason, "invalid_ttl", "{text}");
         }
+    }
+
+    /// `_parse_ttl`, `_parse_listen` and `_positive_int` against the real
+    /// CPython functions: exact unbounded values, `str.strip()` whitespace,
+    /// `str.isdigit()` versus `int()`, and the integer-string digit limit.
+    #[test]
+    fn integer_parsers_match_python_admin_cli_helpers() {
+        let ttl_cases = [
+            "1h",
+            " 3M ",
+            "\u{1c}1h\u{1f}",
+            "\u{85}2d\u{3000}",
+            "999999999999999999999999999999d",
+            "0009223372036854775808s",
+            "0",
+            "1w",
+            "٣h",
+            &"1".repeat(4300),
+            &"1".repeat(4301),
+        ];
+        let listen_cases = [
+            "127.0.0.1:80",
+            " [::1]:65535 ",
+            "\u{1c}127.0.0.1:0\u{1d}",
+            "127.0.0.1:٨٠",
+            "127.0.0.1:０８０",
+            "127.0.0.1:²",
+            "127.0.0.1:65536",
+            "127.0.0.1:",
+            "127.0.0.1",
+            "h:1_0",
+            &format!("h:{}", "0".repeat(4301)),
+        ];
+        let limit_cases = [
+            "50",
+            " 7 ",
+            "1_0",
+            "٣",
+            "0",
+            "-1",
+            "x",
+            &"9".repeat(40),
+            &"1".repeat(4301),
+        ];
+        let input = pyjson::dumps(
+            &json!(json!([ttl_cases, listen_cases, limit_cases]).to_string()),
+            DumpOptions::plain(),
+        )
+        .unwrap();
+        let script = format!(
+            r#"
+import argparse, json
+from zeropw import admin_cli as A
+def run(fn, text):
+    try:
+        value = fn(text)
+    except A.ZeroPWError as exc:
+        return ["error", exc.reason, exc.detail]
+    except argparse.ArgumentTypeError as exc:
+        return ["type_error", str(exc)]
+    except ValueError:
+        return ["error", "state_corrupt", "ValueError"]
+    return ["ok", list(value) if isinstance(value, tuple) else str(value)]
+data = json.loads({input})
+print(json.dumps([[run(A._parse_ttl, t) for t in data[0]], [run(A._parse_listen, t) for t in data[1]], [run(A._positive_int, t) for t in data[2]]]))
+"#
+        );
+        let python: Value = serde_json::from_str(&crate::oracle::python(&script)).unwrap();
+        let error = |e: Error| json!(["error", e.reason, e.detail]);
+        let rust_ttl: Vec<Value> = ttl_cases
+            .iter()
+            .map(|t| ttl(t).map_or_else(error, |v| json!(["ok", v.to_string()])))
+            .collect();
+        let rust_listen: Vec<Value> = listen_cases
+            .iter()
+            .map(|t| parse_listen(t).map_or_else(error, |(h, p)| json!(["ok", [h, p]])))
+            .collect();
+        let rust_limit: Vec<Value> = limit_cases
+            .iter()
+            .map(|t| match (POSITIVE_INT.convert)(t) {
+                Ok(Val::Str(v)) => json!(["ok", v]),
+                Err(Some(message)) => json!(["type_error", message]),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(json!([rust_ttl, rust_listen, rust_limit]), python);
     }
 }

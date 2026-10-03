@@ -2640,7 +2640,7 @@ struct Relay<'a> {
     caller: String,
     connection_id: String,
     grant_id: Option<String>,
-    handle_policy_version: Option<i64>,
+    handle_policy_version: Option<crate::pyint::PyInt>,
     raw_method: String,
     raw_path: String,
     raw_headers: Headers,
@@ -2669,7 +2669,7 @@ impl<'a> Relay<'a> {
         caller: &str,
         connection_id: &str,
         grant_id: Option<&str>,
-        handle_policy_version: Option<i64>,
+        handle_policy_version: Option<crate::pyint::PyInt>,
         method: &str,
         path: &str,
         headers: &Headers,
@@ -3168,8 +3168,8 @@ impl<'a> Relay<'a> {
                 true,
             );
         }
-        if let Some(handle_pv) = self.handle_policy_version
-            && handle_pv != connection.policy_version
+        if let Some(handle_pv) = &self.handle_policy_version
+            && *handle_pv != connection.policy_version
         {
             return self.refuse(403, "grant_stale", "denied", None, None, Vec::new(), true);
         }
