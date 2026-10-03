@@ -1043,17 +1043,18 @@ fn peer_is_local_listener(stream: &TcpStream) -> bool {
 /// `float(False) == 0.0` does (confirmed against live `python3.12` --
 /// Python `bool` is an `int` subclass, so `float()` never raises for one,
 /// unlike the earlier version of this doc comment claimed); a JSON string
-/// is parsed with CPython's `float(str)` grammar, including Unicode decimal
-/// digits and whitespace, PEP 515 underscores between digits, non-finite
-/// spellings and exponent overflow. Anything else
+/// is parsed with the canonical [`crate::pystr::float_from_str`] (CPython's
+/// `float(str)` grammar, PORTING.md §3b). Anything else
 /// (`null`, an array, an object) has no non-panicking `float()` equivalent
-/// and is treated as unconvertible. Returns `None` exactly where Python's
-/// `float(v)` would raise `TypeError`/`ValueError`.
+/// and is treated as unconvertible; a JSON integer too large for a double
+/// (`as_f64` rounds it to infinity and refuses it) is `float(10**400)`'s
+/// `OverflowError`. Returns `None` exactly where Python's `float(v)` would
+/// raise `TypeError`/`ValueError`/`OverflowError`.
 fn python_float(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
         Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        Value::String(s) => python_float_str(s),
+        Value::String(s) => crate::pystr::float_from_str(s),
         _ => None,
     }
 }
@@ -1073,46 +1074,6 @@ fn float_error_class(v: &Value) -> &'static str {
 /// `float(v)` for a stored ledger value, raising the escaping built-in.
 fn ledger_float(v: &Value) -> Result<f64, Error> {
     python_float(v).ok_or_else(|| escaped_builtin(float_error_class(v)))
-}
-
-/// `PyFloat_FromString` for a Python `str`. CPython first maps Unicode
-/// whitespace to ASCII space and Unicode decimal digits to their ASCII
-/// values, then accepts underscores only between two digits before passing
-/// the resulting literal to its decimal/non-finite parser.
-fn python_float_str(text: &str) -> Option<f64> {
-    let mut ascii = String::new();
-    for c in text.chars() {
-        if u32::from(c) < 127 {
-            ascii.push(c);
-        } else if crate::pystr::is_space(c) {
-            ascii.push(' ');
-        } else {
-            ascii.push(char::from_digit(
-                crate::pystr::unicode_decimal_digit(c)?,
-                10,
-            )?);
-        }
-    }
-
-    let mut plain = String::new();
-    let mut previous = '\0';
-    for c in ascii.chars() {
-        if c == '_' {
-            if !previous.is_ascii_digit() {
-                return None;
-            }
-        } else {
-            if previous == '_' && !c.is_ascii_digit() {
-                return None;
-            }
-            plain.push(c);
-        }
-        previous = c;
-    }
-    if previous == '_' || plain.contains('\0') {
-        return None;
-    }
-    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
 }
 
 /// `int(v)` as applied to a stored `response["status"]` value (finding

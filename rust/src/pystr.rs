@@ -442,6 +442,56 @@ fn parse_int_grammar(s: &str, base: u32) -> Option<(bool, String)> {
 }
 
 // ---------------------------------------------------------------------------
+// `float(str)` grammar (PORTING.md §3b): the one canonical home for CPython's
+// `PyFloat_FromString`. `gateway.rs` (ledger `updated_at`) and
+// `fake_upstream.rs` (`/slow?seconds=`) each kept a byte-identical private
+// copy of this function; both now call this one.
+// ---------------------------------------------------------------------------
+
+/// `float(text)` for a Python `str` (CPython 3.12 `PyFloat_FromString`):
+/// `_PyUnicode_TransformDecimalAndSpaceToASCII` first (non-ASCII whitespace
+/// becomes a space, non-ASCII decimal digits their ASCII digit, any other
+/// non-ASCII character makes the parse fail), then
+/// `_Py_string_to_number_with_underscores` (PEP 515 underscores only between
+/// two ASCII digits), then `Py_ISSPACE` ([`is_int_space`]) stripped from both
+/// ends and the float literal grammar (`inf`/`infinity`/`nan` in any case
+/// with an optional sign, or a decimal literal with optional exponent; an
+/// overflowing literal is `inf`), which Rust's correctly-rounded `f64`
+/// parser shares. `None` exactly where CPython raises `ValueError`.
+/// Oracle-tested by `float_from_str_matches_cpython`.
+pub fn float_from_str(text: &str) -> Option<f64> {
+    let mut ascii = String::new();
+    for c in text.chars() {
+        if u32::from(c) < 127 {
+            ascii.push(c);
+        } else if is_space(c) {
+            ascii.push(' ');
+        } else {
+            ascii.push(char::from_digit(unicode_decimal_digit(c)?, 10)?);
+        }
+    }
+    let mut plain = String::new();
+    let mut previous = '\0';
+    for c in ascii.chars() {
+        if c == '_' {
+            if !previous.is_ascii_digit() {
+                return None;
+            }
+        } else {
+            if previous == '_' && !c.is_ascii_digit() {
+                return None;
+            }
+            plain.push(c);
+        }
+        previous = c;
+    }
+    if previous == '_' || plain.contains('\0') {
+        return None;
+    }
+    plain.trim_matches(is_int_space).parse().ok()
+}
+
+// ---------------------------------------------------------------------------
 // Generated tables -- see rust/tools/gen_pystr_tables.py. Do not hand-edit.
 // ---------------------------------------------------------------------------
 
@@ -2044,6 +2094,81 @@ print(h.hexdigest())
                 }
             };
             assert_eq!(actual, expected, "{case:?}");
+        }
+    }
+
+    /// [`float_from_str`] against CPython's `float(str)`, including the
+    /// cases both former private copies were tested with.
+    #[test]
+    fn float_from_str_matches_cpython() {
+        let cases = [
+            "1",
+            " 1.5 ",
+            "\t2\n",
+            "1_0.5",
+            "1_000.5",
+            "1_0e1_0",
+            "1__0",
+            "_1",
+            "1_",
+            "1_e5",
+            "1e_5",
+            "1._5",
+            "1_.5",
+            "1e5",
+            "-0.25",
+            "+.5",
+            "5.",
+            ".",
+            "e5",
+            "inf",
+            "-Infinity",
+            "INF",
+            "nan",
+            "+NaN",
+            "-nan",
+            "infin",
+            "in_f",
+            "0x10",
+            "1e999",
+            "-1e999",
+            "1e-400",
+            "\u{1c}1",
+            "\u{a0}3\u{2003}",
+            "\u{0663}.\u{0665}",
+            "1\u{0}",
+            "\u{7f}1",
+            "\u{e9}",
+            "",
+            "  ",
+            "1 2",
+            "--1",
+            "+-1",
+            "1.5e+3",
+            "1.5E-3",
+            "\u{0661}_\u{0662}",
+            " _1",
+            "1_ ",
+            "1_000_000.000_001",
+            "123456789012345678901234567890",
+            "0.1000000000000000055511151231257827",
+            "\u{ff11}\u{ff12}",
+            "\u{2028}7",
+        ];
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
+        let script = format!(
+            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
+        );
+        let expected = crate::oracle::python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let rust = match float_from_str(case) {
+                Some(v) if v.is_nan() => "nan".to_string(),
+                Some(v) => crate::pyjson::python_float_repr(v),
+                None => "error".to_string(),
+            };
+            assert_eq!(rust, python, "float({case:?})");
         }
     }
 }

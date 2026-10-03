@@ -37,14 +37,17 @@
 //!   creates, scoped to one `SignerManager` instance rather than the whole
 //!   process (so concurrent tests using different managers cannot interfere
 //!   with each other, unlike the Python global).
-//! * Python narrows the process umask around `socket.bind()` so the kernel
-//!   creates the socket file with mode 0600 atomically, then `chmod`s
-//!   redundantly. This crate forbids `unsafe` code everywhere except
-//!   `store.rs`'s one `flock` call (`rust/PORTING.md` engineering rules), and
-//!   narrowing umask needs an FFI call, so this port only `chmod`s after
-//!   `bind()`. The socket directory is always created mode 0700
-//!   ([`choose_socket_dir`]), so no other user on the host can even resolve
-//!   the socket's path to exploit the brief window.
+//! * Python narrows the process umask to `0o177` around `socket.bind()` so
+//!   the kernel creates the socket file with mode 0600 atomically, then
+//!   `chmod`s redundantly. [`bind_and_listen`] reproduces the atomic 0600
+//!   creation with safe `rustix` calls (see its doc comment), then makes the
+//!   same `chmod`.
+//! * An `OSError` (or a failed thread start) inside `SignerManager`/
+//!   `_BindingServer` escapes Python uncaught; [`escaped_os_error`] models
+//!   it the way this crate models every escaping CPython built-in, so the
+//!   CLI prints Python's `OSError` mapping and the server/tools boundary
+//!   answers `500 internal_error` with the run failed as
+//!   `exec_setup_failed`.
 //! * [`bind_and_listen`] matches Python's explicit `listen(16)` backlog
 //!   exactly (finding G-R5-1): `std`'s `UnixListener::bind` has no safe way
 //!   to request a specific backlog (only the OS default, 128 on this
@@ -318,7 +321,7 @@ impl BindingServer {
         let listener = bind_and_listen(&binding.socket_path)?;
         listener
             .set_nonblocking(true)
-            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+            .map_err(|e| escaped_os_error(&e))?;
         // Event-driven accept wait (finding G-R4-1): one `mio::Poll` per
         // binding, set up here (before the accept thread starts) and then
         // handed to it by value. `SourceFd` only borrows the raw fd for the
@@ -329,8 +332,7 @@ impl BindingServer {
         // `register`/`Waker::new` are safe functions (unlike e.g. the
         // `polling` crate's `Poller::add`, which is `unsafe fn` because it
         // requires the caller to `delete()` the source before dropping it).
-        let poll = Poll::new()
-            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+        let poll = Poll::new().map_err(|e| escaped_os_error(&e))?;
         let listener_fd = listener.as_raw_fd();
         poll.registry()
             .register(
@@ -338,9 +340,8 @@ impl BindingServer {
                 LISTENER_TOKEN,
                 Interest::READABLE,
             )
-            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
-        let waker = Waker::new(poll.registry(), WAKE_TOKEN)
-            .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+            .map_err(|e| escaped_os_error(&e))?;
+        let waker = Waker::new(poll.registry(), WAKE_TOKEN).map_err(|e| escaped_os_error(&e))?;
         let server = Arc::new(BindingServer {
             ctx,
             binding,
@@ -361,7 +362,7 @@ impl BindingServer {
                 accept_server.accept_loop(poll);
                 let _ = done_tx.send(());
             })
-            .map_err(|e| Error::state("signer_thread_spawn_failed").with_detail(e.to_string()))?;
+            .map_err(|_| escaped_thread_start_error())?;
         *server
             .accept_handle
             .lock()
@@ -1608,24 +1609,21 @@ fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
         // (finding G-R2-3; see `SignerManager::bind`'s identical fix).
         if probe.to_string_lossy().chars().count() <= MAX_UNIX_PATH {
             if let Some(parent) = candidate.parent().filter(|p| !p.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    Error::state("signer_socket_dir_failed").with_detail(e.to_string())
-                })?;
+                std::fs::create_dir_all(parent).map_err(|e| escaped_os_error(&e))?;
             }
-            mkdir_leaf_private_0700(&candidate)
-                .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+            mkdir_leaf_private_0700(&candidate).map_err(|e| escaped_os_error(&e))?;
             // Defensive backstop against a masking umask, same as
             // `context.rs`'s `create_private_dir`; the `mkdir` syscall above
             // already requested 0700 directly, so this is redundant in the
             // common case, not the primary guarantee.
             std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+                .map_err(|e| escaped_os_error(&e))?;
             return Ok(candidate);
         }
     }
     let short = make_temp_dir("zpws-")?;
     std::fs::set_permissions(&short, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| Error::state("signer_socket_dir_failed").with_detail(e.to_string()))?;
+        .map_err(|e| escaped_os_error(&e))?;
     Ok(short)
 }
 
@@ -1668,9 +1666,7 @@ fn make_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
         match std::fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => return Ok(path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(Error::state("signer_socket_dir_failed").with_detail(e.to_string()));
-            }
+            Err(e) => return Err(escaped_os_error(&e)),
         }
     }
     Err(Error::state("signer_socket_dir_failed").with_detail("tempdir"))
@@ -1683,7 +1679,39 @@ fn short_hex_id() -> String {
     hex::encode(buf)
 }
 
-/// Bind, listen with Python's explicit backlog, and chmod 0600.
+/// The `OSError` CPython raises for `error` inside `SignerManager` /
+/// `_BindingServer` (`Path.mkdir`, `tempfile.mkdtemp`, `os.chmod`,
+/// `socket.bind`/`listen`). Nothing in `signer.py` catches it, so it escapes
+/// to the caller: `admin_cli.main` prints `{"error": "FileNotFoundError",
+/// "reason": "file_not_found"}` or `{"error": <OSError subclass>, "reason":
+/// "io_error", "detail": strerror}`, which is exactly this error's
+/// `to_dict()`; `zeropw.server` answers it as an escaped built-in
+/// ([`crate::gateway::is_escaped_builtin`]) and `tools.exec` fails the run
+/// with `exec_setup_failed`.
+fn escaped_os_error(error: &std::io::Error) -> Error {
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        return Error::subclass(
+            ErrorClass::ZeroPW,
+            "FileNotFoundError",
+            "file_not_found",
+            "",
+        );
+    }
+    Error::subclass(
+        ErrorClass::ZeroPW,
+        crate::pystr::os_error_class(error),
+        "io_error",
+        crate::pystr::os_error_strerror(error).unwrap_or_default(),
+    )
+}
+
+/// `threading.Thread.start()` failing: `RuntimeError("can't start new
+/// thread")`, escaping uncaught like [`escaped_os_error`].
+fn escaped_thread_start_error() -> Error {
+    Error::subclass(ErrorClass::ZeroPW, "RuntimeError", "internal_error", "")
+}
+
+/// Bind, chmod 0600, and listen with Python's explicit backlog.
 /// `BindingServer::start` sets the returned listener non-blocking right
 /// after this returns (finding G-R3-1/G-R4-1): `accept_loop` waits on it
 /// through a per-binding `mio::Poll` (event-driven, no fixed poll interval)
@@ -1708,18 +1736,15 @@ fn short_hex_id() -> String {
 /// every caller of `bind_and_listen` sees the same std type as before.
 /// Pinned by `idle_listener_backlog_caps_pending_connects_like_python`.
 fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
-    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
-    let addr = SockAddr::unix(path)
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
-    socket
-        .bind(&addr)
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None).map_err(|e| escaped_os_error(&e))?;
+    let addr = SockAddr::unix(path).map_err(|e| escaped_os_error(&e))?;
+    bind_private(&socket, &addr).map_err(|e| escaped_os_error(&e))?;
+    // `os.chmod(path, 0o600)` comes before `listen(16)` in Python.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| escaped_os_error(&e))?;
     socket
         .listen(SIGNER_LISTEN_BACKLOG)
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| Error::state("signer_socket_bind_failed").with_detail(e.to_string()))?;
+        .map_err(|e| escaped_os_error(&e))?;
     // `socket2::Socket -> UnixListener` directly is gated behind socket2's
     // "all" feature; going through the standard `OwnedFd` (which both
     // `Socket` and `UnixListener` convert with unconditionally) avoids
@@ -1727,6 +1752,33 @@ fn bind_and_listen(path: &Path) -> Result<UnixListener, Error> {
     let fd: std::os::fd::OwnedFd = socket.into();
     let listener = UnixListener::from(fd);
     Ok(listener)
+}
+
+/// `old_umask = os.umask(0o177); try: sock.bind(path) finally:
+/// os.umask(old_umask)`: the socket file never exists with a mode wider than
+/// 0600.
+///
+/// Linux derives the new socket inode's mode from the (unbound) socket's own
+/// inode mode masked by the umask (`unix_bind_bsd`: `S_IFSOCK |
+/// (SOCK_INODE(sock)->i_mode & ~current_umask())`), so a safe `fchmod(fd,
+/// 0o600)` before `bind` creates the file at 0600 atomically without
+/// touching process-wide state (measured: 0600 under umask 000, 022 and
+/// 077; a plain bind under umask 022 gives 0755). Darwin rejects `fchmod`
+/// on a socket (`EINVAL`) and always creates the file at `0777 & ~umask`,
+/// so there this narrows the process umask around `bind` exactly like
+/// Python does, with `rustix`'s safe `umask` wrapper.
+#[cfg(target_os = "linux")]
+fn bind_private(socket: &Socket, addr: &SockAddr) -> std::io::Result<()> {
+    rustix::fs::fchmod(socket, rustix::fs::Mode::from_raw_mode(0o600))?;
+    socket.bind(addr)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bind_private(socket: &Socket, addr: &SockAddr) -> std::io::Result<()> {
+    let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o177));
+    let bound = socket.bind(addr);
+    rustix::process::umask(previous);
+    bound
 }
 
 // ---------------------------------------------------------------------------
@@ -2067,6 +2119,49 @@ mod tests {
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
         std::fs::remove_dir_all(&candidate).unwrap();
+    }
+
+    /// Python's `os.umask(0o177)` around `bind` means the socket file is
+    /// created at 0600 -- there is no moment where it exists wider. Checked
+    /// on the file `bind_private` leaves BEFORE `bind_and_listen`'s own
+    /// `chmod`; a plain `bind` under the usual 022 umask creates 0755.
+    #[test]
+    fn bind_private_creates_the_socket_file_at_0600_before_any_chmod() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("probe.sock");
+        let socket = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        bind_private(&socket, &SockAddr::unix(&path).unwrap()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600, "socket file mode right after bind: {mode:o}");
+        let plain = tmp.path().join("plain.sock");
+        let plain_socket = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        plain_socket.bind(&SockAddr::unix(&plain).unwrap()).unwrap();
+        let plain_mode = std::fs::metadata(&plain).unwrap().permissions().mode() & 0o7777;
+        assert_ne!(
+            plain_mode & 0o077,
+            0,
+            "a plain bind must be wider than 0600 here, or this test proves nothing"
+        );
+    }
+
+    /// The `OSError` escaping `_BindingServer.__init__` (here: binding inside
+    /// a directory that does not exist) surfaces like Python's: the CLI
+    /// mapping's `FileNotFoundError` shape, and an escaped built-in at the
+    /// server/tools boundary.
+    #[test]
+    fn bind_failure_is_the_escaping_python_os_error() {
+        let tmp = TempDir::new().unwrap();
+        let error = bind_and_listen(&tmp.path().join("missing").join("s.sock")).unwrap_err();
+        assert_eq!(
+            error.to_dict(),
+            json!({"error": "FileNotFoundError", "reason": "file_not_found"})
+        );
+        assert!(crate::gateway::is_escaped_builtin(&error));
+        let output = crate::oracle::python(&format!(
+            "import socket, os\ns = socket.socket(socket.AF_UNIX)\ntry:\n    s.bind({:?})\nexcept OSError as exc:\n    print(type(exc).__name__)\n",
+            tmp.path().join("missing").join("s.sock").to_string_lossy()
+        ));
+        assert_eq!(output.trim(), "FileNotFoundError");
     }
 
     // Regression test for finding G-3: the fallback branch's random
