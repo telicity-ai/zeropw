@@ -55,6 +55,29 @@ in the default run. Strict all-target compilation exposed test-only type
 errors in large vault-version literals and a team-version vector assertion.
 These are concrete failures being corrected, not a full-equivalence PASS.
 
+The complete isolated Linux matrix at `5eb19b6` then passed formatting,
+strict all-target Clippy, 540 default library tests, four separately selected
+signer probes, canonical-guard mutation controls, documentation tests, all
+1099 Python reference tests and 80 harness tests. Of 75 Rust integration
+targets, 73 passed. `gateway` failed on an incorrect hardcoded `int(1e300)`
+expectation; an actual CPython probe matched Rust's 301-digit value.
+`team_parity_gaps` failed because the typed connection loader rejected Python
+bool/integral-float version identities. CLI, native HTTP/SSH E2E and the data
+group passed. HEAD and source cleanliness were verified again after the run.
+The raw log and transfer evidence are retained outside the repository under
+`zeropw-parity-evidence-20261003/isolated-runner`.
+
+Subsequent candidates replace the replay expectation with the real Python
+ledger operation, preserve numeric connection-version spellings through
+roundtrip/update, and narrow eager snapshot validation for unknown and
+settings-only operations. Raw document version-order values are preserved
+until consumed. These bounded changes do not close other operation kinds'
+remaining eager checks, nonintegral/nonnumeric connection-version shapes,
+non-finite JSON representation, native macOS host aliases or final platform
+acceptance. A later test-fixture identifier regression was restored without
+relaxing its original failure assertions. Fresh candidate validation follows;
+the preceding matrix must not be relabeled as a PASS for those changes.
+
 At `f2091e8309cea8cc843020c3ee562bf106db4d7f`, hosted run
 [37041858065](https://github.com/handlecusion/zeropw/actions/runs/37041858065)
 passed the TLS, CLI and native E2E groups on Linux and macOS. Linux library

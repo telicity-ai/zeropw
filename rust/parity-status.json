@@ -3,8 +3,8 @@
   "baseline_sha": "9d91647afe255d827971a1787c7af89a7b2964b6",
   "inventory_source": "rust/DEVIATIONS.md",
   "inventory_source_sha256": "a93a9eaf57dd132ee99164db5d97488ed22028eff4ca6bc61d83d6b75a7b104e",
-  "candidate_sha": "dd7fdca48d580c88f24b2aabca0618f1a1d074b8",
-  "candidate_run": "https://github.com/handlecusion/zeropw/actions/runs/37048435634",
+  "candidate_sha": "5eb19b6793ab43a531b78ae385fb53ba20b7b447",
+  "candidate_run": null,
   "complete": false,
   "entries": [
     {
@@ -1173,15 +1173,56 @@
       "jobs_rejected": 18,
       "github_annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the Billing & plans section in your settings",
       "validation": "No product compilation or tests ran. Local cargo fmt and git diff --check passed before commit."
+    },
+    {
+      "sha": "5eb19b6793ab43a531b78ae385fb53ba20b7b447",
+      "environment": "Dedicated ARM64 Linux Lima VM, unprivileged parity user, no host mounts or administrator credentials",
+      "rust": "1.98.1",
+      "python": "3.12.14",
+      "result": "failed",
+      "library": {
+        "passed": 540,
+        "failed": 0,
+        "ignored": 4
+      },
+      "integration_targets": {
+        "total": 75,
+        "passed": 73,
+        "failed": [
+          "gateway",
+          "team_parity_gaps"
+        ]
+      },
+      "explicit_signer_probes": {
+        "passed": 4,
+        "failed": 0
+      },
+      "python_reference": {
+        "passed": 1099,
+        "failed": 0
+      },
+      "harness": {
+        "passed": 80,
+        "failed": 0
+      },
+      "checks_passed": [
+        "format",
+        "strict all-target Clippy",
+        "canonical guard mutation controls",
+        "documentation tests",
+        "Python compileall",
+        "unchanged HEAD and clean source after tests"
+      ],
+      "log": "isolated-runner/verification-5eb19b6.log",
+      "log_sha256": "762c4193ed06a0d044a531831e9198b1e1a293d1b310a0902554d41d5ed3f30b",
+      "limitations": "Linux only. Later fixes require their own revision-bound validation; no full-equivalence acceptance."
     }
   ],
   "next_candidate_changes": [
-    "Exact vault and credential versions through metadata, AAD, admin CLI, policy and revocations",
-    "Exact handle issuance and expiration for finite binary64 timestamps",
-    "SMTP encoded words, groups and domain literals with Python differential tests",
-    "Stored HTTP header iterable unpacking and Python string conversion",
-    "Strict canonical helper exemptions refreshed without permitting new bypasses",
-    "Python serve timeout diagnostics without relaxing signal-stop assertions"
+    "Replace incorrect hardcoded large replay status with actual Python RequestLedger.replay oracle",
+    "Preserve bool and integral-float connection secret_version representations and exact integer identity",
+    "Preserve raw snapshot version_order and defer selected category validation until access",
+    "Restore unchanged generation identifier in pre-existing malformed-secret fixture"
   ],
   "known_open_items": [
     "macOS SMTP native hostent aliases",
@@ -1189,6 +1230,9 @@
     "Python dictionary semantics for non-string public metadata keys",
     "Remaining numeric width, timestamp, fixture and persisted shape differences require source audit",
     "Team snapshot total drops numbers outside i64 during load and sums/subtracts in i128; exact Python sum and snapshot scheduling require correction",
-    "Nonfinite JSON values require a lossless value representation migration; see rust/pyjson-nonfinite-plan.md"
-  ]
+    "Nonfinite JSON values require a lossless value representation migration; see rust/pyjson-nonfinite-plan.md",
+    "Non-settings snapshot operations still use conservative eager document validation",
+    "Nonintegral or nonnumeric Connection.secret_version values still exceed the current typed representation"
+  ],
+  "candidate_execution": "isolated Lima VM zeropw-parity; ARM64 Linux; Actions disabled"
 }
