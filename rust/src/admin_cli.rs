@@ -1346,7 +1346,7 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     }
     let ver = ctx
         .vault
-        .resolve_version(&connection.secret_id, connection.secret_version.clone())?;
+        .resolve_version(&connection.secret_id, connection.secret_version_for_resolve()?)?;
     if let Some(version) = meta
         .versions
         .iter()
@@ -1632,7 +1632,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 .iter()
                 .filter(|c| {
                     c.secret_id == id
-                        && c.secret_version.as_ref() == Some(&version)
+                        && c.secret_version.as_ref().is_some_and(|v| v.eq_int(&version))
                         && c.status == "active"
                 })
                 .map(|c| c.id.clone())
@@ -1869,7 +1869,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let meta = ctx.vault.get_meta(&stamped.secret_id)?;
             let resolved = ctx
                 .vault
-                .resolve_version(&stamped.secret_id, stamped.secret_version.clone())
+                .resolve_version(&stamped.secret_id, stamped.secret_version_for_resolve()?)
                 .ok();
             if let Some(v) = meta.versions.iter().find(|v| {
                 resolved

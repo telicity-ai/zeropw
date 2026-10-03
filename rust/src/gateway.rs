@@ -3330,7 +3330,10 @@ impl<'a> Relay<'a> {
         let secret = match self
             .ctx
             .vault
-            .secret_for_trusted_use(&connection.secret_id, connection.secret_version.clone())
+            .secret_for_trusted_use(
+                &connection.secret_id,
+                connection.secret_version_for_trusted_use()?,
+            )
         {
             Ok(s) => s,
             Err(e)

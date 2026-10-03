@@ -486,27 +486,80 @@ fn python_int_coerce(v: &Value) -> Option<i64> {
     }
 }
 
-/// Represent the stored `Connection.secret_version` values that compare and
-/// hash equal to a Python integer version key. `Connection.from_dict` leaves
-/// this field untyped, so `True` and integral floats are valid successful
-/// inputs; Python dictionary lookup treats them as the integer keys `1` and
-/// `int(float)` respectively. Do not apply general `int()` coercion here:
-/// `1.5` is a valid stored Python value too, but it does not identify version
-/// `1` and remains outside this typed `Option<PyInt>` representation (the
-/// documented untyped-field gap), so loading it still fails closed.
-fn connection_secret_version(v: &Value) -> Option<PyInt> {
-    match v {
-        Value::Bool(_) => PyInt::from_python_int(v),
-        Value::Number(number) if number_is_python_int(number) => PyInt::from_json_integer(v),
-        Value::Number(number) => {
-            let value = number.as_f64()?;
-            if value.is_finite() && value.fract() == 0.0 {
-                PyInt::coerce_from_json(v)
-            } else {
-                None
-            }
+/// Python's `Connection.secret_version`: `data.get("secret_version")` with
+/// no validation anywhere, so any non-`None` JSON value (an `int` of any
+/// magnitude, a bool, a float, a string, a list, a dict) is stored and kept
+/// verbatim. `None` is represented by the surrounding `Option`.
+///
+/// Equality is Python's `==` ([`python_value_eq`]: `1 == 1.0 == True`, a
+/// string never equals an `int`, containers compare structurally), and
+/// serialization is the exact stored JSON value.
+#[derive(Clone, Debug)]
+pub struct SecretVersion(Value);
+
+impl SecretVersion {
+    /// The stored value, or `None` for JSON `null` (Python `None`).
+    pub fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Null => None,
+            other => Some(SecretVersion(other.clone())),
         }
-        _ => None,
+    }
+
+    /// The exact stored JSON value (what `Connection.to_dict()` writes and
+    /// what `_resolved_credential_version` returns).
+    pub fn value(&self) -> &Value {
+        &self.0
+    }
+
+    /// The Python `int` this value compares equal to, if any: an integer
+    /// (any magnitude), a bool, or an integral float. A non-integral float,
+    /// a string or a container never equals any vault version number.
+    pub fn as_int(&self) -> Option<PyInt> {
+        match &self.0 {
+            Value::Bool(_) => PyInt::from_python_int(&self.0),
+            Value::Number(number) if number_is_python_int(number) => {
+                PyInt::from_json_integer(&self.0)
+            }
+            Value::Number(number) => {
+                let value = number.as_f64()?;
+                if value.is_finite() && value.fract() == 0.0 {
+                    PyInt::coerce_from_json(&self.0)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Python `secret_version == version` against an `int` version.
+    pub fn eq_int(&self, version: &PyInt) -> bool {
+        self.as_int().as_ref() == Some(version)
+    }
+}
+
+impl PartialEq for SecretVersion {
+    fn eq(&self, other: &Self) -> bool {
+        python_value_eq(&self.0, &other.0)
+    }
+}
+
+impl From<PyInt> for SecretVersion {
+    fn from(value: PyInt) -> Self {
+        SecretVersion(value.value())
+    }
+}
+
+impl From<i64> for SecretVersion {
+    fn from(value: i64) -> Self {
+        SecretVersion(json!(value))
+    }
+}
+
+impl serde::Serialize for SecretVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
     }
 }
 
@@ -2009,11 +2062,9 @@ pub struct Connection {
     /// `"http"` or `"ssh"`.
     pub kind: String,
     pub secret_id: String,
-    pub secret_version: Option<PyInt>,
-    // Original JSON spelling for Python numeric values that identify the
-    // same integer version but must survive `to_dict()` unchanged (`True`,
-    // `1.0`). Semantic comparisons use `secret_version`, never this field.
-    raw_secret_version: Option<Value>,
+    /// The pinned vault version, kept verbatim (see [`SecretVersion`]);
+    /// `None` follows the secret's active version.
+    pub secret_version: Option<SecretVersion>,
     pub description: String,
     pub http_target: Option<HttpTarget>,
     pub http_auth: Option<HttpAuth>,
@@ -2163,8 +2214,7 @@ impl Connection {
             service: service.into(),
             kind,
             secret_id: secret_id.into(),
-            secret_version,
-            raw_secret_version: None,
+            secret_version: secret_version.map(SecretVersion::from),
             description: description.into(),
             http_target,
             http_auth,
@@ -2191,10 +2241,7 @@ impl Connection {
                 .secret_id
                 .clone()
                 .unwrap_or_else(|| self.secret_id.clone()),
-            changes
-                .secret_version
-                .clone()
-                .unwrap_or_else(|| self.secret_version.clone()),
+            None,
             changes
                 .description
                 .clone()
@@ -2224,11 +2271,10 @@ impl Connection {
             self.created_at.clone(),
             self.updated_at.clone(),
         )?;
-        if changes.secret_version.is_none() {
-            updated
-                .raw_secret_version
-                .clone_from(&self.raw_secret_version);
-        }
+        updated.secret_version = match &changes.secret_version {
+            Some(version) => version.clone().map(SecretVersion::from),
+            None => self.secret_version.clone(),
+        };
         Ok(updated)
     }
 
@@ -2257,18 +2303,46 @@ impl Connection {
         Ok(updated)
     }
 
+    /// The `version` argument `vault.resolve_version(secret_id,
+    /// connection.secret_version)` receives, narrowed to the
+    /// `Option<PyInt>` `vault.rs` accepts. Python's `resolve_version`
+    /// matches `item.version == version` against integer vault versions, so
+    /// a value equal to an `int` (an integer, a bool, an integral float)
+    /// resolves like that `int`; any other stored shape never matches and
+    /// raises `NotFound("secret_version_not_found")`.
+    pub fn secret_version_for_resolve(&self) -> Result<Option<PyInt>, Error> {
+        match &self.secret_version {
+            None => Ok(None),
+            Some(version) => version
+                .as_int()
+                .map(Some)
+                .ok_or_else(|| Error::not_found("secret_version_not_found")),
+        }
+    }
+
+    /// The `version` argument `vault.secret_for_trusted_use(secret_id,
+    /// connection.secret_version)` receives. Beyond
+    /// [`Connection::secret_version_for_resolve`], Python then looks the
+    /// record up by `str(resolved)`, where `resolved` is the stored value
+    /// itself: only a plain integer finds its record; `True`/`1.0` resolve
+    /// but `str()` to `"True"`/`"1.0"` and raise an uncaught `KeyError`
+    /// (PORTING.md §3.5: `state_corrupt`, which every trusted-use caller
+    /// already maps to its credential-unavailable refusal).
+    pub fn secret_version_for_trusted_use(&self) -> Result<Option<PyInt>, Error> {
+        let resolved = self.secret_version_for_resolve()?;
+        match self.secret_version.as_ref().map(SecretVersion::value) {
+            Some(Value::Number(n)) if number_is_python_int(n) => Ok(resolved),
+            Some(_) => Err(Error::state("state_corrupt").with_detail("vault")),
+            None => Ok(None),
+        }
+    }
+
     /// `Connection.to_dict` (`dataclasses.asdict`).
     pub fn to_value(&self) -> Value {
         let secret_version = self
-            .raw_secret_version
+            .secret_version
             .as_ref()
-            .filter(|raw| connection_secret_version(raw).as_ref() == self.secret_version.as_ref())
-            .cloned()
-            .unwrap_or_else(|| {
-                self.secret_version
-                    .as_ref()
-                    .map_or(Value::Null, PyInt::value)
-            });
+            .map_or(Value::Null, |v| v.value().clone());
         json!({
             "id": self.id, "project": self.project, "environment": self.environment,
             "service": self.service, "kind": self.kind, "secret_id": self.secret_id,
@@ -2340,24 +2414,8 @@ impl Connection {
         let secret_id = required_str("secret_id", &mut corrupt)?;
         // Kwarg order 7-8: secret_version, description (both untyped in
         // Python -- see the doc comment above).
-        let mut raw_secret_version = None;
-        let secret_version = match obj.get("secret_version") {
-            None | Some(Value::Null) => None,
-            Some(v) => match connection_secret_version(v) {
-                Some(n) => {
-                    if matches!(v, Value::Bool(_))
-                        || matches!(v, Value::Number(number) if !number_is_python_int(number))
-                    {
-                        raw_secret_version = Some(v.clone());
-                    }
-                    Some(n)
-                }
-                None => {
-                    corrupt = true;
-                    None
-                }
-            },
-        };
+        // `data.get("secret_version")`: any JSON shape, kept verbatim.
+        let secret_version = obj.get("secret_version").and_then(SecretVersion::from_value);
         let description = match obj.get("description") {
             None => String::new(),
             Some(Value::String(s)) => s.clone(),
@@ -2419,7 +2477,7 @@ impl Connection {
             service,
             kind,
             secret_id,
-            secret_version,
+            None,
             description,
             http_target,
             http_auth,
@@ -2431,7 +2489,7 @@ impl Connection {
             created_at,
             updated_at,
         )?;
-        connection.raw_secret_version = raw_secret_version;
+        connection.secret_version = secret_version;
         if corrupt {
             return Err(bad());
         }
@@ -3794,7 +3852,7 @@ impl<'a> Policy<'a> {
         vault_doc: Option<&Map<String, Value>>,
     ) -> Result<Option<Value>, Error> {
         if let Some(v) = &connection.secret_version {
-            return Ok(Some(v.value()));
+            return Ok(Some(v.value().clone()));
         }
         let owned;
         let doc = match vault_doc {

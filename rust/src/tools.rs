@@ -714,7 +714,7 @@ pub fn exec(
         )?;
         let credential = ctx
             .vault
-            .secret_for_trusted_use(&known.secret_id, known.secret_version.clone())
+            .secret_for_trusted_use(&known.secret_id, known.secret_version_for_trusted_use()?)
             .map_err(|_| Error::state("credential_unavailable"))?;
         if profile_env_carries_vault_value(ctx, &known)? {
             refuse_exec(
@@ -798,7 +798,7 @@ pub fn exec(
                 .ok_or_else(|| Error::unsupported("ssh_signer_unavailable"))?;
             let version = ctx
                 .vault
-                .resolve_version(&known.secret_id, known.secret_version.clone())
+                .resolve_version(&known.secret_id, known.secret_version_for_resolve()?)
                 .map_err(|_| Error::state("credential_unavailable"))?;
             let metadata = ctx
                 .vault

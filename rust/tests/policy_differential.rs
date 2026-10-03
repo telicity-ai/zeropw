@@ -868,25 +868,6 @@ fn is_state_corrupt(o: &Outcome) -> bool {
 }
 
 const NAMED_EXCEPTIONS: &[NamedException] = &[
-    NamedException {
-        description: "DEVIATIONS.md row (policy, secret_version): \
-            `Connection.secret_version` is stored completely untyped in \
-            Python (`data.get(\"secret_version\")`, no validation at all); \
-            `Connection::from_value` now preserves JSON integers at arbitrary \
-            precision, but still cannot represent Python's successful untyped \
-            non-integer values. JSON `null` and every integer magnitude agree.",
-        applies: |doc, path, missing, label, _op| {
-            doc == "connections"
-                && !missing
-                && path.last().map(String::as_str) == Some("secret_version")
-                && !matches!(
-                    label,
-                    "huge_int" | "negative_one" | "i64_max" | "i64_min" | "two_pow_53_plus_1"
-                )
-        },
-        judge: |py, rust| matches!(py, Outcome::Ok(_)) && is_state_corrupt(rust),
-        skip_doc_compare: true,
-    },
     // This `huge_int`-only exception is listed *before* the (removed, round
     // 6) general Grant-field one used to sit so `matching_exception`'s
     // first-match lookup would reach it for `expires_at` at that specific

@@ -1362,10 +1362,8 @@ probe("secret_version_int", d, lambda c: c.secret_version)
             .is(zeropw::errors::ErrorClass::StateError)
     );
 
-    // `secret_version`: stored untyped by Python. The plain-integer case
-    // agrees exactly; the string case is the documented residual (Rust's
-    // typed `Option<PyInt>` cannot hold it, so `state_corrupt` is returned
-    // where Python would silently succeed -- see `DEVIATIONS.md`).
+    // `secret_version`: stored untyped by Python, kept verbatim for every
+    // shape (the differential form is `rust/tests/policy_parity_close.rs`).
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!(5);
     assert_eq!(
@@ -1377,18 +1375,15 @@ probe("secret_version_int", d, lambda c: c.secret_version)
     d["secret_version"] = serde_json::from_str("1000000000000000000000000000000").unwrap();
     let connection = Connection::from_value(&d).unwrap();
     assert_eq!(
-        connection.secret_version.as_ref().unwrap().to_string(),
+        connection.secret_version.as_ref().unwrap().value().to_string(),
         "1000000000000000000000000000000"
     );
     assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
 
     let mut d = http_doc();
     d["secret_version"] = serde_json::json!("abc");
-    assert!(
-        Connection::from_value(&d)
-            .unwrap_err()
-            .is(zeropw::errors::ErrorClass::StateError)
-    );
+    let connection = Connection::from_value(&d).unwrap();
+    assert_eq!(connection.to_value()["secret_version"], d["secret_version"]);
 }
 
 #[test]

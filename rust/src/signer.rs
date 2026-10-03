@@ -828,7 +828,7 @@ impl BindingServer {
         let version = self
             .ctx
             .vault
-            .resolve_version(&conn.secret_id, conn.secret_version.clone())?;
+            .resolve_version(&conn.secret_id, conn.secret_version_for_resolve()?)?;
         let meta = self.ctx.vault.get_meta(&conn.secret_id)?;
         for item in &meta.versions {
             if version.equals_integer(&item.version) {
@@ -1194,7 +1194,7 @@ impl BindingServer {
         let pem = match self
             .ctx
             .vault
-            .secret_for_trusted_use(&conn.secret_id, conn.secret_version.clone())
+            .secret_for_trusted_use(&conn.secret_id, conn.secret_version_for_trusted_use()?)
         {
             Ok(v) => v,
             Err(_) => {
