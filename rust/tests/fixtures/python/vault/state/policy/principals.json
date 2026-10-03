@@ -1,0 +1,8 @@
+{
+  "agent-1": {
+    "created_at": "2023-11-14T22:13:20Z",
+    "runtime": "default",
+    "status": "active",
+    "token_hash": "72d3e2c8f99f24af21b48a08e86a79e36c230f42e87ce993871a94331336efee"
+  }
+}

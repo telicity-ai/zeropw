@@ -1,0 +1,953 @@
+{
+ "parse": [
+  {
+   "argv": [],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: the following arguments are required: --state-dir, COMMAND\n"
+   ]
+  },
+  {
+   "argv": [
+    "-h"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    0,
+    "usage: prog [-h] --state-dir DIR COMMAND ...\n\nA tool (trusted; JSON output).\n\npositional arguments:\n  COMMAND\n    put            store a new secret version; value via --value-file or\n                   --stdin only\n    join           dial the inviter, prove the invite, and join\n\noptions:\n  -h, --help       show this help message and exit\n  --state-dir DIR  trusted state directory (0700)\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "-h"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    0,
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\n\nstore a new secret version; value via --value-file or --stdin only\n\noptions:\n  -h, --help            show this help message and exit\n  --id ID\n  --kind {api_key,password}\n  --version VERSION\n  --staged              store without activating\n  --value-file PATH     read the secret value from this file (delete it\n                        afterwards)\n  --stdin               read the secret value from standard input\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: the following arguments are required: --id, --kind\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "nope",
+    "--stdin"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --kind: invalid choice: 'nope' (choose from api_key, password)\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: one of the arguments --value-file --stdin is required\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--value-file",
+    "f"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --value-file: not allowed with argument --stdin\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--version",
+    " 5_0"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"put\"], [\"id\", \"x\"], [\"kind\", \"api_key\"], [\"staged\", false], [\"state_dir\", \"s\"], [\"stdin\", true], [\"value_file\", null], [\"version\", 50]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--version",
+    "abc"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --version: invalid int value: 'abc'\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "-x",
+    "--kind",
+    "api_key",
+    "--stdin"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --id: expected one argument\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind=api_key",
+    "--stdin",
+    "--value",
+    "v"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"put\"], [\"id\", \"x\"], [\"kind\", \"api_key\"], [\"staged\", false], [\"state_dir\", \"s\"], [\"stdin\", true], [\"value_file\", null], [\"version\", null]] ['--value', 'v']\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin=1"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --stdin: ignored explicit argument '1'\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog join [-h] [--project PROJECT] invite\nprog join: error: the following arguments are required: invite\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "a",
+    "b"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"a\"], [\"project\", null], [\"state_dir\", \"s\"]] ['b']\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "--",
+    "-a"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"-a\"], [\"project\", null], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "-5"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"-5\"], [\"project\", null], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "x",
+    "-hfoo"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    0,
+    "usage: prog join [-h] [--project PROJECT] invite\n\npositional arguments:\n  invite\n\noptions:\n  -h, --help         show this help message and exit\n  --project PROJECT  local project name (default: derived from the inviter)\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "bogus"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: argument COMMAND: invalid choice: 'bogus' (choose from put, join)\n"
+   ]
+  },
+  {
+   "argv": [
+    "put"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: the following arguments are required: --id, --kind\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: argument --state-dir: expected one argument\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir=s",
+    "join",
+    "a b",
+    "--project",
+    ""
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"a b\"], [\"project\", \"\"], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state",
+    "s",
+    "join",
+    "a",
+    "--proj",
+    "p"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: argument COMMAND: invalid choice: 's' (choose from put, join)\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--i",
+    "x",
+    "--k",
+    "api_key",
+    "--st"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: the following arguments are required: --id, --kind\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--s"
+   ],
+   "columns": 80,
+   "abbrev": false,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: one of the arguments --value-file --stdin is required\n"
+   ]
+  },
+  {
+   "argv": [],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: the following arguments are required: --state-dir, COMMAND\n"
+   ]
+  },
+  {
+   "argv": [
+    "-h"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    0,
+    "usage: prog [-h] --state-dir DIR COMMAND ...\n\nA tool (trusted; JSON output).\n\npositional arguments:\n  COMMAND\n    put            store a new secret version; value via --value-file or\n                   --stdin only\n    join           dial the inviter, prove the invite, and join\n\noptions:\n  -h, --help       show this help message and exit\n  --state-dir DIR  trusted state directory (0700)\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "-h"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    0,
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\n\nstore a new secret version; value via --value-file or --stdin only\n\noptions:\n  -h, --help            show this help message and exit\n  --id ID\n  --kind {api_key,password}\n  --version VERSION\n  --staged              store without activating\n  --value-file PATH     read the secret value from this file (delete it\n                        afterwards)\n  --stdin               read the secret value from standard input\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: the following arguments are required: --id, --kind\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "nope",
+    "--stdin"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --kind: invalid choice: 'nope' (choose from api_key, password)\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: one of the arguments --value-file --stdin is required\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--value-file",
+    "f"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --value-file: not allowed with argument --stdin\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--version",
+    " 5_0"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"put\"], [\"id\", \"x\"], [\"kind\", \"api_key\"], [\"staged\", false], [\"state_dir\", \"s\"], [\"stdin\", true], [\"value_file\", null], [\"version\", 50]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin",
+    "--version",
+    "abc"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --version: invalid int value: 'abc'\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "-x",
+    "--kind",
+    "api_key",
+    "--stdin"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --id: expected one argument\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind=api_key",
+    "--stdin",
+    "--value",
+    "v"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --value-file: not allowed with argument --stdin\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--stdin=1"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: argument --stdin: ignored explicit argument '1'\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog join [-h] [--project PROJECT] invite\nprog join: error: the following arguments are required: invite\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "a",
+    "b"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"a\"], [\"project\", null], [\"state_dir\", \"s\"]] ['b']\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "--",
+    "-a"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"-a\"], [\"project\", null], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "-5"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"-5\"], [\"project\", null], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "join",
+    "x",
+    "-hfoo"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    0,
+    "usage: prog join [-h] [--project PROJECT] invite\n\npositional arguments:\n  invite\n\noptions:\n  -h, --help         show this help message and exit\n  --project PROJECT  local project name (default: derived from the inviter)\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "bogus"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: argument COMMAND: invalid choice: 'bogus' (choose from put, join)\n"
+   ]
+  },
+  {
+   "argv": [
+    "put"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: the following arguments are required: --id, --kind\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog [-h] --state-dir DIR COMMAND ...\nprog: error: argument --state-dir: expected one argument\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir=s",
+    "join",
+    "a b",
+    "--project",
+    ""
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"a b\"], [\"project\", \"\"], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state",
+    "s",
+    "join",
+    "a",
+    "--proj",
+    "p"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    null,
+    "[[\"command\", \"join\"], [\"invite\", \"a\"], [\"project\", \"p\"], [\"state_dir\", \"s\"]] []\n",
+    ""
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--i",
+    "x",
+    "--k",
+    "api_key",
+    "--st"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: ambiguous option: --st could match --staged, --stdin\n"
+   ]
+  },
+  {
+   "argv": [
+    "--state-dir",
+    "s",
+    "put",
+    "--id",
+    "x",
+    "--kind",
+    "api_key",
+    "--s"
+   ],
+   "columns": 80,
+   "abbrev": true,
+   "expected": [
+    2,
+    "",
+    "usage: prog put [-h] --id ID --kind {api_key,password} [--version VERSION]\n                [--staged] (--value-file PATH | --stdin)\nprog put: error: ambiguous option: --s could match --staged, --stdin\n"
+   ]
+  }
+ ],
+ "wrap": [
+  {
+   "text": "start team sync on a separate LAN/VPN-facing socket (default: team sync off)",
+   "width": 11,
+   "lines": [
+    "start team",
+    "sync on a",
+    "separate",
+    "LAN/VPN-",
+    "facing",
+    "socket",
+    "(default:",
+    "team sync",
+    "off)"
+   ]
+  },
+  {
+   "text": "open an incident: lock down the given scope (docs/compromise-response.md §4)",
+   "width": 11,
+   "lines": [
+    "open an",
+    "incident:",
+    "lock down",
+    "the given",
+    "scope (docs",
+    "/compromise",
+    "-",
+    "response.md",
+    "§4)"
+   ]
+  },
+  {
+   "text": "a very-long-hyphenated-compound-word-that-must-break and x--y em -- dash --foo",
+   "width": 11,
+   "lines": [
+    "a very-",
+    "long-",
+    "hyphenated-",
+    "compound-",
+    "word-that-",
+    "must-break",
+    "and x--y em",
+    "-- dash",
+    "--foo"
+   ]
+  },
+  {
+   "text": "supercalifragilisticexpialidocious-and-more-words-here ok",
+   "width": 11,
+   "lines": [
+    "supercalifr",
+    "agilisticex",
+    "pialidociou",
+    "s-and-more-",
+    "words-here",
+    "ok"
+   ]
+  },
+  {
+   "text": "30m, 1h, 3600s, 86400 (default: 1h; max 30d)",
+   "width": 11,
+   "lines": [
+    "30m, 1h,",
+    "3600s,",
+    "86400",
+    "(default:",
+    "1h; max",
+    "30d)"
+   ]
+  },
+  {
+   "text": "start team sync on a separate LAN/VPN-facing socket (default: team sync off)",
+   "width": 22,
+   "lines": [
+    "start team sync on a",
+    "separate LAN/VPN-",
+    "facing socket",
+    "(default: team sync",
+    "off)"
+   ]
+  },
+  {
+   "text": "open an incident: lock down the given scope (docs/compromise-response.md §4)",
+   "width": 22,
+   "lines": [
+    "open an incident: lock",
+    "down the given scope",
+    "(docs/compromise-",
+    "response.md §4)"
+   ]
+  },
+  {
+   "text": "a very-long-hyphenated-compound-word-that-must-break and x--y em -- dash --foo",
+   "width": 22,
+   "lines": [
+    "a very-long-",
+    "hyphenated-compound-",
+    "word-that-must-break",
+    "and x--y em -- dash",
+    "--foo"
+   ]
+  },
+  {
+   "text": "supercalifragilisticexpialidocious-and-more-words-here ok",
+   "width": 22,
+   "lines": [
+    "supercalifragilisticex",
+    "pialidocious-and-more-",
+    "words-here ok"
+   ]
+  },
+  {
+   "text": "30m, 1h, 3600s, 86400 (default: 1h; max 30d)",
+   "width": 22,
+   "lines": [
+    "30m, 1h, 3600s, 86400",
+    "(default: 1h; max 30d)"
+   ]
+  },
+  {
+   "text": "start team sync on a separate LAN/VPN-facing socket (default: team sync off)",
+   "width": 54,
+   "lines": [
+    "start team sync on a separate LAN/VPN-facing socket",
+    "(default: team sync off)"
+   ]
+  },
+  {
+   "text": "open an incident: lock down the given scope (docs/compromise-response.md §4)",
+   "width": 54,
+   "lines": [
+    "open an incident: lock down the given scope",
+    "(docs/compromise-response.md §4)"
+   ]
+  },
+  {
+   "text": "a very-long-hyphenated-compound-word-that-must-break and x--y em -- dash --foo",
+   "width": 54,
+   "lines": [
+    "a very-long-hyphenated-compound-word-that-must-break",
+    "and x--y em -- dash --foo"
+   ]
+  },
+  {
+   "text": "supercalifragilisticexpialidocious-and-more-words-here ok",
+   "width": 54,
+   "lines": [
+    "supercalifragilisticexpialidocious-and-more-words-here",
+    "ok"
+   ]
+  },
+  {
+   "text": "30m, 1h, 3600s, 86400 (default: 1h; max 30d)",
+   "width": 54,
+   "lines": [
+    "30m, 1h, 3600s, 86400 (default: 1h; max 30d)"
+   ]
+  }
+ ]
+}

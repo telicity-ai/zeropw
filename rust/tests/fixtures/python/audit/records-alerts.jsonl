@@ -1,0 +1,4 @@
+{"alert":"secret_reveal","caller":"admin","connection":"gh","detail":"administrator revealed a single secret version","event":"secret_reveal","reason":null,"ts":"2023-11-14T22:13:20Z"}
+{"alert":"revoked_use_attempt","caller":"agent-1","connection":null,"detail":"use attempted under a revoked, stale, or stopped grant","event":"http_relay","reason":"grant_revoked","ts":"2023-11-14T22:13:20Z"}
+{"alert":"team_incident_received","caller":"dev-2","connection":"gh","detail":"a shared environment received an incident summary; check rotation flags","event":"team_incident_received","reason":null,"ts":"2023-11-14T22:13:20Z"}
+{"alert":"intrusion","caller":"admin","connection":null,"detail":"incident opened: scope=connection reason=unknown","event":"incident_open","reason":null,"ts":"2023-11-14T22:13:20Z"}

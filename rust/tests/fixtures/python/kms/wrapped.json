@@ -1,0 +1,8 @@
+{
+  "dek_hex": "30313233343536373839303132333435363738393031323334353637383930",
+  "wrapped": {
+    "key_id": "oracle-kms",
+    "nonce": "Z/jYSkhPOxesdcbP",
+    "ciphertext": "FA43iqQnJjofj9M6J1JEZVkn0UC5TdMJ/R0d7Rnn/swxuSWzl2Rq3LP6nMcg7OA="
+  }
+}
