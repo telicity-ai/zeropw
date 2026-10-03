@@ -52,38 +52,28 @@
 //!   exactly (finding G-R5-1): `std`'s `UnixListener::bind` has no safe way
 //!   to request a specific backlog (only the OS default, 128 on this
 //!   platform), so this port builds the socket with the audited
-//!   `socket2` crate -- the same "audited safe wrapper" precedent already
-//!   used for `mio` below -- calls its safe `Socket::listen(16)`, then
+//!   `socket2` crate (an audited safe wrapper) -- calls its safe
+//!   `Socket::listen(16)`, then
 //!   converts it into a `std::os::unix::net::UnixListener` before handing
 //!   it to the rest of this module exactly as `UnixListener::bind` used to.
 //!   Pinned by `idle_listener_backlog_caps_pending_connects_like_python`.
-//! * Python's accept loop blocks in `accept()` with a 0.2s `settimeout`
-//!   purely so `close()` can eventually notice `self._closed`; a genuine
-//!   connection is always served the instant it arrives. `std` has no
-//!   equivalent "blocking accept with a timeout" for `UnixListener`, so this
-//!   port makes the listener non-blocking and waits for it with a real
-//!   OS-level readiness notification (`mio::Poll`, an epoll/kqueue wrapper)
-//!   instead of a fixed poll interval: `accept_loop` blocks in
-//!   `Poll::poll(..., None)` -- no timeout, no busy loop -- until either the
-//!   listener becomes readable or `close()` signals a [`mio::Waker`]
-//!   registered on the same `Poll`. See `BindingServer::close` and
-//!   `accept_loop` for why this needs no durable, connectable "wakeup" alias
-//!   for the socket (finding G-R3-1, still withdrawn) and no fixed poll
-//!   interval (finding G-R4-1, replacing round 3's 1ms busy-poll, which a
-//!   re-measurement against the real Python signer showed was both slower
-//!   per accept and far more idle-CPU-hungry than Python -- see
-//!   `DEVIATIONS.md` for the measured numbers).
-//! * That same `mio::Poll`/[`mio::Waker`] pair costs 2 extra fds per binding
-//!   beyond the listening socket itself (its own kqueue/epoll fd, plus a
-//!   second kqueue-based fd `Waker::new` allocates on this platform) --
-//!   3 fds/binding where Python's `_BindingServer.__init__` opens exactly 1
-//!   (`self._sock`). Per-*client* cost matches Python exactly (1 fd, not 2:
-//!   finding G-R6-1 fixed a `try_clone()`-based duplicate). See
-//!   `DEVIATIONS.md` for the measured ratios and the `RLIMIT_NOFILE` sweep.
+//! * Python's accept loop calls `accept()` on a socket with a 0.2s
+//!   `settimeout`, which CPython implements as `poll(2)` on the listening
+//!   descriptor (up to 0.2s) followed by `accept()`; `close()` closes the
+//!   socket and the loop notices `self._closed` within that bound. This port
+//!   does the same with safe `rustix::event::poll` on the one listening
+//!   descriptor (1 fd per binding, as in Python; a pending connection wakes
+//!   it at once). The accept thread holds a reference to the listener while
+//!   it polls, so `close()` cannot close the descriptor underneath it; on
+//!   Linux `close()` shuts the listening socket down, which refuses new
+//!   connections and wakes the poll immediately, exactly as Python's closed
+//!   socket refuses them; on Darwin, where `shutdown` of a listening socket
+//!   fails, a connection arriving during the (at most 0.2s) wait for the
+//!   accept thread is queued and then reset rather than refused. No durable,
+//!   connectable "wakeup" alias for the socket exists (finding G-R3-1).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -93,8 +83,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mio::unix::SourceFd;
-use mio::{Events, Interest, Poll, Token, Waker};
 use serde_json::{Value, json};
 use socket2::{Domain, SockAddr, Socket, Type};
 
@@ -117,26 +105,18 @@ const SIGNER_LISTEN_BACKLOG: i32 = 16;
 const CLIENT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on waiting for the accept thread to notice `closed` and return, the
-/// same 2s Python gives `self._accept_thread.join(timeout=2)`. `close()`
-/// wakes `accept_loop` with [`mio::Waker::wake`] (finding G-R4-1), which
-/// interrupts a blocked `Poll::poll` immediately rather than relying on a
-/// poll interval, so the accept thread should always notice essentially at
-/// once; this bound is defence in depth rather than the normal path (e.g. a
-/// wedged OS scheduler decision outside this process's control).
+/// same 2s Python gives `self._accept_thread.join(timeout=2)`.
 const ACCEPT_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-/// `Token` identifying the listening socket's readiness registration on this
-/// binding's `mio::Poll` (finding G-R4-1).
-const LISTENER_TOKEN: Token = Token(0);
-/// `Token` identifying the [`mio::Waker`] registration `close()` uses to
-/// interrupt a blocked `accept_loop` -- the event-driven replacement for
-/// round 3's fixed 1ms busy-poll (finding G-R4-1: a re-measurement against
-/// the real Python signer showed that poll interval regressed both
-/// per-connection accept latency (~7x slower than Python, not "far below" as
-/// a prior version of this module claimed) and idle CPU (each live binding's
-/// accept thread woke 700-1000 times/second forever, 25-70x Python's own
-/// idle CPU depending on binding count -- see `DEVIATIONS.md` for the full
-/// measurements).
-const WAKE_TOKEN: Token = Token(1);
+/// `self._sock.settimeout(0.2)`: CPython waits for the listening socket with
+/// `poll(2)` for at most this long per `accept()` call, so the accept thread
+/// notices `self._closed` within 0.2s. [`BindingServer::accept_loop`] makes
+/// the same bounded `poll` (safe `rustix::event::poll`) on the one listening
+/// descriptor -- no extra descriptors, no fixed sleep: a pending connection
+/// wakes it immediately.
+const ACCEPT_POLL_TIMEOUT: rustix::event::Timespec = rustix::event::Timespec {
+    tv_sec: 0,
+    tv_nsec: 200_000_000,
+};
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[sshwire::SESSION_BIND_EXTENSION];
 pub const SSH_ED25519: &str = "ssh-ed25519";
@@ -275,25 +255,14 @@ impl Write for SharedStream {
 struct BindingServer {
     ctx: Arc<Context>,
     binding: SignerBinding,
-    /// The listening socket, non-blocking (finding G-R3-1/G-R4-1:
-    /// `accept_loop` waits on it through `mio::Poll` rather than blocking in
-    /// `accept()` directly, so no durable wakeup alias is ever needed to
-    /// interrupt it). Wrapped so `close()` can `take()` and drop it,
-    /// releasing the listening fd immediately and independently of whether
-    /// some other `Arc<BindingServer>` clone (e.g. a client thread detached
-    /// past its join deadline) keeps the rest of this struct alive (finding
-    /// G-R3-3) -- Python's `close()` releases its listening fd
-    /// unconditionally as its second statement (`self._sock.close()`),
-    /// before any joins.
-    listener: Mutex<Option<UnixListener>>,
-    /// Wakes `accept_loop`'s blocking `Poll::poll` the instant `close()` sets
-    /// `closed`, with no fixed poll interval and no filesystem state
-    /// (finding G-R4-1, replacing round 3's `ACCEPT_POLL_INTERVAL` busy-poll,
-    /// which a re-measurement against the real Python signer showed
-    /// regressed both accept latency and idle CPU -- see `DEVIATIONS.md`).
-    /// Registered on the same `Poll` instance `accept_loop` owns and blocks
-    /// on, under [`WAKE_TOKEN`].
-    waker: Waker,
+    /// The listening socket, non-blocking; `accept_loop` holds the other
+    /// reference while it polls. `close()` takes this one (finding G-R3-3:
+    /// independently of any `Arc<BindingServer>` a detached client thread
+    /// keeps alive), shuts the socket down on Linux, and drops it; the
+    /// descriptor is closed when the accept thread -- woken at once by the
+    /// shutdown, or within [`ACCEPT_POLL_TIMEOUT`] -- drops its reference
+    /// and exits, before `close()`'s bounded wait for it returns.
+    listener: Mutex<Option<Arc<UnixListener>>>,
     closed: AtomicBool,
     /// Live client connections, keyed by a monotonic per-connection id (not
     /// by `ThreadId`, so a client is registered — and admission is decided —
@@ -322,31 +291,11 @@ impl BindingServer {
         listener
             .set_nonblocking(true)
             .map_err(|e| escaped_os_error(&e))?;
-        // Event-driven accept wait (finding G-R4-1): one `mio::Poll` per
-        // binding, set up here (before the accept thread starts) and then
-        // handed to it by value. `SourceFd` only borrows the raw fd for the
-        // duration of `register` -- it does not take ownership -- so the
-        // listener itself stays in `listener: Mutex<Option<UnixListener>>`,
-        // exactly as before, for `close()` to `take()` and drop
-        // independently (finding G-R3-3). No `unsafe`: `mio::Registry`'s
-        // `register`/`Waker::new` are safe functions (unlike e.g. the
-        // `polling` crate's `Poller::add`, which is `unsafe fn` because it
-        // requires the caller to `delete()` the source before dropping it).
-        let poll = Poll::new().map_err(|e| escaped_os_error(&e))?;
-        let listener_fd = listener.as_raw_fd();
-        poll.registry()
-            .register(
-                &mut SourceFd(&listener_fd),
-                LISTENER_TOKEN,
-                Interest::READABLE,
-            )
-            .map_err(|e| escaped_os_error(&e))?;
-        let waker = Waker::new(poll.registry(), WAKE_TOKEN).map_err(|e| escaped_os_error(&e))?;
+        let listener = Arc::new(listener);
         let server = Arc::new(BindingServer {
             ctx,
             binding,
-            listener: Mutex::new(Some(listener)),
-            waker,
+            listener: Mutex::new(Some(Arc::clone(&listener))),
             closed: AtomicBool::new(false),
             clients: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(0),
@@ -359,7 +308,7 @@ impl BindingServer {
         let handle = thread::Builder::new()
             .name(format!("zeropw-signer-{}", server.binding.grant_id))
             .spawn(move || {
-                accept_server.accept_loop(poll);
+                accept_server.accept_loop(listener);
                 let _ = done_tx.send(());
             })
             .map_err(|_| escaped_thread_start_error())?;
@@ -377,50 +326,33 @@ impl BindingServer {
     // ---------------------------------------------------------- lifecycle
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        // Wake `accept_loop` immediately if it is blocked in `Poll::poll`
-        // (finding G-R4-1): `closed` is stored first, so by the time the
-        // accept thread wakes and re-checks it, there is no race where it
-        // could go back to sleep. This replaces round 3's fixed
-        // `ACCEPT_POLL_INTERVAL` busy-poll with a real event -- no polling
-        // interval bounds how quickly `close()` is noticed, the OS wakes the
-        // blocked thread directly, the same way Python's blocking
-        // `accept()`+`settimeout` is woken by the socket itself becoming
-        // ready or by the timeout elapsing, not by rechecking on a schedule.
-        let _ = self.waker.wake();
-        // Take and drop the listener immediately -- Python's `close()`
-        // closes `self._sock` as its second statement, before any joins, so
-        // the listening fd is released unconditionally rather than only
-        // when the last `Arc<BindingServer>` clone drops (finding G-R3-3: a
-        // client thread detached past its join deadline below used to keep
-        // this whole struct, and therefore the listener fd, alive
-        // indefinitely). `accept_loop` re-locks `listener` after every wakeup
-        // and exits as soon as it observes `None`, without ever needing a
-        // durable, connectable alias to the socket (finding G-R3-1 -- the
-        // round-2 hard-link "wakeup" design is withdrawn: the reviewer showed
-        // that link was a second, fully functional agent endpoint reachable
-        // even after the directory holding the real socket was removed,
-        // widening the capability boundary `SSH_AUTH_SOCK` is supposed to
-        // be). Closing this fd also automatically drops any pending
-        // epoll/kqueue registration for it (both remove a descriptor's
-        // registrations synchronously on `close(2)`), so there is no window
-        // where a reused fd number could be confused for this listener --
-        // and even if the OS behaved otherwise, `accept_loop` never trusts
-        // the poll event's identity for anything beyond "recheck now": it
-        // always re-reads the actual accept result through this same
-        // `Mutex<Option<UnixListener>>`.
+        // `self._sock.close()`, Python's second statement, before any join:
+        // from here on a new `connect()` is refused. On Linux, `shutdown` of
+        // a listening AF_UNIX socket gives exactly that (`ECONNREFUSED`,
+        // measured) and wakes the accept thread's `poll` at once; the
+        // descriptor itself is released when that thread drops its
+        // reference. Darwin refuses `shutdown` on a listening socket
+        // (`ENOTCONN`), so there the accept thread notices `closed` within
+        // [`ACCEPT_POLL_TIMEOUT`] -- the same 0.2s bound Python's accept
+        // timeout gives -- and connections arriving in that window are
+        // queued and then reset instead of refused.
         let listener = self
             .listener
             .lock()
             .expect("listener mutex poisoned")
             .take();
+        if let Some(listener) = &listener {
+            #[cfg(target_os = "linux")]
+            let _ = socket2::SockRef::from(&**listener).shutdown(std::net::Shutdown::Both);
+            #[cfg(not(target_os = "linux"))]
+            let _ = listener;
+        }
         drop(listener);
         // Bound the wait the way Python's `self._accept_thread.join(timeout=2)`
         // does: `JoinHandle::join` has no timeout, so wait on a completion
         // signal sent right before `accept_loop` returns, and give up
         // (detaching the handle) past the deadline instead of blocking
-        // `close()` forever on a wedged accept thread. With the waker above,
-        // `accept_loop` should notice essentially at once; this bound is
-        // defence in depth.
+        // `close()` forever on a wedged accept thread.
         let done = self
             .accept_done
             .lock()
@@ -512,53 +444,36 @@ impl BindingServer {
         }
     }
 
-    /// `poll` is the `mio::Poll` `BindingServer::start` created and
-    /// registered the listener (`LISTENER_TOKEN`) and `self.waker`
-    /// (`WAKE_TOKEN`) on, moved here by value so this thread is the only one
-    /// ever calling `Poll::poll` on it (finding G-R4-1).
-    fn accept_loop(self: Arc<Self>, mut poll: Poll) {
-        // Event-driven wait, no fixed poll interval and no busy loop: this
-        // thread blocks in `Poll::poll(..., None)` (no timeout) until the OS
-        // reports the listener readable or `close()` fires the waker, then
-        // rechecks `closed`/the listener exactly once per real event -- the
-        // direct replacement for round 3's `ACCEPT_POLL_INTERVAL` busy-poll,
-        // which a re-measurement against the real Python signer showed was
-        // both ~7x slower per accept and, far more seriously, kept every
-        // live binding's thread waking 700-1000 times/second forever even
-        // when fully idle (25-70x Python's own idle CPU -- see
-        // `DEVIATIONS.md` for the measured numbers, finding G-R4-1). The
-        // listener stays non-blocking (`BindingServer::start`) so a stray
-        // wakeup with nothing pending (a spurious event, mio's own
-        // documented possibility on every backend) just sees `WouldBlock`
-        // and loops back to `poll.poll` instead of blocking in `accept()`.
-        let mut events = Events::with_capacity(4);
+    /// `_BindingServer._accept_loop`: `while not closed: accept()` on a
+    /// socket with a 0.2s timeout. CPython's timed `accept()` first
+    /// `poll`s the descriptor for up to the timeout (`socket.timeout` ->
+    /// `continue`), then accepts; any other `OSError` ends the loop without
+    /// an audit record. This thread owns one reference to the listener for
+    /// as long as it runs, so the descriptor it polls can never be closed
+    /// and reused underneath it.
+    fn accept_loop(self: Arc<Self>, listener: Arc<UnixListener>) {
         'outer: loop {
             if self.closed.load(Ordering::SeqCst) {
                 break;
             }
-            match poll.poll(&mut events, None) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break, // no sane way to keep waiting; exit like a fatal accept error
+            let mut fds = [rustix::event::PollFd::new(
+                &*listener,
+                rustix::event::PollFlags::IN,
+            )];
+            match rustix::event::poll(&mut fds, Some(&ACCEPT_POLL_TIMEOUT)) {
+                Ok(0) => continue, // `socket.timeout`: re-check `closed`
+                Ok(_) => {}
+                Err(rustix::io::Errno::INTR) => continue, // PEP 475 retry
+                Err(_) => break,
             }
             if self.closed.load(Ordering::SeqCst) {
                 break;
             }
-            // A readiness event only means "something may have changed", not
-            // how many connections are queued (mio's own documented
-            // contract, true on both epoll and kqueue): drain until
-            // `WouldBlock` rather than accepting once per event. This also
-            // means the loop never needs to inspect which token fired --
-            // `WAKE_TOKEN` and `LISTENER_TOKEN` both just mean "go check
-            // `closed` and the listener again", exactly like re-checking
-            // both every `ACCEPT_POLL_INTERVAL` used to.
+            // Readiness does not say how many connections are queued: accept
+            // until `WouldBlock`, then wait again.
             loop {
-                let accepted = {
-                    let guard = self.listener.lock().expect("listener mutex poisoned");
-                    guard.as_ref().map(UnixListener::accept)
-                };
-                match accepted {
-                    Some(Ok((stream, _addr))) => {
+                match listener.accept() {
+                    Ok((stream, _addr)) => {
                         // On some platforms (observed on macOS/Darwin) a
                         // socket returned by `accept()` inherits the
                         // non-blocking flag of the *listening* socket, even
@@ -574,9 +489,9 @@ impl BindingServer {
                             break 'outer;
                         }
                     }
-                    Some(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Some(Err(_)) => break 'outer,
-                    None => break 'outer, // `close()` already took the listener
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break 'outer,
                 }
             }
         }
@@ -1716,12 +1631,9 @@ fn escaped_thread_start_error() -> Error {
 
 /// Bind, chmod 0600, and listen with Python's explicit backlog.
 /// `BindingServer::start` sets the returned listener non-blocking right
-/// after this returns (finding G-R3-1/G-R4-1): `accept_loop` waits on it
-/// through a per-binding `mio::Poll` (event-driven, no fixed poll interval)
-/// rather than blocking in `accept()` directly, so `close()` can wake it
-/// with `Waker::wake()` and by simply taking the listener away, with no
-/// durable connectable alias needed. See the module doc comment for the
-/// umask deviation from Python's `socket.bind`.
+/// after this returns: `accept_loop` waits for it with a bounded `poll`
+/// (Python's `settimeout(0.2)`) and then accepts. See [`bind_private`] for
+/// the atomic 0600 creation (Python's `os.umask(0o177)` around `bind`).
 ///
 /// Finding G-R5-1: Python calls `self._sock.listen(16)`, an explicit
 /// backlog, but `std::os::unix::net::UnixListener::bind` has no way to
@@ -1732,8 +1644,8 @@ fn escaped_thread_start_error() -> Error {
 /// default-backlog Rust listener accepted the same 40-connection probe in
 /// full. `socket2::Socket::listen` is a safe `fn`
 /// (unlike the raw `listen(2)` FFI call `std` would need), so this builds
-/// the socket explicitly with `socket2` -- the same "audited safe wrapper
-/// crate" precedent already used for `mio` in this module -- binds it to
+/// the socket explicitly with `socket2` (an audited safe wrapper crate),
+/// binds it to
 /// `path`, calls `listen(SIGNER_LISTEN_BACKLOG)`, and converts the result
 /// into a `std::os::unix::net::UnixListener` via `socket2`'s `From` impl so
 /// every caller of `bind_and_listen` sees the same std type as before.
@@ -2145,6 +2057,38 @@ mod tests {
             0,
             "a plain bind must be wider than 0600 here, or this test proves nothing"
         );
+    }
+
+    /// `close()` relies on this on Linux: shutting a listening AF_UNIX
+    /// socket down refuses new connections (`ECONNREFUSED`, what Python's
+    /// closed `self._sock` gives) and wakes a `poll` waiting on it at once.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn listener_shutdown_refuses_and_wakes_like_a_closed_python_socket() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("s.sock");
+        let listener = Arc::new(bind_and_listen(&path).unwrap());
+        let waiter = Arc::clone(&listener);
+        let woke = std::thread::spawn(move || {
+            let started = Instant::now();
+            let mut fds = [rustix::event::PollFd::new(
+                &*waiter,
+                rustix::event::PollFlags::IN,
+            )];
+            let timeout = rustix::event::Timespec {
+                tv_sec: 5,
+                tv_nsec: 0,
+            };
+            let _ = rustix::event::poll(&mut fds, Some(&timeout));
+            started.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        socket2::SockRef::from(&*listener)
+            .shutdown(std::net::Shutdown::Both)
+            .unwrap();
+        assert!(woke.join().unwrap() < Duration::from_secs(1));
+        let refused = UnixStream::connect(&path).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
     }
 
     /// The `OSError` escaping `_BindingServer.__init__` (here: binding inside
@@ -2876,9 +2820,14 @@ mod tests {
     // (each one burning the full accept-thread join timeout before
     // detaching), so `release_for_grant(None)` over N bindings (e.g.
     // `SignerManager::shutdown`) cost ~2N seconds and leaked N threads + N
-    // fds. The non-blocking, no-wakeup-target accept loop (finding G-R3-1)
-    // makes `binding.socket_path`'s existence irrelevant to `close()`
-    // altogether, so this must complete promptly regardless of N.
+    // fds. The accept loop has no wakeup target on the filesystem (finding
+    // G-R3-1), so `binding.socket_path`'s existence is irrelevant to
+    // `close()`. Each `close()` waits for its accept thread exactly as
+    // Python's does: on Linux the listener shutdown wakes it at once; on
+    // Darwin it notices within `ACCEPT_POLL_TIMEOUT` (0.2s), as Python's
+    // own accept thread does (CPython 3.12.14 closing 20 such bindings:
+    // 1.10-1.72s). The bound allows that per-binding wait and still fails
+    // the old ~2s-per-binding hang by an order of magnitude.
     #[test]
     fn release_for_grant_bulk_after_socket_files_removed_completes_promptly() {
         let f = fixture();
@@ -2895,10 +2844,15 @@ mod tests {
         let closed = f.manager.release_for_grant(None);
         let elapsed = started.elapsed();
         assert_eq!(closed, n);
+        let bound = if cfg!(target_os = "linux") {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(250) * n as u32
+        };
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < bound,
             "release_for_grant took {elapsed:?} for {n} bindings with their socket files \
-             already removed, expected well under the old ~{}s (2 x {n})",
+             already removed, expected under {bound:?}, far below the old ~{}s (2 x {n})",
             2 * n
         );
     }
@@ -2915,11 +2869,12 @@ mod tests {
     // (withdrawn: finding G-R3-1, a real second agent endpoint). Round 3's
     // replacement -- a non-blocking accept polled every fixed 1ms -- was
     // *itself* a regression the round-3 report's own (unreproducible)
-    // Python numbers missed. This round replaces the fixed interval with
-    // the event-driven `mio::Poll`/`Waker` wait in `accept_loop` (finding
-    // G-R4-1): ten sequential cycles measure consistently in the low
-    // single-digit milliseconds, no longer dominated by any fixed interval
-    // at all.
+    // Python numbers missed. Round 4 replaced the fixed interval with an
+    // event-driven `mio::Poll`/`Waker` wait (finding G-R4-1); the current
+    // accept loop waits with a bounded `poll` on the listening descriptor
+    // itself, exactly like CPython's timed `accept()`, which a pending
+    // connection wakes at once -- ten sequential cycles stay in the low
+    // single-digit milliseconds, not dominated by any interval.
     //
     // Round-5 re-measurement (finding G-R5-1's documentation correction:
     // the round-4 numbers below this comment, and the ones previously
@@ -3006,7 +2961,7 @@ mod tests {
     // this crate's own tests exercised, so it silently accepted bursts
     // Python would have refused. `bind_and_listen` now uses
     // `socket2::Socket::listen(SIGNER_LISTEN_BACKLOG)` (16) instead, the
-    // same audited-safe-wrapper-crate precedent already accepted for `mio`.
+    // audited safe wrapper crate.
     //
     // Do not involve the accept loop here: if it drains fast enough (as it
     // did on Ubuntu CI), all 40 connects can succeed despite a backlog of
@@ -3325,18 +3280,16 @@ mod tests {
         drop(conns);
     }
 
-    // Measurement, not a correctness gate (see `FD_MEASUREMENT_LOCK` and the
-    // note on the test above). Documents the accepted per-binding fd-cost
-    // deviation recorded in `DEVIATIONS.md` (finding G-R6-1): Python's
-    // `_BindingServer.__init__` opens exactly 1 fd per binding (`self._sock`),
-    // while this port's event-driven accept wait (finding G-R4-1) needs
-    // `mio::Poll` (its own kqueue/epoll fd) plus a `mio::Waker` (a second
-    // kqueue-based fd on this platform) in addition to the listening socket
-    // itself -- 3 fds/binding. Run explicitly: `cargo test --offline --
-    // --ignored --nocapture per_binding_fd_cost`.
+    // Measurement of the per-binding descriptor cost (see
+    // `FD_MEASUREMENT_LOCK` and the note on the test above): Python's
+    // `_BindingServer.__init__` opens exactly 1 fd per binding (`self._sock`;
+    // re-measured on CPython 3.12.14: 1.00), and so does this port's
+    // poll-based accept wait (the former `mio::Poll`/`Waker` design cost 3).
+    // Run explicitly: `cargo test --offline -- --ignored --nocapture
+    // per_binding_fd_cost`.
     #[test]
     #[ignore]
-    fn per_binding_fd_cost_matches_documented_ratio_of_three() {
+    fn per_binding_fd_cost_matches_python_ratio_of_one() {
         let _guard = FD_MEASUREMENT_LOCK.lock().unwrap();
         let f = fixture(); // already has 1 live binding
         const N: usize = 10;
@@ -3358,6 +3311,7 @@ mod tests {
              exactly 1 fd/binding -- `self._sock`)",
             delta as f64 / N as f64
         );
+        assert_eq!(delta, N, "one descriptor per binding, like Python");
     }
 
     // Reproduces the equivalence reviewer's `RLIMIT_NOFILE` sweep for this
