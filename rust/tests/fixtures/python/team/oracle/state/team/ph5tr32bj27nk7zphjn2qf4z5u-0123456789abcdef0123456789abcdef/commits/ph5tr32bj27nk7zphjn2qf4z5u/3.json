@@ -1,0 +1,23 @@
+{
+  "author": "ph5tr32bj27nk7zphjn2qf4z5u",
+  "author_seq": 3,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "2500-0000",
+  "ops": [
+    {
+      "ciphertext": {
+        "ciphertext": "BBBB",
+        "nonce": "AAAA"
+      },
+      "generation_id": "0000000000000000",
+      "kind": "api_key",
+      "op": "secret.put_version",
+      "public": {},
+      "secret_id": "gh-token",
+      "version_id": "1111111111111111"
+    }
+  ],
+  "seen": {},
+  "sig": "f5ICcZmAIfPeSmjp2/lzsL8i9E3lPNAme+c2lqPIY/TxHTY0zaIvKgptyU7RDuIbogA7oJwAwC560r/ig+YeDg=="
+}

@@ -1,0 +1,21 @@
+{
+  "author": "ph5tr32bj27nk7zphjn2qf4z5u",
+  "author_seq": 2,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "2000-0000",
+  "ops": [
+    {
+      "device": {
+        "agree_pub": "17XoHTNuV4sTuNcG6C0GHjA4yWvOZs3PUNVmuW3buhA=",
+        "sig": "jmgVOsXmIkJc7blJ6G7uOLdyzfooKgh9O8IzVFB7XGBXGEcqRmSwhz/LWeEdAY2n5GeQKV69eToxlxdx69RFBQ==",
+        "sign_pub": "G6QHW3fJ4/s+zeFc2vUiHzwQNz5iP3sOHvdjZrCvcTc="
+      },
+      "name": "bob",
+      "op": "member.add",
+      "role": "admin"
+    }
+  ],
+  "seen": {},
+  "sig": "l3Ygtd6UF0FsOlDaB+IUgB4lWjEzVKtI82ucONRzWQHDqHTfAjTj3Ag2M3XiBnwLn9Cr2mMt+N2EJs7XdSN0AQ=="
+}

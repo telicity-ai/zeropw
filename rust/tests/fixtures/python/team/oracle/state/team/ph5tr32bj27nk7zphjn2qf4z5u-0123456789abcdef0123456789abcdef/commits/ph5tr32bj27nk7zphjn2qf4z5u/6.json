@@ -1,0 +1,16 @@
+{
+  "author": "ph5tr32bj27nk7zphjn2qf4z5u",
+  "author_seq": 6,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "6000-0000",
+  "ops": [
+    {
+      "description": "updated",
+      "id": "gitlab",
+      "op": "connection.update"
+    }
+  ],
+  "seen": {},
+  "sig": "KwihyfZzNQySqjJWsuGmSapNxEifxlKmJjXFiMdoatc8aHyi5F1ge344Na2kLCwIfZmAETqA1uw+F/ph2Tp9Bg=="
+}

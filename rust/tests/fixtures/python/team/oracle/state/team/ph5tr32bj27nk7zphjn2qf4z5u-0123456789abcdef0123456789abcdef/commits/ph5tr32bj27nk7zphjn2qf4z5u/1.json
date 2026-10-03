@@ -1,0 +1,28 @@
+{
+  "author": "ph5tr32bj27nk7zphjn2qf4z5u",
+  "author_seq": 1,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "1000-0000",
+  "ops": [
+    {
+      "generation_id": "0000000000000000",
+      "op": "env.init",
+      "owner_device": {
+        "agree_pub": "BkU/zZzvWh9TrMT5QhBMDI6eJ9XHs39VB83NFigQWWM=",
+        "sig": "3VvwUEdlvuYUVM5dzCrclhZhjKk+a2za4PbJoKpwwEHFsRkGmxpfQHury+QBN+b/ZfJTiXArqstA7BPPc8sKDw==",
+        "sign_pub": "XJxt8mHJy4QEdXdqrvzZRLQFMo+rKPmzqV70BJDT3oQ="
+      },
+      "owner_name": "alice",
+      "wraps": {
+        "ph5tr32bj27nk7zphjn2qf4z5u": {
+          "ciphertext": "AAAA",
+          "eph_pub": "AAAA",
+          "nonce": "AAAA"
+        }
+      }
+    }
+  ],
+  "seen": {},
+  "sig": "cMKrMQc/R11pkW9DjDRdZFSxFkgY+4z9NjYrVwK8HWP6+ci9lVJ9j5I0rxABCupblI/iVhkZtbFkFBdcBKT2AA=="
+}
