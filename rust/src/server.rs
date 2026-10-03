@@ -615,6 +615,16 @@ fn handle_client(inner: &Arc<Inner>, id: u64, stream: TcpStream) {
                 reply
             }
             Err(DispatchError::Gone) => break,
+            Err(DispatchError::Error(e)) if gateway::is_escaped_builtin(&e) => {
+                // `_dispatch`'s final `except Exception`: a CPython built-in
+                // (not a `ZeroPWError`) gets the fixed internal-error reply.
+                mark(inner, id, false);
+                (
+                    500.into(),
+                    json_body(&json!({"error":"InternalError","reason":"internal_error"})),
+                    json_type(),
+                )
+            }
             Err(DispatchError::Error(e)) => {
                 mark(inner, id, false);
                 (
@@ -845,7 +855,9 @@ fn dispatch(
                 None => headers.push((name.clone(), value.clone())),
             }
         }
-        let result = gateway::relay(
+        // `gateway.relay` raising propagates to `_dispatch`'s handlers,
+        // exactly like any other exception from this route.
+        let result = gateway::try_relay(
             ctx,
             handle,
             &r.method,
@@ -853,7 +865,7 @@ fn dispatch(
             &headers,
             &body,
             r.header(REQUEST_ID_HEADER),
-        );
+        )?;
         return Ok((result.status, result.body, result.headers));
     }
     if r.path == "/healthz" {

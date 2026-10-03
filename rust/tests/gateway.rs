@@ -1715,47 +1715,34 @@ fn upstream_down_and_timeout() {
 }
 
 #[test]
-fn non_finite_or_negative_upstream_timeout_fails_closed_without_panicking() {
-    // Finding X-18: Python's `timeout = float(self.ctx.config.
-    // upstream_timeout)` never raises -- the failure happens later, inside
-    // `socket.create_connection`/`.settimeout()` when `conn.connect()`
-    // runs, and `_exchange`'s own `except (socket.timeout, TimeoutError)` /
-    // `except OSError` around that call does NOT catch it. Confirmed
-    // against a real `python3.12` socket: `.settimeout(float('inf'))` and
-    // `.settimeout(1e30)` both raise `OverflowError: timestamp out of range
-    // for platform time_t`, `.settimeout(float('nan'))` raises `ValueError:
-    // Invalid value NaN (not a number)`, and `.settimeout(-1.0)` raises
-    // `ValueError: Timeout value out of range` -- all four uncaught, so the
-    // relay is refused as `upstream_timeout` (this path's existing closest
-    // handled reason, PORTING.md §3.5).
-    //
-    // `Duration::from_secs_f64` PANICS on `inf`/`1e30` (a Rust panic on
-    // in-process config -- PORTING.md §4's untrusted-input rule does not
-    // strictly require a fix here, since `upstream_timeout` is not agent/
-    // peer/file-supplied, but a panic is still worse than Python's own
-    // catchable exception), and the previous `.max(0.0)` clamp silently
-    // turned a NaN timeout into a ZERO-duration one instead of failing at
-    // all (`f64::NAN.max(0.0) == 0.0`, Rust's `f64::max` returns the
-    // non-NaN operand) -- relaying with no timeout budget rather than
-    // refusing. `-1.0` was ALSO silently clamped to zero by the same
-    // `.max(0.0)`, an unrecorded gap beyond the two cases this finding's
-    // text named.
-    for (label, timeout) in [
-        ("infinity", f64::INFINITY),
-        ("neg_infinity", f64::NEG_INFINITY),
-        ("huge_finite", 1e30),
-        ("nan", f64::NAN),
-        ("negative", -1.0),
+fn invalid_upstream_timeout_escapes_relay_like_python() {
+    // Finding X-18, re-measured: `float(self.ctx.config.upstream_timeout)`
+    // never raises; `socket.create_connection`'s `sock.settimeout(timeout)`
+    // does, with a built-in exception none of `_exchange`'s handlers catch
+    // (CPython 3.12.14: `inf`/`-inf`/`1e30`/`9.3e9` -> `OverflowError`,
+    // `nan`/`-1.0`/`-1e-300` -> `ValueError`), so `relay` raises and
+    // `zeropw.server` answers its fixed `500 internal_error`. A zero
+    // timeout is a non-blocking connect whose `BlockingIOError` is the
+    // ordinary `upstream_unreachable` refusal. The ledger/audit scope of the
+    // escape is compared with Python in `relay_escape_parity`.
+    for (label, timeout, expected) in [
+        ("infinity", f64::INFINITY, (500, "internal_error")),
+        ("neg_infinity", f64::NEG_INFINITY, (500, "internal_error")),
+        ("huge_finite", 1e30, (500, "internal_error")),
+        ("past_int64_nanoseconds", 9.3e9, (500, "internal_error")),
+        ("nan", f64::NAN, (500, "internal_error")),
+        ("negative", -1.0, (500, "internal_error")),
+        ("tiny_negative", -1e-300, (500, "internal_error")),
+        ("zero", 0.0, (502, "upstream_unreachable")),
+        ("negative_zero", -0.0, (502, "upstream_unreachable")),
     ] {
         let mut t = GatewayTest::new();
         t.ctx.config.upstream_timeout = timeout;
         let result = t.relay("GET", "/repos");
         assert_eq!(
             (result.status.clone(), result.reason.as_deref()),
-            (502.into(), Some("upstream_timeout")),
-            "{label}: a non-finite/negative upstream_timeout must fail closed as \
-             upstream_timeout without panicking, matching python's own uncaught \
-             OverflowError/ValueError there"
+            (expected.0.into(), Some(expected.1)),
+            "{label}"
         );
         t.assert_result_credential_free(&result);
     }
@@ -2473,7 +2460,7 @@ fn replay_fails_closed_for_genuinely_undecodable_body_b64() {
     let replayed = issue_ledger(&t, "req-b64-bad", "same");
     assert_eq!(
         (replayed.status.clone(), replayed.reason.as_deref()),
-        (503.into(), Some("state_corrupt"))
+        (500.into(), Some("internal_error"))
     );
 }
 
@@ -2497,7 +2484,7 @@ fn replay_fails_closed_for_non_string_body_b64() {
     let replayed = issue_ledger(&t, "req-b64-nonstr", "same");
     assert_eq!(
         (replayed.status.clone(), replayed.reason.as_deref()),
-        (503.into(), Some("state_corrupt"))
+        (500.into(), Some("internal_error"))
     );
 }
 
@@ -2636,7 +2623,7 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
             (replayed.status.clone(), replayed.reason.as_deref()),
-            (503.into(), Some("state_corrupt")),
+            (500.into(), Some("internal_error")),
             "a truthy non-mapping response ({label}) must fail closed, not relay a \
              502 replay_body_unavailable"
         );
@@ -4996,18 +4983,40 @@ fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
     let port = unreachable.port();
     drop(unreachable);
 
-    for (suffix, raw_ca_file, expected_reason) in [
-        ("null", serde_json::Value::Null, "upstream_unreachable"),
-        ("false", serde_json::json!(false), "upstream_unreachable"),
-        ("zero", serde_json::json!(0), "upstream_unreachable"),
-        ("empty-list", serde_json::json!([]), "upstream_unreachable"),
-        ("number", serde_json::json!(5), "ca_file_unavailable"),
-        ("true", serde_json::json!(true), "ca_file_unavailable"),
+    // A truthy non-`str` `ca_file` makes CPython's `load_verify_locations`
+    // raise `TypeError`, which escapes `relay` uncaught; `zeropw.server`
+    // answers it with its fixed 500 `internal_error` reply (see
+    // `python_open_connection_uses_ca_file_truthiness_before_path_type`).
+    for (suffix, raw_ca_file, expected_status, expected_reason) in [
+        ("null", serde_json::Value::Null, 502, "upstream_unreachable"),
+        (
+            "false",
+            serde_json::json!(false),
+            502,
+            "upstream_unreachable",
+        ),
+        ("zero", serde_json::json!(0), 502, "upstream_unreachable"),
+        (
+            "empty-list",
+            serde_json::json!([]),
+            502,
+            "upstream_unreachable",
+        ),
+        (
+            "empty-string",
+            serde_json::json!(""),
+            502,
+            "upstream_unreachable",
+        ),
+        ("number", serde_json::json!(5), 500, "internal_error"),
+        ("true", serde_json::json!(true), 500, "internal_error"),
         (
             "list",
             serde_json::json!(["not", "a", "path"]),
-            "ca_file_unavailable",
+            500,
+            "internal_error",
         ),
+        ("nul", serde_json::json!("a\u{0}b"), 500, "internal_error"),
     ] {
         let connection_id = format!("raw-ca-{suffix}");
         let target = HttpTarget::new("https", "127.0.0.1", port as i64, None, false).unwrap();
@@ -5056,7 +5065,7 @@ fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
         assert_eq!(
             (result.status.clone(), result.reason.as_deref()),
-            (502.into(), Some(expected_reason)),
+            (expected_status.into(), Some(expected_reason)),
             "{suffix}"
         );
     }
@@ -5070,7 +5079,7 @@ import json
 from zeropw import gateway as G
 from zeropw import policy as P
 
-for value in (None, False, 0, [], {}, 5, True, ["not", "a", "path"], {"x": 1}):
+for value in (None, False, 0, [], {}, 5, True, ["not", "a", "path"], {"x": 1}, "", "a\x00b"):
     target = P.HttpTarget("https", "example.com", 443, value)
     connection = P.Connection(
         "c", "demo", "dev", "test", "http", "secret", None, "", target,
@@ -5100,6 +5109,8 @@ for value in (None, False, 0, [], {}, 5, True, ["not", "a", "path"], {"x": 1}):
             serde_json::json!([true, "TypeError"]),
             serde_json::json!([["not", "a", "path"], "TypeError"]),
             serde_json::json!([{"x": 1}, "TypeError"]),
+            serde_json::json!(["", "ok"]),
+            serde_json::json!(["a\u{0}b", "ValueError"]),
         ]
     );
 }
@@ -5878,11 +5889,12 @@ fn ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-1": "oops"}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-1"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5902,11 +5914,12 @@ fn ledger_wrong_typed_request_entry_fails_closed_before_reaching_upstream() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-1": {"r-shape-2": "oops"}}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-2"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5928,11 +5941,12 @@ fn ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream() {
     )
     .unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-3"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5962,11 +5976,12 @@ fn ledger_save_fails_closed_for_a_corrupted_entry_of_a_different_request_id() {
     )
     .unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-2"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5993,8 +6008,8 @@ fn ledger_save_fails_closed_for_a_corrupted_unrelated_caller() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-2": "oops"}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-agent1"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         t.fake.requests().len(),
         0,
