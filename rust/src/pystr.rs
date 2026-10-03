@@ -1334,6 +1334,146 @@ fn unquote_ascii_run(run: &[char]) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+// ---------------------------------------------------------------------------
+// `posixpath.normpath`/`abspath` and `tempfile` directory selection. Used by
+// `signer.rs`'s port of `tempfile.mkdtemp(prefix="zpws-")`.
+// ---------------------------------------------------------------------------
+
+/// `posixpath.normpath(path)` on raw path bytes: repeated separators and
+/// `.` components collapse, `..` removes the previous component (and is
+/// dropped at the root, kept at the start of a relative path), exactly two
+/// leading slashes are preserved while one or three-or-more become one, a
+/// trailing slash is dropped, and an empty result is `.`.
+pub fn posix_normpath(path: &std::ffi::OsStr) -> std::path::PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let bytes = path.as_bytes();
+    if bytes.is_empty() {
+        return std::path::PathBuf::from(".");
+    }
+    let initial_slashes = if bytes.starts_with(b"//") && !bytes.starts_with(b"///") {
+        2
+    } else if bytes.starts_with(b"/") {
+        1
+    } else {
+        0
+    };
+    let mut components: Vec<&[u8]> = Vec::new();
+    for component in bytes.split(|b| *b == b'/') {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        if component != b".."
+            || (initial_slashes == 0 && components.is_empty())
+            || components.last() == Some(&&b".."[..])
+        {
+            components.push(component);
+        } else if !components.is_empty() {
+            components.pop();
+        }
+    }
+    let mut out = vec![b'/'; initial_slashes];
+    out.extend_from_slice(&components.join(&b'/'));
+    if out.is_empty() {
+        out.push(b'.');
+    }
+    std::path::PathBuf::from(std::ffi::OsString::from_vec(out))
+}
+
+/// `os.path.abspath(path)`: joined onto `os.getcwd()` when relative, then
+/// [`posix_normpath`].
+pub fn posix_abspath(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    if path.is_absolute() {
+        return Ok(posix_normpath(path.as_os_str()));
+    }
+    let joined = std::env::current_dir()?.join(path);
+    Ok(posix_normpath(joined.as_os_str()))
+}
+
+/// One name from `tempfile._RandomNameSequence`: 8 characters drawn from
+/// `"abcdefghijklmnopqrstuvwxyz0123456789_"`.
+pub fn tempfile_random_name() -> String {
+    use rand::Rng;
+    const CHARACTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut rng = rand::rngs::OsRng;
+    (0..8)
+        .map(|_| char::from(CHARACTERS[rng.gen_range(0..CHARACTERS.len())]))
+        .collect()
+}
+
+/// `tempfile._candidate_tempdir_list()` on POSIX: non-empty `TMPDIR`,
+/// `TEMP`, `TMP`, then `/tmp`, `/var/tmp`, `/usr/tmp`, then `os.getcwd()`
+/// (`os.curdir` if that fails).
+fn tempfile_candidate_dirs(
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    for name in ["TMPDIR", "TEMP", "TMP"] {
+        if let Some(value) = env(name).filter(|v| !v.is_empty()) {
+            dirs.push(std::path::PathBuf::from(value));
+        }
+    }
+    dirs.extend(["/tmp", "/var/tmp", "/usr/tmp"].map(std::path::PathBuf::from));
+    dirs.push(std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    dirs
+}
+
+/// `tempfile._get_default_tempdir()`: the first candidate (made absolute
+/// unless it is `os.curdir`) in which a fresh `O_RDWR|O_CREAT|O_EXCL|
+/// O_NOFOLLOW` 0600 file can be created and written; up to 100 names per
+/// directory, moving on at the first error other than `FileExistsError`.
+/// `Err` is the `FileNotFoundError` CPython raises when none qualifies.
+fn tempfile_default_tempdir(
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    for candidate in tempfile_candidate_dirs(env) {
+        let dir = if candidate.as_os_str() == "." {
+            candidate
+        } else {
+            match posix_abspath(&candidate) {
+                Ok(dir) => dir,
+                Err(_) => continue,
+            }
+        };
+        for _ in 0..100 {
+            let file = dir.join(tempfile_random_name());
+            let opened = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .mode(0o600)
+                .open(&file);
+            match opened {
+                Ok(mut handle) => {
+                    let written = handle.write_all(b"blat");
+                    drop(handle);
+                    let removed = std::fs::remove_file(&file);
+                    if written.is_err() || removed.is_err() {
+                        break;
+                    }
+                    return Ok(dir);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
+            }
+        }
+    }
+    Err(std::io::Error::from_raw_os_error(libc::ENOENT))
+}
+
+/// `tempfile.gettempdir()`: [`tempfile_default_tempdir`], computed once per
+/// process and cached afterwards like CPython's module-level `tempdir`.
+pub fn gettempdir() -> std::io::Result<std::path::PathBuf> {
+    static TEMPDIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    if let Some(dir) = TEMPDIR.get() {
+        return Ok(dir.clone());
+    }
+    let dir = tempfile_default_tempdir(&|name| std::env::var_os(name))?;
+    Ok(TEMPDIR.get_or_init(|| dir).clone())
+}
+
 /// `type(exc).__name__` of the `OSError` CPython raises for `error`: the
 /// PEP 3151 errno-to-subclass map (`Objects/exceptions.c`), `OSError` for
 /// any other errno or an error with no errno.
@@ -2169,6 +2309,80 @@ print(h.hexdigest())
                 None => "error".to_string(),
             };
             assert_eq!(rust, python, "float({case:?})");
+        }
+    }
+
+    /// [`posix_normpath`] against `posixpath.normpath`.
+    #[test]
+    fn posix_normpath_matches_cpython() {
+        let cases = [
+            "",
+            ".",
+            "/",
+            "//",
+            "///",
+            "////a",
+            "//a//b/",
+            "a/./b/../c",
+            "../a",
+            "/../a",
+            "a/../..",
+            "a/b/../../..",
+            "./",
+            "/tmp/",
+            "/var/folders/x/T/",
+            "a//b///c",
+            "..",
+            "../..",
+            "/.",
+            "/a/b/c/../../..",
+            "rel/../x",
+        ];
+        let script = format!(
+            "import posixpath, json\nfor p in json.loads({:?}):\n    print(posixpath.normpath(p))\n",
+            serde_json::to_string(&cases).unwrap()
+        );
+        let expected = python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let rust = posix_normpath(std::ffi::OsStr::new(case));
+            assert_eq!(rust.to_str().unwrap(), python, "normpath({case:?})");
+        }
+    }
+
+    /// [`tempfile_default_tempdir`] picks the same directory as CPython's
+    /// `tempfile._get_default_tempdir` for the same environment.
+    #[test]
+    fn default_tempdir_matches_cpython_candidate_selection() {
+        let root = tempfile::TempDir::new().unwrap();
+        let writable = root.path().join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        let file = root.path().join("plain-file");
+        std::fs::write(&file, b"x").unwrap();
+        let w = writable.to_str().unwrap().to_string();
+        let f = file.to_str().unwrap().to_string();
+        let cases: Vec<Vec<(&str, String)>> = vec![
+            vec![("TMPDIR", w.clone())],
+            vec![("TMPDIR", format!("{w}//./"))],
+            vec![("TMPDIR", format!("{w}/sub/.."))],
+            vec![("TMPDIR", String::new()), ("TEMP", w.clone())],
+            vec![("TMPDIR", format!("{w}/missing")), ("TMP", w.clone())],
+            vec![("TMPDIR", f.clone()), ("TEMP", w.clone())],
+            vec![("TEMP", f.clone())],
+            vec![],
+        ];
+        let script = format!(
+            "import json, os, tempfile\nfor env in json.loads({:?}):\n    for name in ('TMPDIR', 'TEMP', 'TMP'):\n        os.environ.pop(name, None)\n    os.environ.update(dict(env))\n    print(tempfile._get_default_tempdir())\n",
+            serde_json::to_string(&cases).unwrap()
+        );
+        let expected = python(&script);
+        for (case, python) in cases.iter().zip(expected.lines()) {
+            let env = |name: &str| {
+                case.iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            };
+            let rust = tempfile_default_tempdir(&env).unwrap();
+            assert_eq!(rust.to_str().unwrap(), python, "{case:?}");
         }
     }
 }

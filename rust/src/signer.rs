@@ -1646,30 +1646,33 @@ fn mkdir_leaf_private_0700(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Port of the fallback branch of `SignerManager._choose_socket_dir`
-/// (`tempfile.mkdtemp(prefix="zpws-")`). Python's `mkdtemp` names its
-/// directory with an 8-character random suffix; this used to encode 8
-/// random *bytes* as hex (16 characters), making the resulting path 8 bytes
-/// longer than Python's and shifting exactly where the `MAX_UNIX_PATH`
-/// length check trips relative to Python (finding G-3). Encoding 4 random
-/// bytes as hex instead yields the same 8-character suffix length as
-/// Python's (the alphabet differs -- hex vs. Python's own candidate
-/// charset -- but no caller depends on anything beyond length and
-/// uniqueness).
+/// Port of the fallback branch of `SignerManager._choose_socket_dir`:
+/// `tempfile.mkdtemp(prefix="zpws-")`. The parent is
+/// [`crate::pystr::gettempdir`] (CPython's candidate list -- non-empty
+/// `TMPDIR`/`TEMP`/`TMP`, `/tmp`, `/var/tmp`, `/usr/tmp`, the working
+/// directory -- each made absolute and probed for a writable file, cached
+/// per process), not `std::env::temp_dir()` (which takes `TMPDIR` blindly,
+/// even empty or unwritable). Names are `_RandomNameSequence`'s 8 characters
+/// from `[a-z0-9_]` (finding G-3 fixed the length; the alphabet now matches
+/// too), tried up to `os.TMP_MAX` times; the directory is created with
+/// `os.mkdir(path, 0o700)` and returned through `os.path.abspath`.
 fn make_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
-    let base = std::env::temp_dir();
-    for _ in 0..64 {
-        let mut suffix = [0u8; 4];
-        use rand::RngCore;
-        rand::rngs::OsRng.fill_bytes(&mut suffix);
-        let path = base.join(format!("{prefix}{}", hex::encode(suffix)));
+    let base = crate::pystr::gettempdir().map_err(|e| escaped_os_error(&e))?;
+    for _ in 0..libc::TMP_MAX {
+        let path = base.join(format!("{prefix}{}", crate::pystr::tempfile_random_name()));
         match std::fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => return Ok(path),
+            Ok(()) => return crate::pystr::posix_abspath(&path).map_err(|e| escaped_os_error(&e)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(escaped_os_error(&e)),
         }
     }
-    Err(Error::state("signer_socket_dir_failed").with_detail("tempdir"))
+    // `FileExistsError(EEXIST, "No usable temporary directory name found")`.
+    Err(Error::subclass(
+        ErrorClass::ZeroPW,
+        "FileExistsError",
+        "io_error",
+        "No usable temporary directory name found",
+    ))
 }
 
 fn short_hex_id() -> String {
@@ -2191,6 +2194,18 @@ mod tests {
         assert!(name.starts_with("zpws-"), "{name}");
         let rust_suffix_len = name.len() - "zpws-".len();
         assert_eq!(rust_suffix_len, python_suffix_len);
+        assert!(
+            name["zpws-".len()..]
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+            "{name}: _RandomNameSequence alphabet"
+        );
+        // Same parent as `tempfile.gettempdir()` in this environment.
+        let python_parent = crate::oracle::python("import tempfile\nprint(tempfile.gettempdir())");
+        assert_eq!(
+            dir.parent().unwrap().to_str().unwrap(),
+            python_parent.trim()
+        );
         std::fs::remove_dir(&dir).unwrap();
     }
 
