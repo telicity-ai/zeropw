@@ -32,8 +32,8 @@
 | 자격증명 위치 | 모든 팀원 노드가 환경 DEK를 받는다 | 각 노드의 중계기가 직접 인증해야 한다. admin/user 구분은 정책적 통제이지 암호학적 통제가 아니다(§10). |
 | 오래된 복제본 | 사용을 계속 허용하고 마지막 동기화 시각을 드러낸다 | 오프라인 사용을 막지 않는다. 회수 지연은 한계로 적는다. |
 | 기록 공유 | 침해 사건 요약만 admin 노드에 전파. 사용 기록은 노드 로컬 | |
-| 플랫폼 | 전송 계층을 인터페이스로 두고, 참조 구현은 표준 라이브러리 TCP | 제품 코드의 표준 라이브러리 전용 원칙을 유지한다. |
-| 사람이 읽는 형식 | JSON 저장, YAML은 출력 전용 | 표준 라이브러리에 YAML 파서가 없다. |
+| 플랫폼 | 전송 계층을 인터페이스로 두고, 참조 구현은 TCP(`std::net`) | 다른 전송(VPN 전용 인터페이스 등)은 같은 인터페이스 뒤에 붙인다. |
+| 사람이 읽는 형식 | JSON 저장, YAML은 출력 전용 | YAML 파서를 두지 않는다. 출력은 `team/humanview.rs`의 YAML 부분집합 작성기가 만든다. |
 
 ## 3. 용어와 모델
 
@@ -66,7 +66,7 @@
 
 ### 4.1 기기 키
 
-`team init`이 노드에 기기 키를 만든다. Ed25519 서명 키는 저장소의 `zeropw/crypto/ed25519.py`를 쓴다. X25519 합의 키는 RFC 7748을 같은 방식의 순수 Python으로 추가한다. 두 비밀키는 상태 디렉터리 `team/device.key`(0600)에 두고 로컬 KMS로 감싼다. 서명 공개키가 X25519 공개키를 서명해 묶은 **기기 기록**이 팀원 목록에 들어간다. 비밀키는 기기를 떠나지 않으며 내보내기 명령이 없다.
+`team init`이 노드에 기기 키를 만든다. Ed25519 서명 키는 `rust/src/crypto/ed25519.rs`, X25519 합의 키(RFC 7748)는 `rust/src/crypto/x25519.rs`를 쓴다. 두 비밀키는 상태 디렉터리 `team/device.key`(0600)에 두고 로컬 KMS로 감싼다. 서명 공개키가 X25519 공개키를 서명해 묶은 **기기 기록**이 팀원 목록에 들어간다. 비밀키는 기기를 떠나지 않으며 내보내기 명령이 없다.
 
 기기 키는 관리자 패스프레이즈를 대체하지 않는다. 노드 로컬의 관리 작업(비밀 단일 조회, 복구, 사건 닫기)은 지금처럼 패스프레이즈 재인증을 요구한다. 기기 키는 노드 사이의 신원이다.
 
@@ -182,19 +182,24 @@ user 역할은 어떤 연산도 커밋하지 못한다. user의 권한 부여는
 
 ### 6.1 전송 계층 인터페이스
 
-```python
-class Transport(Protocol):
-    def listen(self, address: str, on_session: Callable[[Session], None]) -> None: ...
-    def dial(self, address: str) -> Session: ...
+```rust
+pub trait Transport: Send + Sync {
+    fn listen(&self, address: &str, on_session: OnSession) -> Result<()>;
+    fn dial(&self, address: &str, env_id: &str, invite_proof: Option<InviteProof>)
+        -> std::result::Result<Arc<dyn Session>, SessionClosed>;
+    fn close(&self);
+    // 팀원 확인·초대 확인·핸드셰이크 실패 알림 콜백 설정 메서드는 생략
+}
 
-class Session(Protocol):
-    peer: DeviceRecord          # 핸드셰이크 뒤 확정된 상대 기기
-    def send(self, message: dict) -> None: ...
-    def recv(self, timeout: float) -> dict | None: ...
-    def close(self) -> None: ...
+pub trait Session: Send + Sync {
+    fn peer(&self) -> DeviceRecord;          // 핸드셰이크 뒤 확정된 상대 기기
+    fn send(&self, message: &Value) -> Result<()>;
+    fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed>;
+    fn close(&self);
+}
 ```
 
-참조 구현은 표준 라이브러리 `socket`의 TCP 위에 §6.2의 핸드셰이크와 프레임(4바이트 길이 + ChaCha20-Poly1305 암호문, 프레임당 최대 4MiB)을 얹는다. 시험용 구현은 같은 프로세스 안의 큐다. 다른 전송(VPN 전용 인터페이스 바인딩 등)은 이 인터페이스 뒤에 붙인다.
+참조 구현(`rust/src/team/transport.rs`)은 TCP 위에 §6.2의 핸드셰이크와 프레임(4바이트 길이 + ChaCha20-Poly1305 암호문, 프레임당 최대 4MiB)을 얹는다. 시험용 구현은 같은 프로세스 안의 큐다. 다른 전송(VPN 전용 인터페이스 바인딩 등)은 이 인터페이스 뒤에 붙인다.
 
 팀 전송 리스너는 도구·중계 리스너와 별개다. 도구·중계 리스너는 지금처럼 루프백만 바인딩한다. 팀 리스너는 `serve --team-listen <host:port>`로 LAN·VPN 주소에 바인딩하며 기본값은 없다(명시하지 않으면 팀 동기화가 꺼진 채 뜬다). 팀 리스너는 핸드셰이크에 실패한 연결에 어떤 정보도 돌려주지 않고 끊는다.
 
@@ -335,7 +340,7 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 | 노드의 상태 디렉터리 백업 유출 | 환경 DEK는 로컬 KMS로 감싸여 있고 암호문뿐. 기존 백업 규칙과 같다. | 암호문 길이가 드러난다(기존과 같음). |
 | 초대 문자열 유출 | 일회용·만료. 가입은 팀원 목록과 감사 기록에 남는다. | 만료 전 먼저 쓴 쪽이 가입한다. admin이 보고 제거한다. |
 
-노드의 팀 리스너, 도구 리스너, 중계기는 같은 프로세스에 있다. 에이전트 실행 환경과 신뢰 프로세스가 같은 호스트에 있다는 개발 구성의 한계([구현 현황](implementation.md) §8)는 그대로이며, 팀 공유가 이를 개선하지도 악화시키지도 않는다.
+노드의 팀 리스너, 도구 리스너, 중계기는 같은 프로세스에 있다. 에이전트 실행 환경과 신뢰 프로세스가 같은 호스트에 있다는 개발 구성의 한계([구현 현황](implementation.md) §9)는 그대로이며, 팀 공유가 이를 개선하지도 악화시키지도 않는다.
 
 ## 11. 하지 않는 것과 한계
 
@@ -352,7 +357,7 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 
 ## 12. CLI
 
-관리 CLI(`zeropw.admin_cli`)에 `team` 명령군을 추가한다. 모든 출력은 기존처럼 값 없는 JSON이다.
+관리 CLI(`zeropw-admin`)에 `team` 명령군을 추가한다. 모든 출력은 기존처럼 값 없는 JSON이다.
 
 | 명령 | 동작 |
 | --- | --- |
@@ -373,38 +378,38 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 
 ## 13. 구현 계획
 
-각 단계는 하네스의 작업 하나로 경계를 지으며, 표준 라이브러리만 쓰고, 합성 자격증명으로 검증하며, Opus 리뷰를 받는다. 통제 파일(`.github/`, `harness/`, `AGENTS.md`, `docs/harness.md`, `docs/product-intent.md`, `docs/security-design.md`)은 건드리지 않는다.
+네 단계 모두 2026-09-16 Python 프로토타입으로 먼저 구현했고, 이후 같은 범위를 Rust로 옮겼다(2026-10-03 프로토타입 제거). 아래 모듈과 시험은 현재 Rust 구현 기준이다. 시험 위치는 `rust/tests/<대상>.rs`와 각 모듈의 단위 시험이다.
 
 ### 단계 1 — 키, 봉투, 커밋, 접기 (네트워크 없음)
 
-- `zeropw/crypto/x25519.py`: RFC 7748. 시험 벡터.
-- `zeropw/team/identity.py`: 기기 키 생성·저장(로컬 KMS 감싸기), 기기 기록, 지문.
-- `zeropw/team/envelope.py`: DEK 세대 감싸기·풀기(HKDF + ChaCha20-Poly1305).
-- `zeropw/team/commit.py`: 커밋 모델, 서명, 형식 검증(§5.4), 하이브리드 논리 시계, 기기별 순번 저장.
-- `zeropw/team/fold.py`: 전순서 접기(§7.2), 긴급 사실 재적용, 스냅샷, 로컬 정책·금고 문서로의 파생과 정책 버전·`stale` 판정.
-- `zeropw/vault.py`: 공유 환경 비밀의 세대 키 선택과 버전 ID ↔ 정수 번호 대응.
-- 시험 `tests/test_team_commit.py`, `tests/test_team_fold.py`(`tests/test_team_envelope.py`, `tests/test_team_identity.py`가 봉투·기기 키를 따로 다룬다): 역할별 연산 허용·건너뜀, 서명·순번·환경 ID 불일치 거부, 시계 5분 초과 보류, 같은 커밋 집합을 다른 도착 순서로 접어도 같은 문서(무작위 순열 시험), 늦게 끼어든 커밋으로 다시 접기와 정책 버전 단조 증가, 넓어짐의 로컬 권한 `stale`, 긴급 사실이 순서와 무관하게 이김, 비밀 암호문의 세대 키 사용과 로컬 DEK로 복호화 불가, 파생 문서 손수정이 덮어써짐, 커밋·문서·스냅샷에 금고 값(모든 인코딩)이 없음. **구현 완료.**
+- `crypto/x25519.rs`: RFC 7748. 시험 벡터.
+- `team/identity.rs`: 기기 키 생성·저장(로컬 KMS 감싸기), 기기 기록, 지문.
+- `team/envelope.rs`: DEK 세대 감싸기·풀기(HKDF + ChaCha20-Poly1305).
+- `team/commit.rs`: 커밋 모델, 서명, 형식 검증(§5.4), 하이브리드 논리 시계, 기기별 순번 저장.
+- `team/fold.rs`: 전순서 접기(§7.2), 긴급 사실 재적용, 스냅샷, 로컬 정책·금고 문서로의 파생과 정책 버전·`stale` 판정.
+- `vault.rs`: 공유 환경 비밀의 세대 키 선택과 버전 ID ↔ 정수 번호 대응.
+- 시험 `team_fold`, `team_oracle`(프로토타입이 쓴 기기 기록·봉투·서명된 커밋·접은 문서와 바이트 일치), `team_envelope_parity_edges`, `team::commit`·`team::fold`·`team::envelope`·`team::identity` 단위 시험: 역할별 연산 허용·건너뜀, 서명·순번·환경 ID 불일치 거부, 시계 5분 초과 보류, 같은 커밋 집합을 다른 도착 순서로 접어도 같은 문서(무작위 순열 시험), 늦게 끼어든 커밋으로 다시 접기와 정책 버전 단조 증가, 넓어짐의 로컬 권한 `stale`, 긴급 사실이 순서와 무관하게 이김, 비밀 암호문의 세대 키 사용과 로컬 DEK로 복호화 불가, 파생 문서 손수정이 덮어써짐, 커밋·문서·스냅샷에 금고 값(모든 인코딩)이 없음. **구현 완료.**
 
 ### 단계 2 — 전송과 동기화
 
-- `zeropw/team/transport.py`: 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(핸드셰이크·프레임).
-- `zeropw/team/sync.py`: 세션 관리, `VECTOR`·`COMMIT`·`FACT`·`PEERS`, 재전파와 중복 제거, 적용(§6.5), 주기 동기화, 재시도.
+- `team/transport.rs`: 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(핸드셰이크·프레임).
+- `team/sync.rs`: 세션 관리, `VECTOR`·`COMMIT`·`FACT`·`PEERS`, 재전파와 중복 제거, 적용(§6.5), 주기 동기화, 재시도.
 - `serve --team-listen`.
-- 시험 `tests/test_team_transport.py`, `tests/test_team_sync.py`: 핸드셰이크 상호 인증(팀원 아님·제거됨·서명 불일치·환경 ID 불일치 거부, 재생 불가), 프레임 변조 거부, 두 `Context` 사이의 양방향 따라잡기, 세 노드에서 직접 닿지 않는 두 노드 사이의 전달, 동시 편집 뒤 세 노드가 같은 문서, 적용 시 실행 취소·소켓 닫기(기존 시험 패턴 재사용), 와이어 캡처에 평문 값·DEK 없음. **구현 완료. §6.4의 UDP 멀티캐스트 발견은 구현하지 않았다**([구현 현황](implementation.md) §10.3): 주소는 초대·`team peers --add`·`PEERS` 재전파로만 퍼진다.
+- 시험 `team_transport`, `team_parity_gaps`, `team_remaining_contract`, `team::sync` 단위 시험: 핸드셰이크 상호 인증(팀원 아님·제거됨·서명 불일치·환경 ID 불일치 거부, 재생 불가), 프레임 변조 거부, 두 `Context` 사이의 양방향 따라잡기, 세 노드에서 직접 닿지 않는 두 노드 사이의 전달, 동시 편집 뒤 세 노드가 같은 문서, 적용 시 실행 취소·소켓 닫기(기존 시험 패턴 재사용), 와이어 캡처에 평문 값·DEK 없음. **구현 완료. §6.4의 UDP 멀티캐스트 발견은 구현하지 않았다**([구현 현황](implementation.md) §11.3): 주소는 초대·`team peers --add`·`PEERS` 재전파로만 퍼진다.
 
 ### 단계 3 — 초대·가입·제거, 긴급 사실, CLI
 
-- `zeropw/team/membership.py`: 초대 생성·소진, 가입 핸드셰이크 확장, `member.*`, `dek.rotate`.
-- 긴급 사실 생성·검증·전파·재적용, `facts.jsonl`은 (`zeropw/team/facts.py`가 아니라) `zeropw/team/sync.py`에 있다: 서명·전파·재적용은 세션·동기화 상태와 얽혀 있어 별도 모듈로 나누기보다 그 상태를 이미 쥔 `TeamSync`에 두는 쪽이 더 간단했다.
+- `team/membership.rs`: 초대 생성·소진, 가입 핸드셰이크 확장, `member.*`, `dek.rotate`.
+- 긴급 사실 생성·검증·전파·재적용과 `facts.jsonl`은 `team/sync.rs`의 `TeamSync`에 있다: 서명·전파·재적용이 세션·동기화 상태와 얽혀 있어 그 상태를 쥔 쪽에 두었다.
 - `team` CLI 명령군과 기존 `connection *`·`secret *`·`rotation *`의 커밋 생성.
-- 시험 `tests/test_team_membership.py`, `tests/test_team_facts.py`, `tests/test_team_snapshot.py`(§7.3 압축), `tests/test_admin_cli.py::TeamCliTestCase`: 초대 일회성·만료, 가입 뒤 이력 수신과 접기, 제거 즉시 세션 종료와 재접속 거부, 새 세대 뒤 새 버전 복호화 불가(제거된 노드), 서로 동시 제거, 긴급 사실의 중복 처리, 복원 뒤 사실 재적용, CLI 출력에 값 없음. **구현 완료.**
+- 시험 `team_membership_sync`, `astra_team_fact_catchup`, `astra_team_round2`~`4`, `team_membership_sync::compact_preserves_membership_history_and_snapshot_document`(§7.3 압축), `native_team_cli`: 초대 일회성·만료, 가입 뒤 이력 수신과 접기, 제거 즉시 세션 종료와 재접속 거부, 새 세대 뒤 새 버전 복호화 불가(제거된 노드), 서로 동시 제거, 긴급 사실의 중복 처리, 복원 뒤 사실 재적용, CLI 출력에 값 없음. **구현 완료.**
 
 ### 단계 4 — 사건 공유와 종단 시험
 
-- `zeropw/team/sync.py`의 `send_incident`/`send_incident_for_all_envs`(공개 별칭 `on_incident_open`)와 `incident_outbox.jsonl`, `INCIDENT`/`INCIDENT_ACK`, admin 노드의 수신·표시(`team/<env-id>/incidents/`)·`rotation_flags.json`·알림(`zeropw/incident.py`가 아니다: [침해 대응](compromise-response.md)의 `open_incident`는 아직 이 브랜치의 바탕인 `main`에 없는 별도 브랜치에 있고, 그 병합 전까지는 `send_incident_for_all_envs`를 부르는 배선도 없다 — [구현 현황](implementation.md) §10.2).
-- §7.2의 `team_op_overridden` 알림(3단계까지 미구현이던 항목)을 `zeropw/team/fold.py`(감지)와 `zeropw/team/sync.py`(이 기기가 진 경우만 1회 알림)에 추가.
-- `zeropw/admin_cli.py`의 `team incidents --env P/E`.
-- `tests/test_team_e2e.py`: 별도 OS 프로세스 세 개(`serve` × 3)와 각자의 관리 CLI·에이전트 CLI로 §1의 흐름 전체. 한 노드의 범위 축소로 다른 노드의 그 경로 요청이 거부되고 그 경로를 계속 부르던 진행 중 실행도 다음 중계에서 같이 거부되어 끝나며(§6.5: 좁아짐은 진행 중 실행을 직접 취소하지 않고 다음 중계·서명에서 새 범위로 판정한다 — 명세 그대로), 두 노드가 오프라인에서 같은 연결을 고친 뒤 재연결하면 세 노드가 같은 상태가 되며 진 쪽에 `team_op_overridden` 알림이 남고, 팀원 제거 뒤 제거된 노드가 새 비밀 버전의 세대 키를 갖지 못하는지 확인. 모든 노드의 상태 디렉터리·출력·와이어 캡처(§6.1을 실제로 지나간 원시 바이트, `ZEROPW_TEAM_WIRE_CAPTURE` 시험 전용 환경변수로 켠다)에서 금고 값 부재 확인. `tests/test_team_sync.py::IncidentSharingTestCase`·`OverrideAlertTestCase`가 사건 공유·`team_op_overridden`을 더 세밀하게 다룬다. **구현 완료.**
+- `team/sync.rs`의 `send_incident`/`send_incident_for_all_envs`(공개 별칭 `on_incident_open`)와 `incident_outbox.jsonl`, `INCIDENT`/`INCIDENT_ACK`, admin 노드의 수신·표시(`team/<env-id>/incidents/`)·`rotation_flags.json`·알림. [침해 대응](compromise-response.md)의 `open_incident`(`incident.rs`)에서 `send_incident_for_all_envs`를 부르는 배선은 아직 없다([구현 현황](implementation.md) §11.2).
+- §7.2의 `team_op_overridden` 알림(3단계까지 미구현이던 항목)을 `team/fold.rs`(감지)와 `team/sync.rs`(이 기기가 진 경우만 1회 알림)에 추가.
+- `admin_cli.rs`의 `team incidents --env P/E`.
+- `native_team_e2e`: 별도 OS 프로세스 세 개(`serve` × 3)와 각자의 관리 CLI·에이전트 CLI로 §1의 흐름 전체. 한 노드의 범위 축소로 다른 노드의 그 경로 요청이 거부되고 그 경로를 계속 부르던 진행 중 실행도 다음 중계에서 같이 거부되어 끝나며(§6.5: 좁아짐은 진행 중 실행을 직접 취소하지 않고 다음 중계·서명에서 새 범위로 판정한다 — 명세 그대로), 두 노드가 오프라인에서 같은 연결을 고친 뒤 재연결하면 세 노드가 같은 상태가 되며 진 쪽에 `team_op_overridden` 알림이 남고, 팀원 제거 뒤 제거된 노드가 새 비밀 버전의 세대 키를 갖지 못하는지 확인. 모든 노드의 상태 디렉터리·출력·와이어 캡처(§6.1을 실제로 지나간 원시 바이트, `ZEROPW_TEAM_WIRE_CAPTURE` 시험 전용 환경변수로 켠다)에서 금고 값 부재 확인. `team::sync` 단위 시험과 `astra_team_review`가 사건 공유·`team_op_overridden`을 더 세밀하게 다룬다. **구현 완료.**
 
 ## 14. 확정한 세부와 남은 확인
 

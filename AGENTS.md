@@ -11,7 +11,7 @@ Read `docs/product-intent.md`, `docs/security-design.md`, and `docs/harness.md` 
 - SSH signing is a core feature. Do not remove it or promise universal CLI compatibility.
 - Useful business output is allowed. Authentication material must not escape via responses, streams, errors, tracing, redirects, or logs.
 - Use synthetic credentials and controlled endpoints during development. Never request or inspect production vault, model, deployment, recovery, or administrator keys.
-- The product is the Rust crate in `rust/`; the Python prototype was removed on 2026-10-03. `rust/PORTING.md` §0 defines where Rust must stay compatible with what the prototype wrote (persisted state, wire/crypto formats, features, security).
+- The product is the Rust crate in `rust/`; the Python prototype was removed on 2026-10-03. `rust/PORTING.md` §1 defines where Rust must stay compatible with what the prototype wrote (persisted state, wire/crypto formats, features, security).
 
 ## Development roles and authority
 
