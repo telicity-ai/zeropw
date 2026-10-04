@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-REPO = "handlecusion/zeropw"
+REPO = "telicity-ai/zeropw"
 READY_MARKER = "<!-- zeropw:ready-for-review -->"
 READY_SHA_PREFIX = "<!-- zeropw-ready-sha:"
 MODEL_PREFIX = "claude-opus-5"

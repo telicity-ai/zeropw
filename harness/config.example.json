@@ -1,5 +1,5 @@
 {
-  "repo": "handlecusion/zeropw",
+  "repo": "telicity-ai/zeropw",
   "cloud_environment_id": "REPLACE_WITH_VERIFIED_ENVIRONMENT_ID",
   "worker_mode": "codex-cloud-default",
   "cloud_default_model_accepted": false

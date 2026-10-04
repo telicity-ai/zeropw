@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
-REPO = "handlecusion/zeropw"
+REPO = "telicity-ai/zeropw"
 READY = "<!-- zeropw:ready-for-review -->"
 READY_SHA = "<!-- zeropw-ready-sha:{sha} -->"
 MAX_PATCH_BYTES = 2_000_000
@@ -365,7 +365,7 @@ def _control_paths(paths: list[str]) -> list[str]:
 def _reconciled_control_paths(record: dict[str, Any], head: str, run: Callable[..., str]) -> list[str]:
     """Read-only tree comparison before accepting a pre-existing worker branch."""
     origin = run(["git", "remote", "get-url", "origin"]).strip()
-    if origin not in {"https://github.com/handlecusion/zeropw.git", "git@github.com:handlecusion/zeropw.git"}:
+    if origin not in {"https://github.com/telicity-ai/zeropw.git", "git@github.com:telicity-ai/zeropw.git"}:
         raise CloudRunnerError("origin URL is not the exact trusted repository")
     with tempfile.TemporaryDirectory(prefix="zeropw-reconcile-") as folder:
         bare = Path(folder) / "repo.git"
@@ -379,8 +379,8 @@ def _materialize(record: dict[str, Any], patch: str, branch: str,
                  run: Callable[..., str]) -> str:
     validate_patch(patch)
     origin = run(["git", "remote", "get-url", "origin"]).strip()
-    allowed_origins = {"https://github.com/handlecusion/zeropw.git",
-                       "git@github.com:handlecusion/zeropw.git"}
+    allowed_origins = {"https://github.com/telicity-ai/zeropw.git",
+                       "git@github.com:telicity-ai/zeropw.git"}
     if origin not in allowed_origins:
         raise CloudRunnerError("origin URL is not the exact trusted repository")
     with tempfile.TemporaryDirectory(prefix="zeropw-cloud-") as folder:

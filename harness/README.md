@@ -1,6 +1,6 @@
 # ZeroPW 작업·리뷰 하네스
 
-이 하네스는 클라우드 구현 작업이 끝나면 현재 로컬 Codex 세션에서 Claude Opus 리뷰를 실행하고, 리뷰를 GitHub PR에 게시한 뒤 수정 작업을 다시 제출한다. GitHub 저장소는 `handlecusion/zeropw`로 고정한다. 원본 제품 키나 모델 키를 클라우드 작업자에게 전달하지 않는다.
+이 하네스는 클라우드 구현 작업이 끝나면 현재 로컬 Codex 세션에서 Claude Opus 리뷰를 실행하고, 리뷰를 GitHub PR에 게시한 뒤 수정 작업을 다시 제출한다. GitHub 저장소는 `telicity-ai/zeropw`로 고정한다. 원본 제품 키나 모델 키를 클라우드 작업자에게 전달하지 않는다.
 
 ## 운영 구성
 
@@ -18,7 +18,7 @@ Codex Cloud 기본 모델은 현재 변경할 수 없다. 원래의 Sol 구현 �
 
 Python 3.11 이상, Git, 로그인된 `gh`·`codex`·`claude` CLI가 로컬 조정기에 필요하다. 신뢰하는 조정기에서만 이 CLI들을 사용한다. 키나 세션 토큰을 저장소나 작업 프롬프트에 복사하지 않는다.
 
-1. Codex Cloud의 GitHub 연결에서 `handlecusion/zeropw` 접근을 허용하고 해당 저장소의 환경을 만든다. 자동으로 다른 저장소 권한을 넓히지 않는다.
+1. Codex Cloud의 GitHub 연결에서 `telicity-ai/zeropw` 접근을 허용하고 해당 저장소의 환경을 만든다. 자동으로 다른 저장소 권한을 넓히지 않는다.
 2. Cloud setup 명령은 `bash harness/cloud_setup.sh`로 지정한다. 이 단계는 필요한 명령의 존재와 격리 모드 Python 컴파일만 확인하며 테스트를 실행하지 않는다. 테스트는 CI와 작업자 단계에서 수행한다. 현재 추가 패키지 설치는 없으며 실제 키나 토큰을 환경 Secrets에 넣지 않는다. 제품 의존성이 생기면 검증한 설치 절차를 별도로 추가한다.
 3. 실제 Cloud 환경 ID와 사용자가 결정한 작업자 모드를 `.zeropw-harness/config.json`에 기록한다. 이 경로는 Git에서 제외한다.
 4. 로컬에서 doctor와 테스트를 실행한 뒤 작업을 제출한다.
