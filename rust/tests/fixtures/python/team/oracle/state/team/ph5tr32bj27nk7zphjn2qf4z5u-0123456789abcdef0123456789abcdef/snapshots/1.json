@@ -1,0 +1,146 @@
+{
+  "document": {
+    "connections": {
+      "gh": {
+        "cli": null,
+        "created_at": "1970-01-01T00:00:03Z",
+        "description": "",
+        "environment": "dev",
+        "http_auth": {
+          "basic_username": null,
+          "header_name": null,
+          "mode": "bearer",
+          "value_prefix": null
+        },
+        "http_scope": {
+          "confirm_methods": [],
+          "methods": [
+            "GET"
+          ],
+          "path_prefixes": [
+            "/repos"
+          ]
+        },
+        "http_target": {
+          "allow_private_network": false,
+          "ca_file": null,
+          "host": "api.github.com",
+          "port": 443,
+          "scheme": "https"
+        },
+        "id": "gh",
+        "kind": "http",
+        "project": "demo",
+        "secret_id": "gh-token",
+        "secret_version": null,
+        "service": "github",
+        "ssh_target": null,
+        "status": "disabled",
+        "updated_at": "1970-01-01T00:00:04Z"
+      },
+      "gitlab": {
+        "cli": null,
+        "created_at": "1970-01-01T00:00:03Z",
+        "description": "",
+        "environment": "dev",
+        "http_auth": {
+          "basic_username": null,
+          "header_name": null,
+          "mode": "bearer",
+          "value_prefix": null
+        },
+        "http_scope": {
+          "confirm_methods": [],
+          "methods": [
+            "GET"
+          ],
+          "path_prefixes": [
+            "/repos"
+          ]
+        },
+        "http_target": {
+          "allow_private_network": false,
+          "ca_file": null,
+          "host": "api.github.com",
+          "port": 443,
+          "scheme": "https"
+        },
+        "id": "gitlab",
+        "kind": "http",
+        "project": "demo",
+        "secret_id": "gh-token",
+        "secret_version": null,
+        "service": "github",
+        "ssh_target": null,
+        "status": "active",
+        "updated_at": "1970-01-01T00:00:03Z"
+      }
+    },
+    "dek": {
+      "current": "0000000000000000",
+      "generations": {
+        "0000000000000000": {
+          "wraps": {
+            "ph5tr32bj27nk7zphjn2qf4z5u": {
+              "ciphertext": "AAAA",
+              "eph_pub": "AAAA",
+              "nonce": "AAAA"
+            }
+          }
+        }
+      }
+    },
+    "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+    "format": "zeropw-team-env-v1",
+    "members": {
+      "bzvg5rt5tkjvxcwso3hp2nurtm": {
+        "device": {
+          "agree_pub": "17XoHTNuV4sTuNcG6C0GHjA4yWvOZs3PUNVmuW3buhA=",
+          "sig": "jmgVOsXmIkJc7blJ6G7uOLdyzfooKgh9O8IzVFB7XGBXGEcqRmSwhz/LWeEdAY2n5GeQKV69eToxlxdx69RFBQ==",
+          "sign_pub": "G6QHW3fJ4/s+zeFc2vUiHzwQNz5iP3sOHvdjZrCvcTc="
+        },
+        "name": "bob",
+        "role": "admin",
+        "status": "active"
+      },
+      "ph5tr32bj27nk7zphjn2qf4z5u": {
+        "device": {
+          "agree_pub": "BkU/zZzvWh9TrMT5QhBMDI6eJ9XHs39VB83NFigQWWM=",
+          "sig": "3VvwUEdlvuYUVM5dzCrclhZhjKk+a2za4PbJoKpwwEHFsRkGmxpfQHury+QBN+b/ZfJTiXArqstA7BPPc8sKDw==",
+          "sign_pub": "XJxt8mHJy4QEdXdqrvzZRLQFMo+rKPmzqV70BJDT3oQ="
+        },
+        "name": "alice",
+        "role": "admin",
+        "status": "active"
+      }
+    },
+    "owner": "ph5tr32bj27nk7zphjn2qf4z5u",
+    "secrets": {
+      "gh-token": {
+        "active_version": null,
+        "kind": "api_key",
+        "versions": {
+          "1111111111111111": {
+            "ciphertext": "BBBB",
+            "generation": "0000000000000000",
+            "nonce": "AAAA",
+            "public": {},
+            "status": "staged"
+          }
+        }
+      }
+    },
+    "settings": {
+      "sync_interval_seconds": 42
+    }
+  },
+  "vector": {
+    "bzvg5rt5tkjvxcwso3hp2nurtm": 2,
+    "ph5tr32bj27nk7zphjn2qf4z5u": 5
+  },
+  "version_order": {
+    "gh-token": [
+      "1111111111111111"
+    ]
+  }
+}

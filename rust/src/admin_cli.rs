@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::argparse::{Arg, INT, Outcome, Parser, TypeFn, Val};
+use crate::argparse::{Arg, Outcome, Parser, TypeFn, Val};
 use crate::audit::RecordArgs;
 use crate::context::{Config, Context, OwnedTempDirRegistry};
 use crate::errors::Error;
@@ -20,6 +20,7 @@ use crate::policy::{
     CliProfile, Connection, ConnectionChanges, HttpAuth, HttpScope, HttpTarget, SshTarget,
 };
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::store::iso;
 use crate::vault::{MAX_SECRET_BYTES, SecretMeta, Vault};
@@ -50,15 +51,28 @@ impl Args {
     fn req(&self, key: &str) -> &str {
         self.get(key).unwrap_or("")
     }
-    /// An argparse `type=int` value narrowed to `i64` by saturation: a
-    /// version, port or limit beyond the range behaves like the (never
-    /// existing / always exceeding) value Python's arbitrary-precision int
-    /// would have been.
-    fn integer(&self, key: &str) -> Result<Option<i64>, Error> {
+    /// An argparse `type=int` value as the exact Python integer. The parser
+    /// stores the canonical decimal text (see [`EXACT_INT`]), never a narrowed
+    /// machine integer.
+    fn py_int(&self, key: &str) -> Result<Option<PyInt>, Error> {
+        self.version(key)
+    }
+    fn version(&self, key: &str) -> Result<Option<PyInt>, Error> {
+        self.get(key)
+            .map(|value| {
+                value
+                    .parse::<serde_json::Number>()
+                    .ok()
+                    .and_then(|number| PyInt::from_json_integer(&Value::Number(number)))
+                    .ok_or_else(|| Error::invalid_input("invalid_arguments"))
+            })
+            .transpose()
+    }
+    fn exact_integer(&self, key: &str) -> Result<Option<Value>, Error> {
         self.get(key)
             .map(|s| {
-                s.parse::<i128>()
-                    .map(|n| n.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64)
+                s.parse::<serde_json::Number>()
+                    .map(Value::Number)
                     .map_err(|_| Error::invalid_input("invalid_arguments"))
             })
             .transpose()
@@ -68,13 +82,28 @@ impl Args {
     }
 }
 
-/// `_positive_int`.
+/// `_positive_int`: `int(text)` (including CPython's integer-string digit
+/// limit, whose `ValueError` is reported like any other parse failure), then
+/// `value < 1` rejected. The exact value is kept as canonical decimal text.
 const POSITIVE_INT: TypeFn = TypeFn {
     name: "_positive_int",
-    convert: |text| match crate::pystr::int_from_str(text) {
-        Some(value) if value >= 1 => Ok(Val::Int(value)),
+    convert: |text| match crate::pystr::int_from_str_decimal_limited(text) {
+        Some(value) if !value.starts_with('-') && value != "0" => Ok(Val::Str(value)),
         _ => Err(Some("must be a positive integer".into())),
     },
+};
+
+fn exact_int_arg(text: &str) -> Result<Val, Option<String>> {
+    let value = crate::pystr::int_from_str_decimal_limited(text).ok_or(None)?;
+    Ok(Val::Str(value))
+}
+
+/// `argparse`'s `type=int` grammar without narrowing the resulting Python
+/// integer. The canonical decimal string stays in the namespace until the
+/// grant policy stores it as an arbitrary-precision JSON number.
+const EXACT_INT: TypeFn = TypeFn {
+    name: "int",
+    convert: exact_int_arg,
 };
 
 const ENV_METAVAR: &str = "PROJECT/ENVIRONMENT";
@@ -177,17 +206,17 @@ fn build_parser() -> Parser {
         "reveal ONE secret version (admin re-auth; audited and alerted)",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT));
+    .arg(Arg::opt("--version").ty(EXACT_INT));
     add(secret, "retire", "retire a non-active version")
         .arg(Arg::opt("--id").required())
-        .arg(Arg::opt("--version").ty(INT).required());
+        .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(
         secret,
         "revoke",
         "revoke a version (connections using it fail closed)",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
 
     let connection = group(sub, "connection", "service connections");
     add(
@@ -202,7 +231,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--secret-id").required())
     .arg(
         Arg::opt("--secret-version")
-            .ty(INT)
+            .ty(EXACT_INT)
             .help("pin a version (default: follow the active version)"),
     )
     .arg(
@@ -264,9 +293,9 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--environment").required())
     .arg(Arg::opt("--service").required())
     .arg(Arg::opt("--secret-id").required())
-    .arg(Arg::opt("--secret-version").ty(INT))
+    .arg(Arg::opt("--secret-version").ty(EXACT_INT))
     .arg(Arg::opt("--host").required())
-    .arg(Arg::opt("--port").ty(INT).default(Val::Int(22)))
+    .arg(Arg::opt("--port").ty(EXACT_INT).default(Val::Int(22)))
     .arg(Arg::opt("--username").required())
     .arg(
         Arg::opt("--host-key")
@@ -301,7 +330,7 @@ fn build_parser() -> Parser {
         "pin the connection to a secret version",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(connection, "disable", "disable a connection").arg(Arg::opt("--id").required());
 
     let principal = group(sub, "principal", "agent identities");
@@ -335,7 +364,7 @@ fn build_parser() -> Parser {
                 .default(Val::Str(DEFAULT_GRANT_TTL.into()))
                 .help("30m, 1h, 3600s, 86400 (default: 1h; max 30d)"),
         )
-        .arg(Arg::opt("--max-uses").ty(INT));
+        .arg(Arg::opt("--max-uses").ty(EXACT_INT));
     add(grant, "list", "list grants").arg(Arg::opt("--principal"));
     add(grant, "revoke", "revoke a grant immediately").arg(Arg::opt("--id").required());
     add(
@@ -371,7 +400,7 @@ fn build_parser() -> Parser {
         "activate a version and switch a connection to it",
     )
     .arg(Arg::opt("--connection").required())
-    .arg(Arg::opt("--version").ty(INT).required());
+    .arg(Arg::opt("--version").ty(EXACT_INT).required());
     add(
         rotation,
         "finish",
@@ -380,7 +409,7 @@ fn build_parser() -> Parser {
     .arg(Arg::opt("--secret-id").required())
     .arg(
         Arg::opt("--version")
-            .ty(INT)
+            .ty(EXACT_INT)
             .required()
             .help("the OLD version to retire"),
     );
@@ -735,7 +764,7 @@ fn admin_record_for(
     ctx: &Context,
     event: &str,
     connection: Option<&str>,
-    policy_version: Option<i64>,
+    policy_version: Option<crate::pyint::PyInt>,
     extra: Vec<(&str, Value)>,
 ) -> Result<(), Error> {
     ctx.audit.record(
@@ -844,22 +873,16 @@ fn pathlib_str(path: &str) -> String {
     }
 }
 
-/// The home directory `pwd` reports for `user` (or the current uid), read
-/// from the local passwd database.
+/// The home directory `pwd` reports for `user` (or the current uid), resolved
+/// through the system's NSS path (`getpwnam`/`getpwuid`).
 fn passwd_home(user: Option<&str>) -> Option<String> {
-    let uid = rustix::process::getuid().as_raw().to_string();
-    let text = fs::read_to_string("/etc/passwd").ok()?;
-    text.lines().find_map(|line| {
-        let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() < 7 {
-            return None;
-        }
-        let matches = match user {
-            Some(name) => fields[0] == name,
-            None => fields[2] == uid,
-        };
-        matches.then(|| fields[5].to_owned())
-    })
+    let record = match user {
+        Some(name) => nix::unistd::User::from_name(name),
+        None => nix::unistd::User::from_uid(nix::unistd::Uid::current()),
+    }
+    .ok()
+    .flatten()?;
+    Some(record.dir.to_string_lossy().into_owned())
 }
 
 /// `str(pathlib.Path(path).expanduser())`; `pathlib` raises
@@ -1197,29 +1220,80 @@ fn confirmations(v: Option<&str>, default: Vec<String>) -> Vec<String> {
     }
     csv(Some(v)).into_iter().map(|s| s.to_uppercase()).collect()
 }
-fn ttl(v: &str) -> Result<i64, Error> {
-    let s = v.trim().to_ascii_lowercase();
+/// `_parse_ttl`: `TTL_RE.fullmatch(text.strip().lower())`, then the exact
+/// (unbounded) `int(digits) * unit`. CPython's integer-string digit limit makes
+/// `int()` raise `ValueError` there, which the CLI reports as
+/// `state_corrupt`/`ValueError`.
+fn ttl(v: &str) -> Result<PyInt, Error> {
+    let s = v.trim_matches(crate::pystr::is_space).to_lowercase();
+    let no_match = || {
+        Error::invalid_input("invalid_ttl").with_detail("use forms like 30m, 1h, 3600s or 86400")
+    };
     let digits_end = s.bytes().take_while(u8::is_ascii_digit).count();
     let (digits, unit) = s.split_at(digits_end);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(Error::invalid_input("invalid_ttl"));
+    if digits.is_empty() {
+        return Err(no_match());
     }
     let factor: i64 = match unit {
         "" | "s" => 1,
         "m" => 60,
         "h" => 3600,
         "d" => 86400,
-        _ => return Err(Error::invalid_input("invalid_ttl")),
+        _ => return Err(no_match()),
     };
-    let seconds = digits
-        .parse::<i64>()
-        .ok()
-        .and_then(|n| n.checked_mul(factor))
-        .ok_or_else(|| Error::invalid_input("invalid_ttl"))?;
-    if seconds <= 0 {
+    let value = crate::pystr::int_from_str_decimal_limited(digits)
+        .and_then(|digits| digits.parse::<num_bigint::BigInt>().ok())
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"))?;
+    let seconds = value * factor;
+    if seconds <= num_bigint::BigInt::from(0) {
         return Err(Error::invalid_input("invalid_ttl"));
     }
-    Ok(seconds)
+    Ok(PyInt(seconds))
+}
+
+/// A positive parsed TTL for a consumer that range-checks it before any other
+/// use (`create_grant`'s and `create_invite`'s `invalid_ttl` bound): a value
+/// beyond `i64` is as out of range there as `i64::MAX`.
+fn ttl_seconds_for_bounded_consumer(seconds: &PyInt) -> i64 {
+    i64::try_from(&seconds.0).unwrap_or(i64::MAX)
+}
+
+/// `_local_version_for`: the local vault version number whose record carries
+/// `version_id`. Each `x or {}` step replaces only a falsy value; a truthy
+/// non-dict then has no `.get`/`.items()` (`AttributeError`), and a matching
+/// key `int()` cannot parse raises `ValueError` -- both reported by the CLI as
+/// `state_corrupt` with the exception class name.
+fn local_version_for(
+    ctx: &Context,
+    secret_id: &str,
+    version_id: &str,
+) -> Result<Option<PyInt>, Error> {
+    fn mapping(value: Value) -> Result<serde_json::Map<String, Value>, Error> {
+        match value {
+            Value::Object(map) => Ok(map),
+            other if !python_truthy(&other) => Ok(serde_json::Map::new()),
+            _ => Err(Error::state("state_corrupt").with_detail("AttributeError")),
+        }
+    }
+    let field = |map: &serde_json::Map<String, Value>, key: &str| {
+        map.get(key).cloned().unwrap_or(Value::Null)
+    };
+    let doc = mapping(ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?)?;
+    let secrets = mapping(field(&doc, "secrets"))?;
+    let entry = mapping(field(&secrets, secret_id))?;
+    let versions = mapping(field(&entry, "versions"))?;
+    for (key, record) in &versions {
+        let matches = record.as_object().is_some_and(|record| {
+            record.get("version_id").and_then(Value::as_str) == Some(version_id)
+        });
+        if matches {
+            return crate::pystr::int_from_str_decimal_limited(key)
+                .and_then(|value| value.parse().ok())
+                .map(|value| Some(PyInt(value)))
+                .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"));
+        }
+    }
+    Ok(None)
 }
 
 /// `_parse_target`: `scheme://host[:port]` with no path, query, fragment or
@@ -1263,38 +1337,24 @@ fn control(ctx: &Context) -> Result<Value, Error> {
     )
 }
 
-fn grant_view(grant: &crate::policy::Grant) -> Value {
-    json!({"id":grant.id,"principal":grant.principal,"connection":grant.connection,
-        "policy_version":grant.policy_version,"expires_at":grant.expires_at.map(|t| iso(Some(t))),
-        "max_uses":grant.max_uses,"uses":grant.uses,"status":grant.status,
-        "created_at":grant.created_at,"revoked_at":grant.revoked_at,
-        "credential_version":grant.credential_version})
+/// `_grant_view`: `asdict(grant)` with `expires_at` rendered through `iso()`
+/// when it is not `None`.
+fn grant_view(grant: &crate::policy::Grant) -> Result<Value, Error> {
+    let mut view = grant.to_value();
+    view["expires_at"] = grant.expires_at_iso()?;
+    Ok(view)
 }
 
-fn check_admin_document(ctx: &Context) -> Result<(), Error> {
-    let doc = ctx.state.read_json(crate::vault::ADMIN_DOC, Value::Null)?;
-    if doc.is_null() {
-        return Ok(()); // Preserve AdminCredential's own admin_missing reason.
-    }
-    let object = doc
-        .as_object()
-        .ok_or_else(|| Error::state("state_corrupt").with_detail("TypeError"))?;
-    for key in ["salt", "hash"] {
-        if !object.contains_key(key) {
-            return Err(Error::state("state_corrupt").with_detail("KeyError"));
-        }
-        if !object[key].is_string() {
-            return Err(Error::state("state_corrupt").with_detail("TypeError"));
-        }
-    }
-    Ok(())
-}
-
+/// `ctx.admin.verify(passphrase)` with `except AuthFailed`: only an
+/// authentication failure is recorded; `admin_missing` and a malformed
+/// `admin.json` (`AdminCredential::verify`'s escaped built-ins) propagate
+/// unrecorded, as in Python.
 fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
-    check_admin_document(ctx)?;
     let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
     if let Err(error) = ctx.admin.verify(&pass, None) {
-        record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        if error.is(crate::errors::ErrorClass::AuthFailed) {
+            record_auth_failure(ctx, &error.reason, vec![("state", json!(state))]);
+        }
         return Err(error);
     }
     Ok(())
@@ -1313,17 +1373,24 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
     } else {
         &["ssh_private_key"][..]
     };
-    if !kinds.contains(&meta.kind.as_str()) {
+    if !meta.kind.as_str().is_some_and(|kind| kinds.contains(&kind)) {
         return Err(Error::invalid_input("secret_kind_mismatch"));
     }
-    let ver = ctx
-        .vault
-        .resolve_version(&connection.secret_id, connection.secret_version)?;
-    if let Some(version) = meta.versions.iter().find(|v| v.version == ver)
-        && version.status != "active"
-        && version.status != "staged"
-    {
-        return Err(Error::invalid_input("secret_version_unusable").with_detail(&version.status));
+    let ver = ctx.vault.resolve_version(
+        &connection.secret_id,
+        connection.secret_version_for_resolve()?,
+    )?;
+    // Python: `status = next((v.status for v in meta.versions if v.version == resolved), None)`;
+    // an unmatched resolved version (an `active_version` naming no stored version) is `None`,
+    // which is not usable either; the detail is `str(status)`.
+    let status = meta
+        .versions
+        .iter()
+        .find(|v| ver.equals_integer(&v.version))
+        .map_or(Value::Null, |v| v.status.clone());
+    if status != "active" && status != "staged" {
+        return Err(Error::invalid_input("secret_version_unusable")
+            .with_detail(crate::vault::python_str_scalar(&status)));
     }
     if crate::tools::profile_env_carries_vault_value(ctx, connection)? {
         return refuse_cli_env(ctx, &connection.id, None, "connection_create");
@@ -1361,7 +1428,7 @@ fn create_connection(
             connection: Some(&stamped.id),
             target: Some(target),
             result: Some("ok"),
-            policy_version: Some(stamped.policy_version),
+            policy_version: Some(stamped.policy_version.clone()),
             extra: fields,
             ..Default::default()
         },
@@ -1375,27 +1442,38 @@ fn create_connection(
 fn switch_credential(
     ctx: &Context,
     connection_id: &str,
-    version: i64,
+    version: PyInt,
 ) -> Result<Connection, Error> {
     let before = ctx.policy.get_connection(connection_id)?;
     let meta = ctx.vault.get_meta(&before.secret_id)?;
+    // Python: `status = next(..., None)`; `if status is None` covers a stored JSON `null` status
+    // too. The unusable detail is the raw status, suppressed when falsy (`ZeroPWError`); a
+    // truthy non-string status renders as its `str()` text (`Error::detail` is a string).
     let status = meta
         .versions
         .iter()
         .find(|v| v.version == version)
         .map(|v| v.status.clone())
+        .filter(|status| !status.is_null())
         .ok_or_else(|| Error::not_found("secret_version_not_found"))?;
     if status != "active" && status != "staged" {
-        return Err(Error::invalid_input("secret_version_unusable").with_detail(status));
+        let detail = if python_truthy(&status) {
+            crate::vault::python_str_scalar(&status)
+        } else {
+            String::new()
+        };
+        return Err(Error::invalid_input("secret_version_unusable").with_detail(detail));
     }
-    let after = ctx.policy.switch_credential(connection_id, Some(version))?;
+    let after = ctx
+        .policy
+        .switch_credential(connection_id, Some(version.clone()))?;
     ctx.audit.record(
         "connection_switch_credential",
         RecordArgs {
             caller: Some("admin"),
             connection: Some(&after.id),
             result: Some("ok"),
-            policy_version: Some(after.policy_version),
+            policy_version: Some(after.policy_version.clone()),
             extra: vec![
                 ("secret_id", json!(after.secret_id)),
                 ("version", json!(version)),
@@ -1485,9 +1563,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     &ctx,
                     &env_id,
                     a.req("id"),
-                    a.req("kind"),
+                    &json!(a.req("kind")),
                     &value,
-                    (a.req("project"), a.req("environment")),
+                    (&json!(a.req("project")), &json!(a.req("environment"))),
                     a.has("staged"),
                 );
             }
@@ -1515,21 +1593,24 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         ),
         ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
         ("secret", "reveal") => {
-            check_admin_document(&ctx)?;
             let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
             let auth = match ctx.admin.verify(&pass, None) {
                 Ok(auth) => auth,
                 Err(error) => {
-                    record_auth_failure(
-                        &ctx,
-                        &error.reason,
-                        vec![("secret_id", json!(a.req("id")))],
-                    );
+                    if error.is(crate::errors::ErrorClass::AuthFailed) {
+                        record_auth_failure(
+                            &ctx,
+                            &error.reason,
+                            vec![("secret_id", json!(a.req("id")))],
+                        );
+                    }
                     return Err(error);
                 }
             };
-            let version = a.integer("version")?;
-            let value = ctx.vault.reveal(a.req("id"), version, &auth, None)?;
+            let version = a.version("version")?;
+            let value = ctx
+                .vault
+                .reveal(a.req("id"), version.clone(), &auth, None)?;
             let resolved = ctx.vault.resolve_version(a.req("id"), version)?;
             let mut out = json!({"id":a.req("id"),"version":resolved});
             if let Ok(text) = std::str::from_utf8(value.expose()) {
@@ -1547,10 +1628,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("secret-id")
             };
             let version = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             if let Some(env_id) = secret_shared_env(&ctx, id)? {
-                let version_id = shared_version_id(&ctx, id, version)?;
+                let version_id = shared_version_id(&ctx, id, version.clone())?;
                 let is_retire = a.action == "retire" || a.command == "rotation";
                 let result = if is_retire {
                     team_commit(
@@ -1583,7 +1664,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             let meta = ctx.vault.get_meta(id)?;
             let is_retire = a.action == "retire" || a.command == "rotation";
-            if is_retire && meta.active_version == Some(version) {
+            if is_retire
+                && meta
+                    .active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&version))
+            {
                 return Err(Error::invalid_input("version_is_active")
                     .with_detail("activate another version first (rotation activate)"));
             }
@@ -1591,7 +1677,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let pinned: Vec<String> = using
                 .iter()
                 .filter(|c| {
-                    c.secret_id == id && c.secret_version == Some(version) && c.status == "active"
+                    c.secret_id == id
+                        && c.secret_version
+                            .as_ref()
+                            .is_some_and(|v| v.eq_int(&version))
+                        && c.status == "active"
                 })
                 .map(|c| c.id.clone())
                 .collect();
@@ -1600,7 +1690,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     .with_detail(format!("pinned by connections: {}", pinned.join(","))));
             }
             let mut affected = pinned;
-            if !is_retire && meta.active_version == Some(version) {
+            if !is_retire
+                && meta
+                    .active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&version))
+            {
                 for c in &using {
                     if c.secret_id == id
                         && c.secret_version.is_none()
@@ -1614,7 +1709,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             ctx.vault.set_version_status(
                 id,
-                version,
+                &version,
                 if is_retire { "retired" } else { "revoked" },
             )?;
             let mut out = json!({"secret_id":id,"version":version,"status":if is_retire {"retired"} else {"revoked"}});
@@ -1687,7 +1782,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("service"),
                 "http",
                 a.req("secret-id"),
-                a.integer("secret-version")?,
+                a.version("secret-version")?,
                 a.get("description").unwrap_or(""),
                 Some(http_target),
                 Some(http_auth),
@@ -1702,7 +1797,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             if let Some(env_id) = project_shared_env(&ctx, a.req("project"), a.req("environment"))?
             {
                 let version_id = a
-                    .integer("secret-version")?
+                    .version("secret-version")?
                     .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
                     .transpose()?;
                 let result = team_commit(
@@ -1739,7 +1834,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             .to_value())
         }
         ("connection", "create-ssh") => {
-            let port = a.integer("port")?.unwrap_or(22);
+            // `type=int` is unbounded; `SshTarget` then rejects every value outside 1..=65535
+            // with `invalid_port`, so an out-of-`i64` value is passed on as 0 (equally invalid).
+            let port = a
+                .py_int("port")?
+                .map_or(22, |port| i64::try_from(&port.0).unwrap_or(0));
             let host_keys = a
                 .list("host-key")
                 .iter()
@@ -1769,7 +1868,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("service"),
                 "ssh",
                 a.req("secret-id"),
-                a.integer("secret-version")?,
+                a.version("secret-version")?,
                 a.get("description").unwrap_or(""),
                 None,
                 None,
@@ -1784,7 +1883,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let shared = project_shared_env(&ctx, a.req("project"), a.req("environment"))?;
             let result = if let Some(env_id) = &shared {
                 let version_id = a
-                    .integer("secret-version")?
+                    .version("secret-version")?
                     .map(|v| shared_version_id(&ctx, a.req("secret-id"), v))
                     .transpose()?;
                 Some(team_commit(
@@ -1822,9 +1921,13 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let meta = ctx.vault.get_meta(&stamped.secret_id)?;
             let resolved = ctx
                 .vault
-                .resolve_version(&stamped.secret_id, stamped.secret_version)
+                .resolve_version(&stamped.secret_id, stamped.secret_version_for_resolve()?)
                 .ok();
-            if let Some(v) = meta.versions.iter().find(|v| Some(v.version) == resolved) {
+            if let Some(v) = meta.versions.iter().find(|v| {
+                resolved
+                    .as_ref()
+                    .is_some_and(|r| r.equals_integer(&v.version))
+            }) {
                 out["public_key"] = v.public.get("public_key").cloned().unwrap_or(Value::Null);
                 out["fingerprint"] = v.public.get("fingerprint").cloned().unwrap_or(Value::Null);
             }
@@ -1870,7 +1973,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "connection_update",
                 Some(&after.id),
-                Some(after.policy_version),
+                Some(after.policy_version.clone()),
                 vec![
                     ("detail", json!("scope")),
                     ("state", json!(if widened { "widened" } else { "narrowed" })),
@@ -1882,11 +1985,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("connection", "switch-credential") => {
             let ver = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("id"))?;
             if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
-                let version_id = shared_version_id(&ctx, &before.secret_id, ver)?;
+                let version_id = shared_version_id(&ctx, &before.secret_id, ver.clone())?;
                 let result = team_commit(
                     &ctx,
                     &env_id,
@@ -1924,7 +2027,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     caller: Some("admin"),
                     connection: Some(&c.id),
                     result: Some("ok"),
-                    policy_version: Some(c.policy_version),
+                    policy_version: Some(c.policy_version.clone()),
                     ..Default::default()
                 },
             )?;
@@ -1946,7 +2049,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("principal", "list") => Ok(
-            json!({"principals":ctx.policy.list_principals()?.into_iter().map(|p|json!({"id":p.id,"status":p.status,"created_at":p.created_at,"runtime":p.runtime})).collect::<Vec<_>>()}),
+            json!({"principals":ctx.policy.list_principals()?.iter().map(crate::policy::Principal::view).collect::<Vec<_>>()}),
         ),
         ("principal", "disable") => {
             ctx.policy.disable_principal(a.req("id"), true)?;
@@ -1958,9 +2061,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(json!({"id":a.req("id"),"status":"disabled"}))
         }
         ("grant", "create") => {
-            let seconds = ttl(a.get("ttl").unwrap_or("1h"))?;
-            let max_uses = a.integer("max-uses")?;
-            let grant = ctx.policy.create_grant(
+            let seconds = ttl_seconds_for_bounded_consumer(&ttl(a.get("ttl").unwrap_or("1h"))?);
+            let max_uses = a.exact_integer("max-uses")?;
+            let grant = ctx.policy.create_grant_with_exact_max_uses(
                 a.req("principal"),
                 a.req("connection"),
                 Some(seconds),
@@ -1970,18 +2073,18 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_create",
                 Some(&grant.connection),
-                Some(grant.policy_version),
+                Some(grant.policy_version.clone()),
                 vec![
                     ("grant", json!(grant.id)),
                     ("principal", json!(grant.principal)),
-                    ("max_uses", json!(grant.max_uses)),
+                    ("max_uses", grant.max_uses_value()),
                     ("expires_at", json!(grant.expires_at.map(|t| iso(Some(t))))),
                 ],
             )?;
-            Ok(grant_view(&grant))
+            grant_view(&grant)
         }
         ("grant", "list") => Ok(
-            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Vec<_>>()}),
+            json!({"grants":ctx.policy.list_grants(a.get("principal"))?.iter().map(grant_view).collect::<Result<Vec<_>, Error>>()?}),
         ),
         ("grant", "revoke") => {
             let g = ctx.policy.revoke_grant(a.req("id"))?;
@@ -1990,9 +2093,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 "grant_revoke",
                 Some(&g.connection),
                 None,
-                vec![("grant", json!(g.id)), ("principal", json!(g.principal))],
+                vec![
+                    ("grant", g.id_value().clone()),
+                    ("principal", g.principal_value().clone()),
+                ],
             )?;
-            Ok(grant_view(&g))
+            grant_view(&g)
         }
         ("grant", "regrant") => {
             let g = ctx.policy.regrant(a.req("id"))?;
@@ -2000,14 +2106,14 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 &ctx,
                 "grant_regrant",
                 Some(&g.connection),
-                Some(g.policy_version),
+                Some(g.policy_version.clone()),
                 vec![
                     ("grant", json!(g.id)),
                     ("principal", json!(g.principal)),
                     ("detail", json!(a.req("id"))),
                 ],
             )?;
-            let mut v = grant_view(&g);
+            let mut v = grant_view(&g)?;
             v["replaces"] = json!(a.req("id"));
             Ok(v)
         }
@@ -2028,20 +2134,24 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             Ok(v)
         }
         ("approvals", "list") => {
-            let approvals = ctx.policy.list_approvals()?;
-            let mut entries: Vec<Value> = approvals
-                .into_iter()
-                .map(|(digest, value)| {
-                    let mut v = json!({"digest":digest});
-                    if let Some(obj) = value.as_object() {
-                        for (k, val) in obj {
-                            v[k] = val.clone();
-                        }
-                    }
-                    v
-                })
-                .collect();
-            entries.sort_by(|a, b| a["digest"].as_str().cmp(&b["digest"].as_str()));
+            // `[{"digest": digest, **entry} for digest, entry in
+            // sorted(ctx.policy.list_approvals().items())]`: keys keep
+            // Python's objects and order; `**entry` needs a mapping (an
+            // uncaught `TypeError` otherwise, PORTING.md §3.5).
+            let mut approvals = ctx.policy.list_approvals_items()?;
+            crate::policy::python_sort_dict_items(&mut approvals)?;
+            let mut entries: Vec<Value> = Vec::with_capacity(approvals.len());
+            for (digest, value) in approvals {
+                let obj = value.as_object().ok_or_else(|| {
+                    Error::state("state_corrupt").with_detail("policy/control.json")
+                })?;
+                let mut v = serde_json::Map::new();
+                v.insert("digest".into(), digest);
+                for (k, val) in obj {
+                    v.insert(k.clone(), val.clone());
+                }
+                entries.push(Value::Object(v));
+            }
             Ok(json!({"approvals":entries,"history":ctx.policy.approval_history()?}))
         }
         ("approvals", "approve") => {
@@ -2074,7 +2184,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("rotation", "start") => {
             let meta = ctx.vault.get_meta(a.req("secret-id"))?;
-            let value = read_secret(a, &meta.kind)?;
+            // `_read_secret_value(args, meta.kind)` only tests `kind not in SSH_SECRET_KINDS`.
+            let value = read_secret(a, meta.kind.as_str().unwrap_or(""))?;
             if let Some(env_id) = secret_shared_env(&ctx, &meta.id)? {
                 let result = shared_put(
                     &ctx,
@@ -2086,12 +2197,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     true,
                 )?;
                 let version_id = result["version_id"].as_str().unwrap_or("");
-                let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-                let version = doc["secrets"][&meta.id]["versions"]
-                    .as_object()
-                    .and_then(|m| m.iter().find(|(_, v)| v["version_id"] == version_id))
-                    .and_then(|(k, _)| k.parse::<i64>().ok());
+                let version = local_version_for(&ctx, &meta.id, version_id)?;
                 let next_version = version
+                    .as_ref()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| version_id.to_owned());
                 return Ok(
@@ -2104,7 +2212,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     return refuse_cli_env(&ctx, &conn.id, Some(&meta.id), "rotation");
                 }
             }
-            let version = ctx.vault.put_secret(
+            let version = ctx.vault.put_secret_values(
                 &meta.id,
                 &meta.kind,
                 &value,
@@ -2127,12 +2235,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("rotation", "activate") => {
             let version = a
-                .integer("version")?
+                .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
             let before = ctx.policy.get_connection(a.req("connection"))?;
             let previous = ctx.vault.get_meta(&before.secret_id)?.active_version;
             if let Some(env_id) = connection_shared_env(&ctx, &before.id)? {
-                let version_id = shared_version_id(&ctx, &before.secret_id, version)?;
+                let version_id = shared_version_id(&ctx, &before.secret_id, version.clone())?;
                 team_commit(
                     &ctx,
                     &env_id,
@@ -2163,9 +2271,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             // Pin first (one policy-version bump for this connection), then activate:
             // activating re-binds only the other unpinned connections that follow the secret.
-            let after = switch_credential(&ctx, &before.id, version)?;
+            let after = switch_credential(&ctx, &before.id, version.clone())?;
             ctx.vault
-                .set_version_status(&before.secret_id, version, "active")?;
+                .set_version_status(&before.secret_id, &version, "active")?;
             let after = ctx.policy.get_connection(&after.id)?;
             let others = ctx
                 .policy
@@ -2265,8 +2373,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("audit", "tail") | ("alerts", "") => {
-            let limit = a.integer("limit")?.unwrap_or(50);
-            if limit < 1 {
+            let limit = a.py_int("limit")?.unwrap_or_else(|| PyInt::from(50_i64));
+            if limit.0 < num_bigint::BigInt::from(1) {
                 return Err(Error::invalid_input("invalid_arguments"));
             }
             let name = if a.command == "audit" {
@@ -2285,7 +2393,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     _ => unparseable += 1,
                 }
             }
-            let start = entries.len().saturating_sub(limit as usize);
+            // `records[-limit:]`: a limit beyond the record count keeps every record.
+            let start =
+                usize::try_from(&limit.0).map_or(0, |limit| entries.len().saturating_sub(limit));
             Ok(
                 json!({if a.command=="audit" {"records"} else {"alerts"}:entries[start..],"unparseable_lines":unparseable}),
             )
@@ -2404,7 +2514,7 @@ fn connection_shared_env(ctx: &Context, connection_id: &str) -> Result<Option<St
     let doc = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
     Ok(doc[connection_id]["shared_env"].as_str().map(str::to_owned))
 }
-fn shared_version_id(ctx: &Context, secret_id: &str, version: i64) -> Result<String, Error> {
+fn shared_version_id(ctx: &Context, secret_id: &str, version: PyInt) -> Result<String, Error> {
     let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
     doc["secrets"][secret_id]["versions"][version.to_string()]["version_id"]
         .as_str()
@@ -2438,16 +2548,16 @@ fn shared_put(
     ctx: &Context,
     env_id: &str,
     id: &str,
-    kind: &str,
+    kind: &Value,
     value: &[u8],
-    location: (&str, &str),
+    location: (&Value, &Value),
     staged: bool,
 ) -> Result<Value, Error> {
     let (generation, dek) = current_dek(ctx, env_id)?;
     let version_id = random_version_id();
     let ciphertext =
         crate::team::envelope::encrypt_secret(dek.expose(), env_id, id, &version_id, value)?;
-    let public = Vault::public_metadata(kind, value)?;
+    let public = Vault::public_metadata(kind.as_str().unwrap_or(""), value)?;
     let mut result = team_commit(
         ctx,
         env_id,
@@ -2547,7 +2657,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         "invite" => {
             // `_parse_ttl(args.ttl) if args.ttl else DEFAULT_INVITE_TTL_SECONDS`.
             let ttl = match a.get("ttl").filter(|t| !t.is_empty()) {
-                Some(text) => ttl(text)?,
+                Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
             let invite = M::create_invite(
@@ -2607,7 +2717,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                         .count()
                 })
                 .unwrap_or(0);
-            json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().sum::<i128>(),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
+            json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().fold(crate::pyint::PyInt::zero(),|acc,v|crate::pyint::PyInt(acc.0+&v.0)),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
         }
         "log" => {
             let store = CommitStore::new(ctx.state, &env_id);
@@ -2720,17 +2830,25 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     Ok(Some(out))
 }
 
+/// `_parse_listen`: `text.strip()`, `rpartition(":")`, `host.strip("[]")`,
+/// then `port_text.isdigit()` and `0 <= int(port_text) <= 65535`. A
+/// non-decimal `isdigit()` character (e.g. a superscript) or a digit string
+/// beyond CPython's integer-string limit makes that `int()` raise
+/// `ValueError`, reported by the CLI as `state_corrupt`/`ValueError`.
 fn parse_listen(raw: &str) -> Result<(String, u16), Error> {
     let (host, port) = raw
-        .trim()
+        .trim_matches(crate::pystr::is_space)
         .rsplit_once(':')
         .ok_or_else(|| Error::invalid_input("invalid_listen").with_detail("use HOST:PORT"))?;
-    if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"));
+    let out_of_range =
+        || Error::invalid_input("invalid_listen").with_detail("port must be 0-65535");
+    if port.is_empty() || !port.chars().all(crate::pystr::is_digit) {
+        return Err(out_of_range());
     }
-    let port = port
+    let port = crate::pystr::int_from_str_decimal_limited(port)
+        .ok_or_else(|| Error::state("state_corrupt").with_detail("ValueError"))?
         .parse::<u16>()
-        .map_err(|_| Error::invalid_input("invalid_listen").with_detail("port must be 0-65535"))?;
+        .map_err(|_| out_of_range())?;
     Ok((host.trim_matches(['[', ']']).to_owned(), port))
 }
 fn require_loopback(host: &str) -> Result<String, Error> {
@@ -3018,6 +3136,43 @@ pub fn main(argv: &[String]) -> i32 {
 mod tests {
     use super::*;
 
+    /// `pathlib.Path(path).expanduser()`: `~user` through the system user
+    /// database, repeated separators, `.` components and a trailing slash
+    /// collapsed; an unknown user is a `RuntimeError`.
+    #[test]
+    fn user_path_matches_pathlib_expanduser_through_system_nss() {
+        let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+            .expect("current-user NSS lookup failed")
+            .expect("current uid has no NSS user");
+        let home = current.dir.to_string_lossy().into_owned();
+        let named = format!("~{}", current.name);
+        let named_child = format!("~{}//nested/./path/", current.name);
+        let unknown = format!(
+            "~zeropw-user-that-must-not-exist-{}/path",
+            std::process::id()
+        );
+        let nested = format!("{}/nested/path", home.trim_end_matches('/'));
+        for (path, expected) in [
+            (named.as_str(), json!({"ok": home})),
+            (named_child.as_str(), json!({"ok": nested})),
+            (unknown.as_str(), json!({"error": "RuntimeError"})),
+            (
+                "relative//nested/./path/",
+                json!({"ok": "relative/nested/path"}),
+            ),
+            (
+                "/absolute//nested/./path/",
+                json!({"ok": "/absolute/nested/path"}),
+            ),
+        ] {
+            let actual = match user_path(path) {
+                Ok(path) => json!({"ok": path}),
+                Err(error) => json!({"error": error.name}),
+            };
+            assert_eq!(actual, expected, "{path}");
+        }
+    }
+
     #[test]
     fn parser_accepts_equals_repeated_values_and_positional_terminator() {
         let args = parse(
@@ -3099,20 +3254,65 @@ mod tests {
             assert_eq!(ttl(text).unwrap(), expected, "{text}");
         }
         for text in [
-            "",
-            "0",
-            "0h",
-            "-1h",
-            "+1h",
-            "1w",
-            "1hour",
-            "1.5h",
-            "٣h",
-            "²h",
-            "1é",
-            "999999999999999999999999999999d",
+            "", "0", "0h", "-1h", "+1h", "1w", "1hour", "1.5h", "٣h", "²h", "1é",
         ] {
             assert_eq!(ttl(text).unwrap_err().reason, "invalid_ttl", "{text}");
+        }
+    }
+
+    /// `_parse_ttl`, `_parse_listen` and `_positive_int` on ordinary ASCII
+    /// input, with the results and error texts of the original helpers.
+    #[test]
+    fn integer_parsers_match_the_original_admin_cli_helpers() {
+        let error = |e: Error| json!(["error", e.reason, e.detail]);
+        let usage = "use forms like 30m, 1h, 3600s or 86400";
+        for (text, expected) in [
+            ("1h", json!(["ok", "3600"])),
+            (" 3M ", json!(["ok", "180"])),
+            ("30m", json!(["ok", "1800"])),
+            ("2d", json!(["ok", "172800"])),
+            ("86400", json!(["ok", "86400"])),
+            ("0", json!(["error", "invalid_ttl", ""])),
+            ("1w", json!(["error", "invalid_ttl", usage])),
+            ("1.5h", json!(["error", "invalid_ttl", usage])),
+        ] {
+            let actual = ttl(text).map_or_else(error, |v| json!(["ok", v.to_string()]));
+            assert_eq!(actual, expected, "ttl {text:?}");
+        }
+        for (text, expected) in [
+            ("127.0.0.1:80", json!(["ok", ["127.0.0.1", 80]])),
+            (" [::1]:65535 ", json!(["ok", ["::1", 65535]])),
+            ("127.0.0.1:0", json!(["ok", ["127.0.0.1", 0]])),
+            ("0.0.0.0:80", json!(["ok", ["0.0.0.0", 80]])),
+            (
+                "127.0.0.1:65536",
+                json!(["error", "invalid_listen", "port must be 0-65535"]),
+            ),
+            (
+                "127.0.0.1:",
+                json!(["error", "invalid_listen", "port must be 0-65535"]),
+            ),
+            (
+                "127.0.0.1",
+                json!(["error", "invalid_listen", "use HOST:PORT"]),
+            ),
+        ] {
+            let actual = parse_listen(text).map_or_else(error, |(h, p)| json!(["ok", [h, p]]));
+            assert_eq!(actual, expected, "listen {text:?}");
+        }
+        for (text, expected) in [
+            ("50", json!(["ok", "50"])),
+            (" 7 ", json!(["ok", "7"])),
+            ("0", json!(["type_error", "must be a positive integer"])),
+            ("-1", json!(["type_error", "must be a positive integer"])),
+            ("x", json!(["type_error", "must be a positive integer"])),
+        ] {
+            let actual = match (POSITIVE_INT.convert)(text) {
+                Ok(Val::Str(v)) => json!(["ok", v]),
+                Err(Some(message)) => json!(["type_error", message]),
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(actual, expected, "limit {text:?}");
         }
     }
 }

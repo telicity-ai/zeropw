@@ -1,0 +1,44 @@
+{
+  "gh": {
+    "cli": null,
+    "created_at": "2023-11-14T22:13:20Z",
+    "description": "demo",
+    "environment": "dev",
+    "http_auth": {
+      "basic_username": null,
+      "header_name": null,
+      "mode": "bearer",
+      "value_prefix": null
+    },
+    "http_scope": {
+      "confirm_methods": [
+        "DELETE"
+      ],
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path_prefixes": [
+        "/repos",
+        "/me"
+      ]
+    },
+    "http_target": {
+      "allow_private_network": false,
+      "ca_file": null,
+      "host": "127.0.0.1",
+      "port": 8080,
+      "scheme": "http"
+    },
+    "id": "gh",
+    "kind": "http",
+    "policy_version": 1,
+    "project": "demo",
+    "secret_id": "gh-token",
+    "secret_version": null,
+    "service": "fake-github",
+    "ssh_target": null,
+    "status": "active",
+    "updated_at": "2023-11-14T22:13:20Z"
+  }
+}

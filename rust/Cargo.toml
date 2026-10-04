@@ -28,10 +28,15 @@ getrandom = "0.2"
 zeroize = { version = "1", features = ["derive"] }
 subtle = "2"
 libc = "0.2"
-mio = { version = "1", default-features = false, features = ["os-poll", "os-ext"] }
 socket2 = "0.5"
+dns-lookup = "3"
+stringprep = "=0.1.5"
+unicode-normalization = "0.1"
+punycode = "=0.4.1"
+nix = { version = "0.30.1", features = ["process", "user"] }
+openssl = "0.10"
 close_fds = "=0.3.2"
-rustix = { version = "1", features = ["process", "fs", "termios", "system"] }
+rustix = { version = "1", features = ["process", "fs", "termios", "system", "event"] }
 tempfile = "3"
 regex = "1"
 percent-encoding = "2"
@@ -43,6 +48,11 @@ rustls-pemfile = "2"
 signal-hook = "0.3"
 rpassword = "7.4.0"
 num-bigint = { version = "=0.5.1", features = ["serde"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+system-configuration = "0.8"
+core-foundation = "0.10"
+plist = "1"
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

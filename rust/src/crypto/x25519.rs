@@ -29,12 +29,14 @@ pub const POINT_SIZE: usize = 32;
 /// little-endian over 32 bytes.
 pub const BASE_POINT: [u8; POINT_SIZE] = X25519_BASEPOINT_BYTES;
 
-/// A wrong-length scalar or point passed to [`clamp_scalar`] or
-/// [`scalarmult`]. Mirrors the `ValueError` raised by Python's `_as_bytes`
-/// helper (`"{name} must be exactly {SCALAR_SIZE} bytes, got {len}"`); the
-/// message never contains the key material itself. Python additionally
-/// raises `TypeError` for a non-bytes-like argument (e.g. a `str`); that
-/// case cannot arise here, since every argument is already `&[u8]`.
+/// A scalar or point that is too short for [`clamp_scalar`] or has the wrong
+/// length for [`scalarmult`]. The message never contains the key material
+/// itself. Python's `_as_bytes` gives `scalarmult` an exact-length
+/// `ValueError`, while `clamp_scalar` lets an `IndexError` escape for fewer
+/// than 32 bytes; PORTING.md section 3.5 permits Rust to return this closest
+/// handled error for that built-in exception. Python additionally raises
+/// `TypeError` for a non-bytes-like argument (e.g. a `str`); that case cannot
+/// arise here, since every argument is already `&[u8]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizeError(String);
 
@@ -84,24 +86,29 @@ fn check_len(name: &str, data: &[u8]) -> Result<[u8; SCALAR_SIZE], SizeError> {
     })
 }
 
-/// Port of `clamp_scalar`: apply the RFC 7748 section 5 clamping to a
-/// 32-byte scalar.
+/// Port of `clamp_scalar`: apply the RFC 7748 section 5 clamping to bytes 0
+/// and 31, then represent Python's `int.from_bytes(k, "little")` result as
+/// secret, little-endian bytes.
 ///
-/// Python's `clamp_scalar` returns the clamped value as an `int` (there is
-/// no size-agnostic bignum in Rust's `std`); this returns the same 255-bit
-/// value's little-endian byte encoding instead, which every caller in this
-/// module and its tests treats identically to Python's `int.from_bytes(...,
-/// "little")` (see `DEVIATIONS.md`). Python's own `clamp_scalar` has no
-/// length check (a non-32-byte `raw` either `IndexError`s or silently
-/// mis-clamps); this rejects a wrong-length input with [`SizeError`] instead,
-/// per this crate's rule against panicking or silently misbehaving on
-/// untrusted input.
-pub fn clamp_scalar(raw: &[u8]) -> Result<[u8; SCALAR_SIZE], SizeError> {
-    let mut k = check_len("raw", raw)?;
+/// Python accepts every input of at least 32 bytes and includes bytes beyond
+/// index 31 in the arbitrary-precision integer. Keeping the full byte string
+/// encodes the same integer while retaining its input width (including
+/// harmless zero bytes at the most-significant end), and avoids exposing
+/// scalar material through a public `Vec<u8>`. Inputs shorter than 32 bytes
+/// return [`SizeError`] rather than allowing Python's built-in `IndexError`
+/// to escape, as permitted by PORTING.md section 3.5.
+pub fn clamp_scalar(raw: &[u8]) -> Result<SecretBytes, SizeError> {
+    if raw.len() < SCALAR_SIZE {
+        return Err(SizeError(format!(
+            "raw must be at least {SCALAR_SIZE} bytes, got {}",
+            raw.len()
+        )));
+    }
+    let mut k = raw.to_vec();
     k[0] &= 248;
     k[31] &= 127;
     k[31] |= 64;
-    Ok(k)
+    Ok(SecretBytes::new(k))
 }
 
 /// Port of `scalarmult`: `X25519(k, u)`, the Diffie-Hellman function of RFC
@@ -326,88 +333,96 @@ mod tests {
     fn clamp_scalar_matches_generate_private_clamping() {
         let raw = [0xffu8; 32];
         let clamped = clamp_scalar(&raw).unwrap();
-        assert_eq!(clamped[0] & 0x07, 0);
-        assert_eq!(clamped[31] & 0x80, 0);
-        assert_eq!(clamped[31] & 0x40, 0x40);
-        // Idempotent, like Python's docstring claims.
-        assert_eq!(clamp_scalar(&clamped).unwrap(), clamped);
+        assert_eq!(clamped.expose()[0] & 0x07, 0);
+        assert_eq!(clamped.expose()[31] & 0x80, 0);
+        assert_eq!(clamped.expose()[31] & 0x40, 0x40);
+        // Applying the same bit masks again is idempotent.
+        let reclamped = clamp_scalar(clamped.expose()).unwrap();
+        assert!(reclamped.ct_eq(clamped.expose()));
     }
 
     #[test]
-    fn clamp_scalar_rejects_wrong_length() {
-        assert!(clamp_scalar(b"short").is_err());
-        assert!(clamp_scalar(&[0u8; 33]).is_err());
+    fn clamp_scalar_short_errors_and_crypto_entrypoints_remain_strict() {
+        for len in [0, 1, 31] {
+            assert!(clamp_scalar(&vec![0u8; len]).is_err());
+        }
+
+        let long = [0u8; 33];
+        assert!(clamp_scalar(&long).is_ok());
+        assert!(scalarmult(&long, &BASE_POINT).is_err());
+        assert!(scalarmult(&BASE_POINT, &long).is_err());
+        assert!(public_key(&long).is_err());
+        assert!(matches!(
+            shared_secret(&long, &BASE_POINT),
+            Err(SharedSecretError::Size(_))
+        ));
+        assert!(matches!(
+            shared_secret(&BASE_POINT, &long),
+            Err(SharedSecretError::Size(_))
+        ));
+    }
+
+    /// Golden vectors generated once from the Python prototype
+    /// (`tests/fixtures/python/crypto/GENERATE.md`).
+    fn python_vectors() -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/crypto/vectors.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn oracle_clamp_scalar_matches_python_for_every_length_boundary() {
+        let vectors = python_vectors();
+        let cases = vectors["x25519_clamp"].as_array().unwrap();
+        assert_eq!(cases.len(), 8);
+        for case in cases {
+            let raw = hex::decode(case[0].as_str().unwrap()).unwrap();
+            let python_result = case[1].as_str().unwrap();
+            match clamp_scalar(&raw) {
+                Ok(rust) => {
+                    assert_eq!(hex::encode(rust.expose()), python_result);
+                    let reclamped = clamp_scalar(rust.expose()).unwrap();
+                    assert!(reclamped.ct_eq(rust.expose()));
+                }
+                Err(_) => assert_eq!(python_result, "IndexError", "{}", case[0]),
+            }
+        }
     }
 
     #[test]
     fn oracle_scalarmult_matches_python() {
-        let k = h("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
-        let u = h("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c");
+        let vectors = python_vectors();
+        let v = &vectors["x25519_scalarmult"];
+        let k = h(v["k"].as_str().unwrap());
+        let u = h(v["u"].as_str().unwrap());
         let rust_result = scalarmult(&k, &u).unwrap();
-
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             k = bytes.fromhex('{}')\n\
-             u = bytes.fromhex('{}')\n\
-             print(x25519.scalarmult(k, u).hex())",
-            hex::encode(&k),
-            hex::encode(&u),
+        assert_eq!(hex::encode(rust_result), v["result"].as_str().unwrap());
+        // RFC 7748 section 5.2, first test vector.
+        assert_eq!(
+            hex::encode(rust_result),
+            "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"
         );
-        let python_result = crate::oracle::python(&script);
-        assert_eq!(hex::encode(rust_result), python_result.trim());
     }
 
     #[test]
     fn oracle_public_key_and_shared_secret_match_python() {
-        let a_priv = generate_private();
-        let b_priv = generate_private();
-        let a_pub = public_key(a_priv.expose()).unwrap();
-        let b_pub = public_key(b_priv.expose()).unwrap();
-        let rust_shared = shared_secret(a_priv.expose(), &b_pub).unwrap();
-
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             a_priv = bytes.fromhex('{}')\n\
-             b_priv = bytes.fromhex('{}')\n\
-             a_pub = x25519.public_key(a_priv)\n\
-             b_pub = x25519.public_key(b_priv)\n\
-             print(a_pub.hex())\n\
-             print(b_pub.hex())\n\
-             print(x25519.shared_secret(a_priv, b_pub).hex())\n\
-             print(x25519.shared_secret(b_priv, a_pub).hex())",
-            hex::encode(a_priv.expose()),
-            hex::encode(b_priv.expose()),
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        let python_a_pub = lines.next().expect("a_pub line");
-        let python_b_pub = lines.next().expect("b_pub line");
-        let python_shared_ab = lines.next().expect("shared a->b line");
-        let python_shared_ba = lines.next().expect("shared b->a line");
-
-        assert_eq!(hex::encode(a_pub), python_a_pub);
-        assert_eq!(hex::encode(b_pub), python_b_pub);
-        assert_eq!(hex::encode(rust_shared), python_shared_ab);
-        assert_eq!(python_shared_ab, python_shared_ba);
+        let vectors = python_vectors();
+        let v = &vectors["x25519_exchange"];
+        let a_priv = h(v["a_priv"].as_str().unwrap());
+        let b_priv = h(v["b_priv"].as_str().unwrap());
+        let a_pub = public_key(&a_priv).unwrap();
+        let b_pub = public_key(&b_priv).unwrap();
+        assert_eq!(hex::encode(a_pub), v["a_pub"].as_str().unwrap());
+        assert_eq!(hex::encode(b_pub), v["b_pub"].as_str().unwrap());
+        let shared_ab = shared_secret(&a_priv, &b_pub).unwrap();
+        let shared_ba = shared_secret(&b_priv, &a_pub).unwrap();
+        assert_eq!(hex::encode(shared_ab), v["shared"].as_str().unwrap());
+        assert_eq!(shared_ab, shared_ba);
     }
 
     #[test]
     fn oracle_low_order_point_rejected_identically() {
         let priv_key = generate_private();
-        let script = format!(
-            "from zeropw.crypto import x25519\n\
-             from zeropw.errors import InvalidInput\n\
-             priv = bytes.fromhex('{}')\n\
-             try:\n\
-             \tx25519.shared_secret(priv, b'\\x00' * 32)\n\
-             \tprint('accepted')\n\
-             except InvalidInput as exc:\n\
-             \tprint(f'rejected:{{exc.reason}}')",
-            hex::encode(priv_key.expose()),
-        );
-        let python_out = crate::oracle::python(&script);
-        assert_eq!(python_out.trim(), "rejected:x25519_low_order_point");
-
         let err = shared_secret(priv_key.expose(), &[0u8; 32]).unwrap_err();
         match err {
             SharedSecretError::LowOrderPoint(e) => assert_eq!(e.reason, "x25519_low_order_point"),

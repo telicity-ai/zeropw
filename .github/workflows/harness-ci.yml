@@ -38,73 +38,22 @@ jobs:
       - name: Run harness unit tests
         run: python -m unittest discover -s harness -p 'test_*.py' -v
 
-  product-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
-
-      - name: Compile product modules
-        run: python -m compileall -q zeropw tests
-
-      - name: Run product tests
-        # The full log goes to a file so a failure can be summarised below; the
-        # tail keeps the step output readable. The suite uses synthetic
-        # credentials and loopback-only test servers.
-        run: |
-          set -o pipefail
-          python -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee product-tests.log | tail -n 40
-
-      - name: Summarise failures
-        if: failure()
-        run: |
-          echo "## Failing product tests" >> "$GITHUB_STEP_SUMMARY"
-          grep -n '^\(FAIL\|ERROR\):' product-tests.log | tee -a "$GITHUB_STEP_SUMMARY" || true
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          awk '/^(FAIL|ERROR): /{p=1} p' product-tests.log | head -n 200 >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
   rust-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - name: Set up Python 3.12 for differential tests
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.12"
+      - name: Use Homebrew OpenSSL on macOS
+        if: runner.os == 'macOS'
+        run: echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path rust/Cargo.toml -- --check
-
-      - name: Run Rust clippy
-        run: cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-
-      - name: Run Rust library tests
-        run: cargo test --locked --manifest-path rust/Cargo.toml --lib
-
-      - name: Run Rust integration tests
-        shell: bash
-        run: |
-          for test_file in rust/tests/*.rs; do
-            test_name="$(basename "$test_file" .rs)"
-            if [[ "$test_name" != "policy_differential" ]]; then
-              cargo test --locked --manifest-path rust/Cargo.toml --test "$test_name"
-            fi
-          done
-
-      - name: Run the long policy differential test
-        run: cargo test --locked --manifest-path rust/Cargo.toml --test policy_differential
+      - name: Run the Rust verification matrix
+        run: rust/verify.sh

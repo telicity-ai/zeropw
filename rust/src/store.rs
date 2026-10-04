@@ -17,8 +17,9 @@ use std::sync::{Condvar, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::errors::Error;
+use crate::errors::{Error, ErrorClass};
 use crate::pyjson::{self, DumpOptions};
+use crate::pystr;
 use serde_json::Value;
 
 pub const DIR_MODE: u32 = 0o700;
@@ -82,33 +83,16 @@ impl StateDir {
 
     // ------------------------------------------------------------------ setup
     /// `StateDir.create`: `self.path.mkdir(mode=DIR_MODE, parents=True)` then
-    /// an unconditional `os.chmod(self.path, DIR_MODE)`. A-R2-7: Python only
-    /// raises `StateError("state_exists")` from the initial `path.exists()`
-    /// check above; any other `mkdir` failure (permission denied, disk full,
-    /// ...) is an uncaught `OSError`, not `StateError("state_exists")` --
-    /// PORTING.md §3.5 applies (`rust/DEVIATIONS.md`), so a non-EEXIST mkdir
-    /// failure here gets a distinct reason (`state_write_failed`) instead of
-    /// being folded into `state_exists`.
+    /// an unconditional `os.chmod(self.path, DIR_MODE)`. Python only raises
+    /// `StateError("state_exists")` from the initial `path.exists()` check;
+    /// every later `mkdir`/`chmod` failure (a losing creation race included,
+    /// which is `FileExistsError` because `exist_ok` is false) is the raw
+    /// `OSError`, reproduced by [`uncaught_os_error`].
     pub fn create(&self) -> Result<(), Error> {
         if self.path.exists() {
             return Err(Error::state("state_exists").with_detail(path_str(&self.path)));
         }
-        if let Some(parent) = self.path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|_| {
-                Error::state("state_write_failed").with_detail(path_str(&self.path))
-            })?;
-        }
-        match mkdir_exact(&self.path, DIR_MODE) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(Error::state("state_exists").with_detail(path_str(&self.path)));
-            }
-            Err(_) => {
-                return Err(Error::state("state_write_failed").with_detail(path_str(&self.path)));
-            }
-        }
+        path_mkdir(&self.path, DIR_MODE, true, false).map_err(|e| uncaught_os_error(&e))?;
         // Python's follow-up `os.chmod` (unconditional, regardless of
         // whether the preceding `mkdir(mode=DIR_MODE)` already landed on
         // DIR_MODE): fixes the directory back to exactly DIR_MODE even
@@ -126,15 +110,13 @@ impl StateDir {
     }
 
     /// `StateDir.subdir`: `target.mkdir(mode=DIR_MODE, exist_ok=True)` --
-    /// the one `mkdir` call site in `store.py` that omits `parents=True`.
-    /// A-R2-7: a missing parent therefore makes Python's `os.mkdir` raise an
-    /// uncaught `FileNotFoundError`, not a `StateError` -- fail *closed*
-    /// here (PORTING.md §3.5, `rust/DEVIATIONS.md`) rather than the
-    /// previous fail-*open* behaviour of silently creating the missing
-    /// parent via `mkdir_p`.
+    /// the one `mkdir` call site in `store.py` that omits `parents=True`. A
+    /// missing parent (`FileNotFoundError`) or a non-directory occupying the
+    /// target (`FileExistsError`) is the raw `OSError` Python raises, never a
+    /// silently created parent.
     pub fn subdir(&self, name: &str) -> Result<PathBuf, Error> {
         let target = self.join(name);
-        mkdir_leaf(&target)?;
+        path_mkdir(&target, DIR_MODE, false, true).map_err(|e| uncaught_os_error(&e))?;
         Ok(target)
     }
 
@@ -181,9 +163,13 @@ impl StateDir {
         Ok(StateLock { dir: self })
     }
 
+    /// `lock()`'s first-entry `mkdir(parents=True, exist_ok=True)`,
+    /// `os.open(".lock")` and `fcntl.flock`: none is caught in Python (a
+    /// failed `flock` only closes the fd before re-raising), so each failure
+    /// is the raw `OSError` ([`uncaught_os_error`]).
     #[allow(unsafe_code)]
     fn acquire_os_lock(&self) -> Result<File, Error> {
-        mkdir_p(&self.path)?;
+        path_mkdir(&self.path, DIR_MODE, true, true).map_err(|e| uncaught_os_error(&e))?;
         let lock_path = self.path.join(".lock");
         let file = OpenOptions::new()
             .read(true)
@@ -191,17 +177,14 @@ impl StateDir {
             .create(true)
             .mode(FILE_MODE)
             .open(&lock_path)
-            .map_err(|e| {
-                Error::state("state_lock_failed")
-                    .with_detail(format!("{}: {e}", path_str(&lock_path)))
-            })?;
+            .map_err(|e| uncaught_os_error(&e))?;
         // SAFETY: `file` owns a valid, open file descriptor for the
         // lifetime of this call; `flock` only touches the kernel's lock
         // table for that fd and does not alias Rust-managed memory. This is
         // the crate's one allowed `unsafe` (rust/PORTING.md engineering rules).
         let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
         if rc != 0 {
-            return Err(Error::state("state_lock_failed").with_detail(path_str(&lock_path)));
+            return Err(uncaught_os_error(&std::io::Error::last_os_error()));
         }
         Ok(file)
     }
@@ -240,21 +223,24 @@ impl StateDir {
     /// either (store.py:104-110) -- so a failed rename leaves no tmp file
     /// behind, unlike [`StateDir::write_bytes`] (store.py:139-147, which
     /// has no such `except` clause and leaves the tmp file in place).
+    ///
+    /// The parent `mkdir` (store.py:96) and the temp-file `os.open`
+    /// (store.py:98) sit before that `try`, so their failures are the raw
+    /// `OSError` ([`uncaught_os_error`]), not `state_write_failed`.
     pub fn write_json(&self, name: &str, value: &Value) -> Result<(), Error> {
         let target = self.join(name);
-        if let Some(parent) = target.parent() {
-            mkdir_p(parent)?;
-        }
+        mkdir_parent(&target)?;
         let text = pyjson::dumps(value, DumpOptions::pretty_sorted())
             .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
         let tmp = tmp_path_write_json(&target);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(FILE_MODE)
+            .open(&tmp)
+            .map_err(|e| uncaught_os_error(&e))?;
         let result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(FILE_MODE)
-                .open(&tmp)?;
             file.write_all(text.as_bytes())?;
             file.flush()?;
             file.sync_all()?;
@@ -268,38 +254,46 @@ impl StateDir {
         })
     }
 
-    /// Append one line and fsync. Port of `StateDir.append_line`.
+    /// Append one line and fsync. Port of `StateDir.append_line`, whose
+    /// docstring documents "Raises OSError to the caller on failure": it has
+    /// no `except` clause, so the `mkdir`, `os.open`, `os.write` and
+    /// `os.fsync` failures are all the raw `OSError` ([`uncaught_os_error`]).
     pub fn append_line(&self, name: &str, line: &str) -> Result<(), Error> {
         if line.contains('\n') {
             return Err(Error::state("state_invalid_line").with_detail(name));
         }
         let target = self.join(name);
-        if let Some(parent) = target.parent() {
-            mkdir_p(parent)?;
-        }
+        mkdir_parent(&target)?;
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .mode(FILE_MODE)
             .open(&target)
-            .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
+            .map_err(|e| uncaught_os_error(&e))?;
         let mut buf = line.as_bytes().to_vec();
         buf.push(b'\n');
-        file.write_all(&buf)
-            .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
-        file.sync_all()
-            .map_err(|_| Error::state("state_write_failed").with_detail(name))?;
+        file.write_all(&buf).map_err(|e| uncaught_os_error(&e))?;
+        file.sync_all().map_err(|e| uncaught_os_error(&e))?;
         Ok(())
     }
 
-    /// `StateDir.read_lines`.
+    /// `StateDir.read_lines`. Python has no `try` here: an `open()`/read
+    /// failure (a directory, no permission) is the raw `OSError`
+    /// ([`uncaught_os_error`]) and undecodable UTF-8 is the built-in
+    /// `UnicodeDecodeError`, which this crate carries as
+    /// `StateError("state_corrupt", "UnicodeDecodeError")` -- the shape the
+    /// administrator CLI's `except (..., ValueError)` handler prints.
     pub fn read_lines(&self, name: &str, limit: Option<usize>) -> Result<Vec<String>, Error> {
         let target = self.join(name);
         if !target.exists() {
             return Ok(Vec::new());
         }
-        let text = fs::read_to_string(&target)
-            .map_err(|_| Error::state("state_corrupt").with_detail(name))?;
+        let mut raw = Vec::new();
+        File::open(&target)
+            .and_then(|mut f| f.read_to_end(&mut raw))
+            .map_err(|e| uncaught_os_error(&e))?;
+        let text = String::from_utf8(raw)
+            .map_err(|_| Error::state("state_corrupt").with_detail("UnicodeDecodeError"))?;
         let mut lines = split_universal_newlines(&text);
         // Python: `lines[-limit:]`. `-0 == 0`, so `lines[-0:]` is `lines[0:]`
         // -- the *whole* list, not an empty one; only `limit > 0` actually
@@ -317,19 +311,21 @@ impl StateDir {
     /// `except OSError` here (store.py:139-147) has no `os.unlink(tmp)` --
     /// a failed write *or* a failed `os.replace` leaves the tmp file
     /// behind. Match that exactly (no cleanup on any failure path).
+    /// The parent `mkdir` (store.py:137) and the temp-file `os.open`
+    /// (store.py:139) precede that `try`: their failures are the raw
+    /// `OSError` ([`uncaught_os_error`]).
     pub fn write_bytes(&self, name: &str, data: &[u8]) -> Result<(), Error> {
         let target = self.join(name);
-        if let Some(parent) = target.parent() {
-            mkdir_p(parent)?;
-        }
+        mkdir_parent(&target)?;
         let tmp = tmp_path_write_bytes(&target);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(FILE_MODE)
+            .open(&tmp)
+            .map_err(|e| uncaught_os_error(&e))?;
         let result = (|| -> std::io::Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(FILE_MODE)
-                .open(&tmp)?;
             file.write_all(data)?;
             file.flush()?;
             file.sync_all()?;
@@ -435,69 +431,96 @@ fn split_universal_newlines(text: &str) -> Vec<String> {
     lines
 }
 
-/// `DirBuilder::new().mode(mode).create(path)`: creates exactly `path` (no
-/// parents) with `mode`, applied atomically at the `mkdir(2)` syscall level
-/// (masked by the process umask) -- the direct equivalent of Python's
-/// `os.mkdir(path, mode)` / `Path.mkdir(mode=mode)`. Unlike creating the
-/// directory with a default mode and `chmod`-ing it afterward (the previous
-/// approach here, A-R2-5), there is no window where the directory exists
-/// with a wider mode than requested.
-fn mkdir_exact(path: &Path, mode: u32) -> std::io::Result<()> {
-    DirBuilder::new().mode(mode).create(path)
+/// The raw `OSError` CPython lets escape a `store.py` call site that has no
+/// `except` around it (PORTING.md §3.5, measured scope: the administrator
+/// CLI's `except FileNotFoundError` / `except OSError` handlers print exactly
+/// this mapping, and nothing between the store and the CLI catches it).
+///
+/// The error is not a `ZeroPWError` in Python, so it carries
+/// [`ErrorClass::ZeroPW`] with `name` set to the PEP 3151 `OSError` subclass
+/// ([`pystr::os_error_class`]); `to_dict()` then renders what the CLI prints:
+/// `{"error": <class>, "reason": "io_error", "detail": <strerror>}`, or
+/// `{"error": "FileNotFoundError", "reason": "file_not_found"}` for `ENOENT`.
+pub fn uncaught_os_error(error: &std::io::Error) -> Error {
+    let class = pystr::os_error_class(error);
+    if class == "FileNotFoundError" {
+        return Error::subclass(ErrorClass::ZeroPW, class, "file_not_found", "");
+    }
+    Error::subclass(
+        ErrorClass::ZeroPW,
+        class,
+        "io_error",
+        pystr::os_error_strerror(error).unwrap_or_default(),
+    )
 }
 
-/// Port of `target.mkdir(mode=DIR_MODE, exist_ok=True)`: creates only the
-/// leaf `path` (no missing parent is created) with `DIR_MODE`, applied
-/// atomically per [`mkdir_exact`]. `exist_ok=True` means a pre-existing
-/// directory is left with whatever mode it already had -- not re-chmod'd to
-/// `DIR_MODE` -- matching Python's `os.mkdir` never even being attempted in
-/// that case.
-fn mkdir_leaf(path: &Path) -> Result<(), Error> {
-    if path.is_dir() {
-        return Ok(());
+/// `pathlib.PurePath.parent` for the paths this module builds: the lexical
+/// parent, `.` for a single relative component, and the path itself for the
+/// root (where `self.parent == self` in pathlib).
+fn pathlib_parent(path: &Path) -> PathBuf {
+    match path.parent() {
+        None => path.to_path_buf(),
+        Some(parent) if parent.as_os_str().is_empty() => PathBuf::from("."),
+        Some(parent) => parent.to_path_buf(),
     }
-    match mkdir_exact(path, DIR_MODE) {
+}
+
+/// CPython 3.12 `pathlib.Path.mkdir(mode, parents, exist_ok)`, returning the
+/// raw `OSError` it would raise:
+///
+/// ```python
+/// try:
+///     os.mkdir(self, mode)
+/// except FileNotFoundError:
+///     if not parents or self.parent == self:
+///         raise
+///     self.parent.mkdir(parents=True, exist_ok=True)
+///     self.mkdir(mode, parents=False, exist_ok=exist_ok)
+/// except OSError:
+///     if not exist_ok or not self.is_dir():
+///         raise
+/// ```
+///
+/// `mode` is applied by the `mkdir(2)` call itself (masked by the umask), so
+/// there is never a window with a wider mode; missing parents get pathlib's
+/// default `0o777`. Trying the leaf first matters for the error identity: a
+/// regular file in place of a parent gives `NotADirectoryError` from the
+/// leaf, not a `FileExistsError` from re-creating the parent.
+pub(crate) fn path_mkdir(
+    path: &Path,
+    mode: u32,
+    parents: bool,
+    exist_ok: bool,
+) -> std::io::Result<()> {
+    match DirBuilder::new().mode(mode).create(path) {
         Ok(()) => Ok(()),
-        // Lost a create race to another thread/process between the is_dir()
-        // check above and here, or the parent already existed with a
-        // pre-existing leaf: `exist_ok` semantics -- leave its mode alone.
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
-        // A-R2-7: covers, among others, a missing parent (Python's
-        // `os.mkdir` raises an uncaught `FileNotFoundError` here, since this
-        // call site has no `parents=True`) -- PORTING.md §3.5 applies
-        // (`rust/DEVIATIONS.md`), folded into the same reason `mkdir_p`
-        // already uses for its own local mkdir failures.
-        Err(_) => Err(Error::state("state_write_failed").with_detail(path_str(path))),
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
+            let parent = pathlib_parent(path);
+            if !parents || parent == path {
+                return Err(error);
+            }
+            path_mkdir(&parent, 0o777, true, true)?;
+            path_mkdir(path, mode, false, exist_ok)
+        }
+        Err(error) => {
+            if !exist_ok || !path.is_dir() {
+                Err(error)
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
-/// Port of the `Path.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)`
-/// calls in `store.py` (`lock`, `write_json`, `append_line`, `write_bytes`
-/// -- every mkdir call site *except* `subdir`, which has no `parents=True`
-/// and goes through [`mkdir_leaf`] directly instead). With `parents=True`,
-/// CPython's recursive parent-creation call
-/// (`self.parent.mkdir(parents=True, exist_ok=True)`) does not forward the
-/// caller's `mode` -- only the leaf directory the caller actually asked for
-/// is created with `mode=DIR_MODE`; any missing parents get the OS default
-/// mode (`0o777`, masked by umask at the syscall, exactly like
-/// `fs::create_dir_all`'s own default). The leaf itself is then created via
-/// [`mkdir_leaf`], atomically at `DIR_MODE`.
-fn mkdir_p(path: &Path) -> Result<(), Error> {
-    if path.is_dir() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|_| Error::state("state_write_failed").with_detail(path_str(parent)))?;
-    }
-    mkdir_leaf(path)
+/// `target.parent.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)`, the
+/// uncaught first step of `write_json`, `append_line` and `write_bytes`.
+fn mkdir_parent(target: &Path) -> Result<(), Error> {
+    path_mkdir(&pathlib_parent(target), DIR_MODE, true, true).map_err(|e| uncaught_os_error(&e))
 }
 
+/// `os.chmod(path, mode)`, uncaught in `StateDir.create`.
 fn set_mode(path: &Path, mode: u32) -> Result<(), Error> {
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .map_err(|_| Error::state("state_write_failed").with_detail(path_str(path)))
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| uncaught_os_error(&e))
 }
 
 /// `write_json`'s temp name (store.py:97: `.{name}.{pid}.{tid}.tmp`), pid
@@ -537,6 +560,24 @@ fn path_str(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// One name from `tempfile._RandomNameSequence`: eight characters drawn
+/// uniformly from `"abcdefghijklmnopqrstuvwxyz0123456789_"`, the suffix
+/// alphabet and length of every `tempfile.mkstemp`/`mkdtemp` name.
+pub fn tempfile_random_name() -> String {
+    use rand::RngCore;
+    const CHARACTERS: &[u8; 37] = b"abcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut name = String::with_capacity(8);
+    while name.len() < 8 {
+        let mut byte = [0u8; 1];
+        rand::rngs::OsRng.fill_bytes(&mut byte);
+        // Rejection sampling keeps the choice uniform (`37 * 6 == 222`).
+        if byte[0] < 222 {
+            name.push(char::from(CHARACTERS[usize::from(byte[0] % 37)]));
+        }
+    }
+    name
+}
+
 /// `store.now()`: seconds since the Unix epoch, like `time.time()`.
 pub fn now() -> f64 {
     SystemTime::now()
@@ -545,32 +586,146 @@ pub fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// `store.iso(ts)`: `time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))`.
-/// `time.gmtime` floors a fractional timestamp to whole seconds (verified
-/// against CPython, not just assumed -- see
-/// `rust/tests/store_oracle.rs`'s `iso_matches_python_time_gmtime_over_a_timestamp_table`,
-/// which covers the epoch, negative and fractional timestamps, 2000-02-29,
-/// years 0, -1, 1 and 9999/10000, an 8-digit year, the `i32` boundaries, and
-/// 200 randomized values).
-///
-/// Python delegates `%Y` rendering to the platform's `strftime(3)`: glibc
-/// renders years below 1000 without leading zeroes (`1`, `0`, `-1`), while
-/// Darwin renders them with a minimum width of four (`0001`, `0000`, `-001`).
-/// Preserve that observable platform difference instead of imposing one
-/// spelling on both targets.
-///
-/// A-R4-2: unlike Python's `time.gmtime`, this never raises -- an
-/// out-of-range or non-finite `ts` (e.g. `1e18`, `NaN`, `f64::INFINITY`)
-/// makes CPython raise `OSError`/`OverflowError`/`ValueError` uncaught, where
-/// this silently returns some computed (and, at that point, physically
-/// meaningless) date string instead, because this function's `-> String`
-/// signature is depended on unconditionally by callers across the crate,
-/// including modules outside this work unit. See `rust/DEVIATIONS.md`'s
-/// `iso` row and `rust/tests/store_oracle.rs`'s
-/// `iso_matches_python_for_out_of_range_and_non_finite_timestamps_is_a_documented_divergence`.
+/// `store.iso(ts)`: `time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))`
+/// for a timestamp Python formats. Inside that range this is exactly
+/// [`try_iso`]. Outside it CPython raises (see [`try_iso`]); this
+/// `-> String` form instead returns the proleptic-Gregorian rendering of the
+/// saturated `i64` second (`NaN` as `0`). A caller whose timestamp can come
+/// from a file, configuration or peer (rather than a `Clock` reading) must
+/// call [`try_iso`]/[`try_iso_int`] to reproduce Python's exception; the
+/// callers that still use this form are listed in `rust/DEVIATIONS.md`'s
+/// `iso` row.
 pub fn iso(ts: Option<f64>) -> String {
     let ts = ts.unwrap_or_else(now);
-    let secs = ts.floor() as i64;
+    try_iso(Some(ts)).unwrap_or_else(|_| format_civil(ts.floor() as i64))
+}
+
+/// The built-in exception CPython's `store.iso` lets escape for a timestamp
+/// it cannot format: `class_name` is `type(exc).__name__` and `message` is
+/// `str(exc)`, measured against CPython 3.12.14 on Linux/glibc (the macOS
+/// `errno`/`strerror` text is spelled per the Darwin headers and has not been
+/// re-measured in this pass).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IsoError {
+    pub class_name: &'static str,
+    pub message: String,
+}
+
+impl IsoError {
+    fn time_t_overflow() -> Self {
+        IsoError {
+            class_name: "OverflowError",
+            message: "timestamp out of range for platform time_t".into(),
+        }
+    }
+
+    /// This escaped built-in in the crate's error shapes, i.e. what the
+    /// administrator CLI prints for it: `OSError` through `except OSError`
+    /// (`io_error` with its `strerror`), `ValueError` through the
+    /// `(KeyError, TypeError, AttributeError, ValueError)` handler
+    /// (`StateError`/`state_corrupt`), `OverflowError` through the final
+    /// `except Exception` (`internal_error`).
+    pub fn to_error(&self) -> Error {
+        match self.class_name {
+            "OSError" => Error::subclass(
+                ErrorClass::ZeroPW,
+                "OSError",
+                "io_error",
+                self.message
+                    .split_once("] ")
+                    .map_or(self.message.as_str(), |(_, strerror)| strerror),
+            ),
+            "ValueError" => Error::state("state_corrupt").with_detail("ValueError"),
+            other => Error::subclass(ErrorClass::ZeroPW, other, "internal_error", ""),
+        }
+    }
+}
+
+impl std::fmt::Display for IsoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.class_name, self.message)
+    }
+}
+
+impl std::error::Error for IsoError {}
+
+/// `store.iso(ts)` for a Python `float` (or `None`), with CPython's own
+/// failure cases:
+///
+/// * `NaN` -> `ValueError("Invalid value NaN (not a number)")`;
+/// * `floor(ts)` outside `[-2**63, 2**63)` (both infinities included) ->
+///   `OverflowError("timestamp out of range for platform time_t")`
+///   (`_PyTime_ObjectToTime_t` with `_PyTime_ROUND_FLOOR`);
+/// * otherwise exactly [`try_iso_int`] of that floored second.
+pub fn try_iso(ts: Option<f64>) -> Result<String, IsoError> {
+    let ts = ts.unwrap_or_else(now);
+    if ts.is_nan() {
+        return Err(IsoError {
+            class_name: "ValueError",
+            message: "Invalid value NaN (not a number)".into(),
+        });
+    }
+    const TIME_T_BOUND: f64 = 9_223_372_036_854_775_808.0; // 2**63
+    let floored = ts.floor();
+    if !(-TIME_T_BOUND..TIME_T_BOUND).contains(&floored) {
+        return Err(IsoError::time_t_overflow());
+    }
+    iso_from_time_t(floored as i64)
+}
+
+/// `store.iso(ts)` for a Python `int` of any size (no float rounding, so a
+/// value above `2**53` keeps its exact second).
+///
+/// * outside `time_t` (`[-2**63, 2**63 - 1]`) ->
+///   `OverflowError("timestamp out of range for platform time_t")`;
+/// * a year whose `tm_year` (`year - 1900`) does not fit a C `int` ->
+///   `gmtime` fails with `EOVERFLOW`: `OSError`;
+/// * a year above `INT_MAX` that `gmtime` still accepted: CPython's
+///   `tm_year + 1900` wraps negative in `struct_time`, and `strftime`'s
+///   `gettmarg` then raises `OverflowError("year out of range")`;
+/// * otherwise the formatted string, with `%Y` as the platform renders it
+///   (glibc: no padding, `-1`, `0`, `1`; Darwin: width 4, `-001`, `0000`,
+///   `0001`).
+pub fn try_iso_int(secs: &num_bigint::BigInt) -> Result<String, IsoError> {
+    let secs = i64::try_from(secs).map_err(|_| IsoError::time_t_overflow())?;
+    iso_from_time_t(secs)
+}
+
+const C_INT_MAX: i64 = i32::MAX as i64;
+const C_INT_MIN: i64 = i32::MIN as i64;
+
+fn iso_from_time_t(secs: i64) -> Result<String, IsoError> {
+    let (year, ..) = civil_from_unix(secs);
+    let tm_year = year - 1900;
+    if !(C_INT_MIN..=C_INT_MAX).contains(&tm_year) {
+        return Err(gmtime_eoverflow());
+    }
+    if year > C_INT_MAX {
+        return Err(IsoError {
+            class_name: "OverflowError",
+            message: "year out of range".into(),
+        });
+    }
+    Ok(format_civil(secs))
+}
+
+#[cfg(target_os = "linux")]
+fn gmtime_eoverflow() -> IsoError {
+    IsoError {
+        class_name: "OSError",
+        message: "[Errno 75] Value too large for defined data type".into(),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn gmtime_eoverflow() -> IsoError {
+    IsoError {
+        class_name: "OSError",
+        message: "[Errno 84] Value too large to be stored in data type".into(),
+    }
+}
+
+fn format_civil(secs: i64) -> String {
     let (y, mo, d, h, mi, s) = civil_from_unix(secs);
     let year = strftime_year(y);
     format!("{year}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
@@ -764,284 +919,164 @@ mod tests {
         );
     }
 
-    // A-R2-7: `read_lines` has no `try`/`except` in Python at all -- a
-    // target that is a directory (`IsADirectoryError`) or contains bytes
-    // that are not valid UTF-8 (`UnicodeDecodeError`) makes Python's
-    // `open(...)`/iteration raise an uncaught `OSError`/`ValueError`, not a
-    // `StateError`. PORTING.md §3.5 applies (`rust/DEVIATIONS.md`): both map
-    // to `state_corrupt`, the reason `read_json` already uses for its own
-    // unreadable/malformed state files.
+    type Setup = fn(&Path, &StateDir);
+    type Op = fn(&Path, &StateDir) -> Result<(), Error>;
+
+    /// (python setup, python op, rust setup, rust op). `d` is the temporary
+    /// directory, `state` a created `StateDir` at `d/state`; the setup runs
+    /// before the op and every mode change is undone before cleanup.
+    #[allow(clippy::type_complexity)]
+    const UNCAUGHT_CASES: &[(&str, &str, Setup, Op)] = &[
+        (
+            "",
+            "state.subdir('a/b')",
+            |_, _| {},
+            |_, s| s.subdir("a/b").map(drop),
+        ),
+        (
+            "open(os.path.join(state.path, 'occupied'), 'w').close()",
+            "state.subdir('occupied')",
+            |_, s| fs::write(s.path.join("occupied"), b"").unwrap(),
+            |_, s| s.subdir("occupied").map(drop),
+        ),
+        (
+            "os.mkdir(os.path.join(d, 'ro'), 0o500)",
+            "StateDir(os.path.join(d, 'ro', 'state')).create()",
+            |d, _| {
+                fs::create_dir(d.join("ro")).unwrap();
+                fs::set_permissions(d.join("ro"), fs::Permissions::from_mode(0o500)).unwrap();
+            },
+            |d, _| StateDir::new(d.join("ro").join("state")).create(),
+        ),
+        (
+            "os.mkdir(os.path.join(state.path, '.lock'))",
+            "state.lock().__enter__()",
+            |_, s| fs::create_dir(s.path.join(".lock")).unwrap(),
+            |_, s| s.lock().map(drop),
+        ),
+        (
+            "os.chmod(state.path, 0o500)",
+            "state.write_json('doc.json', {'a': 1})",
+            |_, s| fs::set_permissions(&s.path, fs::Permissions::from_mode(0o500)).unwrap(),
+            |_, s| s.write_json("doc.json", &json!({"a": 1})),
+        ),
+        (
+            "open(os.path.join(state.path, 'occupied'), 'w').close()",
+            "state.write_json('occupied/doc.json', {'a': 1})",
+            |_, s| fs::write(s.path.join("occupied"), b"").unwrap(),
+            |_, s| s.write_json("occupied/doc.json", &json!({"a": 1})),
+        ),
+        (
+            "open(os.path.join(state.path, 'occupied'), 'w').close()",
+            "state.write_json('occupied/sub/doc.json', {'a': 1})",
+            |_, s| fs::write(s.path.join("occupied"), b"").unwrap(),
+            |_, s| s.write_json("occupied/sub/doc.json", &json!({"a": 1})),
+        ),
+        (
+            "os.mkdir(os.path.join(state.path, 'doc.json'))",
+            "state.write_json('doc.json', {'a': 1})",
+            |_, s| fs::create_dir(s.path.join("doc.json")).unwrap(),
+            |_, s| s.write_json("doc.json", &json!({"a": 1})),
+        ),
+        (
+            "os.chmod(state.path, 0o500)",
+            "state.write_bytes('blob.bin', b'x')",
+            |_, s| fs::set_permissions(&s.path, fs::Permissions::from_mode(0o500)).unwrap(),
+            |_, s| s.write_bytes("blob.bin", b"x"),
+        ),
+        (
+            "open(os.path.join(state.path, 'occupied'), 'w').close()",
+            "state.write_bytes('occupied/blob.bin', b'x')",
+            |_, s| fs::write(s.path.join("occupied"), b"").unwrap(),
+            |_, s| s.write_bytes("occupied/blob.bin", b"x"),
+        ),
+        (
+            "os.mkdir(os.path.join(state.path, 'blob.bin'))",
+            "state.write_bytes('blob.bin', b'x')",
+            |_, s| fs::create_dir(s.path.join("blob.bin")).unwrap(),
+            |_, s| s.write_bytes("blob.bin", b"x"),
+        ),
+        (
+            "os.chmod(state.path, 0o500)",
+            "state.append_line('log.jsonl', 'hello')",
+            |_, s| fs::set_permissions(&s.path, fs::Permissions::from_mode(0o500)).unwrap(),
+            |_, s| s.append_line("log.jsonl", "hello"),
+        ),
+        (
+            "open(os.path.join(state.path, 'occupied'), 'w').close()",
+            "state.append_line('occupied/log.jsonl', 'hello')",
+            |_, s| fs::write(s.path.join("occupied"), b"").unwrap(),
+            |_, s| s.append_line("occupied/log.jsonl", "hello"),
+        ),
+        (
+            "os.mkdir(os.path.join(state.path, 'log.jsonl'))",
+            "state.append_line('log.jsonl', 'hello')",
+            |_, s| fs::create_dir(s.path.join("log.jsonl")).unwrap(),
+            |_, s| s.append_line("log.jsonl", "hello"),
+        ),
+        (
+            "os.mkdir(os.path.join(state.path, 'adir'))",
+            "state.read_lines('adir')",
+            |_, s| fs::create_dir(s.path.join("adir")).unwrap(),
+            |_, s| s.read_lines("adir", None).map(drop),
+        ),
+        (
+            "open(os.path.join(state.path, 'bad.txt'), 'wb').write(b'line one\\n\\xffnot utf8\\n')",
+            "state.read_lines('bad.txt')",
+            |_, s| fs::write(s.path.join("bad.txt"), b"line one\n\xffnot utf8\n").unwrap(),
+            |_, s| s.read_lines("bad.txt", None).map(drop),
+        ),
+        (
+            "open(os.path.join(state.path, 'secret.txt'), 'w').close(); os.chmod(os.path.join(state.path, 'secret.txt'), 0)",
+            "state.read_lines('secret.txt')",
+            |_, s| {
+                fs::write(s.path.join("secret.txt"), b"").unwrap();
+                fs::set_permissions(s.path.join("secret.txt"), fs::Permissions::from_mode(0o000))
+                    .unwrap();
+            },
+            |_, s| s.read_lines("secret.txt", None).map(drop),
+        ),
+    ];
+
+    /// Every `store.py` call site without an `except` let the raw `OSError`
+    /// (or `UnicodeDecodeError`) escape in the prototype; each such
+    /// operation must fail with an error here, never succeed silently.
     #[test]
-    fn read_lines_on_directory_is_state_corrupt() {
-        let (_tmp, state) = new_state();
-        fs::create_dir(state.path.join("adir")).unwrap();
-        let err = state.read_lines("adir", None).unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_corrupt");
-    }
-
-    #[test]
-    fn read_lines_on_non_utf8_file_is_state_corrupt() {
-        let (_tmp, state) = new_state();
-        fs::write(state.path.join("bad.txt"), b"line one\n\xffnot utf8\n").unwrap();
-        let err = state.read_lines("bad.txt", None).unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_corrupt");
-    }
-
-    // A-R2-7: `subdir`'s Python source (`target.mkdir(mode=DIR_MODE,
-    // exist_ok=True)`) has no `parents=True`, unlike every other `mkdir`
-    // call site in `store.py`; a missing parent makes Python's `os.mkdir`
-    // raise an uncaught `FileNotFoundError`. This used to fail *open* in
-    // Rust (silently creating the missing parent via `mkdir_p`); it must
-    // fail *closed* instead, per PORTING.md §3.5 (`rust/DEVIATIONS.md`).
-    #[test]
-    fn subdir_with_missing_parent_fails_instead_of_creating_it() {
-        let (_tmp, state) = new_state();
-        let err = state.subdir("a/b").unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-        assert!(
-            !state.path.join("a").exists(),
-            "subdir must not fail-open by creating the missing parent"
-        );
-    }
-
-    // A-R3-5: `subdir`'s Python source (`target.mkdir(mode=DIR_MODE,
-    // exist_ok=True)`) also raises an uncaught `FileExistsError` when a
-    // regular file already occupies the target path -- `exist_ok=True` only
-    // suppresses the error when the path already exists *as a directory*;
-    // confirmed against `python3.12` (`state.subdir(...)` against a
-    // pre-existing regular file raises `FileExistsError`, not `StateError`).
-    // DEVIATIONS.md's row for this function must cover both uncaught cases
-    // (missing parent, above, and this one), not just the first.
-    #[test]
-    fn subdir_on_path_occupied_by_a_file_is_state_write_failed() {
-        let (_tmp, state) = new_state();
-        fs::write(state.path.join("occupied"), b"x").unwrap();
-        let err = state.subdir("occupied").unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-        assert!(state.path.join("occupied").is_file());
-    }
-
-    // A-R2-7: `create()` only raises `StateError("state_exists")` from its
-    // own initial `path.exists()` probe in Python -- any other `mkdir`
-    // failure (e.g. a read-only parent directory) is an uncaught raw
-    // `OSError` there, not `state_exists`. PORTING.md §3.5 applies
-    // (`rust/DEVIATIONS.md`): give it a distinct reason instead of folding
-    // every mkdir failure into `state_exists`.
-    #[test]
-    fn create_reports_distinct_reason_for_non_exists_mkdir_failure() {
-        let tmp = TempDir::new().unwrap();
-        let readonly_parent = tmp.path().join("readonly");
-        fs::create_dir(&readonly_parent).unwrap();
-        fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o500)).unwrap();
-        let state = StateDir::new(readonly_parent.join("state"));
-
-        let err = state.create();
-
-        // Restore write permission unconditionally (before asserting) so
-        // `TempDir`'s own cleanup can still remove `readonly_parent`.
-        fs::set_permissions(&readonly_parent, fs::Permissions::from_mode(0o700)).unwrap();
-
-        let err = err.unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_ne!(err.reason, "state_exists");
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    // A-R2-7: Python's `lock()` lets a failed `os.open(self.path / ".lock",
-    // ...)` escape as an uncaught `OSError`, not a `StateError`. PORTING.md
-    // §3.5 applies (`rust/DEVIATIONS.md`): map it to `state_lock_failed`,
-    // the reason this port already uses for a failed `flock`.
-    #[test]
-    fn lock_open_failure_is_state_lock_failed() {
-        let (_tmp, state) = new_state();
-        // A directory in place of the `.lock` file makes `OpenOptions::open`
-        // fail (EISDIR) instead of `flock` itself.
-        fs::create_dir(state.path.join(".lock")).unwrap();
-        match state.lock() {
-            Ok(_) => panic!("expected lock() to fail when .lock is a directory"),
-            Err(err) => {
-                assert!(err.is(ErrorClass::StateError));
-                assert_eq!(err.reason, "state_lock_failed");
+    fn uncaught_store_failures_fail_closed() {
+        for (_, op, setup, run) in UNCAUGHT_CASES {
+            let tmp = TempDir::new().unwrap();
+            let state = StateDir::new(tmp.path().join("state"));
+            state.create().unwrap();
+            setup(tmp.path(), &state);
+            let outcome = run(tmp.path(), &state);
+            for entry in walk(tmp.path()) {
+                let _ = fs::set_permissions(entry, fs::Permissions::from_mode(0o700));
             }
+            assert!(outcome.is_err(), "{op}: must fail closed");
         }
     }
 
-    // A-R3-2: `write_json`/`write_bytes`/`append_line` each have at least
-    // one `mkdir`/`os.open` call site that sits *before* Python's own
-    // `try`/`except` (store.py:96-98 `write_json`, store.py:137-139
-    // `write_bytes`, store.py:117-118 `append_line` -- the last has no
-    // `except` at all; see its own doc comment and its `DEVIATIONS.md` row).
-    // A failure there is Python's own uncaught `PermissionError` (a
-    // read-only parent directory) or `FileExistsError` (a regular file
-    // occupying the parent path) -- confirmed against real `python3.12`
-    // below, not just asserted -- rather than the `StateError
-    // ("state_write_failed")` each function's own `except` clause raises for
-    // every *other* failure. This port folds all of these into that same
-    // `state_write_failed` reason (PORTING.md §3.5; `DEVIATIONS.md`); these
-    // tests pin that folding the way `lock_open_failure_is_state_lock_failed`
-    // pins the analogous `lock()` row.
-    fn confirm_python_raises(op: &str, expect: &str) {
-        let script = format!(
-            r#"
-import tempfile, os
-from zeropw.store import StateDir
-with tempfile.TemporaryDirectory() as d:
-    state = StateDir(os.path.join(d, "state"))
-    state.create()
-    {op}
-"#
-        );
-        let out = crate::oracle::python(&script);
-        assert_eq!(out.trim(), expect, "python oracle script:\n{script}");
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                out.push(path.clone());
+                if path.is_dir() {
+                    out.extend(walk(&path));
+                }
+            }
+        }
+        out
     }
 
+    /// `subdir` has no `parents=True`: the missing parent is never created.
     #[test]
-    fn write_json_parent_permission_denied_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    os.chmod(state.path, 0o500)
-    try:
-        state.write_json("doc.json", {"a": 1})
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-    finally:
-        os.chmod(state.path, 0o700)
-"#,
-            "PermissionError",
-        );
-
+    fn subdir_with_missing_parent_does_not_create_it() {
         let (_tmp, state) = new_state();
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
-        let result = state.write_json("doc.json", &json!({"a": 1}));
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
-        let err = result.unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    #[test]
-    fn write_json_parent_occupied_by_file_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    with open(os.path.join(state.path, "occupied"), "w") as f:
-        f.write("x")
-    try:
-        state.write_json("occupied/doc.json", {"a": 1})
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-"#,
-            "FileExistsError",
-        );
-
-        let (_tmp, state) = new_state();
-        fs::write(state.path.join("occupied"), b"x").unwrap();
-        let err = state
-            .write_json("occupied/doc.json", &json!({"a": 1}))
-            .unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    #[test]
-    fn write_bytes_parent_permission_denied_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    os.chmod(state.path, 0o500)
-    try:
-        state.write_bytes("blob.bin", b"x")
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-    finally:
-        os.chmod(state.path, 0o700)
-"#,
-            "PermissionError",
-        );
-
-        let (_tmp, state) = new_state();
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
-        let result = state.write_bytes("blob.bin", b"x");
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
-        let err = result.unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    #[test]
-    fn write_bytes_parent_occupied_by_file_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    with open(os.path.join(state.path, "occupied"), "w") as f:
-        f.write("x")
-    try:
-        state.write_bytes("occupied/blob.bin", b"x")
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-"#,
-            "FileExistsError",
-        );
-
-        let (_tmp, state) = new_state();
-        fs::write(state.path.join("occupied"), b"x").unwrap();
-        let err = state.write_bytes("occupied/blob.bin", b"x").unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    #[test]
-    fn append_line_parent_permission_denied_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    os.chmod(state.path, 0o500)
-    try:
-        state.append_line("log.jsonl", "hello")
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-    finally:
-        os.chmod(state.path, 0o700)
-"#,
-            "PermissionError",
-        );
-
-        let (_tmp, state) = new_state();
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o500)).unwrap();
-        let result = state.append_line("log.jsonl", "hello");
-        fs::set_permissions(&state.path, fs::Permissions::from_mode(0o700)).unwrap();
-        let err = result.unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
-    }
-
-    #[test]
-    fn append_line_parent_occupied_by_file_is_state_write_failed() {
-        confirm_python_raises(
-            r#"
-    with open(os.path.join(state.path, "occupied"), "w") as f:
-        f.write("x")
-    try:
-        state.append_line("occupied/log.jsonl", "hello")
-        print("NO ERROR")
-    except Exception as e:
-        print(type(e).__name__)
-"#,
-            "FileExistsError",
-        );
-
-        let (_tmp, state) = new_state();
-        fs::write(state.path.join("occupied"), b"x").unwrap();
-        let err = state
-            .append_line("occupied/log.jsonl", "hello")
-            .unwrap_err();
-        assert!(err.is(ErrorClass::StateError));
-        assert_eq!(err.reason, "state_write_failed");
+        assert!(state.subdir("a/b").is_err());
+        assert!(!state.path.join("a").exists());
     }
 
     // A-R2-5: `mkdir_p`'s leaf (via `create()` and `subdir()`) must land on
@@ -1060,8 +1095,8 @@ with tempfile.TemporaryDirectory() as d:
     // `create()`-fixes-it-up-afterward-but-`subdir()`-does-not asymmetry.
     #[test]
     fn create_and_subdir_apply_dir_mode_under_various_umasks() {
-        if std::env::var_os("ZEROPW_UMASK_CHILD_TEST").is_some() {
-            run_umask_child_check();
+        if let Ok(umask) = std::env::var("ZEROPW_UMASK_CHILD_TEST") {
+            run_umask_child_check(u32::from_str_radix(&umask, 8).unwrap());
             return;
         }
         let exe = std::env::current_exe().expect("current_exe");
@@ -1073,7 +1108,7 @@ with tempfile.TemporaryDirectory() as d:
                 .arg("-c")
                 .arg(&script)
                 .arg(&exe)
-                .env("ZEROPW_UMASK_CHILD_TEST", "1")
+                .env("ZEROPW_UMASK_CHILD_TEST", umask)
                 .output()
                 .expect("failed to spawn umask child");
             assert!(
@@ -1091,7 +1126,7 @@ with tempfile.TemporaryDirectory() as d:
     /// whatever umask the parent's shell wrapper set, and cross-checks both
     /// resulting modes against `zeropw.store.StateDir` run under the same
     /// (inherited) umask.
-    fn run_umask_child_check() {
+    fn run_umask_child_check(umask: u32) {
         // `TempDir::new()`'s own directory creation is itself subject to the
         // umask we just set (POSIX `mkdir`/`mkdtemp` always masks the
         // requested mode by the process umask); under the pathological
@@ -1117,39 +1152,16 @@ with tempfile.TemporaryDirectory() as d:
         let _ = fs::set_permissions(&rust_sub, fs::Permissions::from_mode(0o700));
         let _ = fs::set_permissions(&rust_state.path, fs::Permissions::from_mode(0o700));
 
-        let py_tmp = TempDir::new().unwrap();
-        fs::set_permissions(py_tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        let script = format!(
-            r#"
-from zeropw.store import StateDir
-state = StateDir({:?})
-state.create()
-sub = state.subdir("audit")
-import os
-print(oct(os.stat(state.path).st_mode & 0o777))
-print(oct(os.stat(sub).st_mode & 0o777))
-"#,
-            py_tmp.path().join("py-state").to_string_lossy()
-        );
-        let out = crate::oracle::python(&script);
-        let mut lines = out.lines();
-        let py_create_mode =
-            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
-        let py_subdir_mode =
-            u32::from_str_radix(lines.next().unwrap().trim_start_matches("0o"), 8).unwrap();
-
-        // Same for the directories Python created under the same umask.
-        let py_state = py_tmp.path().join("py-state");
-        let _ = fs::set_permissions(py_state.join("audit"), fs::Permissions::from_mode(0o700));
-        let _ = fs::set_permissions(&py_state, fs::Permissions::from_mode(0o700));
-
+        // The prototype's `create()` is `mkdir(0o700)` then `chmod(0o700)`,
+        // its `subdir()` a bare `mkdir(0o700)` (masked by the umask).
         assert_eq!(
-            rust_create_mode, py_create_mode,
-            "create() mode must match Python under this umask"
+            rust_create_mode, 0o700,
+            "create() mode under umask {umask:o}"
         );
         assert_eq!(
-            rust_subdir_mode, py_subdir_mode,
-            "subdir() mode must match Python under this umask"
+            rust_subdir_mode,
+            0o700 & !umask,
+            "subdir() mode under umask {umask:o}"
         );
     }
 
@@ -1476,37 +1488,26 @@ print(oct(os.stat(sub).st_mode & 0o777))
         assert_eq!(dir2, state.path.join("nested/dir2"));
     }
 
-    // A-R7-2: differential confirmation that `normalize_join_name`'s table
-    // matches real `python3.12` `pathlib.Path.__truediv__` -- trailing
-    // slash, doubled slash, a `./` component, and an unresolved `..`
-    // component, as the finding specifically asked to pin.
+    // A-R7-2: `normalize_join_name` reproduces `pathlib.Path.__truediv__` --
+    // trailing slash, doubled slash, a `./` component, and an unresolved
+    // `..` component, as the finding specifically asked to pin.
     #[test]
-    fn pathlib_join_matches_python_for_normalization_cases() {
-        let names = [
-            "sub",
-            "sub/",
-            "sub//",
-            "./sub",
-            "sub/./x",
-            "a//b",
-            "a/b/",
-            "a/./b/",
-            "..",
-            "../escape",
-            "sub/../other",
+    fn pathlib_join_normalization_cases() {
+        // `pathlib.Path("/tmp/zpw-a-r7-2-base") / name` in the prototype.
+        let cases = [
+            ("sub", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub/", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub//", "/tmp/zpw-a-r7-2-base/sub"),
+            ("./sub", "/tmp/zpw-a-r7-2-base/sub"),
+            ("sub/./x", "/tmp/zpw-a-r7-2-base/sub/x"),
+            ("a//b", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("a/b/", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("a/./b/", "/tmp/zpw-a-r7-2-base/a/b"),
+            ("..", "/tmp/zpw-a-r7-2-base/.."),
+            ("../escape", "/tmp/zpw-a-r7-2-base/../escape"),
+            ("sub/../other", "/tmp/zpw-a-r7-2-base/sub/../other"),
         ];
-        let script = format!(
-            r#"
-from pathlib import Path
-base = Path("/tmp/zpw-a-r7-2-base")
-for name in {names:?}:
-    print(base / name)
-"#
-        );
-        let out = crate::oracle::python(&script);
-        let want: Vec<&str> = out.lines().collect();
-        assert_eq!(want.len(), names.len());
-        for (name, want) in names.iter().zip(want.iter()) {
+        for (name, want) in cases {
             let base = Path::new("/tmp/zpw-a-r7-2-base");
             let got = base.join(normalize_join_name(name));
             assert_eq!(got, Path::new(want), "name: {name:?}");

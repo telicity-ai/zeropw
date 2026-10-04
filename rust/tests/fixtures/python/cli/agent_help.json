@@ -1,0 +1,63 @@
+[
+ {
+  "args": [
+   "-h"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent [-h] {list-connections,request,exec,status,cancel} ...\n\nZeroPW agent tools client (JSON output)\n\npositional arguments:\n  {list-connections,request,exec,status,cancel}\n    list-connections    connections usable by this caller\n    request             relay one HTTP request through the gateway\n    exec                run the connection's supported CLI; arguments follow\n                        '--'\n    status              state and captured output of one of your runs\n    cancel              cancel one of your runs\n\noptions:\n  -h, --help            show this help message and exit\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "--help"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent [-h] {list-connections,request,exec,status,cancel} ...\n\nZeroPW agent tools client (JSON output)\n\npositional arguments:\n  {list-connections,request,exec,status,cancel}\n    list-connections    connections usable by this caller\n    request             relay one HTTP request through the gateway\n    exec                run the connection's supported CLI; arguments follow\n                        '--'\n    status              state and captured output of one of your runs\n    cancel              cancel one of your runs\n\noptions:\n  -h, --help            show this help message and exit\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "list-connections",
+   "--help"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent list-connections [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "request",
+   "-h"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent request [-h] --connection CONNECTION --method METHOD\n                            --path PATH [--body-file BODY_FILE | --body BODY]\n                            [--header 'K: V'] [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --method METHOD\n  --path PATH\n  --body-file BODY_FILE\n                        file whose bytes form the request body\n  --body BODY           request body text (UTF-8)\n  --header 'K: V'\n  --request-id REQUEST_ID\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "exec",
+   "--help"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent exec [-h] --connection CONNECTION\n                         [--request-id REQUEST_ID]\n\noptions:\n  -h, --help            show this help message and exit\n  --connection CONNECTION\n  --request-id REQUEST_ID\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "status",
+   "--help"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent status [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN\n",
+  "stderr": ""
+ },
+ {
+  "args": [
+   "cancel",
+   "--help"
+  ],
+  "code": 0,
+  "stdout": "usage: zeropw-agent cancel [-h] --run RUN\n\noptions:\n  -h, --help  show this help message and exit\n  --run RUN\n",
+  "stderr": ""
+ }
+]

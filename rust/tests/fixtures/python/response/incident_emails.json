@@ -1,0 +1,87 @@
+{
+ "now": "2023-11-14T22:13:21Z",
+ "cases": [
+  {
+   "incident": {
+    "id": "inc-20231114T221320Z-0123abcd",
+    "opened_at": "2023-11-14T22:13:20Z",
+    "status": "open",
+    "scope": "principal",
+    "principals": [
+     "agent-1"
+    ],
+    "trigger": "manual",
+    "detail": null,
+    "closed_at": null,
+    "widened_from": [],
+    "notification": {
+     "status": "not_configured",
+     "attempts": 0
+    },
+    "actions": {
+     "stopped": false,
+     "principals_disabled": 1,
+     "grants_revoked": 0,
+     "handle_key_rotated": false,
+     "runs_cancelled": 0,
+     "sockets_closed": 0,
+     "failed_steps": []
+    },
+    "assessment": {
+     "principals": [
+      {
+       "id": "agent-1",
+       "created_at": "2023-11-14T22:00:00Z"
+      }
+     ],
+     "secrets": []
+    },
+    "runtime": null,
+    "rule": null
+   },
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "body": "안내 생성 시각: 2023-11-14T22:13:21Z\n\n1. 무슨 일이 있었나\n사건 ID: inc-20231114T221320Z-0123abcd\n사건 시각: 2023-11-14T22:13:20Z  (판정 방식: manual)\n봉쇄 범위: 호출 주체\n침해된 호출 주체:\n  - agent-1 (토큰 생성: 2023-11-14T22:00:00Z)\n\n2. ZeroPW가 이미 한 것\n전체 정지: 아니오\n비활성화된 호출 주체 수: 1\n회수한 권한 수: 0\n핸들 키 교체: 아니오\n취소한 실행 수: 0\n닫은 서명기 소켓 수: 0\n\n3. 지금 해야 할 것 — 필수 교체\n필수 교체 대상이 없습니다.\n\n4. 권장 교체\n권장 교체 대상이 없습니다.\n\n5. 실행 환경\n실행 환경 자체의 침해를 배제할 수 없다면, 같은 실행 환경에 새 호출 주체를 만들기 전에 그 실행 환경을 재구축하고 다음 명령으로 범위를 넓히십시오:\n  incident escalate --id inc-20231114T221320Z-0123abcd --scope runtime|all\n기존 호출 주체의 토큰은 되살아나지 않습니다.\n\n6. 복구 명령\n  incident show --id inc-20231114T221320Z-0123abcd\n  (위 필수 교체를 모두 완료한 뒤)\n  incident close --id inc-20231114T221320Z-0123abcd\n  principal create --runtime <실행 환경 ID>\n  grant create --principal <새 호출 주체 ID> --connection <연결 ID>\n  resume\n"
+  },
+  {
+   "incident": {
+    "id": "inc-20231114T221320Z-0123abcd",
+    "opened_at": "2023-11-14T22:13:20Z",
+    "status": "open",
+    "scope": "principal",
+    "principals": [
+     "agent-1"
+    ],
+    "trigger": "manual",
+    "detail": null,
+    "closed_at": null,
+    "widened_from": [],
+    "notification": {
+     "status": "not_configured",
+     "attempts": 0
+    },
+    "actions": {
+     "stopped": false,
+     "principals_disabled": 1,
+     "grants_revoked": 0,
+     "handle_key_rotated": false,
+     "runs_cancelled": 0,
+     "sockets_closed": 0,
+     "failed_steps": []
+    },
+    "assessment": {
+     "principals": [
+      {
+       "id": "agent-1",
+       "created_at": "2023-11-14T22:00:00Z"
+      }
+     ],
+     "secrets": []
+    },
+    "runtime": "box-1",
+    "rule": "unknown_tool"
+   },
+   "subject": "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 inc-20231114T221320Z-0123abcd)",
+   "body": "안내 생성 시각: 2023-11-14T22:13:21Z\n\n1. 무슨 일이 있었나\n사건 ID: inc-20231114T221320Z-0123abcd\n사건 시각: 2023-11-14T22:13:20Z  (판정 방식: manual)\n봉쇄 범위: 호출 주체 (실행 환경: box-1)\n판정 규칙: unknown_tool\n침해된 호출 주체:\n  - agent-1 (토큰 생성: 2023-11-14T22:00:00Z)\n\n2. ZeroPW가 이미 한 것\n전체 정지: 아니오\n비활성화된 호출 주체 수: 1\n회수한 권한 수: 0\n핸들 키 교체: 아니오\n취소한 실행 수: 0\n닫은 서명기 소켓 수: 0\n\n3. 지금 해야 할 것 — 필수 교체\n필수 교체 대상이 없습니다.\n\n4. 권장 교체\n권장 교체 대상이 없습니다.\n\n5. 실행 환경\n실행 환경 자체의 침해를 배제할 수 없다면, 같은 실행 환경에 새 호출 주체를 만들기 전에 그 실행 환경을 재구축하고 다음 명령으로 범위를 넓히십시오:\n  incident escalate --id inc-20231114T221320Z-0123abcd --scope runtime|all\n기존 호출 주체의 토큰은 되살아나지 않습니다.\n\n6. 복구 명령\n  incident show --id inc-20231114T221320Z-0123abcd\n  (위 필수 교체를 모두 완료한 뒤)\n  incident close --id inc-20231114T221320Z-0123abcd\n  principal create --runtime <실행 환경 ID>\n  grant create --principal <새 호출 주체 ID> --connection <연결 ID>\n  resume\n"
+  }
+ ]
+}

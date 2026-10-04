@@ -1,0 +1,1738 @@
+{
+ "quoteaddr": [
+  [
+   "(x)local+tag@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "(nested(inner))local+tag@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "(escaped\\)paren)local+tag@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "l(x)ocal+tag@domain.example",
+   "\"l ocal+tag\"@domain.example"
+  ],
+  [
+   "l(nested(inner))ocal+tag@domain.example",
+   "\"l ocal+tag\"@domain.example"
+  ],
+  [
+   "l(escaped\\)paren)ocal+tag@domain.example",
+   "\"l ocal+tag\"@domain.example"
+  ],
+  [
+   "lo(x)cal+tag@domain.example",
+   "\"lo cal+tag\"@domain.example"
+  ],
+  [
+   "lo(nested(inner))cal+tag@domain.example",
+   "\"lo cal+tag\"@domain.example"
+  ],
+  [
+   "lo(escaped\\)paren)cal+tag@domain.example",
+   "\"lo cal+tag\"@domain.example"
+  ],
+  [
+   "loc(x)al+tag@domain.example",
+   "\"loc al+tag\"@domain.example"
+  ],
+  [
+   "loc(nested(inner))al+tag@domain.example",
+   "\"loc al+tag\"@domain.example"
+  ],
+  [
+   "loc(escaped\\)paren)al+tag@domain.example",
+   "\"loc al+tag\"@domain.example"
+  ],
+  [
+   "loca(x)l+tag@domain.example",
+   "\"loca l+tag\"@domain.example"
+  ],
+  [
+   "loca(nested(inner))l+tag@domain.example",
+   "\"loca l+tag\"@domain.example"
+  ],
+  [
+   "loca(escaped\\)paren)l+tag@domain.example",
+   "\"loca l+tag\"@domain.example"
+  ],
+  [
+   "local(x)+tag@domain.example",
+   "\"local +tag\"@domain.example"
+  ],
+  [
+   "local(nested(inner))+tag@domain.example",
+   "\"local +tag\"@domain.example"
+  ],
+  [
+   "local(escaped\\)paren)+tag@domain.example",
+   "\"local +tag\"@domain.example"
+  ],
+  [
+   "local+(x)tag@domain.example",
+   "\"local+ tag\"@domain.example"
+  ],
+  [
+   "local+(nested(inner))tag@domain.example",
+   "\"local+ tag\"@domain.example"
+  ],
+  [
+   "local+(escaped\\)paren)tag@domain.example",
+   "\"local+ tag\"@domain.example"
+  ],
+  [
+   "local+t(x)ag@domain.example",
+   "\"local+t ag\"@domain.example"
+  ],
+  [
+   "local+t(nested(inner))ag@domain.example",
+   "\"local+t ag\"@domain.example"
+  ],
+  [
+   "local+t(escaped\\)paren)ag@domain.example",
+   "\"local+t ag\"@domain.example"
+  ],
+  [
+   "local+ta(x)g@domain.example",
+   "\"local+ta g\"@domain.example"
+  ],
+  [
+   "local+ta(nested(inner))g@domain.example",
+   "\"local+ta g\"@domain.example"
+  ],
+  [
+   "local+ta(escaped\\)paren)g@domain.example",
+   "\"local+ta g\"@domain.example"
+  ],
+  [
+   "local+tag(x)@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag(nested(inner))@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag(escaped\\)paren)@domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@(x)domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@(nested(inner))domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@(escaped\\)paren)domain.example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@d(x)omain.example",
+   "local+tag@d"
+  ],
+  [
+   "local+tag@d(nested(inner))omain.example",
+   "local+tag@d"
+  ],
+  [
+   "local+tag@d(escaped\\)paren)omain.example",
+   "local+tag@d"
+  ],
+  [
+   "local+tag@do(x)main.example",
+   "local+tag@do"
+  ],
+  [
+   "local+tag@do(nested(inner))main.example",
+   "local+tag@do"
+  ],
+  [
+   "local+tag@do(escaped\\)paren)main.example",
+   "local+tag@do"
+  ],
+  [
+   "local+tag@dom(x)ain.example",
+   "local+tag@dom"
+  ],
+  [
+   "local+tag@dom(nested(inner))ain.example",
+   "local+tag@dom"
+  ],
+  [
+   "local+tag@dom(escaped\\)paren)ain.example",
+   "local+tag@dom"
+  ],
+  [
+   "local+tag@doma(x)in.example",
+   "local+tag@doma"
+  ],
+  [
+   "local+tag@doma(nested(inner))in.example",
+   "local+tag@doma"
+  ],
+  [
+   "local+tag@doma(escaped\\)paren)in.example",
+   "local+tag@doma"
+  ],
+  [
+   "local+tag@domai(x)n.example",
+   "local+tag@domai"
+  ],
+  [
+   "local+tag@domai(nested(inner))n.example",
+   "local+tag@domai"
+  ],
+  [
+   "local+tag@domai(escaped\\)paren)n.example",
+   "local+tag@domai"
+  ],
+  [
+   "local+tag@domain(x).example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain(nested(inner)).example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain(escaped\\)paren).example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.(x)example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.(nested(inner))example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.(escaped\\)paren)example",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.e(x)xample",
+   "local+tag@domain.e"
+  ],
+  [
+   "local+tag@domain.e(nested(inner))xample",
+   "local+tag@domain.e"
+  ],
+  [
+   "local+tag@domain.e(escaped\\)paren)xample",
+   "local+tag@domain.e"
+  ],
+  [
+   "local+tag@domain.ex(x)ample",
+   "local+tag@domain.ex"
+  ],
+  [
+   "local+tag@domain.ex(nested(inner))ample",
+   "local+tag@domain.ex"
+  ],
+  [
+   "local+tag@domain.ex(escaped\\)paren)ample",
+   "local+tag@domain.ex"
+  ],
+  [
+   "local+tag@domain.exa(x)mple",
+   "local+tag@domain.exa"
+  ],
+  [
+   "local+tag@domain.exa(nested(inner))mple",
+   "local+tag@domain.exa"
+  ],
+  [
+   "local+tag@domain.exa(escaped\\)paren)mple",
+   "local+tag@domain.exa"
+  ],
+  [
+   "local+tag@domain.exam(x)ple",
+   "local+tag@domain.exam"
+  ],
+  [
+   "local+tag@domain.exam(nested(inner))ple",
+   "local+tag@domain.exam"
+  ],
+  [
+   "local+tag@domain.exam(escaped\\)paren)ple",
+   "local+tag@domain.exam"
+  ],
+  [
+   "local+tag@domain.examp(x)le",
+   "local+tag@domain.examp"
+  ],
+  [
+   "local+tag@domain.examp(nested(inner))le",
+   "local+tag@domain.examp"
+  ],
+  [
+   "local+tag@domain.examp(escaped\\)paren)le",
+   "local+tag@domain.examp"
+  ],
+  [
+   "local+tag@domain.exampl(x)e",
+   "local+tag@domain.exampl"
+  ],
+  [
+   "local+tag@domain.exampl(nested(inner))e",
+   "local+tag@domain.exampl"
+  ],
+  [
+   "local+tag@domain.exampl(escaped\\)paren)e",
+   "local+tag@domain.exampl"
+  ],
+  [
+   "local+tag@domain.example(x)",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.example(nested(inner))",
+   "local+tag@domain.example"
+  ],
+  [
+   "local+tag@domain.example(escaped\\)paren)",
+   "local+tag@domain.example"
+  ],
+  [
+   "(x)loc.al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "(nested(inner))loc.al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "(escaped\\)paren)loc.al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "l(x)oc.al@domain.example",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "l(nested(inner))oc.al@domain.example",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "l(escaped\\)paren)oc.al@domain.example",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "lo(x)c.al@domain.example",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "lo(nested(inner))c.al@domain.example",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "lo(escaped\\)paren)c.al@domain.example",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "loc(x).al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc(nested(inner)).al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc(escaped\\)paren).al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.(x)al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.(nested(inner))al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.(escaped\\)paren)al@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.a(x)l@domain.example",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "loc.a(nested(inner))l@domain.example",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "loc.a(escaped\\)paren)l@domain.example",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "loc.al(x)@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al(nested(inner))@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al(escaped\\)paren)@domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@(x)domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@(nested(inner))domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@(escaped\\)paren)domain.example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@d(x)omain.example",
+   "loc.al@d"
+  ],
+  [
+   "loc.al@d(nested(inner))omain.example",
+   "loc.al@d"
+  ],
+  [
+   "loc.al@d(escaped\\)paren)omain.example",
+   "loc.al@d"
+  ],
+  [
+   "loc.al@do(x)main.example",
+   "loc.al@do"
+  ],
+  [
+   "loc.al@do(nested(inner))main.example",
+   "loc.al@do"
+  ],
+  [
+   "loc.al@do(escaped\\)paren)main.example",
+   "loc.al@do"
+  ],
+  [
+   "loc.al@dom(x)ain.example",
+   "loc.al@dom"
+  ],
+  [
+   "loc.al@dom(nested(inner))ain.example",
+   "loc.al@dom"
+  ],
+  [
+   "loc.al@dom(escaped\\)paren)ain.example",
+   "loc.al@dom"
+  ],
+  [
+   "loc.al@doma(x)in.example",
+   "loc.al@doma"
+  ],
+  [
+   "loc.al@doma(nested(inner))in.example",
+   "loc.al@doma"
+  ],
+  [
+   "loc.al@doma(escaped\\)paren)in.example",
+   "loc.al@doma"
+  ],
+  [
+   "loc.al@domai(x)n.example",
+   "loc.al@domai"
+  ],
+  [
+   "loc.al@domai(nested(inner))n.example",
+   "loc.al@domai"
+  ],
+  [
+   "loc.al@domai(escaped\\)paren)n.example",
+   "loc.al@domai"
+  ],
+  [
+   "loc.al@domain(x).example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain(nested(inner)).example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain(escaped\\)paren).example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.(x)example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.(nested(inner))example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.(escaped\\)paren)example",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.e(x)xample",
+   "loc.al@domain.e"
+  ],
+  [
+   "loc.al@domain.e(nested(inner))xample",
+   "loc.al@domain.e"
+  ],
+  [
+   "loc.al@domain.e(escaped\\)paren)xample",
+   "loc.al@domain.e"
+  ],
+  [
+   "loc.al@domain.ex(x)ample",
+   "loc.al@domain.ex"
+  ],
+  [
+   "loc.al@domain.ex(nested(inner))ample",
+   "loc.al@domain.ex"
+  ],
+  [
+   "loc.al@domain.ex(escaped\\)paren)ample",
+   "loc.al@domain.ex"
+  ],
+  [
+   "loc.al@domain.exa(x)mple",
+   "loc.al@domain.exa"
+  ],
+  [
+   "loc.al@domain.exa(nested(inner))mple",
+   "loc.al@domain.exa"
+  ],
+  [
+   "loc.al@domain.exa(escaped\\)paren)mple",
+   "loc.al@domain.exa"
+  ],
+  [
+   "loc.al@domain.exam(x)ple",
+   "loc.al@domain.exam"
+  ],
+  [
+   "loc.al@domain.exam(nested(inner))ple",
+   "loc.al@domain.exam"
+  ],
+  [
+   "loc.al@domain.exam(escaped\\)paren)ple",
+   "loc.al@domain.exam"
+  ],
+  [
+   "loc.al@domain.examp(x)le",
+   "loc.al@domain.examp"
+  ],
+  [
+   "loc.al@domain.examp(nested(inner))le",
+   "loc.al@domain.examp"
+  ],
+  [
+   "loc.al@domain.examp(escaped\\)paren)le",
+   "loc.al@domain.examp"
+  ],
+  [
+   "loc.al@domain.exampl(x)e",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "loc.al@domain.exampl(nested(inner))e",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "loc.al@domain.exampl(escaped\\)paren)e",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "loc.al@domain.example(x)",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.example(nested(inner))",
+   "loc.al@domain.example"
+  ],
+  [
+   "loc.al@domain.example(escaped\\)paren)",
+   "loc.al@domain.example"
+  ],
+  [
+   "(x)\"lo cal\"@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "(nested(inner))\"lo cal\"@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "(escaped\\)paren)\"lo cal\"@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"(x)lo cal\"@domain.example",
+   "\"(x)lo cal\"@domain.example"
+  ],
+  [
+   "\"(nested(inner))lo cal\"@domain.example",
+   "\"(nested(inner))lo cal\"@domain.example"
+  ],
+  [
+   "\"(escaped\\)paren)lo cal\"@domain.example",
+   "\"(escaped)paren)lo cal\"@domain.example"
+  ],
+  [
+   "\"l(x)o cal\"@domain.example",
+   "\"l(x)o cal\"@domain.example"
+  ],
+  [
+   "\"l(nested(inner))o cal\"@domain.example",
+   "\"l(nested(inner))o cal\"@domain.example"
+  ],
+  [
+   "\"l(escaped\\)paren)o cal\"@domain.example",
+   "\"l(escaped)paren)o cal\"@domain.example"
+  ],
+  [
+   "\"lo(x) cal\"@domain.example",
+   "\"lo(x) cal\"@domain.example"
+  ],
+  [
+   "\"lo(nested(inner)) cal\"@domain.example",
+   "\"lo(nested(inner)) cal\"@domain.example"
+  ],
+  [
+   "\"lo(escaped\\)paren) cal\"@domain.example",
+   "\"lo(escaped)paren) cal\"@domain.example"
+  ],
+  [
+   "\"lo (x)cal\"@domain.example",
+   "\"lo (x)cal\"@domain.example"
+  ],
+  [
+   "\"lo (nested(inner))cal\"@domain.example",
+   "\"lo (nested(inner))cal\"@domain.example"
+  ],
+  [
+   "\"lo (escaped\\)paren)cal\"@domain.example",
+   "\"lo (escaped)paren)cal\"@domain.example"
+  ],
+  [
+   "\"lo c(x)al\"@domain.example",
+   "\"lo c(x)al\"@domain.example"
+  ],
+  [
+   "\"lo c(nested(inner))al\"@domain.example",
+   "\"lo c(nested(inner))al\"@domain.example"
+  ],
+  [
+   "\"lo c(escaped\\)paren)al\"@domain.example",
+   "\"lo c(escaped)paren)al\"@domain.example"
+  ],
+  [
+   "\"lo ca(x)l\"@domain.example",
+   "\"lo ca(x)l\"@domain.example"
+  ],
+  [
+   "\"lo ca(nested(inner))l\"@domain.example",
+   "\"lo ca(nested(inner))l\"@domain.example"
+  ],
+  [
+   "\"lo ca(escaped\\)paren)l\"@domain.example",
+   "\"lo ca(escaped)paren)l\"@domain.example"
+  ],
+  [
+   "\"lo cal(x)\"@domain.example",
+   "\"lo cal(x)\"@domain.example"
+  ],
+  [
+   "\"lo cal(nested(inner))\"@domain.example",
+   "\"lo cal(nested(inner))\"@domain.example"
+  ],
+  [
+   "\"lo cal(escaped\\)paren)\"@domain.example",
+   "\"lo cal(escaped)paren)\"@domain.example"
+  ],
+  [
+   "\"lo cal\"(x)@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"(nested(inner))@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"(escaped\\)paren)@domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@(x)domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@(nested(inner))domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@(escaped\\)paren)domain.example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@d(x)omain.example",
+   "\"lo cal\"@d"
+  ],
+  [
+   "\"lo cal\"@d(nested(inner))omain.example",
+   "\"lo cal\"@d"
+  ],
+  [
+   "\"lo cal\"@d(escaped\\)paren)omain.example",
+   "\"lo cal\"@d"
+  ],
+  [
+   "\"lo cal\"@do(x)main.example",
+   "\"lo cal\"@do"
+  ],
+  [
+   "\"lo cal\"@do(nested(inner))main.example",
+   "\"lo cal\"@do"
+  ],
+  [
+   "\"lo cal\"@do(escaped\\)paren)main.example",
+   "\"lo cal\"@do"
+  ],
+  [
+   "\"lo cal\"@dom(x)ain.example",
+   "\"lo cal\"@dom"
+  ],
+  [
+   "\"lo cal\"@dom(nested(inner))ain.example",
+   "\"lo cal\"@dom"
+  ],
+  [
+   "\"lo cal\"@dom(escaped\\)paren)ain.example",
+   "\"lo cal\"@dom"
+  ],
+  [
+   "\"lo cal\"@doma(x)in.example",
+   "\"lo cal\"@doma"
+  ],
+  [
+   "\"lo cal\"@doma(nested(inner))in.example",
+   "\"lo cal\"@doma"
+  ],
+  [
+   "\"lo cal\"@doma(escaped\\)paren)in.example",
+   "\"lo cal\"@doma"
+  ],
+  [
+   "\"lo cal\"@domai(x)n.example",
+   "\"lo cal\"@domai"
+  ],
+  [
+   "\"lo cal\"@domai(nested(inner))n.example",
+   "\"lo cal\"@domai"
+  ],
+  [
+   "\"lo cal\"@domai(escaped\\)paren)n.example",
+   "\"lo cal\"@domai"
+  ],
+  [
+   "\"lo cal\"@domain(x).example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain(nested(inner)).example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain(escaped\\)paren).example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.(x)example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.(nested(inner))example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.(escaped\\)paren)example",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.e(x)xample",
+   "\"lo cal\"@domain.e"
+  ],
+  [
+   "\"lo cal\"@domain.e(nested(inner))xample",
+   "\"lo cal\"@domain.e"
+  ],
+  [
+   "\"lo cal\"@domain.e(escaped\\)paren)xample",
+   "\"lo cal\"@domain.e"
+  ],
+  [
+   "\"lo cal\"@domain.ex(x)ample",
+   "\"lo cal\"@domain.ex"
+  ],
+  [
+   "\"lo cal\"@domain.ex(nested(inner))ample",
+   "\"lo cal\"@domain.ex"
+  ],
+  [
+   "\"lo cal\"@domain.ex(escaped\\)paren)ample",
+   "\"lo cal\"@domain.ex"
+  ],
+  [
+   "\"lo cal\"@domain.exa(x)mple",
+   "\"lo cal\"@domain.exa"
+  ],
+  [
+   "\"lo cal\"@domain.exa(nested(inner))mple",
+   "\"lo cal\"@domain.exa"
+  ],
+  [
+   "\"lo cal\"@domain.exa(escaped\\)paren)mple",
+   "\"lo cal\"@domain.exa"
+  ],
+  [
+   "\"lo cal\"@domain.exam(x)ple",
+   "\"lo cal\"@domain.exam"
+  ],
+  [
+   "\"lo cal\"@domain.exam(nested(inner))ple",
+   "\"lo cal\"@domain.exam"
+  ],
+  [
+   "\"lo cal\"@domain.exam(escaped\\)paren)ple",
+   "\"lo cal\"@domain.exam"
+  ],
+  [
+   "\"lo cal\"@domain.examp(x)le",
+   "\"lo cal\"@domain.examp"
+  ],
+  [
+   "\"lo cal\"@domain.examp(nested(inner))le",
+   "\"lo cal\"@domain.examp"
+  ],
+  [
+   "\"lo cal\"@domain.examp(escaped\\)paren)le",
+   "\"lo cal\"@domain.examp"
+  ],
+  [
+   "\"lo cal\"@domain.exampl(x)e",
+   "\"lo cal\"@domain.exampl"
+  ],
+  [
+   "\"lo cal\"@domain.exampl(nested(inner))e",
+   "\"lo cal\"@domain.exampl"
+  ],
+  [
+   "\"lo cal\"@domain.exampl(escaped\\)paren)e",
+   "\"lo cal\"@domain.exampl"
+  ],
+  [
+   "\"lo cal\"@domain.example(x)",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.example(nested(inner))",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "\"lo cal\"@domain.example(escaped\\)paren)",
+   "\"lo cal\"@domain.example"
+  ],
+  [
+   "(x)Display <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "(nested(inner))Display <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "(escaped\\)paren)Display <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "D(x)isplay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "D(nested(inner))isplay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "D(escaped\\)paren)isplay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Di(x)splay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Di(nested(inner))splay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Di(escaped\\)paren)splay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Dis(x)play <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Dis(nested(inner))play <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Dis(escaped\\)paren)play <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Disp(x)lay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Disp(nested(inner))lay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Disp(escaped\\)paren)lay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displ(x)ay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displ(nested(inner))ay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displ(escaped\\)paren)ay <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displa(x)y <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displa(nested(inner))y <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Displa(escaped\\)paren)y <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display(x) <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display(nested(inner)) <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display(escaped\\)paren) <loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display (x)<loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display (nested(inner))<loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display (escaped\\)paren)<loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <(x)loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <(nested(inner))loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <(escaped\\)paren)loc.al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <l(x)oc.al@domain.example>",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "Display <l(nested(inner))oc.al@domain.example>",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "Display <l(escaped\\)paren)oc.al@domain.example>",
+   "\"l oc.al\"@domain.example"
+  ],
+  [
+   "Display <lo(x)c.al@domain.example>",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "Display <lo(nested(inner))c.al@domain.example>",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "Display <lo(escaped\\)paren)c.al@domain.example>",
+   "\"lo c.al\"@domain.example"
+  ],
+  [
+   "Display <loc(x).al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc(nested(inner)).al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc(escaped\\)paren).al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.(x)al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.(nested(inner))al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.(escaped\\)paren)al@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.a(x)l@domain.example>",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "Display <loc.a(nested(inner))l@domain.example>",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "Display <loc.a(escaped\\)paren)l@domain.example>",
+   "\"loc.a l\"@domain.example"
+  ],
+  [
+   "Display <loc.al(x)@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al(nested(inner))@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al(escaped\\)paren)@domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@(x)domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@(nested(inner))domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@(escaped\\)paren)domain.example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@d(x)omain.example>",
+   "loc.al@d"
+  ],
+  [
+   "Display <loc.al@d(nested(inner))omain.example>",
+   "loc.al@d"
+  ],
+  [
+   "Display <loc.al@d(escaped\\)paren)omain.example>",
+   "loc.al@d"
+  ],
+  [
+   "Display <loc.al@do(x)main.example>",
+   "loc.al@do"
+  ],
+  [
+   "Display <loc.al@do(nested(inner))main.example>",
+   "loc.al@do"
+  ],
+  [
+   "Display <loc.al@do(escaped\\)paren)main.example>",
+   "loc.al@do"
+  ],
+  [
+   "Display <loc.al@dom(x)ain.example>",
+   "loc.al@dom"
+  ],
+  [
+   "Display <loc.al@dom(nested(inner))ain.example>",
+   "loc.al@dom"
+  ],
+  [
+   "Display <loc.al@dom(escaped\\)paren)ain.example>",
+   "loc.al@dom"
+  ],
+  [
+   "Display <loc.al@doma(x)in.example>",
+   "loc.al@doma"
+  ],
+  [
+   "Display <loc.al@doma(nested(inner))in.example>",
+   "loc.al@doma"
+  ],
+  [
+   "Display <loc.al@doma(escaped\\)paren)in.example>",
+   "loc.al@doma"
+  ],
+  [
+   "Display <loc.al@domai(x)n.example>",
+   "loc.al@domai"
+  ],
+  [
+   "Display <loc.al@domai(nested(inner))n.example>",
+   "loc.al@domai"
+  ],
+  [
+   "Display <loc.al@domai(escaped\\)paren)n.example>",
+   "loc.al@domai"
+  ],
+  [
+   "Display <loc.al@domain(x).example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain(nested(inner)).example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain(escaped\\)paren).example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.(x)example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.(nested(inner))example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.(escaped\\)paren)example>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.e(x)xample>",
+   "loc.al@domain.e"
+  ],
+  [
+   "Display <loc.al@domain.e(nested(inner))xample>",
+   "loc.al@domain.e"
+  ],
+  [
+   "Display <loc.al@domain.e(escaped\\)paren)xample>",
+   "loc.al@domain.e"
+  ],
+  [
+   "Display <loc.al@domain.ex(x)ample>",
+   "loc.al@domain.ex"
+  ],
+  [
+   "Display <loc.al@domain.ex(nested(inner))ample>",
+   "loc.al@domain.ex"
+  ],
+  [
+   "Display <loc.al@domain.ex(escaped\\)paren)ample>",
+   "loc.al@domain.ex"
+  ],
+  [
+   "Display <loc.al@domain.exa(x)mple>",
+   "loc.al@domain.exa"
+  ],
+  [
+   "Display <loc.al@domain.exa(nested(inner))mple>",
+   "loc.al@domain.exa"
+  ],
+  [
+   "Display <loc.al@domain.exa(escaped\\)paren)mple>",
+   "loc.al@domain.exa"
+  ],
+  [
+   "Display <loc.al@domain.exam(x)ple>",
+   "loc.al@domain.exam"
+  ],
+  [
+   "Display <loc.al@domain.exam(nested(inner))ple>",
+   "loc.al@domain.exam"
+  ],
+  [
+   "Display <loc.al@domain.exam(escaped\\)paren)ple>",
+   "loc.al@domain.exam"
+  ],
+  [
+   "Display <loc.al@domain.examp(x)le>",
+   "loc.al@domain.examp"
+  ],
+  [
+   "Display <loc.al@domain.examp(nested(inner))le>",
+   "loc.al@domain.examp"
+  ],
+  [
+   "Display <loc.al@domain.examp(escaped\\)paren)le>",
+   "loc.al@domain.examp"
+  ],
+  [
+   "Display <loc.al@domain.exampl(x)e>",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "Display <loc.al@domain.exampl(nested(inner))e>",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "Display <loc.al@domain.exampl(escaped\\)paren)e>",
+   "loc.al@domain.exampl"
+  ],
+  [
+   "Display <loc.al@domain.example(x)>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.example(nested(inner))>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.example(escaped\\)paren)>",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.example>(x)",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.example>(nested(inner))",
+   "loc.al@domain.example"
+  ],
+  [
+   "Display <loc.al@domain.example>(escaped\\)paren)",
+   "loc.al@domain.example"
+  ],
+  [
+   "sender@(nested(inner))example.com",
+   "sender@example.com"
+  ],
+  [
+   "sender@(nested(inner))mple.com",
+   "sender@mple.com"
+  ],
+  [
+   "sender@(nested(inner))com",
+   "sender@com"
+  ],
+  [
+   "sender@(nested(inner)).com",
+   ""
+  ],
+  [
+   "sender@(nested(inner))",
+   ""
+  ],
+  [
+   "sender@exa(nested(inner))example.com",
+   "sender@exa"
+  ],
+  [
+   "sender@exa(nested(inner))mple.com",
+   "sender@exa"
+  ],
+  [
+   "sender@exa(nested(inner))com",
+   "sender@exa"
+  ],
+  [
+   "sender@exa(nested(inner)).com",
+   "sender@exa.com"
+  ],
+  [
+   "sender@exa(nested(inner))",
+   "sender@exa"
+  ],
+  [
+   "sender@exa.(nested(inner))example.com",
+   "sender@exa.example.com"
+  ],
+  [
+   "sender@exa.(nested(inner))mple.com",
+   "sender@exa.mple.com"
+  ],
+  [
+   "sender@exa.(nested(inner))com",
+   "sender@exa.com"
+  ],
+  [
+   "sender@exa.(nested(inner)).com",
+   ""
+  ],
+  [
+   "sender@exa.(nested(inner))",
+   ""
+  ],
+  [
+   "sender@exa-(nested(inner))example.com",
+   "sender@exa-"
+  ],
+  [
+   "sender@exa-(nested(inner))mple.com",
+   "sender@exa-"
+  ],
+  [
+   "sender@exa-(nested(inner))com",
+   "sender@exa-"
+  ],
+  [
+   "sender@exa-(nested(inner)).com",
+   "sender@exa-.com"
+  ],
+  [
+   "sender@exa-(nested(inner))",
+   "sender@exa-"
+  ],
+  [
+   "sender@example.com(nested(inner))example.com",
+   "sender@example.com"
+  ],
+  [
+   "sender@example.com(nested(inner))mple.com",
+   "sender@example.com"
+  ],
+  [
+   "sender@example.com(nested(inner))com",
+   "sender@example.com"
+  ],
+  [
+   "sender@example.com(nested(inner)).com",
+   "sender@example.com.com"
+  ],
+  [
+   "sender@example.com(nested(inner))",
+   "sender@example.com"
+  ]
+ ],
+ "transport": [
+  {
+   "sender": "sender@(nested(inner)).com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@(nested(inner))",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@exa.(nested(inner)).com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@exa.(nested(inner))",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sen(comment)der@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<\"sen der\"@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "\"lo cal\"@(comment)example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<\"lo cal\"@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "\"lo\\\\(cal\"@(comment)example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<\"lo\\\\(cal\"@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "Display <sender@(comment)example.com>",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender(comment).foo@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender.foo@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender.(comment)foo@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender.foo@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@exa(comment).com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@exa.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@exa.(comment)com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@exa.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender(comment)@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@(comment)example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@exa(comment)mple.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@exa>",
+    "<recipient@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@(nested(inner)).com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@(nested(inner))",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@exa.(nested(inner)).com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@exa.(nested(inner))",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sen(comment)der@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<\"sen der\"@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "\"lo cal\"@(comment)example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<\"lo cal\"@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "\"lo\\\\(cal\"@(comment)example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<\"lo\\\\(cal\"@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "Display <sender@(comment)example.com>",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender(comment).foo@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender.foo@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender.(comment)foo@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender.foo@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@exa(comment).com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@exa.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@exa.(comment)com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@exa.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender(comment)@example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@(comment)example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@example.com>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "sender@exa(comment)mple.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<sender@exa>"
+   ]
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "recipient@exa(comment)mple.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<recipient@exa>"
+   ]
+  },
+  {
+   "sender": "sender@(comment)example.com",
+   "recipient": "recipient@(comment)example.com",
+   "result": {
+    "status": "sent"
+   },
+   "envelope": [
+    "<sender@example.com>",
+    "<recipient@example.com>"
+   ]
+  }
+ ],
+ "interior": [
+  {
+   "sender": "sender(Internal)@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   }
+  },
+  {
+   "sender": "sender@(Internal)example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   }
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "recipient(Internal)@example.com",
+   "result": {
+    "status": "sent"
+   }
+  },
+  {
+   "sender": "sender@example.com",
+   "recipient": "recipient@(Internal)example.com",
+   "result": {
+    "status": "sent"
+   }
+  },
+  {
+   "sender": "(Nested (inner)) sender@example.com",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   }
+  },
+  {
+   "sender": "sender@example.com(Nested (inner))",
+   "recipient": "recipient@example.com",
+   "result": {
+    "status": "sent"
+   }
+  }
+ ]
+}

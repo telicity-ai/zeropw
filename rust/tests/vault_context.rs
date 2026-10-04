@@ -89,7 +89,7 @@ fn plain_http_connection(id: &str, secret_version: Option<i64>) -> Connection {
         "fake",
         "http",
         "gh-token",
-        secret_version,
+        secret_version.map(Into::into),
         "",
         Some(HttpTarget::new("http", "127.0.0.1", 1, None, false).unwrap()),
         Some(HttpAuth::bearer()),
@@ -161,7 +161,7 @@ fn put_and_trusted_use_never_persists_plaintext() {
             .contains(std::str::from_utf8(SYNTHETIC).unwrap())
     );
     let meta = ctx.vault.get_meta("gh-token").unwrap();
-    assert_eq!(meta.active_version, Some(1));
+    assert_eq!(meta.active_version, Some(1.into()));
     assert_eq!(meta.versions[0].status, "active");
     assert_eq!(meta.versions[0].public, json!({}));
 }
@@ -276,13 +276,13 @@ fn versioning_and_status_transitions() {
         .put_secret("gh-token", "api_key", b"v2-synthetic", "demo", "dev", false)
         .unwrap();
     let meta = ctx.vault.get_meta("gh-token").unwrap();
-    assert_eq!(meta.active_version, Some(1));
+    assert_eq!(meta.active_version, Some(1.into()));
     assert_eq!(
         meta.versions
             .iter()
             .map(|v| v.status.as_str())
             .collect::<Vec<_>>(),
-        vec!["active", "staged"]
+        vec![Some("active"), Some("staged")]
     );
     assert_eq!(
         ctx.vault
@@ -293,34 +293,34 @@ fn versioning_and_status_transitions() {
     );
     assert_eq!(
         ctx.vault
-            .secret_for_trusted_use("gh-token", Some(2))
+            .secret_for_trusted_use("gh-token", Some(2.into()))
             .unwrap()
             .expose(),
         b"v2-synthetic"
     );
     ctx.vault
-        .set_version_status("gh-token", 2, "active")
+        .set_version_status("gh-token", &2.into(), "active")
         .unwrap();
     let meta = ctx.vault.get_meta("gh-token").unwrap();
-    assert_eq!(meta.active_version, Some(2));
+    assert_eq!(meta.active_version, Some(2.into()));
     assert_eq!(
         meta.versions
             .iter()
             .map(|v| v.status.as_str())
             .collect::<Vec<_>>(),
-        vec!["retired", "active"]
+        vec![Some("retired"), Some("active")]
     );
     let err = ctx
         .vault
-        .secret_for_trusted_use("gh-token", Some(1))
+        .secret_for_trusted_use("gh-token", Some(1.into()))
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     ctx.vault
-        .set_version_status("gh-token", 1, "revoked")
+        .set_version_status("gh-token", &1.into(), "revoked")
         .unwrap();
     let err = ctx
         .vault
-        .set_version_status("gh-token", 1, "active")
+        .set_version_status("gh-token", &1.into(), "active")
         .unwrap_err();
     assert!(err.is(ErrorClass::InvalidInput));
     let err = ctx
@@ -580,7 +580,7 @@ fn new_active_version_rebinds_unpinned_connections_and_invalidates_handles() {
     let (_tmp, ctx) = setup();
     let grant = http_setup(&ctx, "gh", None);
     http_setup(&ctx, "pinned", Some(1));
-    assert_eq!(grant.credential_version, Some(1));
+    assert_eq!(grant.credential_version, Some(1.into()));
     let before = ctx.policy.get_connection("gh").unwrap().policy_version;
     ctx.vault
         .put_secret(
@@ -601,7 +601,7 @@ fn new_active_version_rebinds_unpinned_connections_and_invalidates_handles() {
     let refreshed = ctx.policy.get_grant(&grant.id).unwrap();
     assert_eq!(refreshed.status, "active");
     assert_eq!(refreshed.policy_version, after.policy_version);
-    assert_eq!(refreshed.credential_version, Some(2));
+    assert_eq!(refreshed.credential_version, Some(2.into()));
     let rebound: Vec<Value> = ctx
         .audit
         .tail(50)
@@ -627,14 +627,14 @@ fn new_active_version_rebinds_unpinned_connections_and_invalidates_handles() {
         )
         .unwrap();
     ctx.vault
-        .set_version_status("gh-token", 2, "retired")
+        .set_version_status("gh-token", &2.into(), "retired")
         .unwrap();
     assert_eq!(
         ctx.policy.get_connection("gh").unwrap().policy_version,
         after.policy_version
     );
     ctx.vault
-        .set_version_status("gh-token", 3, "active")
+        .set_version_status("gh-token", &3.into(), "active")
         .unwrap();
     assert_eq!(
         ctx.policy.get_connection("gh").unwrap().policy_version,
@@ -642,7 +642,7 @@ fn new_active_version_rebinds_unpinned_connections_and_invalidates_handles() {
     );
     assert_eq!(
         ctx.policy.get_grant(&grant.id).unwrap().credential_version,
-        Some(3)
+        Some(3.into())
     );
 }
 
@@ -685,7 +685,7 @@ fn restore_reapplies_revocations_rotates_handle_key_and_never_reopens_approvals(
     ctx.policy.disable_connection("gh").unwrap();
     ctx.policy.disable_principal("agent-1", true).unwrap();
     ctx.vault
-        .set_version_status("gh-token", 1, "revoked")
+        .set_version_status("gh-token", &1.into(), "revoked")
         .unwrap();
 
     Vault::restore(ctx.state, &backup, ctx.audit, Some(ctx.kms)).unwrap();
@@ -1024,7 +1024,7 @@ fn reapply_revocations_aborts_when_versions_field_is_not_an_object() {
         .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
         .unwrap();
     ctx.vault
-        .set_version_status("gh-token", 1, "revoked")
+        .set_version_status("gh-token", &1.into(), "revoked")
         .unwrap();
 
     let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
@@ -1046,7 +1046,7 @@ fn reapply_revocations_skips_silently_when_versions_key_is_entirely_missing() {
         .put_secret("gh-token", "api_key", SYNTHETIC, "demo", "dev", true)
         .unwrap();
     ctx.vault
-        .set_version_status("gh-token", 1, "revoked")
+        .set_version_status("gh-token", &1.into(), "revoked")
         .unwrap();
 
     let mut doc = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
@@ -1083,7 +1083,7 @@ fn set_version_status_reactivating_bool_true_active_version_as_one_succeeds() {
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
 
     ctx.vault
-        .set_version_status("gh-token", 1, "active")
+        .set_version_status("gh-token", &1.into(), "active")
         .expect(
             "Python: `previous != version` (`True != 1`) is False, retire is skipped, call succeeds",
         );
@@ -1111,7 +1111,7 @@ fn set_version_status_retiring_clears_active_version_stored_as_integral_float() 
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
 
     ctx.vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap();
 
     let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
@@ -1142,7 +1142,7 @@ fn set_version_status_retire_does_not_clear_active_version_on_f64_collision() {
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
 
     ctx.vault
-        .set_version_status("gh-token", 9007199254740992, "retired")
+        .set_version_status("gh-token", &9007199254740992_i64.into(), "retired")
         .unwrap();
 
     let doc_after = ctx.state.read_json(vault::VAULT_DOC, Value::Null).unwrap();
@@ -1185,7 +1185,7 @@ fn set_version_status_activate_does_not_silently_skip_retire_on_f64_collision() 
 
     let err = ctx
         .vault
-        .set_version_status("gh-token", 9007199254740992, "active")
+        .set_version_status("gh-token", &9007199254740992_i64.into(), "active")
         .expect_err("Python raises KeyError here, mapped to state_corrupt");
     assert!(err.is(ErrorClass::StateError), "{err:?}");
     assert_eq!(err.reason.to_string(), "state_corrupt");
@@ -1297,7 +1297,7 @@ fn secret_version_unusable_suppresses_falsy_status_detail() {
 
     let err = ctx
         .vault
-        .secret_for_trusted_use("gh-token", Some(1))
+        .secret_for_trusted_use("gh-token", Some(1.into()))
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     assert_eq!(err.reason.to_string(), "secret_version_unusable");
@@ -1320,7 +1320,7 @@ fn secret_version_unusable_keeps_truthy_string_status_detail() {
 
     let err = ctx
         .vault
-        .secret_for_trusted_use("gh-token", Some(1))
+        .secret_for_trusted_use("gh-token", Some(1.into()))
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     assert_eq!(err.reason.to_string(), "secret_version_unusable");
@@ -1345,7 +1345,7 @@ fn set_version_status_versions_as_empty_array_is_not_found() {
 
     let err = ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     assert_eq!(err.reason.to_string(), "secret_version_not_found");
@@ -1367,7 +1367,7 @@ fn set_version_status_versions_as_array_containing_the_key_is_state_corrupt() {
 
     let err = ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap_err();
     assert!(err.is(ErrorClass::StateError));
     assert_eq!(err.reason.to_string(), "state_corrupt");
@@ -1387,7 +1387,7 @@ fn set_version_status_versions_as_string_uses_substring_membership() {
     ctx.state.write_json(vault::VAULT_DOC, &doc).unwrap();
     let err = ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap_err();
     assert!(err.is(ErrorClass::NotFound));
     assert_eq!(err.reason.to_string(), "secret_version_not_found");
@@ -1397,7 +1397,7 @@ fn set_version_status_versions_as_string_uses_substring_membership() {
     ctx.state.write_json(vault::VAULT_DOC, &doc2).unwrap();
     let err2 = ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap_err();
     assert!(err2.is(ErrorClass::StateError));
     assert_eq!(err2.reason.to_string(), "state_corrupt");
@@ -1420,7 +1420,7 @@ fn set_version_status_versions_missing_key_is_state_corrupt() {
 
     let err = ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap_err();
     assert!(err.is(ErrorClass::StateError));
     assert_eq!(err.reason.to_string(), "state_corrupt");

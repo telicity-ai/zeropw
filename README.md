@@ -1,41 +1,57 @@
 # ZeroPW
 
-에이전트에게 원본 비밀값을 주지 않고 CLI·API를 사용하게 하는 개인용 클라우드 금고다. 서비스와 자격증명을 한 번 연결하면 작업별 등록 없이 지원하는 CLI·API를 사용하며, 인증 중계와 SSH 서명 위임으로 원본 키를 실행 코드에서 분리한다.
+에이전트에게 원본 비밀값을 주지 않고 CLI·API를 쓰게 하는 개인용 금고다. 서비스와 자격증명을 한 번 연결하면 작업별 등록 없이 지원하는 CLI·API를 쓸 수 있다. HTTP 인증은 신뢰 프로세스의 인증 중계기가 대신 넣고, SSH 인증은 별도 서명기가 맡는다. 그래서 원본 키는 에이전트가 실행하는 코드에 들어가지 않는다.
 
-제품 정의와 보안 기준은 확정 문서를 따르며, Python 프로토타입은 `zeropw/`, 네이티브 Rust 재구현은 `rust/`에 있다. 합성 자격증명과 시험용 서버로만 검증했고 배포 전이다. 현재 Rust 작업은 기존 전체 기능의 동등성을 확인하며 Sol이 구현, Astra가 PO·QA·리뷰를 맡는다. 미해결 항목과 커밋별 검증 상태는 [Rust 인수 기록](docs/rust-completion.md)을 따른다. 과거 클라우드/Opus 개발 하네스의 운영 설명은 [하네스 안내](harness/README.md)에 보존되어 있으며 현재 Rust 작업의 검증 완료를 뜻하지 않는다.
+제품 구현은 `rust/`의 Rust 크레이트(`zeropw`)다. 합성 자격증명과 시험용 서버로만 검증했고 배포 전이다. 처음 만든 Python 프로토타입은 2026-10-03 Rust로 전환을 마치고 저장소에서 제거했다(git 이력에 남아 있다).
 
-## Rust 빌드와 검증
+## 구성
 
-Rust 2024 edition을 지원하는 toolchain이 필요하다. 테스트는 Python 3.12를 동등성 비교와 시험 서버에 사용하지만, Rust 제품은 Python을 실행 백엔드로 사용하지 않는다.
+| 바이너리 | 역할 | 실행 위치 |
+| --- | --- | --- |
+| `zeropw-admin` | 관리 CLI. 상태 디렉터리 초기화, 프로젝트·비밀·연결·호출 주체·권한 관리, 감사·알림 조회, 침해 대응, 팀 공유, 신뢰 프로세스 `serve` | 관리자 / 신뢰 호스트 |
+| `zeropw-agent` | 에이전트 쪽 얇은 클라이언트. `list-connections`, `request`, `exec`, `status`, `cancel` | 비밀 없는 실행 환경 |
+| `zeropw_session` | `exec` 실행 보조 바이너리. `serve` 바이너리와 같은 디렉터리에 둔다 | 신뢰 호스트 |
+| `zeropw-demo` | 합성 값으로 전체 흐름을 한 번에 도는 데모 (종료 코드 0 = 모든 확인 통과) | 시연 |
+| `zeropw-democli` | `exec` 지원 CLI 예시. 연결 핸들이 든 base URL만 받는다 | 시험·시연 |
+
+에이전트가 받는 것은 게이트웨이 URL(`ZEROPW_GATEWAY_URL`)과 자기 호출 토큰(`ZEROPW_CALLER_TOKEN`)뿐이다. 관리자 패스프레이즈나 원본 자격증명은 받지 않는다. `exec`를 쓰는 배포는 `zeropw_session`을 `serve` 바이너리 옆에 함께 둬야 한다. 없으면 `exec`가 `spawn_failed`로 실패하며, 평문 자격증명 경로로 대체하지 않는다.
+
+## 빌드와 실행
+
+Rust 2024 edition을 지원하는 toolchain과 OpenSSL 3 개발 헤더가 필요하다. macOS에서는 Homebrew `openssl@3`를 쓰고 `OPENSSL_DIR=$(brew --prefix openssl@3)`를 지정한다.
 
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml --bins
-cargo test --locked --manifest-path rust/Cargo.toml --all-targets
 rust/target/debug/zeropw-demo
 ```
 
-관리 명령은 `zeropw-admin --state-dir DIR COMMAND ...`, 에이전트 명령은 `zeropw-agent COMMAND ...`다. 에이전트는 `ZEROPW_GATEWAY_URL`과 자신의 제한된 `ZEROPW_CALLER_TOKEN`만 받고, 관리자 패스프레이즈나 원본 자격증명을 받지 않는다. `exec`를 사용하는 배포에는 신뢰하는 실행 보조 바이너리 `zeropw_session`을 서버/관리 바이너리 옆에 함께 두어야 한다. 없으면 `spawn_failed`로 실패하며 Python이나 평문 자격증명 경로로 대체하지 않는다.
+관리자와 에이전트의 실제 사용 흐름(초기화 → 비밀·연결 등록 → 호출 주체·권한 → `serve` → 에이전트 호출)은 [구현 현황](docs/implementation.md) §10에 명령 그대로 적어 두었다.
 
-이 구현은 기존 프로토타입의 지원 범위를 유지하는 작업이다. 모든 CLI 호환성, 운영 배포 준비 완료 또는 서로 다른 OS 사용자 간 격리를 약속하지 않는다. 상세 동등성 계약과 플랫폼 검증 상태는 [Rust 포팅 계약](rust/PORTING.md)과 [인수 기록](docs/rust-completion.md)을 확인한다.
-
-## Python 비교 기준
+## 검증
 
 ```sh
-python3.12 -m unittest discover -s tests -p 'test_*.py' -v   # 제품 프로토타입 시험
-python3.12 -m zeropw.demo                                       # 원커맨드 데모
+rust/verify.sh              # fmt, 엄격한 Clippy, 라이브러리·바이너리 시험, 모든 통합 시험, 서명기 자원 측정, 문서 시험
+rust/verify.sh --list       # 통합 시험 대상 목록
+rust/verify.sh signer_e2e   # 특정 통합 시험만
 ```
 
-## 현행 문서
+`verify.sh`는 제품 코드를 빌드하고 실행한다. 게이트웨이·금고·서명기·관리자 자격증명이 있는 호스트가 아닌 CI 러너나 격리 VM에서 돌린다. SSH 종단 시험은 OpenSSH(`ssh`, `sshd`, `ssh-keygen`)와 `perl`을 쓴다. Python은 필요 없다.
+
+프로토타입과의 호환성은 프로토타입이 제거 전에 한 번 생성한 고정 시험 자료(`rust/tests/fixtures/python/`)로 확인한다. 대상은 그것이 쓴 상태 디렉터리, 서명·다이제스트·통신 바이트, 백업이며, 생성 방법은 각 디렉터리의 `GENERATE.md`에 있다. 어디까지 호환을 지키는지는 [Rust 호환성 계약](rust/PORTING.md)에 있다.
+
+이 구현은 모든 CLI와의 호환, 운영 배포 준비, 서로 다른 OS 사용자 간 격리를 약속하지 않는다. 남은 경계와 한계는 [구현 현황](docs/implementation.md) §9에 있다.
+
+## 문서
 
 - [제품 정의](docs/product-intent.md)
 - [인증 중계와 보안 경계](docs/security-design.md)
-- [클라우드 개발 하네스](docs/harness.md)
-- [v1 프로토타입 구현 현황](docs/implementation.md)
-- [Rust 전체 기능 인수 기록](docs/rust-completion.md)
-- [Rust 동등성 계약](rust/PORTING.md)
-- [팀 공유: 서버 없는 환경 복제와 노드 간 동기화](docs/team-sync.md) — 리더 없는 P2P 커밋 전파. 설계 명세와 4단계(키·커밋·접기, 전송·동기화, 초대·제거·긴급 사실, 사건 공유·종단 시험) 구현. 구현 현황은 [v1 프로토타입 구현 현황](docs/implementation.md) §10 참고. Opus 리뷰 통과를 뜻하지 않는다
-- [실행 환경 침해 대응 설계와 구현 계획](docs/compromise-response.md) — 자동 봉쇄와 교체 안내 이메일. 합성 자격증명으로 시험한 프로토타입 구현 포함
+- [구현 현황](docs/implementation.md): 구성 요소, 사용 흐름, 보안 수용 시험 대응표, 한계, 실행 예시
+- [실행 환경 침해 대응](docs/compromise-response.md): 자동 봉쇄, 노출 판정, 교체 안내 이메일
+- [팀 공유](docs/team-sync.md): 서버 없는 환경 복제와 노드 간 P2P 동기화
+- [Rust 호환성 계약](rust/PORTING.md)
+- [Rust 전환 인수 기록](docs/rust-completion.md): 최종 검증 결과
+- [개발 하네스](docs/harness.md), [하네스 안내](harness/README.md)
 - [개정 반영 현황](docs/reviews/review-summary.md)
-- [제품 정의 PDF](output/pdf/zeropw-product-definition.pdf) — 2026-09-12 세션 연계 하네스 결정 전의 제품 설명 스냅샷. 현재 개발 운영 방식은 Markdown을 따른다.
+- [제품 정의 PDF](output/pdf/zeropw-product-definition.pdf): 2026-09-12 시점 스냅샷이다. 현행 기준은 Markdown이다.
 
-docs/archive의 자료와 2026-09-11 검토 기록은 이전 설계의 이력이다. 현행 요구사항이나 새 보안 검증 통과의 근거로 사용하지 않는다.
+`docs/archive/`와 `docs/reviews/`의 자료는 이전 설계와 검토의 이력이다. 현행 요구사항이나 새 검증 통과의 근거로 쓰지 않는다.

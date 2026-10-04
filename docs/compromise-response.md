@@ -2,7 +2,7 @@
 
 작성일: 2026-09-15 · 갱신 2026-09-16 (결정 확정, 단계 1–5 구현 반영) · 설계와 구현 계획 · 단계 1–5 프로토타입 구현됨, 단계 6 미구현
 
-이 문서는 에이전트 실행 환경이 완전히 장악된 상황을 가정하고, ZeroPW가 침입을 판정해 서비스를 스스로 정지하고, 봉쇄 전에 노출된 자격증명의 교체를 관리자에게 이메일로 안내하는 기능을 정의한다. [제품 정의](product-intent.md) §4의 "권한·만료·회수"와 "사용 기록·알림", [보안 경계](security-design.md) §5의 "전체 실행 정지와 이상 사용 알림"을 구체화한 것이며 두 문서의 요구사항을 바꾸지 않는다. 단계 1–5는 합성 자격증명과 시험용 서버로 시험한 프로토타입으로 구현되었고, 코드가 실제로 하는 일과 한계는 [구현 현황](implementation.md) §7·§9에 있다. 구현과 시험 통과는 보안 인증이나 하네스의 Opus 리뷰 통과를 뜻하지 않는다.
+이 문서는 에이전트 실행 환경이 완전히 장악된 상황을 가정하고, ZeroPW가 침입을 판정해 서비스를 스스로 정지하고, 봉쇄 전에 노출된 자격증명의 교체를 관리자에게 이메일로 안내하는 기능을 정의한다. [제품 정의](product-intent.md) §4의 "권한·만료·회수"와 "사용 기록·알림", [보안 경계](security-design.md) §5의 "전체 실행 정지와 이상 사용 알림"을 구체화한 것이며 두 문서의 요구사항을 바꾸지 않는다. 단계 1–5는 Rust 구현(`rust/`)에 있으며 합성 자격증명과 시험용 서버로 시험했다. 코드가 실제로 하는 일과 한계는 [구현 현황](implementation.md) §7·§9에 있다. 시험 통과는 보안 인증을 뜻하지 않는다.
 
 ## 1. 요약
 
@@ -128,7 +128,7 @@
 
 ### 6.1 발송 경로
 
-발송은 신뢰 프로세스 `serve`가 표준 라이브러리 `smtplib`로 한다. SMTP 서버·포트·발신자·수신자·TLS 방식은 상태 디렉터리의 `notify.json`(0600, 현재 사용자 소유)에, SMTP 비밀번호는 별도 파일(0600) 경로로 지정한다. 항목은 `host`, `port`, `mode`(`starttls`·`smtps`, 시험용 `plain`은 루프백 주소에만 허용), `username`, `password_file`, `sender`, `recipients`, `timeout_seconds`다. TLS는 인증서 검증을 끌 수 없다. 설정 파일이 잘못되었거나 권한이 느슨하면 발송 실패와 같이 `pending`으로 두고 재시도한다. `incident notify-test`로 설정을 확인할 수 있다. 이 자격증명은 [제품 정의](product-intent.md) §4가 말하는 ZeroPW 자신의 기반 권한이며 업무용 연결이나 금고 비밀로 등록하지 않는다. 에이전트 프로세스는 이 파일들에 닿지 못한다.
+발송은 신뢰 프로세스 `serve`가 내장 SMTP 클라이언트(`rust/src/smtp.rs`)로 한다. SMTP 서버·포트·발신자·수신자·TLS 방식은 상태 디렉터리의 `notify.json`(0600, 현재 사용자 소유)에, SMTP 비밀번호는 별도 파일(0600) 경로로 지정한다. 항목은 `host`, `port`, `mode`(`starttls`·`smtps`, 시험용 `plain`은 루프백 주소에만 허용), `username`, `password_file`, `sender`, `recipients`, `timeout_seconds`다. TLS는 인증서 검증을 끌 수 없다. 설정 파일이 잘못되었거나 권한이 느슨하면 발송 실패와 같이 `pending`으로 두고 재시도한다. `incident notify-test`로 설정을 확인할 수 있다. 이 자격증명은 [제품 정의](product-intent.md) §4가 말하는 ZeroPW 자신의 기반 권한이며 업무용 연결이나 금고 비밀로 등록하지 않는다. 에이전트 프로세스는 이 파일들에 닿지 못한다.
 
 설정이 없으면 이메일 없이 봉쇄만 하고, 사건 기록과 `serve` 표준 오류, `alerts`에 `notification: not_configured`를 남긴다. 발송 실패는 `pending`으로 두고 폴링 주기마다 지수 백오프로 재시도하며, 사건이 닫힐 때까지 계속한다. 이메일은 알림이지 인증 채널이 아니다. 이메일 없이도 봉쇄는 완전하다.
 
@@ -175,42 +175,40 @@
 
 ## 9. 구현 계획
 
-각 단계는 하네스의 한 작업으로 경계를 지으며, 표준 라이브러리만 쓰고, 합성 자격증명과 시험용 서버로 검증하며, Opus 리뷰를 받는다. 통제 파일(`.github/`, `harness/`, `AGENTS.md`, `docs/harness.md`, `docs/product-intent.md`, `docs/security-design.md`)은 건드리지 않는다.
-
-2026-09-16 구현 현황: 단계 1–5는 사용자 지시에 따라 Sonnet 작업자가 구현하고 조정 세션(Claude Fable 5.1)이 PO·리뷰어로 검토·수정 요청했다. 이는 하네스의 Opus 적대적 리뷰가 아니며, Opus PASS는 없다. 단계 6은 배포 작업과 함께 진행하며 미구현이다.
+단계 1–5는 2026-09-16 Python 프로토타입으로 먼저 구현했고, 이후 같은 범위를 Rust로 옮겼다(2026-10-03 프로토타입 제거). 아래 모듈(`rust/src/`)과 시험(`rust/tests/<대상>.rs`, 각 모듈의 단위 시험)은 현재 Rust 구현 기준이다. 합성 자격증명과 시험용 서버로만 검증했다. 단계 6은 배포 작업과 함께 진행하며 미구현이다.
 
 ### 단계 1 — 사건 기록과 수동 봉쇄
 
-- `zeropw/incident.py`: `Incident` 모델(범위, 판정 근거, 범위 안 호출 주체 목록), `open_incident(ctx, trigger, scope, principals)`가 §4.4의 1–6·9단계를 범위에 맞게 수행. `widen_incident`로 넓히기만 허용. `incidents/<id>.json` 저장. `close_incident`.
-- `zeropw/policy.py`: 호출 주체에 `runtime` 필드(`principal create --runtime <id>`, 기본 `default`)와 `principals_in_runtime`. 제어 문서에 `incident_open`, `resume`이 열린 사건에서 `InvalidInput("incident_open")`으로 거부. `revoke_grants_of(principal_id)`.
-- `zeropw/audit.py`: 이벤트 `incident_open`, `incident_widen`, `incident_close`, `incident_notify`, `tools_unknown`. 추가 키 `incident_id`, `scope`, `runtime`, `rule`, `tier`.
-- `zeropw/server.py`·`tools.py`: 미제공 도구 이름을 `tools_unknown` 거부로 기록(이름은 기록하지 않음).
-- `zeropw/admin_cli.py`: `incident declare|escalate|list|show|close`, `principal create --runtime`. `serve` 폴링에서 다른 프로세스가 연 사건을 감지해 범위에 맞는 3–6단계를 적용.
-- 시험 `tests/test_incident.py`: 범위별 봉쇄(`principal` 범위에서 다른 호출 주체의 실행과 핸들이 살아 있음, `runtime` 범위에서 같은 실행 환경의 다른 호출 주체까지 비활성화되고 핸들 키가 바뀜, 활성 호출 주체가 전부 범위 안이면 `stop_all`), 순서와 멱등성, `escalate`로 넓히기와 좁히기 거부, 열린 사건에서 `resume` 거부, 비활성화된 호출 주체가 재개 뒤에도 인증 실패, 별도 `Context`에서 선언 시 실행 취소·소켓 닫기, 감사 실패 시에도 봉쇄 유지.
+- `incident.rs`: `Incident` 모델(범위, 판정 근거, 범위 안 호출 주체 목록), `open_incident(ctx, trigger, scope, principals)`가 §4.4의 1–6·9단계를 범위에 맞게 수행. `widen_incident`로 넓히기만 허용. `incidents/<id>.json` 저장. `close_incident`.
+- `policy.rs`: 호출 주체에 `runtime` 필드(`principal create --runtime <id>`, 기본 `default`)와 `principals_in_runtime`. 제어 문서에 `incident_open`, `resume`이 열린 사건에서 `InvalidInput("incident_open")`으로 거부. `revoke_grants_of(principal_id)`.
+- `audit.rs`: 이벤트 `incident_open`, `incident_widen`, `incident_close`, `incident_notify`, `tools_unknown`. 추가 키 `incident_id`, `scope`, `runtime`, `rule`, `tier`.
+- `server.rs`·`tools.rs`: 미제공 도구 이름을 `tools_unknown` 거부로 기록(이름은 기록하지 않음).
+- `admin_cli.rs`: `incident declare|escalate|list|show|close`, `principal create --runtime`. `serve` 폴링에서 다른 프로세스가 연 사건을 감지해 범위에 맞는 3–6단계를 적용.
+- 시험 `response`, `native_response_cli`: 범위별 봉쇄(`principal` 범위에서 다른 호출 주체의 실행과 핸들이 살아 있음, `runtime` 범위에서 같은 실행 환경의 다른 호출 주체까지 비활성화되고 핸들 키가 바뀜, 활성 호출 주체가 전부 범위 안이면 `stop_all`), 순서와 멱등성, `escalate`로 넓히기와 좁히기 거부, 열린 사건에서 `resume` 거부, 비활성화된 호출 주체가 재개 뒤에도 인증 실패, 별도 `Context`에서 선언 시 실행 취소·소켓 닫기, 감사 실패 시에도 봉쇄 유지.
 
 ### 단계 2 — 노출 판정
 
-- `zeropw/incident.py`: `assess(ctx, principals)`가 각 호출 주체의 토큰 생성 시각부터 감사 기록을 읽어 §5의 등급표를 만든다. 연결별 첫·마지막 사용 시각과 횟수, SSH 지문·대상 포함.
+- `incident.rs`: `assess(ctx, principals)`가 각 호출 주체의 토큰 생성 시각부터 감사 기록을 읽어 §5의 등급표를 만든다. 연결별 첫·마지막 사용 시각과 횟수, SSH 지문·대상 포함.
 - 시험: 합성 감사 기록으로 등급 판정(사용됨은 필수, 권한만 있으면 권장, 나머지는 해당 없음), 여러 호출 주체의 합산, `--scope all` 승격, 사건 파일에 금고 값(모든 버전, 원문·base64·16진수)이 없음.
 
 ### 단계 3 — 자동 탐지
 
-- `zeropw/audit.py`: `subscribe(listener)`로 기록 직후 동기 호출. 리스너 예외는 기록을 막지 않는다.
-- `zeropw/intrusion.py`: `Detector`가 §4.2 규칙표를 구현. 호출 주체별 창, 강한 신호 카운터, 약한 신호 점수, 열거 판정(사용 가능한 연결 집합 대비 처음 사용 수). 규칙마다 필요한 접근 위치(HTTP 경로 / 실행 환경)를 표시해 §4.3의 범위를 판정하고, 같은 실행 환경의 둘 이상 호출 주체에서 신호가 오면 `runtime`으로 올린다. 임계 도달 시 `open_incident`, 열린 사건에 더 넓은 범위의 신호가 오면 `widen_incident`.
-- `zeropw/context.py`: `Config`에 임계값과 탐지 창 길이(§4.2의 슬라이딩 창).
+- `audit.rs`: `subscribe(listener)`로 기록 직후 동기 호출. 리스너 예외는 기록을 막지 않는다.
+- `intrusion.rs`: `Detector`가 §4.2 규칙표를 구현. 호출 주체별 창, 강한 신호 카운터, 약한 신호 점수, 열거 판정(사용 가능한 연결 집합 대비 처음 사용 수). 규칙마다 필요한 접근 위치(HTTP 경로 / 실행 환경)를 표시해 §4.3의 범위를 판정하고, 같은 실행 환경의 둘 이상 호출 주체에서 신호가 오면 `runtime`으로 올린다. 임계 도달 시 `open_incident`, 열린 사건에 더 넓은 범위의 신호가 오면 `widen_incident`.
+- `context.rs`: `Config`에 임계값과 탐지 창 길이(§4.2의 슬라이딩 창).
 - `serve`에서 설치. 사건이 열려 있는 동안은 누적만 한다.
-- 시험 `tests/test_intrusion.py`: 강한 신호별 봉쇄, 약한 신호 누적, 정상 2요청 흐름과 `test_cli_e2e`의 흐름이 봉쇄를 일으키지 않음, 열거 판정, 범위 판정(HTTP 신호만이면 `principal`, 서명기·출력 신호면 `runtime`, 같은 실행 환경의 두 호출 주체면 `runtime`, 자동 확대는 되고 축소는 없음), 봉쇄가 같은 `record` 호출 안에서 완료됨(다음 요청은 이미 거부), 임계값 설정 반영, 강한 신호를 끄는 설정 부재.
+- 시험 `response`, `response_contract`(규칙표): 강한 신호별 봉쇄, 약한 신호 누적, 정상 2요청 흐름과 `native_cli_e2e`의 흐름이 봉쇄를 일으키지 않음, 열거 판정, 범위 판정(HTTP 신호만이면 `principal`, 서명기·출력 신호면 `runtime`, 같은 실행 환경의 두 호출 주체면 `runtime`, 자동 확대는 되고 축소는 없음), 봉쇄가 같은 `record` 호출 안에서 완료됨(다음 요청은 이미 거부), 임계값 설정 반영, 강한 신호를 끄는 설정 부재.
 
 ### 단계 4 — 이메일 알림
 
-- `zeropw/notify.py`: `NotifyConfig` 로더(`notify.json`, 비밀번호 파일, 권한 검사), `render_incident_email(incident)` 순수 함수, `SmtpNotifier`(`smtplib`, STARTTLS 또는 SMTPS, 인증서 검증), 실패 시 `pending`과 백오프.
+- `notify.rs`, `smtp.rs`: `NotifyConfig` 로더(`notify.json`, 비밀번호 파일, 권한 검사), `render_incident_email` 순수 함수, SMTP 발송(STARTTLS 또는 SMTPS, 인증서 검증), 실패 시 `pending`과 백오프.
 - `serve` 폴링에서 `pending` 알림 재시도.
-- 시험 `tests/test_notify.py`: 렌더링 결과에 값·핸들·토큰·에이전트 문자열 부재, 종류별 안내 블록, 미설정 시 `not_configured`, 발송 실패 시 `pending`과 재시도. Python 3.12에는 `smtpd`가 없으므로 `zeropw/fake_upstream.py`처럼 시험 전용 최소 SMTP 수신 서버를 `tests/`에 둔다(TLS 없이 127.0.0.1, 메시지 본문만 수집).
+- 시험 `response`, `native_response_cli`, `astra_response_*`: 렌더링 결과에 값·핸들·토큰·에이전트 문자열 부재, 종류별 안내 블록, 미설정 시 `not_configured`, 발송 실패 시 `pending`과 재시도. 시험 전용 최소 SMTP 수신 서버(`rust/tests/native_e2e`의 `FakeSmtp`, TLS 없이 127.0.0.1)를 쓴다.
 
 ### 단계 5 — 종단 시험과 문서
 
-- `tests/test_cli_e2e.py`: 별도 프로세스의 공격자가 열거·핸들 변조·미제공 도구 호출을 하면 `serve`가 봉쇄하고, 시험용 SMTP 서버가 이메일을 받고, `resume`이 거부되고, `incident close` 뒤 새 호출 주체로 재개되는 흐름.
-- `zeropw/demo.py`: "침입 시뮬레이션" 단계 추가.
+- `native_cli_e2e::test_auto_lockdown_exposure_assessment_email_and_recovery`: 별도 프로세스의 공격자가 열거·핸들 변조·미제공 도구 호출을 하면 `serve`가 봉쇄하고, 시험용 SMTP 서버가 이메일을 받고, `resume`이 거부되고, `incident close` 뒤 새 호출 주체로 재개되는 흐름.
+- `demo.rs`(`zeropw-demo`): "침입 시뮬레이션" 단계.
 - `docs/implementation.md`: 구현 범위·한계·수용 시험 대응표 갱신.
 - 제품 문서 개정 제안(사용자 승인 대상, 이 계획이 직접 편집하지 않음): [제품 정의](product-intent.md) §4 "사용 기록·알림"에 자동 봉쇄와 교체 안내 추가, [보안 경계](security-design.md) §5에 침입 판정·범위와 사건 닫기 전 재개 금지, §7 수용 시험에 "침입 시 자동 봉쇄와 노출 판정" 행 추가.
 
@@ -227,7 +225,7 @@
 | --- | --- |
 | 자동 봉쇄 범위 | 침해 유형에 따른다. 호출 주체 침해는 `principal`, 실행 환경 침해(멀웨어)는 `runtime`, 신뢰 호스트 침해는 수동 `all`. 판정 규칙은 §4.3, 절차는 §4.4. |
 | 강한 신호 임계 | 미제공 도구·핸들 변조 2회, 나머지 1회. |
-| 발송 경로 | SMTP 직접(`smtplib`). |
+| 발송 경로 | SMTP 직접 발송(`smtp.rs`). |
 | 노출 판정 | 시간 창 없음. 범위 안 호출 주체의 토큰 생성 이후 사용된 모든 연결이 필수 교체, 권한만 있고 사용 없는 연결은 권장. 사건이 열렸다면 실제 침해를 전제하므로 좁히지 않는다. §5. |
 
 ## 부록 A. 1Password 비교

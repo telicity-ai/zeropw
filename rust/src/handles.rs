@@ -19,7 +19,7 @@ use sha2::Sha256;
 use std::sync::RwLock;
 use subtle::ConstantTimeEq;
 
-use crate::errors::Error;
+use crate::errors::{Error, ErrorClass};
 use crate::pybase64;
 use crate::pyjson::{self, DumpOptions};
 use crate::pystr;
@@ -33,20 +33,6 @@ pub const MAX_TOKEN_LENGTH: usize = 2048;
 fn b64e(raw: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(raw)
 }
-
-/// The smallest `f64` strictly greater than every value `i64::MAX as i64`
-/// can represent. `i64::MAX` (9223372036854775807) is not itself exactly
-/// representable in `f64`; the nearest representable value rounds UP to
-/// exactly `2^63` (9223372036854775808.0, `i64::MAX as f64` in Rust). A
-/// bound check must therefore reject at `>=` this constant, not `>`
-/// `i64::MAX as f64` -- the two are the same float, so `>` lets exactly
-/// `2^63` fall through and `as i64` silently saturates/truncates it instead
-/// of rejecting it (finding X-13: measured against live `python3.12`, the
-/// float literal `9223372036854775808.0` and the integer literal
-/// `9223372036854775808` must be treated identically -- both are one past
-/// `i64::MAX` -- but the old `>` check accepted the float and rejected the
-/// integer).
-const I64_MAX_EXCLUSIVE_UPPER_BOUND_F64: f64 = 9_223_372_036_854_775_808.0;
 
 /// Port of `handles._b64d`: re-pads `text` to a multiple of 4 with `=`
 /// (`"=" * (-len(text) % 4)`, replicated as `(4 - len % 4) % 4`, counting
@@ -68,9 +54,9 @@ pub struct Handle {
     pub caller: String,
     pub connection: String,
     pub grant: String,
-    pub policy_version: i64,
-    pub issued_at: i64,
-    pub expires_at: i64,
+    pub policy_version: crate::pyint::PyInt,
+    pub issued_at: crate::pyint::PyInt,
+    pub expires_at: crate::pyint::PyInt,
     pub handle_id: String,
 }
 
@@ -114,44 +100,17 @@ impl HandleIssuer {
         b64e(&mac.finalize().into_bytes())
     }
 
-    /// `HandleIssuer.issue`. `now` mirrors Python's `now: float | None`
-    /// (seconds since the epoch); `int(now)` truncates toward zero, which is
-    /// exactly what a plain `as i64` cast does in Rust for a finite,
-    /// in-`i64`-range float.
-    ///
-    /// Three clock-input cases, measured against live `python3.12`
-    /// (findings X-8, X-12):
-    ///   - `now` finite and `int(now)` fits `i64`: Python succeeds; so does
-    ///     this function.
-    ///   - `now` is `+inf`/`-inf`: `int(now)` raises `OverflowError`,
-    ///     uncaught (`issue` has no `try`/`except`) -- PORTING.md §3.5
-    ///     applies. `now` is NaN: `int(now)` raises `ValueError`, likewise
-    ///     uncaught, likewise §3.5 (NOT the same as `f64::NAN as i64 == 0`
-    ///     silently succeeding, which is what unchecked Rust code did
-    ///     before this fix -- X-12). Both map to `Error::invalid_input(
-    ///     "handle_clock")`, the closest error a caller of `issue` already
-    ///     handles (the only other error this function returns).
-    ///   - `now` finite but `int(now)` does NOT fit `i64` (e.g. `1e30`,
-    ///     or exactly `9.223372036854776e18` == `2^63`): Python's `int` is
-    ///     unbounded, so `issue` still succeeds and returns a handle dated
-    ///     to an astronomically distant `exp`. This is NOT a §3.5 case --
-    ///     CPython returns a value here, it never raises -- so rejecting it
-    ///     is a genuine, recorded deviation (`rust/DEVIATIONS.md`, `handles`
-    ///     row): `Handle`'s fields are `i64`, and no real caller's clock
-    ///     (`store::now()`) is ever more than a few decades from the
-    ///     epoch, so this narrowing is unreachable in practice. Also
-    ///     covers the case the old code got silently wrong (X-8): an
-    ///     `issued` that fits `i64` but overflows `i64` again once
-    ///     `ttl_seconds` (bounded 1..=86400 by the check above) is added to
-    ///     it -- `checked_add` turns that into the same rejection instead
-    ///     of a debug panic or a release-mode wraparound to a negative
-    ///     `exp` that would have made the handle born already-expired.
+    /// `HandleIssuer.issue`. Python applies unbounded `int(now)` and then
+    /// adds the bounded TTL. `PyInt::coerce_from_json` reproduces the exact
+    /// finite binary64 truncation, including values far beyond `i64`.
+    /// `int(policy_version)` is unbounded too: the payload carries the exact
+    /// integer the caller's grant holds, whatever its magnitude.
     pub fn issue(
         &self,
         caller: &str,
         connection: &str,
         grant: &str,
-        policy_version: i64,
+        policy_version: impl Into<crate::pyint::PyInt>,
         ttl_seconds: i64,
         now: Option<f64>,
     ) -> Result<String, Error> {
@@ -162,14 +121,10 @@ impl HandleIssuer {
         if !now.is_finite() {
             return Err(Error::invalid_input("handle_clock"));
         }
-        let truncated = now.trunc();
-        if truncated >= I64_MAX_EXCLUSIVE_UPPER_BOUND_F64 || truncated < i64::MIN as f64 {
-            return Err(Error::invalid_input("handle_clock"));
-        }
-        let issued = truncated as i64;
-        let exp = issued
-            .checked_add(ttl_seconds)
+        let issued = crate::pyint::PyInt::coerce_from_json(&json!(now))
             .ok_or_else(|| Error::invalid_input("handle_clock"))?;
+        let exp = crate::pyint::PyInt(&issued.0 + num_bigint::BigInt::from(ttl_seconds));
+        let policy_version: crate::pyint::PyInt = policy_version.into();
         let mut jti_raw = [0u8; 12];
         OsRng.fill_bytes(&mut jti_raw);
         let payload = json!({
@@ -177,9 +132,9 @@ impl HandleIssuer {
             "c": caller,
             "n": connection,
             "g": grant,
-            "pv": policy_version,
-            "iat": issued,
-            "exp": exp,
+            "pv": policy_version.value(),
+            "iat": issued.value(),
+            "exp": exp.value(),
             "jti": b64e(&jti_raw),
         });
         let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted())?;
@@ -202,7 +157,19 @@ impl HandleIssuer {
             return Err(Error::auth_failed("handle_malformed"));
         }
         let body = format!("{}.{}", parts[0], parts[1]);
+        // `_sign(body)` encodes the body as ASCII and `hmac.compare_digest`
+        // refuses a non-ASCII `str`: both raise built-in exceptions that
+        // escape `verify` and `gateway.relay` uncaught, so the HTTP server's
+        // catch-all answers 500 `internal_error` without an audit record
+        // (measured on CPython 3.12.14). An agent controls both segments
+        // without the key, so the outcome is reproduced, in Python's order.
+        if !parts[1].is_ascii() {
+            return Err(uncaught_builtin("UnicodeEncodeError"));
+        }
         let expected = self.sign(&body);
+        if !parts[2].is_ascii() {
+            return Err(uncaught_builtin("TypeError"));
+        }
         let ok = expected.len() == parts[2].len()
             && bool::from(expected.as_bytes().ct_eq(parts[2].as_bytes()));
         if !ok {
@@ -210,11 +177,23 @@ impl HandleIssuer {
         }
         let handle = parse_payload(parts[1])?;
         let current = now.unwrap_or_else(store::now);
-        if current >= handle.expires_at as f64 {
+        if matches!(
+            crate::pyint::cmp_bigint_f64(&handle.expires_at.0, current),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
             return Err(Error::auth_failed("handle_expired"));
         }
         Ok(handle)
     }
+}
+
+/// A built-in exception (`type(exc).__name__ == name`) that Python lets
+/// escape `HandleIssuer.verify`. It is not a `ZeroPWError`, so it carries
+/// [`ErrorClass::ZeroPW`] under the built-in's name; the only caller,
+/// `gateway::relay`, turns any non-`AuthFailed` verify error into the
+/// server's fixed 500 `internal_error` reply, as Python's `_dispatch` does.
+fn uncaught_builtin(name: &'static str) -> Error {
+    Error::subclass(ErrorClass::ZeroPW, name, "internal_error", "")
 }
 
 /// Python `str(value)` on a JSON-decoded scalar/container, as
@@ -232,94 +211,24 @@ fn python_str_coerce(value: &Value) -> String {
 }
 
 /// Python `int(value)` coercion, as `HandleIssuer.verify` applies via
-/// `int(payload["pv"])` etc. `Err` covers every case Python's `int()` would
-/// raise `TypeError`/`ValueError` for (both caught by `verify`'s
-/// `except (KeyError, TypeError, ValueError)` and mapped to
-/// `handle_malformed`) -- `None`, a list/dict, or a non-numeric string.
+/// `int(payload["pv"])`/`int(payload["iat"])`/`int(payload["exp"])`. `None`
+/// covers every case Python's `int()` would raise `TypeError`/`ValueError`
+/// for (both caught by `verify`'s `except (KeyError, TypeError, ValueError)`
+/// and mapped to `handle_malformed`) -- `None`, a list/dict, a non-numeric
+/// string, or a decimal string beyond CPython's integer-string digit limit.
+/// Every accepted value is kept exact and unbounded ([`crate::pyint::PyInt`]),
+/// including Unicode `Nd` digit strings and magnitudes far beyond `i64`.
 ///
-/// Two narrow residual gaps versus CPython, neither reachable except via a
-/// hand-crafted token from someone who already holds the HMAC signing key
-/// (coordinator ruling PORTING.md §3.7 -- see `rust/DEVIATIONS.md`):
-/// a magnitude that doesn't fit `i64` (Python `int` is unbounded; this
-/// port's `Handle` fields are `i64`) is rejected here instead of succeeding,
-/// and only ASCII `0`-`9` are accepted as digits in a numeric string (Python
-/// also accepts other Unicode decimal-digit characters, e.g. `int("٤٢") ==
-/// 42`). `issue` never emits either shape, so every value the issuer
-/// produces still round-trips identically. A float that is
-/// `inf`/`-inf` makes Python's `int()` raise `OverflowError`, which is *not*
-/// one of `TypeError`/`ValueError`/`KeyError` and so escapes `verify`
-/// uncaught -- PORTING.md §3.5 applies and this is folded into the same
-/// `handle_malformed` result as the other coercion failures. In practice a
-/// non-finite float payload cannot even reach this function: [`pyjson::loads`]
-/// already rejects the bare `Infinity`/`-Infinity` JSON tokens Python's
-/// decoder would have accepted (`rust/DEVIATIONS.md`, pyjson row).
-fn python_int_coerce(value: &Value) -> Result<i64, ()> {
-    match value {
-        Value::Bool(b) => Ok(i64::from(*b)),
-        Value::Number(n) => {
-            if n.is_f64() {
-                let f = n.as_f64().ok_or(())?;
-                if !f.is_finite() {
-                    return Err(());
-                }
-                let truncated = f.trunc();
-                // X-13: `>=`, not `>` -- see `I64_MAX_EXCLUSIVE_UPPER_BOUND_F64`.
-                // `i64::MAX as f64` rounds UP to exactly `2^63`, so a `>`
-                // comparison let a payload with `exp: 9223372036854775808.0`
-                // fall through and get silently clamped to `i64::MAX` by
-                // `as i64` below, while the equivalent integer JSON literal
-                // `9223372036854775808` was (correctly) rejected -- an
-                // inconsistency measured directly against live
-                // `python3.12`, which accepts both forms identically
-                // (`HandleIssuer.verify` returns `exp=9223372036854775808`
-                // for either).
-                if truncated >= I64_MAX_EXCLUSIVE_UPPER_BOUND_F64 || truncated < i64::MIN as f64 {
-                    return Err(());
-                }
-                Ok(truncated as i64)
-            } else {
-                n.as_str().parse::<i64>().map_err(|_| ())
-            }
-        }
-        Value::String(s) => python_int_from_str(s),
-        Value::Null | Value::Array(_) | Value::Object(_) => Err(()),
-    }
-}
-
-/// Python `int(str)` (base 10, the implicit base `int(x)` uses): strips
-/// surrounding whitespace, an optional leading `+`/`-`, ASCII digits with
-/// single underscores allowed only strictly between two digits (`"1_000"`
-/// ok; `"_1"`, `"1_"`, `"1__0"` are not).
-///
-/// Deliberately narrower than CPython's real grammar in exactly the two
-/// ways this module's own `python_int_coerce` doc comment already
-/// documents (finding A-R2-1, PORTING.md §3.7, pinned by
-/// `forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected`):
-/// only ASCII `0`-`9` digits, and only a magnitude that fits `i64`. The
-/// boundary-whitespace strip and the sign/underscore/digit *grammar*
-/// itself, though, are not re-implemented here -- both go through
-/// `crate::pystr::int_from_str`, the one canonical home for CPython's
-/// `int(str)` semantics (PORTING.md §3b); this function's own job is only
-/// the ASCII-digit guard (checked on the already-`trim`med string, so a
-/// non-ASCII character stripped as boundary whitespace by `trim()` itself
-/// -- e.g. a leading/trailing NBSP -- is not mistaken for a rejected
-/// digit) and the final `i64` narrowing. Narrowing through `i128` first
-/// (rather than parsing the unsigned magnitude directly into `i64`) also
-/// fixes a previously-latent bug this local copy shared with `policy.rs`'s
-/// own pre-fix version (round-6, findings E-R6-1/D-R5-4): `i64::MIN`'s
-/// magnitude, 9223372036854775808, does not fit in an `i64` even though
-/// `i64::MIN` itself is representable, so a same-width unsigned-parse step
-/// wrongly rejected `"-9223372036854775808"` where Python's `int()`
-/// succeeds -- not reachable by any real issued handle either way (`issue`
-/// never emits a `pv`/`iat`/`exp` anywhere near `i64::MIN`), but no longer
-/// wrong now that the grammar is shared.
-fn python_int_from_str(s: &str) -> Result<i64, ()> {
-    let trimmed = s.trim();
-    if !trimmed.is_ascii() {
-        return Err(());
-    }
-    let value = crate::pystr::int_from_str(trimmed).ok_or(())?;
-    i64::try_from(value).map_err(|_| ())
+/// A float that is `inf`/`-inf` makes Python's `int()` raise `OverflowError`,
+/// which is *not* one of `TypeError`/`ValueError`/`KeyError` and so escapes
+/// `verify` uncaught -- PORTING.md §3.5 applies and this is folded into the
+/// same `handle_malformed` result as the other coercion failures. In practice
+/// a non-finite float payload cannot even reach this function:
+/// [`pyjson::loads`] already rejects the bare `Infinity`/`-Infinity` JSON
+/// tokens Python's decoder would have accepted (`rust/DEVIATIONS.md`, pyjson
+/// row).
+fn python_int_coerce(value: &Value) -> Option<crate::pyint::PyInt> {
+    crate::pyint::PyInt::coerce_from_json(value)
 }
 
 /// Parses and validates the handle payload (the `parts[1]` base64 segment),
@@ -340,9 +249,9 @@ fn parse_payload(encoded: &str) -> Result<Handle, Error> {
         // `handle_malformed`. Present: `str()` never fails.
         obj.get(name).map(python_str_coerce).ok_or_else(malformed)
     };
-    let int_field = |name: &str| -> Result<i64, Error> {
+    let int_field = |name: &str| -> Result<crate::pyint::PyInt, Error> {
         let v = obj.get(name).ok_or_else(malformed)?;
-        python_int_coerce(v).map_err(|_| malformed())
+        python_int_coerce(v).ok_or_else(malformed)
     };
 
     let caller = str_field("c")?;
@@ -420,10 +329,10 @@ mod tests {
                 handle.caller.as_str(),
                 handle.connection.as_str(),
                 handle.grant.as_str(),
-                handle.policy_version
             ),
-            ("agent-1", "gh", "g-1", 4)
+            ("agent-1", "gh", "g-1")
         );
+        assert_eq!(handle.policy_version, 4);
         assert_eq!(handle.expires_at, now as i64 + 300);
     }
 
@@ -531,49 +440,38 @@ mod tests {
         }
     }
 
-    // X-8: a finite `now` whose `int(now)` does not fit `i64` must be
-    // rejected rather than silently saturated. Measured against live
-    // `python3.12`: `int(1e30)` and `int(9.223372036854776e18)` (==
-    // `2**63`, one past `i64::MAX`) both succeed -- Python's `int` is
-    // unbounded -- so `issue` returns a token there; Rust's `Handle` is
-    // `i64`-typed (a recorded, genuine deviation -- see
-    // `rust/DEVIATIONS.md`, NOT a §3.5 case, since CPython returns a value
-    // here). Before this fix `now as i64` silently saturated to
-    // `i64::MAX`, and the following `issued + ttl_seconds` then overflowed
-    // -- a debug-build panic (`attempt to add with overflow`), or in
-    // release, a silent wraparound to a negative `exp` that made the
-    // issued handle born already-expired.
+    // Python's `int(float)` is unbounded. Every token issued at a finite
+    // huge clock must retain that exact integer and verify successfully.
     #[test]
-    fn issue_rejects_now_whose_int_conversion_does_not_fit_i64() {
+    fn issue_and_verify_accept_now_beyond_i64() {
         let key = HandleIssuer::generate_key();
         let issuer = HandleIssuer::new(key.expose()).unwrap();
         for now in [1e30, 9.223372036854776e18_f64] {
-            let err = issuer
+            let token = issuer
                 .issue("a", "b", "c", 1, 300, Some(now))
-                .expect_err("out-of-i64-range now must not be silently saturated");
-            assert_eq!(err.reason, "handle_clock");
+                .expect("finite Python float must convert to an unbounded int");
+            let handle = issuer.verify(&token, Some(now - 1.0)).unwrap();
+            let expected = crate::pyint::PyInt::coerce_from_json(&json!(now)).unwrap();
+            assert_eq!(handle.issued_at, expected);
+            assert_eq!(
+                handle.expires_at.0,
+                expected.0 + num_bigint::BigInt::from(300)
+            );
         }
     }
 
-    // X-8: even a `now` that itself fits `i64` can push `issued +
-    // ttl_seconds` past `i64::MAX` once `ttl_seconds` (bounded 1..=86400)
-    // is added. `9223372036854774784.0` is the largest `f64` strictly less
-    // than `2^63` (float spacing near this magnitude is 1024, so it is
-    // also the largest representable value that still passes the
-    // range check above) -- `9223372036854774784 + 86400 =
-    // 9223372036854861184`, which is past `i64::MAX`
-    // (9223372036854775807). `checked_add` must catch this and return an
-    // error instead of panicking (debug) or wrapping to a negative `exp`
-    // (release).
+    // The TTL addition is unbounded too: this value starts below 2**63 but
+    // expires above it. Python succeeds and preserves the exact sum.
     #[test]
-    fn issue_rejects_when_issued_plus_ttl_would_overflow_i64() {
+    fn issue_widens_when_issued_plus_ttl_exceeds_i64() {
         let key = HandleIssuer::generate_key();
         let issuer = HandleIssuer::new(key.expose()).unwrap();
         let now = 9223372036854774784.0_f64;
-        let err = issuer
+        let token = issuer
             .issue("a", "b", "c", 1, 86400, Some(now))
-            .expect_err("issued + ttl_seconds overflow must not panic or wrap");
-        assert_eq!(err.reason, "handle_clock");
+            .expect("Python integer addition cannot overflow");
+        let handle = issuer.verify(&token, Some(now - 1.0)).unwrap();
+        assert_eq!(handle.expires_at.to_string(), "9223372036854861184");
     }
 
     #[test]
@@ -593,72 +491,64 @@ mod tests {
         assert_eq!(err.reason, "handle_version");
     }
 
-    // A-9: Python's `_sign` calls `body.encode("ascii")` on the dot-joined
-    // `f"{parts[0]}.{parts[1]}"`; a non-ASCII `parts[1]` makes that raise an
-    // uncaught `UnicodeEncodeError` (coordinator ruling, PORTING.md §3.5).
-    // Rust's `sign` has no ASCII restriction, so it always computes some
-    // HMAC; pin that a non-ASCII payload segment still surfaces as an
-    // ordinary `handle_signature` failure, not a panic or a different
-    // reason.
+    /// Rows 39/40: a non-ASCII payload segment makes Python's `_sign` raise
+    /// `UnicodeEncodeError` (checked before the signature), and a non-ASCII
+    /// signature segment with an ASCII payload makes `hmac.compare_digest`
+    /// raise `TypeError`. Each class is compared with the real
+    /// `HandleIssuer.verify`, in Python's evaluation order.
     #[test]
-    fn non_ascii_payload_segment_fails_as_signature_mismatch() {
-        let key = HandleIssuer::generate_key();
-        let issuer = HandleIssuer::new(key.expose()).unwrap();
-        let token = "zpw1.café-not-base64.deadbeef";
-        let err = issuer
-            .verify(token, Some(1_700_000_000.0))
-            .expect_err("non-ASCII payload segment must not verify");
-        assert!(err.is(ErrorClass::AuthFailed));
-        assert_eq!(err.reason, "handle_signature");
-    }
-
-    // A-R2-4: Python's `hmac.compare_digest(expected, parts[2])` raises an
-    // uncaught `TypeError` ("comparing strings with non-ASCII characters is
-    // not supported") when the attacker-supplied signature segment contains
-    // a non-ASCII character -- reachable without the HMAC key, since the
-    // caller controls `parts[2]` directly and the comparison runs before any
-    // key-dependent check could reject it first. Coordinator ruling
-    // PORTING.md §3.5 applies (see `rust/DEVIATIONS.md`): Rust's byte-level
-    // comparison never raises, so this must surface as an ordinary
-    // `handle_signature` failure, exactly like `non_ascii_payload_segment_*`
-    // above but for the signature segment instead of the payload segment.
-    #[test]
-    fn non_ascii_signature_segment_fails_as_signature_mismatch() {
-        let key = HandleIssuer::generate_key();
-        let issuer = HandleIssuer::new(key.expose()).unwrap();
+    fn non_ascii_segments_raise_the_python_builtin_in_python_order() {
+        let issuer = HandleIssuer::new(&[7u8; 32]).unwrap();
         let now = 1_700_000_000.0;
         let token = issuer
             .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
             .unwrap();
         let parts: Vec<&str> = token.split('.').collect();
-        let forged = format!("{}.{}.café-not-hex", parts[0], parts[1]);
-        let err = issuer
-            .verify(&forged, Some(now))
-            .expect_err("non-ASCII signature segment must not verify");
-        assert!(err.is(ErrorClass::AuthFailed));
-        assert_eq!(err.reason, "handle_signature");
+        let tokens = [
+            "zpw1.caf\u{e9}-not-base64.deadbeef".to_string(),
+            "zpw1.caf\u{e9}.si\u{e9}".to_string(),
+            format!("{}.{}.caf\u{e9}-not-hex", parts[0], parts[1]),
+            format!("{}.{}.{}", parts[0], parts[1], "A".repeat(43)),
+        ];
+        // What the prototype's `HandleIssuer.verify` raised for each token
+        // (the first two escaped as built-ins); Rust fails closed for all.
+        let python = [
+            "UnicodeEncodeError ",
+            "UnicodeEncodeError ",
+            "TypeError ",
+            "AuthFailed handle_signature",
+        ];
+        for (token, want) in tokens.iter().zip(python) {
+            let err = issuer.verify(token, Some(now)).unwrap_err();
+            let got = if err.is(ErrorClass::AuthFailed) {
+                format!("AuthFailed {}", err.reason)
+            } else {
+                assert!(err.is(ErrorClass::ZeroPW));
+                format!("{} ", err.name)
+            };
+            assert_eq!(got, want, "{token:?}");
+        }
     }
 
-    // A-R2-1: `python_int_coerce`/`python_int_from_str` only accept ASCII
-    // digits and `i64`-range magnitudes. Python's `int()` also accepts other
-    // Unicode decimal-digit characters (`int("٤٢") == 42`,
-    // `int("４２") == 42`) and unbounded magnitudes (`int("9" * 25)`,
-    // `int("9" * 34)`). Both gaps are reachable only by someone who already
-    // holds the HMAC signing key (a forged-but-signed token), so coordinator
-    // ruling PORTING.md §3.7 applies (see `rust/DEVIATIONS.md`): keep
-    // rejecting these as `handle_malformed` rather than matching Python's
-    // `int()`. `issue` never emits a non-ASCII-digit or oversized `pv`, so
-    // this never affects a real token.
+    // Python's `int(payload["pv"])` is unbounded and accepts every Unicode
+    // `Nd` digit string, so a signed payload carrying such a `pv` verifies
+    // with the exact integer.
     #[test]
-    fn forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected() {
+    fn signed_payload_with_unbounded_policy_version_keeps_the_exact_integer() {
         let key = HandleIssuer::generate_key();
         let issuer = HandleIssuer::new(key.expose()).unwrap();
         let now = 1_700_000_000.0;
-        for pv in [
-            "٤٢",                                // Arabic-Indic digits, int() == 42
-            "４２",                              // fullwidth digits, int() == 42
-            &"9".repeat(25),                     // fits Python int, overflows i64
-            "999999999999999999999999999999999", // 33 nines, well past i64::MAX
+        for (pv, expected) in [
+            (json!("9".repeat(25)), "9".repeat(25)),
+            (
+                json!("999999999999999999999999999999999"),
+                "999999999999999999999999999999999".to_owned(),
+            ),
+            (json!("\u{664}\u{662}"), "42".to_owned()),
+            (
+                json!("-9223372036854775809"),
+                "-9223372036854775809".to_owned(),
+            ),
         ] {
             let payload = json!({
                 "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": pv,
@@ -668,30 +558,35 @@ mod tests {
             let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
             let sig = issuer.sign(&body);
             let token = format!("{body}.{sig}");
-            let err = issuer
-                .verify(&token, Some(now))
-                .expect_err("non-ASCII-digit / oversized pv must be rejected");
-            assert_eq!(err.reason, "handle_malformed", "pv={pv:?}");
+            let handle = issuer.verify(&token, Some(now)).unwrap();
+            assert_eq!(handle.policy_version.to_string(), expected);
         }
     }
 
-    // X-13: `python_int_coerce`'s float-branch boundary check must reject
-    // exactly `2^63` (9223372036854775808.0) the same way it already
-    // rejects the equivalent integer JSON literal `9223372036854775808`
-    // (the `999...` case in the test above, one past `i64::MAX`). Before
-    // this fix, the float form was silently accepted and clamped to
-    // `i64::MAX` (`>` let the exact boundary value fall through), which
-    // measurement against live `python3.12` shows is the ONE thing Python
-    // itself does not distinguish -- `HandleIssuer.verify` treats
-    // `exp: 9223372036854775808.0` and `exp: 9223372036854775808` (an
-    // unbounded Python `int`) identically, both returning
-    // `expires_at == 9223372036854775808`. Rust cannot represent that
-    // value at all (`Handle.expires_at` is `i64`, PORTING.md §3.7 / the
-    // `handles` A-R2-1 `DEVIATIONS.md` row), so rejecting both spellings
-    // consistently is correct; silently accepting one spelling and
-    // rejecting the other was the actual bug.
+    // `issue` emits `int(policy_version)` exactly, beyond every machine width.
     #[test]
-    fn float_exp_exactly_two_pow_63_is_rejected_like_the_integer_literal() {
+    fn issue_round_trips_an_unbounded_policy_version() {
+        let key = HandleIssuer::generate_key();
+        let issuer = HandleIssuer::new(key.expose()).unwrap();
+        let pv = crate::pyint::PyInt("1".repeat(40).parse().unwrap());
+        let token = issuer
+            .issue(
+                "agent-1",
+                "gh",
+                "g-1",
+                pv.clone(),
+                300,
+                Some(1_700_000_000.0),
+            )
+            .unwrap();
+        let handle = issuer.verify(&token, Some(1_700_000_001.0)).unwrap();
+        assert_eq!(handle.policy_version, pv);
+    }
+
+    // `int(2**63 as float)` and an integer JSON literal at 2**63 produce
+    // the same unbounded Python integer during verification.
+    #[test]
+    fn float_exp_exactly_two_pow_63_matches_the_integer_literal() {
         let key = HandleIssuer::generate_key();
         let issuer = HandleIssuer::new(key.expose()).unwrap();
         let now = 1_700_000_000.0;
@@ -707,327 +602,132 @@ mod tests {
             let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
             let sig = issuer.sign(&body);
             let token = format!("{body}.{sig}");
-            let err = issuer
-                .verify(&token, Some(now))
-                .expect_err("2^63 must be rejected the same way regardless of spelling");
-            assert_eq!(err.reason, "handle_malformed", "exp={exp:?}");
+            let handle = issuer.verify(&token, Some(now)).unwrap();
+            assert_eq!(handle.expires_at.to_string(), "9223372036854775808");
         }
-    }
-
-    /// Round-6 de-duplication (PORTING.md §3b, finding E-R6-1): a former
-    /// local copy of `int(str)`'s grammar in `python_int_from_str` parsed
-    /// the unsigned magnitude directly into `i64`
-    /// (`digits.parse::<i64>()`), which cannot hold `i64::MIN`'s own
-    /// magnitude (`9223372036854775808`, one past `i64::MAX`) even
-    /// momentarily, so `"-9223372036854775808"` was wrongly rejected even
-    /// though `i64::MIN` itself is representable -- not reachable via any
-    /// real issued handle either way (`issue` never emits a `pv`/`iat`/`exp`
-    /// near `i64::MIN`), but wrong regardless. Delegating to
-    /// `crate::pystr::int_from_str` (which parses the magnitude via `i128`
-    /// before narrowing) fixes this as a byproduct, while the deliberate
-    /// ASCII-only/`i64`-bounded narrowing this module's own
-    /// `forged_payload_with_non_ascii_digits_or_oversized_magnitude_is_rejected`
-    /// test above pins is unchanged.
-    #[test]
-    fn python_int_from_str_accepts_i64_min() {
-        assert_eq!(python_int_from_str("-9223372036854775808"), Ok(i64::MIN));
-        assert_eq!(python_int_from_str("9223372036854775807"), Ok(i64::MAX));
-        assert!(python_int_from_str("-9223372036854775809").is_err()); // one past i64::MIN
-        assert!(python_int_from_str("9223372036854775808").is_err()); // one past i64::MAX
     }
 }
 
-/// Cross-language differential tests: a handle issued by one language must
-/// verify in the other, using the same key and clock, and the two issuers
-/// must produce byte-identical tokens for the same `now`/`jti` (the only
-/// non-deterministic input, which the Python side is told to hold fixed via
-/// monkeypatching `secrets.token_bytes`).
+/// Wire-format tests against tokens the Python prototype issued (golden
+/// fixtures, `tests/fixtures/python/handles/GENERATE.md`): they verify here,
+/// and this issuer produces the identical token for the same key, clock and
+/// `jti`, so the prototype verifies Rust-issued tokens as well.
 #[cfg(test)]
 mod oracle_tests {
     use super::*;
-    use crate::oracle;
 
-    const KEY_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    fn fixture() -> Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/python/handles/tokens.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
 
     fn key_bytes() -> Vec<u8> {
-        hex::decode(KEY_HEX).unwrap()
-    }
-
-    #[test]
-    fn token_issued_by_rust_verifies_in_python() {
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let now = 1_700_000_000.0;
-        let token = issuer
-            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
-            .unwrap();
-
-        let script = format!(
-            r#"
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-handle = issuer.verify("{token}", now={now} + 10)
-print(handle.caller, handle.connection, handle.grant, handle.policy_version, handle.expires_at)
-"#
-        );
-        let out = oracle::python(&script);
-        assert_eq!(out.trim(), format!("agent-1 gh g-1 4 {}", now as i64 + 300));
-    }
-
-    #[test]
-    fn token_issued_by_python_verifies_in_rust() {
-        let now = 1_700_000_000.0;
-        let script = format!(
-            r#"
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-print(issuer.issue("agent-1", "gh", "g-1", 4, 300, now={now}))
-"#
-        );
-        let token = oracle::python(&script).trim().to_string();
-
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let handle = issuer.verify(&token, Some(now + 10.0)).unwrap();
-        assert_eq!(
-            (
-                handle.caller.as_str(),
-                handle.connection.as_str(),
-                handle.grant.as_str(),
-                handle.policy_version,
-                handle.expires_at
-            ),
-            ("agent-1", "gh", "g-1", 4, now as i64 + 300)
-        );
-    }
-
-    #[test]
-    fn issue_output_is_byte_identical_with_same_jti() {
-        // Freeze `secrets.token_bytes` on the Python side to the same 12
-        // bytes Rust's test drives through a stubbed jti, so the two
-        // encoders can be compared byte-for-byte instead of just
-        // cross-verified.
-        let now = 1_700_000_000.0;
-        let jti_hex = "0102030405060708090a0b0c";
-        let script = format!(
-            r#"
-import secrets
-from unittest import mock
-from zeropw.handles import HandleIssuer
-issuer = HandleIssuer(bytes.fromhex("{KEY_HEX}"))
-with mock.patch.object(secrets, "token_bytes", return_value=bytes.fromhex("{jti_hex}")):
-    print(issuer.issue("agent-1", "gh", "g-1", 4, 300, now={now}))
-"#
-        );
-        let py_token = oracle::python(&script).trim().to_string();
-
-        // Reproduce the same token by hand on the Rust side (bypassing the
-        // random `jti` in `issue`) using the same payload-building logic.
-        let payload = json!({
-            "v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4,
-            "iat": now as i64, "exp": now as i64 + 300,
-            "jti": crate::pyjson::dumps(&json!(hex_to_b64url(jti_hex)), DumpOptions::plain()).unwrap().trim_matches('"'),
-        });
-        let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
-        let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
-        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let sig = issuer.sign(&body);
-        let rust_token = format!("{body}.{sig}");
-
-        assert_eq!(rust_token, py_token);
+        hex::decode(fixture()["key_hex"].as_str().unwrap()).unwrap()
     }
 
     fn hex_to_b64url(hex_str: &str) -> String {
         b64e(&hex::decode(hex_str).unwrap())
     }
 
-    // A-R2-3: `b64d` now reproduces `handles._b64d` (re-pad with `=`, then
-    // Python's lenient, non-strict `base64.urlsafe_b64decode`) instead of a
-    // strict `URL_SAFE_NO_PAD` decode. Exercise the reviewer's own cases,
-    // plus a genuine payload segment with junk/extra padding appended,
-    // directly against `zeropw.handles._b64d` byte-for-byte.
+    /// The token `issue()` would produce for `case` with the fixture's
+    /// fixed `jti` (bypassing the random `jti` in `issue`).
+    fn rust_token_for(case: &Value) -> String {
+        let fixture = fixture();
+        let now = case["now"].as_f64().unwrap();
+        let issued = crate::pyint::PyInt::coerce_from_json(&json!(now)).unwrap();
+        let expires = crate::pyint::PyInt(&issued.0 + num_bigint::BigInt::from(300));
+        let payload = json!({
+            "v": 1, "c": case["caller"], "n": case["connection"], "g": case["grant"],
+            "pv": case["policy_version"], "iat": issued.value(), "exp": expires.value(),
+            "jti": hex_to_b64url(fixture["jti_hex"].as_str().unwrap()),
+        });
+        let payload_json = pyjson::dumps(&payload, DumpOptions::compact_sorted()).unwrap();
+        let body = format!("{PREFIX}.{}", b64e(payload_json.as_bytes()));
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        format!("{body}.{}", issuer.sign(&body))
+    }
+
     #[test]
-    fn b64d_matches_python_for_reviewer_cases() {
-        let now = 1_700_000_000.0;
+    fn token_issued_by_python_verifies_in_rust() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        let now = case["now"].as_f64().unwrap();
+        assert_eq!(now, 1_700_000_000.0);
+        let issuer = HandleIssuer::new(&key_bytes()).unwrap();
+        let handle = issuer
+            .verify(case["token"].as_str().unwrap(), Some(now + 10.0))
+            .unwrap();
+        let want = &case["verified"];
+        assert_eq!(handle.caller, want["caller"].as_str().unwrap());
+        assert_eq!(handle.connection, want["connection"].as_str().unwrap());
+        assert_eq!(handle.grant, want["grant"].as_str().unwrap());
+        assert_eq!(
+            handle.policy_version.to_string(),
+            want["policy_version"].as_str().unwrap()
+        );
+        assert_eq!(
+            handle.issued_at.to_string(),
+            want["issued_at"].as_str().unwrap()
+        );
+        assert_eq!(
+            handle.expires_at.to_string(),
+            want["expires_at"].as_str().unwrap()
+        );
+        assert_eq!(handle.handle_id, want["handle_id"].as_str().unwrap());
+    }
+
+    #[test]
+    fn token_issued_by_rust_has_the_python_payload() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        let now = case["now"].as_f64().unwrap();
         let issuer = HandleIssuer::new(&key_bytes()).unwrap();
         let token = issuer
             .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
             .unwrap();
-        let payload_segment = token.split('.').nth(1).unwrap().to_string();
-
-        let cases = vec![
-            format!("{payload_segment}!!!!"),
-            format!("{payload_segment}=="),
-            "QUJ".to_string(),
-            "QUJD==".to_string(),
-            "QU+D".to_string(),
-            "QU/D".to_string(),
-            "QUJD\n".to_string(),
-            "QU-D".to_string(),
-            "QU_D".to_string(),
-        ];
-
-        let mut script = String::from("from zeropw.handles import _b64d\ncases = [\n");
-        for c in &cases {
-            script.push_str(&format!("    {c:?},\n"));
-        }
-        script.push_str(
-            "]\nfor c in cases:\n    try:\n        r = _b64d(c)\n        print('OK ' + r.hex())\n    except Exception:\n        print('ERR')\n",
-        );
-        let out = oracle::python(&script);
-        let python_results: Vec<&str> = out.lines().collect();
-        assert_eq!(python_results.len(), cases.len());
-
-        for (c, py) in cases.iter().zip(python_results.iter()) {
-            let rust = b64d(c);
-            match (*py, rust) {
-                ("ERR", Err(())) => {}
-                (py_ok, Ok(bytes)) if py_ok.starts_with("OK ") => {
-                    assert_eq!(hex::encode(&bytes), &py_ok[3..], "mismatch for {c:?}");
-                }
-                (py_result, rust_result) => {
-                    panic!("mismatch for {c:?}: python={py_result:?} rust={rust_result:?}")
-                }
-            }
-        }
+        let payload = |token: &str| -> Value {
+            let segment = token.split('.').nth(1).unwrap();
+            let mut value: Value = serde_json::from_slice(&b64d(segment).unwrap()).unwrap();
+            value.as_object_mut().unwrap().remove("jti");
+            value
+        };
+        assert_eq!(payload(&token), payload(case["token"].as_str().unwrap()));
+        let handle = issuer.verify(&token, Some(now + 10.0)).unwrap();
+        assert_eq!(handle.expires_at, now as i64 + 300);
     }
 
-    // A-12: `HandleIssuer.verify`'s `str(payload["c"])` / `int(payload["pv"])`
-    // coercions, exercised end-to-end. Python signs a battery of
-    // deliberately odd-typed payloads with the shared key (bypassing
-    // `issue`, which never emits anything but well-typed payloads) and
-    // prints what `verify` did with each; Rust verifies the exact same
-    // tokens with the same key and the results/reasons must match line for
-    // line.
     #[test]
-    fn payload_coercion_matches_python_for_crafted_tokens() {
-        let script = format!(
-            r#"
-import base64, hashlib, hmac, json
-from zeropw.handles import HandleIssuer
-
-KEY = bytes.fromhex("{KEY_HEX}")
-
-def b64e(raw):
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-def sign(body):
-    return b64e(hmac.new(KEY, body.encode("ascii"), hashlib.sha256).digest())
-
-def make_token(payload):
-    body = "zpw1." + b64e(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    return body + "." + sign(body)
-
-base = {{"v": 1, "c": "agent-1", "n": "gh", "g": "g-1", "pv": 4, "iat": 1700000000, "exp": 1700000300, "jti": "abc"}}
-
-def variant(**overrides):
-    p = dict(base)
-    p.update(overrides)
-    return p
-
-cases = [
-    variant(),
-    variant(c=None),
-    variant(c=True),
-    variant(c=[1, 2]),
-    variant(c={{"x": 1}}),
-    # A-R2-2: repr() must escape every non-isprintable() char, not just
-    # C0/DEL -- exercised via a non-str `c` so `str(payload["c"])` falls
-    # through to repr() on the (str) list element.
-    variant(c=["\x85"]),  # NEL, Cc
-    variant(c=["\xa0"]),  # NBSP, Zs (not the one exception, U+0020)
-    variant(c=["\xad"]),  # SOFT HYPHEN, Cf
-    variant(c=["​"]),  # ZERO WIDTH SPACE, Cf
-    variant(c=[" "]),  # LINE SEPARATOR, Zl
-    variant(c=["\U0010ffff"]),  # max codepoint, unassigned (Cn)
-    variant(n=4.0),
-    variant(n=4),
-    variant(pv=True),
-    variant(pv=False),
-    variant(pv=4.9),
-    variant(pv=-4.9),
-    variant(pv="42"),
-    variant(pv=" 4_2 "),
-    variant(pv="+7"),
-    variant(pv="-7"),
-    variant(pv="abc"),
-    variant(pv=None),
-    variant(pv=[1]),
-    variant(v=True),
-    variant(v=1.0),
-    variant(v=2),
-    variant(v=False),
-]
-missing_c = dict(base)
-del missing_c["c"]
-cases.append(missing_c)
-
-issuer = HandleIssuer(KEY)
-for payload in cases:
-    token = make_token(payload)
-    print("TOKEN", token)
-    try:
-        h = issuer.verify(token, now=1700000000.0 + 10)
-        print("OK", h.caller, "|", h.connection, "|", h.grant, "|", h.policy_version, "|",
-              h.issued_at, "|", h.expires_at, "|", h.handle_id)
-    except Exception as exc:
-        print("ERR", getattr(exc, "reason", type(exc).__name__))
-"#
-        );
-        let py_out = oracle::python(&script);
-        let lines: Vec<&str> = py_out.lines().collect();
-        assert!(
-            !lines.is_empty() && lines.len().is_multiple_of(2),
-            "unexpected oracle output shape"
-        );
-
+    fn huge_finite_issue_round_trips_both_directions() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][1];
+        let now = case["now"].as_f64().unwrap();
+        assert_eq!(now, 1e30);
         let issuer = HandleIssuer::new(&key_bytes()).unwrap();
-        let now = 1_700_000_000.0 + 10.0;
-        let mut i = 0;
-        let mut checked = 0;
-        while i < lines.len() {
-            let token = lines[i]
-                .strip_prefix("TOKEN ")
-                .expect("expected a TOKEN line");
-            let result_line = lines[i + 1];
-            i += 2;
-            let rust_result = issuer.verify(token, Some(now));
-            if let Some(rest) = result_line.strip_prefix("OK ") {
-                let parts: Vec<&str> = rest.split(" | ").collect();
-                let handle = rust_result.unwrap_or_else(|e| {
-                    panic!("rust rejected a token python accepted: token={token} err={e:?}")
-                });
-                assert_eq!(handle.caller, parts[0], "caller mismatch for token {token}");
-                assert_eq!(
-                    handle.connection, parts[1],
-                    "connection mismatch for token {token}"
-                );
-                assert_eq!(handle.grant, parts[2], "grant mismatch for token {token}");
-                assert_eq!(
-                    handle.policy_version.to_string(),
-                    parts[3],
-                    "policy_version mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.issued_at.to_string(),
-                    parts[4],
-                    "issued_at mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.expires_at.to_string(),
-                    parts[5],
-                    "expires_at mismatch for token {token}"
-                );
-                assert_eq!(
-                    handle.handle_id, parts[6],
-                    "handle_id mismatch for token {token}"
-                );
-            } else if let Some(reason) = result_line.strip_prefix("ERR ") {
-                let err = rust_result.unwrap_err();
-                assert_eq!(err.reason, reason, "reason mismatch for token {token}");
-            } else {
-                panic!("unexpected oracle line: {result_line}");
-            }
-            checked += 1;
-        }
-        assert_eq!(checked, 29, "expected exactly 29 crafted-token cases");
+        let python_token = case["token"].as_str().unwrap();
+        let rust_handle = issuer.verify(python_token, Some(now)).unwrap();
+        assert_eq!(
+            rust_handle.issued_at.to_string(),
+            case["verified"]["issued_at"].as_str().unwrap()
+        );
+        assert_eq!(
+            rust_handle.expires_at.to_string(),
+            case["verified"]["expires_at"].as_str().unwrap()
+        );
+        assert_eq!(rust_token_for(case), python_token);
+        // A Rust-issued token at the same clock verifies to the same values.
+        let rust_token = issuer
+            .issue("agent-1", "gh", "g-1", 4, 300, Some(now))
+            .unwrap();
+        let again = issuer.verify(&rust_token, Some(now)).unwrap();
+        assert_eq!(again.issued_at, rust_handle.issued_at);
+        assert_eq!(again.expires_at, rust_handle.expires_at);
+    }
+
+    #[test]
+    fn issue_output_is_byte_identical_with_same_jti() {
+        let fixture = fixture();
+        let case = &fixture["tokens"][0];
+        assert_eq!(rust_token_for(case), case["token"].as_str().unwrap());
     }
 }

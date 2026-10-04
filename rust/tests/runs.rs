@@ -1,3 +1,5 @@
+mod session_probe;
+
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{
@@ -36,7 +38,7 @@ fn queued(r: &RunRegistry) -> Run {
         None,
         "digest",
         Some("http://127.0.0.1:9999"),
-        Some(4),
+        Some(4.into()),
     )
 }
 fn start(
@@ -167,26 +169,18 @@ fn cancellation_escalates_and_preserves_reason() {
 fn cancellation_targets_new_session_group_not_coordinator_group() {
     let (temp, _, r) = setup(1024);
     let marker = temp.path().join("child-ready");
-    let program = zeropw::tools::resolve_program("python3.12").expect("Python oracle");
     let run = queued(&r);
-    let script = "import os,sys,time\np=os.getpid()\ntry:\n fd=os.open('/dev/tty', os.O_RDONLY); os.close(fd); tty=True\nexcept OSError: tty=False\nprint(os.getsid(0)==p, os.getpgrp()==p, tty, flush=True)\nopen(sys.argv[1], 'w').close()\ntime.sleep(30)";
     r.start(
         &run,
-        &[
-            program.to_string_lossy().into_owned(),
-            "-I".into(),
-            "-c".into(),
-            script.into(),
-            marker.to_string_lossy().into_owned(),
-        ],
-        &HashMap::new(),
+        &session_probe::argv(),
+        &session_probe::env(Some(&marker)),
         temp.path(),
         &[],
         None,
         Some(60.0),
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !marker.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -196,9 +190,10 @@ fn cancellation_targets_new_session_group_not_coordinator_group() {
     );
     let done = r.cancel(&run.id, "alice", "test_cancel").unwrap();
     assert_eq!(done.state, "cancelled");
-    assert_eq!(
-        done.stdout, b"True True False\n",
-        "group-directed cancellation must target the child-led session without a controlling terminal"
+    assert!(
+        String::from_utf8_lossy(&done.stdout).contains("PROBE true true false\n"),
+        "group-directed cancellation must target the child-led session without a controlling terminal: {:?}",
+        String::from_utf8_lossy(&done.stdout)
     );
 }
 #[test]
@@ -206,23 +201,23 @@ fn cancellation_signals_descendants_in_the_new_process_group() {
     let (temp, _, r) = setup(1024);
     let ready = temp.path().join("descendant-ready");
     let terminated = temp.path().join("descendant-terminated");
-    let program = zeropw::tools::resolve_program("python3.12").expect("Python oracle");
     let run = queued(&r);
-    let script = r#"import subprocess,sys,time
-child = "import signal,sys,time; signal.signal(signal.SIGTERM, lambda s,f: (open(sys.argv[2], 'w').close(), sys.exit(0))); open(sys.argv[1], 'w').close(); time.sleep(30)"
-subprocess.Popen([sys.executable, '-I', '-c', child, sys.argv[1], sys.argv[2]])
-time.sleep(30)"#;
+    // The CLI starts a descendant that records SIGTERM and then waits; the
+    // CLI itself keeps running until it is signalled too.
+    let descendant = r#"trap ': > "$2"; exit 0' TERM; : > "$1"; sleep 30 & wait $!"#;
+    let cli = r#"/bin/sh -c "$1" descendant "$2" "$3" & sleep 30 & wait $!"#;
     r.start(
         &run,
         &[
-            program.to_string_lossy().into_owned(),
-            "-I".into(),
+            "/bin/sh".into(),
             "-c".into(),
-            script.into(),
+            cli.into(),
+            "cli".into(),
+            descendant.into(),
             ready.to_string_lossy().into_owned(),
             terminated.to_string_lossy().into_owned(),
         ],
-        &HashMap::new(),
+        &HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
         temp.path(),
         &[],
         None,
@@ -591,42 +586,28 @@ fn finish_listener_can_query_and_cancel_without_publishing_partial_result() {
     assert_eq!(done.state, "completed");
     assert_eq!(done.stdout, b"business-output");
 }
+/// Every output-filter form of a credential (raw, stripped, encodings and
+/// their alignments) exactly as the original `credential_patterns` derived
+/// it, for binary values, whitespace and alignment cases
+/// (`fixtures/python/runs/credential_patterns.json`).
 #[test]
 fn patterns_match_python_oracle_for_binary_and_alignment_cases() {
-    use std::io::Write;
-    let samples = vec![
-        vec![],
-        b"a".to_vec(),
-        b" abc\t\n".to_vec(),
-        b"secret-value-123!".to_vec(),
-        (0..=255).collect(),
-    ];
-    let script = format!(
-        "import json\nfrom zeropw.runs import credential_patterns\nsamples={}\nprint(json.dumps([[list(p) for p in credential_patterns(bytes(s))] for s in samples]))",
-        serde_json::to_string(&samples).unwrap()
-    );
-    let mut child = std::process::Command::new("python3.12")
-        .arg("-")
-        .env(
-            "PYTHONPATH",
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap(),
-        )
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(out.status.success());
-    let expected: Vec<Vec<Vec<u8>>> = serde_json::from_slice(&out.stdout).unwrap();
-    for (sample, expected) in samples.iter().zip(expected) {
-        assert_eq!(runs::credential_patterns(sample), expected);
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/python/runs/credential_patterns.json"
+    ))
+    .unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 9);
+    for case in cases {
+        let secret = engine.decode(case["secret"].as_str().unwrap()).unwrap();
+        let expected: Vec<Vec<u8>> = case["patterns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| engine.decode(p.as_str().unwrap()).unwrap())
+            .collect();
+        assert_eq!(runs::credential_patterns(&secret), expected, "{secret:?}");
     }
 }

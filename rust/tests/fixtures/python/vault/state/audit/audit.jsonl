@@ -1,0 +1,4 @@
+
+{"action":null,"caller":null,"connection":null,"event":"init","kind":"state_initialized","policy_version":null,"reason":null,"request_id":null,"result":"ok","run_id":null,"target":null,"ts":"2023-11-14T22:13:20Z"}
+{"action":null,"caller":null,"connection":null,"environment":"dev","event":"secret_put","kind":"api_key","policy_version":null,"project":"demo","reason":null,"request_id":null,"result":"ok","run_id":null,"secret_id":"gh-token","target":null,"ts":"2023-11-14T22:13:20Z","version":1}
+{"action":null,"backup_id":"833c367896ccf633","caller":null,"connection":null,"digest":"1c1b5f28b767d5f1eec8966e9a8c32672d2dbf1ed9f5fba8bcea1f85f5c80357","event":"backup","policy_version":null,"reason":null,"request_id":null,"result":"ok","run_id":null,"target":null,"ts":"2023-11-14T22:13:20Z"}

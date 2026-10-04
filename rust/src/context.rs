@@ -442,7 +442,7 @@ impl Context {
     }
 
     fn private_tempdir(&mut self, prefix: &str) -> Result<PathBuf, Error> {
-        let base = std::env::temp_dir();
+        let base = python_gettempdir()?;
         let path = if let Some(registry) = &self.owned_dir_registry {
             registry.create(&base, prefix)?
         } else {
@@ -499,16 +499,17 @@ impl Context {
         let old = self.state.path.join(KMS_FILE);
         let rotated = self.state.path.join("kms").join(format!(
             "master.key.retired-{}",
-            clock_now_i64(&self.clock)?
+            clock_now_int(&self.clock)?
         ));
-        fs::rename(&old, &rotated)
-            .map_err(|e| Error::state("state_write_failed").with_detail(e.to_string()))?;
+        // `os.replace(old, rotated)` is not guarded in `context.py`: its
+        // `OSError` reaches the administrator CLI unchanged.
+        fs::rename(&old, &rotated).map_err(|e| crate::store::uncaught_os_error(&e))?;
 
         let attempt = (|| -> Result<(&'static (dyn Kms + Send + Sync), Vault<'static>), Error> {
             let new_kms: &'static (dyn Kms + Send + Sync) =
                 Box::leak(Box::new(LocalFileKms::create(
                     &old,
-                    &format!("local-dev-kms-{}", clock_now_i64(&self.clock)?),
+                    &format!("local-dev-kms-{}", clock_now_int(&self.clock)?),
                 )?));
             let vault = Vault::recover(
                 self.state,
@@ -530,7 +531,7 @@ impl Context {
                 // original error `e` (finding E-R7-3); surface the rename-back failure instead,
                 // matching Python's replacement semantics.
                 if let Err(e2) = fs::rename(&rotated, &old) {
-                    return Err(Error::state("state_write_failed").with_detail(e2.to_string()));
+                    return Err(crate::store::uncaught_os_error(&e2));
                 }
                 return Err(e);
             }
@@ -565,12 +566,17 @@ impl Context {
 /// `0`) and let `recover` rename the live master key aside on a broken clock (finding E-R7-6).
 /// Only reachable via a caller-injected `Clock` returning a non-finite value -- trusted in-process
 /// code, not any untrusted input.
-fn clock_now_i64(clock: &Clock) -> Result<i64, Error> {
+///
+/// A finite value is CPython's unbounded `int(float)`: the exact truncated integer, however far
+/// outside every machine width (`int(1e300)` is a 301-digit integer), rendered in decimal for the
+/// filename suffix and key id exactly as Python's f-string does.
+fn clock_now_int(clock: &Clock) -> Result<crate::pyint::PyInt, Error> {
     let now = clock();
     if !now.is_finite() {
         return Err(Error::state("state_write_failed").with_detail("clock_not_finite"));
     }
-    Ok(now as i64)
+    crate::pyint::PyInt::coerce_from_json(&json!(now))
+        .ok_or_else(|| Error::state("state_write_failed").with_detail("clock_not_finite"))
 }
 
 impl Drop for Context {
@@ -605,42 +611,154 @@ fn mkdir_private_0700(path: &Path) -> std::io::Result<()> {
     builder.create(path)
 }
 
-/// Finding E-R3-2: this used to encode 8 raw random bytes as hex (16
-/// characters), 8 characters longer than Python's `tempfile.mkdtemp`'s own
-/// 8-character random suffix (`zeropw-sockets-`/`zeropw-runs-` basenames
-/// ended up 8 bytes longer than Python's for the same prefix). That silently
-/// defeated `signer.rs`'s own `MAX_UNIX_PATH` bind-time length check: a
-/// `ctx.config.socket_dir` that Python's shorter basename keeps under the
-/// limit could push Rust's longer one over it, making `choose_socket_dir`
-/// discard the configured directory and fall back to a `zpws-` temp dir that
-/// `Context` neither owns nor removes. 4 random bytes hex-encoded yields the
-/// same 8-character suffix length as `mkdtemp`'s own alphabet (different
-/// character set, same length), matching the fix already applied to
-/// `signer.rs`'s `make_temp_dir` (findings G-2/G-3).
+/// `tempfile.mkdtemp(prefix=prefix, dir=base)` followed by `_private_tempdir`'s
+/// `os.chmod(path, 0o700)`, with CPython's exact naming and failure modes:
+/// `prefix` plus one [`crate::store::tempfile_random_name`] (finding E-R3-2:
+/// the basename length, and so the signer's `MAX_UNIX_PATH` check, matches
+/// Python's), `os.mkdir(path, 0o700)` retried only on `FileExistsError` up to
+/// `TMP_MAX` times, the result made absolute (`os.path.abspath`), and every
+/// other `OSError` -- uncaught in `context.py` -- reported as the raw error
+/// the administrator CLI prints ([`crate::store::uncaught_os_error`]).
 fn create_private_dir(base: &Path, prefix: &str) -> Result<PathBuf, Error> {
-    for _ in 0..64 {
-        let mut suffix = [0u8; 4];
-        {
-            use rand::RngCore;
-            rand::rngs::OsRng.fill_bytes(&mut suffix);
-        }
-        let path = base.join(format!("{prefix}{}", hex::encode(suffix)));
+    for _ in 0..crate::vault::TMP_MAX {
+        let path = base.join(format!("{prefix}{}", crate::store::tempfile_random_name()));
         match mkdir_private_0700(&path) {
             Ok(()) => {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).map_err(|_| {
-                    Error::state("state_write_failed").with_detail(path.display().to_string())
-                })?;
+                let path =
+                    posixpath_abspath(&path).map_err(|e| crate::store::uncaught_os_error(&e))?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                    .map_err(|e| crate::store::uncaught_os_error(&e))?;
                 return Ok(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                return Err(
-                    Error::state("state_write_failed").with_detail(path.display().to_string())
-                );
+            Err(e) => return Err(crate::store::uncaught_os_error(&e)),
+        }
+    }
+    Err(Error::subclass(
+        crate::errors::ErrorClass::ZeroPW,
+        "FileExistsError",
+        "io_error",
+        "No usable temporary directory name found",
+    ))
+}
+
+/// `posixpath.normpath` on raw bytes: collapses empty and `.` segments,
+/// pops `..` against a preceding real segment (kept when nothing precedes it
+/// in a relative path, dropped at the root), keeps exactly two leading
+/// slashes but folds three or more into one, and returns `.` for an empty
+/// result.
+fn posixpath_normpath(path: &[u8]) -> Vec<u8> {
+    if path.is_empty() {
+        return b".".to_vec();
+    }
+    let initial_slashes = if path.starts_with(b"//") && !path.starts_with(b"///") {
+        2
+    } else if path.starts_with(b"/") {
+        1
+    } else {
+        0
+    };
+    let mut comps: Vec<&[u8]> = Vec::new();
+    for comp in path.split(|b| *b == b'/') {
+        if comp.is_empty() || comp == b"." {
+            continue;
+        }
+        if comp != b".."
+            || (initial_slashes == 0 && comps.is_empty())
+            || comps.last() == Some(&&b".."[..])
+        {
+            comps.push(comp);
+        } else if !comps.is_empty() {
+            comps.pop();
+        }
+    }
+    let mut out = vec![b'/'; initial_slashes];
+    out.extend_from_slice(&comps.join(&b'/'));
+    if out.is_empty() {
+        out.push(b'.');
+    }
+    out
+}
+
+/// `os.path.abspath(path)`: joins a relative path onto `os.getcwd()` (whose
+/// failure propagates), then [`posixpath_normpath`].
+fn posixpath_abspath(path: &Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let normalized = posixpath_normpath(joined.as_os_str().as_bytes());
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(normalized)))
+}
+
+/// The directory `tempfile.gettempdir()` chose, once one was found (CPython
+/// caches it in `tempfile.tempdir` for the life of the process).
+static GETTEMPDIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// `tempfile.gettempdir()` (CPython 3.12 `_get_default_tempdir`): the first of
+/// `$TMPDIR`, `$TEMP`, `$TMP` (each only when set and non-empty), `/tmp`,
+/// `/var/tmp`, `/usr/tmp` and the working directory (`.` if `os.getcwd()`
+/// fails) in which a fresh `O_EXCL|O_NOFOLLOW` 0600 file can be created,
+/// written (`b"blat"`) and removed. Up to 100 names are tried per directory,
+/// moving on at the first error other than `FileExistsError`. Every
+/// candidate but `.` is made absolute first. No usable directory is
+/// `FileNotFoundError`. Unlike `std::env::temp_dir()`, an unset, empty,
+/// missing or unwritable `$TMPDIR` falls back exactly as Python does.
+fn python_gettempdir() -> Result<PathBuf, Error> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut cached = GETTEMPDIR.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(dir) = cached.as_ref() {
+        return Ok(dir.clone());
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for name in ["TMPDIR", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(name).filter(|v| !v.is_empty()) {
+            candidates.push(PathBuf::from(value));
+        }
+    }
+    candidates.extend(["/tmp", "/var/tmp", "/usr/tmp"].map(PathBuf::from));
+    candidates.push(std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    for candidate in candidates {
+        let dir = if candidate.as_os_str() == "." {
+            candidate
+        } else {
+            posixpath_abspath(&candidate).map_err(|e| crate::store::uncaught_os_error(&e))?
+        };
+        for _ in 0..100 {
+            let file = dir.join(crate::store::tempfile_random_name());
+            match fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .mode(0o600)
+                .open(&file)
+            {
+                Ok(mut handle) => {
+                    let written = handle.write_all(b"blat");
+                    drop(handle);
+                    let removed = fs::remove_file(&file);
+                    if written.is_ok() && removed.is_ok() {
+                        *cached = Some(dir.clone());
+                        return Ok(dir);
+                    }
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => break,
             }
         }
     }
-    Err(Error::state("state_write_failed").with_detail("tempdir"))
+    Err(Error::subclass(
+        crate::errors::ErrorClass::ZeroPW,
+        "FileNotFoundError",
+        "file_not_found",
+        "",
+    ))
 }
 
 /// Port of `pathlib.Path.resolve(strict=False)`: walks the path component by
@@ -950,23 +1068,11 @@ mod tests {
         assert_eq!(mode, 0o700);
     }
 
-    /// Finding E-R3-2: `create_private_dir`'s random suffix used to be 8 raw
-    /// bytes hex-encoded (16 characters), 8 characters longer than Python's
-    /// `tempfile.mkdtemp`'s own suffix for the same prefix -- oracle-compared
-    /// here directly against real `python3.12`, mirroring `signer.rs`'s own
-    /// `make_temp_dir_suffix_length_matches_python_mkdtemp` (the identical
-    /// fix for the identical bug, findings G-2/G-3).
+    /// Finding E-R3-2: `create_private_dir`'s random suffix is 8 characters,
+    /// like the prototype's `tempfile.mkdtemp` suffix (it used to be 16 hex
+    /// characters, which ate into the short AF_UNIX socket path budget).
     #[test]
-    fn create_private_dir_suffix_length_matches_python_mkdtemp() {
-        let python_suffix_len: usize = crate::oracle::python(
-            "import tempfile, os, shutil\n\
-             path = tempfile.mkdtemp(prefix='zeropw-sockets-')\n\
-             print(len(os.path.basename(path)) - len('zeropw-sockets-'))\n\
-             shutil.rmtree(path, ignore_errors=True)\n",
-        )
-        .trim()
-        .parse()
-        .expect("python prints an integer suffix length");
+    fn create_private_dir_suffix_length_is_eight_like_mkdtemp() {
         let base = std::env::temp_dir();
         let path = create_private_dir(&base, "zeropw-sockets-").unwrap();
         let name = path
@@ -976,8 +1082,7 @@ mod tests {
             .to_string();
         fs::remove_dir(&path).unwrap();
         assert!(name.starts_with("zeropw-sockets-"), "{name}");
-        let rust_suffix_len = name.len() - "zeropw-sockets-".len();
-        assert_eq!(rust_suffix_len, python_suffix_len);
+        assert_eq!(name.len() - "zeropw-sockets-".len(), 8, "{name}");
     }
 
     /// Finding E-R3-1: the reviewer's probe shape for the fail-*open* cycle-handling gap.
@@ -992,7 +1097,7 @@ mod tests {
     /// Rust implementation kept resolving past the cycle, so it *did* follow `M`, giving the
     /// wrong answer `<base>/other/x`.
     #[test]
-    fn resolve_lenient_matches_python_for_loop_then_dotdot_then_symlink() {
+    fn resolve_lenient_for_loop_then_dotdot_then_symlink() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let base = tmp.path().to_path_buf();
         let loop_path = base.join("L");
@@ -1005,16 +1110,9 @@ mod tests {
 
         let rust_resolved = resolve_lenient(&candidate).expect("resolve_lenient");
 
-        let python_resolved = crate::oracle::python(&format!(
-            "import pathlib\n\
-             print(pathlib.Path({candidate:?}).resolve(strict=False))\n",
-        ));
-        let python_resolved = PathBuf::from(python_resolved.trim());
-
-        assert_eq!(
-            rust_resolved, python_resolved,
-            "rust={rust_resolved:?} python={python_resolved:?}"
-        );
+        // `pathlib.Path(candidate).resolve(strict=False)` in the prototype.
+        let expected = fs::canonicalize(&base).unwrap().join("x");
+        assert_eq!(rust_resolved, expected, "rust={rust_resolved:?}");
         assert_eq!(
             rust_resolved.file_name().and_then(|n| n.to_str()),
             Some("x"),

@@ -20,7 +20,7 @@ use crate::context::Context;
 use crate::crypto::ed25519;
 use crate::errors::{Error, Result};
 use crate::pybase64;
-use crate::pyint::PyInt;
+use crate::pyint::{PyInt, PyNumber};
 use crate::pyjson::{self, DumpOptions};
 use crate::store::{StateDir, iso};
 
@@ -441,37 +441,9 @@ mod retry_tests {
         );
     }
 
-    /// Python half of [`owner_with_admin_peer`]: an owner node with a shared
-    /// environment, a `TeamSync` and one admin peer, plus a recording session
-    /// for that peer (driven through `_handle_message` directly).
-    const PY_OWNER_WITH_ADMIN_PEER: &str = r#"
-import json, tempfile, pathlib, time
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-team.register_env(env_id)
-peer = DeviceKey.generate()
-M.author_commit(ctx, team, env_id, [{"op": "member.add", "device": peer.record.to_dict(), "name": "bob",
-                                     "role": "admin"}])
-
-class Fake:
-    def __init__(self, peer):
-        self.peer, self.env_id, self.sent, self.closed = peer, env_id, [], False
-        self.created_at = time.monotonic()
-    def send(self, m): self.sent.append(m)
-    def recv(self, timeout): return None
-    def close(self): self.closed = True
-
-session = Fake(peer.record)
-"#;
-
+    /// An owner node with a shared environment, a `TeamSync` and one admin
+    /// peer, plus a recording session for that peer (driven through
+    /// `handle_message` directly).
     struct OwnerWithAdminPeer {
         _root: TempDir,
         ctx: Arc<Context>,
@@ -544,63 +516,13 @@ session = Fake(peer.record)
         }
     }
 
-    /// The same inbound traffic replayed against Python, whose
-    /// `_relaxed_document` is wrapped to count the `F.fold` calls it makes.
-    const PY_RELAXED_FOLDS: &str = r#"
-folds = [0]
-real_relaxed = S.TeamSync._relaxed_document
-def counted(self, env_id):
-    real_fold = S.F.fold
-    def fold(*args, **kwargs):
-        folds[0] += 1
-        return real_fold(*args, **kwargs)
-    S.F.fold = fold
-    try:
-        return real_relaxed(self, env_id)
-    finally:
-        S.F.fold = real_fold
-S.TeamSync._relaxed_document = counted
-
-def bad_fact(i):
-    fact = S.sign_fact(peer, env_id, "connection_disabled", {"connection_id": f"c{i}"}, f"{5000 + i}-0000").to_dict()
-    fact["target"]["connection_id"] = "tampered"
-    return {"type": "FACT", "fact": fact}
-
-def incident(i):
-    fact = S.sign_fact(peer, env_id, "incident", {"incident_id": f"{i:016x}"}, f"{6000 + i}-0000")
-    return {"type": "INCIDENT", "fact": fact.to_dict()}
-
-counts = []
-for i in range(5):
-    team._handle_message(env_id, session, bad_fact(i))
-counts.append(folds[0])
-for i in range(3):
-    team._handle_message(env_id, session, incident(i))
-counts.append(folds[0])
-M.author_commit(ctx, None, env_id, [{"op": "settings.update", "sync_interval_seconds": 7}])
-team._handle_message(env_id, session, bad_fact(10))
-counts.append(folds[0])
-team._handle_message(env_id, session, bad_fact(11))
-counts.append(folds[0])
-team.poll()
-team._handle_message(env_id, session, bad_fact(12))
-counts.append(folds[0])
-acks = sum(1 for m in session.sent if m["type"] == "INCIDENT_ACK")
-rejected = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_fact_rejected")
-print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
-"#;
-
     /// Gap 1: `_relaxed_document` is cached by the store vector and cleared
     /// only by `_refold`, so a removed member's device record is resolved
     /// without re-folding the whole log per FACT/INCIDENT -- and the
     /// Rust-only offline fact replay folds at most once per pass, not once
     /// per replayed line.
     #[test]
-    fn relaxed_document_is_cached_by_store_vector_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_RELAXED_FOLDS}")).trim(),
-        )
-        .unwrap();
+    fn relaxed_document_is_cached_by_store_vector() {
         let OwnerWithAdminPeer {
             _root,
             ctx,
@@ -675,11 +597,12 @@ print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
             .iter()
             .filter(|r| r["event"] == "team_fact_rejected")
             .count();
+        // The counts the Python prototype's `_relaxed_document` produced for
+        // the same traffic.
         assert_eq!(
             json!({"counts":counts,"acks":acks,"rejected":rejected}),
-            python
+            json!({"counts": [1, 1, 2, 2, 3], "acks": 3, "rejected": 8})
         );
-        assert_eq!(python["counts"], json!([1, 1, 2, 2, 3]));
 
         // Rust-only offline fact replay (DEVIATIONS.md): 64 lines, each
         // needing the author's device record.
@@ -711,34 +634,6 @@ print(json.dumps({"counts": counts, "acks": acks, "rejected": rejected}))
         assert_eq!(folds(), warm + 1, "one fold per replay pass, not per line");
     }
 
-    /// `_apply_incident_rotation_flags` over a corrupt `rotation_flags.json`.
-    const PY_ROTATION_FLAGS: &str = r#"
-path = f"team/{env_id}/rotation_flags.json"
-cases = [(["x"], {"secret_ids_mandatory": ["s1"]}), (["x"], {}),
-         ({"s2": "bad"}, {"secret_ids_recommended": ["s2"]}), ({"s2": "bad"}, {"secret_ids_mandatory": ["s2"]}),
-         ({"s2": None}, {"secret_ids_recommended": ["s2"]}), (0, {"secret_ids_recommended": ["s3"]}),
-         ({"s4": {"reason": "rotation_required", "flagged_at": "T0"}},
-          {"secret_ids_recommended": ["s4", "s5"], "secret_ids_mandatory": ["s6"]})]
-out = []
-for i, (flags, extra) in enumerate(cases):
-    ctx.state.write_json(path, flags)
-    before = len(session.sent)
-    fact = S.sign_fact(peer, env_id, "incident", dict(extra, incident_id=f"{i:016x}"), f"{6000 + i}-0000")
-    try:
-        team._handle_message(env_id, session, {"type": "INCIDENT", "fact": fact.to_dict()})
-        raised = False
-    except Exception:
-        raised = True
-    after = ctx.state.read_json(path, None)
-    if isinstance(after, dict):
-        after = {k: dict(v, flagged_at="T") if isinstance(v, dict) and v.get("flagged_at") != "T0" else v
-                 for k, v in after.items()}
-    out.append({"raised": raised, "flags": after, "acked": len(session.sent) - before,
-                "record": ctx.state.exists(f"team/{env_id}/incidents/{peer.fingerprint}-{i:016x}.json")})
-received = sum(1 for r in ctx.audit.tail(500) if r["event"] == "team_incident_received")
-print(json.dumps({"cases": out, "received": received}))
-"#;
-
     /// A truthy non-dict `rotation_flags.json` (or a non-dict entry that a
     /// recommended id reads) raises in Python inside `_handle_incident`,
     /// after the incident record is written and before the ACK; Rust returns
@@ -746,11 +641,7 @@ print(json.dumps({"cases": out, "received": received}))
     /// session exactly as Python's escaping exception does) instead of
     /// panicking on `Value` index assignment.
     #[test]
-    fn corrupt_rotation_flags_fail_the_incident_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_ROTATION_FLAGS}")).trim(),
-        )
-        .unwrap();
+    fn corrupt_rotation_flags_fail_the_incident() {
         let fixture = owner_with_admin_peer();
         let (ctx, env_id, team) = (&fixture.ctx, &fixture.env_id, &fixture.team);
         let path = format!("team/{env_id}/rotation_flags.json");
@@ -814,39 +705,27 @@ print(json.dumps({"cases": out, "received": received}))
             .iter()
             .filter(|r| r["event"] == "team_incident_received")
             .count();
-        assert_eq!(json!({"cases":out,"received":received}), python);
-        assert_eq!(python["cases"][0]["raised"], json!(true));
-        assert_eq!(python["cases"][1]["raised"], json!(false));
+        // The outcomes the Python prototype's `_handle_incident` produced
+        // (`raised` there is an escaping exception, here `state_corrupt`).
+        assert_eq!(
+            json!({"cases":out,"received":received}),
+            json!({"cases": [
+                {"raised": true, "flags": ["x"], "acked": 0, "record": true},
+                {"raised": false, "flags": ["x"], "acked": 1, "record": true},
+                {"raised": true, "flags": {"s2": "bad"}, "acked": 0, "record": true},
+                {"raised": false, "flags": {"s2": {"flagged_at": "T", "reason": "rotation_required"}},
+                 "acked": 1, "record": true},
+                {"raised": true, "flags": {"s2": null}, "acked": 0, "record": true},
+                {"raised": false, "flags": {"s3": {"flagged_at": "T", "reason": "rotation_recommended"}},
+                 "acked": 1, "record": true},
+                {"raised": false, "flags": {
+                    "s4": {"flagged_at": "T0", "reason": "rotation_required"},
+                    "s5": {"flagged_at": "T", "reason": "rotation_recommended"},
+                    "s6": {"flagged_at": "T", "reason": "rotation_required"}},
+                 "acked": 1, "record": true},
+            ], "received": 4})
+        );
     }
-
-    /// `_load_env_locked`'s reads of `peer_vectors.json` and
-    /// `overridden_alerted.json`, shape by shape, against CPython.
-    const PY_LOAD_PEER_STATE: &str = r#"
-import json, tempfile, pathlib
-from zeropw.context import Config, Context
-from zeropw.team import membership as M, sync as S, transport as T
-from zeropw.team.identity import DeviceKey
-
-cases = json.loads(CASES)
-root = pathlib.Path(tempfile.mkdtemp())
-ctx = Context.initialize(root / "a", "synthetic-admin", "synthetic-recovery", Config())
-ctx.projects.create("demo", ["dev"])
-env_id = M.share_environment(ctx, None, "demo", "dev", "owner", "synthetic-admin")["env_id"]
-device = DeviceKey.load_or_create(ctx.state, ctx.kms)
-out = []
-for vectors, alerted in cases:
-    ctx.state.write_json(f"team/{env_id}/peer_vectors.json", vectors)
-    ctx.state.write_json(f"team/{env_id}/overridden_alerted.json", alerted)
-    team = S.TeamSync(ctx, T.InProcessTransport(device), device)
-    try:
-        team.register_env(env_id)
-    except Exception as exc:
-        out.append({"error": type(exc).__name__})
-        continue
-    env = team._envs[env_id]
-    out.append({"peer_vectors": env.peer_vectors, "alerted": sorted(env.alerted_overrides)})
-print(json.dumps(out))
-"#;
 
     /// `register_env` over every JSON shape of the two peer-state documents:
     /// a truthy non-dict `peer_vectors.json` raises `AttributeError` and a
@@ -854,7 +733,7 @@ print(json.dumps(out))
     /// Python (`state_corrupt` here, §3.5); a falsy document is empty; any
     /// other iterable is iterated like Python; peer-vector ints are exact.
     #[test]
-    fn peer_state_documents_load_like_python() {
+    fn peer_state_documents_load() {
         let fps: Vec<String> = (0..3)
             .map(|_| DeviceKey::generate().record().unwrap().fingerprint())
             .collect();
@@ -892,13 +771,30 @@ print(json.dumps(out))
         for doc in falsy.iter().chain(alerted.iter()) {
             cases.push(json!([{}, doc]));
         }
-        let script = PY_LOAD_PEER_STATE.replace(
-            "json.loads(CASES)",
-            &format!("json.loads({:?})", json!(cases).to_string()),
-        );
-        let python: Value = serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
-        let python = python.as_array().unwrap();
-        assert_eq!(python.len(), cases.len());
+        // `None`: the load fails closed (`state_corrupt`; the Python
+        // prototype raised `AttributeError`/`TypeError`). Otherwise the
+        // loaded state, as the Python prototype loaded it.
+        let loaded = |alerted: Value| Some(json!({"peer_vectors": {}, "alerted": alerted}));
+        let mut expected: Vec<Option<Value>> = vec![Some(json!({
+            "peer_vectors": {
+                (fps[0].clone()): {"a": 1, "d": -3, "e": serde_json::from_str::<Value>(big).unwrap(),
+                    "e2": serde_json::from_str::<Value>(&format!("-{big}")).unwrap(), "j": 0, "k": 0},
+                (fps[2].clone()): {},
+            },
+            "alerted": ["o1", "o2"],
+        }))];
+        expected.extend(falsy.iter().map(|_| loaded(json!(["o1"]))));
+        expected.extend(odd.iter().map(|_| None));
+        expected.extend(falsy.iter().map(|_| loaded(json!([]))));
+        expected.extend([
+            loaded(json!(["k1", "k2"])),
+            loaded(json!(["x", "y", "z"])),
+            loaded(json!(["c"])),
+            None,
+            None,
+            None,
+        ]);
+        assert_eq!(expected.len(), cases.len());
 
         let root = TempDir::new().unwrap();
         let ctx = Arc::new(
@@ -930,7 +826,7 @@ print(json.dumps(out))
             closed: AtomicBool::new(false),
             created: Instant::now(),
         });
-        for (case, expected) in cases.iter().zip(python) {
+        for (case, expected) in cases.iter().zip(&expected) {
             ctx.state
                 .write_json(&format!("team/{env_id}/peer_vectors.json"), &case[0])
                 .unwrap();
@@ -947,10 +843,7 @@ print(json.dumps(out))
             match team.register_env(&env_id) {
                 Err(error) => {
                     assert_eq!(error.reason, "state_corrupt", "{case}");
-                    assert!(
-                        expected["error"] == "AttributeError" || expected["error"] == "TypeError",
-                        "{case}: Rust failed, Python gave {expected}"
-                    );
+                    assert!(expected.is_none(), "{case}: failed, expected {expected:?}");
                 }
                 Ok(()) => {
                     let envs = team.envs.lock().unwrap();
@@ -958,52 +851,21 @@ print(json.dumps(out))
                     let mut alerted: Vec<&String> = env.alerted_overrides.iter().collect();
                     alerted.sort();
                     assert_eq!(
-                        json!({"peer_vectors": env.peer_vectors, "alerted": alerted}),
+                        Some(json!({"peer_vectors": env.peer_vectors, "alerted": alerted})),
                         *expected,
                         "{case}"
                     );
                 }
             }
         }
-        // The shapes this test is about really do reach each Python branch.
-        assert_eq!(
-            python[0]["peer_vectors"][&fps[0]]["e"],
-            serde_json::from_str::<Value>(big).unwrap()
-        );
-        assert_eq!(python[7]["error"], "AttributeError");
-        assert!(python.iter().any(|r| r["error"] == "TypeError"));
-        assert!(
-            python
-                .iter()
-                .any(|r| r["alerted"] == json!(["x", "y", "z"]))
-        );
     }
 
-    /// `_handle_vector` with Python-int edge values from a peer: the stored
+    /// `handle_vector` with integer edge values from a peer: the stored
     /// and persisted vector keeps every non-negative int exactly, and the
     /// catch-up range treats a claim past the local sequence (at any
     /// magnitude) as "nothing to send", a negative/bool/float as 0.
-    const PY_VECTOR_INTS: &str = r#"
-own = device.fingerprint
-big = 10 ** 30
-huge = 10 ** 40
-out = []
-for vector in ({"a": huge, "b": -1, "c": True, "d": 1.5, "e": 5, own: huge},
-               {own: big}, {own: -5}, {own: True}, {own: 1.0}, {own: 1}, {}):
-    session.sent.clear()
-    team._handle_message(env_id, session, {"type": "VECTOR", "vector": vector})
-    out.append({"commits": sum(1 for m in session.sent if m["type"] == "COMMIT"),
-                "stored": {("OWN" if k == own else k): v for k, v in
-                           ctx.state.read_json(f"team/{env_id}/peer_vectors.json", None)[peer.fingerprint].items()}})
-print(json.dumps(out))
-"#;
-
     #[test]
-    fn peer_vector_ints_are_exact_like_python() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_VECTOR_INTS}")).trim(),
-        )
-        .unwrap();
+    fn peer_vector_ints_are_exact() {
         let fixture = owner_with_admin_peer();
         let own = fixture.team.device.fingerprint().unwrap();
         let peer_fp = fixture.peer_key.fingerprint().unwrap();
@@ -1062,40 +924,26 @@ print(json.dumps(out))
                 .collect::<Map<String, Value>>();
             out.push(json!({"commits": commits, "stored": stored}));
         }
-        assert_eq!(json!(out), python);
-        // A huge claim sends nothing; an invalid one is treated as 0.
-        assert_eq!(python[1]["commits"], 0);
-        assert_eq!(python[2]["commits"], python[6]["commits"]);
-        assert!(python[6]["commits"].as_u64().unwrap() >= 2);
+        // A huge claim sends nothing; an invalid one is treated as 0. (The
+        // outcomes the Python prototype's `_handle_vector` produced.)
+        let huge_value: Value = serde_json::from_str(huge).unwrap();
+        assert_eq!(
+            json!(out),
+            json!([
+                {"commits": 0, "stored": {"a": huge_value, "e": 5, "OWN": huge_value}},
+                {"commits": 0, "stored": {"OWN": serde_json::from_str::<Value>(big).unwrap()}},
+                {"commits": 2, "stored": {}},
+                {"commits": 2, "stored": {}},
+                {"commits": 2, "stored": {}},
+                {"commits": 1, "stored": {"OWN": 1}},
+                {"commits": 2, "stored": {}},
+            ])
+        );
     }
 
     /// `stop()`'s ordering, observed through a transport whose `dial` is
-    /// slow: Python joins the poll thread (so the in-flight dial returns)
-    /// before closing the transport.
-    const PY_STOP_ORDER: &str = r#"
-import threading
-events = []
-started = threading.Event()
-
-class Slow:
-    def dial(self, address, env_id, invite_proof=None):
-        events.append("dial_start")
-        started.set()
-        time.sleep(0.3)
-        events.append("dial_end")
-        raise T.SessionClosed("synthetic_refused")
-    def close(self):
-        events.append("close")
-
-slow = S.TeamSync(ctx, Slow(), device)
-slow.register_env(env_id)
-slow.set_peer_address(env_id, peer.fingerprint, "synthetic-slow-address")
-slow.start()
-assert started.wait(10)
-slow.stop()
-print(json.dumps(events))
-"#;
-
+    /// slow: the poll thread is joined (so the in-flight dial returns)
+    /// before the transport is closed.
     struct SlowDialTransport {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -1124,10 +972,6 @@ print(json.dumps(events))
 
     #[test]
     fn stop_joins_the_poll_thread_before_closing_the_transport() {
-        let python: Value = serde_json::from_str(
-            crate::oracle::python(&format!("{PY_OWNER_WITH_ADMIN_PEER}{PY_STOP_ORDER}")).trim(),
-        )
-        .unwrap();
         let fixture = owner_with_admin_peer();
         let events = Arc::new(Mutex::new(Vec::new()));
         let slow = TeamSync::new(
@@ -1152,7 +996,6 @@ print(json.dumps(events))
         }
         slow.stop();
         let events = events.lock().unwrap().clone();
-        assert_eq!(json!(events), python);
         assert_eq!(events, ["dial_start", "dial_end", "close"]);
     }
 
@@ -1230,10 +1073,11 @@ print(json.dumps(events))
         assert!(env.next_attempt.contains_key(&other_fp));
     }
 
-    /// Gap 2: the rebroadcast seen-set is `sync._LruSet` (hit refreshes
-    /// recency, overflow evicts the least recent), compared call by call.
+    /// Gap 2: the rebroadcast seen-set is an LRU set like `sync._LruSet` (a
+    /// hit refreshes recency, overflow evicts the least recent), compared
+    /// call by call with a straightforward reference model.
     #[test]
-    fn lru_seen_set_matches_python() {
+    fn lru_seen_set_refreshes_on_hit_and_evicts_least_recent() {
         let mut state = 0x2545_f491_u64;
         let keys: Vec<String> = (0..400)
             .map(|_| {
@@ -1243,15 +1087,24 @@ print(json.dumps(events))
                 format!("k{}", state % 9)
             })
             .collect();
-        let script = format!(
-            "import json\nfrom zeropw.team.sync import _LruSet\ns = _LruSet(4)\nprint(json.dumps([s.add_if_new(k) for k in json.loads({:?})]))",
-            json!(keys).to_string()
-        );
-        let python: Vec<bool> =
-            serde_json::from_str(crate::oracle::python(&script).trim()).unwrap();
+        let mut model: Vec<&str> = Vec::new(); // least recent first
+        let mut expected = Vec::new();
+        for key in &keys {
+            if let Some(index) = model.iter().position(|k| k == key) {
+                let hit = model.remove(index);
+                model.push(hit);
+                expected.push(false);
+            } else {
+                model.push(key);
+                if model.len() > 4 {
+                    model.remove(0);
+                }
+                expected.push(true);
+            }
+        }
         let mut seen = LruSet::new(4);
         let rust: Vec<bool> = keys.iter().map(|k| seen.add_if_new(k)).collect();
-        assert_eq!(rust, python);
+        assert_eq!(rust, expected);
         assert!(
             rust.iter().filter(|new| **new).count() > 9,
             "no eviction exercised"
@@ -1786,9 +1639,12 @@ struct EnvState {
     backoff: HashMap<String, Duration>,
     next_attempt: HashMap<String, Instant>,
     hlc: Hlc,
-    last_known_vector: BTreeMap<String, i128>,
+    last_known_vector: BTreeMap<String, PyInt>,
     known_fact_lines: usize,
-    last_snapshot_total: i128,
+    /// `_EnvState.last_snapshot_total`: a Python number -- the exact `int`
+    /// sum of a saved snapshot's vector, or whatever `sum()` of a loaded
+    /// snapshot's raw vector values produced (a `float` when it held one).
+    last_snapshot_total: PyNumber,
     last_vector_sent: HashMap<String, Instant>,
     synced_at: Option<f64>,
     incident_outbox: HashMap<String, Fact>,
@@ -1797,7 +1653,7 @@ struct EnvState {
     pending_invites: HashMap<String, (String, String)>,
     alerted_overrides: HashSet<String>,
     /// `_EnvState.relaxed_cache`: (store vector, relaxed document).
-    relaxed_cache: Option<(BTreeMap<String, i128>, Arc<Value>)>,
+    relaxed_cache: Option<(BTreeMap<String, PyInt>, Arc<Value>)>,
     /// Bumped wherever Python clears `relaxed_cache` (`_refold`), so a fold
     /// computed concurrently with that invalidation is never cached.
     relaxed_generation: u64,
@@ -1823,7 +1679,7 @@ impl EnvState {
             hlc: Hlc::new(0, 0),
             last_known_vector: BTreeMap::new(),
             known_fact_lines: 0,
-            last_snapshot_total: 0,
+            last_snapshot_total: PyNumber::Int(0.into()),
             last_vector_sent: HashMap::new(),
             synced_at: None,
             incident_outbox: HashMap::new(),
@@ -2030,12 +1886,26 @@ impl TeamSync {
             .state
             .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
             .len();
-        env.last_known_vector = CommitStore::new(self.ctx.state, env_id).vector()?;
-        if let Some(snapshot) = fold::load_latest_snapshot(self.ctx.state, env_id)? {
-            env.last_snapshot_total = snapshot["vector"]
-                .as_object()
-                .map(|v| v.values().filter_map(Value::as_i64).map(i128::from).sum())
-                .unwrap_or(0);
+        // `snapshot = F.load_latest_snapshot(...)`; `if snapshot is not
+        // None: env.last_snapshot_total = sum((snapshot.get("vector") or
+        // {}).values())`. A non-dict snapshot (even a falsy one) or a truthy
+        // non-dict vector has no `.get`/`.values` (`AttributeError`), and
+        // `sum()` raises for a non-number value (`TypeError`) or an int too
+        // large for a float it must be added to (`OverflowError`); all are
+        // `state_corrupt` from this step (§3.5).
+        if let Some(snapshot) = fold::load_latest_snapshot(self.ctx.state, env_id)?
+            && !snapshot.is_null()
+        {
+            let corrupt = || Error::state("state_corrupt").with_detail("team_snapshot");
+            let vector = snapshot.as_object().ok_or_else(corrupt)?.get("vector");
+            env.last_snapshot_total = match vector {
+                None => PyNumber::Int(0.into()),
+                Some(v) if super::json_falsy(v) => PyNumber::Int(0.into()),
+                Some(Value::Object(v)) => {
+                    crate::pyint::python_sum(v.values()).ok_or_else(corrupt)?
+                }
+                Some(_) => return Err(corrupt()),
+            };
         }
         for line in self
             .ctx
@@ -2072,6 +1942,18 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .insert(env_id.into(), env);
         self.refold(env_id)?;
+        // `env.last_known_vector = dict(env.store.vector())` runs after
+        // `_refold`, so a failing refold leaves the registered environment
+        // with the empty baseline.
+        let vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.last_known_vector = vector;
+        }
         Ok(())
     }
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
@@ -2104,7 +1986,11 @@ impl TeamSync {
             project.as_deref(),
             environment.as_deref(),
         )?;
-        let total: i128 = result.vector.values().sum();
+        // `total = sum(result.vector.values())`: exact Python ints.
+        let total = result
+            .vector
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -2112,14 +1998,16 @@ impl TeamSync {
         env.document = result.document.clone();
         env.relaxed_cache = None;
         env.relaxed_generation = env.relaxed_generation.wrapping_add(1);
-        if total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS {
-            fold::save_snapshot(
-                self.ctx.state,
-                env_id,
-                total.try_into().unwrap_or(i64::MAX),
-                &result,
-            )?;
-            env.last_snapshot_total = total;
+        // `total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS`,
+        // with Python's int/float arithmetic (an `OverflowError` converting
+        // a huge int for a float operand escapes `_refold`).
+        let due = PyNumber::Int(total.0.clone())
+            .sub(&env.last_snapshot_total)
+            .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
+            .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
+        if due {
+            fold::save_snapshot(self.ctx.state, env_id, &total, &result)?;
+            env.last_snapshot_total = PyNumber::Int(total.0);
         }
         drop(envs);
         self.record_overrides(env_id, &result.overridden)?;
@@ -2507,7 +2395,7 @@ impl TeamSync {
         }
         let store = CommitStore::new(self.ctx.state, env_id);
         let fp = self.device.fingerprint()?;
-        let seq = store.last_seq(&fp)? + 1;
+        let seq = &store.last_seq(&fp)? + 1;
         let hlc = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get_mut(env_id)
@@ -2725,15 +2613,14 @@ impl TeamSync {
                 .get(&author)
                 .and_then(PyInt::from_json_integer)
                 .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
-            let first = match their {
-                None => 1,
-                Some(n) => match i128::try_from(&n.0).ok().and_then(|t| t.checked_add(1)) {
-                    Some(first) => first,
-                    None => continue,
-                },
+            let mut seq = match their {
+                None => PyInt::from(1),
+                Some(n) => &n + 1,
             };
-            for seq in first..=last {
-                if let Some(commit) = store.get(&author, seq)? {
+            while seq <= last {
+                let found = store.get(&author, &seq)?;
+                seq = &seq + 1;
+                if let Some(commit) = found {
                     if session
                         .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
                         .is_err()
@@ -2855,8 +2742,24 @@ impl TeamSync {
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
-        let Ok(commit) = Commit::from_dict(&message["commit"]) else {
-            return Ok(());
+        let commit = match Commit::from_dict(&message["commit"]) {
+            Ok(commit) => commit,
+            Err(error) if error.is(crate::errors::ErrorClass::InvalidInput) => return Ok(()),
+            Err(error) => {
+                // A built-in exception escaping `Commit.from_dict` (an
+                // infinite `author_seq`/`seen` value) ends the receive loop
+                // at once. For an op with a non-string key, Python's
+                // `from_dict` succeeded: another environment's commit is
+                // ignored, and for this one `receive_commit` raises while
+                // hashing or verifying it -- before any rejected record or
+                // audit -- which ends the receive loop.
+                if commit::raises_only_when_canonicalized(&error)
+                    && commit::python_str_coerce(&message["commit"]["env_id"]) != env_id
+                {
+                    return Ok(());
+                }
+                return Err(error);
+            }
         };
         if commit.env_id != env_id {
             return Ok(());
@@ -3507,11 +3410,16 @@ impl TeamSync {
         };
         let mut added = Vec::new();
         for (fp, hi) in &current {
-            let lo = baseline.get(fp).copied().unwrap_or(0);
-            for seq in lo + 1..=*hi {
-                if let Some(commit) = store.get(fp, seq)? {
+            // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
+            let mut seq = match baseline.get(fp) {
+                Some(lo) => lo + 1,
+                None => PyInt::from(1),
+            };
+            while seq <= *hi {
+                if let Some(commit) = store.get(fp, &seq)? {
                     added.push(commit);
                 }
+                seq = &seq + 1;
             }
         }
         if let Some(env) = self
@@ -3726,11 +3634,11 @@ impl TeamSync {
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
-        let now = i128::from(commit::now_ms());
+        let now = PyInt::from(commit::now_ms());
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
             let (wall, _) = Hlc::parse(&entry.hlc)?;
-            if now - wall < i128::from(COMPACT_MIN_AGE_MS) {
+            if PyInt(&now.0 - wall.0) < COMPACT_MIN_AGE_MS {
                 break;
             }
             cutoff = Some(i);
@@ -3740,12 +3648,16 @@ impl TeamSync {
                 json!({"env_id":env_id,"removed":0,"blocked_by":[],"reason":"no_commit_old_enough"}),
             );
         };
-        let mut candidate = BTreeMap::<String, i128>::new();
+        // `candidate_vector[author] = max(candidate_vector.get(author, 0),
+        // author_seq)`.
+        let mut candidate = BTreeMap::<String, PyInt>::new();
         for entry in &commits[..=cutoff] {
-            candidate
+            let seq = candidate
                 .entry(entry.author.clone())
-                .and_modify(|seq| *seq = (*seq).max(entry.author_seq))
-                .or_insert(entry.author_seq);
+                .or_insert_with(PyInt::zero);
+            if entry.author_seq > *seq {
+                *seq = entry.author_seq.clone();
+            }
         }
         let mine = self.device.fingerprint()?;
         let mut blocked = Vec::new();
@@ -3758,7 +3670,7 @@ impl TeamSync {
                     peer_vectors
                         .get(fp)
                         .and_then(|v| v.get(author))
-                        .map_or(0 < *seq, |known| known.0 < num_bigint::BigInt::from(*seq))
+                        .map_or(*seq > 0, |known| known < seq)
                 }) {
                     blocked.push(fp.clone());
                 }
@@ -3776,13 +3688,10 @@ impl TeamSync {
             None,
             Some(self.ctx.audit),
         )?;
-        let total: i128 = candidate.values().sum();
-        fold::save_snapshot(
-            self.ctx.state,
-            env_id,
-            total.try_into().unwrap_or(i64::MAX),
-            &snapshot,
-        )?;
+        let total = candidate
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
         let mut removed = 0;
         {
             let _lock = self.ctx.state.lock()?;
@@ -3815,7 +3724,7 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .get_mut(env_id)
         {
-            env.last_snapshot_total = total;
+            env.last_snapshot_total = PyNumber::Int(total.0);
         }
         self.refold(env_id)?;
         let _ = self.ctx.audit.record(

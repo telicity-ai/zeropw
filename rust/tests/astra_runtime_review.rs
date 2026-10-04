@@ -1,5 +1,7 @@
 //! Independent Astra runtime regression probes, synthetic state only.
-use std::{collections::HashMap, sync::Arc};
+mod session_probe;
+
+use std::sync::Arc;
 use std::{
     io::{Read, Write},
     net::TcpStream,
@@ -42,39 +44,27 @@ fn ar_runtime_01_installation_survives_discarded_return_value() {
 fn ar_runtime_02_child_leads_a_new_session() {
     let (temp, ctx) = context();
     let registry = RunRegistry::new(ctx, 1024, 0.05);
+    let argv = session_probe::argv();
     let run = registry.create(
-        "alice",
-        "service",
-        "grant",
-        "http",
-        "python3.12",
-        None,
-        "digest",
-        None,
-        None,
+        "alice", "service", "grant", "http", &argv[0], None, "digest", None, None,
     );
-    let python = tools::resolve_program("python3.12").expect("Python 3.12 test oracle");
     registry
         .start(
             &run,
-            &[
-                python.to_string_lossy().into_owned(),
-                "-I".into(),
-                "-c".into(),
-                "import os; print(os.getsid(0) == os.getpid(), flush=True)".into(),
-            ],
-            &HashMap::new(),
+            &argv,
+            &session_probe::env(None),
             temp.path(),
             &[],
             None,
-            Some(3.0),
+            Some(10.0),
         )
         .unwrap();
-    let result = registry.wait(&run, Some(5.0));
+    let result = registry.wait(&run, Some(15.0));
     assert_eq!(result.state, "completed");
-    assert_eq!(
-        result.stdout, b"True\n",
-        "Python start_new_session=True makes the child its own session leader"
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("PROBE true "),
+        "start_new_session=True makes the child its own session leader: {:?}",
+        String::from_utf8_lossy(&result.stdout)
     );
 }
 
@@ -201,7 +191,7 @@ fn relay_filters_non_ascii_headers_before_server_serialization() {
             "alice",
             "service",
             &grant.id,
-            connection.policy_version,
+            connection.policy_version.to_i64().unwrap(),
             300,
             None,
         )

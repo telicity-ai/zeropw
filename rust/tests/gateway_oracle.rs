@@ -1,117 +1,66 @@
-//! Differential tests for `zeropw::gateway`/`zeropw::fake_upstream` against
-//! the Python prototype, per `rust/PORTING.md`'s "add oracle differential
-//! tests" rule for work unit F.
-//!
-//! `crate::oracle` is `#[cfg(test)] pub(crate)` and not reachable from an
-//! integration test binary (see `tests/policy_oracle.rs`'s doc comment for
-//! why); this file has its own small `run_python` helper, same as the other
-//! `*_oracle.rs` files.
+//! Wire-format tests for `zeropw::gateway` against golden fixtures the Python
+//! prototype produced once (`tests/fixtures/python/gateway/GENERATE.md`).
+//! The gateway's upstream request is a wire format another party parses
+//! (`PORTING.md` §0 boundary 2), and `credential_patterns` decides what the
+//! gateway redacts from upstream output (boundary 4).
 //!
 //! Covers:
-//! - `credential_patterns` byte-identical with Python's
-//!   `gateway.credential_patterns`, for a table of secrets/usernames
+//! - `credential_patterns` byte-identical with the patterns Python's
+//!   `gateway.credential_patterns` derived, for a table of secrets/usernames
 //!   exercising every encoding (plain, base64 std/urlsafe padded and core
 //!   alignments, hex, percent both hex casings and both `quote`/
 //!   `quote_plus`, JSON with/without `ensure_ascii`, HTML-escaped, and the
 //!   Basic `user:secret` forms).
-//! - The exact HTTP/1.1 request bytes `gateway::relay_for_caller` sends are
-//!   byte-identical to what `zeropw.gateway.relay_for_caller` sends for the
-//!   same inputs, captured by a raw TCP listener shared by both languages
-//!   (so the `Host` header's port matches without normalization).
-//! - `gateway::relay_for_caller` (Rust) successfully relays to a live
-//!   `zeropw.fake_upstream.FakeUpstream` running as a Python subprocess,
-//!   and the credential the fake recorded is exactly the one the Rust
-//!   vault stored -- proving the two languages' HTTP framing and auth
-//!   header construction interoperate, not just "look the same".
+//! - The exact HTTP/1.1 request bytes `gateway::relay_for_caller` sends for
+//!   every header-order, method/body, auth-mode and header-collision shape
+//!   are byte-identical to what `zeropw.gateway.relay_for_caller` sent for
+//!   the same inputs (the upstream port normalized to `PORT`).
+//! - `gateway::relay_for_caller` relays to a live `FakeUpstream`, and the
+//!   credential the fake checked is exactly the one the vault stored.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use base64::Engine as _;
+use serde_json::Value;
 use tempfile::TempDir;
 
 use zeropw::context::{Config, Context};
+use zeropw::fake_upstream::FakeUpstream;
 use zeropw::gateway::{self, Headers};
 use zeropw::policy::{Connection, HttpAuth, HttpScope, HttpTarget};
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
-}
+const CREDENTIAL_PATTERNS: &str = include_str!("fixtures/python/gateway/credential_patterns.json");
+const REQUEST_BYTES: &str = include_str!("fixtures/python/gateway/request_bytes.json");
 
-fn run_python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let output = Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
-}
-
-fn py_str_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+fn b64(text: &str) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .expect("fixture base64")
 }
 
 // -------------------------------------------------------- credential_patterns
 
 #[test]
-fn credential_patterns_matches_python_byte_for_byte() {
-    use base64::Engine as _;
-    let table: &[(&[u8], Option<&str>)] = &[
-        (b"synthetic-token-alpha-0123456789ABCDEFGHIJ", None),
-        (
-            b"synthetic-token-alpha-0123456789ABCDEFGHIJ",
-            Some("synthetic-user"),
-        ),
-        (b"AKIA/secret+Key 9=abc", None),
-        (b"synthetic pass word/+=", Some("synthetic-user")),
-        (
-            b"synthetic-token/enc+ode=chars:>>>?<&\"\\x-0123456789",
-            Some("synthetic-user"),
-        ),
-        (b"Synthetic/TOKEN", None),
-        (
-            b"synthetic\x00\xff\xfe-binary-credential",
-            Some("synthetic-user"),
-        ),
-    ];
-    for (secret, username) in table {
-        let rust_patterns = gateway::credential_patterns(secret, *username);
-        let rust_b64: Vec<String> = rust_patterns
+fn credential_patterns_match_the_python_fixture() {
+    let table: Vec<Value> = serde_json::from_str(CREDENTIAL_PATTERNS).unwrap();
+    assert_eq!(table.len(), 7);
+    for row in &table {
+        let secret = b64(row["secret_b64"].as_str().unwrap());
+        let username = row["username"].as_str();
+        let expected: Vec<Vec<u8>> = row["patterns_b64"]
+            .as_array()
+            .unwrap()
             .iter()
-            .map(|p| base64::engine::general_purpose::STANDARD.encode(p))
+            .map(|p| b64(p.as_str().unwrap()))
             .collect();
-
-        let secret_b64 = base64::engine::general_purpose::STANDARD.encode(secret);
-        let username_py = match username {
-            Some(u) => py_str_literal(u),
-            None => "None".to_string(),
-        };
-        let script = format!(
-            "import base64, json\nfrom zeropw.gateway import credential_patterns\nsecret = base64.b64decode({})\npatterns = credential_patterns(secret, {})\nprint(json.dumps([base64.b64encode(p).decode() for p in patterns]))",
-            py_str_literal(&secret_b64),
-            username_py
-        );
-        let out = run_python(&script);
-        let python_b64: Vec<String> = serde_json::from_str(out.trim()).expect("json array");
+        assert!(!expected.is_empty());
         assert_eq!(
-            rust_b64,
-            python_b64,
-            "secret={:?} username={:?}",
-            String::from_utf8_lossy(secret),
-            username
+            gateway::credential_patterns(&secret, username),
+            expected,
+            "secret={:?} username={username:?}",
+            String::from_utf8_lossy(&secret),
         );
     }
 }
@@ -135,15 +84,52 @@ fn rust_ctx(tmp: &TempDir) -> Context {
     ctx.projects
         .create("demo", zeropw::projects::DEFAULT_ENVIRONMENTS)
         .unwrap();
+    ctx.vault
+        .put_secret(
+            "gh-token",
+            "api_key",
+            SECRET.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    ctx.policy.create_principal("agent-1", "cli").unwrap();
     ctx
 }
 
-// --------------------------------------------------- raw request byte oracle
+fn connect_gh(ctx: &Context, port: u16, auth: HttpAuth) {
+    let connection = Connection::new(
+        "gh",
+        "demo",
+        "dev",
+        "svc",
+        "http",
+        "gh-token",
+        None,
+        "",
+        Some(HttpTarget::new("http", "127.0.0.1", port as i64, None, false).unwrap()),
+        Some(auth),
+        Some(HttpScope::new(None, None, vec![]).unwrap()),
+        None,
+        None,
+        0,
+        "active",
+        "",
+        "",
+    )
+    .unwrap();
+    ctx.policy.create_connection(connection).unwrap();
+    ctx.policy
+        .create_grant("agent-1", "gh", Some(3600), None)
+        .unwrap();
+}
 
-/// Accepts exactly one connection on `listener`, reads until the peer
-/// closes (both the Rust and the Python relay always send `Connection:
-/// close` and finish the write side before reading the response), and
-/// writes back a minimal `200 OK` so the relay call completes normally.
+// --------------------------------------------------- raw request bytes
+
+/// Accepts exactly one connection on `listener`, reads the request head and
+/// its `Content-Length` body, and writes back a minimal `200 OK` so the
+/// relay call completes normally.
 fn capture_one_request(listener: &TcpListener) -> Vec<u8> {
     let (mut stream, _) = listener.accept().expect("accept");
     stream
@@ -152,6 +138,20 @@ fn capture_one_request(listener: &TcpListener) -> Vec<u8> {
     let mut received = Vec::new();
     let mut buf = [0u8; 65536];
     loop {
+        // Stop once the head and its declared `Content-Length` body have
+        // arrived (the relay does not half-close before reading the reply,
+        // so waiting for EOF would only wait out the read timeout).
+        if let Some(head_end) = received.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&received[..head_end]).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if received.len() >= head_end + 4 + length {
+                break;
+            }
+        }
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => received.extend_from_slice(&buf[..n]),
@@ -163,199 +163,86 @@ fn capture_one_request(listener: &TcpListener) -> Vec<u8> {
     received
 }
 
-fn rust_request_bytes(port: u16) -> Vec<u8> {
+/// The bytes `relay_for_caller` writes upstream for one fixture case, with
+/// the upstream port normalized to `PORT` like the fixture.
+fn rust_wire_bytes(case: &Value) -> String {
     let tmp = TempDir::new().unwrap();
     let ctx = rust_ctx(&tmp);
-    ctx.vault
-        .put_secret(
-            "gh-token",
-            "api_key",
-            SECRET.as_bytes(),
-            "demo",
-            "dev",
-            true,
-        )
-        .unwrap();
-    ctx.policy.create_principal("agent-1", "cli").unwrap();
-    let connection = Connection::new(
-        "gh",
-        "demo",
-        "dev",
-        "svc",
-        "http",
-        "gh-token",
-        None,
-        "",
-        Some(HttpTarget::new("http", "127.0.0.1", port as i64, None, false).unwrap()),
-        Some(HttpAuth::bearer()),
-        Some(HttpScope::new(None, None, vec![]).unwrap()),
-        None,
-        None,
-        0,
-        "active",
-        "",
-        "",
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind capture port");
+    let port = listener.local_addr().unwrap().port();
+    let auth = &case["auth"];
+    let auth = HttpAuth::new(
+        auth[0].as_str().unwrap(),
+        auth[1].as_str().map(str::to_string),
+        auth[2].as_str().map(str::to_string),
+        auth[3].as_str().map(str::to_string),
     )
     .unwrap();
-    ctx.policy.create_connection(connection).unwrap();
-    ctx.policy
-        .create_grant("agent-1", "gh", Some(3600), None)
-        .unwrap();
-
-    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind capture port");
+    connect_gh(&ctx, port, auth);
     let capture = std::thread::spawn(move || capture_one_request(&listener));
-
-    let headers: Headers = vec![
-        ("Accept".to_string(), "application/json".to_string()),
-        ("User-Agent".to_string(), "oracle-test/1".to_string()),
-    ];
-    let body = br#"{"title":"from oracle"}"#;
+    let headers: Headers = case["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h[0].as_str().unwrap().to_string(),
+                h[1].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
     let result = gateway::relay_for_caller(
         &ctx,
         "agent-1",
         "gh",
-        "POST",
-        "/repos/demo/issues",
+        case["method"].as_str().unwrap(),
+        case["target"].as_str().unwrap(),
         &headers,
-        body,
+        &b64(case["body_b64"].as_str().unwrap()),
         None,
     );
-    assert!(
-        result.status == 200 || result.reason.is_some(),
-        "relay result: {result:?}"
-    );
-    capture.join().expect("capture thread")
+    assert_eq!(result.status, 200, "{}: {result:?}", case["name"]);
+    let bytes = capture.join().expect("capture thread");
+    String::from_utf8(bytes)
+        .expect("ASCII request")
+        .replace(&format!("127.0.0.1:{port}"), "127.0.0.1:PORT")
 }
 
-fn python_request_bytes(port: u16) -> Vec<u8> {
-    let tmp = TempDir::new().unwrap();
-    let state_dir = tmp.path().join("state");
-    let capture_thread = {
-        let addr = ("127.0.0.1".to_string(), port);
-        std::thread::spawn(move || {
-            let listener = TcpListener::bind(addr).expect("bind capture port (python)");
-            capture_one_request(&listener)
-        })
-    };
-    // Give the Rust-side listener a beat to bind before the subprocess dials it.
-    std::thread::sleep(Duration::from_millis(50));
-
-    let script = format!(
-        r#"
-from pathlib import Path
-from zeropw import policy as P
-from zeropw.context import Config, Context
-from zeropw import gateway
-
-ctx = Context.initialize(Path({state}), {admin}, {recovery}, Config(), lambda: 1700000000.0)
-ctx.projects.create("demo")
-ctx.vault.put_secret("gh-token", "api_key", {secret}.encode(), "demo", "dev")
-ctx.policy.create_principal("agent-1")
-ctx.policy.create_connection(P.Connection(
-    id="gh", project="demo", environment="dev", service="svc", kind="http", secret_id="gh-token",
-    secret_version=None, description="", http_target=P.HttpTarget("http", "127.0.0.1", {port}, None),
-    http_auth=P.HttpAuth("bearer"), http_scope=P.HttpScope(), ssh_target=None, cli=None,
-    policy_version=0, status="active", created_at="", updated_at=""))
-ctx.policy.create_grant("agent-1", "gh", 3600, None)
-gateway.relay_for_caller(ctx, "agent-1", "gh", "POST", "/repos/demo/issues",
-    {{"Accept": "application/json", "User-Agent": "oracle-test/1"}}, b'{{"title":"from oracle"}}')
-"#,
-        state = py_str_literal(state_dir.to_str().unwrap()),
-        admin = py_str_literal(ADMIN),
-        recovery = py_str_literal(RECOVERY),
-        secret = py_str_literal(SECRET),
-        port = port,
-    );
-    run_python(&script);
-    capture_thread.join().expect("capture thread (python)")
-}
-
-/// Normalizes the one piece of the request that legitimately differs
-/// between the two captures: none, actually -- both dial the *same* fixed
-/// port, chosen up front, so `Host: 127.0.0.1:<port>` is identical too.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    listener.local_addr().unwrap().port()
-}
-
+/// `DEVIATIONS.md` "HTTP request byte-identity": the exact bytes on the wire
+/// for every header-order, method/body, auth-mode and header-collision
+/// shape, Rust against what `zeropw.gateway.relay_for_caller` sent.
 #[test]
-fn relay_for_caller_request_bytes_match_python_byte_for_byte() {
-    // Two fixed, distinct ports (chosen up front and released) so each
-    // capture step can bind its own listener without a race between the
-    // Rust and Python runs.
-    let rust_port = free_port();
-    let python_port = free_port();
-    assert_ne!(rust_port, python_port);
-
-    let rust_bytes = rust_request_bytes(rust_port);
-    let python_bytes = python_request_bytes(python_port);
-
-    let normalize = |bytes: &[u8], port: u16| -> String {
-        String::from_utf8_lossy(bytes).replace(&format!("127.0.0.1:{port}"), "127.0.0.1:PORT")
-    };
-    let rust_text = normalize(&rust_bytes, rust_port);
-    let python_text = normalize(&python_bytes, python_port);
-    assert_eq!(rust_text, python_text);
-}
-
-// ------------------------------------------------- live Python FakeUpstream
-
-/// Runs `zeropw.fake_upstream.FakeUpstream` in a subprocess, printing its
-/// port on stdout, and keeps it alive until the returned child is killed.
-struct PythonFakeUpstream {
-    child: std::process::Child,
-    port: u16,
-}
-
-impl PythonFakeUpstream {
-    fn start(secret: &str) -> Self {
-        let interpreter =
-            std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-        let script = format!(
-            r#"
-import sys, time
-from zeropw.fake_upstream import FakeUpstream
-fake = FakeUpstream({secret}).start()
-print(fake.port, flush=True)
-try:
-    time.sleep(30)
-finally:
-    fake.stop()
-"#,
-            secret = py_str_literal(secret),
+fn request_bytes_match_the_python_fixture_across_shapes() {
+    let fixture: Value = serde_json::from_str(REQUEST_BYTES).unwrap();
+    assert_eq!(fixture["secret"], SECRET);
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 13);
+    let mut mismatches = Vec::new();
+    for case in cases {
+        let expected = case["request"].as_str().unwrap();
+        assert!(
+            !expected.is_empty(),
+            "{}: python sent nothing",
+            case["name"]
         );
-        let mut child = Command::new(interpreter)
-            .arg("-c")
-            .arg(script)
-            .env("PYTHONPATH", repo_root())
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn python fake upstream");
-        let stdout = child.stdout.take().expect("stdout");
-        let mut reader = std::io::BufReader::new(stdout);
-        let mut line = String::new();
-        use std::io::BufRead;
-        reader.read_line(&mut line).expect("read port line");
-        let port: u16 = line.trim().parse().expect("port number");
-        PythonFakeUpstream { child, port }
+        let rust = rust_wire_bytes(case);
+        if rust != expected {
+            mismatches.push(format!(
+                "{}:\n  rust:   {rust:?}\n  python: {expected:?}",
+                case["name"]
+            ));
+        }
     }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
-impl Drop for PythonFakeUpstream {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
+// ------------------------------------------------------ live FakeUpstream
 
 #[test]
-fn rust_relay_reaches_a_live_python_fake_upstream() {
-    let fake = PythonFakeUpstream::start(SECRET);
-    // Give the subprocess a moment to bind before dialing it.
+fn relay_reaches_a_live_fake_upstream_with_the_stored_credential() {
+    let fake = FakeUpstream::new(SECRET).start();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while TcpStream::connect(("127.0.0.1", fake.port)).is_err()
+    while TcpStream::connect(("127.0.0.1", fake.port())).is_err()
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(Duration::from_millis(20));
@@ -363,48 +250,11 @@ fn rust_relay_reaches_a_live_python_fake_upstream() {
 
     let tmp = TempDir::new().unwrap();
     let ctx = rust_ctx(&tmp);
-    ctx.vault
-        .put_secret(
-            "gh-token",
-            "api_key",
-            SECRET.as_bytes(),
-            "demo",
-            "dev",
-            true,
-        )
-        .unwrap();
-    ctx.policy.create_principal("agent-1", "cli").unwrap();
-    let connection = Connection::new(
-        "gh",
-        "demo",
-        "dev",
-        "svc",
-        "http",
-        "gh-token",
-        None,
-        "",
-        Some(HttpTarget::new("http", "127.0.0.1", fake.port as i64, None, false).unwrap()),
-        Some(HttpAuth::bearer()),
-        Some(HttpScope::new(None, None, vec![]).unwrap()),
-        None,
-        None,
-        0,
-        "active",
-        "",
-        "",
-    )
-    .unwrap();
-    ctx.policy.create_connection(connection).unwrap();
-    ctx.policy
-        .create_grant("agent-1", "gh", Some(3600), None)
-        .unwrap();
+    connect_gh(&ctx, fake.port(), HttpAuth::bearer());
 
-    // `FakeUpstream._authorized` only accepts `Authorization: Bearer
-    // <exact SECRET>`; a 200 here (rather than the fixture's 401) proves
-    // the *exact* credential the Rust vault stored reached the live Python
-    // fixture byte-for-byte, not merely "some" bearer token. (`/debug/token`
-    // would also prove it, but the gateway's own reflection guard blocks
-    // that response before it reaches this assertion, credential included.)
+    // The fake only accepts `Authorization: Bearer <exact SECRET>`; a 200
+    // here (rather than its 401) proves the exact credential the vault
+    // stored reached the upstream, not merely "some" bearer token.
     let result = gateway::relay_for_caller(
         &ctx,
         "agent-1",
@@ -419,5 +269,11 @@ fn rust_relay_reaches_a_live_python_fake_upstream() {
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!({"login": "synthetic-user"})
+    );
+    let recorded = fake.requests();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(
+        recorded[0].headers.get("authorization").map(String::as_str),
+        Some(format!("Bearer {SECRET}").as_str())
     );
 }

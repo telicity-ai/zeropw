@@ -1,11 +1,10 @@
 //! Port of `tests/test_sshwire.py`.
 //!
 //! Every test here is a direct behavioural port of the corresponding Python
-//! `unittest` case; comments note the Python test name. Oracle differential
-//! tests (which need `crate::oracle::python`, only reachable from inside the
-//! crate under `#[cfg(test)]`) live in `rust/src/sshwire.rs` instead; see
-//! that file's `mod tests` for the encode/decode/sign/verify equivalence
-//! checks and the malformed-input table cross-checked against Python.
+//! `unittest` case; comments note the Python test name. Tests that need
+//! crate-private items live in `rust/src/sshwire.rs` instead; see that
+//! file's `mod tests` for the encode/decode/sign/verify checks against the
+//! prototype's golden vectors and the malformed-input table.
 //!
 //! Unlike the Python suite, there is no "fake" Ed25519 backend to patch in:
 //! `zeropw::sshwire`'s adapter always talks to the real `ed25519_dalek`

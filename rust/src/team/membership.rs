@@ -21,6 +21,7 @@ use crate::context::Context;
 use crate::errors::{Error, Result};
 use crate::kms::WrappedKey;
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::secret::SecretBytes;
 use crate::store::iso;
@@ -211,9 +212,9 @@ pub fn author_commit(
     let store = CommitStore::new(ctx.state, env_id);
     let _lock = ctx.state.lock()?;
     let mut hlc = Hlc::new(0, 0);
-    let seq = store.last_seq(&device.fingerprint()?)? + 1;
+    let seq = &store.last_seq(&device.fingerprint()?)? + 1;
     if seq > 1
-        && let Some(previous) = store.get(&device.fingerprint()?, seq - 1)?
+        && let Some(previous) = store.get(&device.fingerprint()?, &seq - 1)?
     {
         hlc.observe(&previous.hlc)?;
     }
@@ -680,22 +681,37 @@ pub fn share_environment(
             shareable.insert(sid.clone(), entry.clone());
         }
     }
-    let mut version_ids: BTreeMap<String, BTreeMap<i64, String>> = BTreeMap::new();
+    fn numeric_value_equals_int(value: &Value, integer: &crate::pyint::PyInt) -> bool {
+        crate::vault::ResolvedVersion::Raw(value.clone()).equals_integer(integer)
+    }
+
+    let mut version_ids: BTreeMap<String, BTreeMap<crate::pyint::PyInt, String>> = BTreeMap::new();
     let mut secret_ops: Vec<Value> = Vec::new();
     for (sid, entry) in &shareable {
-        let mut versions = entry["versions"]
+        let versions = entry["versions"]
             .as_object()
             .map(|m| m.iter().collect::<Vec<_>>())
             .unwrap_or_default();
-        versions.sort_by_key(|(n, _)| n.parse::<i64>().unwrap_or(i64::MAX));
-        for (number, v) in versions {
+        // Python evaluates the `int(k)` sort key for every item before the
+        // loop filters retired/revoked records. Parse first so one malformed
+        // key aborts the pure computation phase instead of sorting as `None`
+        // or being hidden by its status.
+        let mut versions = versions
+            .into_iter()
+            .map(|(number, record)| {
+                let parsed = crate::pystr::int_from_str_decimal_limited(number)
+                    .and_then(|v| v.parse().ok())
+                    .map(crate::pyint::PyInt)
+                    .ok_or_else(|| Error::state("state_corrupt"))?;
+                Ok((parsed, number, record))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        versions.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+        for (n, number, v) in versions {
             if v["status"] != "active" && v["status"] != "staged" {
                 continue;
             }
-            let n = number
-                .parse::<i64>()
-                .map_err(|_| Error::state("state_corrupt"))?;
-            let value = ctx.vault.secret_for_trusted_use(sid, Some(n))?;
+            let value = ctx.vault.secret_for_trusted_use(sid, Some(n.clone()))?;
             let version_id = token(8);
             let ciphertext =
                 envelope::encrypt_secret(&dek, &env_id, sid, &version_id, value.expose())?;
@@ -703,8 +719,8 @@ pub fn share_environment(
             version_ids
                 .entry(sid.clone())
                 .or_default()
-                .insert(n, version_id.clone());
-            if entry["active_version"].as_i64() == Some(n) {
+                .insert(n.clone(), version_id.clone());
+            if numeric_value_equals_int(&entry["active_version"], &n) {
                 secret_ops
                     .push(json!({"op":"secret.activate","secret_id":sid,"version_id":version_id}));
             }
@@ -748,8 +764,19 @@ pub fn share_environment(
                         continue;
                     }
                     let value = if k == "secret_version" && !v.is_null() {
-                        v.as_i64()
-                            .and_then(|n| version_ids.get(sid).and_then(|m| m.get(&n)))
+                        if v.is_array() || v.is_object() {
+                            // Python dict lookup hashes the raw key before it
+                            // can miss; list/dict keys raise TypeError.
+                            return Err(Error::state("state_corrupt"));
+                        }
+                        version_ids
+                            .get(sid)
+                            .and_then(|versions| {
+                                versions
+                                    .iter()
+                                    .find(|(number, _)| numeric_value_equals_int(v, number))
+                            })
+                            .map(|(_, id)| id)
                             .map_or(Value::Null, |id| json!(id))
                     } else {
                         v.clone()
@@ -777,11 +804,34 @@ pub fn share_environment(
         }
         ctx.state.write_json(crate::policy::CONNECTIONS, &doc)?;
         for cid in &converted {
+            // `_force_grant_reevaluation_for_share`: `doc = read_json(...)
+            // or {}`; `entry = doc.get(conn_id)` (skipped when `None`);
+            // `entry["policy_version"] = int(entry.get("policy_version", 0))
+            // + 1` -- CPython's `int()` at unbounded precision. A value
+            // `int()` rejects, or a non-dict document/entry, raises there
+            // (after the retag writes) and aborts the share.
+            let corrupt = || Error::state("state_corrupt").with_detail("policy_connections");
             let mut updated = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
-            let version = updated[cid]["policy_version"].as_i64().unwrap_or(0) + 1;
-            updated[cid]["policy_version"] = json!(version);
+            if super::json_falsy(&updated) {
+                updated = json!({});
+            }
+            let Some(entry) = updated
+                .as_object_mut()
+                .ok_or_else(corrupt)?
+                .get_mut(cid.as_str())
+                .filter(|entry| !entry.is_null())
+            else {
+                continue;
+            };
+            let entry = entry.as_object_mut().ok_or_else(corrupt)?;
+            let current = match entry.get("policy_version") {
+                None => PyInt::zero(),
+                Some(value) => PyInt::coerce_from_json(value).ok_or_else(corrupt)?,
+            };
+            let version = &current + 1;
+            entry.insert("policy_version".into(), version.value());
             ctx.state.write_json(crate::policy::CONNECTIONS, &updated)?;
-            ctx.policy.reevaluate_grants(cid, version, true, None)?;
+            ctx.policy.reevaluate_grants(cid, &version, true, None)?;
             ctx.policy.invalidate_approvals(
                 |e| e.get("connection").and_then(Value::as_str) == Some(cid),
                 "policy_changed",
@@ -815,46 +865,51 @@ pub fn share_environment(
 #[cfg(test)]
 mod invite_compat_tests {
     use super::*;
-    use std::io::Write;
-    use std::process::{Command, Stdio};
 
+    /// Invite codes are unpadded (or standard-padded) base32 of the invite
+    /// JSON. `b32d` strips surrounding whitespace, upper-cases and re-pads
+    /// before decoding; surplus padding, interior garbage and incomplete
+    /// quanta are rejected. Expected values were measured once against the
+    /// retired Python prototype's `_b32d`.
     #[test]
-    fn base32_padding_and_malformed_inputs_match_python() {
-        let mut corpus = Vec::new();
-        for stem in [
-            "MY", "MZ", "MZXQ", "MZXW6", "MZXW6YQ", "MZXW6YTB", "A", "AAA", "AAAAAA",
-        ] {
+    fn base32_padding_and_malformed_inputs() {
+        // (stem, largest accepted count of trailing '=', decoded hex)
+        let stems: [(&str, usize, Option<&str>); 9] = [
+            ("MY", 6, Some("66")),
+            ("MZ", 6, Some("66")),
+            ("MZXQ", 4, Some("666f")),
+            ("MZXW6", 3, Some("666f6f")),
+            ("MZXW6YQ", 1, Some("666f6f62")),
+            ("MZXW6YTB", 0, Some("666f6f6261")),
+            ("A", 0, None),
+            ("AAA", 0, None),
+            ("AAAAAA", 0, None),
+        ];
+        for (stem, max_pad, decoded) in stems {
             for pad in 0..=9 {
-                corpus.push(format!("{stem}{}", "=".repeat(pad)));
+                let input = format!("{stem}{}", "=".repeat(pad));
+                let expected = if pad <= max_pad { decoded } else { None };
+                assert_eq!(
+                    b32d(&input).ok().map(hex::encode).as_deref(),
+                    expected,
+                    "{input:?}"
+                );
             }
         }
-        corpus.extend(
-            [
-                " my====== ",
-                "my=",
-                "MY=Q",
-                "MY====A=",
-                "M Y",
-                "é",
-                "\u{2003}MY\u{2003}",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        );
-        let mut child = Command::new("python3.12")
-            .args(["-c", "import sys,json,base64\nout=[]\nfor s in json.load(sys.stdin):\n try:\n  p=s.strip().upper();p+='='*(-len(p)%8);out.append(base64.b32decode(p).hex())\n except Exception: out.append(None)\nprint(json.dumps(out))"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(json!(corpus).to_string().as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(output.status.success());
-        let expected: Vec<Option<String>> = serde_json::from_slice(&output.stdout).unwrap();
-        for (input, expected) in corpus.iter().zip(expected) {
-            assert_eq!(b32d(input).ok().map(hex::encode), expected, "{input:?}");
+        for (input, expected) in [
+            (" my====== ", Some("66")),
+            ("my=", Some("66")),
+            ("MY=Q", None),
+            ("MY====A=", None),
+            ("M Y", None),
+            ("\u{e9}", None),
+            ("\u{2003}MY\u{2003}", Some("66")),
+        ] {
+            assert_eq!(
+                b32d(input).ok().map(hex::encode).as_deref(),
+                expected,
+                "{input:?}"
+            );
         }
     }
 

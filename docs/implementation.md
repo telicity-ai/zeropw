@@ -1,55 +1,61 @@
-# ZeroPW v1 프로토타입 구현 현황
+# ZeroPW 구현 현황
 
-작성일: 2026-09-14 · 갱신 2026-09-16 (침해 대응: 자동 봉쇄·노출 판정·교체 안내 이메일 구현 반영) · 구현 기준 · 합성 자격증명과 통제된 시험용 서버만 사용
+작성 2026-09-14 · 침해 대응 반영 2026-09-16 · Rust 구현 기준으로 개정 2026-10-04 · 합성 자격증명과 통제된 시험용 서버만 사용
 
-이 문서는 [제품 정의](product-intent.md)와 [인증 중계와 보안 경계](security-design.md)에 적힌 첫 버전 요구사항을 실제로 어디까지 실행 가능한 코드로 옮겼는지 기록한다. 제품 문서와 보안 기준 자체는 바꾸지 않았다. 여기 적힌 내용은 코드가 통과한 시험의 범위이며 보안 인증, Opus 리뷰 통과, 배포 준비 완료를 뜻하지 않는다.
+이 문서는 [제품 정의](product-intent.md)와 [인증 중계와 보안 경계](security-design.md)에 적힌 첫 버전 요구사항을 실제로 어디까지 실행 가능한 코드로 옮겼는지 기록한다. 제품 문서와 보안 기준 자체는 바꾸지 않았다. 여기 적힌 내용은 코드가 통과한 시험의 범위이며 보안 인증이나 배포 준비 완료를 뜻하지 않는다. 구현은 `rust/`의 Rust 크레이트이고, 2026-09-14~16에 같은 요구사항을 먼저 구현했던 Python 프로토타입은 2026-10-03 제거했다.
 
 ## 1. 요약
 
-`zeropw/` 패키지는 Python 3.11 이상 표준 라이브러리만으로 금고·정책·감사·HTTP 인증 중계기·SSH 서명기·에이전트 네이티브 도구·관리 CLI를 구현한다. 하나의 연결로 서로 다른 API 요청과 CLI 실행이 개별 등록 없이 동작하고, 원본 비밀은 신뢰 프로세스 밖으로 나가지 않는다. 에이전트 도구 `exec`가 실제 OpenSSH `ssh`를 띄워 서명기만으로 실제 `sshd`에 인증하는 종단 시험과, 관리 CLI·`serve`·에이전트 CLI를 각각 별도 OS 프로세스로 띄워 문서의 사용 흐름 전체를 도는 종단 시험(`tests/test_cli_e2e.py`)을 포함한다.
+`rust/`의 `zeropw` 크레이트가 금고·정책·감사·HTTP 인증 중계기·SSH 서명기·에이전트 네이티브 도구·관리 CLI를 구현한다. 하나의 연결로 서로 다른 API 요청과 CLI 실행이 개별 등록 없이 동작하고, 원본 비밀은 신뢰 프로세스 밖으로 나가지 않는다. 시험에는 두 가지 종단 시험이 들어 있다.
+
+- 에이전트 도구 `exec`가 실제 OpenSSH `ssh`를 띄워, 서명기만으로 실제 `sshd`에 인증한다(`rust/tests/signer_e2e.rs`).
+- 관리 CLI·`serve`·에이전트 CLI를 각각 별도 OS 프로세스로 띄워, 문서의 사용 흐름 전체를 돈다(`rust/tests/native_cli_e2e.rs`).
 
 ```sh
-python3.12 -m unittest discover -s tests -p 'test_*.py' -v   # 전체 시험
-python3.12 -m zeropw.demo                                       # 원커맨드 데모 (종료 코드 0 = 모든 확인 통과)
+cargo build --locked --manifest-path rust/Cargo.toml --bins
+rust/verify.sh                       # 전체 검증 (fmt, Clippy, 모든 시험)
+rust/target/debug/zeropw-demo        # 원커맨드 데모 (종료 코드 0 = 모든 확인 통과)
 ```
 
-기존 CI의 "Run product tests when present" 단계가 `tests/`를 자동으로 실행한다. `sshd`를 일반 사용자로 띄울 수 없는 환경에서는 SSH 종단 시험을 건너뛰며 통과로 표시하지 않는다.
+SSH 종단 시험은 OpenSSH 도구가 없으면 건너뛰지 않고 실패한다. 통과로 표시되는 일이 없게 하기 위해서다.
 
 ## 2. 구성 요소와 신뢰 영역
 
-| 모듈 | 역할 | 신뢰 영역 |
+| 모듈 (`rust/src/`) | 역할 | 신뢰 영역 |
 | --- | --- | --- |
-| `zeropw/crypto/chacha20poly1305.py`, `zeropw/crypto/ed25519.py` | RFC 8439 AEAD, RFC 8032 서명. 순수 Python, RFC 시험 벡터와 OpenSSH 상호운용으로 검증 | 신뢰 프로세스 |
-| `zeropw/kms.py` | DEK 봉투 암호화. `LocalFileKms`는 관리형 KMS의 개발용 대체물 | 신뢰 프로세스 |
-| `zeropw/vault.py` | 비밀 버전 관리, 신뢰 컴포넌트 전용 조회, 재인증이 필요한 단일 조회, 교체·백업·복원·복구 | 신뢰 프로세스 |
-| `zeropw/policy.py` | 호출 주체, 연결, 권한(만료·사용량·정책 버전), 회수, 전체 정지, 위험 행위 승인 | 신뢰 프로세스 |
-| `zeropw/audit.py` | 값 없는 감사 기록과 이상 사용 알림. 기록 실패 시 인증 거부 | 신뢰 프로세스 |
-| `zeropw/handles.py` | 실행 환경에 주는 불투명 연결 핸들(HMAC 서명, 짧은 만료) | 발급은 신뢰 프로세스 |
-| `zeropw/gateway.py` | HTTP 인증 중계기. 대상 고정, 자격증명 삽입, 응답 반사 차단, 중복 요청 원장 | 신뢰 프로세스 |
-| `zeropw/signer.py`, `zeropw/sshwire.py` | SSH agent 프로토콜 서명기. session-bind 목적지 결합 | 신뢰 프로세스 |
-| `zeropw/tools.py`, `zeropw/runs.py`, `zeropw/server.py` | `list_connections`·`request`·`exec`·`status`·`cancel` 도구 API와 실행 추적 | 신뢰 프로세스 |
-| `zeropw/agent_cli.py`, `examples/democli.py` | 에이전트 쪽 얇은 클라이언트와 "지원 CLI" 예시 | 비밀 없는 실행 환경 |
-| `zeropw/incident.py` | 침해 대응 사건 모델과 저장(`incidents/<id>.json`), 범위별 봉쇄(§4.4), 노출 판정(§5) | 신뢰 프로세스 |
-| `zeropw/intrusion.py` | 감사 기록 스트림을 구독하는 자동 침입 탐지기. 강한·약한 신호 판정과 봉쇄 범위 결정(§4.2, §4.3) | 신뢰 프로세스 |
-| `zeropw/notify.py` | 교체 안내 이메일 렌더링과 `smtplib` 발송, 실패 시 재시도(§6) | 신뢰 프로세스 |
-| `zeropw/admin_cli.py` | 관리자 CLI (별도 신원, 패스프레이즈 재인증) | 관리자 |
-| `zeropw/fake_upstream.py`, `zeropw/demo.py` | 합성 토큰을 검증하는 시험용 외부 API와 원커맨드 데모 | 시험·시연 전용 |
-| `zeropw/crypto/x25519.py` | RFC 7748 X25519. 순수 Python, RFC 시험 벡터로 검증 | 신뢰 프로세스 |
-| `zeropw/team/identity.py`, `zeropw/team/envelope.py` | 기기 키(서명+합의)와 지문, 환경 DEK 세대 감싸기·풀기(HKDF+ChaCha20-Poly1305) | 신뢰 프로세스 |
-| `zeropw/team/commit.py`, `zeropw/team/fold.py` | 커밋 서명·검증·저장, 하이브리드 논리 시계, 전순서 접기와 노드 로컬 파생, 스냅샷 | 신뢰 프로세스 |
-| `zeropw/team/transport.py` | 전송 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(SIGMA류 핸드셰이크, 프레임) | 신뢰 프로세스 |
-| `zeropw/team/sync.py` | 세션 관리, VECTOR·COMMIT·FACT·PEERS·INCIDENT·INCIDENT_ACK 메시지 루프, 접기 적용, 사건 공유 발신·수신 | 신뢰 프로세스 |
-| `zeropw/team/membership.py` | 초대 생성·소진, 가입, 팀원 제거와 DEK 교체, `team share` | 신뢰 프로세스 |
-| `zeropw/admin_cli.py`의 `team *` 명령군, `serve --team-listen` | 팀 공유 CLI([팀 공유](team-sync.md) §12)와 팀 리스너 | 관리자 / 신뢰 프로세스 |
+| `crypto/chacha20poly1305.rs`, `crypto/ed25519.rs`, `crypto/x25519.rs` | RFC 8439 AEAD, RFC 8032 서명, RFC 7748 키 합의. 감사된 crate(`chacha20poly1305`, `ed25519-dalek`, `x25519-dalek`) 위의 얇은 계층이며, RFC 시험 벡터와 OpenSSH 상호운용으로 검증한다 | 신뢰 프로세스 |
+| `secret.rs` | 비밀 바이트 타입 `SecretBytes`. 해제 시 0으로 지우고 `Debug` 출력은 가린다 | 신뢰 프로세스 |
+| `kms.rs` | DEK 봉투 암호화. `LocalFileKms`는 관리형 KMS의 개발용 대체물 | 신뢰 프로세스 |
+| `vault.rs` | 비밀 버전 관리, 신뢰 컴포넌트 전용 조회, 재인증이 필요한 단일 조회, 교체·백업·복원·복구 | 신뢰 프로세스 |
+| `policy.rs` | 호출 주체, 연결, 권한(만료·사용량·정책 버전), 회수, 전체 정지, 위험 행위 승인 | 신뢰 프로세스 |
+| `audit.rs` | 값 없는 감사 기록과 이상 사용 알림. 기록 실패 시 인증 거부 | 신뢰 프로세스 |
+| `handles.rs` | 실행 환경에 주는 불투명 연결 핸들(HMAC 서명, 짧은 만료) | 발급은 신뢰 프로세스 |
+| `gateway.rs` | HTTP 인증 중계기. 대상 고정, 자격증명 삽입, 응답 반사 차단, 중복 요청 원장 | 신뢰 프로세스 |
+| `signer.rs`, `sshwire.rs` | SSH agent 프로토콜 서명기. session-bind 목적지 결합 | 신뢰 프로세스 |
+| `tools.rs`, `runs.rs`, `server.rs`, `bin/zeropw_session.rs` | `list_connections`·`request`·`exec`·`status`·`cancel` 도구 API, 실행 추적, 도구 HTTP 서버, `exec` 실행 보조 바이너리 | 신뢰 프로세스 |
+| `agent_cli.rs`(`zeropw-agent`), `bin/zeropw-democli.rs` | 에이전트 쪽 얇은 클라이언트와 "지원 CLI" 예시 | 비밀 없는 실행 환경 |
+| `incident.rs` | 침해 대응 사건 모델과 저장(`incidents/<id>.json`), 범위별 봉쇄(§4.4), 노출 판정(§5) | 신뢰 프로세스 |
+| `intrusion.rs` | 감사 기록 스트림을 구독하는 자동 침입 탐지기. 강한·약한 신호 판정과 봉쇄 범위 결정(§4.2, §4.3) | 신뢰 프로세스 |
+| `notify.rs`, `smtp.rs` | 교체 안내 이메일 렌더링과 SMTP 발송(STARTTLS·SMTPS), 실패 시 재시도(§6) | 신뢰 프로세스 |
+| `admin_cli.rs`(`zeropw-admin`) | 관리자 CLI (별도 신원, 패스프레이즈 재인증)와 `serve` | 관리자 |
+| `context.rs`, `store.rs`, `projects.rs` | 상태 디렉터리(0700/0600, 원자적 교체, `flock`), 프로젝트·환경, 구성 요소 묶음 | 신뢰 프로세스 |
+| `fake_upstream.rs`, `demo.rs`(`zeropw-demo`) | 합성 토큰을 검증하는 시험용 외부 API와 원커맨드 데모 | 시험·시연 전용 |
+| `team/identity.rs`, `team/envelope.rs` | 기기 키(서명+합의)와 지문, 환경 DEK 세대 감싸기·풀기(HKDF+ChaCha20-Poly1305) | 신뢰 프로세스 |
+| `team/commit.rs`, `team/fold.rs`, `team/humanview.rs` | 커밋 서명·검증·저장, 하이브리드 논리 시계, 전순서 접기와 노드 로컬 파생, 스냅샷, 사람이 읽는 표시 | 신뢰 프로세스 |
+| `team/transport.rs` | 전송 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(SIGMA류 핸드셰이크, 프레임) | 신뢰 프로세스 |
+| `team/sync.rs` | 세션 관리, VECTOR·COMMIT·FACT·PEERS·INCIDENT·INCIDENT_ACK 메시지 루프, 접기 적용, 사건 공유 발신·수신 | 신뢰 프로세스 |
+| `team/membership.rs` | 초대 생성·소진, 가입, 팀원 제거와 DEK 교체, `team share` | 신뢰 프로세스 |
+| `admin_cli.rs`의 `team *` 명령군, `serve --team-listen` | 팀 공유 CLI([팀 공유](team-sync.md) §12)와 팀 리스너 | 관리자 / 신뢰 프로세스 |
+| `pyjson.rs`, `pystr.rs`, `pyint.rs`, `pybase64.rs`, `pyidna.rs`, `argparse.rs` | 프로토타입이 쓴 JSON 바이트 형식(정렬·구분자·이스케이프·실수 표기), 정수 크기, base64, IDNA, CLI 인자 규칙을 그대로 읽고 쓰는 보조 모듈. 상태 파일·서명 입력의 호환을 위한 것이다 | 신뢰 프로세스 |
 
 에이전트 프로세스가 받는 것은 게이트웨이 URL과 자기 호출 토큰(`zpwc_...`)이다. `exec`로 실행되는 CLI는 여기에 더해 연결 핸들이 들어간 base URL(`.../h/zpw1....`) 또는 서명기 소켓 경로를 받는다. 이 중 어느 것도 금고 값이 아니다. 핸들은 호출 주체·연결·권한·정책 버전에 묶인 짧은 수명의 사용 권한이며, 유출되면 회수 전까지 허용 범위 안에서 사용될 수 있다. 이는 제품 문서가 말한 "허용된 사용 권한과 원본 자격증명은 다르다"는 구분 그대로다.
 
 ## 3. 사용 흐름이 코드에서 어떻게 보이는가
 
-1. 관리자가 `admin_cli init`으로 상태 디렉터리를 만든다. KMS 마스터 키, 금고 DEK, 관리자 패스프레이즈, 복구 패스프레이즈가 생긴다.
+1. 관리자가 `zeropw-admin init`으로 상태 디렉터리를 만든다. KMS 마스터 키, 금고 DEK, 관리자 패스프레이즈, 복구 패스프레이즈가 생긴다.
 2. `project create`, `secret put`(값은 stdin 또는 파일로만), `connection create-http` 또는 `create-ssh`로 서비스·자격증명·대상·허용 범위를 연결 하나에 설정한다. 명령이나 API 작업을 등록하는 단계는 없다.
 3. `principal create --runtime <id>`(기본 `default`)로 에이전트 신원을 만들고 `grant create`로 연결 사용 권한(만료, 사용량)을 준다. `--runtime`은 같은 실행 환경(호스트·컨테이너)에서 도는 호출 주체를 묶어, 침해 대응의 봉쇄 범위 판정에 쓰인다(§7).
-4. `serve`로 신뢰 프로세스를 띄운다. 에이전트는 `agent_cli list-connections`로 쓸 수 있는 연결을 보고, `request`로 API를 호출하거나 `exec`로 지원 CLI를 실행한다.
+4. `serve`로 신뢰 프로세스를 띄운다. 에이전트는 `zeropw-agent list-connections`로 쓸 수 있는 연결을 보고, `request`로 API를 호출하거나 `exec`로 지원 CLI를 실행한다.
 5. 관리자는 `audit tail`, `alerts`로 사용을 보고 `grant revoke`, `principal disable`, `connection disable`, `stop-all`로 막는다. 관리 CLI는 `serve`와 별도 프로세스다. 변경은 상태 파일에 바로 기록되어 다음 중계·서명·실행에서 거부되고, 이미 진행 중인 실행과 열린 서명기 소켓에는 `serve`의 다음 폴링(0.25초 주기)에서 반영된다(§6).
 6. `serve` 안의 탐지기가 침입 신호를 보면 스스로 사건을 열어 해당 범위를 봉쇄하거나(자동), 관리자가 `incident declare`로 직접 연다(수동). 사건이 열려 있는 동안 `resume`은 거부된다. 관리자는 `incident show`로 노출 판정을 보고 필수 교체를 마친 뒤 `incident close`(패스프레이즈 재인증)로 닫고, 새 `principal create`·`grant create`로 신원을 다시 만들어 `resume`으로 재개한다(§7).
 
@@ -79,7 +85,7 @@ python3.12 -m zeropw.demo                                       # 원커맨드 �
 - 키 추가·삭제·잠금·스마트카드·프로토콜 1 메시지, 임의 데이터 서명(`ssh-add -T`), 결합 전 서명 요청, 두 번째 결합, forwarding 결합은 모두 `SSH_AGENT_FAILURE`다. 개인키 내보내기는 프로토콜에 존재하지 않는다.
 - 권한 회수, 호출 주체·연결 비활성화, 전체 정지, 복원 대기는 해당 소켓을 닫는다. 같은 프로세스에서 `Policy`를 호출하면 회수 알림으로 바로 닫고, 별도 프로세스인 관리 CLI의 변경은 `serve`가 폴링 주기(`SERVE_POLL_SECONDS`, 0.25초)마다 열린 소켓의 (호출 주체, 연결, 권한)을 상태 파일로 다시 확인해 닫는다. 그 사이의 서명 요청은 서명 직전 정책 재확인에서 거부된다.
 - `exec`는 SSH 연결에 대해 프로그램을 연결 프로필의 `ssh`로 고정하고 `-F /dev/null`로 사용자·시스템 설정을 무시한다. 실행 디렉터리에는 관리되는 `known_hosts`와 연결 키의 공개키 한 줄만 담긴 `id.pub`를 쓰고 `IdentitiesOnly=yes`, `IdentityAgent=<소켓>`, `ForwardAgent=no`, `StrictHostKeyChecking=yes`, `BatchMode=yes`로 실행한다. 에이전트는 원격 명령 인자만 정한다.
-- `tests/test_ssh_e2e.py`는 실제 `sshd`를 일반 사용자로 127.0.0.1의 임시 포트에 띄운다. 실제 `ssh`가 서명기만으로 인증해 원격 명령 두 개를 실행하고, 에이전트 도구 `exec`로도 같은 연결에서 서로 다른 명령 두 개를 실행한다. `exec` 시험은 `ssh` 앞에 둔 기록용 래퍼로 자식이 본 실행 디렉터리의 파일(`id.pub`, `known_hosts`만)과 환경변수 전체를 기록해, 개인키(PEM, 디코딩한 키 블롭, 시드)가 어떤 인코딩으로도 없음을 확인한다. 연결에 다른 호스트 키를 설정하면 결합이 거부되어 인증이 실패하고, 권한을 회수하면 소켓이 사라지고 `exec`가 거부된다.
+- `rust/tests/signer_e2e.rs`는 실제 `sshd`를 일반 사용자로 127.0.0.1의 임시 포트에 띄운다. 실제 `ssh`가 서명기만으로 인증해 원격 명령 두 개를 실행하고, 에이전트 도구 `exec`로도 같은 연결에서 서로 다른 명령 두 개를 실행한다. `exec` 시험은 `ssh` 앞에 둔 기록용 래퍼로 자식이 본 실행 디렉터리의 파일(`id.pub`, `known_hosts`만)과 환경변수 전체를 기록해, 개인키(PEM, 디코딩한 키 블롭, 시드)가 어떤 인코딩으로도 없음을 확인한다. 연결에 다른 호스트 키를 설정하면 결합이 거부되어 인증이 실패하고, 권한을 회수하면 소켓이 사라지고 `exec`가 거부된다.
 
 session-bind를 보내지 않는 클라이언트(OpenSSH 8.9 미만, 대부분의 비 OpenSSH 클라이언트)는 서명을 받지 못한다. 이는 문서의 "검증할 수 없는 클라이언트는 미지원" 규칙을 그대로 적용한 것이다.
 
@@ -103,40 +109,40 @@ session-bind를 보내지 않는 클라이언트(OpenSSH 8.9 미만, 대부분�
 
 [침해 대응 설계](compromise-response.md) §9 단계 1-5를 구현한 것이다: 실행 환경이 완전히 장악됐다는 가정 아래 신뢰 프로세스가 스스로 침입을 판정해 봉쇄하고, 노출된 자격증명의 교체를 관리자에게 이메일로 안내한다. 아래는 코드가 실제로 하는 일과 그것을 증명하는 시험이며, §9의 한계대로 완전한 탐지나 보안 인증을 뜻하지 않는다.
 
-- **사건 모델과 파일 (`zeropw/incident.py`).** 사건은 `<상태 디렉터리>/incidents/<id>.json`에 값 없는 JSON으로 저장된다: id, 시각, 상태(`open`/`closed`), 범위, 실행 환경, 범위 안 호출 주체 목록, 판정 트리거(`manual`/`auto`), 규칙, 조치 집계(`actions`), 노출 판정(`assessment`), 알림 상태(`notification`). 매 쓰기 전에 직렬화한 결과를 금고의 모든 비밀(모든 버전)과 대조하고, 값이 섞여 있으면(있어서는 안 되지만) 판정을 `{"redacted": true}`로 바꿔 대신 쓴다(`zeropw.runs`가 실행 출력에 쓰는 것과 같은 반사 검사 패턴). 사건이 열리면 정책 제어 문서에 `incident_open` 플래그가 켜지고(`Policy.set_open_incident`), 이 플래그가 있는 동안은 범위와 무관하게 `resume`이 `incident_open` 오류로 거부된다. 사건을 닫아도(`incident close`) 이 플래그만 내려갈 뿐 전체 정지 자체는 풀리지 않는다 — `resume`은 별도 명령이다.
+- **사건 모델과 파일 (`incident.rs`).** 사건은 `<상태 디렉터리>/incidents/<id>.json`에 값 없는 JSON으로 저장된다: id, 시각, 상태(`open`/`closed`), 범위, 실행 환경, 범위 안 호출 주체 목록, 판정 트리거(`manual`/`auto`), 규칙, 조치 집계(`actions`), 노출 판정(`assessment`), 알림 상태(`notification`). 매 쓰기 전에 직렬화한 결과를 금고의 모든 비밀(모든 버전)과 대조하고, 값이 섞여 있으면(있어서는 안 되지만) 판정을 `{"redacted": true}`로 바꿔 대신 쓴다(`runs.rs`가 실행 출력에 쓰는 것과 같은 반사 검사 패턴). 사건이 열리면 정책 제어 문서에 `incident_open` 플래그가 켜지고(`Policy.set_open_incident`), 이 플래그가 있는 동안은 범위와 무관하게 `resume`이 `incident_open` 오류로 거부된다. 사건을 닫아도(`incident close`) 이 플래그만 내려갈 뿐 전체 정지 자체는 풀리지 않는다 — `resume`은 별도 명령이다.
 
-- **범위와 봉쇄 (`open_incident`/`widen_incident`).** 범위는 `principal`(그 호출 주체만), `runtime`(같은 실행 환경의 모든 호출 주체), `all`(전체)이다. `stop_all`은 범위가 `all`이거나, 범위가 `runtime`이면서 그 실행 환경이 현재 활성 호출 주체 전부를 포함할 때만 실행된다 — 그 밖의 `runtime` 범위와 모든 `principal` 범위는 범위 밖 호출 주체를 막지 않는다. 범위 안 호출 주체는 모두 비활성화되고(`disable_principal`) 권한이 회수된다(`revoke_grants_of`). 핸들 키 교체(`rotate_handle_key`)는 `runtime`·`all` 범위에서만 한다 — 핸들 키는 하나뿐이라 교체가 범위 밖 호출 주체의 핸들까지 무효로 만들기 때문에 `principal` 범위에서는 하지 않는다. 진행 중인 실행 취소와 서명기 소켓 닫기는 호출 주체를 비활성화하기 *전에* 찍은 스냅숏을 기준으로 그 안의 각 실행·소켓에 정확히 `cancel`/`release`를 호출해 세므로, §6에서 말한 "회수 알림에 대상이 없어 전부 취소"하는 과잉 취소와 달리 정밀하다. `serve`가 붙어 있지 않은 프로세스(관리 CLI 자신의 `incident declare`)에서 사건이 선언되면 `ctx.runs`/`ctx.signer_manager`가 없어 이 스냅숏이 항상 비어 있고, 대신 조치 집계에 `applied_by_serve: true`가 남는다 — 실제 취소와 소켓 닫기는 그때 떠 있는 `serve`가 다음 폴링(`_enforce_withdrawn_permissions`, 0.25초 주기)에서 사라진 권한을 찾아 수행한다. 사건이 열린 뒤 더 넓은 범위에 해당하는 신호가 오면 `widen_incident`가 새로 추가된 호출 주체에만 봉쇄를 다시 적용하고 노출 판정을 새로 만들어 이메일을 한 통 더 보낸다; 범위를 좁히는 경로는 없다.
+- **범위와 봉쇄 (`open_incident`/`widen_incident`).** 범위는 `principal`(그 호출 주체만), `runtime`(같은 실행 환경의 모든 호출 주체), `all`(전체)이다. `stop_all`은 범위가 `all`이거나, 범위가 `runtime`이면서 그 실행 환경이 현재 활성 호출 주체 전부를 포함할 때만 실행된다 — 그 밖의 `runtime` 범위와 모든 `principal` 범위는 범위 밖 호출 주체를 막지 않는다. 범위 안 호출 주체는 모두 비활성화되고(`disable_principal`) 권한이 회수된다(`revoke_grants_of`). 핸들 키 교체(`rotate_handle_key`)는 `runtime`·`all` 범위에서만 한다 — 핸들 키는 하나뿐이라 교체가 범위 밖 호출 주체의 핸들까지 무효로 만들기 때문에 `principal` 범위에서는 하지 않는다. 진행 중인 실행 취소와 서명기 소켓 닫기는 호출 주체를 비활성화하기 *전에* 찍은 스냅숏을 기준으로 그 안의 각 실행·소켓에 정확히 `cancel`/`release`를 호출해 세므로, §6에서 말한 "회수 알림에 대상이 없어 전부 취소"하는 과잉 취소와 달리 정밀하다. `serve`가 붙어 있지 않은 프로세스(관리 CLI 자신의 `incident declare`)에서 사건이 선언되면 `ctx.runs`/`ctx.signer_manager`가 없어 이 스냅숏이 항상 비어 있고, 대신 조치 집계에 `applied_by_serve: true`가 남는다 — 실제 취소와 소켓 닫기는 그때 떠 있는 `serve`가 다음 폴링(`admin_cli.rs`의 `enforce_withdrawn`, 0.25초 주기)에서 사라진 권한을 찾아 수행한다. 사건이 열린 뒤 더 넓은 범위에 해당하는 신호가 오면 `widen_incident`가 새로 추가된 호출 주체에만 봉쇄를 다시 적용하고 노출 판정을 새로 만들어 이메일을 한 통 더 보낸다; 범위를 좁히는 경로는 없다.
 
 - **노출 판정 (`assess`).** 시작점은 범위 안 각 호출 주체 자신의 토큰 생성 시각이며 시간 창은 없다. 그 시각 이후 `http_relay`·`ssh_sign`이 `ok`였거나 `run_start`가 있었던 연결은 "필수 교체"(`mandatory`)다. 사용 기록은 없지만 침해된 호출 주체가 `active`·`stale` 권한을 가졌거나 이 사건 자신의 봉쇄가 사건이 열린 뒤(`revoked_at >= opened_at`) 회수한 권한을 가졌던 연결은 "권장 교체"(`recommended`)다. 후자의 기준을 사건이 열린 시각으로 두는 이유는, 노출 판정이 항상 4단계(권한 회수)가 이미 끝난 뒤 실행되어 기준이 없으면 모든 권한이 `revoked` 상태로만 보여 "권장"이 나올 수 없기 때문이다. `scope="all"`이면 연결 사용과 무관하게 활성 버전이 있는 금고의 모든 비밀이 "필수"가 되고 최상위 `recover_required` 플래그가 켜져(이메일이 `recover`와 패스프레이즈 교체를 추가로 안내) 신뢰 호스트 침해 전제를 반영한다. 판정은 감사 기록만 읽고 금고 값은 한 번도 열지 않는다; 그래도 직렬화한 결과를 금고의 모든 값과 대조해 값이 발견되면(있어서는 안 되지만) 기록 전에 판정을 `{"redacted": true}`로 바꾼다.
 
-- **자동 탐지기 (`zeropw/intrusion.py`, `Detector`).** `Audit.subscribe`로 매 감사 기록 직후 동기 호출된다. 강한 신호(단독으로 봉쇄, 끌 수 있는 설정 없음)는 `unknown_tool`(`tools_unknown` 거부, 임계 2회), `handle_forgery`(`http_relay` 거부 사유 `handle_signature`/`handle_malformed`/`handle_version`, 임계 2회), `signer_misuse`(`ssh_agent_refused` 거부 `unsupported_agent_message`/`unsupported_extension`, `ssh_bind` 거부 `agent_forwarding_not_allowed`, `ssh_sign` 거부 `not_userauth_request`/`no_session_bind`/`unsupported_sign_flags`, 임계 1회), `output_exfiltration`(`run_finish` 결과 `blocked` 사유 `output_credential_blocked`, 임계 1회)다. 약한 신호(점수 누적, 기본 창 120초, 임계 8점)는 `revoked_use`(사유 `grant_revoked`/`grant_stale`/`principal_disabled`, 3점), `scope_violation`(`http_relay`·`tools_request`·`tools_exec` 거부 사유 `method_not_allowed`/`path_not_allowed`/`approval_required`, 1점), `unauthorized_connection`(`tools_request`·`tools_exec` 거부 사유 `no_grant`/`grant_unknown`/`connection_unknown`, 2점), `expired_handle`(`http_relay` 거부 `handle_expired`, 1점), `enumeration`(창 안에서 이 호출 주체가 *처음* 쓰는 연결 수가 4개 이상이면서 사용 가능한 연결의 절반 이상, 4점), `burst`(창 안 자격증명 요청 수 — `tools_request`·`tools_exec`·`http_relay`만이며 상태 조회·핸들 발급·실행 기록은 제외 — 60건 초과, 2점)다. `enumeration`·`burst`는 임계를 "넘을 때" 한 번만 가산하고(latch) 창이 지나 조건이 풀린 뒤에야 다시 가산해, 임계를 넘긴 채로 계속하는 사용이 점수를 무한히 쌓지 않게 한다. `global_stop`·`restore_pending`은 관리자가 한 번 걸면 이후 모든 호출 주체가 똑같이 거부되는 전역 상태라 개별 증거가 되지 못하므로 `revoked_use`에서 제외했다(`grant_revoked`/`grant_stale`/`principal_disabled`는 호출 주체별 증거이므로 포함). 호출 주체를 특정할 수 없는 신호(위조·변조·만료 핸들처럼 `caller` 없이 기록되는 거부)는 전역 버킷에 쌓이며, 그 임계 도달은 범위 `principal`로 *그 순간의 모든 활성 호출 주체*를 겨냥한다(`handle_forgery_unattributed`) — `all` 범위는 예약해 두지 않는다. 범위 판정은 트립한 규칙의 위치(`signer_misuse`·`output_exfiltration`는 실행 환경 자체 접근이 필요해 `runtime`, 나머지는 `http` 경로만으로 가능)를 보고, `http` 신호뿐이라도 같은 실행 환경의 다른 호출 주체가 창 안에서 함께 신호를 냈으면 `runtime`으로 올린다. 실제 봉쇄·확대는 항상 `open_incident`에 맡긴다(`widen_incident`를 직접 부르지 않는다): 이미 열린 사건이 같은 범위이거나 더 넓으면 아무 일도 하지 않는다. 동시성은 두 개의 락으로 다룬다 — 비재진입 `_lock`은 집계 딕셔너리만 보호하고 `open_incident` 호출 중에는 잡지 않으며, `open_incident` 자신이 감사를 남기며 재진입(`run_cancel` 등)하는 동안에는 스레드 로컬 플래그로 "집계는 하되 결정은 하지 않는다"를 지키고, 결정 단계 자체는 논블로킹 락으로 한 스레드만 수행해 동시에 트립한 두 신호가 사건을 두 번 열지 않게 한다.
+- **자동 탐지기 (`intrusion.rs`, `Detector`).** `Audit.subscribe`로 매 감사 기록 직후 동기 호출된다. 강한 신호(단독으로 봉쇄, 끌 수 있는 설정 없음)는 `unknown_tool`(`tools_unknown` 거부, 임계 2회), `handle_forgery`(`http_relay` 거부 사유 `handle_signature`/`handle_malformed`/`handle_version`, 임계 2회), `signer_misuse`(`ssh_agent_refused` 거부 `unsupported_agent_message`/`unsupported_extension`, `ssh_bind` 거부 `agent_forwarding_not_allowed`, `ssh_sign` 거부 `not_userauth_request`/`no_session_bind`/`unsupported_sign_flags`, 임계 1회), `output_exfiltration`(`run_finish` 결과 `blocked` 사유 `output_credential_blocked`, 임계 1회)다. 약한 신호(점수 누적, 기본 창 120초, 임계 8점)는 `revoked_use`(사유 `grant_revoked`/`grant_stale`/`principal_disabled`, 3점), `scope_violation`(`http_relay`·`tools_request`·`tools_exec` 거부 사유 `method_not_allowed`/`path_not_allowed`/`approval_required`, 1점), `unauthorized_connection`(`tools_request`·`tools_exec` 거부 사유 `no_grant`/`grant_unknown`/`connection_unknown`, 2점), `expired_handle`(`http_relay` 거부 `handle_expired`, 1점), `enumeration`(창 안에서 이 호출 주체가 *처음* 쓰는 연결 수가 4개 이상이면서 사용 가능한 연결의 절반 이상, 4점), `burst`(창 안 자격증명 요청 수 — `tools_request`·`tools_exec`·`http_relay`만이며 상태 조회·핸들 발급·실행 기록은 제외 — 60건 초과, 2점)다. `enumeration`·`burst`는 임계를 "넘을 때" 한 번만 가산하고(latch) 창이 지나 조건이 풀린 뒤에야 다시 가산해, 임계를 넘긴 채로 계속하는 사용이 점수를 무한히 쌓지 않게 한다. `global_stop`·`restore_pending`은 관리자가 한 번 걸면 이후 모든 호출 주체가 똑같이 거부되는 전역 상태라 개별 증거가 되지 못하므로 `revoked_use`에서 제외했다(`grant_revoked`/`grant_stale`/`principal_disabled`는 호출 주체별 증거이므로 포함). 호출 주체를 특정할 수 없는 신호(위조·변조·만료 핸들처럼 `caller` 없이 기록되는 거부)는 전역 버킷에 쌓이며, 그 임계 도달은 범위 `principal`로 *그 순간의 모든 활성 호출 주체*를 겨냥한다(`handle_forgery_unattributed`) — `all` 범위는 예약해 두지 않는다. 범위 판정은 트립한 규칙의 위치(`signer_misuse`·`output_exfiltration`는 실행 환경 자체 접근이 필요해 `runtime`, 나머지는 `http` 경로만으로 가능)를 보고, `http` 신호뿐이라도 같은 실행 환경의 다른 호출 주체가 창 안에서 함께 신호를 냈으면 `runtime`으로 올린다. 실제 봉쇄·확대는 항상 `open_incident`에 맡긴다(`widen_incident`를 직접 부르지 않는다): 이미 열린 사건이 같은 범위이거나 더 넓으면 아무 일도 하지 않는다. 동시성은 두 개의 잠금으로 다룬다. 집계 상태 잠금은 집계 중에만 잡고 `open_incident` 호출 중에는 잡지 않는다. 결정 단계는 `try_lock`으로 한 스레드만 들어간다. 그래서 `open_incident`가 봉쇄하며 남기는 감사 기록(`run_cancel` 등)은 다시 집계는 되지만 새 결정을 열지 못하고, 동시에 임계를 넘은 두 신호가 사건을 두 번 열지도 않는다. 결정 중 오류나 패닉은 `decision_errors`로 세고 다음 기록의 탐지를 막지 않는다.
 
-- **알림 (`zeropw/notify.py`).** SMTP 설정은 `<상태 디렉터리>/notify.json`(0600, 현재 사용자 소유)에 `host`·`port`·`mode`(`starttls`·`smtps`·루프백 전용 시험 모드 `plain`)·`sender`·`recipients`·`username`·`password_file`·`timeout_seconds`로 담는다. 비밀번호는 별도 파일(0600, 같은 소유자 검사)에서 발송 시점에만 읽고 호출이 끝나면 버린다. `plain` 모드는 루프백 호스트(`127.0.0.1`·`::1`·`localhost`)에만 허용되고, 그 외 호스트에 `plain`을 쓰면 거부된다. `notify.json`이 없으면 "미설정"(`not_configured`)으로 봉쇄만 하고 이메일은 보내지 않는다; 권한·소유자·형식이 잘못됐거나 발송 자체가 실패하면 둘 다 `pending`으로 남겨 지수 백오프(1, 2, 4, ... 최대 300초)로 재시도하며, `serve`의 매 폴링이 열린 사건 하나(정책 제어 문서가 가리키는 포인터 하나뿐이므로 사건 파일을 훑지 않는다)의 대기 중인 알림만 확인해 보낸다. `render_incident_email`은 사건의 구조화된 필드만 읽는 순수 함수로 §6.2의 여섯 절(무슨 일이 있었나 / 이미 한 것 / 필수 교체 / 권장 교체 / 실행 환경 / 복구 명령)을 순서대로 만들고, 링크(`http://`·`https://`)를 넣지 않는다. 보내기 직전에 렌더링 결과를 금고 값과 대조해 값이 섞여 있으면(있어서는 안 되지만) 발송을 막고 사건을 `failed`로 남긴다(`rendered_value_detected`). 범위가 넓어질 때(`incident escalate` 또는 자동 확대)는 다시 보내지만 그 밖의 갱신은 새 이메일을 만들지 않는다. `incident notify-test`는 사건을 만들지 않고 같은 발송 경로로 짧은 확인 메시지만 보낸다. 모든 시도(성공·미설정·대기·값 검출 거부)는 수신자·주소 없이 `incident_notify` 감사 기록으로 남는다.
+- **알림 (`notify.rs`, `smtp.rs`).** SMTP 설정은 `<상태 디렉터리>/notify.json`(0600, 현재 사용자 소유)에 `host`·`port`·`mode`(`starttls`·`smtps`·루프백 전용 시험 모드 `plain`)·`sender`·`recipients`·`username`·`password_file`·`timeout_seconds`로 담는다. 비밀번호는 별도 파일(0600, 같은 소유자 검사)에서 발송 시점에만 읽고 호출이 끝나면 버린다. `plain` 모드는 루프백 호스트(`127.0.0.1`·`::1`·`localhost`)에만 허용되고, 그 외 호스트에 `plain`을 쓰면 거부된다. `notify.json`이 없으면 "미설정"(`not_configured`)으로 봉쇄만 하고 이메일은 보내지 않는다; 권한·소유자·형식이 잘못됐거나 발송 자체가 실패하면 둘 다 `pending`으로 남겨 지수 백오프(1, 2, 4, ... 최대 300초)로 재시도하며, `serve`의 매 폴링이 열린 사건 하나(정책 제어 문서가 가리키는 포인터 하나뿐이므로 사건 파일을 훑지 않는다)의 대기 중인 알림만 확인해 보낸다. `render_incident_email`은 사건의 구조화된 필드만 읽는 순수 함수로 §6.2의 여섯 절(무슨 일이 있었나 / 이미 한 것 / 필수 교체 / 권장 교체 / 실행 환경 / 복구 명령)을 순서대로 만들고, 링크(`http://`·`https://`)를 넣지 않는다. 보내기 직전에 렌더링 결과를 금고 값과 대조해 값이 섞여 있으면(있어서는 안 되지만) 발송을 막고 사건을 `failed`로 남긴다(`rendered_value_detected`). 범위가 넓어질 때(`incident escalate` 또는 자동 확대)는 다시 보내지만 그 밖의 갱신은 새 이메일을 만들지 않는다. `incident notify-test`는 사건을 만들지 않고 같은 발송 경로로 짧은 확인 메시지만 보낸다. 모든 시도(성공·미설정·대기·값 검출 거부)는 수신자·주소 없이 `incident_notify` 감사 기록으로 남는다.
 
 - **CLI.** `principal create --id <id> --runtime <id>`(기본 `default`)가 실행 환경 소속을 정한다. `incident declare --scope principal|runtime|all [--principal <id>] [--runtime <id>] [--reason TEXT]`로 수동 선언(`--scope all`은 관리자 패스프레이즈 재인증을 요구), `incident escalate --id <id> --scope runtime|all [--runtime <id>]`로 범위 확대(좁히는 방향은 없음), `incident list` / `incident show --id <id>`로 조회, `incident close --id <id>`(관리자 패스프레이즈 재인증; 정지 자체는 풀지 않음)로 닫기, `incident notify-test`로 SMTP 설정 확인을 한다.
 
 ## 8. 수용 시험 대응표
 
-[보안 설계 §7](security-design.md)의 각 행이 어떤 시험으로 검증되는지 적는다.
+[보안 설계 §7](security-design.md)의 각 행을 검증하는 시험이다. 시험 위치는 `rust/tests/<대상>.rs`(통합 시험)와 `rust/src/<모듈>.rs`의 `tests` 모듈(단위 시험)이다. `rust/verify.sh`가 모두 실행한다.
 
 | 검증할 행동 | 시험 |
 | --- | --- |
-| 연결 한 번으로 다양한 명령 실행 | `test_gateway` 정상 2요청 흐름, `test_tools`·`test_agent_cli`의 `exec`, `test_ssh_e2e`의 원격 명령 2개(직접 `ssh`와 `exec` 도구 모두), `test_cli_e2e`(별도 프로세스의 관리 CLI·`serve`·에이전트 CLI로 HTTP 요청 2종과 CLI 실행, 실제 `sshd`의 원격 명령 2개), `test_demo` |
-| 에이전트의 원본 키 추출 시도 | `test_tools`(자식 환경·인자·작업 디렉터리·출력 검사, 상태 디렉터리 경로 비노출, 자격증명이 든 CLI 프로필 환경변수 거부 `test_cli_env_carrying_the_credential_is_refused_before_any_artefact`), `test_admin_cli`의 저장 시점 거부(`test_cli_env_holding_the_credential_is_refused_at_save_time`, `test_new_secret_version_matching_existing_cli_env_is_refused`), `examples/democli.py steal`, `test_cli_e2e`의 에이전트 출력·`serve` 출력·상태 디렉터리 전체 검사, `test_core_vault` 상태 파일 평문 부재 |
-| 응답·오류·로그를 통한 유출 시도 | `test_gateway` 헤더·본문 반사, 인코딩 형태별 반사, Set-Cookie, 리다이렉트, 오류 본문, 감사 기록 검사, `test_runs` 출력 차단 |
-| 다른 연결·대상 사용 시도 | `test_gateway` 핸들 변조·타 연결 핸들·Host 헤더·절대 URI·경로 이동, `test_gateway`의 `ResolvedAddressTests`(루프백·섞인 응답·메타데이터로 해석되는 호스트 이름 거부, 요청마다 한 번 해석, DNS 변경 반영, 고정 주소 접속과 호스트 이름 기준 TLS 검증), `test_signer` 세션·호스트 키 불일치, `test_ssh_e2e` 잘못된 목적지 |
-| SSH 키 오용 시도 | `test_signer` 임의 데이터·forwarding·키 관리 메시지·`ssh-add -T`·`ssh-add -D` 거부 |
-| 미지원 CLI 실행 | `test_tools` 프로필 없는 연결·없는 프로그램의 명시적 오류(`test_requires_cli_profile_and_existing_executable_program`), `test_gateway` 미지원 인증 방식의 명시적 오류(`test_unsupported_auth_mode_fails_closed`) |
-| 권한 만료·회수·전체 정지 | `test_core_policy`, `test_gateway`, `test_signer`, `test_runs` 실행 취소, `test_tools` 실행 직전 재확인, `test_admin_cli`의 `test_serve_cancels_runs_and_closes_signer_sockets_revoked_by_another_process`(`serve`와 다른 `Context`로 실행한 관리 CLI의 권한 회수가 실행을 취소하고, 호출 주체 비활성화가 소켓을 닫고, 복원 뒤 `serve`가 새 핸들 키를 읽음), `test_cli_e2e`(별도 OS 프로세스의 `grant revoke`·`connection disable`·`stop-all`·`resume`이 떠 있는 `serve`에 반영되고, 실제 `sshd`로 원격 명령을 실행 중인 실행이 각각으로 취소됨. 취소는 로컬 `ssh` 클라이언트만 끝내며 서버의 원격 명령은 계속된다는 한계를 하트비트 파일로 확인함) |
-| 운영·복구 경계 우회 시도 | `test_core_vault`·`test_admin_cli` 복원 대기·정지 유지·KMS 불일치 거부·복구, `test_tools`·`test_agent_cli` 목록 밖 도구(`reveal_secret` 등) 거부 |
-| 침입 시 자동 봉쇄와 노출 판정 | `test_incident`(범위별 봉쇄와 다른 범위 밖 호출 주체 보존, 순서와 멱등성, `escalate`로 확대·축소 거부, 열린 사건에서 `resume` 거부, 별도 `Context`에서 선언 시 `serve`의 다음 폴링이 실행 취소·소켓 닫기를 대신함, 감사 실패에도 봉쇄 유지, 노출 등급 판정과 사건 파일의 금고 값 부재), `test_intrusion`(강한 신호별 단독 봉쇄, 약한 신호 누적과 임계, 정상 흐름은 트립하지 않음, 열거·속도급증의 1회 가산, 범위 판정과 자동 확대, 같은 감사 기록 호출 안에서 봉쇄 완료, 임계값 설정), `test_cli_e2e`(`CompromiseResponseEndToEndTestCase`: 별도 프로세스의 공격자가 가진 것은 게이트웨이 URL과 호출 토큰뿐이며 미제공 도구를 두 번 불러 `unknown_tool` 강한 신호로 자동 봉쇄, `incident list`/`show`가 별도 관리 CLI 프로세스에서 사건을 보여줌, 봉쇄된 호출 주체의 다음 `list-connections`·`request`가 `principal_disabled`로 거부, `resume`이 `incident_open`으로 거부, `incident close` 뒤 새 호출 주체로 재개), `test_demo`(데모 [7]단계) |
-| 교체 안내 이메일 | `test_notify`(§6.2 절 순서와 종류별 안내, 필수·권장 등급 분리, 값·핸들·토큰 부재, 미설정 시 `not_configured`, 발송 실패 시 `pending`과 지수 백오프·재시도, 범위 확대 시 재발송, `notify-test`, `serve` 폴링의 재시도 반영), `test_cli_e2e`(`CompromiseResponseEndToEndTestCase`: 시험용 SMTP 서버(`tests.fake_smtp.FakeSmtp`)가 정확히 한 통을 받고 제목에 사건 id가 있으며 본문이 사용된 연결의 비밀을 필수 교체, granted되었지만 쓰지 않은 연결의 비밀을 권장 교체로 나누고, 합성 업스트림 자격증명·호출 토큰·SMTP 비밀번호가 이메일·`serve` 출력·감사 기록·알림·사건 파일 어디에도 없음을 확인) |
+| 연결 한 번으로 다양한 명령 실행 | `tools_server::one_connection_supports_multiple_api_operations_without_registration`, `native_agent_cli`(`request`·`exec`·`status`·`cancel` 왕복), `signer_e2e`(실제 `ssh`와 `exec` 도구 모두로 원격 명령 2개), `native_cli_e2e`(별도 프로세스의 관리 CLI·`serve`·에이전트 CLI로 HTTP 요청과 CLI 실행, 실제 `sshd`의 원격 명령), `zeropw-demo` |
+| 에이전트의 원본 키 추출 시도 | `tools_server`(자식 환경·인자·작업 디렉터리·출력, `any_vault_value_in_profile_is_refused_before_handle_or_child`, `ssh_cli_keeps_private_key_in_signer_and_fixes_local_ssh_options`), `native_admin_cli_more`의 저장 시점 거부(`cli_env_holding_the_credential_is_refused_at_save_time`, `cli_env_holding_any_vault_value_is_refused_at_save_time`, `only_reveal_prints_a_secret_value_across_the_command_surface`), `democli_parity`(`zeropw-democli steal`이 자격증명을 찾지 못함), `signer_e2e`(`exec` 자식이 본 파일·환경에 개인키 부재), `native_cli_e2e`의 에이전트·`serve` 출력과 상태 디렉터리 전체 검사, `vault_context::put_and_trusted_use_never_persists_plaintext` |
+| 응답·오류·로그를 통한 유출 시도 | `gateway`(`reflection_in_body_and_headers_is_blocked`, `lowercase_percent_encoded_reflection_is_blocked`, `credential_reflection_is_caught_via_latin1_bytes_not_utf8`, `redirects_are_not_followed_and_location_never_forwarded`), `relay_escape_parity`(오류·원장·감사 기록에 자격증명 부재), `runs::output_encodings_block_both_streams`, `tools_server::handle_output_is_blocked_and_revocation_denies_new_work` |
+| 다른 연결·대상 사용 시도 | `gateway`(`tampered_or_foreign_handles_are_unauthorized`, `handle_is_bound_to_its_connection_caller_and_grant`, `path_traversal_and_smuggling_rejected`, 해석 주소 검사 `hostname_resolving_to_loopback_is_refused_without_opt_in`·`metadata_answer_is_refused_even_for_private_opt_in`·`address_refusal_spends_no_grant_use_approval_or_credential`·`peer_check_catches_a_dns_resolved_self_reference`), `tools_server::proxy_tunnels_absolute_targets_and_self_reference_are_refused`, `signer`(`destination_binding`, `session_binding_and_reuse`), `signer_e2e::wrong_destination_host_key_is_refused` |
+| SSH 키 오용 시도 | `signer`(`arbitrary_data_never_signed`, `sign_without_bind_refused`, `forwarding_bind_refused`, `key_management_messages_refused`, `ssh_add_lists_key_but_cannot_sign_random_data_or_delete`) |
+| 미지원 CLI 실행 | `tools_server::original_cli_preflight_missing_profiles_and_programs_never_spawn`, `gateway::unsupported_auth_mode_and_unsafe_credential_fail_closed`, `runtime_parity_gaps`(실행 형식을 커널이 거부하는 프로그램은 실행되지 않음) |
+| 권한 만료·회수·전체 정지 | `policy`·`policy_oracle`, `gateway`(`global_stop_and_resume`, `stale_policy_version_on_handle_after_narrowing_change`, `widening_change_makes_grant_stale_until_regrant`), `signer::policy_checked_at_bind_and_sign_time`, `runs::revocation_targets_grant_and_global_stop_cancels_rest`, `tools_server::queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn`, `signer_e2e`(`revoked_grant_cannot_authenticate`, `exec_tool_after_revocation_is_denied_before_ssh_starts`), `native_cli_e2e`(별도 OS 프로세스의 `grant revoke`·`connection disable`·`stop-all`·`resume`이 떠 있는 `serve`에 반영되고, 실제 `sshd`로 원격 명령을 실행 중인 실행이 취소됨) |
+| 운영·복구 경계 우회 시도 | `vault_context`(`backup_restore_blocks_until_ack_and_recovery_rewraps`, `restore_reapplies_revocations_rotates_handle_key_and_never_reopens_approvals`, `kms_unwrap_rejects_other_master_key`, `recover_rotates_kms_revokes_grants_and_handles`), `native_admin_cli_more`(`restore_keeps_a_global_stop_and_restore_ack_does_not_lift_it`, `restore_refuses_an_archive_the_current_kms_cannot_open`), `tools_server::original_dispatch_shape_limits_are_enforced`(목록 밖 도구 거부) |
+| 침입 시 자동 봉쇄와 노출 판정 | `response`(범위별 봉쇄와 범위 밖 호출 주체 보존, 확대·멱등성, 노출 등급 판정과 사건 파일의 금고 값 부재, 강한 신호 단독 봉쇄, 약한 신호 누적과 임계, 열거·속도 급증 1회 가산, 범위 판정과 자동 확대, 동시 임계 도달 시 사건 하나), `native_response_cli`(별도 프로세스에서 선언한 사건이 떠 있는 `serve`의 실행을 취소, `resume` 거부, `incident close` 재인증), `native_cli_e2e::test_auto_lockdown_exposure_assessment_email_and_recovery`(게이트웨이 URL과 호출 토큰만 가진 별도 프로세스 공격자가 미제공 도구를 두 번 불러 자동 봉쇄되고, 새 호출 주체로 재개), `zeropw-demo`(침입 시뮬레이션 단계) |
+| 교체 안내 이메일 | `response`(§6.2 절 순서, 필수·권장 분리, 값·핸들·토큰 부재, 미설정 `not_configured`, 발송 실패 시 `pending`과 재시도, 설정 파일 헤더·SMTP 명령 주입 거부, 렌더링 결과에 값이 있으면 발송 차단), `native_response_cli`(`notify-test`, 떠 있는 `serve`의 재시도와 범위 확대 시 재발송), `native_cli_e2e`(시험용 SMTP 서버가 정확히 한 통을 받고, 업스트림 자격증명·호출 토큰·SMTP 비밀번호가 이메일·`serve` 출력·감사 기록·사건 파일 어디에도 없음) |
 
 ## 9. 남아 있는 경계와 한계
 
 - 같은 개발 호스트에서 신뢰 프로세스와 실행 환경을 나누는 것은 디렉터리·소켓 권한(0700/0600), 상태 디렉터리 밖 실행 디렉터리, 깨끗한 환경변수뿐이다. 같은 OS 사용자로 도는 자식은 상태 디렉터리 경로를 알면 읽을 수 있다. 이는 제품 문서가 말한 격리가 아니다. 배포 시에는 신뢰 프로세스와 실행 환경을 다른 신원·호스트·네트워크에 둔다.
 - `LocalFileKms`는 파일 하나의 마스터 키다. 관리형 KMS로 교체해야 하며 `Kms` 프로토콜이 그 자리다.
-- 순수 Python 암호 구현은 상수 시간이 아니고 메모리를 지우지 못한다. 정확성은 RFC 벡터와 OpenSSH 상호운용으로 확인했지만 부채널 저항은 없다.
+- 암호 연산은 감사된 crate(`chacha20poly1305`, `ed25519-dalek`, `x25519-dalek`, `scrypt`)를 쓰고, 비밀·MAC 비교는 상수 시간이다. 비밀 바이트는 `SecretBytes`가 해제할 때 지우지만, 운영체제 스왑·코어 덤프·복사된 버퍼까지 막지는 않는다.
 - Ed25519 검증은 RFC 8032 표준식을 따르며 작은 위수의 공개키를 거부하지 않는다. 서명기는 연결에 설정된 호스트 키로만 검증하므로 공격자가 고른 키로 검증하는 경로는 없다.
 - 반사 검사는 알려진 인코딩만 찾는다. 임의로 변형·분할·암호화된 반사까지 보장하지 않으므로, 제품 문서대로 인증 정보를 반사하는 서비스 기능은 지원 목록에서 제외해야 한다.
 - 실행 출력 검사도 원문, base64, 16진수, URL 인코딩만 찾는다. 자식이 핸들을 뒤집거나 나눠 출력하면 실행은 `completed`로 끝나고, 에이전트는 `status` 출력에서 유효한 핸들을 다시 조립할 수 있다. 핸들은 원본 비밀이 아니지만 만료(기본 900초), 회수, 정책 버전 변경 전까지 허용 범위 안에서 쓰일 수 있다.
@@ -148,7 +154,7 @@ session-bind를 보내지 않는 클라이언트(OpenSSH 8.9 미만, 대부분�
 - 같은 프로세스에서 `Policy`로 호출 주체·연결을 비활성화하거나 연결 범위를 넓히면, 회수 알림에 대상 식별자가 없어 해당 대상만이 아니라 진행 중인 모든 실행을 취소하고 모든 서명기 소켓을 닫는다. 안전 쪽으로 과하게 취소하는 선택이며 취소 사유는 감사 기록에 남는다. 관리 CLI에서 온 변경은 `serve`가 실행·소켓별로 권한을 다시 확인하므로 권한이 사라진 것만 취소한다.
 - 실행 기록과 게이트웨이의 요청 원장은 신뢰 프로세스 메모리·상태 파일에 있고, 프로세스가 재시작되면 진행 중이던 실행은 추적되지 않는다.
 - 스트리밍 응답 통과, 서비스별 실제 CLI 프로필, 관리 UI, 관리형 저장소, 공급자별 자동 교체, IPv6 수신은 구현하지 않았다.
-- 각 서비스·CLI의 실제 지원 여부는 이 프로토타입으로 후보를 시험한 뒤 정한다. 여기서 검증한 CLI는 시험용 `examples/democli.py`와 OpenSSH `ssh`다.
+- 각 서비스·CLI의 실제 지원 여부는 후보를 이 구현으로 시험한 뒤 정한다. 여기서 검증한 CLI는 시험용 `zeropw-democli`와 OpenSSH `ssh`다.
 - 침입 탐지기의 상태는 `serve` 프로세스 메모리에만 있다. `serve`가 재시작되면 슬라이딩 창의 누적 점수와 "처음 사용" 집합이 초기화된다 — 강한 신호는 재시작 뒤에도 즉시 걸리지만, 약한 점수와 열거 이력은 재시작 전 것이 이어지지 않는다.
 - 핸들 키는 하나뿐이다. `runtime`·`all` 범위의 봉쇄가 하는 핸들 키 교체는 그 범위 밖 다른 실행 환경에서 발급된 핸들까지 함께 무효로 만든다.
 - 만료된 핸들 신호(`expired_handle`)는 호출 주체를 알 수 없어 전역 버킷에 쌓인다. 15분(기본 핸들 만료)을 넘겨 오래 실행되는 `exec`의 CLI가 만료된 핸들로 여러 번 재시도하면 이 전역 임계에 닿을 수 있고, 그러면 범위 `principal`로 그 순간의 모든 활성 호출 주체가 한꺼번에 비활성화된다.
@@ -160,20 +166,19 @@ session-bind를 보내지 않는 클라이언트(OpenSSH 8.9 미만, 대부분�
 
 ## 10. 실행 예시
 
-모든 명령은 저장소 루트에서 실행한다. `zeropw.fake_upstream`에는 명령행 진입점이 없고 127.0.0.1의 임시 포트에만 뜬다. 아래 첫 줄은 합성 토큰 `synthetic-token-1`만 받는 시험용 외부 API를 백그라운드로 띄우고 `http://127.0.0.1:<포트>`를 출력한다. 포트는 실행마다 달라지므로 출력된 url을 `--target`에 준다. 이 프로세스는 한 시간 뒤 스스로 끝난다.
+모든 명령은 저장소 루트에서 `cargo build --manifest-path rust/Cargo.toml --bins` 뒤에 실행하며, `rust/target/debug`가 `PATH`에 있다고 가정한다. 합성 토큰 `synthetic-token-1`만 받는 시험용 외부 API를 127.0.0.1에 준비하고 그 url을 `--target`에 준다(시험용 서버 `zeropw::fake_upstream::FakeUpstream`은 라이브러리로만 제공되며, 전체 흐름은 `zeropw-demo`가 내장 시험 서버로 한 번에 보여 준다).
 
 관리자 쪽:
 
 ```sh
-python3.12 -c 'import time; from zeropw.fake_upstream import FakeUpstream; f = FakeUpstream("synthetic-token-1").start(); print(f.url, flush=True); time.sleep(3600)' &
 export ZEROPW_ADMIN_PASSPHRASE='admin-passphrase-1' ZEROPW_RECOVERY_PASSPHRASE='recovery-passphrase-1'
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw init
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw project create demo
-printf 'synthetic-token-1' | python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw secret put --id gh --kind api_key --project demo --environment dev --stdin
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw connection create-http --id gh --project demo --environment dev --service fake --secret-id gh --target '<시험용 외부 API가 출력한 url>' --auth bearer --methods GET,POST --path-prefixes /repos,/me --cli-program "$PWD/examples/democli.py"
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-1
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw grant create --principal agent-1 --connection gh --ttl 1h --max-uses 100
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw serve
+zeropw-admin --state-dir /tmp/zpw init
+zeropw-admin --state-dir /tmp/zpw project create demo
+printf 'synthetic-token-1' | zeropw-admin --state-dir /tmp/zpw secret put --id gh --kind api_key --project demo --environment dev --stdin
+zeropw-admin --state-dir /tmp/zpw connection create-http --id gh --project demo --environment dev --service fake --secret-id gh --target '<시험용 외부 API가 출력한 url>' --auth bearer --methods GET,POST --path-prefixes /repos,/me --cli-program "$PWD/rust/target/debug/zeropw-democli"
+zeropw-admin --state-dir /tmp/zpw principal create --id agent-1
+zeropw-admin --state-dir /tmp/zpw grant create --principal agent-1 --connection gh --ttl 1h --max-uses 100
+zeropw-admin --state-dir /tmp/zpw serve
 ```
 
 `principal create`는 호출 토큰을 `token` 필드로 한 번만 출력한다. `serve`는 첫 줄에 `url`이 든 JSON을 출력하고 SIGINT·SIGTERM에 종료한다. `--cli-program`에는 절대 경로를 준다. 이 예시의 대상은 127.0.0.1 IP 주소라 그대로 동작한다. 호스트 이름 대상이 사설 주소로 해석되어야 하는 내부 서비스라면 `connection create-http`에 `--allow-private-network`를 더한다. `--cli-env`에는 비밀이 아닌 값만 주며, 자격증명과 일치하면 거부된다.
@@ -181,7 +186,7 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw serve
 침해 대응(§7) 관련 예시. 실행 환경마다 다른 `--runtime`으로 호출 주체를 만든다:
 
 ```sh
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-2 --runtime box-1
+zeropw-admin --state-dir /tmp/zpw principal create --id agent-2 --runtime box-1
 ```
 
 자동 봉쇄가 교체 안내 이메일을 보내게 하려면 관리자가 `<상태 디렉터리>/notify.json`(0600, 현재 사용자 소유)과 비밀번호 파일(0600)을 직접 만든다 — 이 자격증명은 금고 비밀이나 업무용 연결로 등록하지 않는다:
@@ -197,9 +202,9 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw principal create --id agent-
 사건을 수동으로 선언·확인·닫는 예시:
 
 ```sh
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident declare --scope principal --principal agent-2 --reason "토큰 유출 의심"
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident show --id <위 명령이 출력한 id>
-python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident close --id <id>
+zeropw-admin --state-dir /tmp/zpw incident declare --scope principal --principal agent-2 --reason "토큰 유출 의심"
+zeropw-admin --state-dir /tmp/zpw incident show --id <위 명령이 출력한 id>
+zeropw-admin --state-dir /tmp/zpw incident close --id <id>
 ```
 
 `incident close`(그리고 `--scope all`인 `incident declare`)는 `ZEROPW_ADMIN_PASSPHRASE`로 관리자 패스프레이즈 재인증을 한다. 자동 탐지기가 스스로 여는 사건은 이 명령 없이 `serve` 안에서 만들어지며, `incident list`·`incident show`로 같은 방식으로 조회한다.
@@ -208,16 +213,16 @@ python3.12 -m zeropw.admin_cli --state-dir /tmp/zpw incident close --id <id>
 
 ```sh
 export ZEROPW_GATEWAY_URL='<serve가 출력한 url>' ZEROPW_CALLER_TOKEN='<principal create가 출력한 token>'
-python3.12 -m zeropw.agent_cli list-connections
-python3.12 -m zeropw.agent_cli request --connection gh --method GET --path /repos
-python3.12 -m zeropw.agent_cli exec --connection gh -- list-repos
-python3.12 -m zeropw.agent_cli status --run '<exec가 출력한 run_id>'
+zeropw-agent list-connections
+zeropw-agent request --connection gh --method GET --path /repos
+zeropw-agent exec --connection gh -- list-repos
+zeropw-agent status --run '<exec가 출력한 run_id>'
 ```
 
 사건이 열려 있는 동안(자동이든 수동이든) 같은 호출 주체의 모든 호출이 거부된다. 에이전트 쪽에서는 다음처럼 보인다(종료 코드 1):
 
 ```sh
-$ python3.12 -m zeropw.agent_cli list-connections
+$ zeropw-agent list-connections
 {
   "error": "AuthFailed",
   "reason": "principal_disabled",
@@ -225,36 +230,36 @@ $ python3.12 -m zeropw.agent_cli list-connections
 }
 ```
 
-위 흐름은 2026-09-14에 이 절의 명령을 그대로 쓰고 자리표시자와 상태 디렉터리 경로만 실제 값으로 바꿔 실행해 확인했고, 같은 흐름을 `tests/test_cli_e2e.py`가 별도 프로세스로 자동 시험한다. 전체 흐름을 한 번에 보려면 `python3.12 -m zeropw.demo`를 실행한다.
+같은 흐름을 `rust/tests/native_cli_e2e.rs`가 별도 프로세스로 자동 시험한다. 전체 흐름을 한 번에 보려면 `zeropw-demo`를 실행한다.
 
-## 10. 팀 공유 (docs/team-sync.md)
+## 11. 팀 공유 (docs/team-sync.md)
 
-작성일 2026-09-16. [팀 공유](team-sync.md) 명세의 4단계(§13) 모두 코드로 옮겼다. 이 절도 §1의 원칙 그대로 시험 통과 범위이며 Opus 리뷰 통과나 배포 준비를 뜻하지 않는다.
+[팀 공유](team-sync.md) 명세의 4단계(§13)를 모두 구현했다. 이 절도 §1의 원칙대로 시험 통과 범위만 적으며, 배포 준비를 뜻하지 않는다.
 
-### 10.1 구현한 것과 시험
+### 11.1 구현한 것과 시험
 
-| 단계 | 구현 | 시험 |
+| 단계 | 구현 (`rust/src/`) | 시험 (`rust/tests/`, 단위 시험은 각 모듈) |
 | --- | --- | --- |
-| 1 (§13 단계 1): 키·봉투·커밋·접기, 네트워크 없음 | `zeropw/crypto/x25519.py`, `zeropw/team/identity.py`, `zeropw/team/envelope.py`, `zeropw/team/commit.py`, `zeropw/team/fold.py` | `tests/test_team_envelope.py`, `tests/test_team_identity.py`, `tests/test_team_commit.py`, `tests/test_team_fold.py` |
-| 2 (§13 단계 2): 전송과 동기화 | `zeropw/team/transport.py`(인프로세스·TCP), `zeropw/team/sync.py`의 세션·VECTOR/COMMIT/FACT/PEERS 루프, `serve --team-listen` | `tests/test_team_transport.py`, `tests/test_team_sync.py` |
-| 3 (§13 단계 3): 초대·가입·제거, 긴급 사실, CLI | `zeropw/team/membership.py`, `zeropw/team/sync.py`의 `Fact`/`facts.jsonl`, `admin_cli.py`의 `team *`와 공유 환경의 `connection *`·`secret *`·`rotation *` | `tests/test_team_membership.py`, `tests/test_team_facts.py`, `tests/test_team_snapshot.py`(§7.3 압축), `tests/test_admin_cli.py::TeamCliTestCase` |
-| 4 (§13 단계 4): 사건 공유와 종단 시험 | `zeropw/team/sync.py`의 `send_incident`/`send_incident_for_all_envs`(`on_incident_open`)·`INCIDENT`/`INCIDENT_ACK`·`incident_outbox.jsonl`, `admin_cli.py`의 `team incidents`, §7.2 `team_op_overridden` 알림(`zeropw/team/fold.py`의 `overridden` 감지 + `sync.py`의 알림) | `tests/test_team_sync.py::IncidentSharingTestCase`(정제·서명·admin 전용 전달·ack 큐잉·재시도·교체 표시), `tests/test_team_sync.py::OverrideAlertTestCase`(진 쪽 1회 알림, 이긴 쪽 알림 없음), `tests/test_team_e2e.py`(별도 OS 프로세스 3개, §1 흐름 전체) |
+| 1 (§13 단계 1): 키·봉투·커밋·접기, 네트워크 없음 | `crypto/x25519.rs`, `team/identity.rs`, `team/envelope.rs`, `team/commit.rs`, `team/fold.rs` | `team_oracle`(프로토타입이 쓴 기기 기록·DEK 봉투·서명된 커밋·접은 문서와 바이트 일치), `team_fold`, `team_envelope_parity_edges`, `team_snapshot_version_order_parity`, `team::commit`·`team::fold` 단위 시험 |
+| 2 (§13 단계 2): 전송과 동기화 | `team/transport.rs`(인프로세스·TCP), `team/sync.rs`의 세션·VECTOR/COMMIT/FACT/PEERS 루프, `serve --team-listen` | `team_transport`, `team_parity_gaps`, `team_remaining_contract`, `team::sync` 단위 시험 |
+| 3 (§13 단계 3): 초대·가입·제거, 긴급 사실, CLI | `team/membership.rs`, `team/sync.rs`의 `Fact`/`facts.jsonl`, `admin_cli.rs`의 `team *`와 공유 환경의 `connection *`·`secret *`·`rotation *` | `team_membership_sync`, `astra_team_fact_catchup`, `astra_team_round2`~`4`, `native_team_cli` |
+| 4 (§13 단계 4): 사건 공유와 종단 시험 | `team/sync.rs`의 `send_incident`/`send_incident_for_all_envs`(`on_incident_open`)·`INCIDENT`/`INCIDENT_ACK`·`incident_outbox.jsonl`, `admin_cli.rs`의 `team incidents`, §7.2 `team_op_overridden` 알림(`team/fold.rs`의 감지 + `team/sync.rs`의 알림) | `team::sync` 단위 시험(정제·서명·admin 전용 전달·ack 큐잉·재시도), `astra_team_review`, `native_team_e2e`(별도 OS 프로세스 3개, §1 흐름 전체) |
 
-`team_op_overridden` 알림은 명세 §7.2에 있었으나 3단계까지 구현이 없었던 항목이라 이번에 `fold.py`(같은 대상에 대한 연속된 성공 연산 사이의 작성자 전환 감지)와 `sync.py`(이 기기가 진 경우만, 재접기마다 중복 없이 1회) 양쪽에 추가했다.
+`team_op_overridden` 알림은 같은 대상에 대한 연속된 성공 연산 사이의 작성자 전환을 `team/fold.rs`가 감지하고, `team/sync.rs`가 이 기기가 진 경우에만 재접기마다 중복 없이 한 번 알린다.
 
-### 10.2 사건 공유 (§9)
+### 11.2 사건 공유 (§9)
 
 `send_incident`는 요약을 `INCIDENT_ALLOWED_KEYS`(문자열·정수·문자열 목록만, 길이 제한, 제어 문자 없음)로 정제하고 `Fact`(종류 `incident`)로 서명해 `facts.jsonl`에 다른 사실처럼 남긴다. `incident_id`는 그대로 `team/<env-id>/incidents/<지문>-<사건 ID>.json` 경로의 일부가 되므로, 다른 필드보다 좁게 `version_id`·세대 ID와 같은 16진수 토큰 형식만 받는다(그 밖의 형식은 `sanitize_incident_summary`가 통째로 거부한다) — 자유 문자열을 그대로 받으면 `..`나 `/`가 든 값으로 경로를 벗어나는 구멍이 열리기 때문이다. 전달은 그 순간 세션이 열려 있는 admin 팀원에게만 하는 단발 메시지(`INCIDENT`)이며, 일반 `FACT`처럼 전체 메시로 재중계하지 않는다(admin에게만 전파한다는 §3.1/§9 그대로). 세션이 열려 있어도 유실될 수 있으므로 admin 하나가 `INCIDENT_ACK`(사실 해시)를 보낼 때까지 `team/<env-id>/incident_outbox.jsonl`에 남아 `poll()`이 지수 백오프로 재시도한다. 받은 admin 노드는 `team/<env-id>/incidents/<지문>-<사건 ID>.json`에 두고, 요약의 `secret_ids_mandatory`/`secret_ids_recommended`를 `team/<env-id>/rotation_flags.json`에 `rotation_required`/`rotation_recommended`로 남기며 `team_incident_received` 알림을 남긴다. admin이 아닌 노드는 조용히 무시한다(ack도 저장도 하지 않는다).
 
-`zeropw/incident.py`의 `open_incident`(침해 대응 기능)가 사건을 열 때 `ctx.team.send_incident_for_all_envs(summary_by_env)`를 부르는 배선은 이 저장소에 아직 없다. 그 기능은 `feature/compromise-response-plan` 브랜치에 있고 이 작업의 바탕인 `main`에는 없기 때문이다. 그 브랜치가 병합되면 `open_incident`에서 `getattr(ctx, "team", None)`이 있을 때 그 호출을 추가하면 된다. `send_incident_for_all_envs`는 그 호출부를 위해 미리 만든 훅이며 지금은 시험 말고는 호출하는 곳이 없다.
+`incident.rs`의 `open_incident`가 사건을 열 때 `send_incident_for_all_envs`를 부르는 배선은 아직 없다. `send_incident_for_all_envs`(`on_incident_open`)는 그 호출부를 위해 만든 훅이며, 지금은 시험 말고는 호출하는 곳이 없다.
 
 `team incidents --env P/E`는 받은 사건 요약(값 없음)과 `rotation_flags.json`을 함께 보여 준다.
 
-### 10.3 남은 한계
+### 11.3 남은 한계
 
 - **스냅샷 전송 없음.** §7.3의 압축(`team compact`)은 노드 로컬이며, 압축 뒤 처음 붙는 노드나 오래 떨어져 있던 노드에 스냅샷을 전송하는 메시지는 명세에도 이 구현에도 없다(§7.3 "스냅샷 전송 메시지는 이 명세에 없으며 후속 범위다"). 그런 노드는 지워진 커밋을 받지 못한다.
 - **LAN 멀티캐스트 발견 없음.** §6.4의 UDP 멀티캐스트 신호(`239.192.47.42:47420`)는 구현하지 않았다. 주소는 초대의 `--address`와 `team peers --add`로만 전달되며, `PEERS` 메시지로 이미 연결된 팀원 사이에서만 더 퍼진다.
-- **사건 발신 훅 배선 지연.** 위 §10.2대로 `zeropw/incident.py`가 병합되기 전까지 `send_incident_for_all_envs`는 실제 침해 대응 흐름에서 호출되지 않는다.
+- **사건 발신 훅 미배선.** 위 §11.2대로 `send_incident_for_all_envs`는 실제 침해 대응 흐름(`open_incident`)에서 아직 호출되지 않는다.
 - **LAN·VPN 안 직접 연결만.** NAT 통과, 공개 인터넷, 중계 서버는 없다(§11).
 - **모든 팀원 노드가 환경 DEK를 받는다.** admin/user 구분은 정책적 통제이지 암호학적 통제가 아니다(§10). user 역할 팀원도 자기 기기에서 값을 꺼낼 수 있다.
 - **`INCIDENT`는 중계하지 않는다.** 명세 §6.3의 메시지 표가 `INCIDENT`를 "노드 → admin 노드"로만 적어, 이 구현은 admin과 직접 세션이 없는 노드의 사건 요약을 전달하지 못한다(재시도 큐는 세션이 나중에 열리는 경우만 돕는다). 팀 규모가 작고 전체 연결 그래프를 가정하는 §6.4의 전제 안에서는 대개 문제가 되지 않는다.

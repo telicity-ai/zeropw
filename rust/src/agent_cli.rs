@@ -427,14 +427,43 @@ fn route(
         tunnel: None,
         proxy_authorization: None,
     };
-    let proxies = env_proxies();
+    let environment_proxies = env_proxies();
+    #[cfg(target_os = "macos")]
+    let system_proxies = environment_proxies
+        .is_empty()
+        .then(|| crate::mac_proxies::load().unwrap_or_default());
+    #[cfg(target_os = "macos")]
+    let proxies = system_proxies
+        .as_ref()
+        .map_or(&environment_proxies, |settings| &settings.proxies);
+    #[cfg(not(target_os = "macos"))]
+    let proxies = &environment_proxies;
     let Some(proxy) = proxies.get(if tls { "https" } else { "http" }) else {
         return Ok(direct());
     };
     let (scheme, user, password, hostport) = parse_proxy(proxy).map_err(gateway_unreachable)?;
     let orig_type = if tls { "https" } else { "http" };
     let proxy_type = scheme.unwrap_or_else(|| orig_type.to_owned());
-    if host.is_some_and(|h| !h.is_empty() && proxy_bypass(h, &proxies)) {
+    let bypass = if let Some(host) = host.filter(|host| !host.is_empty()) {
+        #[cfg(target_os = "macos")]
+        if environment_proxies.is_empty() {
+            // `urllib.proxy_bypass` asks `_scproxy` again rather than reusing
+            // the dictionary returned by `getproxies()`.
+            let settings = crate::mac_proxies::load().ok_or_else(|| {
+                gateway_unreachable("SystemConfiguration proxy settings unavailable")
+            })?;
+            crate::mac_proxies::proxy_bypass(host, &settings)
+        } else {
+            proxy_bypass(host, &environment_proxies)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            proxy_bypass(host, &environment_proxies)
+        }
+    } else {
+        false
+    };
+    if bypass {
         return Ok(direct());
     }
     let proxy_authorization = match (user, password) {
@@ -570,14 +599,17 @@ pub fn call_tool(base_url: &str, token: &str, tool: &str, payload: &Value) -> (u
         None => connect_host.clone(),
     };
     let body = pyjson::dumps(payload, DumpOptions::plain()).unwrap_or_else(|_| "{}".to_owned());
-    // urllib sends the URL's own authority as `Host`, and the proxy
-    // credentials only to an HTTP proxy (never through a CONNECT tunnel).
+    // `urllib`'s request processors add Content-Length, Host and User-Agent
+    // as unredirected headers before the Request's three explicit headers.
+    // `http.client.putrequest` emits Accept-Encoding first; `do_open` appends
+    // Connection last.  Keep that wire order as well as the values: header
+    // order and duplicates are observable to an HTTP peer.
     let proxy_header = match (&route.proxy_authorization, &route.tunnel) {
         (Some(value), None) => format!("Proxy-Authorization: {value}\r\n"),
         _ => String::new(),
     };
     let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {host}\r\n{proxy_header}Authorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {} HTTP/1.1\r\nAccept-Encoding: identity\r\nContent-Length: {}\r\nHost: {host}\r\nUser-Agent: Python-urllib/3.12\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\n{proxy_header}Connection: close\r\n\r\n{body}",
         route.selector,
         body.len()
     );

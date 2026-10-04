@@ -101,7 +101,7 @@ impl<'a> Projects<'a> {
     fn load(&self) -> Result<Map<String, Value>, Error> {
         match self.load_raw()? {
             LoadedDoc::Object(map) => Ok(map),
-            LoadedDoc::NonObject(_) => Err(state_corrupt()),
+            LoadedDoc::NonObject(_) => Err(escaped("AttributeError")),
         }
     }
 
@@ -147,7 +147,7 @@ impl<'a> Projects<'a> {
                 if s.contains(name.as_str()) {
                     return Err(Error::invalid_input("project_exists"));
                 }
-                return Err(state_corrupt());
+                return Err(escaped("TypeError"));
             }
             LoadedDoc::NonObject(Value::Array(items)) => {
                 let contained = items.iter().any(|item| match item {
@@ -157,13 +157,13 @@ impl<'a> Projects<'a> {
                 if contained {
                     return Err(Error::invalid_input("project_exists"));
                 }
-                return Err(state_corrupt());
+                return Err(escaped("TypeError"));
             }
             // `bool`/number documents: Python's `in` itself raises
             // `TypeError` ("argument of type 'bool'/'int' is not
             // iterable"), unconditionally -- no substring/membership test
             // is even attempted.
-            LoadedDoc::NonObject(_) => return Err(state_corrupt()),
+            LoadedDoc::NonObject(_) => return Err(escaped("TypeError")),
         };
         if doc.contains_key(&name) {
             return Err(Error::invalid_input("project_exists"));
@@ -198,11 +198,34 @@ impl<'a> Projects<'a> {
 
     /// `Projects.require_environment`.
     pub fn require_environment(&self, project: &str, environment: &str) -> Result<(), Error> {
-        let entry = self.get(project)?;
+        self.require_environment_value(&json!(project), &json!(environment))
+    }
+
+    /// `Projects.require_environment` for stored JSON arguments (a vault
+    /// entry's raw `project`/`environment`). `doc.get(project)` finds only a
+    /// `str` key, raises `TypeError` for an unhashable list/dict, and returns
+    /// `None` (`project_not_found`) for any other value; `environment not in
+    /// entry.environments` is tuple membership with Python `==`.
+    pub fn require_environment_value(
+        &self,
+        project: &Value,
+        environment: &Value,
+    ) -> Result<(), Error> {
+        let entry = match project {
+            Value::String(name) => self.get(name)?,
+            Value::Array(_) | Value::Object(_) => {
+                self.load()?;
+                return Err(escaped("TypeError"));
+            }
+            _ => {
+                self.load()?;
+                return Err(Error::not_found("project_not_found"));
+            }
+        };
         if !entry
             .environments
             .iter()
-            .any(|e| e == &Value::String(environment.to_owned()))
+            .any(|e| crate::vault::python_eq(e, environment))
         {
             return Err(Error::not_found("environment_not_found"));
         }
@@ -221,10 +244,12 @@ impl<'a> Projects<'a> {
     }
 }
 
-/// `state_corrupt` for a malformed `projects.json` document/entry, shared by
-/// [`Projects::load`], [`Projects::get`], and [`project_from_entry`].
-fn state_corrupt() -> Error {
-    Error::state("state_corrupt").with_detail(DOC)
+/// A built-in exception `projects.py` lets escape on a malformed
+/// `projects.json` (PORTING.md §3.5): `StateError("state_corrupt")` carrying
+/// the Python exception class name, which is what the administrator CLI's
+/// handler prints for it.
+fn escaped(class: &'static str) -> Error {
+    Error::state("state_corrupt").with_detail(class)
 }
 
 /// Python truthiness (`bool(value)`) for a JSON-decoded value, as
@@ -258,13 +283,23 @@ fn is_falsy(value: &Value) -> bool {
 /// including for native admin listing. Missing/non-iterable fields use the
 /// existing fail-closed `state_corrupt` boundary (PORTING.md §3.5).
 fn project_from_entry(name: &str, entry: &Value) -> Result<Project, Error> {
-    let environments = match entry.get("environments").ok_or_else(state_corrupt)? {
+    // `entry["environments"]`: a non-dict entry cannot be subscripted (`TypeError`).
+    let Value::Object(entry) = entry else {
+        return Err(escaped("TypeError"));
+    };
+    let environments = match entry
+        .get("environments")
+        .ok_or_else(|| escaped("KeyError"))?
+    {
         Value::Array(items) => items.clone(),
         Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
         Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
-        _ => return Err(state_corrupt()),
+        _ => return Err(escaped("TypeError")),
     };
-    let created_at = entry.get("created_at").ok_or_else(state_corrupt)?.clone();
+    let created_at = entry
+        .get("created_at")
+        .ok_or_else(|| escaped("KeyError"))?
+        .clone();
     Ok(Project {
         name: name.to_string(),
         environments,
@@ -552,223 +587,35 @@ mod tests {
     }
 }
 
-/// Differential tests against the CPython oracle.
+/// Project-name validation against the prototype's
+/// `NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")` matched with
+/// `re.match`, whose `$` also matches before one trailing newline.
 #[cfg(test)]
 mod oracle_tests {
     use super::*;
-    use crate::oracle;
 
-    // A-3: table-tests `NAME_RE.match(...)` (the exact regex source, run
-    // through CPython) against `matches_name_re` for every case the
-    // reviewer flagged, plus the 64/65-char boundary with and without a
-    // trailing newline.
+    // A-3: every case the reviewer flagged, plus the 64/65-char boundary with
+    // and without a trailing newline.
     #[test]
-    fn validate_name_matches_python_name_re_table() {
+    fn validate_name_matches_the_name_re_table() {
         let name64 = "a".repeat(64);
         let name65 = "a".repeat(65);
-        let cases: Vec<String> = vec![
-            "abc".to_string(),
-            "abc\n".to_string(),
-            "abc\n\n".to_string(),
-            "\nabc".to_string(),
-            "a\nb".to_string(),
-            "\n".to_string(),
-            "".to_string(),
-            name64.clone(),
-            format!("{name64}\n"),
-            format!("{name64}\n\n"),
-            name65.clone(),
-            format!("{name65}\n"),
+        let cases: Vec<(String, bool)> = vec![
+            ("abc".to_string(), true),
+            ("abc\n".to_string(), true),
+            ("abc\n\n".to_string(), false),
+            ("\nabc".to_string(), false),
+            ("a\nb".to_string(), false),
+            ("\n".to_string(), false),
+            ("".to_string(), false),
+            (name64.clone(), true),
+            (format!("{name64}\n"), true),
+            (format!("{name64}\n\n"), false),
+            (name65.clone(), false),
+            (format!("{name65}\n"), false),
         ];
-        let script = format!(
-            r#"
-import re
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{{0,63}}$")
-cases = {cases:?}
-for c in cases:
-    print("MATCH" if NAME_RE.match(c) else "NOMATCH")
-"#
-        );
-        let out = oracle::python(&script);
-        let want: Vec<&str> = out.lines().collect();
-        assert_eq!(want.len(), cases.len());
-        for (case, expected) in cases.iter().zip(want.iter()) {
-            let got = if matches_name_re(case) {
-                "MATCH"
-            } else {
-                "NOMATCH"
-            };
-            assert_eq!(got, *expected, "mismatch for case {case:?}");
-        }
-    }
-
-    // A-R2-6: confirms the actual Python behaviour this row's reasoning and
-    // the unit tests above rely on, against a real `python3.12` run of
-    // `zeropw.projects.Projects` (not a re-derivation of the Python
-    // source): (a) a `null` entry is `NotFound`, same as a missing key; (c)
-    // a truthy non-dict document makes `get`/`list`/`create` all raise, and
-    // `create` never writes; a falsy non-dict document behaves like `{}`;
-    // (b) Python's `Project.environments`/`.created_at` accept values this
-    // port rejects as `state_corrupt` (int elements, a string iterated into
-    // characters, `None`), with no exception and no observable effect on
-    // this crate's one in-scope caller (`require_environment`'s membership
-    // test).
-    #[test]
-    fn python_oracle_confirms_load_get_create_edge_cases() {
-        let script = r#"
-import tempfile, os
-from zeropw.projects import Projects
-from zeropw.store import StateDir
-
-def probe(doc):
-    """(a)/(c): get/list/create against a whole-document edge case, keyed
-    on "acme" so a null-valued (but present) "acme" entry and a genuinely
-    absent one are both exercised the same way `create("acme", ["dev"])`
-    would collide with."""
-    with tempfile.TemporaryDirectory() as d:
-        state = StateDir(os.path.join(d, "state"))
-        state.create()
-        state.write_json("projects.json", doc)
-        projects = Projects(state)
-
-        try:
-            projects.get("acme")
-            get_result = "OK"
-        except Exception as exc:
-            get_result = type(exc).__name__
-
-        try:
-            projects.list()
-            list_result = "OK"
-        except Exception as exc:
-            list_result = type(exc).__name__
-
-        try:
-            projects.create("acme", ["dev"])
-            create_result = "OK"
-        except Exception as exc:
-            create_result = type(exc).__name__
-
-        on_disk = state.read_json("projects.json", None)
-        unchanged = on_disk == doc
-        print(get_result, "|", list_result, "|", create_result, "|", "unchanged" if unchanged else "changed")
-
-def probe_get(entry):
-    """(b): what `get()` returns for one already-present, loosely-typed
-    "acme" entry (no `create` call, since `create` would just hit
-    `project_exists` for a key that's already there)."""
-    with tempfile.TemporaryDirectory() as d:
-        state = StateDir(os.path.join(d, "state"))
-        state.create()
-        state.write_json("projects.json", {"acme": entry})
-        projects = Projects(state)
-        p = projects.get("acme")
-        print("env=" + repr(list(p.environments)) + " created_at=" + repr(p.created_at))
-
-def probe_named(doc, name):
-    """A-R7-1: like `probe`, but with `name` chosen so `if name in doc`
-    (the very first thing `create` does after acquiring the lock) succeeds
-    as a substring/membership test on a truthy non-dict document -- the
-    case the original `probe(doc)` (fixed at name="acme") never exercised
-    because "acme" was never contained in any of its truthy-non-dict
-    fixtures."""
-    with tempfile.TemporaryDirectory() as d:
-        state = StateDir(os.path.join(d, "state"))
-        state.create()
-        state.write_json("projects.json", doc)
-        projects = Projects(state)
-        try:
-            projects.create(name, ["dev"])
-            create_result = "OK"
-        except Exception as exc:
-            create_result = type(exc).__name__ + (":" + str(exc) if hasattr(exc, "detail") else "")
-        on_disk = state.read_json("projects.json", None)
-        unchanged = on_disk == doc
-        print(create_result, "|", "unchanged" if unchanged else "changed")
-
-# (a) null entry -> get() is NotFound, same as a missing key.
-probe({"acme": None})
-# (c) truthy non-dict documents -> get/list/create all raise, file untouched.
-probe([1])
-probe("abc")
-probe(True)
-probe(7)
-# (c) falsy non-dict documents -> treated as {}.
-probe(None)
-probe(0)
-probe("")
-probe([])
-probe(False)
-# (b) loosely-typed environments/created_at -> Project construction succeeds
-# in Python with no exception at all.
-probe_get({"environments": [1, 2], "created_at": "2024-01-01T00:00:00Z"})
-probe_get({"environments": "dev", "created_at": "2024-01-01T00:00:00Z"})
-probe_get({"environments": ["dev"], "created_at": None})
-# A-R7-1: name IS a substring (str doc) / IS an element (list doc) ->
-# create raises the *documented* InvalidInput("project_exists"), not a
-# builtin exception, and the file is left untouched either way.
-probe_named("abc", "a")
-probe_named("dev-prod-a", "prod")
-probe_named(["acme"], "acme")
-probe_named(["a", "b"], "a")
-"#;
-        let out = oracle::python(script);
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 17, "expected exactly 17 probe cases");
-
-        // (a): null entry -> NotFound (not AttributeError/KeyError).
-        assert!(
-            lines[0].starts_with("NotFound |"),
-            "null entry: {}",
-            lines[0]
-        );
-
-        // (c): truthy non-dict -> every operation raises, file untouched.
-        for line in &lines[1..5] {
-            assert!(
-                line.contains("AttributeError") || line.contains("TypeError"),
-                "truthy non-dict case: {line}"
-            );
-            assert!(
-                line.ends_with("unchanged"),
-                "create must not overwrite a truthy non-dict document: {line}"
-            );
-        }
-
-        // (c): falsy non-dict -> treated as {} (NotFound for a genuinely
-        // absent "acme" key; list/create both succeed against an empty
-        // document).
-        for line in &lines[5..10] {
-            assert!(
-                line.starts_with("NotFound | OK | OK"),
-                "falsy non-dict case: {line}"
-            );
-        }
-
-        // (b): Python accepts int elements, a string iterated into
-        // characters, and a `None` created_at with no exception at all.
-        assert_eq!(
-            lines[10], "env=[1, 2] created_at='2024-01-01T00:00:00Z'",
-            "int elements"
-        );
-        assert_eq!(
-            lines[11], "env=['d', 'e', 'v'] created_at='2024-01-01T00:00:00Z'",
-            "string iterated into characters"
-        );
-        assert_eq!(lines[12], "env=['dev'] created_at=None", "None created_at");
-
-        // A-R7-1: a contained name resolves to the documented
-        // InvalidInput("project_exists"), file untouched -- not a builtin
-        // exception the way the not-contained cases above are.
-        for line in &lines[13..17] {
-            assert!(
-                line.starts_with("InvalidInput"),
-                "contained-name case: {line}"
-            );
-            assert!(
-                line.ends_with("unchanged"),
-                "create must not overwrite even on project_exists: {line}"
-            );
+        for (case, expected) in &cases {
+            assert_eq!(matches_name_re(case), *expected, "case {case:?}");
         }
     }
 }

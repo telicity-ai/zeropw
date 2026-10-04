@@ -945,56 +945,36 @@ or to cite them other than as /\u{201c}work in progress./\u{201d}"
         assert!(!sealed.windows(aad.len()).any(|w| w == &aad[..]));
     }
 
-    /// Oracle differential test (PORTING.md engineering rules): ciphertext
-    /// produced by Python decrypts in Rust, and ciphertext produced by Rust
-    /// decrypts in Python, for the same key/nonce/aad/plaintext.
+    /// Wire/storage format: ciphertext the Python prototype produced (golden
+    /// vector, `tests/fixtures/python/crypto/GENERATE.md`) decrypts here, and
+    /// this implementation produces the identical bytes for the same
+    /// key/nonce/aad/plaintext.
     #[test]
     fn oracle_ciphertext_round_trips_both_directions() {
-        let key = vec![0x12u8; KEY_SIZE];
-        let nonce = vec![0x34u8; NONCE_SIZE];
-        let aad = b"zeropw-oracle-aad";
-        let plaintext = b"zeropw rust/python chacha20poly1305 oracle check";
-
-        let rust_sealed = encrypt(&key, &nonce, plaintext, aad).unwrap();
-
-        let encrypt_script = format!(
-            "from zeropw.crypto import chacha20poly1305 as aead\n\
-             key = bytes.fromhex('{}')\n\
-             nonce = bytes.fromhex('{}')\n\
-             aad = bytes.fromhex('{}')\n\
-             plaintext = bytes.fromhex('{}')\n\
-             print(aead.encrypt(key, nonce, plaintext, aad).hex())",
-            hex::encode(&key),
-            hex::encode(&nonce),
-            hex::encode(aad),
-            hex::encode(plaintext),
+        let vectors: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/python/crypto/vectors.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let v = &vectors["chacha20poly1305"];
+        let field = |name: &str| hex::decode(v[name].as_str().unwrap()).unwrap();
+        let (key, nonce, aad, plaintext) = (
+            field("key"),
+            field("nonce"),
+            field("aad"),
+            field("plaintext"),
         );
-        let python_sealed_hex = crate::oracle::python(&encrypt_script).trim().to_string();
-        // Same key/nonce/plaintext/aad must produce byte-identical ciphertext.
-        assert_eq!(hex::encode(&rust_sealed), python_sealed_hex);
+        assert_eq!(key, vec![0x12u8; KEY_SIZE]);
+        assert_eq!(nonce, vec![0x34u8; NONCE_SIZE]);
+        let python_sealed = field("sealed");
 
-        // Python decrypts what Rust encrypted.
-        let decrypt_script = format!(
-            "from zeropw.crypto import chacha20poly1305 as aead\n\
-             key = bytes.fromhex('{}')\n\
-             nonce = bytes.fromhex('{}')\n\
-             aad = bytes.fromhex('{}')\n\
-             sealed = bytes.fromhex('{}')\n\
-             print(aead.decrypt(key, nonce, sealed, aad).hex())",
-            hex::encode(&key),
-            hex::encode(&nonce),
-            hex::encode(aad),
-            hex::encode(&rust_sealed),
-        );
+        let rust_sealed = encrypt(&key, &nonce, &plaintext, &aad).unwrap();
+        assert_eq!(rust_sealed, python_sealed);
         assert_eq!(
-            crate::oracle::python(&decrypt_script).trim(),
-            hex::encode(plaintext)
-        );
-
-        // Rust decrypts what Python encrypted.
-        let python_sealed = hex::decode(&python_sealed_hex).unwrap();
-        assert_eq!(
-            decrypt(&key, &nonce, &python_sealed, aad).unwrap(),
+            decrypt(&key, &nonce, &python_sealed, &aad).unwrap(),
             plaintext
         );
     }

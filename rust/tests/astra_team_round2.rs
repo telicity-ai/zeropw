@@ -1,7 +1,6 @@
 //! Independent gpt-6-astra boundary review of f7d160bd927f008c3b87974331f861c62d87b3e1.
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Barrier, mpsc};
 use std::time::{Duration, Instant};
 
@@ -174,77 +173,90 @@ fn raw_tcp_replayed_responder_message_is_rejected_in_new_session() {
     server.shutdown();
 }
 
-fn python(script: &str, input: &Value) -> Value {
-    let mut child = Command::new("python3.12")
-        .args(["-c", script])
-        .env("PYTHONPATH", format!("{}/..", env!("CARGO_MANIFEST_DIR")))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&canon(input))
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    pyjson::loads(std::str::from_utf8(&output.stdout).unwrap()).unwrap()
-}
-
+/// `sanitize_incident_summary` and `Fact::from_dict` over a boundary corpus
+/// of peer-supplied values. Expected outcomes were measured against the
+/// Python prototype's `sanitize_incident_summary`/`Fact.from_dict`: a
+/// summary keeps only a valid `incident_id` plus in-bounds `uses` (a
+/// non-negative int32), `scope` (printable text up to 200 characters) and
+/// `connection_ids` (up to 100 de-duplicated strings of up to 64
+/// characters); anything else is dropped.
 #[test]
 fn incident_sanitizer_and_fact_conversion_boundary_corpus_match_python() {
-    let mut cases = vec![
+    for invalid in [
         Value::Null,
         json!([]),
         json!({}),
         json!({"incident_id":"../escape"}),
-    ];
-    for value in [
-        Value::Null,
-        json!(true),
-        json!(1.0),
-        json!(-1),
-        json!(0),
-        json!(2147483647_i64),
-        json!(2147483648_i64),
-        json!("x"),
-        json!("é".repeat(200)),
-        json!("é".repeat(201)),
-        json!("control\u{007f}"),
-        json!([]),
-        json!(["a", "b", "a"]),
-        json!(["a", false]),
-        json!(["é".repeat(64)]),
-        json!(["é".repeat(65)]),
-        json!(vec!["a"; 101]),
     ] {
-        cases.push(json!({"incident_id":"0123456789abcdef","uses":value,"scope":value,"connection_ids":value,"unknown":"drop"}));
+        assert_eq!(
+            sync::sanitize_incident_summary(&invalid)
+                .unwrap_err()
+                .reason,
+            "team_incident_summary_invalid",
+            "{invalid}"
+        );
     }
-    let expected = python(
-        "import json,sys\nfrom zeropw.team.sync import sanitize_incident_summary\nr=[]\nfor v in json.load(sys.stdin):\n try:r.append({'ok':sanitize_incident_summary(v)})\n except Exception as e:r.append({'error':getattr(e,'reason',type(e).__name__)})\nprint(json.dumps(r))",
-        &json!(cases),
-    );
-    for (case, want) in cases.iter().zip(expected.as_array().unwrap()) {
-        let actual = match sync::sanitize_incident_summary(case) {
-            Ok(v) => json!({"ok":v}),
-            Err(e) => json!({"error":e.reason}),
-        };
-        assert_eq!(&actual, want, "{case}");
+    let id = || json!({"incident_id": "0123456789abcdef"});
+    let with = |key: &str, value: Value| {
+        let mut summary = id();
+        summary[key] = value;
+        summary
+    };
+    let cases = [
+        (Value::Null, id()),
+        (json!(true), id()),
+        (json!(1.0), id()),
+        (json!(-1), id()),
+        (json!(0), with("uses", json!(0))),
+        (json!(2147483647_i64), with("uses", json!(2147483647_i64))),
+        (json!(2147483648_i64), id()),
+        (json!("x"), with("scope", json!("x"))),
+        (
+            json!("\u{e9}".repeat(200)),
+            with("scope", json!("\u{e9}".repeat(200))),
+        ),
+        (json!("\u{e9}".repeat(201)), id()),
+        (json!("control\u{007f}"), id()),
+        (json!([]), id()),
+        (
+            json!(["a", "b", "a"]),
+            with("connection_ids", json!(["a", "b"])),
+        ),
+        (json!(["a", false]), id()),
+        (
+            json!(["\u{e9}".repeat(64)]),
+            with("connection_ids", json!(["\u{e9}".repeat(64)])),
+        ),
+        (json!(["\u{e9}".repeat(65)]), id()),
+        (json!(vec!["a"; 101]), id()),
+    ];
+    for (value, expected) in cases {
+        let case = json!({"incident_id":"0123456789abcdef","uses":value,"scope":value,"connection_ids":value,"unknown":"drop"});
+        assert_eq!(
+            sync::sanitize_incident_summary(&case).unwrap(),
+            expected,
+            "{case}"
+        );
     }
-    let cases = [json!({}),json!(["ab","cd"]),json!([[1,"one"],[true,"true"],[1.0,"float"]]),json!([[null,1],["None",2]]),json!([["é","value"]]),json!([])].map(|target| json!({"format":sync::FACT_FORMAT,"env_id":"e","kind":"incident","author":"a","hlc":"1-0","sig":"","target":target}));
-    let expected = python(
-        "import json,sys\nfrom zeropw.team.sync import Fact\nprint(json.dumps([Fact.from_dict(v).to_dict() for v in json.load(sys.stdin)]))",
-        &json!(cases),
-    );
-    for (case, want) in cases.iter().zip(expected.as_array().unwrap()) {
-        assert_eq!(&sync::Fact::from_dict(case).unwrap().to_dict(), want);
+    let fact = |target: Value| json!({"format":sync::FACT_FORMAT,"env_id":"e","kind":"incident","author":"a","hlc":"1-0","sig":"","target":target});
+    for (target, expected) in [
+        (json!({}), json!({})),
+        (json!(["ab", "cd"]), json!({"a": "b", "c": "d"})),
+        // Colliding keys keep the FIRST key's text and the LAST value.
+        (
+            json!([[1, "one"], [true, "true"], [1.0, "float"]]),
+            json!({"1": "float"}),
+        ),
+        (json!([[null, 1], ["None", 2]]), json!({"None": 2})),
+        (json!([["\u{e9}", "value"]]), json!({"\u{e9}": "value"})),
+        (json!([]), json!({})),
+    ] {
+        let mut want = fact(target.clone());
+        want["target"] = expected;
+        assert_eq!(
+            sync::Fact::from_dict(&fact(target)).unwrap().to_dict(),
+            want
+        );
     }
 }
 

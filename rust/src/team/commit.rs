@@ -76,10 +76,11 @@ use serde_json::{Map, Value, json};
 
 use crate::audit::{Audit, RecordArgs};
 use crate::crypto::ed25519;
-use crate::errors::{Error, Result};
+use crate::errors::{Error, ErrorClass, Result};
 use crate::policy;
 use crate::projects;
 use crate::pybase64;
+use crate::pyint::PyInt;
 use crate::pyjson::{self, DumpOptions};
 use crate::store::StateDir;
 use crate::vault;
@@ -165,38 +166,50 @@ fn python_stem_isdigit(stem: &str) -> bool {
     !stem.is_empty() && stem.chars().all(is_python_isdigit_char)
 }
 
-/// CPython 3.12 `int(str)`'s full numeric-literal grammar (surrounding
-/// `int()`-specific whitespace -- not `str.isspace()` -- an optional
-/// `+`/`-` sign, then one or more decimal digits, ASCII or any Unicode `Nd`
-/// code point, with single, non-leading/trailing underscores allowed
-/// between them) is `crate::pystr::int_from_str_checked`, the one canonical
-/// home for CPython's `int(str)` semantics (PORTING.md §3b; a former
-/// private copy of this whole grammar -- including its own
-/// `is_int_strip_space`, fixed independently for the identical
-/// U+001C-U+001F whitespace bug `vault.rs`'s and `policy.rs`'s copies also
-/// had, finding H-R2-1 -- lived here, see `rust/DEVIATIONS.md`).
-///
-/// The *checked* (non-saturating) variant is used deliberately, not the
-/// plain saturating `int_from_str`: unlike `policy.rs`'s narrower
-/// `python_int_from_str` (ASCII-digit-only, bounded to `i64`, where the
-/// final `i64::try_from` narrowing step makes the saturating/checked choice
-/// unobservable either way), `Hlc`/`Commit`'s `i128` fields store and
-/// re-serialize the parsed magnitude itself with no further narrowing --
-/// silently substituting a saturated `i128::MAX`/`MIN` sentinel for a
-/// magnitude that overflows would be a *different*, worse wrong answer than
-/// this port's existing, documented "reject past `i128`" gap (see
-/// `rust/DEVIATIONS.md` for the residual, practically-unreachable gap
-/// beyond `i128::MAX`/`MIN` that remains).
-fn python_int_parse_i128(raw: &str) -> Option<i128> {
-    crate::pystr::int_from_str_checked(raw)
+/// A CPython built-in exception (`AttributeError`, `TypeError`, `ValueError`)
+/// that escapes `Commit.from_dict`'s caller, `validate_op` or
+/// `build_connection_fields` uncaught (PORTING.md §3.5). It is deliberately
+/// not `InvalidInput`, so its SCOPE matches Python's (§3d):
+/// [`receive_commit`] propagates it instead of recording a rejection (the
+/// exception leaves `receive_commit` before `_reject`: no rejected record,
+/// no audit, and `TeamSync`'s receive loop ends the session), and `fold`
+/// aborts instead of skipping the op (its `except InvalidInput` does not
+/// catch it). `detail` names the Python exception.
+pub(crate) fn uncaught_builtin(exception: &'static str) -> Error {
+    Error::state("team_uncaught_exception").with_detail(exception)
 }
 
-/// Build a `serde_json::Value` integer from an `i128`, preserving the exact
-/// decimal digits (`serde_json`'s `arbitrary_precision` feature backs
-/// `Number` with the literal text, so this round-trips byte-identically
-/// through `pyjson::dumps`, matching Python's arbitrary-precision `int`).
-pub(super) fn json_int128(v: i128) -> Value {
-    Value::Number(v.into())
+/// Whether a [`Commit::from_dict`] error stands for Python's LATER
+/// `canonical_json` `TypeError` (an op with a non-string key): Python's
+/// `from_dict` itself succeeded, so a caller that inspects the commit before
+/// hashing it (`_handle_commit`'s env-id check) still runs first.
+pub(crate) fn raises_only_when_canonicalized(error: &Error) -> bool {
+    error.reason == "team_uncaught_exception" && error.detail == "TypeError"
+}
+
+/// `int(value)` for a decoded commit field (`author_seq`, a `seen` value):
+/// CPython's grammar and unbounded precision ([`PyInt::coerce_from_json`]);
+/// `ValueError`/`TypeError` are `commit_malformed` (caught by `from_dict`),
+/// while `int(float("inf"))`'s `OverflowError` -- a JSON literal such as
+/// `1e400` decodes to infinity -- escapes `from_dict` uncaught.
+fn python_int_field(value: &Value) -> Result<PyInt> {
+    if let Value::Number(n) = value
+        && pyjson::is_float_literal(n.as_str())
+        && n.as_str().parse::<f64>().is_ok_and(f64::is_infinite)
+    {
+        return Err(uncaught_builtin("OverflowError"));
+    }
+    PyInt::coerce_from_json(value).ok_or_else(|| Error::invalid_input("commit_malformed"))
+}
+
+/// CPython 3.12 `int(str)` for one `Hlc` half: the canonical grammar
+/// (`crate::pystr::int_from_str_decimal_limited`, PORTING.md §3b --
+/// `int()`-specific whitespace, sign, `_` separators, Unicode `Nd` digits and
+/// the interpreter's 4300-digit conversion limit), at Python's unbounded
+/// precision. `None` is CPython's `ValueError`.
+fn python_int_parse(raw: &str) -> Option<PyInt> {
+    let decimal = crate::pystr::int_from_str_decimal_limited(raw)?;
+    decimal.parse::<num_bigint::BigInt>().ok().map(PyInt)
 }
 
 fn b64decode_strict(text: &str) -> std::result::Result<Vec<u8>, ()> {
@@ -230,44 +243,47 @@ fn b64decode_strict(text: &str) -> std::result::Result<Vec<u8>, ()> {
 /// string, since a wall-clock component can exceed 9999 and would then sort
 /// incorrectly as text.
 ///
-/// `wall_ms`/`counter` are `i128`, unlike Python's arbitrary-precision
-/// `int`; see `rust/DEVIATIONS.md` for the (practically unreachable, beyond
-/// `i128::MAX`) bound this implies on [`Hlc::parse`]. `i128` is wide enough
-/// that every value this port's own [`Hlc::tick`] ever produces, and every
-/// value a reviewer's or peer's hand-crafted `hlc` string can plausibly
-/// exercise, parses and compares exactly as Python's `int` would (finding
-/// H-2).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+/// `wall_ms`/`counter` are exact Python integers ([`PyInt`]): `Hlc.parse`'s
+/// `int()` has no magnitude bound, `tick`'s `self.counter += 1` never
+/// overflows, and every comparison is exact at any magnitude.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hlc {
-    pub wall_ms: i128,
-    pub counter: i128,
+    pub wall_ms: PyInt,
+    pub counter: PyInt,
+}
+
+impl Default for Hlc {
+    fn default() -> Self {
+        Hlc::new(0, 0)
+    }
 }
 
 impl Hlc {
-    pub fn new(wall_ms: i128, counter: i128) -> Self {
-        Hlc { wall_ms, counter }
+    pub fn new(wall_ms: impl Into<PyInt>, counter: impl Into<PyInt>) -> Self {
+        Hlc {
+            wall_ms: wall_ms.into(),
+            counter: counter.into(),
+        }
     }
 
-    /// `Hlc.parse` (a `@staticmethod` in Python). `wall_str`/`counter_str`
-    /// are parsed with [`python_int_parse_i128`], matching CPython's
-    /// `int(str)` grammar (whitespace, `+`/`-` sign, `_` digit separators,
-    /// Unicode decimal digits, arbitrary precision up to `i128`) rather
-    /// than Rust's strict `str::parse`.
-    pub fn parse(value: &str) -> Result<(i128, i128)> {
+    /// `Hlc.parse` (a `@staticmethod` in Python): `value.split("-")` into
+    /// exactly two halves, each through CPython's `int(str)` grammar
+    /// ([`python_int_parse`]), then `wall_ms < 0 or counter < 0` rejected.
+    pub fn parse(value: &str) -> Result<(PyInt, PyInt)> {
         let bad = || Error::invalid_input("hlc_malformed");
         let parts: Vec<&str> = value.split('-').collect();
         if parts.len() != 2 {
             return Err(bad());
         }
-        let wall_ms = python_int_parse_i128(parts[0]).ok_or_else(bad)?;
-        let counter = python_int_parse_i128(parts[1]).ok_or_else(bad)?;
+        let wall_ms = python_int_parse(parts[0]).ok_or_else(bad)?;
+        let counter = python_int_parse(parts[1]).ok_or_else(bad)?;
         if wall_ms < 0 || counter < 0 {
             return Err(bad());
         }
         Ok((wall_ms, counter))
     }
 
-    /// `Hlc.render`.
+    /// `Hlc.render`: `f"{self.wall_ms}-{self.counter:04d}"`.
     pub fn render(&self) -> String {
         format!("{}-{:04}", self.wall_ms, self.counter)
     }
@@ -279,35 +295,22 @@ impl Hlc {
             self.wall_ms = remote_wall;
             self.counter = remote_counter;
         } else if remote_wall == self.wall_ms {
-            self.counter = self.counter.max(remote_counter);
+            self.counter = self.counter.clone().max(remote_counter);
         }
         Ok(())
     }
 
     /// `Hlc.tick`: advance the clock for a new local commit and return its
     /// rendered `hlc`. `now_ms=None` uses the system clock, like Python's
-    /// `int(time.time() * 1000)`.
+    /// `int(time.time() * 1000)`. `self.counter += 1` is exact at any
+    /// magnitude, as Python's `int` is.
     pub fn tick(&mut self, now_ms_value: Option<i64>) -> String {
-        let now_ms_value = i128::from(now_ms_value.unwrap_or_else(now_ms));
-        let candidate = now_ms_value.max(self.wall_ms);
-        if candidate > self.wall_ms {
-            self.wall_ms = candidate;
-            self.counter = 0;
+        let now_ms_value = PyInt::from(now_ms_value.unwrap_or_else(now_ms));
+        if now_ms_value > self.wall_ms {
+            self.wall_ms = now_ms_value;
+            self.counter = PyInt::zero();
         } else {
-            // Finding H-R3-8: Python's `int` never overflows, so
-            // `self.counter += 1` there is always exact. `Hlc::parse`
-            // accepts a peer-supplied `counter` up to `i128::MAX` (only
-            // `wall_ms` is separately bounded, by `receive_commit`), and
-            // `observe`-then-`tick` -- exactly the sequence this type's own
-            // `observe` doc comment and docs/team-sync.md §5.2 prescribe for
-            // every incoming commit -- can raise this clock's `counter` to
-            // that peer-chosen value before a later local `tick()` (wall
-            // clock not yet advanced) increments it, panicking
-            // (`attempt to add with overflow`) on `i128::MAX`.
-            // `saturating_add` removes the panic; the resulting bound
-            // (`counter` sticks at `i128::MAX` rather than continuing to
-            // climb) is recorded in `rust/DEVIATIONS.md`.
-            self.counter = self.counter.saturating_add(1);
+            self.counter = &self.counter + 1;
         }
         self.render()
     }
@@ -320,14 +323,14 @@ pub fn now_ms() -> i64 {
 
 /// Total order key (docs/team-sync.md section 7.1): `(hlc, author)` as a
 /// numeric/text tuple. Port of `order_key`.
-pub fn order_key(commit: &Commit) -> Result<(i128, i128, String)> {
+pub fn order_key(commit: &Commit) -> Result<(PyInt, PyInt, String)> {
     let (wall_ms, counter) = Hlc::parse(&commit.hlc)?;
     Ok((wall_ms, counter, commit.author.clone()))
 }
 
 /// Port of `sort_total_order`.
 pub fn sort_total_order(commits: Vec<Commit>) -> Result<Vec<Commit>> {
-    let mut keyed: Vec<((i128, i128, String), Commit)> = Vec::with_capacity(commits.len());
+    let mut keyed: Vec<((PyInt, PyInt, String), Commit)> = Vec::with_capacity(commits.len());
     for commit in commits {
         let key = order_key(&commit)?;
         keyed.push((key, commit));
@@ -343,11 +346,10 @@ pub struct Commit {
     pub format: String,
     pub env_id: String,
     pub author: String,
-    /// `i128`, unlike Python's arbitrary-precision `int`; see
-    /// `rust/DEVIATIONS.md` (finding H-6).
-    pub author_seq: i128,
+    /// Python's `int(data["author_seq"])`, exact at any magnitude.
+    pub author_seq: PyInt,
     pub hlc: String,
-    pub seen: BTreeMap<String, i128>,
+    pub seen: BTreeMap<String, PyInt>,
     pub ops: Vec<Value>,
     /// Base64 Ed25519 signature, empty until signed.
     pub sig: String,
@@ -359,12 +361,12 @@ impl Commit {
         m.insert("format".into(), Value::String(self.format.clone()));
         m.insert("env_id".into(), Value::String(self.env_id.clone()));
         m.insert("author".into(), Value::String(self.author.clone()));
-        m.insert("author_seq".into(), json_int128(self.author_seq));
+        m.insert("author_seq".into(), self.author_seq.value());
         m.insert("hlc".into(), Value::String(self.hlc.clone()));
         let seen: Map<String, Value> = self
             .seen
             .iter()
-            .map(|(k, v)| (k.clone(), json_int128(*v)))
+            .map(|(k, v)| (k.clone(), v.value()))
             .collect();
         m.insert("seen".into(), Value::Object(seen));
         m.insert("ops".into(), Value::Array(self.ops.clone()));
@@ -411,15 +413,45 @@ impl Commit {
     pub fn from_dict(data: &Value) -> Result<Commit> {
         let bad = || Error::invalid_input("commit_malformed");
         let obj = data.as_object().ok_or_else(bad)?;
+        // `ops = tuple(dict(op) for op in data["ops"])` runs before every
+        // other field. `data["ops"]` may be any iterable (a string yields
+        // its characters, a dict its keys -- so `""`/`{}` are an empty
+        // tuple), and each element goes through `dict(...)`; every failure
+        // there is a caught `TypeError`/`ValueError`.
+        //
+        // Finding H-R3-3: a hashable non-string pair key is kept by
+        // `dict()`, so `from_dict` still succeeds in Python once the other
+        // fields parse; the `TypeError` comes later, from every
+        // `canonical_json`/`hash` of the commit. It is reported after the
+        // remaining fields as [`uncaught_builtin`] (see
+        // [`raises_only_when_canonicalized`]) rather than `commit_malformed`.
+        let raw_ops: Vec<Value> = match obj.get("ops").ok_or_else(bad)? {
+            Value::Array(items) => items.clone(),
+            Value::String(text) => text.chars().map(|c| Value::String(c.to_string())).collect(),
+            Value::Object(map) => map.keys().cloned().map(Value::String).collect(),
+            Value::Null | Value::Bool(_) | Value::Number(_) => return Err(bad()),
+        };
+        let mut non_string_op_key = false;
+        let mut ops: Vec<Value> = Vec::with_capacity(raw_ops.len());
+        for op in &raw_ops {
+            let pairs = python_dict_pairs_checked(op).map_err(|_| bad())?;
+            let mut out = Map::new();
+            for (k, v) in pairs {
+                match k {
+                    Value::String(s) => {
+                        out.insert(s, v);
+                    }
+                    _ => non_string_op_key = true,
+                }
+            }
+            ops.push(Value::Object(out));
+        }
         let str_field =
             |key: &str| -> Result<String> { obj.get(key).map(python_str_coerce).ok_or_else(bad) };
         let format = str_field("format")?;
         let env_id = str_field("env_id")?;
         let author = str_field("author")?;
-        let author_seq = obj
-            .get("author_seq")
-            .and_then(python_int_coerce)
-            .ok_or_else(bad)?;
+        let author_seq = python_int_field(obj.get("author_seq").ok_or_else(bad)?)?;
         let hlc = str_field("hlc")?;
         // `dict(data.get("seen") or {})`: a *falsy* `seen` (absent, `null`,
         // `0`, `""`, `[]`, `{}`, `false`) is treated as `{}` with no error;
@@ -464,59 +496,16 @@ impl Commit {
                 let mut out = BTreeMap::new();
                 for (k, v) in merged {
                     let key = python_str_coerce(&k);
-                    let n = python_int_coerce(&v).ok_or_else(bad)?;
+                    let n = python_int_field(&v)?;
                     out.insert(key, n);
                 }
                 out
             }
         };
-        // `tuple(dict(op) for op in data["ops"])`: each element of `ops`
-        // goes through `dict(op)`, which accepts a mapping directly OR any
-        // iterable of two-element pairs (e.g. an on-disk op reshaped as
-        // `[["op", "settings.update"], ["sync_interval_seconds", 1]]`) --
-        // the same normalisation `seen` already gets, via
-        // [`python_dict_pairs`], rather than requiring every element
-        // already be a literal JSON object (finding H-R2-5).
-        //
-        // Finding H-R3-3 (correcting H-R2-5's own reasoning): a pair whose
-        // key is not a JSON string, e.g.
-        // `[["op", "settings.update"], [1, "x"]]`, is NOT actually inert in
-        // Python just because no op handler looks it up by name --
-        // `dict()` keeps the `1` key exactly like any other, and
-        // `Commit.canonical_json`'s `json.dumps(..., sort_keys=True)` (the
-        // exact bytes that get signed/hashed) recurses into `ops` and, to
-        // sort THIS op's dict keys, compares `1 < "op"` -- an uncaught
-        // `TypeError: '<' not supported between instances of 'int' and
-        // 'str'` that propagates out of `canonical_json`, `hash`,
-        // `sign_commit` and `receive_commit` entirely. A commit whose `ops`
-        // holds such an entry can therefore never actually be signed,
-        // hashed, or accepted by any real Python caller -- the previous
-        // round's "drop the bad-keyed pair and keep the rest of the op"
-        // fix was itself wrong: it made this port ACCEPT and FOLD a signed
-        // commit Python can never even construct, let alone verify. Reject
-        // the whole commit as malformed here instead, matching "every real
-        // caller's canonicalization step raises" (PORTING.md §3.5; see
-        // `rust/DEVIATIONS.md`).
-        let ops: Vec<Value> = obj
-            .get("ops")
-            .and_then(Value::as_array)
-            .ok_or_else(bad)?
-            .iter()
-            .map(|op| {
-                let pairs = python_dict_pairs(op).ok_or_else(bad)?;
-                let mut out = Map::new();
-                for (k, v) in pairs {
-                    match k {
-                        Value::String(s) => {
-                            out.insert(s, v);
-                        }
-                        _ => return Err(bad()),
-                    }
-                }
-                Ok(Value::Object(out))
-            })
-            .collect::<Result<_>>()?;
         let sig = str_field("sig")?;
+        if non_string_op_key {
+            return Err(uncaught_builtin("TypeError"));
+        }
         Ok(Commit {
             format,
             env_id,
@@ -527,41 +516,6 @@ impl Commit {
             ops,
             sig,
         })
-    }
-}
-
-/// Python `int(x)` for a parsed JSON value (bool/int/float-truncating/
-/// numeric-string), used by [`Commit::from_dict`] for `author_seq`/`seen`
-/// values -- a `Value::String` goes through [`python_int_parse_i128`], so
-/// this accepts CPython's full `int(str)` grammar (whitespace, `+`/`-`
-/// sign, `_` separators, Unicode decimal digits) and any magnitude up to
-/// `i128`, not just plain ASCII digits bounded to `i64` (finding H-2/H-6).
-/// A wider duplicate of `handles.rs`'s/`policy.rs`'s private
-/// `python_int_coerce` (not reachable from here, and narrower: those stay
-/// `i64`/ASCII-only) -- the residual gap beyond `i128` is recorded in
-/// `rust/DEVIATIONS.md`.
-fn python_int_coerce(value: &Value) -> Option<i128> {
-    match value {
-        Value::Bool(b) => Some(i128::from(*b)),
-        Value::Number(n) => {
-            if pyjson::is_float_literal(n.as_str()) {
-                let f: f64 = n.as_str().parse().ok()?;
-                if !f.is_finite() {
-                    return None;
-                }
-                let truncated = f.trunc();
-                if truncated > i128::MAX as f64 || truncated < i128::MIN as f64 {
-                    return None;
-                }
-                Some(truncated as i128)
-            } else {
-                // Beyond `i128` but still integer-shaped: `None` (see
-                // `rust/DEVIATIONS.md`).
-                n.as_str().parse::<i128>().ok()
-            }
-        }
-        Value::String(s) => python_int_parse_i128(s),
-        Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
 }
 
@@ -654,6 +608,69 @@ pub(crate) fn python_dict_pairs(value: &Value) -> Option<Vec<(Value, Value)>> {
     }
 }
 
+/// Which built-in exception CPython's `dict(x)` raises for a JSON value it
+/// cannot build a dict from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DictError {
+    /// `x`, or one of its elements, is not iterable; or a key is
+    /// unhashable.
+    TypeError,
+    /// An element is iterable but not of length 2 (a non-empty string `x`
+    /// iterates one-character elements).
+    ValueError,
+}
+
+/// `dict(x)` with CPython's exact failure classification, element by
+/// element in order (the first failing element decides): a non-iterable
+/// element is `TypeError`, an element of the wrong length `ValueError`, and
+/// an unhashable key `TypeError`.
+pub(crate) fn python_dict_pairs_checked(
+    value: &Value,
+) -> std::result::Result<Vec<(Value, Value)>, DictError> {
+    match value {
+        Value::Object(m) => Ok(m
+            .iter()
+            .map(|(k, v)| (Value::String(k.clone()), v.clone()))
+            .collect()),
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let pair = match item {
+                    Value::Array(pair) if pair.len() == 2 => (pair[0].clone(), pair[1].clone()),
+                    Value::String(s) if s.chars().count() == 2 => {
+                        let mut chars = s.chars().map(|c| Value::String(c.to_string()));
+                        match (chars.next(), chars.next()) {
+                            (Some(k), Some(v)) => (k, v),
+                            _ => return Err(DictError::ValueError),
+                        }
+                    }
+                    Value::Object(map) if map.len() == 2 => {
+                        let mut keys = map.keys().map(|k| Value::String(k.clone()));
+                        match (keys.next(), keys.next()) {
+                            (Some(k), Some(v)) => (k, v),
+                            _ => return Err(DictError::ValueError),
+                        }
+                    }
+                    Value::Array(_) | Value::String(_) | Value::Object(_) => {
+                        return Err(DictError::ValueError);
+                    }
+                    Value::Null | Value::Bool(_) | Value::Number(_) => {
+                        return Err(DictError::TypeError);
+                    }
+                };
+                if !dict_key_is_hashable(&pair.0) {
+                    return Err(DictError::TypeError);
+                }
+                out.push(pair);
+            }
+            Ok(out)
+        }
+        Value::String(s) if s.is_empty() => Ok(Vec::new()),
+        Value::String(_) => Err(DictError::ValueError),
+        Value::Null | Value::Bool(_) | Value::Number(_) => Err(DictError::TypeError),
+    }
+}
+
 /// Whether a JSON value is Python-HASHABLE when used as a `dict`/`seen`-pair
 /// key (finding H-R5-5): everything except a `list`/`dict` (Python's own
 /// unhashable types -- confirmed against real `python3.12`:
@@ -733,12 +750,13 @@ fn float_exact_integer(value: f64) -> Option<num_bigint::BigInt> {
 pub fn sign_commit(
     device: &DeviceKey,
     env_id: &str,
-    author_seq: i128,
+    author_seq: impl Into<PyInt>,
     hlc: &str,
-    seen: &BTreeMap<String, i128>,
+    seen: &BTreeMap<String, PyInt>,
     ops: Vec<Value>,
 ) -> Result<Commit> {
     validate_ops(&ops)?;
+    let author_seq = author_seq.into();
     let author = device.fingerprint()?;
     let unsigned = Commit {
         format: COMMIT_FORMAT.to_string(),
@@ -1071,6 +1089,25 @@ fn build_http_auth(value: Option<&Value>) -> Result<Option<policy::HttpAuth>> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| Error::invalid_input("unsupported_auth_mode"))?;
+    // `HttpAuth.__post_init__` after its mode check: `HEADER_NAME_RE.match(
+    // header_name)` (mode "header") and `":" in basic_username` (mode
+    // "basic") raise an uncaught `TypeError` for a truthy value of the
+    // wrong type -- a non-string `header_name`, a non-iterable scalar
+    // `basic_username` -- which `_build_http_auth`'s `except KeyError` does
+    // not catch (findings H-R2-9b, H-R5-3).
+    let truthy = |name: &str| obj.get(name).filter(|v| !json_falsy(v));
+    match mode.as_str() {
+        "header" if truthy("header_name").is_some_and(|v| !v.is_string()) => {
+            return Err(uncaught_builtin("TypeError"));
+        }
+        "basic"
+            if truthy("basic_username")
+                .is_some_and(|v| matches!(v, Value::Number(_) | Value::Bool(_))) =>
+        {
+            return Err(uncaught_builtin("TypeError"));
+        }
+        _ => {}
+    }
     // Finding H-R5-3: `basic_username` goes through
     // `policy::basic_username_decision` rather than `opt_string`, which
     // used to collapse ANY non-string value -- including a truthy,
@@ -1129,11 +1166,29 @@ fn build_http_scope(value: Option<&Value>) -> Result<Option<policy::HttpScope>> 
         Some(v) if json_falsy(v) => Vec::new(),
         Some(v) => python_iterable_strings(v).ok_or_else(wrap_err)?,
     };
-    Ok(Some(policy::HttpScope::new(
-        methods,
-        path_prefixes,
-        confirm_methods,
-    )?))
+    match policy::HttpScope::new(methods, path_prefixes, confirm_methods) {
+        Ok(scope) => Ok(Some(scope)),
+        // `prefix.startswith("/")` on the first prefix that does not pass
+        // (finding H-R2-9a): a non-string one raises an uncaught
+        // `AttributeError` (`_build_http_scope` catches only `KeyError`/
+        // `TypeError`) instead of `invalid_path_prefix`.
+        Err(error) if error.reason == "invalid_path_prefix" => {
+            let first_bad = obj
+                .get("path_prefixes")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items.iter().find(|item| match item.as_str() {
+                        Some(p) => !p.starts_with('/') || p.contains("..") || p.contains('?'),
+                        None => true,
+                    })
+                });
+            if first_bad.is_some_and(|item| !item.is_string()) {
+                return Err(uncaught_builtin("AttributeError"));
+            }
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// `zeropw.team.commit._build_ssh_target`.
@@ -1252,7 +1307,14 @@ fn build_cli_profile(value: Option<&Value>) -> Result<Option<policy::CliProfile>
             .iter()
             .map(|(k, v)| (Value::String(k.clone()), v.clone()))
             .collect(),
-        Some(v) => python_dict_pairs(v).ok_or_else(bad)?,
+        // `dict(...)`'s `TypeError` is caught (`invalid_cli_profile`); its
+        // `ValueError` (an element of the wrong length, e.g. a truthy plain
+        // string) escapes `_build_cli_profile` (finding H-R2-9c).
+        Some(v) => match python_dict_pairs_checked(v) {
+            Ok(pairs) => pairs,
+            Err(DictError::TypeError) => return Err(bad()),
+            Err(DictError::ValueError) => return Err(uncaught_builtin("ValueError")),
+        },
     };
     // `dict(pairs)` itself never raises for a bad key/value type -- it just
     // does last-write-wins per key (JSON equality, matching Python's own
@@ -1263,7 +1325,7 @@ fn build_cli_profile(value: Option<&Value>) -> Result<Option<policy::CliProfile>
     // rejected here either.
     let mut merged: Vec<(Value, Value)> = Vec::new();
     for (k, v) in pairs {
-        match merged.iter_mut().find(|(ek, _)| *ek == k) {
+        match merged.iter_mut().find(|(ek, _)| dict_keys_equal(ek, &k)) {
             Some(existing) => existing.1 = v,
             None => merged.push((k, v)),
         }
@@ -1839,7 +1901,7 @@ impl<'a> CommitStore<'a> {
         }
     }
 
-    fn commit_path(&self, fingerprint: &str, seq: i128) -> String {
+    fn commit_path(&self, fingerprint: &str, seq: &PyInt) -> String {
         format!("{}/commits/{}/{}.json", self.root, fingerprint, seq)
     }
 
@@ -1848,55 +1910,51 @@ impl<'a> CommitStore<'a> {
     }
 
     /// The vector of the newest snapshot on disk, or `{}` if there is none
-    /// (section 7.3). Port of `CommitStore._snapshot_floor`.
+    /// (section 7.3). Port of `CommitStore._snapshot_floor`:
     ///
-    /// Finding H-R2-6: Python's `{str(k): int(v) for k, v in vector.items()
-    /// if isinstance(v, int) and not isinstance(v, bool)}` keeps an
-    /// arbitrary-precision `int` verbatim; this used to parse each entry
-    /// with `Number::as_i64`, silently DROPPING (not clamping) any entry
-    /// outside `i64` -- so a snapshot vector holding `10**30` for some
-    /// author disappeared from the map entirely instead of being retained
-    /// as a (large but real) floor, letting a replayed `author_seq=1`
-    /// commit from that author be re-accepted (`append`'s duplicate check
-    /// compared against a floor of `0`, not `10**30`). Widened to `i128` --
-    /// the same bound `Commit::author_seq` itself uses (see
-    /// `rust/DEVIATIONS.md`), not full arbitrary precision.
-    fn snapshot_floor(&self) -> Result<BTreeMap<String, i128>> {
+    /// `vector = (data or {}).get("vector") or {}` then `{str(k): int(v) for
+    /// k, v in vector.items() if isinstance(v, int) and not isinstance(v,
+    /// bool)}`. Integer entries are exact Python ints at any magnitude
+    /// ([`PyInt`]); float, bool and non-number entries are skipped. A truthy
+    /// non-object snapshot document or `vector` has no `.get`/`.items`: the
+    /// `AttributeError` CPython lets escape is `state_corrupt` here
+    /// (PORTING.md §3.5), at the same point, aborting the same caller.
+    fn snapshot_floor(&self) -> Result<BTreeMap<String, PyInt>> {
         let directory = self.dir("snapshots");
         if !directory.is_dir() {
             return Ok(BTreeMap::new());
         }
-        let mut numbers: Vec<i128> = digit_stems(&directory)?;
-        if numbers.is_empty() {
+        let numbers = digit_stems(&directory)?;
+        let Some(top) = numbers.iter().max() else {
             return Ok(BTreeMap::new());
-        }
-        numbers.sort_unstable_by(|a, b| b.cmp(a));
-        let top = numbers[0];
-        let data = self.state.read_json(
-            &format!("{}/snapshots/{}.json", self.root, top),
-            Value::Null,
-        )?;
+        };
+        let path = format!("{}/snapshots/{}.json", self.root, top);
+        let data = self.state.read_json(&path, Value::Null)?;
+        let corrupt = || Error::state("state_corrupt").with_detail(path.clone());
+        let vector = if json_falsy(&data) {
+            None
+        } else {
+            data.as_object().ok_or_else(corrupt)?.get("vector")
+        };
         let mut result = BTreeMap::new();
-        if let Some(vector) = data
-            .as_object()
-            .and_then(|o| o.get("vector"))
-            .and_then(Value::as_object)
-        {
-            for (k, v) in vector {
-                if let Value::Number(n) = v
-                    && !pyjson::is_float_literal(n.as_str())
-                    && let Some(i) = n.as_i128()
-                {
-                    result.insert(k.clone(), i);
+        match vector {
+            None => {}
+            Some(v) if json_falsy(v) => {}
+            Some(Value::Object(vector)) => {
+                for (k, v) in vector {
+                    if let Some(i) = PyInt::from_json_integer(v) {
+                        result.insert(k.clone(), i);
+                    }
                 }
             }
+            Some(_) => return Err(corrupt()),
         }
         Ok(result)
     }
 
     /// Version vector: fingerprint -> highest `author_seq` stored (section
     /// 6.3). Port of `CommitStore.vector`.
-    pub fn vector(&self) -> Result<BTreeMap<String, i128>> {
+    pub fn vector(&self) -> Result<BTreeMap<String, PyInt>> {
         let mut result = self.snapshot_floor()?;
         let commits_dir = self.dir("commits");
         if !commits_dir.is_dir() {
@@ -1915,17 +1973,22 @@ impl<'a> CommitStore<'a> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
-            let seqs: Vec<i128> = digit_stems(&device_dir)?;
-            if let Some(&max_seq) = seqs.iter().max() {
-                let entry = result.entry(name).or_insert(0);
-                *entry = (*entry).max(max_seq);
+            let seqs = digit_stems(&device_dir)?;
+            if let Some(max_seq) = seqs.into_iter().max() {
+                let entry = result.entry(name).or_insert_with(PyInt::zero);
+                if max_seq > *entry {
+                    *entry = max_seq;
+                }
             }
         }
         Ok(result)
     }
 
-    pub fn last_seq(&self, fingerprint: &str) -> Result<i128> {
-        Ok(*self.vector()?.get(fingerprint).unwrap_or(&0))
+    pub fn last_seq(&self, fingerprint: &str) -> Result<PyInt> {
+        Ok(self
+            .vector()?
+            .remove(fingerprint)
+            .unwrap_or_else(PyInt::zero))
     }
 
     /// Store a commit, enforcing contiguous per-author sequence (no gaps,
@@ -1938,54 +2001,37 @@ impl<'a> CommitStore<'a> {
         if commit.author_seq <= last {
             return Err(Error::invalid_input("team_seq_duplicate"));
         }
-        // `saturating_add`: `last` can only reach `i128::MAX` via a
-        // hand-crafted snapshot floor claiming that exact value, in which
-        // case no real `commit.author_seq` (itself bounded to `i128`) can
-        // ever be `> last`, so this arm is never taken there anyway --
-        // avoids a theoretical overflow panic on untrusted snapshot data
-        // rather than relying on that reachability argument alone.
-        if commit.author_seq > last.saturating_add(1) {
+        if commit.author_seq > &last + 1 {
             return Err(Error::invalid_input("team_seq_gap"));
         }
-        // `commit.author_seq` is proven `== last + 1` by the two checks
-        // above.
         self.state.write_json(
-            &self.commit_path(&commit.author, last + 1),
+            &self.commit_path(&commit.author, &commit.author_seq),
             &commit.to_dict(),
         )?;
         Ok(())
     }
 
-    pub fn get(&self, fingerprint: &str, seq: i128) -> Result<Option<Commit>> {
+    pub fn get(&self, fingerprint: &str, seq: impl Into<PyInt>) -> Result<Option<Commit>> {
         let data = self
             .state
-            .read_json(&self.commit_path(fingerprint, seq), Value::Null)?;
+            .read_json(&self.commit_path(fingerprint, &seq.into()), Value::Null)?;
         if json_falsy(&data) {
             return Ok(None);
         }
         Ok(Some(Commit::from_dict(&data)?))
     }
 
+    /// `for seq in range(1, last + 1): self.get(fingerprint, seq)` per
+    /// vector entry, at Python's unbounded integer precision.
     pub fn all_commits(&self) -> Result<Vec<Commit>> {
         let mut commits = Vec::new();
         for (fingerprint, last) in self.vector()? {
-            // `last` only exceeds the count of real on-disk files through a
-            // hand-crafted/bit-rotted snapshot (`rust/DEVIATIONS.md`'s
-            // `fold`/`validate_document_shape` row makes the same
-            // reachability argument for a malformed `base_document`):
-            // `append()`'s contiguity check means a real environment's
-            // on-disk sequence numbers are always a gap-free `1..=last`
-            // run. Python's own `for seq in range(1, last + 1): self.get(...)`
-            // would iterate exactly as far for the same pathological input
-            // (a `10**30` floor is as impractical to loop over in Python as
-            // in Rust) -- this is not a new Rust/Python divergence, just
-            // inherited from the prototype's own design.
-            let mut seq: i128 = 1;
+            let mut seq = PyInt::from(1);
             while seq <= last {
-                if let Some(commit) = self.get(&fingerprint, seq)? {
+                if let Some(commit) = self.get(&fingerprint, &seq)? {
                     commits.push(commit);
                 }
-                seq += 1;
+                seq = &seq + 1;
             }
         }
         sort_total_order(commits)
@@ -2051,7 +2097,7 @@ impl<'a> CommitStore<'a> {
         let mut released = Vec::new();
         for commit in self.deferred_commits()? {
             let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
-            if wall_ms > i128::from(now_ms_value) + i128::from(MAX_CLOCK_SKEW_MS) {
+            if wall_ms > &PyInt::from(now_ms_value) + MAX_CLOCK_SKEW_MS {
                 continue;
             }
             let path = self.deferred_path(&commit);
@@ -2072,30 +2118,17 @@ impl<'a> CommitStore<'a> {
 /// `team::fold`'s snapshot lookup (`load_latest_snapshot`) reuses the exact
 /// same scan.
 ///
-/// Finding H-R3-9: Python's `str.isdigit()` (the filter) and `int(str)`
-/// (the conversion) are NOT the same grammar -- `isdigit()` is strictly
-/// WIDER (see [`UNICODE_DIGIT_NOT_DECIMAL`]). The previous version filtered
-/// on `stem.bytes().all(|b| b.is_ascii_digit())`, narrower than Python's
-/// `isdigit()` in the OTHER direction (ASCII-only), so:
-///  - a stem like `"٣.json"` (U+0663, an `Nd` digit `int()` DOES accept)
-///    was silently IGNORED here (`vector()`/`snapshot_floor` missing that
-///    entry entirely) where Python reads it as `3` -- letting a REPLAYED
-///    commit/snapshot floor Python would refuse (`team_seq_duplicate`) be
-///    silently re-accepted by this port instead;
-///  - a stem like `"².json"` (`isdigit()` true, `int()` raises
-///    `ValueError`) was ALSO silently ignored here, but Python's own
-///    `[int(p.stem) ...]` list comprehension raises that `ValueError`
-///    UNCAUGHT, aborting `_snapshot_floor`/`CommitStore.vector` entirely --
-///    a genuine accept/crash divergence, not just a missed entry.
-///
-/// Fixed to match `isdigit()` exactly ([`python_stem_isdigit`]) for the
-/// filter, then fail closed (`state_corrupt`, PORTING.md §3.5) for a stem
-/// that passes `isdigit()` but hits a non-decimal digit (mirroring Python's
-/// uncaught `ValueError`) or overflows `i128` (this crate's own bound on
-/// every other `author_seq`/snapshot-number field, `rust/DEVIATIONS.md`)
-/// rather than silently dropping either case as if the filename had never
-/// matched `isdigit()` at all.
-pub(super) fn digit_stems(directory: &std::path::Path) -> Result<Vec<i128>> {
+/// The filter is `str.isdigit()` exactly ([`python_stem_isdigit`]), which is
+/// WIDER than the grammar `int(str)` accepts (finding H-R3-9): a stem of
+/// `Numeric_Type=Digit` code points (`"\u{b2}"`) passes the filter and then
+/// makes `int()` raise `ValueError`, as does a stem longer than CPython's
+/// 4300-digit conversion limit. That `ValueError` escapes the list
+/// comprehension uncaught in Python (aborting `_snapshot_floor`/`vector`/
+/// `load_latest_snapshot` entirely), so it is `state_corrupt` here at the
+/// same point (PORTING.md §3.5). Every stem `int()` accepts is converted at
+/// Python's unbounded precision through the canonical
+/// `crate::pystr::int_from_str_decimal_limited`.
+pub(super) fn digit_stems(directory: &std::path::Path) -> Result<Vec<PyInt>> {
     let corrupt =
         || Error::state("state_corrupt").with_detail(directory.to_string_lossy().into_owned());
     let entries = std::fs::read_dir(directory).map_err(|_| corrupt())?;
@@ -2113,15 +2146,7 @@ pub(super) fn digit_stems(directory: &std::path::Path) -> Result<Vec<i128>> {
         if !python_stem_isdigit(stem) {
             continue;
         }
-        let mut value: i128 = 0;
-        for c in stem.chars() {
-            let digit = crate::pystr::unicode_decimal_digit(c).ok_or_else(corrupt)?;
-            value = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(digit as i128))
-                .ok_or_else(corrupt)?;
-        }
-        out.push(value);
+        out.push(python_int_parse(stem).ok_or_else(corrupt)?);
     }
     Ok(out)
 }
@@ -2195,6 +2220,11 @@ pub fn receive_commit(
         return reject("team_env_id_mismatch");
     }
     if let Err(exc) = validate_ops(&commit.ops) {
+        if !exc.is(ErrorClass::InvalidInput) {
+            // A built-in exception escaping `validate_ops` leaves
+            // `receive_commit` before `_reject` (see `uncaught_builtin`).
+            return Err(exc);
+        }
         return reject(&format!("team_op_format_{}", exc.reason));
     }
 
@@ -2241,7 +2271,7 @@ pub fn receive_commit(
 
     let last_seq = store.last_seq(&commit.author)?;
     if commit.author_seq <= last_seq {
-        let previously_stored = store.get(&commit.author, commit.author_seq)?;
+        let previously_stored = store.get(&commit.author, &commit.author_seq)?;
         if let Some(prev) = &previously_stored
             && prev.hash()? == commit.hash()?
         {
@@ -2251,10 +2281,7 @@ pub fn receive_commit(
     }
 
     if commit.author_seq > 1 {
-        // `commit.author_seq - 1` cannot underflow: the branch above already
-        // proved `commit.author_seq > last_seq >= 0`, and this `if` proves
-        // `commit.author_seq > 1`, so `commit.author_seq - 1 >= 1`.
-        let previous = store.get(&commit.author, commit.author_seq - 1)?;
+        let previous = store.get(&commit.author, &commit.author_seq - 1)?;
         if let Some(previous) = previous
             && Hlc::parse(&commit.hlc)? <= Hlc::parse(&previous.hlc)?
         {
@@ -2263,7 +2290,7 @@ pub fn receive_commit(
     }
 
     let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
-    if wall_ms > i128::from(now_ms_value) + i128::from(MAX_CLOCK_SKEW_MS) {
+    if wall_ms > &PyInt::from(now_ms_value) + MAX_CLOCK_SKEW_MS {
         store.defer(commit)?;
         return Ok("deferred");
     }
@@ -2282,29 +2309,6 @@ mod tests {
     use tempfile::TempDir;
 
     const ENV_ID: &str = "env-0123456789abcdef";
-
-    /// A valid single-quoted Python string literal for `s`, escaping every
-    /// character via Python's own `\xNN`/`\uNNNN`/`\UNNNNNNNN` string syntax
-    /// (never a raw byte) so a control character or line-separator-like
-    /// codepoint can never be misread by Python's tokenizer as ending the
-    /// literal early, and never via Rust's `{:?}` debug format, which emits
-    /// `\u{NN}` -- not valid Python syntax.
-    fn py_str_literal(s: &str) -> String {
-        let mut out = String::from("'");
-        for c in s.chars() {
-            let cp = c as u32;
-            match c {
-                '\\' => out.push_str("\\\\"),
-                '\'' => out.push_str("\\'"),
-                _ if cp < 0x20 || cp == 0x7f => out.push_str(&format!("\\x{cp:02x}")),
-                _ if cp > 0x7e && cp <= 0xffff => out.push_str(&format!("\\u{cp:04x}")),
-                _ if cp > 0xffff => out.push_str(&format!("\\U{cp:08x}")),
-                _ => out.push(c),
-            }
-        }
-        out.push('\'');
-        out
-    }
 
     fn env_init_op(owner: &DeviceKey, name: &str, generation_id: &str) -> Value {
         let record = owner.record().unwrap();
@@ -2344,23 +2348,28 @@ mod tests {
         assert_eq!(third, "1000-0002");
     }
 
-    /// Finding H-R3-8: `Hlc::tick`'s `self.counter += 1` PANICKED
-    /// (`attempt to add with overflow`) once `counter == i128::MAX` --
-    /// reachable via `observe(remote_hlc)` (raising this clock's own
-    /// `counter` to a peer-chosen value up to `i128::MAX`, which
-    /// `Hlc::parse` accepts) followed by a local `tick()` whose wall clock
-    /// has not advanced past `remote_hlc`'s -- exactly the sequence this
-    /// type's own `observe` doc comment and docs/team-sync.md §5.2
-    /// prescribe for every incoming commit. Must saturate, not panic.
+    /// Finding H-R3-8, closed: `Hlc.tick`'s `self.counter += 1` and
+    /// `Hlc.parse`/`observe` are exact (unbounded) integers, so a
+    /// peer-chosen counter far beyond any fixed width keeps incrementing
+    /// (no saturation, no panic) and renders in full decimal.
     #[test]
-    fn tick_saturates_instead_of_panicking_at_i128_max_counter() {
-        let mut hlc = Hlc::new(1000, i128::MAX);
-        let remote = format!("1000-{}", i128::MAX);
-        hlc.observe(&remote).unwrap();
-        assert_eq!(hlc.counter, i128::MAX);
-        let rendered = hlc.tick(Some(500)); // wall clock does not advance
-        assert_eq!(hlc.counter, i128::MAX, "must saturate, not wrap or panic");
-        assert_eq!(rendered, format!("1000-{}", i128::MAX));
+    fn tick_increments_beyond_any_fixed_width() {
+        let big = "170141183460469231731687303715884105727"; // 2**127 - 1
+        let huge = format!("{big}{big}");
+        let mut hlc = Hlc::new(1000, 0);
+        hlc.observe(&format!("1000-{huge}")).unwrap();
+        // The wall clock does not advance, so the counter increments.
+        assert_eq!(
+            hlc.tick(Some(500)),
+            format!("1000-{big}170141183460469231731687303715884105728")
+        );
+        assert_eq!(
+            hlc.tick(Some(500)),
+            format!("1000-{big}170141183460469231731687303715884105729")
+        );
+        let (wall, counter) = Hlc::parse(&format!("{huge}-{huge}")).unwrap();
+        assert_eq!(wall.to_string(), huge);
+        assert_eq!(counter.to_string(), huge);
     }
 
     #[test]
@@ -2369,7 +2378,10 @@ mod tests {
         let remote = "5000-0003";
         hlc.observe(remote).unwrap();
         let nxt = hlc.tick(Some(1000));
-        assert_eq!(Hlc::parse(&nxt).unwrap(), (5000, 4));
+        assert_eq!(
+            Hlc::parse(&nxt).unwrap(),
+            (PyInt::from(5000), PyInt::from(4))
+        );
         assert!(Hlc::parse(&nxt).unwrap() > Hlc::parse(remote).unwrap());
     }
 
@@ -2500,22 +2512,36 @@ mod tests {
     }
 
     /// Finding H-R3-3: an `ops` element reshaped as a pair list whose key
-    /// isn't a JSON string (`[["op", "settings.update"], [1, "x"]]`) must
-    /// be rejected as `commit_malformed`, not silently accepted with the
-    /// `1` key dropped -- see `rust/tests/team_oracle.rs`'s
-    /// `commit_ops_element_with_non_string_pair_key_is_pythons_uncaught_typeerror`
-    /// for the full cross-language pin (Python's `canonical_json` raises an
-    /// uncaught `TypeError` for this exact shape).
+    /// is a hashable non-string (`[["op", "settings.update"], [1, "x"]]`)
+    /// passes Python's `Commit.from_dict` (`dict()` keeps the key) but every
+    /// later `canonical_json` raises an uncaught `TypeError`; it is the
+    /// non-`InvalidInput` [`uncaught_builtin`] here, raised only once every
+    /// other field parsed (a missing `sig` is still `commit_malformed`). An
+    /// unhashable key is `dict()`'s own caught `TypeError`. See
+    /// `rust/tests/team_oracle.rs`'s
+    /// `commit_ops_element_with_non_string_pair_key_is_pythons_uncaught_typeerror`.
     #[test]
-    fn from_dict_rejects_ops_pair_with_non_string_key() {
-        let data = json!({
+    fn from_dict_reports_a_non_string_op_key_as_the_later_uncaught_typeerror() {
+        let mut data = json!({
             "format": COMMIT_FORMAT, "env_id": ENV_ID, "author": "a", "author_seq": 1,
             "hlc": "1000-0000", "seen": {}, "sig": "",
             "ops": [[["op", "settings.update"], [1, "x"]]],
         });
-        let err = Commit::from_dict(&data)
-            .expect_err("a non-string pair key must reject the whole commit");
-        assert_eq!(err.reason, "commit_malformed");
+        let err = Commit::from_dict(&data).expect_err("never hashable in Python");
+        assert!(!err.is(ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "team_uncaught_exception");
+        assert_eq!(err.detail, "TypeError");
+        data["ops"] = json!([[["op", "settings.update"], [[1], "x"]]]);
+        assert_eq!(
+            Commit::from_dict(&data).unwrap_err().reason,
+            "commit_malformed"
+        );
+        data["ops"] = json!([[["op", "settings.update"], [1, "x"]]]);
+        data.as_object_mut().unwrap().remove("sig");
+        assert_eq!(
+            Commit::from_dict(&data).unwrap_err().reason,
+            "commit_malformed"
+        );
     }
 
     // ----------------------------------------------------- op validation
@@ -2659,14 +2685,17 @@ mod tests {
         .unwrap();
         store.append(&c2).unwrap();
         let vector = store.vector().unwrap();
-        assert_eq!(vector.get(&f.owner.fingerprint().unwrap()), Some(&2));
-        let seqs: Vec<i128> = store
+        assert_eq!(
+            vector.get(&f.owner.fingerprint().unwrap()),
+            Some(&PyInt::from(2))
+        );
+        let seqs: Vec<PyInt> = store
             .all_commits()
             .unwrap()
             .iter()
-            .map(|c| c.author_seq)
+            .map(|c| c.author_seq.clone())
             .collect();
-        assert_eq!(seqs, vec![1, 2]);
+        assert_eq!(seqs, vec![PyInt::from(1), PyInt::from(2)]);
     }
 
     #[test]
@@ -2771,7 +2800,7 @@ mod tests {
         assert_eq!(result, "deferred");
         assert_eq!(
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
-            Some(&1)
+            Some(&PyInt::from(1))
         );
         assert_eq!(store.release_deferred(1_000_000).unwrap(), vec![]);
         let released = store.release_deferred(far_future_ms).unwrap();
@@ -2784,7 +2813,7 @@ mod tests {
         );
         assert_eq!(
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
-            Some(&2)
+            Some(&PyInt::from(2))
         );
     }
 
@@ -2830,7 +2859,7 @@ mod tests {
         bootstrap(&f, &store);
         assert_eq!(
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
-            Some(&1)
+            Some(&PyInt::from(1))
         );
     }
 
@@ -2867,7 +2896,7 @@ mod tests {
         );
         assert_eq!(
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
-            Some(&2)
+            Some(&PyInt::from(2))
         );
     }
 
@@ -2930,87 +2959,29 @@ mod tests {
     }
 
     // ------------------------------------------------------------ H-R2-1/H-R2-2
-    // Round-2 equivalence-review fixes. `python_int_parse_i128` no longer has
+    // Round-2 equivalence-review fixes. `python_int_parse` no longer has
     // any hand/generated-table logic of its own to pin here (PORTING.md §3b,
     // finding E-R6-1 round 6: it now delegates entirely to
-    // `crate::pystr::int_from_str_checked`, whose own full-enumeration oracle
-    // tests live in `pystr.rs`), but this end-to-end probe through
-    // `python_int_parse_i128` itself is kept as a regression pin for this
+    // `crate::pystr::int_from_str_checked`), but this probe through
+    // `python_int_parse` itself is kept as a regression pin for this
     // call site.
 
     /// Finding H-R2-1: CPython 3.12's `int(str)` strips only 25 of
-    /// `str.isspace()`'s 29 code points -- U+001C..U+001F
-    /// (`Bidi_Class=B`) are `isspace()`-true but rejected by `int()`.
-    /// Enumerates every `str.isspace()` code point (`crate::pystr::is_space`,
-    /// itself already oracle-proven against `python3.12` in `pystr.rs`) and
-    /// checks [`python_int_parse_i128`]'s accept/reject decision, in both
-    /// leading and trailing position, against real `python3.12` `int()`.
+    /// `str.isspace()`'s 29 code points -- U+001C..U+001F (`Bidi_Class=B`)
+    /// are `isspace()`-true but rejected. Pins [`python_int_parse`]'s
+    /// accept/reject decision for those four and for ordinary whitespace.
     #[test]
-    fn int_strip_space_matches_python_over_every_isspace_codepoint() {
-        let isspace_codepoints: Vec<u32> = (0..=0x10FFFFu32)
-            .filter(|&cp| {
-                char::from_u32(cp)
-                    .map(crate::pystr::is_space)
-                    .unwrap_or(false)
-            })
-            .collect();
-        // Sanity: matches the finding's own count (25 accepted + 4 rejected).
-        assert_eq!(
-            isspace_codepoints.len(),
-            29,
-            "str.isspace() should have exactly 29 code points"
-        );
-
-        let mut probes: Vec<(String, bool)> = Vec::new(); // (numeral string, leading?)
-        for &cp in &isspace_codepoints {
-            let c = char::from_u32(cp).unwrap();
-            probes.push((format!("{c}1000"), true));
-            probes.push((format!("1000{c}"), false));
-        }
-
-        // One python3.12 subprocess for the whole table, not one per probe.
-        // Every character is escaped via Python's own `\xNN`/`\uNNNN` string
-        // syntax (not Rust's `{:?}`, which emits `\u{NN}` -- invalid Python,
-        // and not raw bytes, which risk a control character the tokenizer
-        // reads as a physical line break inside a plain quoted string).
-        let mut script = String::from("import json\nresults = []\n");
-        for (s, _) in &probes {
-            script.push_str(&format!(
-                "try:\n    int({})\n    results.append(True)\nexcept ValueError:\n    results.append(False)\n",
-                py_str_literal(s)
-            ));
-        }
-        script.push_str("print(json.dumps(results))\n");
-        let out = crate::oracle::python(&script);
-        let py_results: Vec<bool> = pyjson::loads(out.trim())
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_bool().unwrap())
-            .collect();
-
-        assert_eq!(py_results.len(), probes.len());
-        for ((s, leading), py_ok) in probes.iter().zip(py_results.iter()) {
-            let rust_ok = python_int_parse_i128(s).is_some();
-            assert_eq!(
-                rust_ok, *py_ok,
-                "int({s:?}) accept/reject mismatch (leading={leading}): rust={rust_ok} python={py_ok}"
-            );
-        }
-
-        // Concrete pin for the four rejected exceptions and one accepted
-        // case, independent of the full sweep above.
-        assert!(python_int_parse_i128("\u{1c}1000-0000".split('-').next().unwrap()).is_none());
+    fn int_strip_space_rejects_the_four_separator_controls() {
+        assert!(python_int_parse("\u{1c}1000-0000".split('-').next().unwrap()).is_none());
         for cp in [0x1Cu32, 0x1D, 0x1E, 0x1F] {
             let c = char::from_u32(cp).unwrap();
             assert!(
-                python_int_parse_i128(&format!("{c}1000")).is_none(),
+                python_int_parse(&format!("{c}1000")).is_none(),
                 "U+{cp:04X} must not be stripped by int()"
             );
         }
-        assert_eq!(python_int_parse_i128(" 1000 "), Some(1000));
-        assert_eq!(python_int_parse_i128("\u{a0}1000"), Some(1000)); // NBSP: isspace() and int()-strippable
+        assert_eq!(python_int_parse(" 1000 "), Some(PyInt::from(1000)));
+        assert_eq!(python_int_parse("\u{a0}1000"), Some(PyInt::from(1000))); // NBSP: isspace() and int()-strippable
     }
 
     /// Finding H-R2-2 (historical) / E-R6-1 (round 6): this module's own

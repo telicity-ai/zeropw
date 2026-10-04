@@ -1,0 +1,15 @@
+{
+  "author": "bzvg5rt5tkjvxcwso3hp2nurtm",
+  "author_seq": 2,
+  "env_id": "ph5tr32bj27nk7zphjn2qf4z5u-0123456789abcdef0123456789abcdef",
+  "format": "zeropw-team-commit-v1",
+  "hlc": "5000-0000",
+  "ops": [
+    {
+      "op": "settings.update",
+      "sync_interval_seconds": 42
+    }
+  ],
+  "seen": {},
+  "sig": "fpeFR5ju8qw8W7ChD/T3w5shuNjFMU/QaMkLmxfxz053tmxMvXt4mc8nDol4DfUPs+s8aU3nvNhfbBSYoFlwCA=="
+}

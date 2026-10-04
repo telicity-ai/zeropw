@@ -355,8 +355,8 @@ fn runtime_covers_all_active(ctx: &Context, runtime: Option<&str>) -> bool {
         .list_principals()
         .map(|ps| {
             ps.iter()
-                .filter(|p| p.status == "active")
-                .all(|p| Some(p.runtime.as_str()) == runtime)
+                .filter(|p| p.status_is("active"))
+                .all(|p| p.runtime_eq(runtime))
         })
         // A corrupt/unreadable principal document cannot safely prove that any
         // active principal lies outside this runtime. Over-stop in that case.
@@ -409,7 +409,7 @@ pub fn apply_lockdown(
         let active = ctx
             .policy
             .get_principal(pid)
-            .is_ok_and(|p| p.status == "active");
+            .is_ok_and(|p| p.status_is("active"));
         match ctx.policy.disable_principal(pid, false) {
             Ok(()) if active => disabled += 1,
             Ok(()) => (),
@@ -624,13 +624,19 @@ pub fn close_incident(ctx: &Arc<Context>, incident_id: &str) -> Result<Incident>
 }
 
 fn new_secret_entry(meta: &crate::vault::SecretMeta, service: Option<&str>) -> Value {
-    let mut entry = json!({"secret_id":meta.id,"kind":meta.kind,"project":meta.project,"environment":meta.environment,"service":service,"connections":[],"targets":[],"first_used":null,"last_used":null,"use_count":0,"active_version":meta.active_version,"tier":"none"});
+    let mut entry = json!({"secret_id":meta.id,"kind":meta.kind,"project":meta.project,"environment":meta.environment,"service":service,"connections":[],"targets":[],"first_used":null,"last_used":null,"use_count":0,"active_version":meta.active_version.clone(),"tier":"none"});
     if meta.kind == "ssh_private_key" {
         entry["fingerprint"] = meta
             .versions
             .iter()
-            .find(|v| Some(v.version) == meta.active_version)
+            .find(|v| {
+                meta.active_version
+                    .as_ref()
+                    .is_some_and(|active| active.equals_integer(&v.version))
+            })
             .and_then(|v| v.public.get("fingerprint"))
+            // `_fingerprint`: `fingerprint if isinstance(fingerprint, str) else None`.
+            .filter(|fingerprint| fingerprint.is_string())
             .cloned()
             .unwrap_or(Value::Null);
     }
@@ -655,7 +661,7 @@ pub fn assess(ctx: &Context, principals: &[String], scope: &str, since: &str) ->
             Ok(p) => {
                 starts.insert(pid.clone(), p.created_at.clone());
                 principal_views
-                    .push(json!({"id":p.id,"created_at":p.created_at,"runtime":p.runtime}));
+                    .push(json!({"id":p.id,"created_at":p.created_at_value(),"runtime":p.runtime_value()}));
             }
             Err(e) if e.is(ErrorClass::NotFound) => (),
             Err(e) => return Err(e),

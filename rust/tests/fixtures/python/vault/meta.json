@@ -1,0 +1,18 @@
+{
+  "admin_passphrase": "admin-passphrase-1",
+  "recovery_passphrase": "recovery-passphrase-1",
+  "secret_id": "gh-token",
+  "secret_value": "cross-lang-secret-py-to-rust",
+  "grant_id": "g-46f1656fb50a41dd",
+  "handle": "zpw1.eyJjIjoiYWdlbnQtMSIsImV4cCI6MTcwMDAwMDMwMCwiZyI6ImctNDZmMTY1NmZiNTBhNDFkZCIsImlhdCI6MTcwMDAwMDAwMCwianRpIjoiTHFOOE9jNERJZzFoSllGbyIsIm4iOiJnaCIsInB2IjoxLCJ2IjoxfQ.AXKUVj-AS2W0EnECH7z19Qa9T-SM3FWFDpRSyy0mxK8",
+  "now": 1700000000.0,
+  "recover": {
+    "clock": 1700000123.75,
+    "revoked": 1,
+    "kms_files": [
+      "master.key",
+      "master.key.retired-1700000123"
+    ],
+    "kms_key_id": "local-dev-kms-1700000123"
+  }
+}

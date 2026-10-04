@@ -12,6 +12,7 @@ pub mod errors;
 pub mod secret;
 
 pub mod pybase64;
+mod pyidna;
 pub mod pyint;
 pub mod pyjson;
 pub mod pystr;
@@ -47,9 +48,8 @@ mod smtp;
 pub mod admin_cli;
 pub mod agent_cli;
 pub mod argparse;
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_proxies;
 pub mod team;
-
-#[cfg(test)]
-pub(crate) mod oracle;
 
 pub use errors::{Error, ErrorClass, Result};

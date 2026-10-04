@@ -1,39 +1,32 @@
-//! Differential tests for `zeropw::team` against the Python prototype
-//! (`zeropw/team/`), per `rust/PORTING.md`'s "add oracle differential
-//! tests ... for every cross-language format you own" rule for work unit H.
+//! Cross-language compatibility tests for `zeropw::team` against golden
+//! output of the retired Python prototype (`zeropw/team/`), stored under
+//! `tests/fixtures/python/team/oracle/` (see its `GENERATE.md`).
 //!
-//! Lives under `rust/tests/` as a standalone test binary (like
-//! `policy_oracle.rs`/`state_dir_cross_language.rs`): `crate::oracle` is
-//! `#[cfg(test)] pub(crate)` and not reachable from here, so this file has
-//! its own tiny Python-running helper.
-//!
-//! Covers:
+//! Covers the persisted-state and wire boundaries:
 //! - Device identity: the SAME fixed seed pair derives byte-identical
-//!   `DeviceRecord` fields (`sign_pub`, `agree_pub`, `sig`, fingerprint) in
-//!   both languages, and each language's signature verifies under the
-//!   other's decode.
-//! - `envelope.wrap_dek`/`unwrap_dek`: a DEK wrapped in one language unwraps
-//!   correctly in the other, in both directions.
+//!   `DeviceRecord` fields (`sign_pub`, `agree_pub`, `sig`, fingerprint), and
+//!   the Python-made record verifies here.
+//! - `envelope.unwrap_dek`: a DEK wrapped by Python unwraps here.
 //! - `commit.sign_commit`: the same device/env id/seq/hlc/seen/ops sign to
-//!   byte-identical `Commit.to_dict()` (hash included) in both languages --
-//!   Ed25519 is deterministic and the canonical JSON encoder is
-//!   byte-identical, so this is not just "both succeed" but "both produce
-//!   the exact same bytes".
-//! - `fold()`: a fixed commit history, signed once in Rust and handed to
-//!   Python as JSON, folds to a byte-identical environment document in
-//!   both languages -- including under a handful of fixed-seed shuffles of
-//!   arrival order on each side.
-//! - `humanview.to_yaml`/`strip_document`: byte-identical rendering of the
-//!   same folded document.
+//!   byte-identical `Commit.to_dict()` (hash included) -- Ed25519 is
+//!   deterministic and the canonical JSON encoder is byte-identical.
+//! - `fold()`: a fixed commit history signed by Python folds to a
+//!   byte-identical environment document, under several arrival orders.
+//! - A commit store and snapshot written by Python load and fold here, and
+//!   the same files written here are byte-identical.
+//! - `humanview.to_yaml`/`strip_document`: byte-identical rendering.
+//!
+//! The remaining tests pin peer-input handling (lenient decoding, documented
+//! rejection reasons, fail-closed outcomes) that was first measured against
+//! the prototype; their expected values are now explicit.
 
 use std::collections::BTreeMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{Map, Value, json};
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 
+use zeropw::pyint::PyInt;
 use zeropw::pyjson::{self, DumpOptions};
 use zeropw::secret::SecretBytes;
 use zeropw::store::StateDir;
@@ -43,59 +36,28 @@ use zeropw::team::fold as F;
 use zeropw::team::humanview;
 use zeropw::team::identity::{DeviceKey, DeviceRecord};
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf()
+fn fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/python/team/oracle")
 }
 
-/// Runs `script` with `python3.12` (override with `ZEROPW_PYTHON`) and the
-/// repository root on `PYTHONPATH`. Panics with stderr on a non-zero exit.
-fn run_python(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let output = Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root())
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .expect("run python");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
+/// `oracle.json`: every value the generator measured.
+fn fixture() -> Value {
+    let text = std::fs::read_to_string(fixture_dir().join("oracle.json")).expect("oracle fixture");
+    serde_json::from_str(&text).expect("oracle fixture is JSON")
 }
 
-/// Writes `data` to a fresh temp `.json` file and returns it (kept alive by
-/// the caller for the duration of the Python subprocess).
-fn write_json_temp(data: &Value) -> NamedTempFile {
-    let mut f = NamedTempFile::new().expect("temp file");
-    let text = pyjson::dumps(data, DumpOptions::compact_sorted()).expect("dumps");
-    f.write_all(text.as_bytes()).expect("write temp json");
-    f.flush().expect("flush");
-    f
+fn text(value: &Value) -> &str {
+    value.as_str().expect("fixture string")
 }
 
-/// A valid single-quoted Python string literal for `s` (backslash/quote/
-/// newline escaped), for splicing arbitrary Rust-computed text (JSON,
-/// paths, hex) into a generated Python script -- Rust's own `format!` has
-/// no `!r`-style repr formatting, so this does the escaping by hand.
-fn py_str_literal(s: &str) -> String {
-    let mut out = String::from("'");
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\'' => out.push_str("\\'"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(c),
-        }
-    }
-    out.push('\'');
-    out
+/// A Python `Commit.to_dict()` stored as its compact, key-sorted JSON text.
+fn python_commit(value: &Value) -> Commit {
+    Commit::from_dict(&pyjson::loads(text(value)).expect("fixture commit JSON"))
+        .expect("python commit parses")
+}
+
+fn compact(value: &Value) -> String {
+    pyjson::dumps(value, DumpOptions::compact_sorted()).unwrap()
 }
 
 fn fixed_device(seed_byte: u8, scalar_byte: u8) -> DeviceKey {
@@ -108,104 +70,75 @@ fn fixed_device(seed_byte: u8, scalar_byte: u8) -> DeviceKey {
 // ------------------------------------------------------------------ identity
 #[test]
 fn device_record_matches_python_for_a_fixed_seed_pair() {
+    let fx = &fixture()["device_record"];
     let device = fixed_device(0x11, 0x22);
     let record = device.record().expect("record");
-    let rust_dict = record.to_dict();
-    let rust_dict_text = pyjson::dumps(&rust_dict, DumpOptions::compact_sorted()).unwrap();
-
-    let script = r#"
-import json
-from zeropw.team.identity import DeviceKey
-device = DeviceKey(bytes([0x11]) * 32, bytes([0x22]) * 32)
-record = device.record
-print(json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")))
-print(record.fingerprint)
-print(record.verify())
-"#;
-    let out = run_python(script);
-    let mut lines = out.lines();
-    let py_dict_text = lines.next().unwrap();
-    let py_fingerprint = lines.next().unwrap();
-    let py_verify = lines.next().unwrap();
-
     assert_eq!(
-        rust_dict_text, py_dict_text,
+        compact(&record.to_dict()),
+        text(&fx["record"]),
         "DeviceRecord.to_dict() must match byte-for-byte"
     );
-    assert_eq!(record.fingerprint(), py_fingerprint);
-    assert_eq!(py_verify, "True");
+    assert_eq!(record.fingerprint(), text(&fx["fingerprint"]));
     assert!(record.verify());
 
-    // The Rust-produced record, fed back through Python's own decoder, must
-    // verify there too (round-trip through the wire encoding, not just
-    // matching field values).
-    let script2 = format!(
-        r#"
-import json
-from zeropw.team.identity import DeviceRecord
-record = DeviceRecord.from_dict(json.loads({text}))
-print(record.verify())
-"#,
-        text = py_str_literal(&rust_dict_text),
-    );
-    let out2 = run_python(&script2);
-    assert_eq!(out2.trim(), "True");
+    // The Python-produced record decodes and verifies here.
+    let python_record =
+        DeviceRecord::from_dict(&pyjson::loads(text(&fx["record"])).unwrap()).unwrap();
+    assert!(python_record.verify());
+    assert_eq!(python_record, record);
 }
 
 // ------------------------------------------------------------------ envelope
 #[test]
-fn wrap_in_rust_unwrap_in_python() {
+fn wrap_in_python_unwrap_in_rust() {
+    let fx = &fixture()["envelope"];
+    let recipient = fixed_device(0x55, 0x66);
+    let recovered = envelope::unwrap_dek(
+        &fx["wrap"],
+        text(&fx["env_id"]),
+        text(&fx["generation_id"]),
+        &recipient,
+    )
+    .unwrap();
+    assert_eq!(hex::encode(recovered), text(&fx["dek_hex"]));
+    // Bound to the env id and generation it was wrapped for.
+    assert!(
+        envelope::unwrap_dek(
+            &fx["wrap"],
+            text(&fx["env_id"]),
+            "0000000000000000",
+            &recipient
+        )
+        .is_err()
+    );
+}
+
+/// A Rust wrap has the Python wrap's shape (same fields, same encoded
+/// lengths) and round-trips.
+#[test]
+fn wrap_in_rust_has_the_python_shape_and_round_trips() {
+    let python_wrap = fixture()["envelope"]["wrap"].clone();
     let recipient = fixed_device(0x33, 0x44);
     let record = recipient.record().unwrap();
     let dek: Vec<u8> = (0..32u8).collect();
     let env_id = "0123456789abcdef0123456789abcdef";
     let generation_id = "deadbeefcafef00d";
     let wrap = envelope::wrap_dek(&dek, env_id, generation_id, &record).unwrap();
-    let wrap_text = pyjson::dumps(&wrap, DumpOptions::compact_sorted()).unwrap();
-
-    let script = format!(
-        r#"
-import json
-from zeropw.team import envelope
-from zeropw.team.identity import DeviceKey
-device = DeviceKey(bytes([0x33]) * 32, bytes([0x44]) * 32)
-wrap = json.loads({wrap})
-recovered = envelope.unwrap_dek(wrap, {env_id}, {generation_id}, device)
-print(recovered.hex())
-"#,
-        wrap = py_str_literal(&wrap_text),
-        env_id = py_str_literal(env_id),
-        generation_id = py_str_literal(generation_id),
-    );
-    let out = run_python(&script);
-    assert_eq!(out.trim(), hex::encode(&dek));
-}
-
-#[test]
-fn wrap_in_python_unwrap_in_rust() {
-    let recipient = fixed_device(0x55, 0x66);
-    let dek_hex = "aa".repeat(32);
-    let env_id = "0123456789abcdef0123456789abcdef";
-    let generation_id = "deadbeefcafef00d";
-
-    let script = format!(
-        r#"
-import json
-from zeropw.team import envelope
-from zeropw.team.identity import DeviceKey
-device = DeviceKey(bytes([0x55]) * 32, bytes([0x66]) * 32)
-record = device.record
-wrap = envelope.wrap_dek(bytes.fromhex({dek_hex}), {env_id}, {generation_id}, record)
-print(json.dumps(wrap, sort_keys=True, separators=(",", ":")))
-"#,
-        dek_hex = py_str_literal(&dek_hex),
-        env_id = py_str_literal(env_id),
-        generation_id = py_str_literal(generation_id),
-    );
-    let out = run_python(&script);
-    let wrap: Value = pyjson::loads(out.trim()).unwrap();
+    let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    let mut rust_keys = keys(&wrap);
+    let mut python_keys = keys(&python_wrap);
+    rust_keys.sort();
+    python_keys.sort();
+    assert_eq!(rust_keys, python_keys);
+    for field in &python_keys {
+        assert_eq!(
+            text(&wrap[field]).len(),
+            text(&python_wrap[field]).len(),
+            "{field}"
+        );
+    }
     let recovered = envelope::unwrap_dek(&wrap, env_id, generation_id, &recipient).unwrap();
-    assert_eq!(hex::encode(recovered), dek_hex);
+    assert_eq!(recovered, dek);
 }
 
 // -------------------------------------------------------------------- commit
@@ -221,70 +154,49 @@ fn env_init_op(owner_record: &DeviceRecord, name: &str, generation_id: &str) -> 
 
 #[test]
 fn sign_commit_matches_python_byte_for_byte() {
+    let fx = &fixture()["sign_commit"];
     let owner = fixed_device(0x77, 0x88);
     let record = owner.record().unwrap();
-    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
-    let op = env_init_op(&record, "alice-laptop", &"0".repeat(16));
-    let c1 = C::sign_commit(
-        &owner,
-        &env_id,
-        1,
-        "1000-0000",
-        &BTreeMap::new(),
-        vec![op.clone()],
-    )
-    .unwrap();
-    let rust_dict_text = pyjson::dumps(&c1.to_dict(), DumpOptions::compact_sorted()).unwrap();
-    let rust_hash = c1.hash().unwrap();
-
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team.identity import DeviceKey
-device = DeviceKey(bytes([0x77]) * 32, bytes([0x88]) * 32)
-op = json.loads({op})
-c1 = C.sign_commit(device, {env_id}, 1, "1000-0000", {{}}, [op])
-print(json.dumps(c1.to_dict(), sort_keys=True, separators=(",", ":")))
-print(c1.hash)
-print(C.verify_commit(c1, device.record))
-"#,
-        op = py_str_literal(&pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let out = run_python(&script);
-    let mut lines = out.lines();
-    let py_dict_text = lines.next().unwrap();
-    let py_hash = lines.next().unwrap();
-    let py_verify = lines.next().unwrap();
-
+    let env_id = text(&fx["env_id"]);
     assert_eq!(
-        rust_dict_text, py_dict_text,
+        C::env_owner_fingerprint(env_id).unwrap(),
+        record.fingerprint()
+    );
+    let op = env_init_op(&record, "alice-laptop", &"0".repeat(16));
+    let c1 = C::sign_commit(&owner, env_id, 1, "1000-0000", &BTreeMap::new(), vec![op]).unwrap();
+    assert_eq!(
+        compact(&c1.to_dict()),
+        text(&fx["commit"]),
         "Commit.to_dict() must match byte-for-byte"
     );
-    assert_eq!(rust_hash, py_hash);
-    assert_eq!(py_verify, "True");
+    assert_eq!(c1.hash().unwrap(), text(&fx["hash"]));
     assert!(C::verify_commit(&c1, &record));
 
-    // The Python-signed commit's own JSON, re-parsed and re-verified on the
-    // Rust side.
-    let py_commit_value: Value = pyjson::loads(py_dict_text).unwrap();
-    let restored = Commit::from_dict(&py_commit_value).unwrap();
-    assert_eq!(restored.hash().unwrap(), rust_hash);
+    // The Python-signed commit, parsed and verified here.
+    let restored = python_commit(&fx["commit"]);
+    assert_eq!(restored.hash().unwrap(), text(&fx["hash"]));
     assert!(C::verify_commit(&restored, &record));
 }
 
 // ---------------------------------------------------------------------- fold
-/// A small, fixed commit history (env.init, member.add, two
-/// connection.create, a disable, a settings.update) signed once in Rust
-/// with fixed-seed device keys, used by both the fold and humanview oracle
-/// tests below.
+/// The env id the fixture history was signed under (`<owner fp>-<fixed hex>`).
+fn history_env_id() -> String {
+    text(&fixture()["history"]["env_id"]).to_owned()
+}
+
+/// A small, fixed commit history (env.init, member.add, a secret, two
+/// connection.create, a disable, a settings.update) signed with fixed-seed
+/// device keys -- the same history the Python generator signed.
 fn build_history() -> (String, Vec<Commit>, DeviceRecord, DeviceRecord) {
     let owner = fixed_device(0x10, 0x20);
     let second = fixed_device(0x30, 0x40);
     let owner_record = owner.record().unwrap();
     let second_record = second.record().unwrap();
-    let env_id = C::new_env_id(&owner_record.fingerprint()).unwrap();
+    let env_id = history_env_id();
+    assert_eq!(
+        C::env_owner_fingerprint(&env_id).unwrap(),
+        owner_record.fingerprint()
+    );
 
     let gen0 = "0".repeat(16);
     let c1 = C::sign_commit(
@@ -309,8 +221,7 @@ fn build_history() -> (String, Vec<Commit>, DeviceRecord, DeviceRecord) {
     // `connection.create` ops below are skipped at fold time
     // (`secret_not_found`), so the whole connection path -- including the
     // `http_scope`/`ssh_target` tuple-rendering `to_yaml` bug -- went
-    // untested. `secret.put_version` needs a generation id the document
-    // already knows about (`gen0`, from `c1`'s `env.init`).
+    // untested.
     let c3 = C::sign_commit(
         &owner,
         &env_id,
@@ -374,48 +285,44 @@ fn build_history() -> (String, Vec<Commit>, DeviceRecord, DeviceRecord) {
     )
 }
 
+fn python_history() -> Vec<Commit> {
+    fixture()["history"]["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(python_commit)
+        .collect()
+}
+
+#[test]
+fn history_signs_byte_identically_to_python() {
+    let (_env_id, commits, _owner, _second) = build_history();
+    let fx = fixture();
+    let python: Vec<&str> = fx["history"]["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(text)
+        .collect();
+    let rust: Vec<String> = commits.iter().map(|c| compact(&c.to_dict())).collect();
+    assert_eq!(rust, python);
+}
+
 #[test]
 fn fold_matches_python_for_a_fixed_commit_history() {
-    let (env_id, commits, _owner_record, _second_record) = build_history();
+    let env_id = history_env_id();
+    let fx = fixture();
+    let py_doc_text = text(&fx["history"]["document"]);
+    let commits = python_history();
     let rust_result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
-    let rust_doc_text =
-        pyjson::dumps(&rust_result.document, DumpOptions::compact_sorted()).unwrap();
-
-    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json
-import random
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-canonical = None
-for seed in range(4):
-    rnd = random.Random(seed)
-    shuffled = commits[:]
-    rnd.shuffle(shuffled)
-    result = F.fold({env_id}, shuffled)
-    as_json = json.dumps(result.document, sort_keys=True, separators=(",", ":"))
-    if canonical is None:
-        canonical = as_json
-    assert as_json == canonical, f"python-side shuffle {{seed}} diverged"
-print(canonical)
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let out = run_python(&script);
-    let py_doc_text = out.trim();
+    assert!(rust_result.skipped.is_empty());
     assert_eq!(
-        rust_doc_text, py_doc_text,
+        compact(&rust_result.document),
+        py_doc_text,
         "fold() must produce a byte-identical document"
     );
 
-    // And the reverse direction: fold the same history under a handful of
-    // fixed-seed Rust-side shuffles too (order-independence on this side).
+    // Order independence: fold the same history under fixed-seed shuffles.
     let mut seeds = [0x9u64, 0x99, 0x999, 0x9999];
     for seed in seeds.iter_mut() {
         let mut shuffled = commits.clone();
@@ -427,10 +334,10 @@ print(canonical)
             shuffled.swap(i, j);
         }
         let result = F::fold(&env_id, shuffled, None, None, None, None).unwrap();
-        let text = pyjson::dumps(&result.document, DumpOptions::compact_sorted()).unwrap();
         assert_eq!(
-            text, py_doc_text,
-            "rust-side shuffle diverged from the python oracle"
+            compact(&result.document),
+            py_doc_text,
+            "a shuffled arrival order diverged from the python document"
         );
     }
 }
@@ -438,55 +345,30 @@ print(canonical)
 // ----------------------------------------------------------------- humanview
 #[test]
 fn humanview_matches_python_for_the_folded_history() {
-    let (env_id, commits, _owner_record, _second_record) = build_history();
-    let rust_result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    let env_id = history_env_id();
+    let fx = fixture();
+    let rust_result = F::fold(&env_id, python_history(), None, None, None, None).unwrap();
     let stripped = humanview::strip_document(&rust_result.document);
-    // Every connection in `build_history()` is created within this single
-    // `fold()` call, so all of them are "fresh" (finding H-R2-7) -- matches
-    // the tuple-repr assertions below.
+    // Every connection in the history is created within this single
+    // `fold()` call, so all of them are "fresh" (finding H-R2-7).
     let rust_yaml = humanview::to_yaml(&stripped, &rust_result.fresh_connections);
-    let rust_stripped_json = pyjson::dumps(&stripped, DumpOptions::compact_sorted()).unwrap();
-
-    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-from zeropw.team import humanview as H
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-result = F.fold({env_id}, commits)
-stripped = H.strip_document(result.document)
-print(json.dumps(stripped, sort_keys=True, separators=(",", ":")))
-print("---SPLIT---")
-print(H.to_yaml(stripped), end="")
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let out = run_python(&script);
-    let mut parts = out.splitn(2, "---SPLIT---\n");
-    let py_stripped_json = parts.next().unwrap().trim_end_matches('\n');
-    let py_yaml = parts.next().unwrap();
 
     assert_eq!(
-        rust_stripped_json, py_stripped_json,
+        compact(&stripped),
+        text(&fx["history"]["stripped"]),
         "strip_document() must match byte-for-byte"
     );
-    assert_eq!(rust_yaml, py_yaml, "to_yaml() must match byte-for-byte");
+    assert_eq!(
+        rust_yaml,
+        text(&fx["history"]["yaml"]),
+        "to_yaml() must match byte-for-byte"
+    );
 
-    // Finding H-1: `dataclasses.asdict(Connection(...))` keeps
+    // Finding H-1: `dataclasses.asdict(Connection(...))` kept
     // `HttpScope.methods`/`path_prefixes`/`confirm_methods` as Python
-    // tuples, which `to_yaml` renders as `str(tuple)` -- a single inline
-    // scalar like `methods: ('GET',)`, never the multi-line `-` list form
-    // `to_yaml` uses for a JSON array. Byte-equality with the oracle above
-    // already proves this, but assert the concrete shape too so a future
-    // change that happens to make both sides agree on the *wrong* thing
-    // (e.g. by reverting `build_history()`'s secret so connections are
-    // skipped again) fails loudly here instead of silently.
+    // tuples, which `to_yaml` renders as `str(tuple)`. Assert the concrete
+    // shape too, so a fixture regenerated with the connections skipped
+    // fails loudly here.
     assert!(
         rust_yaml.contains("methods: ('GET',)"),
         "http_scope.methods must render as a Python tuple repr:\n{rust_yaml}"
@@ -501,41 +383,46 @@ print(H.to_yaml(stripped), end="")
     );
 }
 
-/// Finding H-R2-7: a connection's `http_scope`/`ssh_target` tuple-vs-list
-/// rendering depends on whether THAT connection was (re)built by the fold
-/// call that produced the document, not on the key name. Builds the same
-/// small history as above, folds it once and saves a snapshot (so "gh" and
-/// "gitlab" both start out fresh-built, matching the test above), then
-/// folds AGAIN from that snapshot with one more commit that only updates
-/// "gitlab" -- `fold_with_snapshot`'s second-stage document must render
-/// "gitlab" as a tuple (rebuilt this fold) and "gh" as a plain YAML list
-/// (carried over untouched from the snapshot), byte-identical to Python
-/// performing the exact same two-stage `fold`/`save_snapshot`/
-/// `fold_with_snapshot` pipeline.
-#[test]
-fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
-    let (env_id, commits, owner_record, _second_record) = build_history();
+/// Copies the Python-written `team/<env>/...` tree into a fresh state dir.
+fn python_state() -> (TempDir, StateDir) {
     let tmp = TempDir::new().unwrap();
     let state = StateDir::new(tmp.path().join("state"));
     state.create().unwrap();
+    let fx = fixture();
+    for rel in fx["snapshot_seeded"]["files"].as_array().unwrap() {
+        let rel = text(rel);
+        let bytes = std::fs::read(fixture_dir().join("state").join(rel)).unwrap();
+        let value = pyjson::loads(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        state.write_json(rel, &value).unwrap();
+        // `write_json` reproduces Python's own bytes exactly.
+        assert_eq!(
+            std::fs::read(state.path.join(rel)).unwrap(),
+            bytes,
+            "{rel}: rust-written JSON differs from the python-written file"
+        );
+    }
+    (tmp, state)
+}
 
-    let result1 = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
-    F::save_snapshot(&state, &env_id, 1, &result1).unwrap();
+/// Finding H-R2-7: a connection's `http_scope`/`ssh_target` tuple-vs-list
+/// rendering depends on whether THAT connection was (re)built by the fold
+/// call that produced the document, not on the key name. The Python
+/// generator stored the history plus one more commit (updating only
+/// "gitlab") in its own commit store, saved snapshot 1 after the first
+/// seven commits, and rendered `fold_with_snapshot`'s document: "gitlab" as
+/// a tuple (rebuilt this fold), "gh" as a plain YAML list (carried over
+/// from the snapshot). That Python-written state must load and render
+/// byte-identically here.
+#[test]
+fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
+    let env_id = history_env_id();
+    let fx = fixture();
+    let (_tmp, state) = python_state();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    let all_commits = store.all_commits().unwrap();
+    assert_eq!(all_commits.len(), 8);
 
-    let owner = fixed_device(0x10, 0x20); // same fixed seed `build_history()` uses for owner
-    let c8 = C::sign_commit(
-        &owner,
-        &env_id,
-        6,
-        "6000-0000",
-        &BTreeMap::new(),
-        vec![json!({"op": "connection.update", "id": "gitlab", "description": "updated"})],
-    )
-    .unwrap();
-    let mut all_commits = commits.clone();
-    all_commits.push(c8.clone());
-
-    let result2 = F::fold_with_snapshot(&env_id, all_commits.clone(), &state, None, None).unwrap();
+    let result2 = F::fold_with_snapshot(&env_id, all_commits, &state, None, None).unwrap();
     assert_eq!(
         result2.fresh_connections,
         std::collections::BTreeSet::from(["gitlab".to_string()]),
@@ -543,7 +430,11 @@ fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
     );
     let stripped2 = humanview::strip_document(&result2.document);
     let rust_yaml2 = humanview::to_yaml(&stripped2, &result2.fresh_connections);
-
+    assert_eq!(
+        rust_yaml2,
+        text(&fx["snapshot_seeded"]["yaml"]),
+        "to_yaml() after a snapshot-seeded second fold must match byte-for-byte"
+    );
     assert_eq!(
         rust_yaml2.matches("methods: ('GET',)").count(),
         1,
@@ -558,38 +449,49 @@ fn humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold() {
         rust_yaml2.contains("methods:\n      - GET"),
         "the untouched connection (gh) must render http_scope.methods as a YAML list, not a tuple:\n{rust_yaml2}"
     );
+}
 
-    let commits_json: Vec<Value> = all_commits.iter().map(Commit::to_dict).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-from zeropw.team import humanview as H
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    result1 = F.fold({env_id}, commits[:7])
-    F.save_snapshot(state, {env_id}, 1, result1)
-    result2 = F.fold_with_snapshot({env_id}, commits, state)
-    stripped2 = H.strip_document(result2.document)
-    print(H.to_yaml(stripped2), end="")
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let py_yaml2 = run_python(&script);
+/// The same commit store and snapshot, written by this port from the same
+/// commits, is byte-identical to the Python-written files.
+#[test]
+fn commit_store_and_snapshot_files_match_python_bytes() {
+    let (env_id, mut commits, _owner, _second) = build_history();
+    let fx = fixture();
+    let owner = fixed_device(0x10, 0x20);
+    let c8 = C::sign_commit(
+        &owner,
+        &env_id,
+        6,
+        "6000-0000",
+        &BTreeMap::new(),
+        vec![json!({"op": "connection.update", "id": "gitlab", "description": "updated"})],
+    )
+    .unwrap();
     assert_eq!(
-        rust_yaml2, py_yaml2,
-        "to_yaml() after a snapshot-seeded second fold must match byte-for-byte"
+        compact(&c8.to_dict()),
+        text(&fx["snapshot_seeded"]["commit"])
     );
-    let _ = owner_record; // only used to keep build_history()'s destructure symmetric with the sibling test
+
+    let tmp = TempDir::new().unwrap();
+    let state = StateDir::new(tmp.path().join("state"));
+    state.create().unwrap();
+    let store = C::CommitStore::new(&state, env_id.clone());
+    let result1 = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    commits.push(c8);
+    for commit in &commits {
+        store.append(commit).unwrap();
+    }
+    F::save_snapshot(&state, &env_id, &PyInt::from(1), &result1).unwrap();
+    let files = fx["snapshot_seeded"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 9);
+    for rel in files {
+        let rel = text(rel);
+        assert_eq!(
+            std::fs::read(state.path.join(rel)).unwrap(),
+            std::fs::read(fixture_dir().join("state").join(rel)).unwrap(),
+            "{rel}"
+        );
+    }
 }
 
 /// Finding H-R3-6: the tuple-rendering special case used to trigger for a
@@ -597,23 +499,18 @@ with tempfile.TemporaryDirectory() as tmp:
 /// document's own top-level `connections` map -- but a `secret.put_version`
 /// op's `public` metadata is arbitrary peer-controlled JSON that never
 /// passes through `build_connection_fields`/`dataclasses.asdict`, so its
-/// array values are always plain Python `list`s, never `tuple`s, no matter
-/// what key they sit under. This must be tested through a REAL `fold()`
-/// (not a hand-built document loaded straight from JSON, which -- in
-/// Python -- can never contain a real `tuple` at all, `json.loads` always
-/// produces `list`s, so it could never actually exercise the "must still
-/// render as a tuple" half of this comparison): `build_history()`'s "gh"
-/// connection is genuinely fresh-built by a real `connection.create` op
-/// (so `http_scope.methods` really is a Python `tuple` there), and this
-/// adds one more commit whose `secret.put_version` op's `public` metadata
-/// nests a `"connections"` key with an id that deliberately COLLIDES with
-/// "gh". Confirms real `python3.12` renders the top-level "gh" as a tuple
-/// repr but the nested, colliding one as an ordinary list, then confirms
-/// Rust matches byte-for-byte.
+/// array values are always plain lists, no matter what key they sit under.
+/// The history's "gh" connection is genuinely fresh-built by a real
+/// `connection.create` op, and one more commit's `public` metadata nests a
+/// `"connections"` key with an id that deliberately COLLIDES with "gh". The
+/// Python prototype rendered the top-level "gh" as a tuple repr but the
+/// nested, colliding one as an ordinary list; this port must match
+/// byte-for-byte.
 #[test]
 fn humanview_nested_connections_key_off_root_matches_python() {
-    let (env_id, mut commits, owner_record, _second_record) = build_history();
-    let owner = fixed_device(0x10, 0x20); // same fixed seed build_history() uses for owner
+    let (env_id, mut commits, _owner_record, _second_record) = build_history();
+    let fx = fixture();
+    let owner = fixed_device(0x10, 0x20);
     let gen0 = "0".repeat(16);
     let trap_public = json!({"connections": {"gh": {"http_scope": {"methods": ["GET"]}}}});
     let c8 = C::sign_commit(
@@ -629,16 +526,23 @@ fn humanview_nested_connections_key_off_root_matches_python() {
         ],
     )
     .unwrap();
+    assert_eq!(
+        compact(&c8.to_dict()),
+        text(&fx["nested_connections"]["commit"])
+    );
     commits.push(c8);
 
-    let rust_result = F::fold(&env_id, commits.clone(), None, None, None, None).unwrap();
+    let rust_result = F::fold(&env_id, commits, None, None, None, None).unwrap();
     let stripped = humanview::strip_document(&rust_result.document);
     let rust_yaml = humanview::to_yaml(&stripped, &rust_result.fresh_connections);
-    // Both "gh" and "gitlab" are genuinely fresh-built this fold (each has
-    // its own real `connection.create`), so each renders `http_scope.
-    // methods` as a tuple repr -- exactly 2 occurrences, not 3: the nested,
-    // colliding "connections.gh" inside `s-trap`'s `public` metadata must
-    // NOT add a third.
+    assert_eq!(
+        rust_yaml,
+        text(&fx["nested_connections"]["yaml"]),
+        "to_yaml() must match python byte-for-byte for a colliding nested connections key"
+    );
+    // Both "gh" and "gitlab" are genuinely fresh-built this fold, so each
+    // renders `http_scope.methods` as a tuple repr -- exactly 2
+    // occurrences, not 3.
     assert_eq!(
         rust_yaml.matches("methods: ('GET',)").count(),
         2,
@@ -648,31 +552,6 @@ fn humanview_nested_connections_key_off_root_matches_python() {
         rust_yaml.contains("public:\n          connections:\n            gh:\n              http_scope:\n                methods:\n                - GET"),
         "the nested, colliding connections key must render as an ordinary YAML list:\n{rust_yaml}"
     );
-
-    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-from zeropw.team import humanview as H
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-result = F.fold({env_id}, commits)
-stripped = H.strip_document(result.document)
-print(H.to_yaml(stripped), end="")
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let py_yaml = run_python(&script);
-    assert_eq!(
-        rust_yaml, py_yaml,
-        "to_yaml() must match python byte-for-byte for a colliding nested connections key"
-    );
-    let _ = owner_record; // only used to keep build_history()'s destructure symmetric with sibling tests
 }
 
 // ------------------------------------------------------------------ H-R2-6
@@ -688,7 +567,8 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     let record = owner.record().unwrap();
     let env_id = C::new_env_id(&record.fingerprint()).unwrap();
     let gen0 = "0".repeat(16);
-    let huge: i128 = 1_000_000_000_000_000_000_000_000_000_000; // 10**30, far outside i64
+    // 10**60: beyond i64 and i128 alike.
+    let huge = PyInt(format!("1{}", "0".repeat(60)).parse().unwrap());
     let c1 = C::sign_commit(
         &owner,
         &env_id,
@@ -701,7 +581,7 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     let c2 = C::sign_commit(
         &owner,
         &env_id,
-        huge,
+        &huge,
         "2000-0000",
         &BTreeMap::new(),
         vec![json!({"op": "settings.update", "sync_interval_seconds": 1})],
@@ -717,30 +597,6 @@ fn fold_vector_preserves_author_seq_beyond_i64_like_python() {
     )
     .unwrap();
     assert_eq!(rust_result.vector.get(&record.fingerprint()), Some(&huge));
-    assert_ne!(
-        rust_result.vector.get(&record.fingerprint()),
-        Some(&(i64::MAX as i128)),
-        "must not be clamped to i64::MAX"
-    );
-
-    let commits_json = vec![c1.to_dict(), c2.to_dict()];
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-result = F.fold({env_id}, commits)
-print(result.vector[commits[0].author])
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let out = run_python(&script);
-    assert_eq!(out.trim(), huge.to_string());
 }
 
 /// Finding H-R2-6 (probe 2, "the 10^30 snapshot vector"): `snapshot_floor`
@@ -793,48 +649,6 @@ fn snapshot_floor_beyond_i64_still_refuses_a_replayed_commit() {
     );
     let rust_err = store.append(&replayed).unwrap_err();
     assert_eq!(rust_err.reason, "team_seq_duplicate");
-
-    // --- Python side: the exact same snapshot bytes (via a temp file, to
-    // avoid hand-templating a JSON literal into the generated script), and
-    // the same replayed commit.
-    let snapshot_temp = write_json_temp(&snapshot_doc);
-    let replayed_text = pyjson::dumps(&replayed.to_dict(), DumpOptions::compact_sorted()).unwrap();
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-with open({snapshot_path}) as f:
-    snapshot = json.load(f)
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    state.write_json({snapshot_rel_path}, snapshot)
-    store = C.CommitStore(state, {env_id})
-    print(store.last_seq({owner}))
-    replayed = C.Commit.from_dict(json.loads({replayed}))
-    try:
-        store.append(replayed)
-        print("accepted")
-    except InvalidInput as exc:
-        print(exc.reason)
-"#,
-        snapshot_path = py_str_literal(snapshot_temp.path().to_str().unwrap()),
-        snapshot_rel_path = py_str_literal(&format!("team/{env_id}/snapshots/1.json")),
-        env_id = py_str_literal(&env_id),
-        owner = py_str_literal(&record.fingerprint()),
-        replayed = py_str_literal(&replayed_text),
-    );
-    let out = run_python(&script);
-    let mut lines = out.lines();
-    assert_eq!(lines.next().unwrap(), huge.to_string());
-    assert_eq!(
-        lines.next().unwrap(),
-        "team_seq_duplicate",
-        "python must also refuse the replayed commit"
-    );
 }
 
 /// Finding H-R3-9: `CommitStore.vector`/`_snapshot_floor` (Python) filter
@@ -845,9 +659,8 @@ with tempfile.TemporaryDirectory() as tmp:
 /// IGNORED here (`vector()` missing that entry, `last_seq() == 0`) where
 /// Python reads it as `author_seq = 3` -- which would let a REPLAYED
 /// `author_seq = 1..3` commit Python refuses (`team_seq_duplicate`) be
-/// silently re-accepted by this port instead. This confirms real
-/// `python3.12`'s `CommitStore.vector` really does read that exact
-/// filename as `3`, then confirms Rust now agrees.
+/// silently re-accepted by this port instead. (The Python prototype read
+/// that exact filename as `3`.)
 #[test]
 fn commit_store_vector_reads_non_ascii_nd_digit_filename_like_python() {
     let owner = fixed_device(0x91, 0x92);
@@ -872,26 +685,6 @@ fn commit_store_vector_reads_non_ascii_nd_digit_filename_like_python() {
         store.last_seq(&fp).unwrap(),
         3,
         "a non-ASCII Nd digit filename must still be read as author_seq 3"
-    );
-
-    let script = format!(
-        r#"
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-state = StateDir(Path({state_path}))
-store = C.CommitStore(state, {env_id})
-print(store.last_seq({fp}))
-"#,
-        state_path = py_str_literal(&state.path.to_string_lossy()),
-        env_id = py_str_literal(&env_id),
-        fp = py_str_literal(&fp),
-    );
-    let out = run_python(&script);
-    assert_eq!(
-        out.trim(),
-        "3",
-        "real python3.12 must also read this filename as author_seq 3"
     );
 }
 
@@ -925,38 +718,14 @@ fn commit_store_vector_fails_closed_on_isdigit_but_unparsable_filename() {
         .last_seq(&fp)
         .expect_err("an isdigit()-but-unparsable stem must fail closed, not silently skip");
     assert_eq!(err.reason, "state_corrupt");
-
-    let script = format!(
-        r#"
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-state = StateDir(Path({state_path}))
-store = C.CommitStore(state, {env_id})
-try:
-    store.last_seq({fp})
-    print("OK")
-except Exception as e:
-    print(f"ERR {{type(e).__name__}}")
-"#,
-        state_path = py_str_literal(&state.path.to_string_lossy()),
-        env_id = py_str_literal(&env_id),
-        fp = py_str_literal(&fp),
-    );
-    let out = run_python(&script);
-    assert_eq!(
-        out.trim(),
-        "ERR ValueError",
-        "real python3.12 must raise an uncaught ValueError for this filename"
-    );
 }
 
 // ------------------------------------------------------------------ H-2/H-3/H-4/H-5/H-6
 // Round-1 equivalence-review fixes for work unit H (team data layer). Each
-// test below is oracle-backed: the same genuinely-signed commit (or op) is
-// fed to both languages' `receive_commit`/`validate_op`/`fold`, and their
-// outcomes are asserted equal -- both to each other and, where the finding
-// spells one out, to the specific string the review recorded.
+// test below feeds a genuinely-signed commit (or op) to `receive_commit`/
+// `validate_op`/`fold` and asserts the outcome the Python prototype
+// produced for the same input (measured when these tests were written
+// against it).
 
 fn fresh_state() -> (TempDir, StateDir) {
     let tmp = TempDir::new().expect("tempdir");
@@ -988,7 +757,6 @@ fn hlc_parse_leniency_matches_python_receive_commit_outcome() {
         vec![env_init_op(&record, "alice", &gen0)],
     )
     .unwrap();
-    let c1_text = pyjson::dumps(&c1.to_dict(), DumpOptions::compact_sorted()).unwrap();
 
     let probes: [(&str, &str); 5] = [
         (" 1000-0001", "accepted"),
@@ -1007,7 +775,6 @@ fn hlc_parse_leniency_matches_python_receive_commit_outcome() {
             vec![json!({"op": "settings.update", "sync_interval_seconds": 42})],
         )
         .unwrap();
-        let c2_text = pyjson::dumps(&c2.to_dict(), DumpOptions::compact_sorted()).unwrap();
 
         let (_tmp, state) = fresh_state();
         let store = C::CommitStore::new(&state, env_id.clone());
@@ -1019,38 +786,6 @@ fn hlc_parse_leniency_matches_python_receive_commit_outcome() {
         assert_eq!(
             rust_result, expected,
             "rust receive_commit outcome for hlc={hlc:?}"
-        );
-
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, {env_id})
-    c1 = C.Commit.from_dict(json.loads({c1}))
-    c2 = C.Commit.from_dict(json.loads({c2}))
-    print(C.receive_commit(store, c1, 1_000_000))
-    print(C.receive_commit(store, c2, 1_000_000))
-"#,
-            env_id = py_str_literal(&env_id),
-            c1 = py_str_literal(&c1_text),
-            c2 = py_str_literal(&c2_text),
-        );
-        let out = run_python(&script);
-        let mut lines = out.lines();
-        assert_eq!(lines.next().unwrap(), "accepted", "python bootstrap");
-        let py_result = lines.next().unwrap();
-        assert_eq!(
-            py_result, expected,
-            "python receive_commit outcome for hlc={hlc:?}"
-        );
-        assert_eq!(
-            rust_result, py_result,
-            "rust and python must agree for hlc={hlc:?}"
         );
     }
 }
@@ -1079,25 +814,6 @@ fn settings_update_accepts_arbitrary_precision_positive_int() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(rust_result, expected, "rust reason for {value}");
-
-        let op_text = pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap();
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-op = json.loads({op})
-try:
-    C.validate_op(op)
-    print("accepted")
-except InvalidInput as exc:
-    print(exc.reason)
-"#,
-            op = py_str_literal(&op_text),
-        );
-        let py_result = run_python(&script);
-        assert_eq!(py_result.trim(), expected, "python reason for {value}");
-        assert_eq!(rust_result, py_result.trim());
     }
     // 1.5 is a float, not an int shape at all -- rejected on both sides too,
     // checked separately since it needs a float JSON literal.
@@ -1111,12 +827,13 @@ except InvalidInput as exc:
 /// value validates and is stored verbatim in the folded document. Both
 /// sides used to accept the commit but produce byte-different documents
 /// (Rust silently dropped the field to `null`); this compares the folded
-/// document byte-for-byte.
+/// document with the Python fixture byte-for-byte.
 #[test]
 fn ca_file_and_value_prefix_pass_through_verbatim_in_folded_document() {
+    let fx = fixture();
     let owner = fixed_device(0xF1, 0xF2);
     let record = owner.record().unwrap();
-    let env_id = C::new_env_id(&record.fingerprint()).unwrap();
+    let env_id = text(&fx["ca_file"]["env_id"]).to_owned();
     let gen0 = "0".repeat(16);
     let c1 = C::sign_commit(
         &owner,
@@ -1166,26 +883,17 @@ fn ca_file_and_value_prefix_pass_through_verbatim_in_folded_document() {
         json!(7)
     );
 
-    let commits_json: Vec<Value> = commits.iter().map(Commit::to_dict).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.team import fold as F
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-result = F.fold({env_id}, commits)
-print(json.dumps(result.document, sort_keys=True, separators=(",", ":")))
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let py_doc_text = run_python(&script);
+    let python_commits: Vec<&str> = fx["ca_file"]["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(text)
+        .collect();
+    let rust_commits: Vec<String> = commits.iter().map(|c| compact(&c.to_dict())).collect();
+    assert_eq!(rust_commits, python_commits);
     assert_eq!(
         rust_doc_text,
-        py_doc_text.trim(),
+        text(&fx["ca_file"]["document"]),
         "folded document must be byte-identical, including ca_file/value_prefix"
     );
 }
@@ -1458,29 +1166,6 @@ fn op_validation_reason_sweep_matches_python() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(&rust_result, expected, "rust reason for case {label:?}");
-
-        let op_text = pyjson::dumps(op, DumpOptions::compact_sorted()).unwrap();
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-op = json.loads({op})
-try:
-    C.validate_op(op)
-    print("accepted")
-except InvalidInput as exc:
-    print(exc.reason)
-"#,
-            op = py_str_literal(&op_text),
-        );
-        let py_result = run_python(&script);
-        let py_result = py_result.trim();
-        assert_eq!(py_result, *expected, "python reason for case {label:?}");
-        assert_eq!(
-            rust_result, py_result,
-            "rust/python reason must agree for case {label:?}"
-        );
     }
 }
 
@@ -1517,27 +1202,6 @@ fn extra_env_key_before_value_order_matches_python_when_not_key_sorted() {
         rust_result, "invalid_env_name",
         "'b' (checked first in document order) must fail the name pattern before 'A's bad value is ever inspected"
     );
-
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-op = json.loads({raw})
-try:
-    C.validate_op(op)
-    print("accepted")
-except InvalidInput as e:
-    print(e.reason)
-"#,
-        raw = py_str_literal(raw_json),
-    );
-    let py_result = run_python(&script);
-    assert_eq!(
-        py_result.trim(),
-        rust_result,
-        "rust and real python3.12 must agree on the first-in-document-order failure"
-    );
 }
 
 /// Finding H-R4-3 (`build_cli_profile` vs `zeropw/team/commit.py`
@@ -1554,9 +1218,8 @@ except InvalidInput as e:
 /// comment explains -- irrelevant for most cases below (`extra_env` as an
 /// ARRAY of pairs keeps its element order under key-sorting regardless,
 /// since only object *keys* get reordered) but kept consistent throughout
-/// for a single, uniformly trustworthy harness. Every reason below is
-/// independently confirmed against real `python3.12` in the same loop that
-/// checks Rust, not asserted from memory.
+/// for a single, uniformly trustworthy harness. Every reason below was
+/// measured against the Python prototype, not asserted from memory.
 #[test]
 fn build_cli_profile_check_order_matches_python_over_a_sweep() {
     fn cli_op(cli_json: &str) -> String {
@@ -1674,28 +1337,6 @@ fn build_cli_profile_check_order_matches_python_over_a_sweep() {
             Err(e) => e.reason.to_string(),
         };
         assert_eq!(&rust_result, expected, "rust reason for cli={cli_json:?}");
-
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-op = json.loads({raw})
-try:
-    C.validate_op(op)
-    print("accepted")
-except InvalidInput as e:
-    print(e.reason)
-"#,
-            raw = py_str_literal(&raw),
-        );
-        let py_result = run_python(&script);
-        let py_result = py_result.trim();
-        assert_eq!(py_result, *expected, "python reason for cli={cli_json:?}");
-        assert_eq!(
-            rust_result, py_result,
-            "rust/python must agree for cli={cli_json:?}"
-        );
     }
 }
 
@@ -1736,23 +1377,6 @@ fn cli_profile_truthy_container_program_matches_python() {
         &json!(["curl", "--silent"]),
         "the list program must be folded VERBATIM into the document"
     );
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-args = json.loads({raw})
-fields = C.build_connection_fields(args)
-print(json.dumps(fields["cli"]["program"]))
-"#,
-        raw = py_str_literal(&accept_args),
-    );
-    let py_out = run_python(&script);
-    let py_program: Value = serde_json::from_str(py_out.trim()).unwrap();
-    assert_eq!(
-        py_program,
-        json!(["curl", "--silent"]),
-        "python's own program field must also be the verbatim list"
-    );
 
     // A dict `program` containing the literal NUL as a KEY must still be
     // rejected the documented way.
@@ -1764,26 +1388,6 @@ print(json.dumps(fields["cli"]["program"]))
     let rust_err = C::build_connection_fields(&reject_op)
         .expect_err("a dict program containing a literal NUL key must be rejected");
     assert_eq!(rust_err.reason, "invalid_cli_program");
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-args = json.loads({raw})
-try:
-    C.build_connection_fields(args)
-    print("accepted")
-except InvalidInput as e:
-    print(e.reason)
-"#,
-        raw = py_str_literal(&reject_args),
-    );
-    let py_out = run_python(&script);
-    assert_eq!(
-        py_out.trim(),
-        "invalid_cli_program",
-        "python must reject the NUL-keyed dict program the same documented way"
-    );
 }
 
 /// Finding H-R5-4 (`build_cli_profile`'s check ORDER vs
@@ -1808,27 +1412,6 @@ fn cli_profile_program_checked_before_base_url_env_matches_python() {
     assert_eq!(
         rust_err.reason, "invalid_cli_program",
         "rust must report the PROGRAM failure, not whatever base_url_env's own reason is"
-    );
-
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-args = json.loads({raw})
-try:
-    C.build_connection_fields(args)
-    print("accepted")
-except InvalidInput as e:
-    print(e.reason)
-"#,
-        raw = py_str_literal(&args_text),
-    );
-    let py_out = run_python(&script);
-    assert_eq!(
-        py_out.trim(),
-        "invalid_cli_program",
-        "python must also report invalid_cli_program first"
     );
 }
 
@@ -1855,19 +1438,11 @@ fn commit_from_dict_coerces_non_string_scalar_fields_like_python_str() {
     let rust_commit = Commit::from_dict(&raw).expect("must parse despite non-string fields");
     let rust_text = pyjson::dumps(&rust_commit.to_dict(), DumpOptions::compact_sorted()).unwrap();
 
-    let raw_text = pyjson::dumps(&raw, DumpOptions::compact_sorted()).unwrap();
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-data = json.loads({raw})
-c = C.Commit.from_dict(data)
-print(json.dumps(c.to_dict(), sort_keys=True, separators=(",", ":")))
-"#,
-        raw = py_str_literal(&raw_text),
+    // What the Python prototype's `Commit.from_dict(...).to_dict()` gave.
+    assert_eq!(
+        rust_text,
+        r#"{"author":"True","author_seq":1,"env_id":"12345","format":"zeropw-team-commit-v1","hlc":"1000","ops":[{"op":"settings.update","sync_interval_seconds":1}],"seen":{},"sig":"None"}"#
     );
-    let py_text = run_python(&script);
-    assert_eq!(rust_text, py_text.trim());
 }
 
 /// Finding H-R4-1 (`DeviceRecord::from_dict` vs `zeropw/team/identity.py`
@@ -1952,36 +1527,6 @@ fn member_add_device_record_with_array_wrapped_field_matches_python_receive_comm
         "rust receive_commit outcomes"
     );
 
-    let commits_json: Vec<Value> = [&c1, &c2, &c3].iter().map(|c| c.to_dict()).collect();
-    let temp = write_json_temp(&json!(commits_json));
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-with open({path}) as f:
-    raw = json.load(f)
-commits = [C.Commit.from_dict(c) for c in raw]
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, {env_id})
-    for c in commits:
-        print(C.receive_commit(store, c, 1_000_000))
-"#,
-        path = py_str_literal(temp.path().to_str().unwrap()),
-        env_id = py_str_literal(&env_id),
-    );
-    let out = run_python(&script);
-    let py_results: Vec<&str> = out.lines().collect();
-    assert_eq!(
-        py_results,
-        vec!["accepted", "accepted", "accepted"],
-        "python receive_commit outcomes"
-    );
-    assert_eq!(rust_results, py_results);
-
     // The commit store, folded, must show both members joined, like Python.
     let all_commits = store.all_commits().unwrap();
     let rust_fold = F::fold(&env_id, all_commits, None, None, None, None).unwrap();
@@ -2061,32 +1606,6 @@ fn device_record_from_dict_container_field_coercion_matches_python() {
          SAME bytes as the plain string form"
     );
 
-    let doc_text =
-        pyjson::dumps(&dict_order_device, DumpOptions::plain()).expect("dump dict-order device");
-    let script = format!(
-        r#"
-import json
-from zeropw.team.identity import DeviceRecord
-data = json.loads({doc_text:?})
-try:
-    r = DeviceRecord.from_dict(data)
-    print("OK", r.agree_pub.hex())
-except Exception as e:
-    print("ERR", type(e).__name__)
-"#
-    );
-    let py_out = run_python(&script);
-    assert!(
-        py_out.trim().starts_with("OK"),
-        "real python3.12 must also accept the dict-ordered agree_pub: {py_out}"
-    );
-    let py_hex = py_out.trim().strip_prefix("OK ").unwrap();
-    assert_eq!(
-        py_hex,
-        hex::encode(record.agree_pub),
-        "python's decoded agree_pub bytes must match the real key"
-    );
-
     // (b) array-wrapped with a literal non-ASCII element: must be REJECTED,
     // matching Python.
     let mut array_nonascii_device = record.to_dict();
@@ -2098,26 +1617,6 @@ except Exception as e:
     assert!(
         rust_result.is_err(),
         "rust must reject the non-ASCII-containing array agree_pub, matching python"
-    );
-
-    let doc_text = pyjson::dumps(&array_nonascii_device, DumpOptions::plain())
-        .expect("dump array-nonascii device");
-    let script = format!(
-        r#"
-import json
-from zeropw.team.identity import DeviceRecord
-data = json.loads({doc_text:?})
-try:
-    DeviceRecord.from_dict(data)
-    print("OK")
-except Exception as e:
-    print("ERR", type(e).__name__)
-"#
-    );
-    let py_out = run_python(&script);
-    assert!(
-        py_out.trim().starts_with("ERR"),
-        "real python3.12 must also reject the non-ASCII-containing array agree_pub: {py_out}"
     );
 }
 
@@ -2148,7 +1647,6 @@ fn commit_ops_element_accepts_pair_list_like_python_dict_op() {
         vec![env_init_op(&record, "alice", &gen0)],
     )
     .unwrap();
-    let c1_text = pyjson::dumps(&c1.to_dict(), DumpOptions::compact_sorted()).unwrap();
     let c2 = C::sign_commit(
         &owner,
         &env_id,
@@ -2162,7 +1660,6 @@ fn commit_ops_element_accepts_pair_list_like_python_dict_op() {
     let op_obj = c2_reshaped["ops"][0].as_object().unwrap().clone();
     let pairs: Vec<Value> = op_obj.into_iter().map(|(k, v)| json!([k, v])).collect();
     c2_reshaped["ops"][0] = json!(pairs);
-    let c2_text = pyjson::dumps(&c2_reshaped, DumpOptions::compact_sorted()).unwrap();
 
     let (_tmp, state) = fresh_state();
     let store = C::CommitStore::new(&state, env_id.clone());
@@ -2179,36 +1676,6 @@ fn commit_ops_element_accepts_pair_list_like_python_dict_op() {
     // appended with a pair-list op.
     let all = store.all_commits().unwrap();
     assert_eq!(all.len(), 2);
-
-    let script = format!(
-        r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, {env_id})
-    c1 = C.Commit.from_dict(json.loads({c1}))
-    c2 = C.Commit.from_dict(json.loads({c2}))
-    print(C.receive_commit(store, c1, 1_000_000))
-    print(C.receive_commit(store, c2, 1_000_000))
-    print(len(store.all_commits()))
-"#,
-        env_id = py_str_literal(&env_id),
-        c1 = py_str_literal(&c1_text),
-        c2 = py_str_literal(&c2_text),
-    );
-    let out = run_python(&script);
-    let mut lines = out.lines();
-    assert_eq!(lines.next().unwrap(), "accepted");
-    assert_eq!(
-        lines.next().unwrap(),
-        "accepted",
-        "python must also accept a pair-list op"
-    );
-    assert_eq!(lines.next().unwrap(), "2");
 }
 
 /// Finding H-R3-3 (correcting H-R2-5's own reasoning): a pair-list `ops`
@@ -2232,32 +1699,15 @@ fn commit_ops_element_with_non_string_pair_key_is_pythons_uncaught_typeerror() {
         "hlc": "1000-0000", "seen": {}, "sig": "",
         "ops": [[["op", "settings.update"], [1, "x"]]],
     });
-    let data_text = pyjson::dumps(&data, DumpOptions::compact_sorted()).unwrap();
 
-    let script = format!(
-        r#"
-import json
-from zeropw.team.commit import Commit
-data = json.loads({data})
-c = Commit.from_dict(data)
-try:
-    c.canonical_json(False)
-    print("OK")
-except Exception as e:
-    print(f"ERR {{type(e).__name__}}")
-"#,
-        data = py_str_literal(&data_text),
-    );
-    let out = run_python(&script);
-    assert_eq!(
-        out.trim(),
-        "ERR TypeError",
-        "real python3.12 must raise an uncaught TypeError canonicalizing this op"
-    );
-
-    let err = Commit::from_dict(&data)
-        .expect_err("Rust must reject the whole commit as malformed, not silently drop the key");
-    assert_eq!(err.reason, "commit_malformed");
+    // Python's `Commit.from_dict` itself succeeds; the uncaught
+    // `TypeError` comes from canonicalization. Rust reports that later
+    // failure as the non-`InvalidInput` uncaught-builtin error, so callers
+    // do not treat it as an ordinary malformed (ignored) message.
+    let err = Commit::from_dict(&data).expect_err("Rust cannot hold a non-string op key");
+    assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+    assert_eq!(err.reason, "team_uncaught_exception");
+    assert_eq!(err.detail, "TypeError");
 }
 
 /// Finding H-6 (`Commit::from_dict`'s `seen` arm vs `zeropw/team/commit.py`
@@ -2282,7 +1732,6 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
         vec![env_init_op(&record, "alice", &gen0)],
     )
     .unwrap();
-    let c1_text = pyjson::dumps(&c1.to_dict(), DumpOptions::compact_sorted()).unwrap();
 
     // --- seen as an array of pairs: reshape an already-signed commit's
     // wire JSON, keeping `sig` untouched -- the signature only has to
@@ -2290,7 +1739,7 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
     // `seen`), not the wire shape, so this is transparent to a lenient
     // parser and must be ACCEPTED, not `commit_malformed`.
     let mut seen_map = BTreeMap::new();
-    seen_map.insert(record.fingerprint(), 3i128);
+    seen_map.insert(record.fingerprint(), PyInt::from(3));
     let c2 = C::sign_commit(
         &owner,
         &env_id,
@@ -2302,7 +1751,6 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
     .unwrap();
     let mut c2_reshaped = c2.to_dict();
     c2_reshaped["seen"] = json!([[record.fingerprint(), 3]]);
-    let c2_text = pyjson::dumps(&c2_reshaped, DumpOptions::compact_sorted()).unwrap();
 
     {
         let (_tmp, state) = fresh_state();
@@ -2312,37 +1760,12 @@ fn commit_from_dict_accepts_seen_pairs_and_large_author_seq() {
             "accepted"
         );
         let rust_c2 = Commit::from_dict(&c2_reshaped).expect("seen-as-pairs must parse");
-        assert_eq!(rust_c2.seen.get(&record.fingerprint()), Some(&3));
+        assert_eq!(
+            rust_c2.seen.get(&record.fingerprint()),
+            Some(&PyInt::from(3))
+        );
         let rust_result = C::receive_commit(&store, &rust_c2, 1_000_000, None).unwrap();
         assert_eq!(rust_result, "accepted");
-
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, {env_id})
-    c1 = C.Commit.from_dict(json.loads({c1}))
-    c2 = C.Commit.from_dict(json.loads({c2}))
-    print(C.receive_commit(store, c1, 1_000_000))
-    print(C.receive_commit(store, c2, 1_000_000))
-"#,
-            env_id = py_str_literal(&env_id),
-            c1 = py_str_literal(&c1_text),
-            c2 = py_str_literal(&c2_text),
-        );
-        let out = run_python(&script);
-        let mut lines = out.lines();
-        assert_eq!(lines.next().unwrap(), "accepted");
-        assert_eq!(
-            lines.next().unwrap(),
-            "accepted",
-            "python must also accept seen-as-pairs"
-        );
     }
 
     // --- a large author_seq: signed directly (this port's own signer
@@ -2367,37 +1790,8 @@ with tempfile.TemporaryDirectory() as tmp:
             vec![json!({"op": "settings.update", "sync_interval_seconds": 1})],
         )
         .unwrap();
-        let huge_text = pyjson::dumps(&huge.to_dict(), DumpOptions::compact_sorted()).unwrap();
         let rust_result = C::receive_commit(&store, &huge, 1_000_000, None).unwrap();
         assert_eq!(rust_result, "rejected");
-
-        let script = format!(
-            r#"
-import json, tempfile
-from pathlib import Path
-from zeropw.store import StateDir
-from zeropw.team import commit as C
-with tempfile.TemporaryDirectory() as tmp:
-    state = StateDir(Path(tmp) / "state")
-    state.create()
-    store = C.CommitStore(state, {env_id})
-    c1 = C.Commit.from_dict(json.loads({c1}))
-    huge = C.Commit.from_dict(json.loads({huge}))
-    print(C.receive_commit(store, c1, 1_000_000))
-    print(C.receive_commit(store, huge, 1_000_000))
-"#,
-            env_id = py_str_literal(&env_id),
-            c1 = py_str_literal(&c1_text),
-            huge = py_str_literal(&huge_text),
-        );
-        let out = run_python(&script);
-        let mut lines = out.lines();
-        assert_eq!(lines.next().unwrap(), "accepted");
-        assert_eq!(
-            lines.next().unwrap(),
-            "rejected",
-            "python must also reject the huge-seq commit"
-        );
     }
 }
 
@@ -2432,7 +1826,7 @@ fn commit_from_dict_seen_pair_key_hashability_and_collisions_match_python() {
         });
         match Commit::from_dict(&data) {
             Ok(c) => {
-                let mut entries: Vec<(String, i128)> = c.seen.into_iter().collect();
+                let mut entries: Vec<(String, PyInt)> = c.seen.into_iter().collect();
                 entries.sort();
                 format!(
                     "OK {}",
@@ -2447,80 +1841,63 @@ fn commit_from_dict_seen_pair_key_hashability_and_collisions_match_python() {
         }
     }
 
-    fn py_from_dict_seen(seen_json: &str) -> String {
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-data = {{"format": "zeropw-team-commit-v1", "env_id": "env", "author": "auth",
-        "author_seq": 1, "hlc": "1000-0000", "seen": json.loads({seen}),
-        "ops": [{{"op": "settings.update", "sync_interval_seconds": 1}}], "sig": ""}}
-try:
-    c = C.Commit.from_dict(data)
-    entries = sorted(c.seen.items())
-    print("OK " + ",".join(f"{{k!r}}:{{v}}" for k, v in entries))
-except InvalidInput as e:
-    print("ERR " + e.reason)
-"#,
-            seen = py_str_literal(seen_json),
-        );
-        run_python(&script).trim().to_string()
-    }
-
-    let cases: &[(&str, &str)] = &[
+    // Outcomes measured against the Python prototype (`ERR` for an
+    // unhashable pair key; colliding keys keep the FIRST key's text and the
+    // LAST value).
+    let cases: &[(&str, &str, &str)] = &[
         // Unhashable pair keys: a list, then a dict.
-        (r#"[[["x"], 5]]"#, "list key"),
-        (r#"[[{"a": 1}, 5]]"#, "dict key"),
+        (r#"[[["x"], 5]]"#, "list key", "ERR commit_malformed"),
+        (r#"[[{"a": 1}, 5]]"#, "dict key", "ERR commit_malformed"),
         // bool/int collide: ONE entry, first key's repr, last value.
-        (r#"[[true, 1], [1, 2]]"#, "bool/int collision"),
+        (
+            r#"[[true, 1], [1, 2]]"#,
+            "bool/int collision",
+            r#"OK "True":2"#,
+        ),
         // bool/float/int collide, mixed with an ordinary string key.
         (
             r#"[["fp", 1], [1.0, 2], [true, 3]]"#,
             "fp plus float/bool/int collision",
+            r#"OK "1.0":3,"fp":1"#,
         ),
         // false/0 collide too.
-        (r#"[[false, 1], [0, 2], [0.0, 3]]"#, "false/0/0.0 collision"),
+        (
+            r#"[[false, 1], [0, 2], [0.0, 3]]"#,
+            "false/0/0.0 collision",
+            r#"OK "False":3"#,
+        ),
         // A later pair's key collides with and overwrites an earlier one
         // whose VALUE would otherwise fail int() validation -- Python's
         // dict()-first order never evaluates int() on the discarded value.
         (
             r#"[[1, "not-an-int"], [1, 5]]"#,
             "overwritten bad value never validated",
+            r#"OK "1":5"#,
         ),
         (
             r#"[[9007199254740992, 1], [9007199254740993, 2]]"#,
             "distinct integer keys above binary64 precision",
+            r#"OK "9007199254740992":1,"9007199254740993":2"#,
         ),
         (
             r#"[[9007199254740992.0, 1], [9007199254740993, 2]]"#,
             "float and next integer stay distinct",
+            r#"OK "9007199254740992.0":1,"9007199254740993":2"#,
         ),
-        (r#"[{"a": 0, "2": 1}]"#, "two-key mapping as pair iterable"),
+        (
+            r#"[{"a": 0, "2": 1}]"#,
+            "two-key mapping as pair iterable",
+            r#"OK "a":2"#,
+        ),
     ];
 
-    for (seen_json, label) in cases {
+    for (seen_json, label, expected) in cases {
         let seen_value: Value = serde_json::from_str(seen_json).unwrap();
-        let rust_out = from_dict_seen(seen_value);
-        let py_out = py_from_dict_seen(seen_json);
-        // Compare only ACCEPT-vs-REJECT and, when both accept, the entry
-        // COUNT and VALUES -- not the exact Rust `{:?}`-vs-Python `repr()`
-        // key text side by side (already covered by other tests), just
-        // that both languages agree on outcome.
-        let rust_ok = rust_out.starts_with("OK");
-        let py_ok = py_out.starts_with("OK");
         assert_eq!(
-            rust_ok, py_ok,
-            "case {label:?} ({seen_json}): rust={rust_out} python={py_out}"
+            from_dict_seen(seen_value),
+            *expected,
+            "case {label:?} ({seen_json})"
         );
-        if rust_ok {
-            let rust_count = rust_out.matches(':').count();
-            let py_count = py_out.matches(':').count();
-            assert_eq!(
-                rust_count, py_count,
-                "case {label:?} entry count mismatch: rust={rust_out} python={py_out}"
-            );
-        }
     }
 }
 
@@ -2541,39 +1918,19 @@ except InvalidInput as e:
 /// `invalid_path_prefix` instead.
 #[test]
 fn path_prefixes_non_string_element_is_pythons_uncaught_attributeerror() {
+    // Reached via the public `validate_op` (`_build_http_scope`'s Rust
+    // port is private), same connection.create baseline as the H-5 reason
+    // sweep.
     for elem in [json!(5), json!(true)] {
-        let op = json!({"path_prefixes": [elem]});
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-try:
-    C._build_http_scope(json.loads({op}))
-    print("ok")
-except Exception as exc:
-    print(f"{{type(exc).__name__}}:{{exc}}")
-"#,
-            op = py_str_literal(&pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap()),
-        );
-        let out = run_python(&script);
-        assert!(
-            out.starts_with("AttributeError:"),
-            "python must raise an uncaught AttributeError for {elem}, got: {out}"
-        );
-        assert!(out.contains("startswith"));
-    }
-
-    // Rust: reached via the public `validate_op` (`_build_http_scope`'s
-    // Rust port is private), same connection.create baseline as the H-5
-    // reason sweep.
-    let http_base = || {
-        json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
+        let op = json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
               "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
               "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
-              "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [5]}})
-    };
-    let err = C::validate_op(&http_base()).unwrap_err();
-    assert_eq!(err.reason, "invalid_path_prefix");
+              "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"], "path_prefixes": [elem]}});
+        let err = C::validate_op(&op).unwrap_err();
+        assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "team_uncaught_exception");
+        assert_eq!(err.detail, "AttributeError");
+    }
 }
 
 /// Finding H-R2-9(b), corrected by finding H-R5-3: `HttpAuth.__post_init__`'s
@@ -2596,55 +1953,24 @@ except Exception as exc:
 /// get.
 #[test]
 fn header_name_and_basic_username_truthy_non_string_is_pythons_uncaught_typeerror() {
-    let cases = [
-        (json!({"mode": "header", "header_name": 5}), "header_name"),
-        (
-            json!({"mode": "header", "header_name": true}),
-            "header_name",
-        ),
-        (
-            json!({"mode": "basic", "basic_username": 5}),
-            "basic_username",
-        ),
-        (
-            json!({"mode": "basic", "basic_username": true}),
-            "basic_username",
-        ),
-    ];
-    for (value, field) in cases {
-        let script = format!(
-            r#"
-import json
-from zeropw.team import commit as C
-try:
-    C._build_http_auth(json.loads({value}))
-    print("ok")
-except Exception as exc:
-    print(f"{{type(exc).__name__}}:{{exc}}")
-"#,
-            value = py_str_literal(&pyjson::dumps(&value, DumpOptions::compact_sorted()).unwrap()),
-        );
-        let out = run_python(&script);
-        assert!(
-            out.starts_with("TypeError:"),
-            "python must raise an uncaught TypeError for {field}={value}, got: {out}"
-        );
-    }
-
     let http_auth_base = |auth: Value| {
         json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
               "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
               "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
               "http_auth": auth, "http_scope": {"methods": ["GET"]}})
     };
-    let err =
-        C::validate_op(&http_auth_base(json!({"mode": "header", "header_name": 5}))).unwrap_err();
-    assert_eq!(err.reason, "invalid_header_name");
-    let err = C::validate_op(&http_auth_base(
+    for auth in [
+        json!({"mode": "header", "header_name": 5}),
+        json!({"mode": "header", "header_name": true}),
+        json!({"mode": "header", "header_name": ["X-Foo"]}),
         json!({"mode": "basic", "basic_username": 5}),
-    ))
-    .unwrap_err();
-    assert_eq!(err.reason, "invalid_basic_username");
+        json!({"mode": "basic", "basic_username": true}),
+    ] {
+        let err = C::validate_op(&http_auth_base(auth)).unwrap_err();
+        assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+        assert_eq!(err.reason, "team_uncaught_exception");
+        assert_eq!(err.detail, "TypeError");
+    }
 }
 
 /// Finding H-R5-3 (`build_http_auth`'s `basic_username` check vs
@@ -2679,23 +2005,6 @@ fn http_auth_truthy_container_basic_username_matches_python() {
         &json!(["curl", "user"]),
         "the list basic_username must be folded VERBATIM into the document"
     );
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-args = json.loads({raw})
-fields = C.build_connection_fields(args)
-print(json.dumps(fields["http_auth"]["basic_username"]))
-"#,
-        raw = py_str_literal(&accept_args),
-    );
-    let py_out = run_python(&script);
-    let py_basic_username: Value = serde_json::from_str(py_out.trim()).unwrap();
-    assert_eq!(
-        py_basic_username,
-        json!(["curl", "user"]),
-        "python's own basic_username field must also be the verbatim list"
-    );
 
     // A list `basic_username` containing the literal ":" as an ELEMENT
     // must still be rejected the documented way.
@@ -2707,26 +2016,6 @@ print(json.dumps(fields["http_auth"]["basic_username"]))
     let rust_err = C::build_connection_fields(&reject_op)
         .expect_err("a list basic_username containing the literal ':' must be rejected");
     assert_eq!(rust_err.reason, "invalid_basic_username");
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-from zeropw.errors import InvalidInput
-args = json.loads({raw})
-try:
-    C.build_connection_fields(args)
-    print("accepted")
-except InvalidInput as e:
-    print(e.reason)
-"#,
-        raw = py_str_literal(&reject_args),
-    );
-    let py_out = run_python(&script);
-    assert_eq!(
-        py_out.trim(),
-        "invalid_basic_username",
-        "python must reject the colon-containing list basic_username the same documented way"
-    );
 }
 
 /// Finding X-4: `HttpAuth.__post_init__` only inspects `header_name` when
@@ -2752,23 +2041,6 @@ fn http_auth_container_header_name_matches_python_for_non_header_mode() {
         &json!({"mode": "bearer", "header_name": ["X-Foo"], "value_prefix": null, "basic_username": null}),
         "the header_name container must be folded VERBATIM into the document, not dropped to null"
     );
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-args = json.loads({raw})
-fields = C.build_connection_fields(args)
-print(json.dumps(fields["http_auth"], sort_keys=True))
-"#,
-        raw = py_str_literal(&args),
-    );
-    let py_out = run_python(&script);
-    let py_http_auth: Value = serde_json::from_str(py_out.trim()).unwrap();
-    assert_eq!(
-        py_http_auth,
-        json!({"mode": "bearer", "header_name": ["X-Foo"], "value_prefix": null, "basic_username": null}),
-        "python's own header_name field must also be the verbatim list"
-    );
 }
 
 /// Finding H-R2-9(c): a truthy plain *string* `extra_env` (e.g. `"ab"`) is
@@ -2780,36 +2052,18 @@ print(json.dumps(fields["http_auth"], sort_keys=True))
 /// `build_cli_profile`'s caller folds into `invalid_cli_profile`.
 #[test]
 fn extra_env_truthy_string_is_pythons_uncaught_valueerror() {
-    let op = json!({"program": "gh", "kind": "http", "extra_env": "ab"});
-    let script = format!(
-        r#"
-import json
-from zeropw.team import commit as C
-try:
-    C._build_cli_profile(json.loads({op}))
-    print("ok")
-except Exception as exc:
-    print(f"{{type(exc).__name__}}:{{exc}}")
-"#,
-        op = py_str_literal(&pyjson::dumps(&op, DumpOptions::compact_sorted()).unwrap()),
-    );
-    let out = run_python(&script);
-    assert!(
-        out.starts_with("ValueError:"),
-        "python must raise an uncaught ValueError, got: {out}"
-    );
-    assert!(out.contains("length 1"));
-
     let full_op = json!({"op": "connection.create", "id": "gh", "project": "demo", "environment": "dev",
           "service": "github", "kind": "http", "secret_id": "gh-token", "secret_version": null,
           "description": "", "http_target": {"scheme": "https", "host": "api.github.com", "port": 443},
           "http_auth": {"mode": "bearer"}, "http_scope": {"methods": ["GET"]},
           "cli": {"program": "gh", "kind": "http", "extra_env": "ab"}});
     let err = C::validate_op(&full_op).unwrap_err();
-    assert_eq!(err.reason, "invalid_cli_profile");
+    assert!(!err.is(zeropw::errors::ErrorClass::InvalidInput));
+    assert_eq!(err.reason, "team_uncaught_exception");
+    assert_eq!(err.detail, "ValueError");
 }
 
-/// Finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
+/// Regression for finding H-R2-9(d): `unwrap_dek`/`decrypt_secret` build each of
 /// `eph_pub`/`nonce`/`ciphertext` with `str(wrap[key])`, so a *present*
 /// `null` becomes the text `"None"` -- 4 base64-alphabet characters -- which
 /// decodes cleanly to 3 bytes and reaches the real AEAD call, failing
@@ -2817,26 +2071,17 @@ except Exception as exc:
 /// wrap would get (`dek_wrap_malformed` only if the resulting byte length
 /// is wrong, e.g. `eph_pub`; `dek_unwrap_failed`/`secret_ciphertext_invalid`
 /// for `nonce`/`ciphertext`, which reach `aead.decrypt` at any length and
-/// fail authentication there instead). `envelope.rs`'s exact-`Value::String`
-/// requirement instead rejects a `null` value up front as
-/// `dek_wrap_malformed`/`secret_ciphertext_malformed` for ALL THREE fields --
-/// happens to already match Python for `eph_pub` (both give
-/// `dek_wrap_malformed`, since either path ultimately hits the same length
-/// check) but diverges for `nonce`/`ciphertext`, where Python's outcome is
-/// `dek_unwrap_failed`/`secret_ciphertext_invalid`, not `..._malformed`.
-/// Not literally a §3.5 "uncaught builtin exception" case like (a)/(b)/(c)
-/// above -- Python handles this cleanly via `InvalidInput` on both sides --
-/// but the same "closest handled error substituted for Python's real
-/// behaviour" shape, so recorded the same way.
+/// fail authentication there instead). The port applies the same `str(...)`
+/// coercion before decoding, so the documented reason agrees for every
+/// field.
 #[test]
-fn envelope_null_field_matches_python_reason_only_for_eph_pub() {
+fn envelope_null_field_matches_python_reason() {
     let owner = DeviceKey::generate();
     let record = owner.record().unwrap();
     let dek: Vec<u8> = (0..32u8).collect();
     let env_id = "0123456789abcdef0123456789abcdef";
     let generation_id = "deadbeefcafef00d";
     let wrap = envelope::wrap_dek(&dek, env_id, generation_id, &record).unwrap();
-    let wrap_text = pyjson::dumps(&wrap, DumpOptions::compact_sorted()).unwrap();
 
     for field in ["eph_pub", "nonce", "ciphertext"] {
         let mut w = wrap.clone();
@@ -2846,54 +2091,11 @@ fn envelope_null_field_matches_python_reason_only_for_eph_pub() {
             .reason
             .to_string();
 
-        let script = format!(
-            r#"
-import json
-from zeropw.team import envelope
-from zeropw.team.identity import DeviceKey
-from zeropw.errors import InvalidInput
-device = DeviceKey({sign_seed}, {agree_private})
-wrap = json.loads({wrap})
-wrap[{field}] = None
-try:
-    envelope.unwrap_dek(wrap, {env_id}, {generation_id}, device)
-    print("ok")
-except InvalidInput as exc:
-    print(exc.reason)
-"#,
-            sign_seed = py_bytes_literal(owner.sign_seed.expose()),
-            agree_private = py_bytes_literal(owner.agree_private.expose()),
-            wrap = py_str_literal(&wrap_text),
-            field = py_str_literal(field),
-            env_id = py_str_literal(env_id),
-            generation_id = py_str_literal(generation_id),
-        );
-        let py_reason = run_python(&script).trim().to_string();
-
-        if field == "eph_pub" {
-            assert_eq!(rust_reason, "dek_wrap_malformed");
-            assert_eq!(
-                py_reason, "dek_wrap_malformed",
-                "eph_pub=null happens to already match Python"
-            );
+        let expected = if field == "eph_pub" {
+            "dek_wrap_malformed"
         } else {
-            assert_eq!(rust_reason, "dek_wrap_malformed");
-            assert_eq!(
-                py_reason, "dek_unwrap_failed",
-                "python reaches the real AEAD call for a null {field} and fails there instead"
-            );
-            assert_ne!(
-                rust_reason, py_reason,
-                "documented divergence for {field}=null (rust/DEVIATIONS.md)"
-            );
-        }
+            "dek_unwrap_failed"
+        };
+        assert_eq!(rust_reason, expected, "{field}=null");
     }
-}
-
-/// A valid Python `bytes(...)` literal for `b`, as a comma-separated
-/// decimal-byte list -- used to reconstruct a `DeviceKey` from its raw
-/// secret bytes inside a generated script.
-fn py_bytes_literal(b: &[u8]) -> String {
-    let items: Vec<String> = b.iter().map(|byte| byte.to_string()).collect();
-    format!("bytes([{}])", items.join(","))
 }

@@ -1,29 +1,16 @@
 //! `serve` prints the server's request log (method and query-free path, with
-//! handles masked) to stderr like the original CLI, and `--quiet` prints none.
+//! handles masked) to stderr like the original CLI did, and `--quiet` prints
+//! none.
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-fn python() -> String {
-    std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".into())
-}
-
-fn admin(native: bool) -> Command {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let mut command = if native {
-        Command::new(env!("CARGO_BIN_EXE_zeropw-admin"))
-    } else {
-        let mut c = Command::new(python());
-        c.args(["-m", "zeropw.admin_cli"]);
-        c
-    };
+fn admin() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_zeropw-admin"));
     command
-        .current_dir(root)
-        .env("PYTHONPATH", root)
         .env("ZEROPW_ADMIN_PASSPHRASE", "admin-passphrase-1")
         .env("ZEROPW_RECOVERY_PASSPHRASE", "recovery-passphrase-1");
     command
@@ -42,11 +29,11 @@ fn get(port: u16, path: &str) {
 
 /// Start serve, send the requests, and collect the stderr lines printed
 /// within a bounded wait.
-fn serve_log(native: bool, quiet: bool) -> Vec<String> {
+fn serve_log(quiet: bool) -> Vec<String> {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("state");
     assert!(
-        admin(true)
+        admin()
             .arg("--state-dir")
             .arg(&state)
             .arg("init")
@@ -55,7 +42,7 @@ fn serve_log(native: bool, quiet: bool) -> Vec<String> {
             .status
             .success()
     );
-    let mut command = admin(native);
+    let mut command = admin();
     command.arg("--state-dir").arg(&state).arg("serve");
     if quiet {
         command.arg("--quiet");
@@ -104,15 +91,12 @@ fn serve_log(native: bool, quiet: bool) -> Vec<String> {
 }
 
 #[test]
-fn serve_request_log_matches_the_original_and_masks_handles() {
-    let original = serve_log(false, false);
-    let native = serve_log(true, false);
-    assert_eq!(native, original);
-    assert_eq!(native, ["GET /nope", "GET /h/<handle>/..."]);
+fn serve_request_log_masks_queries_and_handles() {
+    // The prototype's CLI printed exactly these lines for these requests.
+    assert_eq!(serve_log(false), ["GET /nope", "GET /h/<handle>/..."]);
 }
 
 #[test]
 fn quiet_serve_prints_no_request_log() {
-    assert_eq!(serve_log(true, true), Vec::<String>::new());
-    assert_eq!(serve_log(false, true), Vec::<String>::new());
+    assert_eq!(serve_log(true), Vec::<String>::new());
 }

@@ -1,0 +1,91 @@
+[
+ {
+  "snapshot": {
+   "document": null,
+   "vector": {},
+   "version_order": {
+    "sid": [
+     1,
+     true,
+     null,
+     "v",
+     1.5
+    ]
+   }
+  },
+  "version_order": {
+   "sid": [
+    1,
+    true,
+    null,
+    "v",
+    1.5
+   ]
+  },
+  "saved": "{\n  \"document\": {\n    \"connections\": {},\n    \"dek\": {\n      \"current\": null,\n      \"generations\": {}\n    },\n    \"env_id\": \"env\",\n    \"format\": \"zeropw-team-env-v1\",\n    \"members\": {},\n    \"owner\": null,\n    \"secrets\": {},\n    \"settings\": {\n      \"sync_interval_seconds\": 10\n    }\n  },\n  \"vector\": {},\n  \"version_order\": {\n    \"sid\": [\n      1,\n      true,\n      null,\n      \"v\",\n      1.5\n    ]\n  }\n}"
+ },
+ {
+  "snapshot": {
+   "document": null,
+   "vector": {},
+   "version_order": {
+    "sid": "a\ud83d\ude42"
+   }
+  },
+  "version_order": {
+   "sid": [
+    "a",
+    "\ud83d\ude42"
+   ]
+  },
+  "saved": "{\n  \"document\": {\n    \"connections\": {},\n    \"dek\": {\n      \"current\": null,\n      \"generations\": {}\n    },\n    \"env_id\": \"env\",\n    \"format\": \"zeropw-team-env-v1\",\n    \"members\": {},\n    \"owner\": null,\n    \"secrets\": {},\n    \"settings\": {\n      \"sync_interval_seconds\": 10\n    }\n  },\n  \"vector\": {},\n  \"version_order\": {\n    \"sid\": [\n      \"a\",\n      \"\\ud83d\\ude42\"\n    ]\n  }\n}"
+ },
+ {
+  "snapshot": {
+   "document": null,
+   "vector": {},
+   "version_order": {
+    "sid": {
+     "first": 1,
+     "second": 2
+    }
+   }
+  },
+  "version_order": {
+   "sid": [
+    "first",
+    "second"
+   ]
+  },
+  "saved": "{\n  \"document\": {\n    \"connections\": {},\n    \"dek\": {\n      \"current\": null,\n      \"generations\": {}\n    },\n    \"env_id\": \"env\",\n    \"format\": \"zeropw-team-env-v1\",\n    \"members\": {},\n    \"owner\": null,\n    \"secrets\": {},\n    \"settings\": {\n      \"sync_interval_seconds\": 10\n    }\n  },\n  \"vector\": {},\n  \"version_order\": {\n    \"sid\": [\n      \"first\",\n      \"second\"\n    ]\n  }\n}"
+ },
+ {
+  "snapshot": {
+   "document": {
+    "_version_order": 5
+   },
+   "vector": {},
+   "version_order": {
+    "ignored": [
+     "v1"
+    ]
+   }
+  },
+  "version_order": 5,
+  "saved": "{\n  \"document\": {},\n  \"vector\": {},\n  \"version_order\": 5\n}"
+ },
+ {
+  "snapshot": {
+   "document": {
+    "env_id": "env",
+    "connections": {
+     "bad": {}
+    }
+   },
+   "vector": {},
+   "version_order": {}
+  },
+  "version_order": {},
+  "saved": "{\n  \"document\": {\n    \"connections\": {\n      \"bad\": {}\n    },\n    \"env_id\": \"env\"\n  },\n  \"vector\": {},\n  \"version_order\": {}\n}"
+ }
+]

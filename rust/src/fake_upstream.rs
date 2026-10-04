@@ -30,6 +30,8 @@ use crate::pyjson::{self, DumpOptions};
 
 /// `_Handler` defines `do_GET`/`HEAD`/`POST`/`PUT`/`PATCH`/`DELETE`/`OPTIONS`.
 const HANDLED_METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+const MAX_LINE: usize = 65_536;
+const MAX_HEADERS: usize = 100;
 
 pub const LARGE_BODY_SIZE: usize = 2 * 1024 * 1024;
 pub const HUGE_BODY_SIZE: usize = 9 * 1024 * 1024;
@@ -476,7 +478,18 @@ fn handle_connection(tcp: TcpStream, server: &Server) -> std::io::Result<()> {
     let request = match read_request(&mut reader) {
         Ok(Some(r)) => r,
         Ok(None) => return Ok(()),
-        Err(_) => return Ok(()),
+        Err(ReadRequestError::Io) => return Ok(()),
+        Err(ReadRequestError::Http(code, message, explain, headers, head)) => {
+            send_parse_error(
+                reader.get_mut(),
+                code,
+                message,
+                explain.as_deref(),
+                headers,
+                head,
+            );
+            return Ok(());
+        }
     };
     // Any other command is `send_error(501, ...)`, not recorded.
     if !HANDLED_METHODS.contains(&request.method.as_str()) {
@@ -484,21 +497,16 @@ fn handle_connection(tcp: TcpStream, server: &Server) -> std::io::Result<()> {
             "Unsupported method ({})",
             crate::pystr::repr_str(&request.method)
         );
-        let (message, body) = crate::server::error_page(501, Some(message), None);
-        let mut out = format!("HTTP/1.1 501 {message}\r\n").into_bytes();
-        out.extend_from_slice(format!("Server: {FAKE_SERVER_HEADER}\r\n").as_bytes());
-        out.extend_from_slice(format!("Date: {FAKE_DATE_HEADER}\r\n").as_bytes());
-        out.extend_from_slice(
-            format!(
-                "Connection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: {}\r\n\r\n",
-                body.len()
-            )
-            .as_bytes(),
+        let response_headers = request.response_headers;
+        let head = request.method == "HEAD";
+        send_parse_error(
+            reader.get_mut(),
+            501,
+            Some(message),
+            None,
+            response_headers,
+            head,
         );
-        out.extend_from_slice(body.as_bytes());
-        let stream = reader.get_mut();
-        let _ = stream.write_all(&out);
-        let _ = stream.flush();
         return Ok(());
     }
     dispatch(reader.get_mut(), server, request);
@@ -510,11 +518,54 @@ struct IncomingRequest {
     raw_path: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    response_headers: bool,
+}
+
+enum ReadRequestError {
+    Io,
+    Http(u16, Option<String>, Option<String>, bool, bool),
+}
+
+impl From<std::io::Error> for ReadRequestError {
+    fn from(_: std::io::Error) -> Self {
+        Self::Io
+    }
+}
+
+fn send_parse_error(
+    stream: &mut IncomingStream,
+    code: u16,
+    message: Option<String>,
+    explain: Option<&str>,
+    headers: bool,
+    head: bool,
+) {
+    let (message, body) = crate::server::error_page(code, message, explain);
+    let mut out = Vec::new();
+    if headers {
+        out.extend_from_slice(format!("HTTP/1.1 {code} {message}\r\n").as_bytes());
+        out.extend_from_slice(format!("Server: {FAKE_SERVER_HEADER}\r\n").as_bytes());
+        out.extend_from_slice(format!("Date: {}\r\n", date_header()).as_bytes());
+        out.extend_from_slice(
+            format!(
+                "Connection: close\r\nContent-Type: text/html;charset=utf-8\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            )
+            .as_bytes(),
+        );
+    }
+    if !head {
+        out.extend_from_slice(body.as_bytes());
+    }
+    let _ = stream.write_all(&out);
+    let _ = stream.flush();
 }
 
 fn read_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
-    let n = reader.read_until(b'\n', &mut line)?;
+    let n = reader
+        .take(MAX_LINE as u64 + 1)
+        .read_until(b'\n', &mut line)?;
     if n == 0 {
         return Ok(None);
     }
@@ -528,20 +579,88 @@ fn latin1(bytes: &[u8]) -> String {
 /// `BaseHTTPRequestHandler.parse_request` for the requests this fixture
 /// answers (three words; `//` paths reduced to one slash), then
 /// `http.client.parse_headers`' header block as the `email` parser reads it
-/// (see [`parse_header_block`]) and `_Handler._read_body`.
-fn read_request(reader: &mut impl BufRead) -> std::io::Result<Option<IncomingRequest>> {
+/// (see [`crate::gateway::parse_header_blob`]) and `_Handler._read_body`.
+fn read_request(
+    reader: &mut BufReader<IncomingStream>,
+) -> Result<Option<IncomingRequest>, ReadRequestError> {
     let Some(line) = read_line(reader)? else {
         return Ok(None);
     };
+    if line.len() > MAX_LINE {
+        return Err(ReadRequestError::Http(414, None, None, true, false));
+    }
     let line = latin1(&line);
-    let words: Vec<&str> = line
-        .trim_end_matches(['\r', '\n'])
+    let requestline = line.trim_end_matches(['\r', '\n']);
+    let words: Vec<&str> = requestline
         .split(crate::pystr::is_space)
         .filter(|w| !w.is_empty())
         .collect();
-    let [method, raw_path, _version] = words[..] else {
+    let Some(method) = words.first().copied() else {
         return Ok(None);
     };
+    let mut response_headers = false;
+    if words.len() >= 3 {
+        let version = words[words.len() - 1];
+        let valid = version
+            .strip_prefix("HTTP/")
+            .and_then(|numbers| numbers.split_once('.'));
+        let valid = valid.is_some_and(|(major, minor)| {
+            !major.is_empty()
+                && !minor.is_empty()
+                && major.len() <= 10
+                && minor.len() <= 10
+                && major.bytes().all(|b| b.is_ascii_digit())
+                && minor.bytes().all(|b| b.is_ascii_digit())
+        });
+        if !valid {
+            return Err(ReadRequestError::Http(
+                400,
+                Some(format!(
+                    "Bad request version ({})",
+                    crate::pystr::repr_str(version)
+                )),
+                None,
+                false,
+                false,
+            ));
+        }
+        let (major, minor) = version[5..].split_once('.').unwrap();
+        response_headers = version != "HTTP/0.9";
+        if (major.parse::<u64>().unwrap(), minor.parse::<u64>().unwrap()) >= (2, 0) {
+            return Err(ReadRequestError::Http(
+                505,
+                Some(format!("Invalid HTTP version ({major}.{minor})")),
+                None,
+                false,
+                false,
+            ));
+        }
+    }
+    if !(2..=3).contains(&words.len()) {
+        return Err(ReadRequestError::Http(
+            400,
+            Some(format!(
+                "Bad request syntax ({})",
+                crate::pystr::repr_str(requestline)
+            )),
+            None,
+            response_headers,
+            false,
+        ));
+    }
+    if words.len() == 2 && method != "GET" {
+        return Err(ReadRequestError::Http(
+            400,
+            Some(format!(
+                "Bad HTTP/0.9 request type ({})",
+                crate::pystr::repr_str(method)
+            )),
+            None,
+            false,
+            false,
+        ));
+    }
+    let raw_path = words[1];
     let method = method.to_string();
     let raw_path = if raw_path.starts_with("//") {
         format!("/{}", raw_path.trim_start_matches('/'))
@@ -549,14 +668,50 @@ fn read_request(reader: &mut impl BufRead) -> std::io::Result<Option<IncomingReq
         raw_path.to_string()
     };
     // `_read_headers`: lines up to a blank one or the end of the stream.
-    let mut block = Vec::new();
+    let mut block = String::new();
+    let mut header_count = 0usize;
     while let Some(header_line) = read_line(reader)? {
+        header_count += 1;
+        if header_line.len() > MAX_LINE {
+            return Err(ReadRequestError::Http(
+                431,
+                Some("Line too long".into()),
+                Some("got more than 65536 bytes when reading header line".into()),
+                response_headers,
+                method == "HEAD",
+            ));
+        }
+        if header_count > MAX_HEADERS {
+            return Err(ReadRequestError::Http(
+                431,
+                Some("Too many headers".into()),
+                Some("got more than 100 headers".into()),
+                response_headers,
+                method == "HEAD",
+            ));
+        }
+        block.push_str(&latin1(&header_line));
         if header_line == b"\r\n" || header_line == b"\n" {
             break;
         }
-        block.push(latin1(&header_line));
     }
-    let headers = parse_header_block(&block);
+    // `http.client.parse_headers`: the joined block through the `email`
+    // parser, shared with the gateway's own response-header parsing.
+    let headers = crate::gateway::parse_header_blob(&block);
+    // `parse_request`'s `Expect: 100-continue` handling (`protocol_version`
+    // is "HTTP/1.1"; `request_version >= "HTTP/1.1"` is a plain string
+    // comparison, so "HTTP/1.10" qualifies and "HTTP/01.1" does not):
+    // `handle_expect_100` answers `100 Continue` before the method is even
+    // looked up or the body read.
+    if words.len() == 3
+        && words[2] >= "HTTP/1.1"
+        && header_get(&headers, "Expect").is_some_and(|v| v.to_lowercase() == "100-continue")
+    {
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+        reader.get_mut().flush()?;
+    }
     // An unsupported method is answered 501 before `_read_body` runs.
     let handled = HANDLED_METHODS.contains(&method.as_str());
     let body = match header_get(&headers, "Content-Length").map(crate::pystr::int_from_str) {
@@ -576,55 +731,8 @@ fn read_request(reader: &mut impl BufRead) -> std::io::Result<Option<IncomingReq
         raw_path,
         headers,
         body,
+        response_headers,
     }))
-}
-
-/// The `email` parser's (compat32) view of a header block: a line is a
-/// field when it matches `^[\041-\071\073-\176]*:` (an empty name is a
-/// skipped defect); a line starting with a space or tab continues the
-/// previous field; a `From ` envelope line is not a field; any other line
-/// starts the body, so the fields after it are not headers. A field's value
-/// is its first line after the colon with leading blanks removed, plus each
-/// continuation line as sent, with trailing CR/LF removed.
-fn parse_header_block(lines: &[String]) -> Vec<(String, String)> {
-    let mut headers: Vec<(String, String)> = Vec::new();
-    let mut last: Option<usize> = None;
-    for line in lines {
-        if line.starts_with([' ', '\t']) {
-            if let Some(index) = last
-                && let Some((_, value)) = headers.get_mut(index)
-            {
-                value.push_str(line);
-            }
-            continue;
-        }
-        if line.starts_with("From ") {
-            last = None;
-            continue;
-        }
-        let Some(colon) = line.find(':') else {
-            break;
-        };
-        let (name, value) = line.split_at(colon);
-        if !name.chars().all(|c| ('\x21'..='\x7e').contains(&c)) {
-            break;
-        }
-        if name.is_empty() {
-            last = None;
-            continue;
-        }
-        let value = value.get(1..).unwrap_or_default();
-        headers.push((
-            name.to_string(),
-            value.trim_start_matches([' ', '\t']).to_string(),
-        ));
-        last = Some(headers.len() - 1);
-    }
-    for (_, value) in &mut headers {
-        let trimmed = value.trim_end_matches(['\r', '\n']).len();
-        value.truncate(trimmed);
-    }
-    headers
 }
 
 fn header_get<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -651,27 +759,63 @@ fn status_reason(status: u16) -> &'static str {
 struct Responder<'a> {
     stream: &'a mut IncomingStream,
     method: String,
+    response_headers: bool,
 }
 
 /// `BaseHTTPRequestHandler.send_response(status)`: emitted first, before any
 /// handler-chosen header, on every response (`_Handler.server_version =
-/// "fake-upstream"`; `send_response` always adds `Server`/`Date`). A fixed
-/// `Date` is fine here -- this is a test fixture (module doc: "Security
-/// scope: none") -- but the headers must actually be present so the
+/// "fake-upstream"`; `send_response` always adds `Server`/`Date`). The
+/// headers must actually be present so the
 /// response-header-allowlist assertion in `rust/tests/gateway.rs` proves
 /// `gateway.rs`'s `RESPONSE_HEADER_ALLOWLIST` really does drop them, instead
 /// of vacuously passing because this fixture never emitted them in the first
 /// place (finding F-20).
-const FAKE_SERVER_HEADER: &str = "fake-upstream";
-const FAKE_DATE_HEADER: &str = "Wed, 01 Jan 2025 00:00:00 GMT";
+const FAKE_SERVER_HEADER: &str = "fake-upstream ";
+
+fn date_header() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (seconds / 86_400) as i64;
+    let second = seconds % 86_400;
+    let hour = second / 3_600;
+    let minute = second % 3_600 / 60;
+    let second = second % 60;
+    // Howard Hinnant's civil-from-days conversion, with day zero at the
+    // Unix epoch.  `BaseHTTPRequestHandler.date_time_string` uses the same
+    // current UTC second and IMF-fixdate layout.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    let weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    format!(
+        "{}, {day:02} {} {year:04} {hour:02}:{minute:02}:{second:02} GMT",
+        weekdays[(days + 4).rem_euclid(7) as usize],
+        months[(month - 1) as usize]
+    )
+}
 
 impl Responder<'_> {
     fn write_status_and_boilerplate(&self, out: &mut Vec<u8>, status: u16) {
+        if !self.response_headers {
+            return;
+        }
         out.extend_from_slice(
             format!("HTTP/1.1 {status} {}\r\n", status_reason(status)).as_bytes(),
         );
         out.extend_from_slice(format!("Server: {FAKE_SERVER_HEADER}\r\n").as_bytes());
-        out.extend_from_slice(format!("Date: {FAKE_DATE_HEADER}\r\n").as_bytes());
+        out.extend_from_slice(format!("Date: {}\r\n", date_header()).as_bytes());
     }
 
     /// `_Handler._send`.
@@ -684,14 +828,16 @@ impl Responder<'_> {
     ) {
         let mut out = Vec::new();
         self.write_status_and_boilerplate(&mut out, status);
-        if !body.is_empty() || !matches!(status, 204 | 304) {
-            out.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
+        if self.response_headers {
+            if !body.is_empty() || !matches!(status, 204 | 304) {
+                out.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
+            }
+            out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            for (name, value) in extra_headers {
+                out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+            }
+            out.extend_from_slice(b"Connection: close\r\n\r\n");
         }
-        out.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
-        for (name, value) in extra_headers {
-            out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
-        }
-        out.extend_from_slice(b"Connection: close\r\n\r\n");
         if self.method != "HEAD" && !body.is_empty() {
             out.extend_from_slice(body);
         }
@@ -710,9 +856,11 @@ impl Responder<'_> {
     fn send_chunked(&mut self, parts: &[&[u8]]) {
         let mut out = Vec::new();
         self.write_status_and_boilerplate(&mut out, 200);
-        out.extend_from_slice(b"Content-Type: text/plain\r\n");
-        out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
-        out.extend_from_slice(b"Connection: close\r\n\r\n");
+        if self.response_headers {
+            out.extend_from_slice(b"Content-Type: text/plain\r\n");
+            out.extend_from_slice(b"Transfer-Encoding: chunked\r\n");
+            out.extend_from_slice(b"Connection: close\r\n\r\n");
+        }
         if self.method != "HEAD" {
             for part in parts {
                 out.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
@@ -729,9 +877,11 @@ impl Responder<'_> {
     fn send_streamed(&mut self, total: usize) {
         let mut head = Vec::new();
         self.write_status_and_boilerplate(&mut head, 200);
-        head.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
-        head.extend_from_slice(format!("Content-Length: {total}\r\n").as_bytes());
-        head.extend_from_slice(b"Connection: close\r\n\r\n");
+        if self.response_headers {
+            head.extend_from_slice(b"Content-Type: application/octet-stream\r\n");
+            head.extend_from_slice(format!("Content-Length: {total}\r\n").as_bytes());
+            head.extend_from_slice(b"Connection: close\r\n\r\n");
+        }
         let _ = self.stream.write_all(&head);
         if self.method != "HEAD" {
             let chunk = vec![b'y'; 64 * 1024];
@@ -759,47 +909,6 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
             (!value.is_empty()).then(|| (unquote_plus(name), unquote_plus(value)))
         })
         .collect()
-}
-
-/// `float(text)` for a `str` (CPython 3.12 `PyFloat_FromString`): non-ASCII
-/// whitespace becomes a space and non-ASCII decimal digits their ASCII
-/// digit (any other non-ASCII character fails), PEP 515 underscores only
-/// between digits, `Py_ISSPACE` stripped from both ends, then the float
-/// literal grammar (`inf`/`infinity`/`nan` in any case, optional sign),
-/// which Rust's `f64` parser shares.
-fn python_float(text: &str) -> Option<f64> {
-    let mut ascii = String::new();
-    for c in text.chars() {
-        if u32::from(c) < 127 {
-            ascii.push(c);
-        } else if crate::pystr::is_space(c) {
-            ascii.push(' ');
-        } else {
-            ascii.push(char::from_digit(
-                crate::pystr::unicode_decimal_digit(c)?,
-                10,
-            )?);
-        }
-    }
-    let mut plain = String::new();
-    let mut previous = '\0';
-    for c in ascii.chars() {
-        if c == '_' {
-            if !previous.is_ascii_digit() {
-                return None;
-            }
-        } else {
-            if previous == '_' && !c.is_ascii_digit() {
-                return None;
-            }
-            plain.push(c);
-        }
-        previous = c;
-    }
-    if previous == '_' || plain.contains('\0') {
-        return None;
-    }
-    plain.trim_matches(crate::pystr::is_int_space).parse().ok()
 }
 
 /// Port of `urllib.parse.unquote_plus` (via `parse_qsl`'s `_unquote`): `+`
@@ -878,6 +987,7 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
     let mut responder = Responder {
         stream,
         method: method.clone(),
+        response_headers: request.response_headers,
     };
     if !authorized(server, &request.headers) {
         let scheme = if server.mode == "basic" {
@@ -896,15 +1006,18 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         return;
     }
 
-    // `urllib.parse.urlsplit(self.path)` of an origin-form target (never
-    // `//` after `parse_request`): the fragment goes first, then the query.
-    let target = request
-        .raw_path
-        .trim_start_matches(|c: char| c <= ' ')
-        .replace(['\t', '\r', '\n'], "");
-    let target = target.split_once('#').map_or(target.as_str(), |(t, _)| t);
-    let (path, query_str) = target.split_once('?').unwrap_or((target, ""));
-    let query = parse_query(query_str);
+    // `_Handler` accepts every request-target form that
+    // `BaseHTTPRequestHandler` accepts and passes `self.path` directly to
+    // `urllib.parse.urlsplit`, including absolute-form targets.
+    let parsed = match crate::pystr::urlsplit(&request.raw_path) {
+        Ok(parsed) => parsed,
+        // `urlsplit` can reject malformed bracketed netlocs.  Python lets
+        // that ValueError escape the handler, closing the connection without
+        // another response.
+        Err(_) => return,
+    };
+    let path = parsed.path.as_str();
+    let query = parse_query(&parsed.query);
     let is_get_or_head = method == "GET" || method == "HEAD";
 
     if is_get_or_head && path == "/repos" {
@@ -1035,7 +1148,9 @@ fn dispatch(stream: &mut IncomingStream, server: &Server, request: IncomingReque
         // echoes `{"slept": -5.0}`) -- the previous version applied
         // `.clamp(0.0, 30.0)` before both the sleep *and* the echo, so a
         // negative `seconds` wrongly echoed `0.0`.
-        let seconds: f64 = python_float(query_get(&query, "seconds").unwrap_or("1")).unwrap_or(1.0);
+        let seconds: f64 =
+            crate::pystr::float_from_str(query_get(&query, "seconds").unwrap_or("1"))
+                .unwrap_or(1.0);
         // Rust's `f64::min`/`max` ignore a NaN operand and return the
         // *other* one (`f64::NAN.min(30.0) == 30.0`), unlike Python's
         // comparison-based `min`/`max`, which propagate NaN (confirmed
@@ -1120,66 +1235,6 @@ mod tests {
             &[0x31, 0x30, 0x30, 0x25, 0x64, 0x6f, 0x6e, 0x65],
         );
         case(b"\xff\xfe%41", &[0xff, 0xfe, 0x41]);
-    }
-
-    /// `python_float` against CPython's `float(str)` over the shapes the
-    /// `/slow?seconds=` query can carry.
-    #[test]
-    fn python_float_matches_cpython() {
-        let cases = [
-            "1",
-            " 1.5 ",
-            "\t2\n",
-            "1_0.5",
-            "1__0",
-            "_1",
-            "1_",
-            "1_e5",
-            "1e_5",
-            "1e5",
-            "-0.25",
-            "+.5",
-            "5.",
-            ".",
-            "e5",
-            "inf",
-            "-Infinity",
-            "INF",
-            "nan",
-            "+NaN",
-            "infin",
-            "0x10",
-            "1e999",
-            "\u{1c}1",
-            "\u{a0}3\u{2003}",
-            "\u{0663}.\u{0665}",
-            "1\u{0}",
-            "\u{7f}1",
-            "\u{e9}",
-            "",
-            "  ",
-            "1 2",
-            "--1",
-            "+-1",
-            "1.5e+3",
-            "1.5E-3",
-            "١_٢",
-        ];
-        use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(serde_json::to_string(&cases.to_vec()).unwrap());
-        let script = format!(
-            "import base64, json\nfor s in json.loads(base64.b64decode('{encoded}')):\n    try:\n        v = float(s)\n        print('nan' if v != v else repr(v))\n    except ValueError:\n        print('error')\n"
-        );
-        let expected = crate::oracle::python(&script);
-        for (case, python) in cases.iter().zip(expected.lines()) {
-            let rust = match python_float(case) {
-                Some(v) if v.is_nan() => "nan".to_string(),
-                Some(v) => crate::pyjson::python_float_repr(v),
-                None => "error".to_string(),
-            };
-            assert_eq!(rust, python, "float({case:?})");
-        }
     }
 
     /// Finding X-6, unit-level: the `/repos/` prefix and `/issues` suffix

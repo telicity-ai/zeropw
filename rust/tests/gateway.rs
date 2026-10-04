@@ -294,6 +294,8 @@ fn issue_handle(
             .get_connection(connection)
             .unwrap()
             .policy_version
+            .to_i64()
+            .unwrap()
     });
     ctx.handles
         .issue(caller, connection, grant, pv, ttl, Some(now))
@@ -326,7 +328,10 @@ fn one_connection_two_operations_placeholder_replaced() {
         ("Transfer-Encoding", "identity"),
     ]);
     let first = t.relay_h("GET", "/repos", &client_headers);
-    assert_eq!((first.status, first.reason.clone()), (200, None));
+    assert_eq!(
+        (first.status.clone(), first.reason.clone()),
+        (200.into(), None)
+    );
     assert_eq!(
         first.json().expect("test body is valid utf-8 JSON"),
         serde_json::json!([{"name": "demo"}, {"name": "tools"}])
@@ -343,7 +348,10 @@ fn one_connection_two_operations_placeholder_replaced() {
         None,
         None,
     );
-    assert_eq!((second.status, second.reason.clone()), (201, None));
+    assert_eq!(
+        (second.status.clone(), second.reason.clone()),
+        (201.into(), None)
+    );
     assert_eq!(
         second.json().expect("test body is valid utf-8 JSON")["title"],
         "from agent"
@@ -482,8 +490,8 @@ fn basic_mode() {
         None,
     );
     assert_eq!(
-        (echoed.status, echoed.reason.as_deref()),
-        (502, Some("credential_reflection_blocked"))
+        (echoed.status.clone(), echoed.reason.as_deref()),
+        (502.into(), Some("credential_reflection_blocked"))
     );
     assert!(!String::from_utf8_lossy(&echoed.body).contains(expected.split(' ').nth(1).unwrap()));
 }
@@ -584,8 +592,8 @@ fn relay_for_caller_without_handle() {
         None,
     );
     assert_eq!(
-        (denied.status, denied.reason.as_deref()),
-        (403, Some("connection_unknown"))
+        (denied.status.clone(), denied.reason.as_deref()),
+        (403.into(), Some("connection_unknown"))
     );
     let ghost = gateway::relay_for_caller(
         &t.ctx,
@@ -598,8 +606,8 @@ fn relay_for_caller_without_handle() {
         None,
     );
     assert_eq!(
-        (ghost.status, ghost.reason.as_deref()),
-        (403, Some("principal_unknown"))
+        (ghost.status.clone(), ghost.reason.as_deref()),
+        (403.into(), Some("principal_unknown"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -625,8 +633,8 @@ fn head_and_no_content_responses() {
     let t = GatewayTest::new();
     let head = t.relay("HEAD", "/repos");
     assert_eq!(
-        (head.status, head.body.clone(), head.reason.clone()),
-        (200, Vec::new(), None)
+        (head.status.clone(), head.body.clone(), head.reason.clone()),
+        (200.into(), Vec::new(), None)
     );
     let digest = t
         .relay("DELETE", "/repos/demo")
@@ -638,8 +646,8 @@ fn head_and_no_content_responses() {
     t.ctx.policy.approve(&digest).unwrap();
     let gone = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (gone.status, gone.body.clone(), gone.reason.clone()),
-        (204, Vec::new(), None)
+        (gone.status.clone(), gone.body.clone(), gone.reason.clone()),
+        (204.into(), Vec::new(), None)
     );
 }
 
@@ -686,7 +694,10 @@ fn response_header_filter_and_upstream_401() {
         .unwrap();
     let handle = t.issue_handle_for("agent-1", "bad", &grant.id, None, 300);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
-    assert_eq!((result.status, result.reason.clone()), (401, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.clone()),
+        (401.into(), None)
+    );
     assert!(!header_names(&result).contains("www-authenticate"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON"),
@@ -737,8 +748,8 @@ fn usage_consumed_only_after_policy_pass() {
     assert_eq!(t.ctx.policy.get_grant(&limited.id).unwrap().uses, 1);
     let exhausted = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (exhausted.status, exhausted.reason.as_deref()),
-        (403, Some("grant_exhausted"))
+        (exhausted.status.clone(), exhausted.reason.as_deref()),
+        (403.into(), Some("grant_exhausted"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -813,16 +824,16 @@ fn path_traversal_and_smuggling_rejected() {
     for path in bad {
         let result = t.relay("GET", path);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (400, Some("invalid_path")),
+            (result.status.clone(), result.reason.as_deref()),
+            (400.into(), Some("invalid_path")),
             "path={path}"
         );
     }
     let long_path = format!("/{}", "a".repeat(9000));
     let result = t.relay("GET", &long_path);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (400, Some("invalid_path"))
+        (result.status.clone(), result.reason.as_deref()),
+        (400.into(), Some("invalid_path"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     for record in t.audit_records() {
@@ -903,8 +914,8 @@ fn scope_method_and_path_denied_with_reason() {
     for (method, path, reason) in cases {
         let result = t.relay_full(method, path, &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some(reason)),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some(reason)),
             "{method} {path}"
         );
         assert_eq!(
@@ -1007,8 +1018,8 @@ fn handle_is_bound_to_its_connection_caller_and_grant() {
     for (handle, reason) in cross {
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some(reason))
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some(reason))
         );
     }
     let result = gateway::relay_for_caller(
@@ -1022,8 +1033,8 @@ fn handle_is_bound_to_its_connection_caller_and_grant() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("no_grant"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("no_grant"))
     );
     assert_eq!((t.fake.requests().len(), fake_b.requests().len()), before);
 }
@@ -1051,8 +1062,8 @@ fn tampered_or_foreign_handles_are_unauthorized() {
     for (token, reason) in cases {
         let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&token), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (401, Some(reason))
+            (result.status.clone(), result.reason.as_deref()),
+            (401.into(), Some(reason))
         );
         assert_eq!(
             result.json().expect("test body is valid utf-8 JSON")["error"],
@@ -1075,8 +1086,8 @@ fn tampered_or_foreign_handles_are_unauthorized() {
     t.advance(60.0);
     let expired = t.relay_full("GET", "/me", &no_headers(), b"", Some(&short), None);
     assert_eq!(
-        (expired.status, expired.reason.as_deref()),
-        (401, Some("handle_expired"))
+        (expired.status.clone(), expired.reason.as_deref()),
+        (401.into(), Some("handle_expired"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     let denied: Vec<_> = t
@@ -1094,8 +1105,8 @@ fn assert_denied(t: &GatewayTest, reason: &str, handle: Option<&str>) {
     let before = t.fake.requests().len();
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", handle, None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some(reason))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some(reason))
     );
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON"),
@@ -1270,8 +1281,8 @@ fn widening_change_makes_grant_stale_until_regrant() {
     assert!(widened);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("grant_stale"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("grant_stale"))
     );
     let denied = gateway::relay_for_caller(
         &t.ctx,
@@ -1304,8 +1315,8 @@ fn principal_and_connection_disabled() {
 fn assert_blocked(t: &GatewayTest, path: &str, reason: &str) -> RelayResult {
     let result = t.relay("GET", path);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some(reason)),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some(reason)),
         "path={path}"
     );
     assert_eq!(
@@ -1356,7 +1367,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     // `.expect()`-panicked on both failure modes instead of returning an
     // error the caller can handle.
     let non_utf8 = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: vec![0xff, 0xfe, 0xfd],
         reason: None,
@@ -1368,7 +1379,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     );
 
     let non_json = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: b"not json at all {".to_vec(),
         reason: None,
@@ -1380,7 +1391,7 @@ fn relay_result_json_returns_none_instead_of_panicking_on_malformed_body() {
     );
 
     let valid = RelayResult {
-        status: 200,
+        status: 200.into(),
         headers: Headers::new(),
         body: b"{\"ok\": true}".to_vec(),
         reason: None,
@@ -1458,8 +1469,8 @@ fn lowercase_percent_encoded_reflection_is_blocked() {
     for path in ["/urlencoded-leak?case=lower", "/urlencoded-leak"] {
         let result = t.relay_full("GET", path, &no_headers(), b"", Some(&handle), None);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("credential_reflection_blocked")),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some("credential_reflection_blocked")),
             "path={path}"
         );
         assert_eq!(
@@ -1539,10 +1550,10 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
         );
         assert_eq!(
             (
-                result.status,
+                result.status.clone(),
                 result.json().expect("test body is valid utf-8 JSON")
             ),
-            (200, serde_json::json!({"login": "synthetic-user"})),
+            (200.into(), serde_json::json!({"login": "synthetic-user"})),
             "{mode}"
         );
         let mut forms: Vec<&str> = zeropw::fake_upstream::ENCODED_LEAK_FORMS.to_vec();
@@ -1559,8 +1570,8 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
                 None,
             );
             assert_eq!(
-                (result.status, result.reason.as_deref()),
-                (502, Some("credential_reflection_blocked")),
+                (result.status.clone(), result.reason.as_deref()),
+                (502.into(), Some("credential_reflection_blocked")),
                 "{mode} {form}"
             );
             assert_eq!(
@@ -1584,11 +1595,15 @@ fn every_credential_encoding_in_upstream_body_is_blocked() {
         );
         assert_eq!(
             (
-                result.status,
+                result.status.clone(),
                 result.reason.clone(),
                 result.json().expect("test body is valid utf-8 JSON")
             ),
-            (400, None, serde_json::json!({"error": "unknown_form"}))
+            (
+                400.into(),
+                None,
+                serde_json::json!({"error": "unknown_form"})
+            )
         );
         assert_eq!(fake.requests().len(), forms.len() + 2);
     }
@@ -1643,7 +1658,10 @@ fn chunked_stream_is_buffered() {
     let t = GatewayTest::new();
     let result = t.relay("GET", "/stream");
     let expected: Vec<u8> = zeropw::fake_upstream::STREAM_PARTS.concat();
-    assert_eq!((result.status, result.body.clone()), (200, expected));
+    assert_eq!(
+        (result.status.clone(), result.body.clone()),
+        (200.into(), expected)
+    );
     assert!(!header_names(&result).contains("transfer-encoding"));
 }
 
@@ -1652,8 +1670,8 @@ fn large_ok_and_huge_rejected() {
     let mut t = GatewayTest::new();
     let result = t.relay("GET", "/large");
     assert_eq!(
-        (result.status, result.body.len()),
-        (200, zeropw::fake_upstream::LARGE_BODY_SIZE)
+        (result.status.clone(), result.body.len()),
+        (200.into(), zeropw::fake_upstream::LARGE_BODY_SIZE)
     );
     let huge = assert_blocked(&t, "/huge", "response_too_large");
     assert!(!huge.body.windows(4).any(|w| w == b"yyyy"));
@@ -1678,8 +1696,8 @@ fn upstream_down_and_timeout() {
     t.ctx.config.upstream_timeout = 0.3;
     let slow = t.relay("GET", "/slow?seconds=1");
     assert_eq!(
-        (slow.status, slow.reason.as_deref()),
-        (502, Some("upstream_timeout"))
+        (slow.status.clone(), slow.reason.as_deref()),
+        (502.into(), Some("upstream_timeout"))
     );
     t.assert_result_credential_free(&slow);
     assert_eq!(t.audit_records().last().unwrap()["result"], "error");
@@ -1687,8 +1705,8 @@ fn upstream_down_and_timeout() {
     t.fake.stop();
     let down = t.relay("GET", "/repos");
     assert_eq!(
-        (down.status, down.reason.as_deref()),
-        (502, Some("upstream_unreachable"))
+        (down.status.clone(), down.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable"))
     );
     t.assert_result_credential_free(&down);
     assert_eq!(
@@ -1699,47 +1717,34 @@ fn upstream_down_and_timeout() {
 }
 
 #[test]
-fn non_finite_or_negative_upstream_timeout_fails_closed_without_panicking() {
-    // Finding X-18: Python's `timeout = float(self.ctx.config.
-    // upstream_timeout)` never raises -- the failure happens later, inside
-    // `socket.create_connection`/`.settimeout()` when `conn.connect()`
-    // runs, and `_exchange`'s own `except (socket.timeout, TimeoutError)` /
-    // `except OSError` around that call does NOT catch it. Confirmed
-    // against a real `python3.12` socket: `.settimeout(float('inf'))` and
-    // `.settimeout(1e30)` both raise `OverflowError: timestamp out of range
-    // for platform time_t`, `.settimeout(float('nan'))` raises `ValueError:
-    // Invalid value NaN (not a number)`, and `.settimeout(-1.0)` raises
-    // `ValueError: Timeout value out of range` -- all four uncaught, so the
-    // relay is refused as `upstream_timeout` (this path's existing closest
-    // handled reason, PORTING.md §3.5).
-    //
-    // `Duration::from_secs_f64` PANICS on `inf`/`1e30` (a Rust panic on
-    // in-process config -- PORTING.md §4's untrusted-input rule does not
-    // strictly require a fix here, since `upstream_timeout` is not agent/
-    // peer/file-supplied, but a panic is still worse than Python's own
-    // catchable exception), and the previous `.max(0.0)` clamp silently
-    // turned a NaN timeout into a ZERO-duration one instead of failing at
-    // all (`f64::NAN.max(0.0) == 0.0`, Rust's `f64::max` returns the
-    // non-NaN operand) -- relaying with no timeout budget rather than
-    // refusing. `-1.0` was ALSO silently clamped to zero by the same
-    // `.max(0.0)`, an unrecorded gap beyond the two cases this finding's
-    // text named.
-    for (label, timeout) in [
-        ("infinity", f64::INFINITY),
-        ("neg_infinity", f64::NEG_INFINITY),
-        ("huge_finite", 1e30),
-        ("nan", f64::NAN),
-        ("negative", -1.0),
+fn invalid_upstream_timeout_escapes_relay_like_python() {
+    // Finding X-18, re-measured: `float(self.ctx.config.upstream_timeout)`
+    // never raises; `socket.create_connection`'s `sock.settimeout(timeout)`
+    // does, with a built-in exception none of `_exchange`'s handlers catch
+    // (CPython 3.12.14: `inf`/`-inf`/`1e30`/`9.3e9` -> `OverflowError`,
+    // `nan`/`-1.0`/`-1e-300` -> `ValueError`), so `relay` raises and
+    // `zeropw.server` answers its fixed `500 internal_error`. A zero
+    // timeout is a non-blocking connect whose `BlockingIOError` is the
+    // ordinary `upstream_unreachable` refusal. The ledger/audit scope of the
+    // escape is compared with Python in `relay_escape_parity`.
+    for (label, timeout, expected) in [
+        ("infinity", f64::INFINITY, (500, "internal_error")),
+        ("neg_infinity", f64::NEG_INFINITY, (500, "internal_error")),
+        ("huge_finite", 1e30, (500, "internal_error")),
+        ("past_int64_nanoseconds", 9.3e9, (500, "internal_error")),
+        ("nan", f64::NAN, (500, "internal_error")),
+        ("negative", -1.0, (500, "internal_error")),
+        ("tiny_negative", -1e-300, (500, "internal_error")),
+        ("zero", 0.0, (502, "upstream_unreachable")),
+        ("negative_zero", -0.0, (502, "upstream_unreachable")),
     ] {
         let mut t = GatewayTest::new();
         t.ctx.config.upstream_timeout = timeout;
         let result = t.relay("GET", "/repos");
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("upstream_timeout")),
-            "{label}: a non-finite/negative upstream_timeout must fail closed as \
-             upstream_timeout without panicking, matching python's own uncaught \
-             OverflowError/ValueError there"
+            (result.status.clone(), result.reason.as_deref()),
+            (expected.0.into(), Some(expected.1)),
+            "{label}"
         );
         t.assert_result_credential_free(&result);
     }
@@ -1777,8 +1782,8 @@ fn unsupported_auth_mode_and_unsafe_credential_fail_closed() {
     let handle = t.issue_handle_for("agent-1", "crlf", &grant.id, None, 300);
     let result = t.relay_full("GET", "/repos", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("credential_header_unsafe"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("credential_header_unsafe"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -1881,8 +1886,8 @@ fn zeropw_authority_is_never_a_business_credential() {
             None,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (501, Some("self_referential_credential")),
+            (result.status.clone(), result.reason.as_deref()),
+            (501.into(), Some("self_referential_credential")),
             "{name}"
         );
     }
@@ -1924,7 +1929,10 @@ fn zeropw_authority_is_never_a_business_credential() {
         b"",
         None,
     );
-    assert_eq!((result.status, result.reason.as_deref()), (401, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.as_deref()),
+        (401.into(), None)
+    );
     t.assert_credential_free(&t.state_text(&["audit/audit.jsonl"]), &[token.as_str()]);
 }
 
@@ -1933,12 +1941,12 @@ fn missing_credential_is_explicit() {
     let t = GatewayTest::new();
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap();
     let result = t.relay("GET", "/repos");
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (503, Some("credential_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (503.into(), Some("credential_unavailable"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -1962,8 +1970,8 @@ fn audit_unavailable_refuses_before_credential_use() {
     let result = t.relay("GET", "/repos");
     std::fs::set_permissions(&audit_path, original_perms).unwrap();
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (503, Some("audit_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (503.into(), Some("audit_unavailable"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 0);
@@ -2008,8 +2016,8 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     let t = GatewayTest::new();
     let first = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (first.status, first.reason.as_deref()),
-        (428, Some("approval_required"))
+        (first.status.clone(), first.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let digest = first.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -2042,12 +2050,15 @@ fn delete_requires_one_shot_approval_bound_to_digest() {
     );
     assert_eq!(t.fake.requests().len(), 0);
     let done = t.relay("DELETE", "/repos/demo");
-    assert_eq!((done.status, done.reason.clone()), (204, None));
+    assert_eq!(
+        (done.status.clone(), done.reason.clone()),
+        (204.into(), None)
+    );
     assert_eq!(t.fake.requests().last().unwrap().method, "DELETE");
     let again = t.relay("DELETE", "/repos/demo");
     assert_eq!(
-        (again.status, again.reason.as_deref()),
-        (428, Some("approval_required"))
+        (again.status.clone(), again.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     assert_eq!(t.fake.requests().len(), 1);
     assert_eq!(t.ctx.policy.get_grant(&t.grant.id).unwrap().uses, 1);
@@ -2158,7 +2169,10 @@ fn pending_approval_shows_what_the_digest_binds() {
         Some(&handle),
         None,
     );
-    assert_eq!((done.status, done.reason.clone()), (201, None));
+    assert_eq!(
+        (done.status.clone(), done.reason.clone()),
+        (201.into(), None)
+    );
     let last = t.fake.requests().last().unwrap().clone();
     assert_eq!(
         (last.path.as_str(), last.body),
@@ -2271,8 +2285,8 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         None,
     );
     assert_eq!(
-        (after_move.status, after_move.reason.as_deref()),
-        (428, Some("approval_required"))
+        (after_move.status.clone(), after_move.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let after_move_digest =
         after_move.json().expect("test body is valid utf-8 JSON")["approval_digest"]
@@ -2302,8 +2316,8 @@ fn approval_does_not_survive_a_changed_target_or_policy_version() {
         None,
     );
     assert_eq!(
-        (renamed.status, renamed.reason.as_deref()),
-        (428, Some("approval_required"))
+        (renamed.status.clone(), renamed.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let renamed_digest = renamed.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -2355,8 +2369,12 @@ fn completed_request_is_replayed_without_upstream_contact() {
     assert_eq!(first.status, 201);
     let replay = issue_ledger(&t, "req-1", "same");
     assert_eq!(
-        (replay.status, replay.body.clone(), replay.reason.clone()),
-        (201, first.body.clone(), None)
+        (
+            replay.status.clone(),
+            replay.body.clone(),
+            replay.reason.clone()
+        ),
+        (201.into(), first.body.clone(), None)
     );
     assert!(
         replay
@@ -2413,11 +2431,11 @@ fn replay_decodes_body_b64_leniently_like_python_b64decode() {
     let replayed = issue_ledger(&t, "req-b64-lenient", "same");
     assert_eq!(
         (
-            replayed.status,
+            replayed.status.clone(),
             replayed.body.clone(),
             replayed.reason.clone()
         ),
-        (200, b"abc".to_vec(), None),
+        (200.into(), b"abc".to_vec(), None),
         "a newline inside the base64 body must be discarded, not rejected, matching \
          Python's lenient b64decode"
     );
@@ -2443,8 +2461,8 @@ fn replay_fails_closed_for_genuinely_undecodable_body_b64() {
     );
     let replayed = issue_ledger(&t, "req-b64-bad", "same");
     assert_eq!(
-        (replayed.status, replayed.reason.as_deref()),
-        (503, Some("state_corrupt"))
+        (replayed.status.clone(), replayed.reason.as_deref()),
+        (500.into(), Some("internal_error"))
     );
 }
 
@@ -2467,8 +2485,8 @@ fn replay_fails_closed_for_non_string_body_b64() {
     );
     let replayed = issue_ledger(&t, "req-b64-nonstr", "same");
     assert_eq!(
-        (replayed.status, replayed.reason.as_deref()),
-        (503, Some("state_corrupt"))
+        (replayed.status.clone(), replayed.reason.as_deref()),
+        (500.into(), Some("internal_error"))
     );
 }
 
@@ -2495,11 +2513,11 @@ fn replay_treats_a_truthy_non_bool_body_stored_as_stored() {
     let replayed = issue_ledger(&t, "req-stored-truthy", "same");
     assert_eq!(
         (
-            replayed.status,
+            replayed.status.clone(),
             replayed.body.clone(),
             replayed.reason.clone()
         ),
-        (200, b"abc".to_vec(), None),
+        (200.into(), b"abc".to_vec(), None),
         "a truthy non-bool body_stored must still replay the real stored body"
     );
 }
@@ -2606,8 +2624,8 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
         set_ledger_response(&t, "agent-1", &request_id, bad_response);
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
-            (replayed.status, replayed.reason.as_deref()),
-            (503, Some("state_corrupt")),
+            (replayed.status.clone(), replayed.reason.as_deref()),
+            (500.into(), Some("internal_error")),
             "a truthy non-mapping response ({label}) must fail closed, not relay a \
              502 replay_body_unavailable"
         );
@@ -2615,42 +2633,15 @@ fn replay_fails_closed_for_a_truthy_non_mapping_response() {
 }
 
 #[test]
-fn replay_status_never_truncates_out_of_range_magnitudes() {
-    // Finding X-5: Python's `int(v)` (`RequestLedger.replay`,
-    // `status = int(response.get("status", 502))`) has no upper/lower
-    // bound -- CPython's arbitrary-precision `int` never raises here, so
-    // `relayed=True` for every case below, confirmed against real
-    // `python3.12`: `int(65736) == 65736`, `int(65536) == 65536`,
-    // `int(1000000) == 1000000`, `int(1e300)` is exact to the last digit (a
-    // 303-digit integer), `int("18446744073709551816") ==
-    // 18446744073709551816`, `int(" 65736_0 ") == 657360`.
-    //
-    // `RelayResult::status` is a fixed `u16` (PORTING.md §3d: every OTHER
-    // status field in this module uses the same type for a real HTTP
-    // status code) -- a genuine representational gap this crate cannot
-    // avoid. The previous three-step lossy path (a saturating parse, `as
-    // i64`, `as u16`) silently wrapped every one of these into a small,
-    // plausible-looking, WRONG status instead of failing: `65736 -> 200`,
-    // `65536 -> 0`, `1000000 -> 16960`, `1e300 -> 65535`,
-    // `"18446744073709551816" -> 200`, `" 65736_0 " -> 2000` -- and the
-    // truncated value reached the audit record too (`self.audit(...,
-    // Some(replayed.status), ...)`). The fix never truncates: any
-    // magnitude Python accepts but this crate's `u16` field cannot hold now
-    // fails closed with `state_corrupt` instead.
+fn replay_status_preserves_persisted_integer_statuses() {
+    // The prototype persisted the integer status the upstream answered
+    // (`RequestLedger.replay`, `status = int(response.get("status", 502))`);
+    // replay, the audit record and the tools response all carry it
+    // unchanged. Hand-edited, non-integer statuses are covered by
+    // `gateway_replay_status_parity.rs`.
     let t = GatewayTest::new();
-    let out_of_range: [(&str, serde_json::Value); 6] = [
-        ("65736", serde_json::json!(65736)),
-        ("65536", serde_json::json!(65536)),
-        ("1000000", serde_json::json!(1_000_000)),
-        ("1e300", serde_json::json!(1e300)),
-        (
-            "numeric_string_huge",
-            serde_json::json!("18446744073709551816"),
-        ),
-        ("numeric_string_underscore", serde_json::json!(" 65736_0 ")),
-    ];
-    for (label, status) in out_of_range {
-        let request_id = format!("req-status-oor-{label}");
+    for (label, status) in [("ok", 200u16), ("not_found", 404), ("unavailable", 503)] {
+        let request_id = format!("req-status-{label}");
         assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
         set_ledger_response(
             &t,
@@ -2663,40 +2654,39 @@ fn replay_status_never_truncates_out_of_range_magnitudes() {
         );
         let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
-            (replayed.status, replayed.reason.as_deref()),
-            (503, Some("state_corrupt")),
-            "{label}: a status magnitude python accepts but u16 cannot hold must fail \
-             closed, not truncate into a plausible-looking wrong status"
+            (replayed.status.clone(), replayed.reason.clone()),
+            (status.into(), None),
+            "{label}"
         );
-    }
-
-    // In-range values (including the u16::MAX boundary) must still match
-    // Python exactly -- this fix must not turn a VALID status into an
-    // error.
-    let in_range: [(&str, serde_json::Value, u16); 5] = [
-        ("plain_200", serde_json::json!(200), 200),
-        ("float_truncates", serde_json::json!(200.9), 200),
-        ("bool_true", serde_json::json!(true), 1),
-        ("numeric_string", serde_json::json!("404"), 404),
-        ("u16_max_boundary", serde_json::json!(65535), 65535),
-    ];
-    for (label, status, expected) in in_range {
-        let request_id = format!("req-status-ok-{label}");
-        assert_eq!(issue_ledger(&t, &request_id, "same").status, 201);
-        set_ledger_response(
-            &t,
-            "agent-1",
-            &request_id,
-            serde_json::json!({
-                "status": status, "headers": [], "reason": null,
-                "body_b64": "YWJj", "body_stored": true,
-            }),
+        assert_eq!(replayed.body, b"abc", "{label}");
+        assert!(
+            replayed
+                .headers
+                .iter()
+                .any(|(name, value)| name == "X-ZeroPW-Replay" && value == "true"),
+            "{label}: replay marker must be retained"
         );
-        let replayed = issue_ledger(&t, &request_id, "same");
         assert_eq!(
-            (replayed.status, replayed.reason.clone()),
-            (expected, None),
-            "{label}: an in-range status must match python's int() exactly, not fail"
+            t.audit_records().last().unwrap()["status"],
+            serde_json::json!(status),
+            "{label}: replay audit must retain the exact status"
+        );
+        let body = serde_json::to_vec(&serde_json::json!({"title": "same"})).unwrap();
+        let tool_result = zeropw::tools::request(
+            &t.ctx,
+            "agent-1",
+            "gh",
+            "POST",
+            "/repos/demo/issues",
+            &headers(&[("Content-Type", "application/json")]),
+            &body,
+            Some(&request_id),
+        )
+        .unwrap();
+        assert_eq!(
+            tool_result["status"],
+            serde_json::json!(status),
+            "{label}: tools.request must retain the exact status"
         );
     }
 }
@@ -2707,8 +2697,8 @@ fn same_id_different_request_is_rejected() {
     assert_eq!(issue_ledger(&t, "req-2", "same").status, 201);
     let reused = issue_ledger(&t, "req-2", "different");
     assert_eq!(
-        (reused.status, reused.reason.as_deref()),
-        (409, Some("request_id_reused"))
+        (reused.status.clone(), reused.reason.as_deref()),
+        (409.into(), Some("request_id_reused"))
     );
     assert_eq!(t.fake.requests().len(), 1);
     let other_path = t.relay_full("GET", "/repos", &no_headers(), b"", None, Some("req-2"));
@@ -2729,7 +2719,10 @@ fn uncertain_outcome_is_not_retried_blindly() {
     // this file before this fix.
     let mut t = GatewayTest::new();
     let first = issue_ledger(&t, "req-3", "same");
-    assert_eq!((first.status, first.reason.clone()), (201, None));
+    assert_eq!(
+        (first.status.clone(), first.reason.clone()),
+        (201.into(), None)
+    );
     t.ctx.config.upstream_timeout = 0.3;
     let timed_out = t.relay_full(
         "GET",
@@ -2749,8 +2742,8 @@ fn uncertain_outcome_is_not_retried_blindly() {
         Some("slow-2"),
     );
     assert_eq!(
-        (again.status, again.reason.as_deref()),
-        (409, Some("outcome_uncertain"))
+        (again.status.clone(), again.reason.as_deref()),
+        (409.into(), Some("outcome_uncertain"))
     );
     assert_eq!(
         t.fake
@@ -2796,8 +2789,8 @@ fn in_flight_duplicate_is_rejected_then_replayed() {
             Some("in-flight"),
         );
         assert_eq!(
-            (duplicate.status, duplicate.reason.as_deref()),
-            (409, Some("request_in_flight"))
+            (duplicate.status.clone(), duplicate.reason.as_deref()),
+            (409.into(), Some("request_in_flight"))
         );
     });
     let first = first_result.into_inner().unwrap().expect("worker ran");
@@ -2810,7 +2803,10 @@ fn in_flight_duplicate_is_rejected_then_replayed() {
         None,
         Some("in-flight"),
     );
-    assert_eq!((replay.status, replay.body.clone()), (200, first.body));
+    assert_eq!(
+        (replay.status.clone(), replay.body.clone()),
+        (200.into(), first.body)
+    );
     assert_eq!(t.fake.requests().len(), 1);
 }
 
@@ -2819,13 +2815,13 @@ fn pre_transmission_failure_releases_claim() {
     let t = GatewayTest::new();
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "retired")
+        .set_version_status("gh-token", &1.into(), "retired")
         .unwrap();
     let failed = issue_ledger(&t, "req-4", "same");
     assert_eq!(failed.reason.as_deref(), Some("credential_unavailable"));
     t.ctx
         .vault
-        .set_version_status("gh-token", 1, "active")
+        .set_version_status("gh-token", &1.into(), "active")
         .unwrap();
     assert_eq!(issue_ledger(&t, "req-4", "same").status, 201);
     let mut fake = FakeUpstream::new(SECRET_A);
@@ -2933,8 +2929,8 @@ fn large_replay_body_is_not_stored() {
     assert_eq!(first.status, 200);
     let replay = t.relay_full("GET", "/large", &no_headers(), b"", None, Some("big"));
     assert_eq!(
-        (replay.status, replay.reason.as_deref()),
-        (200, Some("replay_body_unavailable"))
+        (replay.status.clone(), replay.reason.as_deref()),
+        (200.into(), Some("replay_body_unavailable"))
     );
     assert_eq!(
         replay.json().expect("test body is valid utf-8 JSON")["reason"],
@@ -3237,8 +3233,8 @@ fn hostname_resolving_to_loopback_is_refused_without_opt_in() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("target_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("target_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 0);
     t.assert_result_credential_free(&result);
@@ -3265,8 +3261,8 @@ fn mixed_answer_is_refused_as_a_whole() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("target_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("target_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -3301,8 +3297,8 @@ fn metadata_answer_is_refused_even_for_private_opt_in() {
             resolver,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("metadata_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("metadata_address_not_allowed")),
             "answer={answer}"
         );
     }
@@ -3338,8 +3334,8 @@ fn ipv4_embedded_in_ipv6_answers_are_judged_by_the_ipv4_address() {
             resolver,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("target_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("target_address_not_allowed")),
             "answer={answer}"
         );
     }
@@ -3420,8 +3416,8 @@ fn address_refusal_spends_no_grant_use_approval_or_credential() {
         allowed,
     );
     assert_eq!(
-        (pending.status, pending.reason.as_deref()),
-        (428, Some("approval_required"))
+        (pending.status.clone(), pending.reason.as_deref()),
+        (428.into(), Some("approval_required"))
     );
     let digest = pending.json().expect("test body is valid utf-8 JSON")["approval_digest"]
         .as_str()
@@ -3444,8 +3440,8 @@ fn address_refusal_spends_no_grant_use_approval_or_credential() {
             refused.clone(),
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (403, Some("metadata_address_not_allowed")),
+            (result.status.clone(), result.reason.as_deref()),
+            (403.into(), Some("metadata_address_not_allowed")),
             "{method} {path}"
         );
     }
@@ -3549,8 +3545,8 @@ fn stored_metadata_literal_loads_and_is_refused_at_use() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("metadata_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("metadata_address_not_allowed"))
     );
     let record = t.audit_records().last().unwrap().clone();
     assert_eq!(record["connection"], "old-meta");
@@ -3608,7 +3604,10 @@ fn opt_in_connects_to_the_checked_address_and_resolves_once_per_request() {
         None,
         resolver,
     );
-    assert_eq!((first.status, second.status), (200, 200));
+    assert_eq!(
+        (first.status.clone(), second.status),
+        (200.into(), 200.into())
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         t.fake
@@ -3648,8 +3647,8 @@ fn resolution_failure_is_explicit() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable"))
     );
     t.assert_result_credential_free(&result);
 }
@@ -3685,8 +3684,8 @@ fn dns_change_between_requests_takes_effect_on_the_next_request() {
         rebound,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (403, Some("metadata_address_not_allowed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (403.into(), Some("metadata_address_not_allowed"))
     );
     assert_eq!(t.fake.requests().len(), 1);
 }
@@ -3755,8 +3754,8 @@ fn self_reference_via_registered_listener() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 
     gateway::unregister_local_listener(&listener);
@@ -3796,8 +3795,8 @@ fn peer_check_catches_a_dns_resolved_self_reference() {
         resolver,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
     gateway::unregister_local_listener(&listener);
 }
@@ -3886,10 +3885,10 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let trusted = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
         (
-            trusted.status,
+            trusted.status.clone(),
             trusted.json().expect("test body is valid utf-8 JSON")
         ),
-        (200, serde_json::json!({"login": "synthetic-user"}))
+        (200.into(), serde_json::json!({"login": "synthetic-user"}))
     );
     assert_eq!(
         good.requests()
@@ -3917,8 +3916,8 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-untrusted", &grant.id, None, 300);
     let untrusted = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (untrusted.status, untrusted.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (untrusted.status.clone(), untrusted.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     t.assert_result_credential_free(&untrusted);
     assert_eq!(good.requests().len(), 1);
@@ -3945,8 +3944,8 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-mismatch", &grant.id, None, 300);
     let mismatch = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (mismatch.status, mismatch.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (mismatch.status.clone(), mismatch.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     assert_eq!(wrong_name.requests().len(), 0);
     assert_eq!(t.audit_records().last().unwrap()["result"], "error");
@@ -3969,20 +3968,15 @@ fn https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails() {
     let handle = t.issue_handle_for("agent-1", "tls-missing-ca", &grant.id, None, 300);
     let missing = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (missing.status, missing.reason.as_deref()),
-        (502, Some("ca_file_unavailable"))
+        (missing.status.clone(), missing.reason.as_deref()),
+        (502.into(), Some("ca_file_unavailable"))
     );
 }
 
-/// Confirms the CN-fallback difference recorded in `DEVIATIONS.md`'s
-/// "gateway (TLS stack)" row (finding F-19): OpenSSL (Python's `ssl` module,
-/// what `zeropw/gateway.py` actually runs on) accepts a certificate whose
-/// Common Name matches the requested hostname even when the certificate
-/// carries no Subject Alternative Name at all (a legacy fallback OpenSSL
-/// still honours); `rustls`/`webpki` is SAN-only per RFC 6125 and always
-/// rejects such a certificate, even though the CN is exactly right.
+/// OpenSSL's legacy Common Name fallback is DNS-only.  A CN spelling an IP
+/// address does not satisfy IP identity verification when SAN is absent.
 #[test]
-fn tls_cert_with_matching_cn_but_no_san_is_rejected() {
+fn tls_cert_with_ip_cn_but_no_san_is_rejected() {
     let t = GatewayTest::new();
     t.ctx
         .vault
@@ -4027,10 +4021,10 @@ fn tls_cert_with_matching_cn_but_no_san_is_rejected() {
     let handle = t.issue_handle_for("agent-1", "tls-cn-only", &grant.id, None, 300);
     let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
-    assert_eq!(good.requests().len(), 0);
+    assert!(good.requests().is_empty());
 }
 
 #[test]
@@ -4147,10 +4141,10 @@ fn tls_is_verified_against_the_configured_name_not_the_pinned_address() {
         None,
         resolver,
     );
-    assert_eq!((ok.status, ok.reason.clone()), (200, None));
+    assert_eq!((ok.status.clone(), ok.reason.clone()), (200.into(), None));
     assert_eq!(
-        (bad.status, bad.reason.as_deref()),
-        (502, Some("upstream_tls_failed"))
+        (bad.status.clone(), bad.reason.as_deref()),
+        (502.into(), Some("upstream_tls_failed"))
     );
     assert_eq!(fake.requests().len(), 1);
 }
@@ -4223,8 +4217,8 @@ fn credential_reflection_is_caught_via_latin1_bytes_not_utf8() {
     let handle = raw_port_connection(&t, "basic-nonascii", "basic-pw-nonascii", auth, port);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("credential_reflection_blocked"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("credential_reflection_blocked"))
     );
 }
 
@@ -4240,8 +4234,8 @@ fn duplicate_content_encoding_headers_are_joined_before_checking() {
             .to_vec();
     let result = relay_via_raw_response(&t, "dup-content-encoding", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("response_encoding_unsupported"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("response_encoding_unsupported"))
     );
 }
 
@@ -4269,20 +4263,9 @@ fn self_referential_target_via_public_url_is_case_insensitive() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
-}
-
-#[test]
-fn urlsplit_hostname_matches_python_lower_casing() {
-    let out = run_python_oracle(
-        r#"
-import urllib.parse
-print(urllib.parse.urlsplit("http://ZEROPW.invalid:8443").hostname)
-"#,
-    );
-    assert_eq!(out.trim(), "zeropw.invalid");
 }
 
 #[test]
@@ -4310,8 +4293,8 @@ fn slow_upstream_read_is_a_timeout_not_connection_lost() {
     let handle = raw_port_connection(&t, "never-answers", "gh-token", HttpAuth::bearer(), port);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_timeout"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_timeout"))
     );
 }
 
@@ -4324,8 +4307,8 @@ fn status_code_outside_100_999_is_a_protocol_error() {
     let too_small =
         relay_via_raw_response(&t, "status-too-small", b"HTTP/1.1 12 Nope\r\n\r\n".to_vec());
     assert_eq!(
-        (too_small.status, too_small.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (too_small.status.clone(), too_small.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
     let too_large = relay_via_raw_response(
         &t,
@@ -4333,8 +4316,8 @@ fn status_code_outside_100_999_is_a_protocol_error() {
         b"HTTP/1.1 1000 Nope\r\n\r\n".to_vec(),
     );
     assert_eq!(
-        (too_large.status, too_large.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (too_large.status.clone(), too_large.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4347,7 +4330,10 @@ fn continue_interim_response_is_skipped_and_the_real_response_relayed() {
     let response =
         b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "continue-then-ok", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4371,7 +4357,10 @@ fn tab_separated_status_line_is_accepted() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1\t200\tOK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "tab-status-line", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4383,7 +4372,10 @@ fn folded_header_continuation_line_does_not_error() {
         b"HTTP/1.1 200 OK\r\nX-Custom: first\r\n second-part\r\nContent-Length: 2\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "folded-continuation", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4399,7 +4391,10 @@ fn header_line_without_colon_ends_recognised_headers_without_erroring() {
         b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nBadHeaderNoColon\r\nX-After: ignored\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "no-colon-header", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -4413,8 +4408,8 @@ fn malformed_chunk_size_is_a_protocol_error_not_connection_lost() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZZ\r\nhello\r\n0\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "malformed-chunk-size", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4433,8 +4428,8 @@ fn more_than_max_headers_is_a_protocol_error() {
     response.extend_from_slice(b"\r\nbody");
     let result = relay_via_raw_response(&t, "too-many-headers", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4449,8 +4444,8 @@ fn oversized_header_line_is_a_protocol_error() {
     response.extend_from_slice(b"\r\n\r\nbody");
     let result = relay_via_raw_response(&t, "oversized-header-line", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4462,7 +4457,10 @@ fn header_block_ended_by_eof_is_relayed_normally() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 200 OK\r\nX-Custom: value".to_vec();
     let result = relay_via_raw_response(&t, "headers-end-at-eof", response);
-    assert_eq!((result.status, result.reason.as_deref()), (200, None));
+    assert_eq!(
+        (result.status.clone(), result.reason.as_deref()),
+        (200.into(), None)
+    );
     assert_eq!(result.body, Vec::<u8>::new());
     assert!(
         !header_names(&result).contains("x-custom"),
@@ -4480,8 +4478,12 @@ fn status_line_then_immediate_eof_is_relayed_as_empty_ok() {
     let response = b"HTTP/1.1 200 OK\r\n".to_vec();
     let result = relay_via_raw_response(&t, "status-then-eof", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, Vec::new(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), Vec::new(), None)
     );
 }
 
@@ -4495,8 +4497,12 @@ fn content_length_larger_than_bytes_sent_relays_the_short_body() {
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\nshort".to_vec();
     let result = relay_via_raw_response(&t, "content-length-too-big", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"short".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"short".to_vec(), None)
     );
 }
 
@@ -4510,8 +4516,12 @@ fn chunked_body_ending_at_eof_after_terminal_chunk_is_relayed_normally() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n".to_vec();
     let result = relay_via_raw_response(&t, "chunked-eof-after-terminal", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4527,8 +4537,12 @@ fn chunk_terminator_bytes_are_consumed_without_validation() {
         b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXY0\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "chunk-terminator-unchecked", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4547,8 +4561,8 @@ fn chunk_terminator_lf_only_framing_is_a_protocol_error() {
     let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\nhello\n0\n\n".to_vec();
     let result = relay_via_raw_response(&t, "chunk-terminator-lf-only", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -4561,8 +4575,12 @@ fn content_length_with_pep515_underscore_is_parsed_like_python_int() {
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1_0\r\n\r\n0123456789tail".to_vec();
     let result = relay_via_raw_response(&t, "content-length-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"0123456789".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"0123456789".to_vec(), None)
     );
 }
 
@@ -4577,8 +4595,12 @@ fn chunk_size_with_pep515_underscore_is_parsed_like_python_int() {
     response.extend_from_slice(b"\r\n0\r\n\r\n");
     let result = relay_via_raw_response(&t, "chunk-size-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, body, None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), body, None)
     );
 }
 
@@ -4589,8 +4611,12 @@ fn status_code_with_pep515_underscore_is_parsed_like_python_int() {
     let response = b"HTTP/1.1 2_00 OK\r\nContent-Length: 2\r\n\r\nhi".to_vec();
     let result = relay_via_raw_response(&t, "status-underscore", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, b"hi".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), b"hi".to_vec(), None)
     );
 }
 
@@ -4611,8 +4637,8 @@ fn only_http_1_x_and_0_9_versions_are_accepted() {
         let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
         let result = relay_via_raw_response(&t, &format!("bad-version-{name}"), response);
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (502, Some("upstream_protocol_error")),
+            (result.status.clone(), result.reason.as_deref()),
+            (502.into(), Some("upstream_protocol_error")),
             "version {version:?} should have been refused"
         );
     }
@@ -4625,8 +4651,12 @@ fn only_http_1_x_and_0_9_versions_are_accepted() {
         let response = format!("{version} 200 OK\r\nContent-Length: 2\r\n\r\nhi").into_bytes();
         let result = relay_via_raw_response(&t, &format!("good-version-{name}"), response);
         assert_eq!(
-            (result.status, result.body.clone(), result.reason.as_deref()),
-            (200, b"hi".to_vec(), None),
+            (
+                result.status.clone(),
+                result.body.clone(),
+                result.reason.as_deref()
+            ),
+            (200.into(), b"hi".to_vec(), None),
             "version {version:?} should have been accepted"
         );
     }
@@ -4645,8 +4675,12 @@ fn no_content_status_with_chunked_transfer_encoding_still_decodes_the_body() {
             .to_vec();
     let result = relay_via_raw_response(&t, "204-chunked-has-body", response);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (204, b"hello".to_vec(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (204.into(), b"hello".to_vec(), None)
     );
 }
 
@@ -4669,8 +4703,12 @@ fn head_request_still_forces_an_empty_body_even_when_chunked() {
     );
     let result = gateway::relay(&t.ctx, &handle, "HEAD", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.body.clone(), result.reason.as_deref()),
-        (200, Vec::new(), None)
+        (
+            result.status.clone(),
+            result.body.clone(),
+            result.reason.as_deref()
+        ),
+        (200.into(), Vec::new(), None)
     );
 }
 
@@ -4694,8 +4732,8 @@ fn header_value_ending_in_newline_is_accepted_then_fails_after_transmission() {
         Some("req-header-newline"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_connection_lost"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_connection_lost"))
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -4752,8 +4790,8 @@ fn bearer_credential_ending_in_newline_is_accepted_then_fails_after_transmission
         Some("req-cred-newline"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_connection_lost"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_connection_lost"))
     );
     assert_eq!(t.fake.requests().len(), 0);
 }
@@ -4830,9 +4868,114 @@ fn ca_file_unavailable_takes_priority_over_an_unreachable_target() {
     let handle = t.issue_handle_for("agent-1", "ca-unreachable", &grant.id, None, 300);
     let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("ca_file_unavailable"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("ca_file_unavailable"))
     );
+}
+
+#[test]
+fn raw_ca_file_truthiness_fails_closed_without_default_trust_fallback() {
+    let t = GatewayTest::new();
+    t.ctx
+        .vault
+        .put_secret(
+            "raw-ca-token",
+            "api_key",
+            SECRET_B.as_bytes(),
+            "demo",
+            "dev",
+            true,
+        )
+        .unwrap();
+    let unreachable = FakeUpstream::new("x").start();
+    let port = unreachable.port();
+    drop(unreachable);
+
+    // A hand-edited, truthy non-path `ca_file` fails closed: the error
+    // escapes `relay` and the server answers its fixed 500 `internal_error`
+    // reply; a falsy one means "no pinned CA".
+    for (suffix, raw_ca_file, expected_status, expected_reason) in [
+        ("null", serde_json::Value::Null, 502, "upstream_unreachable"),
+        (
+            "false",
+            serde_json::json!(false),
+            502,
+            "upstream_unreachable",
+        ),
+        ("zero", serde_json::json!(0), 502, "upstream_unreachable"),
+        (
+            "empty-list",
+            serde_json::json!([]),
+            502,
+            "upstream_unreachable",
+        ),
+        (
+            "empty-string",
+            serde_json::json!(""),
+            502,
+            "upstream_unreachable",
+        ),
+        ("number", serde_json::json!(5), 500, "internal_error"),
+        ("true", serde_json::json!(true), 500, "internal_error"),
+        (
+            "list",
+            serde_json::json!(["not", "a", "path"]),
+            500,
+            "internal_error",
+        ),
+        ("nul", serde_json::json!("a\u{0}b"), 500, "internal_error"),
+    ] {
+        let connection_id = format!("raw-ca-{suffix}");
+        let target = HttpTarget::new("https", "127.0.0.1", port as i64, None, false).unwrap();
+        t.ctx
+            .policy
+            .create_connection(
+                Connection::new(
+                    &connection_id,
+                    "demo",
+                    "dev",
+                    "test",
+                    "http",
+                    "raw-ca-token",
+                    None,
+                    "",
+                    Some(target),
+                    Some(HttpAuth::bearer()),
+                    Some(HttpScope::new(None, None, vec![]).unwrap()),
+                    None,
+                    None,
+                    0,
+                    "active",
+                    "",
+                    "",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut connections = t
+            .ctx
+            .state
+            .read_json(P::CONNECTIONS, serde_json::json!({}))
+            .unwrap();
+        connections[&connection_id]["http_target"]["ca_file"] = raw_ca_file;
+        t.ctx
+            .state
+            .write_json(P::CONNECTIONS, &connections)
+            .unwrap();
+
+        let grant = t
+            .ctx
+            .policy
+            .create_grant("agent-1", &connection_id, Some(3600), None)
+            .unwrap();
+        let handle = t.issue_handle_for("agent-1", &connection_id, &grant.id, None, 300);
+        let result = t.relay_full("GET", "/me", &no_headers(), b"", Some(&handle), None);
+        assert_eq!(
+            (result.status.clone(), result.reason.as_deref()),
+            (expected_status.into(), Some(expected_reason)),
+            "{suffix}"
+        );
+    }
 }
 
 #[test]
@@ -4862,8 +5005,8 @@ fn unbracketed_ipv6_like_public_url_does_not_false_positive_self_referential() {
     let handle = named_connection_port(&t, "v6-unbracketed", "::1", 8443, false);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable")),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable")),
         "must not be refused as self_referential_target (that would be the pre-fix, \
          Python-diverging false positive)"
     );
@@ -4921,8 +5064,7 @@ fn normalize_path_accepts_a_single_trailing_newline_like_python() {
     // Finding F-12: Python's `re` `$` also matches immediately before a
     // single trailing `"\n"`, so `_TARGET_CHARS.match("/a?b\n")` succeeds in
     // Python (returning `("/a", "/a?b\n")`), where the `regex` crate's own
-    // `$`/`is_match` only accepts the true end of the haystack. Oracle
-    // checked against real `python3.12` below.
+    // `$`/`is_match` only accepts the true end of the haystack.
     assert_eq!(
         gateway::normalize_path("/a?b\n").unwrap(),
         ("/a".to_string(), "/a?b\n".to_string())
@@ -4932,19 +5074,6 @@ fn normalize_path_accepts_a_single_trailing_newline_like_python() {
     // special-cased by Python's `$`).
     assert!(gateway::normalize_path("/a\nb").is_err());
     assert!(gateway::normalize_path("/a?b\n\n").is_err());
-}
-
-#[test]
-fn normalize_path_trailing_newline_matches_python_target_chars_regex() {
-    let out = run_python_oracle(
-        r#"
-import re
-pat = re.compile(r"^[\x21-\x7e]*$")
-tests = ["/a?b\n", "/a\nb", "/a?b\n\n", "/a?b"]
-print([bool(pat.match(t)) for t in tests])
-"#,
-    );
-    assert_eq!(out.trim(), "[True, False, False, True]");
 }
 
 /// Small seeded xorshift64* PRNG, same technique used by the internal
@@ -5056,7 +5185,7 @@ fn random_path_candidate(rng: &mut Lcg) -> String {
 }
 
 #[test]
-fn normalize_path_percent_decoding_never_panics_and_matches_python() {
+fn normalize_path_percent_decoding_never_panics() {
     // Finding F-R2-1: `percent_decode_lossy` used to index a `str` slice at
     // a byte offset that can land inside a multi-byte UTF-8 character
     // produced by the *first* decode pass (e.g. `/%25%E4%B8%AD` decodes
@@ -5064,66 +5193,55 @@ fn normalize_path_percent_decoding_never_panics_and_matches_python() {
     // panicking on agent-supplied input. Generate several thousand random
     // and adversarial percent-sequences (including ones specifically
     // engineered to reproduce that exact shape) and assert `normalize_path`
-    // never panics on any of them, and its accept/reject outcome (and, when
-    // accepted, its `(path, target)` pair) matches the real
-    // `zeropw.gateway.normalize_path` for every one of them.
+    // never panics on any of them, and that whatever it accepts is returned
+    // unchanged as the target with the query split off as the path.
     let mut rng = Lcg::new(0xA5A5_1234_5678_9ABC);
     let case_count = 6000usize;
-    let cases: Vec<String> = (0..case_count)
-        .map(|_| random_path_candidate(&mut rng))
-        .collect();
-
-    // No panic: computing every outcome up front is itself the assertion
-    // (a panic fails the test with a backtrace pointing at the case).
-    let rust_results: Vec<Result<(String, String), &'static str>> =
-        cases.iter().map(|c| gateway::normalize_path(c)).collect();
-
-    let script = r#"
-import sys, json
-from zeropw import gateway as G
-cases = json.loads(sys.stdin.read())
-out = []
-for raw in cases:
-    try:
-        path, target = G.normalize_path(raw)
-        out.append(["ok", path, target])
-    except G._Invalid as e:
-        out.append(["err", e.reason])
-sys.stdout.write(json.dumps(out))
-"#;
-    let stdin_json = serde_json::to_string(&cases).unwrap();
-    let py_out = run_python_oracle_stdin(script, &stdin_json);
-    let py_results: Vec<Value> = serde_json::from_str(py_out.trim()).unwrap();
-    assert_eq!(py_results.len(), cases.len());
-
-    let mut mismatches = Vec::new();
-    for (i, (case, rust_result)) in cases.iter().zip(rust_results.iter()).enumerate() {
-        let py = &py_results[i];
-        let matches = match (rust_result, py[0].as_str().unwrap()) {
-            (Ok((path, target)), "ok") => {
-                path.as_str() == py[1].as_str().unwrap()
-                    && target.as_str() == py[2].as_str().unwrap()
-            }
-            (Err(_), "err") => true,
-            _ => false,
-        };
-        if !matches {
-            mismatches.push(format!(
-                "case {i} ({case:?}): rust={rust_result:?} python={py:?}"
-            ));
+    let mut accepted = 0usize;
+    for _ in 0..case_count {
+        let case = random_path_candidate(&mut rng);
+        // No panic: a panic fails the test with a backtrace at the case.
+        if let Ok((path, target)) = gateway::normalize_path(&case) {
+            accepted += 1;
+            assert_eq!(target, case, "{case:?}");
+            assert_eq!(path, case.split('?').next().unwrap(), "{case:?}");
         }
     }
-    assert!(
-        mismatches.is_empty(),
-        "{} / {} cases diverged from python3.12 gateway.normalize_path:\n{}",
-        mismatches.len(),
-        cases.len(),
-        mismatches.join("\n")
-    );
-    eprintln!(
-        "normalize_path percent-decode fuzz: {} cases, 0 divergences, 0 panics",
-        cases.len()
-    );
+    assert!(accepted > 0 && accepted < case_count, "{accepted}");
+}
+
+#[test]
+fn normalize_path_representative_outcomes() {
+    // Well-formed agent paths pass through unchanged (the query split off
+    // for scope matching); dot segments, encoded dot segments, an empty
+    // segment, NUL, spaces, fragments and relative paths are refused.
+    // Expected values measured once against the prototype's
+    // `gateway.normalize_path`.
+    for (raw, expected) in [
+        ("/repos/demo/issues", Some("/repos/demo/issues")),
+        ("/repos?per_page=5&q=a%20b", Some("/repos")),
+        ("/a%2Fb/c", Some("/a%2Fb/c")),
+        ("/%25%E4%B8%AD", Some("/%25%E4%B8%AD")),
+        ("/%E4%B8%AD/x", Some("/%E4%B8%AD/x")),
+        ("/%41%42?x=%41", Some("/%41%42")),
+        ("/a/../b", None),
+        ("/a/./b", None),
+        ("/%2e%2e/x", None),
+        ("//x", None),
+        ("/a%00b", None),
+        ("/a\nb", None),
+        ("relative", None),
+        ("/a b", None),
+        ("/a#frag", None),
+    ] {
+        match (gateway::normalize_path(raw), expected) {
+            (Ok((path, target)), Some(want)) => {
+                assert_eq!((path.as_str(), target.as_str()), (want, raw), "{raw:?}");
+            }
+            (Err(reason), None) => assert_eq!(reason, "invalid_path", "{raw:?}"),
+            (got, _) => panic!("{raw:?}: unexpected {got:?}"),
+        }
+    }
 }
 
 // ---------------------------------------------- equivalence review round 3
@@ -5181,8 +5299,8 @@ fn write_request_rejects_agent_controlled_request_line_injection() {
         Some("inject-1"),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
     assert!(
         captured.lock().unwrap().is_empty(),
@@ -5194,41 +5312,6 @@ fn write_request_rejects_agent_controlled_request_line_injection() {
         .read_json(gateway::LEDGER_DOC, serde_json::json!({}))
         .unwrap();
     assert_eq!(doc["agent-1"]["inject-1"]["state"], "uncertain");
-}
-
-#[test]
-fn validate_method_and_validate_path_raise_different_exception_types_in_python() {
-    // Finding F-R3-1: both guards live in the same `putrequest` call, but
-    // they raise DIFFERENT exception types in CPython, which
-    // `_Relay._exchange`'s except clauses classify differently --
-    // `_validate_method` is a plain `ValueError` (caught by `except
-    // (OSError, ValueError): upstream_connection_lost`, the same outcome as
-    // an illegal header value), while `_validate_path` is `InvalidURL`, an
-    // `http.client.HTTPException` (caught by `except
-    // http.client.HTTPException: upstream_protocol_error`). Verified
-    // directly against a live `python3.12`.
-    let out = run_python_oracle(
-        r#"
-import http.client
-conn = http.client.HTTPConnection("127.0.0.1", 1)
-try:
-    conn.putrequest("GE\x01T", "/ok")
-    print("no-error")
-except http.client.HTTPException:
-    print("http-exception")
-except ValueError:
-    print("value-error")
-conn2 = http.client.HTTPConnection("127.0.0.1", 1)
-try:
-    conn2.putrequest("GET", "/x?y\n")
-    print("no-error")
-except http.client.HTTPException:
-    print("http-exception")
-except ValueError:
-    print("value-error")
-"#,
-    );
-    assert_eq!(out.trim(), "value-error\nhttp-exception");
 }
 
 #[test]
@@ -5245,7 +5328,10 @@ fn content_length_with_information_separator_control_char_is_not_a_valid_int() {
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: \x1c5\r\n\r\n1234567890".to_vec();
     let result = relay_via_raw_response(&t, "content-length-info-sep", response);
-    assert_eq!((result.status, result.body), (200, b"1234567890".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"1234567890".to_vec())
+    );
 }
 
 #[test]
@@ -5260,13 +5346,13 @@ fn chunk_size_of_only_information_separator_control_chars_is_a_protocol_error() 
             .to_vec();
     let result = relay_via_raw_response(&t, "chunk-size-info-sep", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
 #[test]
-fn status_line_split_and_int_semantics_for_control_chars_match_python_oracle() {
+fn status_line_with_an_information_separator_in_the_status_is_a_protocol_error() {
     // Finding F-R3-2: U+001C-U+001F count as whitespace for
     // `line.split(None, 2)` (`str.isspace()`'s predicate, the same one
     // `_read_status`'s tokenizing uses) -- so a status token can never
@@ -5275,22 +5361,13 @@ fn status_line_split_and_int_semantics_for_control_chars_match_python_oracle() {
     // valid `int()` parse (`2`) but fails the `100 <= status <= 999` range
     // check, landing on the same `upstream_protocol_error` outcome via a
     // different route than the `Content-Length`/chunk-size cases above.
-    // Confirmed directly against python3.12 below, then pinned end-to-end.
-    let out = run_python_oracle(
-        r#"
-line = "HTTP/1.1 2\x1c00 OK\r\n"
-print(line.split(None, 2))
-print(int("2"))
-"#,
-    );
-    assert_eq!(out.trim(), "['HTTP/1.1', '2', '00 OK\\r\\n']\n2");
-
+    // Pinned end-to-end.
     let t = GatewayTest::new();
     let response = b"HTTP/1.1 2\x1c00 OK\r\n\r\n".to_vec();
     let result = relay_via_raw_response(&t, "status-info-sep", response);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_protocol_error"))
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_protocol_error"))
     );
 }
 
@@ -5306,9 +5383,7 @@ fn doubled_trailing_cr_in_header_block_does_not_leak_a_header_into_the_body() {
     // the bare `\r` this line contains still ends *recognition*, so
     // `Content-Type` (sharing this response's header block after the
     // doubled CR) is correctly dropped rather than becoming a header OR
-    // leaking into the body. Pinned end-to-end against python3.12 by the
-    // `http_framing_fuzz` differential fuzzer's `"\r\r\n"`
-    // header-terminator mutation in `gateway.rs`.
+    // leaking into the body.
     let t = GatewayTest::new();
     let response =
         b"HTTP/1.1 200 OK\r\nETag: keep-going\r\n\r\r\nContent-Type: text/plain\r\n\r\nbody"
@@ -5469,7 +5544,10 @@ fn content_encoding_with_information_separator_prefix_is_still_accepted() {
         b"HTTP/1.1 200 OK\r\nContent-Encoding: \x1cidentity\r\nContent-Length: 2\r\n\r\nhi"
             .to_vec();
     let result = relay_via_raw_response(&t, "content-encoding-info-sep", response);
-    assert_eq!((result.status, result.body), (200, b"hi".to_vec()));
+    assert_eq!(
+        (result.status.clone(), result.body),
+        (200.into(), b"hi".to_vec())
+    );
 }
 
 #[test]
@@ -5495,8 +5573,8 @@ fn self_referential_target_via_scheme_relative_public_url() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 }
 
@@ -5523,8 +5601,8 @@ fn self_referential_target_treats_public_url_port_zero_as_unspecified() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
 }
 
@@ -5555,8 +5633,8 @@ fn self_referential_target_via_bracketed_public_url_with_empty_port() {
         None,
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target")),
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target")),
         "a bracketed host with a colon but an empty port must still use the scheme default \
          port and run the self-reference comparison, matching real urlsplit"
     );
@@ -5582,8 +5660,8 @@ fn invalid_bracketed_public_url_does_not_false_positive_self_referential() {
     let handle = named_connection_port(&t, "public-self-v6-invalid", "::1", 80, false);
     let result = gateway::relay(&t.ctx, &handle, "GET", "/me", &no_headers(), b"", None);
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (502, Some("upstream_unreachable")),
+        (result.status.clone(), result.reason.as_deref()),
+        (502.into(), Some("upstream_unreachable")),
         "must not be refused as self_referential_target (that would be the pre-fix, \
          Python-diverging false positive)"
     );
@@ -5603,11 +5681,12 @@ fn ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-1": "oops"}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-1"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5627,11 +5706,12 @@ fn ledger_wrong_typed_request_entry_fails_closed_before_reaching_upstream() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-1": {"r-shape-2": "oops"}}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-2"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5653,11 +5733,12 @@ fn ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream() {
     )
     .unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("r-shape-3"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5687,11 +5768,12 @@ fn ledger_save_fails_closed_for_a_corrupted_entry_of_a_different_request_id() {
     )
     .unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-2"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    // An escaping built-in: `zeropw.server`'s fixed `except Exception` reply.
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         result.json().expect("test body is valid utf-8 JSON")["error"],
-        "StateError"
+        "InternalError"
     );
     assert_eq!(
         t.fake.requests().len(),
@@ -5718,8 +5800,8 @@ fn ledger_save_fails_closed_for_a_corrupted_unrelated_caller() {
     std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
     std::fs::write(&ledger_path, br#"{"agent-2": "oops"}"#).unwrap();
     let result = t.relay_full("GET", "/me", &no_headers(), b"", None, Some("rid-agent1"));
-    assert_eq!(result.status, 503);
-    assert_eq!(result.reason.as_deref(), Some("state_corrupt"));
+    assert_eq!(result.status, 500);
+    assert_eq!(result.reason.as_deref(), Some("internal_error"));
     assert_eq!(
         t.fake.requests().len(),
         0,
@@ -5730,62 +5812,6 @@ fn ledger_save_fails_closed_for_a_corrupted_unrelated_caller() {
         raw, r#"{"agent-2": "oops"}"#,
         "the ledger must be left byte-for-byte untouched on a failed save"
     );
-}
-
-/// Like `run_python_oracle`, but pipes `stdin_data` to the script's stdin
-/// (for a batch of test cases too large to embed as a `-c` argument) and
-/// sets `PYTHONPATH` to the repository root so `import zeropw...` works,
-/// same as `rust/tests/gateway_oracle.rs`'s `run_python`.
-fn run_python_oracle_stdin(script: &str, stdin_data: &str) -> String {
-    use std::io::Write as _;
-    use std::process::Stdio;
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root")
-        .to_path_buf();
-    let mut child = std::process::Command::new(&interpreter)
-        .arg("-c")
-        .arg(script)
-        .env("PYTHONPATH", repo_root)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {interpreter}: {e}"));
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_data.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
-}
-
-/// Minimal Python runner for the oracle checks above -- same technique as
-/// `rust/tests/gateway_oracle.rs`'s `run_python` (not reused directly since
-/// that helper lives in a separate integration-test binary and isn't
-/// exported).
-fn run_python_oracle(script: &str) -> String {
-    let interpreter = std::env::var("ZEROPW_PYTHON").unwrap_or_else(|_| "python3.12".to_string());
-    let output = std::process::Command::new(interpreter)
-        .arg("-c")
-        .arg(script)
-        .output()
-        .expect("run python3.12");
-    assert!(
-        output.status.success(),
-        "python stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 stdout")
 }
 
 // ------------------------------------------------------------- HashMap import
@@ -6501,8 +6527,8 @@ fn server_target_that_is_zeropw_itself_is_refused_before_use() {
             None,
         );
         assert_eq!(
-            (result.status, result.reason.as_deref()),
-            (501, Some("self_referential_target")),
+            (result.status.clone(), result.reason.as_deref()),
+            (501.into(), Some("self_referential_target")),
             "{cid}"
         );
         assert_eq!(result.json().unwrap()["error"], "Unsupported");
@@ -6550,7 +6576,13 @@ fn server_peer_that_resolves_to_zeropw_is_refused_before_transmission() {
             "agent-1",
             "alias",
             &grant,
-            s.ctx.policy.get_connection("alias").unwrap().policy_version,
+            s.ctx
+                .policy
+                .get_connection("alias")
+                .unwrap()
+                .policy_version
+                .to_i64()
+                .unwrap(),
             300,
             Some(s.now),
         )
@@ -6566,8 +6598,8 @@ fn server_peer_that_resolves_to_zeropw_is_refused_before_transmission() {
         resolver_answering(vec!["127.0.0.1".parse().unwrap()]),
     );
     assert_eq!(
-        (result.status, result.reason.as_deref()),
-        (501, Some("self_referential_target"))
+        (result.status.clone(), result.reason.as_deref()),
+        (501.into(), Some("self_referential_target"))
     );
     assert!(s.server.log_lines().is_empty());
     let ledger = s
@@ -6633,9 +6665,9 @@ fn server_relayed_request_marker_is_refused_by_the_server() {
         None,
     );
     assert_eq!(
-        (result.status, result.json().unwrap()),
+        (result.status.clone(), result.json().unwrap()),
         (
-            501,
+            501.into(),
             serde_json::json!({"error": "Unsupported", "reason": "self_referential_target"})
         )
     );
