@@ -1,21 +1,21 @@
 # ZeroPW
 
-에이전트에게 원본 비밀값을 주지 않고 CLI·API를 쓰게 하는 개인용 금고다. 서비스와 자격증명을 한 번 연결하면 작업별 등록 없이 지원하는 CLI·API를 쓸 수 있다. HTTP 인증은 신뢰 프로세스의 인증 중계기가 대신 넣고, SSH 인증은 별도 서명기가 맡는다. 그래서 원본 키는 에이전트가 실행하는 코드에 들어가지 않는다.
+ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰게 하는 개인용 금고다. 서비스와 자격증명을 한 번 연결하면 작업별 등록 없이 지원하는 CLI·API를 쓸 수 있다. 신뢰 프로세스 안의 중계기가 HTTP 인증 정보를 넣고 별도 서명기가 SSH 인증을 맡는다. 그래서 원본 키는 에이전트가 실행하는 코드에 들어가지 않는다.
 
-제품 구현은 `rust/`의 Rust 크레이트(`zeropw`)다. 합성 자격증명과 시험용 서버로만 검증했고 배포 전이다. 처음 만든 Python 프로토타입은 2026-10-03 Rust로 전환을 마치고 저장소에서 제거했다(git 이력에 남아 있다).
+제품 코드는 `rust/`의 Rust 크레이트(`zeropw`)에 있다. 합성 자격증명과 시험용 서버로만 검증했고 배포 전이다. 2026-10-03 Rust 전환을 마친 뒤 기존 Python 프로토타입을 저장소에서 제거했다. 코드는 git 이력에 남아 있다.
 
 ## 처음 사용한다면
 
-[쉬운 시작 GUIDE](GUIDE.md)에서 데모 → 관리자 설정 → 팀 가입 → 에이전트 사용 순서로 시작하세요. 에이전트에는 [ZeroPW 스킬](skills/zeropw-agent/SKILL.md)을 설치할 수 있습니다.
+[시작 안내](GUIDE.md)에 데모 실행부터 관리자 설정, 팀 가입, 에이전트 사용까지 필요한 절차를 적었다. 에이전트에는 [ZeroPW 스킬](skills/zeropw-agent/SKILL.md)을 설치할 수 있습니다.
 
 ## 구성
 
 | 바이너리 | 역할 | 실행 위치 |
 | --- | --- | --- |
 | `zeropw-admin` | 관리 CLI. 상태 디렉터리 초기화, 프로젝트·비밀·연결·호출 주체·권한 관리, 감사·알림 조회, 침해 대응, 팀 공유, 신뢰 프로세스 `serve` | 관리자 / 신뢰 호스트 |
-| `zeropw-agent` | 에이전트 쪽 얇은 클라이언트. `list-connections`, `request`, `exec`, `status`, `cancel` | 비밀 없는 실행 환경 |
+| `zeropw-agent` | 에이전트용 CLI. `list-connections`, `request`, `exec`, `status`, `cancel` | 비밀 없는 실행 환경 |
 | `zeropw_session` | `exec` 실행 보조 바이너리. `serve` 바이너리와 같은 디렉터리에 둔다 | 신뢰 호스트 |
-| `zeropw-demo` | 합성 값으로 전체 흐름을 한 번에 도는 데모 (종료 코드 0 = 모든 확인 통과) | 시연 |
+| `zeropw-demo` | 시험용 값으로 전체 사용 과정을 보여 주는 데모 (종료 코드 0 = 모든 확인 통과) | 시연 |
 | `zeropw-democli` | `exec` 지원 CLI 예시. 연결 핸들이 든 base URL만 받는다 | 시험·시연 |
 
 에이전트가 받는 것은 게이트웨이 URL(`ZEROPW_GATEWAY_URL`)과 자기 호출 토큰(`ZEROPW_CALLER_TOKEN`)뿐이다. 관리자 패스프레이즈나 원본 자격증명은 받지 않는다. `exec`를 쓰는 배포는 `zeropw_session`을 `serve` 바이너리 옆에 함께 둬야 한다. 없으면 `exec`가 `spawn_failed`로 실패하며, 평문 자격증명 경로로 대체하지 않는다.
@@ -29,7 +29,7 @@ cargo build --locked --manifest-path rust/Cargo.toml --bins
 rust/target/debug/zeropw-demo
 ```
 
-관리자와 에이전트의 실제 사용 흐름(초기화 → 비밀·연결 등록 → 호출 주체·권한 → `serve` → 에이전트 호출)은 [구현 현황](docs/implementation.md) §10에 명령 그대로 적어 두었다.
+초기화부터 비밀과 연결 등록, 권한 설정, `serve` 실행, 에이전트 호출까지의 명령은 [구현 현황](docs/implementation.md) §10에도 있다.
 
 ## 검증
 
@@ -41,7 +41,7 @@ rust/verify.sh signer_e2e   # 특정 통합 시험만
 
 `verify.sh`는 제품 코드를 빌드하고 실행한다. 게이트웨이·금고·서명기·관리자 자격증명이 있는 호스트가 아닌 CI 러너나 격리 VM에서 돌린다. SSH 종단 시험은 OpenSSH(`ssh`, `sshd`, `ssh-keygen`)와 `perl`을 쓴다. Python은 필요 없다.
 
-프로토타입과의 호환성은 프로토타입이 제거 전에 한 번 생성한 고정 시험 자료(`rust/tests/fixtures/python/`)로 확인한다. 대상은 그것이 쓴 상태 디렉터리, 서명·다이제스트·통신 바이트, 백업이며, 생성 방법은 각 디렉터리의 `GENERATE.md`에 있다. 어디까지 호환을 지키는지는 [Rust 호환성 계약](rust/PORTING.md)에 있다.
+Python 프로토타입을 제거하기 전에 만든 고정 시험 자료(`rust/tests/fixtures/python/`)로 호환성을 확인한다. 상태 디렉터리와 백업, 서명·다이제스트·통신 바이트를 비교하며 자료 생성 방법은 각 디렉터리의 `GENERATE.md`에 있다. 호환 범위는 [Rust 호환성 계약](rust/PORTING.md)을 따른다.
 
 이 구현은 모든 CLI와의 호환, 운영 배포 준비, 서로 다른 OS 사용자 간 격리를 약속하지 않는다. 남은 경계와 한계는 [구현 현황](docs/implementation.md) §9에 있다.
 
