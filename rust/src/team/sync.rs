@@ -693,7 +693,10 @@ mod retry_tests {
                 &f.env_id,
                 vec![json!({"op":"secret.put","generation_id":before})],
             );
-            assert_eq!(result.unwrap_err().name, "team_rekey_pending");
+            assert_eq!(
+                result.unwrap_err().reason.as_deref(),
+                Some("team_rekey_pending")
+            );
         }
     }
 
@@ -2745,13 +2748,18 @@ impl TeamSync {
                     .as_str()
                     .unwrap_or("");
                 message["fact"]["author"] == fp
-                    && envs
-                        .get(env_id)
-                        .and_then(|e| e.removal_authors.get(&fp))
-                        .is_some_and(|authors| authors.contains(target))
+                    && (target == fp
+                        || envs
+                            .get(env_id)
+                            .and_then(|e| e.removal_authors.get(&fp))
+                            .is_some_and(|authors| authors.contains(target)))
             };
             if mtype == "FACT" && message["fact"]["kind"] == "member_removed" && reciprocal {
                 self.handle_fact(env_id, session, message)?;
+            } else if mtype == "FACT"
+                && let Ok(fact) = Fact::from_dict(&message["fact"])
+            {
+                self.audit_fact_rejected(env_id, &fact, "team_fact_not_authorized");
             }
             return Ok(());
         }
