@@ -79,4 +79,3 @@ jobs:
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-agent" --help
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-admin" --help
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-demo"
-
