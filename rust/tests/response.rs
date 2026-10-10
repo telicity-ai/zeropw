@@ -738,7 +738,7 @@ fn email_render_has_ordered_sections_and_no_detail_or_value() {
         previous = found;
     }
     assert!(body.contains("recover"));
-    assert!(body.contains("공급자 콘솔"));
+    assert!(body.contains("provider console"));
     assert!(!body.contains("do not render me"));
     assert!(!body.contains(std::str::from_utf8(SECRET).unwrap()));
 }

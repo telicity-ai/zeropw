@@ -1,0 +1,403 @@
+[
+  [
+    {
+      "id": "inc-20231114T221321Z-d8260dee",
+      "opened_at": "2023-11-14T22:13:21Z",
+      "status": "open",
+      "scope": "principal",
+      "runtime": null,
+      "principals": [
+        "agent-1"
+      ],
+      "trigger": "manual",
+      "rule": null,
+      "detail": null,
+      "actions": {
+        "stopped": false,
+        "principals_disabled": 1,
+        "grants_revoked": 4,
+        "handle_key_rotated": false,
+        "runs_cancelled": 0,
+        "sockets_closed": 0,
+        "failed_steps": [],
+        "applied_by_serve": true
+      },
+      "assessment": {
+        "principals": [
+          {
+            "id": "agent-1",
+            "created_at": "2023-11-14T22:13:20Z",
+            "runtime": "default"
+          }
+        ],
+        "secrets": [
+          {
+            "secret_id": "box-key",
+            "kind": "ssh_private_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-ssh-box",
+            "connections": [
+              "box"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 2222,
+                "username": "deploy"
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory",
+            "fingerprint": "SHA256:El4H3wrXSHbXTtSll02lHY/yBQwCxycCG+hejnetUEM"
+          },
+          {
+            "secret_id": "gh-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-github",
+            "connections": [
+              "gh"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory"
+          },
+          {
+            "secret_id": "jira-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-jira",
+            "connections": [
+              "jira"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": null,
+            "last_used": null,
+            "use_count": 0,
+            "active_version": 1,
+            "tier": "recommended"
+          },
+          {
+            "secret_id": "svc-pw",
+            "kind": "password",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-service-basic",
+            "connections": [
+              "svc"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory"
+          }
+        ]
+      },
+      "notification": {
+        "status": "not_configured",
+        "attempts": 0
+      },
+      "closed_at": null,
+      "widened_from": []
+    },
+    [
+      "[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident inc-20231114T221321Z-d8260dee)",
+      "Report generated: 2026-09-16T00:00:00Z\n\n1. What happened\nIncident ID: inc-20231114T221321Z-d8260dee\nIncident time: 2023-11-14T22:13:21Z  (trigger: manual)\nContainment scope: principal\nCompromised principals:\n  - agent-1 (token created: 2023-11-14T22:13:20Z)\n\n2. Actions already taken by ZeroPW\nGlobal stop: no\nDisabled principals: 1\nRevoked grants: 4\nHandle key rotated: no\nCancelled runs: 0\nClosed signer sockets: 0\n\n3. Required credential rotation\n* Secret ID: box-key  (kind: ssh_private_key, service: fake-ssh-box)\n  Project/environment: demo/dev  Active version: 1\n  Connections: box\n  Targets: deploy@127.0.0.1:2222\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Generate a new key.\n  2. On each target server, remove the key with fingerprint SHA256:El4H3wrXSHbXTtSll02lHY/yBQwCxycCG+hejnetUEM from authorized_keys and replace it with the new key.\n  3. Inspect and terminate active sessions on target servers (who, ss -tnp).\n  4. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n\n* Secret ID: gh-token  (kind: api_key, service: fake-github)\n  Project/environment: demo/dev  Active version: 1\n  Connections: gh\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Revoke and reissue this credential in the provider console.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Review provider audit logs for activity since token creation.\n\n* Secret ID: svc-pw  (kind: password, service: fake-service-basic)\n  Project/environment: demo/dev  Active version: 1\n  Connections: svc\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Change the password at the service.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Terminate active sessions at the service.\n\n4. Recommended rotation\n* Secret ID: jira-token  (kind: api_key) - granted authority without recorded use\n\n5. Runtime\nIf runtime compromise cannot be ruled out, rebuild it before creating new principals there and escalate the incident with:\n  incident escalate --id inc-20231114T221321Z-d8260dee --scope runtime|all\nTokens for existing principals remain invalid.\n\n6. Recovery commands\n  incident show --id inc-20231114T221321Z-d8260dee\n  (after completing all required rotations above)\n  incident close --id inc-20231114T221321Z-d8260dee\n  principal create --runtime <RUNTIME_ID>\n  grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>\n  resume\n"
+    ]
+  ],
+  [
+    {
+      "id": "inc-20231114T221321Z-78285bed",
+      "opened_at": "2023-11-14T22:13:21Z",
+      "status": "open",
+      "scope": "runtime",
+      "runtime": "default",
+      "principals": [
+        "agent-1"
+      ],
+      "trigger": "manual",
+      "rule": null,
+      "detail": null,
+      "actions": {
+        "stopped": true,
+        "principals_disabled": 1,
+        "grants_revoked": 4,
+        "handle_key_rotated": true,
+        "runs_cancelled": 0,
+        "sockets_closed": 0,
+        "failed_steps": [],
+        "applied_by_serve": true
+      },
+      "assessment": {
+        "principals": [
+          {
+            "id": "agent-1",
+            "created_at": "2023-11-14T22:13:20Z",
+            "runtime": "default"
+          }
+        ],
+        "secrets": [
+          {
+            "secret_id": "box-key",
+            "kind": "ssh_private_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-ssh-box",
+            "connections": [
+              "box"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 2222,
+                "username": "deploy"
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory",
+            "fingerprint": "SHA256:OlLtlxhY6F8WaIcPPOy4R1s39X0iqeC473URs26atkY"
+          },
+          {
+            "secret_id": "gh-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-github",
+            "connections": [
+              "gh"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory"
+          },
+          {
+            "secret_id": "jira-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-jira",
+            "connections": [
+              "jira"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": null,
+            "last_used": null,
+            "use_count": 0,
+            "active_version": 1,
+            "tier": "recommended"
+          },
+          {
+            "secret_id": "svc-pw",
+            "kind": "password",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-service-basic",
+            "connections": [
+              "svc"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory"
+          }
+        ]
+      },
+      "notification": {
+        "status": "not_configured",
+        "attempts": 0
+      },
+      "closed_at": null,
+      "widened_from": []
+    },
+    [
+      "[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident inc-20231114T221321Z-78285bed)",
+      "Report generated: 2026-09-16T00:00:00Z\n\n1. What happened\nIncident ID: inc-20231114T221321Z-78285bed\nIncident time: 2023-11-14T22:13:21Z  (trigger: manual)\nContainment scope: runtime (runtime: default)\nCompromised principals:\n  - agent-1 (token created: 2023-11-14T22:13:20Z)\n\n2. Actions already taken by ZeroPW\nGlobal stop: yes\nDisabled principals: 1\nRevoked grants: 4\nHandle key rotated: yes\nCancelled runs: 0\nClosed signer sockets: 0\n\n3. Required credential rotation\n* Secret ID: box-key  (kind: ssh_private_key, service: fake-ssh-box)\n  Project/environment: demo/dev  Active version: 1\n  Connections: box\n  Targets: deploy@127.0.0.1:2222\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Generate a new key.\n  2. On each target server, remove the key with fingerprint SHA256:OlLtlxhY6F8WaIcPPOy4R1s39X0iqeC473URs26atkY from authorized_keys and replace it with the new key.\n  3. Inspect and terminate active sessions on target servers (who, ss -tnp).\n  4. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n\n* Secret ID: gh-token  (kind: api_key, service: fake-github)\n  Project/environment: demo/dev  Active version: 1\n  Connections: gh\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Revoke and reissue this credential in the provider console.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Review provider audit logs for activity since token creation.\n\n* Secret ID: svc-pw  (kind: password, service: fake-service-basic)\n  Project/environment: demo/dev  Active version: 1\n  Connections: svc\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Change the password at the service.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Terminate active sessions at the service.\n\n4. Recommended rotation\n* Secret ID: jira-token  (kind: api_key) - granted authority without recorded use\n\n5. Runtime\nDiscard and rebuild the compromised runtime (host). Tokens for existing principals remain invalid.\n\n6. Recovery commands\n  incident show --id inc-20231114T221321Z-78285bed\n  (after completing all required rotations above)\n  incident close --id inc-20231114T221321Z-78285bed\n  principal create --runtime <RUNTIME_ID>\n  grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>\n  resume\n"
+    ]
+  ],
+  [
+    {
+      "id": "inc-20231114T221321Z-95b61005",
+      "opened_at": "2023-11-14T22:13:21Z",
+      "status": "open",
+      "scope": "all",
+      "runtime": null,
+      "principals": [
+        "agent-1"
+      ],
+      "trigger": "manual",
+      "rule": null,
+      "detail": null,
+      "actions": {
+        "stopped": true,
+        "principals_disabled": 1,
+        "grants_revoked": 4,
+        "handle_key_rotated": true,
+        "runs_cancelled": 0,
+        "sockets_closed": 0,
+        "failed_steps": [],
+        "applied_by_serve": true
+      },
+      "assessment": {
+        "principals": [
+          {
+            "id": "agent-1",
+            "created_at": "2023-11-14T22:13:20Z",
+            "runtime": "default"
+          }
+        ],
+        "secrets": [
+          {
+            "secret_id": "box-key",
+            "kind": "ssh_private_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-ssh-box",
+            "connections": [
+              "box"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 2222,
+                "username": "deploy"
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory",
+            "fingerprint": "SHA256:1AFlS/bHihRGeWwbN4yfchjJJ6EFkBHzkpggixF9qxQ",
+            "recover_required": true
+          },
+          {
+            "secret_id": "gh-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-github",
+            "connections": [
+              "gh"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory",
+            "recover_required": true
+          },
+          {
+            "secret_id": "jira-token",
+            "kind": "api_key",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-jira",
+            "connections": [
+              "jira"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": null,
+            "last_used": null,
+            "use_count": 0,
+            "active_version": 1,
+            "tier": "mandatory",
+            "recover_required": true
+          },
+          {
+            "secret_id": "svc-pw",
+            "kind": "password",
+            "project": "demo",
+            "environment": "dev",
+            "service": "fake-service-basic",
+            "connections": [
+              "svc"
+            ],
+            "targets": [
+              {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            ],
+            "first_used": "2023-11-14T22:13:21Z",
+            "last_used": "2023-11-14T22:13:21Z",
+            "use_count": 1,
+            "active_version": 1,
+            "tier": "mandatory",
+            "recover_required": true
+          }
+        ],
+        "recover_required": true
+      },
+      "notification": {
+        "status": "not_configured",
+        "attempts": 0
+      },
+      "closed_at": null,
+      "widened_from": []
+    },
+    [
+      "[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident inc-20231114T221321Z-95b61005)",
+      "Report generated: 2026-09-16T00:00:00Z\n\n1. What happened\nIncident ID: inc-20231114T221321Z-95b61005\nIncident time: 2023-11-14T22:13:21Z  (trigger: manual)\nContainment scope: all\nCompromised principals:\n  - agent-1 (token created: 2023-11-14T22:13:20Z)\n\n2. Actions already taken by ZeroPW\nGlobal stop: yes\nDisabled principals: 1\nRevoked grants: 4\nHandle key rotated: yes\nCancelled runs: 0\nClosed signer sockets: 0\n\n3. Required credential rotation\n* Secret ID: box-key  (kind: ssh_private_key, service: fake-ssh-box)\n  Project/environment: demo/dev  Active version: 1\n  Connections: box\n  Targets: deploy@127.0.0.1:2222\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Generate a new key.\n  2. On each target server, remove the key with fingerprint SHA256:1AFlS/bHihRGeWwbN4yfchjJJ6EFkBHzkpggixF9qxQ from authorized_keys and replace it with the new key.\n  3. Inspect and terminate active sessions on target servers (who, ss -tnp).\n  4. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n\n* Secret ID: gh-token  (kind: api_key, service: fake-github)\n  Project/environment: demo/dev  Active version: 1\n  Connections: gh\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Revoke and reissue this credential in the provider console.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Review provider audit logs for activity since token creation.\n\n* Secret ID: jira-token  (kind: api_key, service: fake-jira)\n  Project/environment: demo/dev  Active version: 1\n  Connections: jira\n  Targets: 127.0.0.1:8080\n  First use: none  Last use: none  Use count: 0\n  1. Revoke and reissue this credential in the provider console.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Review provider audit logs for activity since token creation.\n\n* Secret ID: svc-pw  (kind: password, service: fake-service-basic)\n  Project/environment: demo/dev  Active version: 1\n  Connections: svc\n  Targets: 127.0.0.1:8080\n  First use: 2023-11-14T22:13:21Z  Last use: 2023-11-14T22:13:21Z  Use count: 1\n  1. Change the password at the service.\n  2. Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.\n  3. Terminate active sessions at the service.\n\n4. Recommended rotation\nNo recommended rotation targets.\n\n5. Runtime\nDiscard and rebuild the compromised runtime (host). Tokens for existing principals remain invalid.\n\n6. Recovery commands\n  incident show --id inc-20231114T221321Z-95b61005\n  (after completing all required rotations above)\n  incident close --id inc-20231114T221321Z-95b61005\n  principal create --runtime <RUNTIME_ID>\n  grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>\n  resume\n\nThis incident is assessed as full vault exposure. Before `incident close`:\n  recover   (new KMS key, revoke all grants, rotate handle key)\n  Change both administrator and recovery passphrases.\n"
+    ]
+  ]
+]

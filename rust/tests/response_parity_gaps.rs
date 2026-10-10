@@ -276,12 +276,12 @@ fn ctx_open_incident(state: &Path) -> Option<String> {
 }
 
 /// Incident emails for loaded incident documents (no runtime and rule, and a
-/// runtime with a detector rule) render exactly as the original rendered them
-/// (`fixtures/python/response/incident_emails.json`).
+/// runtime with a detector rule) render the English notification contract.
+/// Historic Python fixtures remain unchanged; English expectations are separate.
 #[test]
-fn email_rendering_matches_the_original_for_loaded_incidents() {
+fn email_rendering_matches_english_contract_for_loaded_incidents() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "fixtures/python/response/incident_emails.json"
+        "fixtures/english/response/incident_emails.json"
     ))
     .unwrap();
     let now = fixture["now"].as_str().unwrap();

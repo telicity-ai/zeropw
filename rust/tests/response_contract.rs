@@ -64,13 +64,12 @@ fn every_rule_combination_matches_original_python_table_and_nonmatches() {
     assert_eq!(checked, 1250);
 }
 
-/// Incident email subject and body for each scope, exactly as the original
-/// rendered them for the same incident documents
-/// (`fixtures/python/response/scope_emails.json`).
+/// English subject/body for every containment scope. Historic incident inputs
+/// and all leakage assertions remain; user-facing text intentionally changes.
 #[test]
-fn all_scope_email_bodies_match_original_python_exactly() {
+fn all_scope_email_bodies_match_english_contract_exactly() {
     let cases: Value =
-        serde_json::from_str(include_str!("fixtures/python/response/scope_emails.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/english/response/scope_emails.json")).unwrap();
     assert_eq!(cases.as_array().unwrap().len(), 3);
     for case in cases.as_array().unwrap() {
         let incident = incident::Incident::from_dict(&case[0]).unwrap();
