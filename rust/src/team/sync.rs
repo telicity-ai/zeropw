@@ -1543,7 +1543,7 @@ pub fn sanitize_incident_summary(summary: &Value) -> Result<Value> {
     Ok(Value::Object(clean))
 }
 
-fn validate_fact_target(kind: &str, target: &Value) -> Result<()> {
+pub(crate) fn validate_fact_target(kind: &str, target: &Value) -> Result<()> {
     let bad = || Error::invalid_input("team_fact_target_invalid");
     let obj = target.as_object().ok_or_else(bad)?;
     match kind {

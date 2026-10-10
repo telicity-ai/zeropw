@@ -12,7 +12,7 @@ description = "ZeroPW trusted process: vault, policy, audit, HTTP auth relay and
 path = "src/lib.rs"
 
 [features]
-bundled-openssl = ["openssl/vendored"]
+bundled-openssl = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

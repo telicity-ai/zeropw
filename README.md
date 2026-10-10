@@ -37,6 +37,8 @@ Share one project environment with invited devices over a LAN or team VPN. Each 
 
 Caller identities and grants remain local to each device. Offline devices can keep using their last synchronized state, so revocation is delayed until they reconnect. Removing a member cannot erase secrets they could previously decrypt: rotate those credentials at the provider. Roles prevent mistakes and record authority; they do not cryptographically prevent a device owner from extracting a shared secret.
 
+Concurrent administrator removals can leave different accepted membership facts. Check `team status` → `rejected_removals`; an active admin must review and reissue the intended removals.
+
 ZeroPW does not import or export a complete `.env` file. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 
 ## Verify changes

@@ -17,7 +17,10 @@ def main():
     p.add_argument('--target', required=True, help='release target triple')
     p.add_argument('--include-development', action='store_true', help='also traverse test dependencies')
     p.add_argument('--features', default='', help='Cargo features used by the release build')
+    p.add_argument('--openssl-source', type=pathlib.Path, help='verified static SDK source tree')
     args = p.parse_args()
+    if 'bundled-openssl' in args.features.split(',') and args.openssl_source is None:
+        p.error('bundled release notices require --openssl-source')
     raw = subprocess.check_output(['cargo', 'metadata', '--locked', '--offline',
                                    '--format-version', '1', '--filter-platform', args.target,
                                    '--manifest-path', args.manifest_path, *(['--features', args.features] if args.features else [])])
@@ -67,6 +70,14 @@ def main():
             sections.append(f'\n### {file.relative_to(root)}\n\n')
             # Indent instead of fences so original notice text cannot close a fence.
             sections.append('\n'.join('    ' + line for line in file.read_text(encoding='utf-8').splitlines()) + '\n')
+    if args.openssl_source is not None:
+        sections.append('## OpenSSL 3.5.9 (statically linked release SDK)\n')
+        for relative in ('LICENSE.txt', 'external/perl/Text-Template-1.56/LICENSE'):
+            notice = args.openssl_source / relative
+            if not notice.is_file() or notice.is_symlink():
+                raise SystemExit('missing static OpenSSL notice: ' + relative)
+            sections.append('\n### ' + relative + '\n\n' + '\n'.join(
+                '    ' + line for line in notice.read_text(encoding='utf-8').splitlines()) + '\n')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text('\n'.join(sections), encoding='utf-8')
     if missing:
