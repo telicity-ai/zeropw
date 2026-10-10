@@ -69,7 +69,7 @@ Humans inspect audit/alerts and revoke grants, disable principals/connections or
 - `--allow-private-network` explicitly permits private DNS answers, never metadata/link-local. Enabling it broadens scope and makes existing grants stale. Administrator-selected IP literals reject metadata/link-local/unspecified/multicast, including embedded IPv4. Older forbidden literal connections remain listable/disableable but fail before transmission on use. HTTPS SNI/certificate checks use the configured hostname while connecting to the pinned address. Self-targeting fails with `self_referential_target`.
 - `X-ZeroPW-Request-Id` binds caller, ID and input digest. Different input with the same ID fails; in-flight/uncertain transmitted requests return 409 rather than replaying a write. Completed results can replay.
 - `confirm_methods` requires one-time approval bound to caller, connection, method, path and body digest. Changed input needs new approval.
-- Usage is charged after policy and mandatory audit but before credential access. Audit failure spends neither usage nor approval/transmission authority.
+- Usage is charged after policy and mandatory audit but before credential access. Audit failure charges no usage and sends no request.
 
 ## 5. SSH signing
 
@@ -148,7 +148,7 @@ The following retained test identifiers map to [security acceptance requirements
 - Cross-process cancellation/socket closure can lag by 0.25 seconds, and completed external work cannot be undone. Some principal-disable/restore cross-process behavior was manually tested with synthetic data on 2026-09-14 rather than covered automatically; preserve that evidence distinction.
 - SSH cancellation ends the local client, not remote processes. Non-PTY remote `sleep 60` was observed surviving disconnection; server control is needed for forced termination.
 - Generic in-process principal/connection disabling or widening can cancel all runs/sockets because the callback lacks target IDs; cross-process polling checks each scope precisely.
-- Restart loses tracking of in-flight runs and the detector's weak-window/lifetime-first-use state. Strong rules still work after restart.
+- Run records and relay ledgers use trusted memory/state; restart does not reconstruct in-flight runs and loses the detector's weak-window/lifetime-first-use state. Strong rules still work after restart.
 - Streaming passthrough, real service CLI profiles, management UI, managed storage, provider auto-rotation and IPv6 tool listening are unimplemented. Tested CLIs are democli and OpenSSH, not universal compatibility.
 - There is one handle key; runtime/global rotation affects handles outside that runtime too. Unattributed expired-handle accumulation can disable every active principal, including after long-running CLI retries.
 - HTTP-only malware can be classified principal-only. Email warns to rebuild/escalate before creating new identities, but cannot prove runtime safety.
