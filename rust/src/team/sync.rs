@@ -3368,7 +3368,7 @@ impl TeamSync {
         }
         queue.push_back((env_id.into(), message, exclude.map(str::to_owned), notice));
     }
-    fn flush_deferred_sends(&self) {
+    pub(crate) fn flush_deferred_sends(&self) {
         if self.ctx.state.locked_by_current_thread() {
             return;
         }
@@ -3580,6 +3580,8 @@ impl TeamSync {
                 ..Default::default()
             },
         );
+        drop(_lock);
+        self.flush_deferred_sends();
         Ok(())
     }
     /// `_start_receiver`: always a receive thread of THIS instance (Python's

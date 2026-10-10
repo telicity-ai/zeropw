@@ -255,6 +255,10 @@ pub fn author_commit(
     if team.is_none() {
         refold_and_derive(ctx, env_id)?;
     }
+    drop(_lock);
+    if let Some(team) = team {
+        team.flush_deferred_sends();
+    }
     Ok(commit)
 }
 pub fn author_fact(
@@ -580,6 +584,10 @@ pub fn remove_member(
         env_id,
         vec![("fingerprint", json!(fingerprint))],
     );
+    drop(_lock);
+    if let Some(team) = team {
+        team.flush_deferred_sends();
+    }
     Ok(
         json!({"env_id":env_id,"fingerprint":fingerprint,"fact":fact,"dek_rotated":rotated.is_some(),"new_generation":rotated}),
     )
@@ -624,6 +632,10 @@ fn rotate_dek_bound(
         env_id,
         vec![("count", json!(wraps.len()))],
     );
+    drop(_lock);
+    if let Some(team) = team {
+        team.flush_deferred_sends();
+    }
     Ok(generation)
 }
 /// Repair a received or persisted removal before accepting new secret writes.
@@ -734,6 +746,10 @@ pub(crate) fn ensure_removal_rotations(
         }
         flag_rotation_recommended(ctx, team, env_id)?;
         rotate_dek_bound(ctx, team, env_id, None)?;
+    }
+    drop(_lock);
+    if let Some(team) = team {
+        team.flush_deferred_sends();
     }
     Ok(())
 }
