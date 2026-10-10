@@ -209,8 +209,7 @@ fn inject(session: &QueueSession, f: &sync::Fact) {
     session.push(json!({"type":"FACT","fact":f.to_dict()}));
 }
 fn has_fact(node: &Node, env: &str, f: &sync::Fact) -> bool {
-    sync::load_facts(node.ctx.state, env)
-        .is_ok_and(|(_, hashes, _)| hashes.contains(&f.hash().unwrap()))
+    sync::load_facts(&node.ctx, env).is_ok_and(|(_, hashes, _)| hashes.contains(&f.hash().unwrap()))
 }
 
 #[test]
@@ -643,7 +642,7 @@ fn facts_replay_deduplicates_and_restore_cannot_undo_later_revocation() {
     let mut replay = original.clone();
     replay.extend(&original);
     a.ctx.state.write_bytes(&factpath, &replay).unwrap();
-    let (facts, hashes, _) = sync::load_facts(a.ctx.state, env).unwrap();
+    let (facts, hashes, _) = sync::load_facts(&a.ctx, env).unwrap();
     assert_eq!(hashes.len(), 1);
     assert!(facts.disabled_connections.contains("shared-connection"));
     let backup = root.path().join("backup.json");
@@ -686,7 +685,7 @@ fn facts_replay_deduplicates_and_restore_cannot_undo_later_revocation() {
             .status,
         "disabled"
     );
-    assert_eq!(sync::load_facts(a.ctx.state, env).unwrap().1.len(), 2);
+    assert_eq!(sync::load_facts(&a.ctx, env).unwrap().1.len(), 2);
 }
 
 #[test]

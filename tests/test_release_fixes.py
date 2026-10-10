@@ -139,6 +139,23 @@ class ReleaseFixTests(unittest.TestCase):
         normal = subprocess.run([str(gate)],env={},capture_output=True,text=True)
         self.assertEqual(normal.returncode,0,normal.stderr)
 
+    def test_release_environment_removes_precedence_overrides(self):
+        spec = importlib.util.spec_from_file_location('release_builder', ROOT / 'scripts/build-release.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        inherited = {'PATH':'/usr/bin', 'OPENSSL_LIB_DIR':'/untrusted',
+                     'AARCH64_APPLE_DARWIN_OPENSSL_DIR':'/untrusted',
+                     'AARCH64_APPLE_DARWIN_OPENSSL_STATIC':'0', 'OPENSSL_LIBS':'bad',
+                     'PKG_CONFIG_PATH':'/untrusted', 'RUSTFLAGS':'-L/untrusted'}
+        self.assertEqual(module.controlled_environment(inherited), {'PATH':'/usr/bin'})
+        fixture = self.fixture()
+        gate = fixture.root / 'gate'
+        subprocess.run(['rustc', str(ROOT / 'rust/build.rs'), '-o', str(gate)], check=True)
+        for key in ('OPENSSL_LIB_DIR','AARCH64_APPLE_DARWIN_OPENSSL_DIR','PKG_CONFIG_PATH'):
+            result = subprocess.run([str(gate)], env={'CARGO_FEATURE_BUNDLED_OPENSSL':'1',key:'/untrusted'}, capture_output=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn(b'conflicting SDK override',result.stderr)
+
     def test_identical_release_inputs_produce_identical_archives(self):
         fixture = self.fixture()
         bins = fixture.root / 'bins'

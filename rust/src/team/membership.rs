@@ -176,7 +176,7 @@ fn audit(ctx: &Context, event: &str, env_id: &str, extra: Vec<(&'static str, Val
 
 pub fn load_environment(ctx: &Context, env_id: &str) -> Result<FoldResult> {
     let store = CommitStore::new(ctx.state, env_id);
-    let (facts, _, _) = sync::load_facts(ctx.state, env_id)?;
+    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
     fold::fold_with_snapshot(
         env_id,
         store.all_commits()?,
@@ -248,13 +248,14 @@ pub fn author_fact(
     kind: &str,
     target: Value,
 ) -> Result<Value> {
+    let _lock = ctx.state.lock()?;
     if let Some(team) = team {
         return team.publish_fact(env_id, kind, target);
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let mut doc = load_environment(ctx, env_id)?.document;
     if kind == "member_removed" {
-        let (mut facts, _, authors) = sync::load_facts(ctx.state, env_id)?;
+        let (mut facts, _, authors) = sync::load_facts(ctx, env_id)?;
         let author = device.fingerprint()?;
         let target_fp = target["fingerprint"].as_str().unwrap_or("");
         if facts.removed_members.contains(&author)
@@ -278,6 +279,7 @@ pub fn author_fact(
     }
     let fact = sync::sign_fact(&device, env_id, kind, target, &Hlc::new(0, 0).tick(None))?;
     let _lock = ctx.state.lock()?;
+    sync::receipt_fact(ctx, &fact)?;
     ctx.state.append_line(
         &format!("team/{env_id}/facts.jsonl"),
         &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?,
@@ -614,7 +616,7 @@ pub(crate) fn ensure_removal_rotations(
     let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let mut doc = load_environment(ctx, env_id)?.document;
-    let (facts, _, _) = sync::load_facts(ctx.state, env_id)?;
+    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
     let removals = ctx
         .state
         .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
@@ -654,7 +656,16 @@ pub(crate) fn ensure_removal_rotations(
                         .is_some_and(|fp| fp == target)
                 })
             });
-        if completed {
+        let current = doc["dek"]["current"].as_str().unwrap_or("");
+        let unsafe_current = doc["dek"]["generations"][current]["wraps"]
+            .as_object()
+            .is_none_or(|wraps| {
+                facts
+                    .removed_members
+                    .iter()
+                    .any(|fp| wraps.contains_key(fp))
+            });
+        if completed && !unsafe_current {
             continue;
         }
         if identity_doc.is_none() {

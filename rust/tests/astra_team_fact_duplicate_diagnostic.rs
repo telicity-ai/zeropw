@@ -224,7 +224,7 @@ fn simultaneous_duplicate_fact_has_one_application_audit() {
         inject(&ab, &f);
         inject(&ac, &f);
     }
-    wait(|| sync::load_facts(a.ctx.state, &env).unwrap().1.len() == 20);
+    wait(|| sync::load_facts(&a.ctx, &env).unwrap().1.len() == 20);
     // Receiver barrier: each queue processes its earlier FACTs before answering VECTOR.
     ab.sent.lock().unwrap().clear();
     ac.sent.lock().unwrap().clear();

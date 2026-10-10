@@ -2745,7 +2745,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         "diff" => {
             let store = CommitStore::new(ctx.state, &env_id);
             let commits = sort_total_order(store.all_commits()?)?;
-            let (facts, _, _) = sync::load_facts(ctx.state, &env_id)?;
+            let (facts, _, _) = sync::load_facts(&ctx, &env_id)?;
             let find = |prefix: &str| -> Result<usize, Error> {
                 let matches = commits
                     .iter()

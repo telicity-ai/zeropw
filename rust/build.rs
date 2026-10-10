@@ -6,6 +6,16 @@ fn main() {
     if env::var_os("CARGO_FEATURE_BUNDLED_OPENSSL").is_none() {
         return;
     }
+    for (key, _) in env::vars() {
+        if (key.contains("OPENSSL")
+            && key != "OPENSSL_DIR"
+            && key != "OPENSSL_STATIC"
+            && key != "CARGO_FEATURE_BUNDLED_OPENSSL")
+            || key.contains("PKG_CONFIG")
+        {
+            panic!("bundled-openssl rejects conflicting SDK override: {}", key);
+        }
+    }
     assert_eq!(
         env::var("OPENSSL_STATIC").as_deref(),
         Ok("1"),

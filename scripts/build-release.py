@@ -22,6 +22,25 @@ def run(command, cwd, environment):
     subprocess.run(command, cwd=cwd, env=environment, check=True)
 
 
+def controlled_environment(inherited):
+    # openssl-sys gives target-prefixed settings precedence over OPENSSL_DIR.
+    # Cargo/rustc linker overrides would bypass the SDK decision as well.
+    return {key: value for key, value in inherited.items()
+            if not any(token in key for token in ('OPENSSL', 'PKG_CONFIG'))
+            and key not in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
+                            'CC', 'CXX', 'AR', 'RANLIB', 'CFLAGS', 'CPPFLAGS', 'LDFLAGS', 'LD_PRELOAD')
+            and not key.startswith(('DYLD_', 'CARGO_TARGET_'))}
+
+
+def verify_linkage(binary, system):
+    command = ['otool', '-L', str(binary)] if system == 'Darwin' else ['readelf', '-d', str(binary)]
+    output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
+    dependencies = output.splitlines()[1:] if system == 'Darwin' else output.splitlines()
+    if any(re.search(r'lib(?:ssl|crypto)[.\-]|/opt/homebrew/|/usr/local/opt/', line, re.I)
+           for line in dependencies):
+        raise SystemExit('release binary has an unexpected dynamic dependency: ' + binary.name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target', required=True)
@@ -39,7 +58,7 @@ def main():
     work = output / 'openssl-build'
     work.mkdir(exist_ok=True)
     archive = work / ('openssl-' + OPENSSL_VERSION + '.tar.gz')
-    environment = dict(os.environ)
+    environment = controlled_environment(os.environ)
     if not archive.exists():
         partial = archive.with_suffix('.partial')
         run(['curl', '--disable', '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
@@ -72,6 +91,8 @@ def main():
     environment.pop('OPENSSL_NO_VENDOR', None)
     run(['cargo', 'build', '--locked', '--release', '--features', 'bundled-openssl',
          '--target', args.target, '--manifest-path', str(root / 'rust/Cargo.toml'), '--bins'], root, environment)
+    for name in ('zeropw', 'zeropw-admin', 'zeropw-gateway', 'zeropw-signer', 'zeropw-response'):
+        verify_linkage(output / 'cargo-target' / args.target / 'release' / name, platform.system())
     notices = output / 'THIRD_PARTY_LICENSES.md'
     run(['python3', str(root / 'scripts/dependency-licenses.py'), '--features', 'bundled-openssl',
          '--target', args.target, '--openssl-source', str(source), '--output', str(notices)], root, environment)
