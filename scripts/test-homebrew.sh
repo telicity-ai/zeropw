@@ -15,7 +15,7 @@ formula = (pathlib.Path(root) / 'Formula/zeropw.rb').read_text()
 # Local Git clone provides the exact source without a GitHub authentication token.
 import json
 formula = formula.replace('head "https://github.com/telicity-ai/zeropw.git", branch: "main"',
-                          f'head {json.dumps(root)}, revision: {json.dumps(commit)}')
+                          f'head {json.dumps(root)}, using: :git, revision: {json.dumps(commit)}')
 (pathlib.Path(tap) / 'Formula/zeropw.rb').write_text(formula)
 PY
 HOMEBREW_NO_AUTO_UPDATE=1 brew install --HEAD zeropw-ci/readiness/zeropw
