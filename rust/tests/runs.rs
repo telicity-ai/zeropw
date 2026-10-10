@@ -622,12 +622,12 @@ fn ack_socket_respects_short_sandbox_tmpdir_and_survives_long_tmpdir() {
         std::fs::create_dir(base).unwrap();
         let mut command = if cfg!(target_os = "macos") {
             let allowed = if base == &short {
-                base.to_str().unwrap()
+                base.canonicalize().unwrap()
             } else {
-                "/tmp"
+                std::path::PathBuf::from("/private/tmp")
             };
             let mut sandbox = Command::new("/usr/bin/sandbox-exec");
-            sandbox.args(["-p", &format!("(version 1)(allow default)(deny network-outbound (to unix-socket))(allow network-outbound (to unix-socket (subpath \"{allowed}\")))")]);
+            sandbox.args(["-p", &format!("(version 1)(allow default)(deny network-outbound (to unix-socket))(allow network-outbound (to unix-socket (subpath \"{}\")))", allowed.display())]);
             sandbox.arg(std::env::current_exe().unwrap());
             sandbox
         } else {
