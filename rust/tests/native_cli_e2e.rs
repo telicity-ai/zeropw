@@ -1067,14 +1067,14 @@ fn test_auto_lockdown_exposure_assessment_email_and_recovery() {
     assert!(body.contains(&incident_id));
 
     let (mandatory_block, recommended_block) = body
-        .split_once("4. 권장 교체")
+        .split_once("4. Recommended rotation")
         .expect("the email has a recommended-replacement section");
     assert!(mandatory_block.contains("gh-token"));
     assert!(!recommended_block.contains("gh-token"));
     assert!(recommended_block.contains("jira-token"));
     assert!(!mandatory_block.contains("jira-token"));
 
-    assert!(body.contains("6. 복구 명령"));
+    assert!(body.contains("6. Recovery commands"));
     assert!(body.contains(&format!("incident show --id {incident_id}")));
     assert!(body.contains(&format!("incident close --id {incident_id}")));
     assert!(body.contains("principal create --runtime"));

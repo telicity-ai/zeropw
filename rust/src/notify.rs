@@ -278,12 +278,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         format!("Incident ID: {}", i.id),
         format!("Incident time: {}  (trigger: {})", i.opened_at, i.trigger),
     ];
-    let scope = match i.scope.as_str() {
-        "principal" => "principal",
-        "runtime" => "runtime",
-        "all" => "all",
-        s => s,
-    };
+    let scope = i.scope.as_str();
     // `incident.runtime`/`incident.rule` as loaded (any JSON value), each
     // rendered only when truthy.
     let raw = i.to_dict();
