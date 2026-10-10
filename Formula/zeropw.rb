@@ -5,8 +5,10 @@ class Zeropw < Formula
   head "https://github.com/telicity-ai/zeropw.git", branch: "main"
 
   depends_on "rust" => :build
+  depends_on "openssl@3"
 
   def install
+    ENV["OPENSSL_DIR"] = Formula["openssl@3"].opt_prefix
     system "cargo", "build", "--locked", "--release", "--manifest-path", "rust/Cargo.toml", "--bins"
     %w[zeropw-admin zeropw-agent zeropw_session zeropw-demo zeropw-democli].each do |name|
       bin.install "rust/target/release/#{name}"

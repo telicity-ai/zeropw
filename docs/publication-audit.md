@@ -15,3 +15,8 @@ This record tracks work before the owner changes repository visibility. The repo
 The current tree still needs notification-output translation, remaining maintained-document translation, private-information scanning, dependency-license inventory, validated release archives and Homebrew checks, current-commit E2E evidence and independent review. The security reporting contact/channel must be finalized before launch.
 
 Git history remains unchanged. Deleting a sensitive or personal file from the current tree does not remove it from history. If the audit finds content that should not be public, decide on a sanitized history or a separate public snapshot before changing visibility; do not force-rewrite the private repository without an explicit decision.
+
+## Concrete release findings
+
+- OSS-INSTALL-OPENSSL: Source builds use OpenSSL. The Homebrew formula now declares openssl@3 and selects its prefix explicitly. Native Homebrew execution is still pending. Curl binary archives still need a checked portability policy for their OpenSSL linkage; success on a builder that already has system libraries does not prove a fresh machine can run them.
+- OSS-TEAM-SELFREMOVE: `team/membership.rs::remove_member` rotates the generation only when an admin removes another device. User/admin self-removal publishes a removal fact but does not rotate DEK. Removal denies synchronization, but the existing generation remains available to the removed device; the general promise of new-generation secrecy needs a fix or explicit acceptance rather than a documentation-only PASS. This is a coordinator finding, not an Opus review or severity assessment.
