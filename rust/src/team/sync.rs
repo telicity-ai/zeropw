@@ -609,6 +609,43 @@ mod retry_tests {
     }
 
     #[test]
+    fn idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive() {
+        let f = owner_with_admin_peer();
+        let ctx = f.ctx.clone();
+        let env = f.env_id.clone();
+        let writer = std::thread::spawn(move || {
+            for i in 0..12 {
+                crate::team::membership::author_fact(
+                    &ctx,
+                    None,
+                    &env,
+                    "connection_disabled",
+                    json!({"connection_id":format!("gh{i}")}),
+                )
+                .unwrap();
+            }
+        });
+        for _ in 0..12 {
+            f.team.pick_up_local_facts(&f.env_id).unwrap();
+        }
+        writer.join().unwrap();
+        f.team.pick_up_local_facts(&f.env_id).unwrap();
+        assert_eq!(load_facts(&f.ctx, &f.env_id).unwrap().1.len(), 12);
+        assert_eq!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .facts
+                .disabled_connections
+                .len(),
+            12
+        );
+        let loads = f.team.fact_pickup_loads.load(Ordering::SeqCst);
+        for _ in 0..12 {
+            f.team.pick_up_local_facts(&f.env_id).unwrap();
+        }
+        assert_eq!(f.team.fact_pickup_loads.load(Ordering::SeqCst), loads);
+    }
+
+    #[test]
     fn admission_observes_future_commits_and_send_waits_for_unlock() {
         let f = owner_with_admin_peer();
         assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
@@ -2661,6 +2698,7 @@ struct EnvState {
     hlc: Hlc,
     last_known_vector: BTreeMap<String, PyInt>,
     known_fact_lines: usize,
+    fact_file_stamp: Option<(u64, u64, i64, i64)>,
     /// `_EnvState.last_snapshot_total`: a Python number -- the exact `int`
     /// sum of a saved snapshot's vector, or whatever `sum()` of a loaded
     /// snapshot's raw vector values produced (a `float` when it held one).
@@ -2701,6 +2739,7 @@ impl EnvState {
             hlc: Hlc::new(0, 0),
             last_known_vector: BTreeMap::new(),
             known_fact_lines: 0,
+            fact_file_stamp: None,
             last_snapshot_total: PyNumber::Int(0.into()),
             last_vector_sent: HashMap::new(),
             synced_at: None,
@@ -2735,6 +2774,8 @@ pub struct TeamSync {
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    fact_pickup_loads: std::sync::atomic::AtomicUsize,
 }
 pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
     let guard = ctx.team.lock().ok()?;
@@ -2756,6 +2797,8 @@ impl TeamSync {
             deferred_sends: Mutex::new(std::collections::VecDeque::new()),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            fact_pickup_loads: std::sync::atomic::AtomicUsize::new(0),
         });
         let weak = Arc::downgrade(&this);
         let membership: MembershipCheck =
@@ -4701,7 +4744,34 @@ impl TeamSync {
         Ok(())
     }
 
+    fn fact_file_stamp(&self, env_id: &str) -> Result<Option<(u64, u64, i64, i64)>> {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::metadata(
+            self.ctx
+                .state
+                .path
+                .join(format!("team/{env_id}/facts.jsonl")),
+        ) {
+            Ok(m) => Ok(Some((m.ino(), m.len(), m.mtime(), m.mtime_nsec()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(Error::state("team_fact_stat_failed")),
+        }
+    }
     fn pick_up_local_facts(&self, env_id: &str) -> Result<()> {
+        let _lock = self.ctx.state.lock()?;
+        let stamp = self.fact_file_stamp(env_id)?;
+        if self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .is_some_and(|env| env.fact_file_stamp == stamp)
+        {
+            return Ok(());
+        }
+        #[cfg(test)]
+        self.fact_pickup_loads.fetch_add(1, Ordering::SeqCst);
+
         let (_, admitted, _) = load_facts(&self.ctx, env_id)?;
         let lines = self
             .ctx
@@ -4780,6 +4850,15 @@ impl TeamSync {
                     self.send_removal_notice(env_id, &fact, None);
                 }
             }
+        }
+        let stamp = self.fact_file_stamp(env_id)?;
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.fact_file_stamp = stamp;
         }
         Ok(())
     }
