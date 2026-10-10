@@ -1,81 +1,85 @@
-# ZeroPW 제품 정의
+# ZeroPW product intent
 
-작성일: 2026-09-12 · 갱신 2026-09-16 (팀 공유를 다음 범위로 추가) · 현행 제품 기준 · 기획·문서: Astra
+Written 2026-09-12; team-sharing scope added 2026-09-16. This is the working product specification. Implementation evidence is separate.
 
-## 1. 어떤 제품인가
+## 1. Product
 
-ZeroPW는 에이전트에게 비밀값을 주지 않고 CLI·API를 사용하게 하는 개인용 클라우드 금고다. 서비스와 자격증명을 한 번 연결하면, 에이전트는 작업별 등록 없이 지원하는 CLI·API를 사용한다. 인증은 ZeroPW가 대신 처리하며 에이전트와 실행 코드에는 원본 키를 주지 않는다.
+ZeroPW is a personal credential vault that lets agents use supported CLIs and APIs without receiving original secret values. Connect a service and its credential once, then use different operations within that connection's scope. ZeroPW performs authentication outside the agent and execution code.
 
-핵심 기능은 환경변수·API 키·비밀번호의 암호화 보관, 프로젝트별 관리, API 인증 중계, SSH 서명 위임, 접근 권한·만료·회수·사용 기록이다. 제품과 구현 작업자는 클라우드에서 운영한다. 사용자의 최신 운영 결정에 따라 개발 조정과 Opus 리뷰는 현재 로컬 Codex 세션이 맡는다. 첫 버전은 본인 한 명의 CLI·API 사용에 집중한다. 그 다음 범위는 프로젝트 환경 하나를 팀원과 공유하는 기능이며, 클라우드나 상시 서버 없이 팀원 기기끼리 직접 동기화한다([팀 공유](team-sync.md)).
+Core capabilities are encrypted environment-variable/API-key/password storage, project environments, HTTP authentication relay, SSH signing delegation, access grants, expiry, revocation and usage records. The initial product scope focuses on one person's CLI/API usage. The subsequent [team-sharing scope](team-sync.md) shares one project environment directly between teammate devices without a central server or leader.
 
-이 문서는 작업별 사전등록을 요구했던 이전 제안을 대체한다. 현재는 제품 정의 단계다. 아래 기능과 보안 기준은 구현 요구사항이며, 제품이 배포되었거나 개별 CLI의 호환성이 검증되었다는 뜻은 아니다.
+The original deployment direction uses trusted cloud services; team synchronization uses local trusted processes. The development coordinator is session-based and is not an always-on cloud service. Development implementation, coordination and review are separate from the product runtime; see [the harness](harness.md) for the dated operating arrangement.
 
-## 2. 사용 흐름
+This specification supersedes the proposal requiring per-operation registration. Requirements here are not proof of deployment or specific CLI compatibility. Current implementation status is in [implementation.md](implementation.md).
 
-1. 사용자가 별도 관리 화면에서 비밀값을 저장하고 프로젝트·환경에 연결한다. 서비스 대상, 자격증명, 허용 권한과 만료를 설정한다.
-2. 에이전트는 사용할 연결을 선택하고 지원하는 CLI 명령이나 API 요청을 실행한다. 명령·하위 명령·API 작업을 하나씩 등록할 필요가 없다.
-3. 에이전트 네이티브 도구가 통신 경로와 비밀이 아닌 설정을 준비한다. HTTP 요청은 인증 중계기로 보내고, SSH 클라이언트는 서명 서비스에 인증 서명을 요청한다.
-4. 중계기 또는 서명기가 권한을 확인하고 인증을 처리한다. 에이전트는 업무 결과를 받으며 원본 자격증명은 받지 않는다.
-5. 같은 연결의 허용 범위 안에서는 다른 명령도 계속 사용할 수 있다. 대상이나 권한 범위를 넓힐 때 연결 정책을 변경한다. 사용자는 사용 기록을 보고 권한을 회수할 수 있다.
+## 2. Workflow
 
-예를 들어 하나의 코드 호스팅 서비스 연결에서 목록 조회와 이슈 생성처럼 서로 다른 API 요청을 쓸 수 있어야 한다. 이는 목표 UX의 예시이며 특정 서비스나 CLI의 지원 완료를 의미하지 않는다. 서비스별 프로토콜 통합은 제품이 제공하고, 사용자가 작업 카탈로그를 작성하게 하지 않는다.
+1. A human stores a secret through a separate administrative surface and associates it with a project/environment, service destination, allowed scope and expiry.
+2. The agent selects a connection and runs supported CLI commands or API requests. Individual commands, subcommands and API operations need no separate registration.
+3. Native tools prepare routing and non-secret configuration. HTTP requests go through the authentication gateway; SSH clients request authentication signatures.
+4. The gateway or signer checks grants and authenticates. The agent receives business results without original credentials.
+5. Reuse the connection for other operations within its scope. Change connection policy to expand destination or permissions. The human can inspect usage and revoke authority.
 
-## 3. 비밀 보관과 비밀 사용의 차이
+A code-hosting connection should, for example, support both listing resources and creating an issue. This is a UX requirement, not a claim of support for a particular service. Protocol integration belongs to the product; users do not write a task catalog.
 
-금고는 환경변수·API 키·비밀번호·SSH 개인키를 암호화해 보관한다. 이 중 에이전트가 사용할 수 있는 인증 방식은 원본 값을 클라이언트에 주지 않고 중계하거나 서명할 수 있는 방식이다.
+## 3. Storage versus use
 
-클라이언트의 환경변수에는 서비스 주소, 비밀이 아닌 설정, 불투명한 연결 참조만 둔다. 원본 비밀이 필요한 임의 프로그램을 그대로 실행하면서 그 프로그램이 값을 읽지 못하게 할 수는 없다. 해당 방식은 미지원으로 표시하며 실제 값을 환경변수·명령 인자·파일·credential helper 결과에 넣는 호환 경로는 제공하지 않는다.
+The vault stores environment values, API keys, passwords and SSH private keys encrypted. Agents can use only authentication methods that can be relayed or signed without giving original values to the client.
 
-원본 키를 보유할 수 있는 곳은 신뢰하는 금고·인증 중계기·서명기다. 인증 방식에 따라 외부 대상 서비스도 자격증명을 받는다. 이 제품은 이 신뢰 영역의 침해까지 막는 영지식 시스템을 약속하지 않는다. 에이전트가 허용된 권한을 악용하는 문제는 별도의 권한 제한과 회수로 다룬다.
+Client environments contain service addresses, non-secret settings and opaque connection references. An arbitrary program that requires the original secret cannot simultaneously read it and be prevented from accessing it. Mark such execution unsupported; never inject real secrets through environment variables, arguments, files or credential-helper output as a compatibility fallback.
 
-업무에 필요한 텍스트와 API 응답은 에이전트에 전달한다. 결과를 성공 여부나 고정된 열거값으로만 제한하지 않는다. 인증 정보가 응답·오류·로그에 반사되는 경로는 별도로 차단한다. 업무 데이터는 에이전트와 모델 제공자에게 전달될 수 있으므로 모든 데이터의 비공개를 보장하는 제품은 아니다. 출력 마스킹은 보조 수단이며 원본 키를 클라이언트에 주지 않는 구조를 대신하지 않는다.
+Original keys may exist in the trusted vault, gateway and signer. Depending on the protocol, the external service also receives a credential. This is not a zero-knowledge guarantee against compromise of those trusted components. Limit and revoke allowed authority separately to address agent misuse.
 
-## 4. 첫 버전의 기능
+Useful text and API results are allowed. Do not restrict all output to success/failure or fixed enums. Separately block reflected authentication material in responses, errors and logs. Business data may reach the agent and its model provider: ZeroPW does not promise privacy for every piece of data. Output masking supplements, rather than replaces, the no-original-key client boundary.
 
-| 기능 | 제품 요구사항 |
+## 4. Scope
+
+| Capability | Requirement |
 | --- | --- |
-| 암호화 금고 | 환경변수·API 키·비밀번호·SSH 개인키 보관과 버전 관리. 관리형 비밀 저장소와 KMS 사용을 기본 설계로 한다. |
-| 프로젝트·환경 관리 | 프로젝트별 dev·staging·prod 연결과 권한을 구분한다. |
-| 서비스 연결 | 서비스·자격증명·대상·권한을 연결 단위로 설정한다. 사용자가 작업마다 등록하지 않는다. |
-| API 인증 중계 | 지원하는 HTTP 인증을 신뢰하는 중계기에서 처리한다. 에이전트는 원본 키 없이 요청과 업무 결과를 다룬다. |
-| SSH 서명 위임 | 지원하는 SSH 클라이언트에 인증 서명을 제공한다. 개인키 내보내기 없이 인증하며 첫 버전의 핵심 기능에 포함한다. |
-| 에이전트 네이티브 도구 | 연결 조회·선택, CLI 실행, API 요청, 상태 확인과 취소를 제공한다. 비밀값 조회 도구는 제공하지 않는다. |
-| 권한·만료·회수 | 호출 주체·연결·대상·권한·기간·사용량을 제한한다. 개별 권한 회수와 전체 실행 정지를 제공한다. |
-| 사용 기록·알림 | 누가 어떤 연결과 대상을 사용했는지 값 없이 기록한다. 비정상 사용과 실패를 알린다. |
-| 교체·복구 | 자격증명 수동 교체, 암호화 백업, 사용자 복구 절차를 제공한다. 공급자별 자동 교체는 후속 범위다. |
-| 팀 공유(다음 범위) | 프로젝트 환경 하나를 초대한 팀원 기기와 공유한다. 서버·클라우드·리더 없이 팀원 기기가 동등한 노드로 직접 연결하고, 어느 기기에서 고치든 모든 기기에 같은 상태가 반영된다. 환경별 admin/user 역할, 기기별 키와 일회용 초대, 팀원 제거와 교체 안내를 제공한다. 첫 버전 뒤에 구현하며 상세는 [팀 공유](team-sync.md)를 따른다. |
+| Encrypted vault | Store environment values, API keys, passwords and SSH private keys with version history. Managed secret storage and KMS are the deployment design. |
+| Projects and environments | Separate dev, staging and prod connections and permissions. |
+| Service connections | Configure service, credential, destination and permissions once per connection. No per-task registration. |
+| HTTP authentication relay | Trusted gateway performs supported authentication; agents handle requests and business responses without original keys. |
+| SSH signing | Authenticate supported SSH clients without private-key export. This is a core first-version feature. |
+| Native agent tools | List/select connections, run supported CLIs, request APIs, inspect state and cancel. No secret-value retrieval tool. |
+| Grants and revocation | Restrict caller, connection, destination, scope, time and usage. Revoke individual grants and stop all execution. |
+| Usage records and alerts | Record who used which connection/destination without values. Alert on failures and abnormal behavior. |
+| Rotation and recovery | Manual credential rotation, encrypted backup and human recovery. Provider-specific automatic rotation is later scope. |
+| Team sharing | Following the initial personal scope, share one project environment with invited devices as equal nodes. Any authorized device can edit, and states converge. Environment-specific admin/user roles, device keys, one-time invites, removal and rotation guidance are required. See [team-sync.md](team-sync.md). |
 
-브라우저 자동완성, TOTP·패스키, 카드 정보, 가족 공유, 기업 SSO·SCIM, 멀티클라우드 운영은 범위 밖이다. 팀 공유는 첫 버전 범위 밖이지만 다음 범위로 정의했다.
+Browser autofill, TOTP/passkeys, payment-card storage, family sharing, enterprise SSO/SCIM and multi-cloud operation are outside scope. Team sharing was defined after the initial personal version and is implemented as described in the implementation record.
 
-팀 공유에서도 원본 비밀은 에이전트·실행 코드·도구 응답에 나가지 않는다. 다만 클라우드가 없으므로 공유 환경의 자격증명은 각 팀원 기기의 신뢰 프로세스가 복호화할 수 있는 형태로 놓인다. 팀원은 사람으로서 신뢰하고 에이전트는 신뢰하지 않는다는 경계의 연장이며, admin/user 역할 구분은 실수 방지와 이력을 위한 정책적 통제이지 암호학적 격리가 아니다. 팀원을 제거해도 그 시점까지 읽을 수 있던 자격증명은 외부 공급자 쪽 교체로만 무효가 된다.
+Team sharing maintains the agent boundary: original secrets do not enter agent processes, execution code or tool results. Because there is no cloud service, every member's trusted device can decrypt shared credentials. Humans are trusted; agents are not. Admin/user roles provide policy and history rather than cryptographic separation. Removing a member does not invalidate credentials they could previously read; rotate those at the external provider.
 
-ZeroPW 자체의 KMS·관리·감사·백업·복구·결제·DNS 권한과 개발 하네스의 모델 호출·관리 키는 에이전트 업무용 연결에 넣지 않는다. 이 부트스트랩 권한은 별도 신뢰 영역에서 관리한다.
+ZeroPW's KMS, administration, audit, backup, recovery, billing and DNS authority, and the development harness's model/administration keys, must never be agent business connections. Keep bootstrap authority in a separate trust domain.
 
-## 5. 지원 범위와 판정 기준
+## 5. Support and acceptance
 
-| 지원 후보 | 지원에 필요한 조건 | 조건을 만족하지 못하면 |
+| Candidate integration | Required conditions | Otherwise |
 | --- | --- | --- |
-| HTTP API·CLI | 인증을 중계기에 위임할 수 있고 프록시·base URL·TLS 경로, 대상 검증, 응답 처리를 통제할 수 있어야 한다. | 해당 API 또는 CLI를 미지원으로 표시한다. |
-| SSH CLI | SSH agent 프로토콜 연동과 서버·목적지에 대한 인증 요청의 결합을 검증할 수 있어야 한다. | 개인키 파일만 받거나 목적지를 검증할 수 없으면 미지원이다. |
-| 비밀번호 기반 인증 | HTTP Basic 등 지원 프로토콜의 인증을 중계기가 대신 처리할 수 있어야 한다. | DB 등 다른 프로토콜은 전용 중계 검증 전까지 미지원이다. |
-| 평문 비밀로 계산하는 프로그램 | 프로그램 자체가 원본 값을 요구하므로 이 제품의 비밀 비전달 조건을 충족하지 못한다. | 보관은 가능하지만 해당 실행 방식은 미지원이다. |
+| HTTP API/CLI | Gateway-delegated authentication with controllable proxy/base URL/TLS route, destination validation and response handling. | Unsupported. |
+| SSH CLI | Agent protocol integration with validated session/server/destination binding. | Unsupported; no key-file fallback. |
+| Password authentication | A supported relay protocol such as HTTP Basic. Database and other protocols need dedicated verification. | Unsupported until integrated and verified. |
+| Programs computing with raw secrets | The client itself requires original values. | Storage only; execution unsupported. |
 
-지원 판정에는 정상 요청 성공뿐 아니라 하나의 연결로 서로 다른 명령을 등록 없이 실행하는지, 원본 키 추출이 차단되는지, 응답·오류·스트림·로그에 인증 정보가 유출되지 않는지, 권한 회수가 적용되는지 확인하는 시험을 포함한다. 조건이 맞지 않으면 명시적으로 실패해야 하며 평문 주입으로 우회하지 않는다.
+If an integration cannot meet its conditions, mark it unsupported. A private-key-file-only client or an SSH client without destination binding must fail explicitly.
 
-특정 CLI, 서비스, 클라우드 제공자·리전·예산은 아직 확정하지 않았다. 실제 사용할 서비스 후보로 프로토타입을 검증한 뒤 지원 목록을 정한다. 모든 CLI가 수정 없이 동작한다고 약속하지 않는다.
+Acceptance tests cover normal success, different operations on one connection, blocked extraction, authentication material in responses/errors/streams/logs, and effective revocation. A failed condition must produce an explicit failure, never a plaintext workaround.
 
-## 6. 1Password에서 참고하는 부분
+Specific services, CLIs, cloud providers, regions and budgets are not universally specified. Validate actual candidates before listing support. Do not promise every unmodified CLI will work.
 
-1Password의 환경변수 관리와 비밀 참조는 금고·연결 UX의 참고 대상이다. 다만 op run은 실제 비밀을 자식 프로세스의 환경변수에 넣으므로 ZeroPW의 실행 보안 모델로 그대로 사용하지 않는다. 출력 마스킹이 자식 프로세스의 값 접근을 막는 것은 아니다. [S1, S2]
+## 6. References
 
-1Password SSH agent의 개인키 비반출과 서명 제공 방식은 SSH 인증의 참고 대상이다. 관리용 MCP 도구와, 외부 MCP 서버를 감싸서 그 서버의 환경에 비밀을 넣는 방식은 구분한다. MCP를 쓴다는 사실만으로 실행 코드에서 비밀이 숨겨지지는 않는다. [S3, S4]
+Reference material was checked on 2026-09-12; it is design context, not current compatibility evidence.
 
-Envoy의 credential injector는 중계기에서 HTTP 자격증명을 넣는 구현 참고 사례다. 이 기능 하나가 사용자 권한, 목적지 제한, 응답 유출 방지 또는 모든 CLI 호환성을 해결하지는 않는다. 이 보호와 검증은 ZeroPW가 별도로 설계한다. [S5]
+1Password environment management and secret references inform vault UX. Its `op run` injects real secrets into child environments, so it does not satisfy ZeroPW's execution boundary. Masking output does not prevent a child from reading its values.
 
-공식 자료 확인일: 2026-09-12
+The 1Password SSH agent's non-exported keys and signature service inform SSH design. Distinguish management MCP tools from wrappers injecting secrets into an external MCP server's environment. Using MCP does not by itself hide credentials from execution code.
 
-- [S1] 1Password Environments: https://www.1password.dev/environments
-- [S2] 1Password CLI — op run: https://www.1password.dev/cli/reference/commands/run
-- [S3] 1Password SSH agent security: https://www.1password.dev/ssh/agent/security
-- [S4] 1Password — Secure AI access: https://www.1password.dev/get-started/secure-ai-access
-- [S5] Envoy credential injector: https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/credential_injector_filter
+Envoy's credential injector informs gateway-side HTTP authentication. It does not alone solve user grants, destination limits, reflected credentials or universal CLI compatibility; ZeroPW must validate those separately.
+
+- [1Password environments](https://www.1password.dev/environments)
+- [1Password op run](https://www.1password.dev/cli/reference/commands/run)
+- [1Password SSH agent security](https://www.1password.dev/ssh/agent/security)
+- [1Password secure AI access](https://www.1password.dev/get-started/secure-ai-access)
+- [Envoy credential injector](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/credential_injector_filter)
