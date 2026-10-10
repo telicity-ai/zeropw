@@ -41,3 +41,11 @@ For CI, create an isolated local Homebrew tap from the formula and point its sou
 Default documentation already translated: README, GUIDE, product intent and security design. Remaining maintained documents and user-facing demo/notification strings are still being migrated. Historical fixtures remain unchanged.
 
 For the user-selected Mac mini execution path, see [self-hosted runner setup](self-hosted-runner.md). Hosted verification is manual-only to avoid consuming hosted minutes on pushes and PRs.
+
+## Preparation evidence: 2026-10-10
+
+At `e81fd0b`, the complete Linux ARM64 verification matrix ran in the existing isolated Lima VM under an unprivileged verification user. The matrix finished with `VERIFY_FAILED=test:runs`: `timeout_and_spawn_failure_are_terminal` observed `running` rather than `failed` after its unchanged four-second wait. All four separately selected signer resource probes passed. This is a failed overall result, not a release PASS. The original log is retained in the private VM job evidence.
+
+At `29faaa1`, six affected integration targets passed: `cli_commands` (10), `native_response_cli` (13), `response` (27), `response_contract` (8), `response_parity_gaps` (8), and `runs` (19): 85 tests total. This validates the English incident report and decoded SMTP delivery and preserves the historical Korean fixtures. The timeout test also passed, but the original matrix failure remains unexplained and open. Later documentation-only commits do not extend this evidence into a full release claim.
+
+The tracked-tree information scan examined 336 files: 18 file-level personal-path findings and three file-level private-key-marker findings require classification. No GitHub-token or AWS-access-key pattern was found by these narrow rules. This is not proof of a comprehensive clean secret audit; history and other token formats remain to be examined. The scanner reports paths, categories and counts without printing matched values.
