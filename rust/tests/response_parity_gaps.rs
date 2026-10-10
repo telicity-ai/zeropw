@@ -299,8 +299,8 @@ fn email_rendering_matches_english_contract_for_loaded_incidents() {
 }
 
 // ---------------------------------------------------------------- SMTP
-// Every SMTP scenario runs Python's `send_test_message` and Rust's against a
-// fresh scripted loopback server, then compares the outcome, the new audit
+// English transcripts are generated with independent CPython email. Rust
+// runs against a fresh scripted loopback server, checking outcome, new audit
 // records and the exact bytes the server received (the EHLO/HELO argument
 // is compared separately by `smtp::tests`, since Python may answer it from
 // DNS).
@@ -533,7 +533,7 @@ enum Password {
 }
 
 #[test]
-fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
+fn smtp_sessions_match_english_transcripts_outcomes_and_audit() {
     let scenarios: Vec<(&'static str, Value, Password)> = vec![
         ("plain_ok", json!({}), Password::None),
         ("helo_fallback", json!({}), Password::None),
@@ -689,7 +689,7 @@ fn smtp_sessions_match_python_transcripts_outcomes_and_audit() {
         ("tls_eof", json!({"mode": "smtps"}), Password::None),
     ];
     let recorded: Vec<Value> =
-        serde_json::from_str(include_str!("fixtures/python/response/smtp_sessions.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/english/response/smtp_sessions.json")).unwrap();
     let (tmp, ctx) = fixture();
     let mut failures = vec![];
     assert_eq!(scenarios.len(), recorded.len());

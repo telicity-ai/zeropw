@@ -553,8 +553,8 @@ pub fn send_test_message(ctx: &Arc<Context>) -> Result<Value> {
     };
     let result = crate::smtp::send(
         &config,
-        "[ZeroPW] 알림 설정 시험 메시지",
-        "ZeroPW 알림 설정을 확인하기 위한 시험 메시지입니다.\n실제 침입 사건이 아닙니다. 이 메시지가 도착했다면 SMTP 설정이 올바르게 동작합니다.\n",
+        "[ZeroPW] Notification configuration test",
+        "ZeroPW notification configuration test.\nThis is not a real intrusion incident. Receipt confirms the SMTP setup works.\n",
     );
     match result {
         Ok(()) => {
