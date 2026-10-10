@@ -54,6 +54,9 @@ jobs:
           VERIFY_COMMIT: ${{ inputs.commit }}
         run: test "$(git rev-parse HEAD)" = "$VERIFY_COMMIT"
 
+      - name: Select the runner's OpenSSL 3 installation
+        run: echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
       - name: Test installation tooling and compile the harness
         run: |
           python3 -m unittest discover -s tests -p 'test_*.py' -v

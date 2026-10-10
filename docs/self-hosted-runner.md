@@ -6,7 +6,7 @@ This workflow uses your own Apple Silicon Mac mini, not billable GitHub-hosted r
 
 Use a dedicated disposable verification machine or equivalent isolation with no production credentials, vault state, signer keys, administrator/recovery material, deployment authority or coordinator session. Do not register the current trusted coordinator account as the verification runner. A clean environment does not remove credentials that remain accessible on disk; the machine boundary is the requirement.
 
-Install a Rust toolchain supporting edition 2024, Python 3, Git, Homebrew, Perl and OpenSSH client/server tooling. The real SSH E2E must be able to start `sshd` as the verification user. Install GitHub's official self-hosted runner from the repository's **Settings → Actions → Runners** page, in the dedicated verification environment. Enter registration material directly there; never paste it into agent chat or commit it.
+Install a Rust toolchain supporting edition 2024, Python 3, Git, Homebrew, Homebrew `openssl@3`, Perl and OpenSSH client/server tooling. The real SSH E2E must be able to start `sshd` as the verification user. Install GitHub's official self-hosted runner from the repository's **Settings → Actions → Runners** page, in the dedicated verification environment. Enter registration material directly there; never paste it into agent chat or commit it.
 
 Use the default `self-hosted`, `macOS`, and `ARM64` labels and add `zeropw-isolated`. Configure only this repository's trusted maintainers to dispatch it. Do not add automatic PR execution. An ephemeral runner is preferable because a test can change its execution environment; rebuild it before running another untrusted revision.
 
