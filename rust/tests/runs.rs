@@ -656,7 +656,7 @@ fn ack_socket_boundary_child() {
     if std::env::var_os("ZEROPW_ACK_BOUNDARY_CHILD").is_none() {
         return;
     }
-    let (temp, _ctx, registry) = setup(10);
+    let (temp, _ctx, registry) = setup(1024);
     let run = queued(&registry);
     start(
         &registry,
