@@ -693,10 +693,7 @@ mod retry_tests {
                 &f.env_id,
                 vec![json!({"op":"secret.put","generation_id":before})],
             );
-            assert_eq!(
-                result.unwrap_err().reason.as_deref(),
-                Some("team_rekey_pending")
-            );
+            assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
         }
     }
 
