@@ -2,7 +2,7 @@
 
 - Actual independent reviewer: `gpt-6-astra`.
 - Exact product: `d6fdee402d9d915eb9288a4ce97bbc1662fac7bb`.
-- Worktree `/Users/ys/Code/zeropw-rust-runtime-final` was clean before detaching at this revision; its saved branch was preserved. Only this unique report and independent regression were added.
+- Worktree `${HOME}/Code/zeropw-rust-runtime-final` was clean before detaching at this revision; its saved branch was preserved. Only this unique report and independent regression were added.
 - **Socket disappearance is not a terminal-run publication barrier.** No new product defect is demonstrated by this control.
 
 ## Observed failure and ordering
@@ -28,7 +28,7 @@ This uses a **generic actual Unix socket**, not a newly created SignerBinding or
 Using the released existing mailbox target cache (no new build cache):
 
 ```sh
-env -i PATH=/Users/ys/.cargo/bin:/Users/ys/.local/bin:/usr/bin:/bin CARGO_TARGET_DIR=/Users/ys/Code/zeropw-rust-mailbox-final/rust/target cargo test --offline --test astra_cleanup_publication_order -- --nocapture
+env -i PATH=${HOME}/.cargo/bin:${HOME}/.local/bin:/usr/bin:/bin CARGO_TARGET_DIR=${HOME}/Code/zeropw-rust-mailbox-final/rust/target cargo test --offline --test astra_cleanup_publication_order -- --nocapture
 ```
 
 Result: **1 passed**, 2.71s, including the original-Python comparison. Strict Clippy for this new test and `git diff --check` passed.

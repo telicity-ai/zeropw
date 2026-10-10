@@ -1,0 +1,166 @@
+{
+  "actual_models": [
+    "claude-opus-5-5"
+  ],
+  "cli_version": "2.1.287",
+  "effort": "medium",
+  "tools": [],
+  "review": {
+    "verdict": "REVISE",
+    "head_sha": "03a989ff81eee0c16871278c438c17b48dbce826",
+    "scope": [
+      "scripts/install.sh",
+      "scripts/package-release.py",
+      "scripts/test-homebrew.sh",
+      "Formula/zeropw.rb",
+      "rust/src/notify.rs (English incident/test notifications)",
+      "rust/src/team/membership.rs (remove_member, author_fact, rotate_dek)",
+      "rust/src/team/sync.rs (fact authority, removal draining, fact replay)",
+      "docs/team-sync.md §4.4/§7.4/§8, docs/releasing.md, README.md (consistency with the above only)"
+    ],
+    "known_open_preserved": [
+      {
+        "id": "OSS-TEAM-SELFREMOVE",
+        "status": "open, unchanged",
+        "note": "remove_member authors no dek.rotate when caller == fingerprint (membership.rs `if is_admin && caller != fingerprint`). docs/team-sync.md §4.4 states this accurately. This review does not re-file or resolve it."
+      },
+      {
+        "id": "OSS-INSTALL-OPENSSL",
+        "status": "open, unchanged",
+        "note": "The -gnu targets and the Formula's openssl@3 dependency indicate dynamic system-library requirements. Fresh-host portability of the installed binaries is still unestablished. The only native install evidence is Linux ARM64 in an existing VM."
+      }
+    ],
+    "findings": [
+      {
+        "id": "R1",
+        "severity": "high",
+        "title": "member_removed authority does not require the author to be an active member, so a removed admin keeps removal power",
+        "file": "rust/src/team/sync.rs",
+        "evidence": "fact_role_ok, kind == \"member_removed\": `return doc[\"owner\"] == author || doc[\"members\"][author][\"role\"] == \"admin\" || author == target_fp;`. There is no `status == \"active\"` check. is_admin and the incident branch do check it. docs/team-sync.md §5.1 says removed members keep `role` with `status: removed`. validate_incoming_fact resolves the author's key from relaxed_document, where removed_members is cleared, so the signature verifies. role_document_for_removal returns the ordinary env.document unless the author was removed solely by this target. In that document the removed admin still has role \"admin\", so the check passes. The same predicate gates publish_fact and the local author_fact path. The reciprocal-removal special case in role_document_for_removal would be unnecessary if removed authors already passed. That points to the missing status check being unintended.",
+        "impact": "An admin who has been removed by a third party can still author valid, irreversible member_removed facts against any non-owner member, including remaining admins. Delivery paths include the drain window (see R2), offline-buffered facts, and relay by nodes that accept them. Facts cannot be undone (§7.4).",
+        "resolution_conditions": [
+          "For member_removed, the author must be the owner or an *active* admin, or the target itself.",
+          "The only exception is the reciprocal case already modeled by role_document_for_removal: the author was removed solely by this target.",
+          "Apply the same rule in publish_fact, author_fact (local path) and validate_incoming_fact.",
+          "Add a regression test: admin A is removed by admin B, then A's fact removing member C is rejected with team_fact_not_authorized on receive, replay and local authoring. The existing mutual-removal (A↔B) convergence test must still pass."
+        ]
+      },
+      {
+        "id": "R2",
+        "severity": "medium",
+        "title": "Drain window accepts any member_removed fact, not only the reciprocal one the design specifies",
+        "file": "rust/src/team/sync.rs",
+        "evidence": "handle_message, draining branch: `if mtype == \"FACT\" && message[\"fact\"][\"kind\"] == \"member_removed\" { self.handle_fact(...) }`. Nothing checks that the fact targets the remover or is otherwise reciprocal. docs/team-sync.md §4.4/§7.4: \"Accept only a valid reciprocal member_removed fact during that window\". Combined with R1, the removed peer's still-open session is a direct path for arbitrary removals during team_removed_drain_seconds.",
+        "resolution_conditions": [
+          "While a session is draining, accept only member_removed facts authored by the drained peer whose target is a device that removed that peer. The target must be in removal_authors[peer], or this node itself if this node authored the removal.",
+          "Alternatively, document a broader rule and justify it.",
+          "Test that a non-reciprocal removal sent during the drain window is ignored and not stored."
+        ]
+      },
+      {
+        "id": "R3",
+        "severity": "medium",
+        "title": "Installer's --version path depends on a SHA256SUMS asset that no supplied tooling produces",
+        "file": "scripts/install.sh, scripts/package-release.py",
+        "evidence": "install.sh downloads `$base/SHA256SUMS` and selects the line with `$2 == name`. package-release.py writes only a per-archive `<archive>.tar.gz.sha256`. No supplied script aggregates these into SHA256SUMS. docs/releasing.md documents `--version` as downloading \"the matching archive and SHA256SUMS\" without defining how SHA256SUMS is produced or verified.",
+        "impact": "The advertised --version install path fails ('missing or ambiguous release checksum') unless a manual, unspecified step creates SHA256SUMS. A hand-built file is also a place for format drift: a `*name` binary marker or one-space separator would not match `$2 == name`.",
+        "resolution_conditions": [
+          "Provide a scripted step that builds SHA256SUMS in `<hex>  <name>` form from the produced archives, or switch the installer to the per-archive .sha256 file.",
+          "Cover the --version code path with a test that uses locally served release-shaped assets, including the multi-line and missing-entry cases."
+        ]
+      },
+      {
+        "id": "R4",
+        "severity": "medium",
+        "title": "Incident email subject always says the service stopped, even when the body reports it did not",
+        "file": "rust/src/notify.rs",
+        "evidence": "render_incident_email: subject is fixed as `\"[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident {})\"`. The body separately renders `Global stop: yes|no` from `i.actions[\"stopped\"]`, and the mandatory list can be empty (\"No mandatory rotation targets.\").",
+        "impact": "If the global stop failed or was not taken, or nothing requires rotation, the subject line most recipients act on states the opposite. In a security notification that can delay manual containment.",
+        "resolution_conditions": [
+          "Derive the subject from `actions.stopped` and from whether mandatory targets exist.",
+          "Alternatively, use neutral wording such as \"Intrusion detected: action required (incident X)\".",
+          "Add an English-output test covering stopped=false and no-mandatory cases."
+        ]
+      },
+      {
+        "id": "R5",
+        "severity": "low",
+        "title": "Homebrew CI test silently falls back to GitHub main if the formula's head line changes; checkout path is spliced into Ruby unsafely",
+        "file": "scripts/test-homebrew.sh",
+        "evidence": "`formula.replace('head \"https://github.com/telicity-ai/zeropw.git\", branch: \"main\"', ...)` is never asserted to have matched. Any whitespace or option edit in Formula/zeropw.rb makes it a no-op, and `brew install --HEAD` then builds remote main while the script still reports success. json.dumps produces a Ruby double-quoted literal, but `#{...}` in the checkout path is not escaped and would be interpolated as Ruby.",
+        "resolution_conditions": [
+          "Fail if the head line is not found exactly once.",
+          "Emit the path with a non-interpolating Ruby literal, or reject paths containing `#`.",
+          "Optionally, after install, assert that the installed formula's recorded revision equals `commit`."
+        ]
+      },
+      {
+        "id": "R6",
+        "severity": "low",
+        "title": "Staging directory can be left in the bin directory on a narrow failure",
+        "file": "scripts/install.sh",
+        "evidence": "`stage=$(mktemp -d \"$prefix/bin/...\")` then `docstage=$(mktemp -d ...)`. The trap that removes `$stage` is installed only after both succeed. If the second mktemp fails, `set -e` exits under the old trap, which removes only `$work`.",
+        "resolution_conditions": [
+          "Install the cleanup trap immediately after each mktemp, using initialized empty variables.",
+          "Test the docstage-failure path."
+        ]
+      },
+      {
+        "id": "R7",
+        "severity": "low",
+        "title": "Archive bytes are not reproducible despite normalized entry metadata",
+        "file": "scripts/package-release.py",
+        "evidence": "Entry uid/gid/mtime/uname/gname are zeroed, but `tarfile.open(out, 'w:gz')` writes a gzip header with the current time and the output filename. Rebuilding identical inputs gives a different SHA-256. That weakens the 'artifacts tied to commit' gate in releasing.md, since checksums cannot be independently reproduced.",
+        "resolution_conditions": [
+          "Write the gzip stream with mtime=0 and no filename, for example via gzip.GzipFile(fileobj=..., mtime=0, filename='').",
+          "Alternatively, state explicitly that archives are not reproducible."
+        ]
+      },
+      {
+        "id": "R8",
+        "severity": "low",
+        "title": "English notification still emits Python literals and commands that are unsafe to copy",
+        "file": "rust/src/notify.rs",
+        "evidence": [
+          "`display` renders JSON null as \"None\" and other values via pystr::repr_value. Missing fields therefore produce lines like \"Project/environment: None/None  Active version: None\". get_or_zero shows \"None\" for present-null counters.",
+          "The recovery line `incident escalate --id X --scope runtime|all` contains a literal shell pipe, so pasting it runs `all` as a command.",
+          "Recovery commands omit the `zeropw-admin --state-dir` prefix.",
+          "The full-exposure \"Before `incident close`: recover\" block is printed after the command list that already includes `incident close`."
+        ],
+        "resolution_conditions": [
+          "Render missing values as \"unknown\"/\"none\" in English output, or document Python-parity output as an intentional exception.",
+          "Show alternatives as separate lines or `--scope <runtime|all>`.",
+          "Place the recover prerequisite before the close command."
+        ]
+      },
+      {
+        "id": "R9",
+        "severity": "low",
+        "title": "Release documentation is internally inconsistent about targets and translation status",
+        "file": "docs/releasing.md",
+        "evidence": [
+          "Gate 3 lists three targets (Apple Silicon macOS, Intel macOS, x86-64 Linux), but package-release.py, install.sh and the notices section support four, including aarch64 Linux. The only native install evidence is aarch64 Linux.",
+          "The doc says \"user-facing demo/notification strings are still being migrated\", yet the 29faaa1 evidence claims the English incident report is validated.",
+          "The doc says \"Team protocol documentation remains to be translated\", but docs/team-sync.md is English."
+        ],
+        "resolution_conditions": [
+          "Make the gate target list match the supported targets.",
+          "Update the translation-status sentences so each claim matches current state, with the commit it applies to."
+        ]
+      }
+    ],
+    "non_findings_checked": [
+      "install.sh archive validation is sound under the stated assumptions: exact sorted entry-set comparison, non-regular/hardlink rejection via `tar -tv` type column ('h' for hardlinks in GNU tar and libarchive), and extraction into a private temp dir.",
+      "install.sh refuses symlinked prefix/bin/doc directories. A destination symlink to a directory is caught by `-d`, so `mv -f` cannot write through it.",
+      "install.sh checksum parsing rejects multi-line (ambiguous) digests because bash `=~` anchors apply to the whole string.",
+      "notify.rs runs value_leak on subject+body before SMTP send. Config header fields reject control characters.",
+      "Admin removal of another device rotates the DEK using the post-removal document in both team and local paths."
+    ],
+    "limitations": [
+      "Static review only: nothing was executed, built or installed. No tar, Homebrew or SMTP behavior was observed.",
+      "fold.rs, smtp.rs, incident.rs, transport and CLI wiring were not supplied. R1 assumes, per docs/team-sync.md §5.1, that folded documents keep `role` for removed members. If fold strips or changes the role of removed members, R1 is reduced to R2's drain-window scope and must be re-assessed.",
+      "Homebrew `head ... revision:` semantics and `brew test` sandbox networking for zeropw-demo were not verified.",
+      "This is not full repository acceptance. Validation state as supplied: the macOS full matrix and Homebrew run are in progress, and there is no current full PASS."
+    ]
+  }
+}

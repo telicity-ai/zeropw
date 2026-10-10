@@ -23,7 +23,7 @@ The original report and reproduction evidence remain unchanged in `astra-team-ro
 
 All credentials, device keys and state were synthetic and temporary. Network tests use local controlled listeners. Python is used only as a test oracle, never as a product backend.
 
-Run from `rust/` using `/Users/ys/.cargo/bin/cargo`:
+Run from `rust/` using `${HOME}/.cargo/bin/cargo`:
 
 ```text
 cargo test --offline --test astra_team_review --test team_membership_sync --test team_transport -- --test-threads=1

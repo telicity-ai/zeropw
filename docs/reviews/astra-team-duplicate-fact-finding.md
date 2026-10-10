@@ -14,7 +14,7 @@ This adapter test exercises concurrency and signature/role validation, not the T
 Executed from `rust/`:
 
 ```sh
-env -i PATH=/Users/ys/.cargo/bin:/Users/ys/.local/bin:/usr/bin:/bin cargo test --offline --test astra_team_fact_duplicate_diagnostic -- --nocapture
+env -i PATH=${HOME}/.cargo/bin:${HOME}/.local/bin:/usr/bin:/bin cargo test --offline --test astra_team_fact_duplicate_diagnostic -- --nocapture
 ```
 
 Result: **0 passed / 1 failed**, 7.25 seconds:

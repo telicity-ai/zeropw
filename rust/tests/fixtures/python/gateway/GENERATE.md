@@ -16,7 +16,7 @@ Run from the repository root of a checkout that still has `zeropw/`
 `python3.12` first on `PATH`):
 
 ```sh
-/Users/ys/Code/zeropw-parity-evidence-20261003/vmrun.sh <worktree> cvnet bash -c '
+${HOME}/Code/zeropw-parity-evidence-20261003/vmrun.sh <worktree> cvnet bash -c '
   set -e; out=$(mktemp -d)
   PYTHONPATH=$PWD PYTHONDONTWRITEBYTECODE=1 python3.12 - "$out" >&2 <<"PYGEN"
 <the script below>

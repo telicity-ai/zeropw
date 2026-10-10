@@ -7,7 +7,7 @@
 - Scope: AR-RUNTIME-05/06 and the descriptor criterion of AR-RUNTIME-02; AR-CLI-01 and terminal interruption/EOF; the reported intermittent native demo output assertion.
 - Decision: **REVISE. AR-RUNTIME-07 and AR-CLI-02 are confirmed and open. No full-product or Linux acceptance is claimed.**
 
-All credentials, state, descriptor contents and subprocess output were synthetic. Commands ran with a clean environment: `env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. No product files or earlier finding reports/tests were changed. The latest user decision in `docs/rust-completion.md` controls reviewer/model authority.
+All credentials, state, descriptor contents and subprocess output were synthetic. Commands ran with a clean environment: `env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. No product files or earlier finding reports/tests were changed. The latest user decision in `docs/rust-completion.md` controls reviewer/model authority.
 
 ## Existing finding dispositions
 

@@ -1,22 +1,22 @@
-# ZeroPW 시작하기
+# Getting started with ZeroPW
 
-ZeroPW는 팀의 비밀을 암호화해 기기끼리 동기화합니다. 에이전트는 원본 키를 받지 않고 지원하는 API와 SSH를 사용할 수 있습니다. 현재는 Rust CLI로 사용하는 배포 전 제품입니다.
+ZeroPW synchronizes encrypted secrets between trusted devices. Agents use supported APIs and SSH without receiving the original keys. The product currently runs through Rust CLIs and is pre-release software.
 
-## 어디서 시작할까요
+## Choose your starting point
 
-| 하고 싶은 일 | 시작점 |
+| Goal | Start here |
 | --- | --- |
-| 동작을 먼저 보기 | 아래 빌드와 데모 |
-| 팀 환경을 처음 만들기 | 관리자 설정 → 팀 공유 |
-| 팀에 가입하기 | 팀 공유의 팀원 단계 |
-| 에이전트로 작업하기 | 에이전트 사용 → 스킬 설치 |
-| 기존 앱에 `.env`를 그대로 주입하기 | 현재 미지원. 앱의 인증 경로를 먼저 확인 |
+| See how it works | Build and demo |
+| Create a team environment | Administrator setup, then team sharing |
+| Join a team | Device B under team sharing |
+| Use it from an agent | Agent usage, then install the skill |
+| Inject an existing `.env` into an application | Unsupported; first check the application's authentication path |
 
-`.env` 파일을 통째로 가져오거나 내보내는 기능은 없습니다. API 키는 금고에, URL 같은 비밀이 아닌 설정은 앱 설정에 둡니다. 원본 키를 `process.env`로 읽는 앱이나 DB 비밀번호를 직접 받는 드라이버에는 별도 통합이 필요합니다. 현재 검증한 CLI는 `zeropw-democli`와 OpenSSH입니다.
+There is no whole-file `.env` import or export. Store API keys in the vault and keep non-secret settings, such as service URLs, in application configuration. Applications that read a raw key from `process.env`, or database drivers that directly require a password, need a dedicated integration. The tested CLI paths are `zeropw-democli` and OpenSSH.
 
-## 1. 빌드와 데모
+## 1. Build and demo
 
-저장소 루트에서 실행합니다. Rust 2024 edition 지원 toolchain과 OpenSSL 3 개발 헤더가 필요합니다. Linux에서는 배포판의 OpenSSL 개발 패키지와 pkg-config를 준비합니다. macOS에서 Homebrew `openssl@3`를 설치했다면 빌드 전에 다음을 실행합니다.
+Run from the repository root. You need a toolchain supporting Rust edition 2024. On Linux, prepare your distribution's development build tools. Some dependency configurations may need OpenSSL development headers and pkg-config. If using Homebrew OpenSSL 3 on macOS, set:
 
 ```sh
 export OPENSSL_DIR="$(brew --prefix openssl@3)"
@@ -28,11 +28,11 @@ export PATH="$PWD/rust/target/debug:$PATH"
 zeropw-demo
 ```
 
-데모는 합성 자격증명과 내장 시험 서버를 씁니다. 종료 코드가 0이면 데모의 모든 검사를 통과했습니다. 제품 빌드·데모는 실제 금고나 조정기 권한이 없는 CI 러너·격리 VM에서 실행하세요. `exec`를 사용할 때는 `zeropw_session`을 `zeropw-admin` 옆에 함께 배포합니다.
+The demo uses synthetic credentials and an embedded test server. Exit code 0 means all demo checks passed. Build and run the product on a disposable CI runner or isolated VM without real vault or coordinator authority. When deploying `exec`, install `zeropw_session` beside `zeropw-admin`.
 
-## 2. 관리자 설정
+## 2. Administrator setup
 
-관리자가 에이전트와 분리된 신뢰 터미널에서 직접 설정합니다. 관리자·복구 패스프레이즈, 원본 키, `.env` 내용은 에이전트에게 전달하지 않습니다. 에이전트는 아래 관리 명령을 대신 실행하지 않습니다.
+A human administrator performs this section in a trusted terminal separated from the agent. Never give the agent administrator or recovery passphrases, original credentials, or `.env` contents. The agent must not run these administration commands on your behalf.
 
 ```sh
 export ZPW_STATE="$HOME/.local/share/zeropw"
@@ -40,7 +40,7 @@ zeropw-admin --state-dir "$ZPW_STATE" init
 zeropw-admin --state-dir "$ZPW_STATE" project create team-app
 ```
 
-`init`이 물으면 관리자 패스프레이즈와 복구 패스프레이즈를 정하고 별도로 보관합니다. 아래 파일 경로와 서비스 주소는 예시입니다. 관리자가 확인한 경로와 주소로 바꿔 실행하세요. 값 파일에는 키 하나만 담습니다. `.env` 전체를 값 파일로 넘기지 마세요.
+When `init` prompts, choose administrator and recovery passphrases and store them separately. The file path and target below are examples: replace them with administrator-verified values. The value file contains one credential, not a complete `.env`.
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" secret put \
@@ -52,9 +52,9 @@ zeropw-admin --state-dir "$ZPW_STATE" connection create-http \
   --auth bearer --methods GET --path-prefixes /v1
 ```
 
-임시 값 파일을 썼다면 등록이 끝난 뒤 관리자가 안전하게 정리합니다. 실제 서비스를 연결하기 전에는 인증 정보를 조회하거나 응답에 그대로 돌려주는 경로가 있는지, 중계기가 이를 막는지 검증해야 합니다. 위 명령이 성공해도 해당 서비스를 안전하게 지원한다는 뜻은 아닙니다. CLI 실행은 검증한 프로필을 별도로 연결하며, API 호출은 `--cli-program` 없이 가능합니다.
+After successful import, the administrator safely removes any temporary plaintext value file. Before connecting a real service, verify credential-query and reflection endpoints and how the gateway handles their responses. Creating a connection does not establish safe service compatibility. HTTP API requests do not require `--cli-program`; CLI execution requires a separately validated profile.
 
-각 기기에서 호출 주체와 권한을 만듭니다. 호출 토큰은 한 번만 출력됩니다. 토큰으로 허용된 작업을 실행할 수 있으므로 공개 문서나 Git, 채팅에 넣지 마세요.
+Create a caller identity and grant on each device. The caller token is printed once. It authorizes restricted operations, so do not put it in public documents, Git, or chat logs.
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" principal create --id agent-1 --runtime dev-box
@@ -63,13 +63,15 @@ zeropw-admin --state-dir "$ZPW_STATE" grant create \
 zeropw-admin --state-dir "$ZPW_STATE" serve
 ```
 
-`serve`는 켜 둡니다. 첫 JSON의 `url`과 호출 토큰만 에이전트 환경에 전달합니다. 도구 API는 루프백 주소에서만 접속을 받습니다. 개발할 때처럼 금고와 에이전트를 같은 OS 사용자로 실행하면 둘을 보안상 격리할 수 없습니다. 운영용 격리는 따로 준비해야 합니다. 온보딩 시험에는 실제 비밀을 쓰지 마세요.
+Keep `serve` running. Pass only its first JSON response's `url` and the caller token to the agent environment. The tools API accepts connections only over loopback. Running the agent and vault as the same OS user does not provide security isolation. Prepare deployment isolation separately and test onboarding only with synthetic credentials.
 
-## 3. 팀 공유
+## 3. Team sharing
 
-같은 LAN 또는 팀 VPN 안에서 기기끼리 연결합니다. 중앙 서버는 필요 없지만 동기화할 각 기기의 `serve`는 실행 중이어야 합니다. 다음은 기기 A의 VPN IP가 `10.8.0.2`, B가 `10.8.0.3`인 예입니다. 실제 주소로 바꾸고 팀 리스너 포트만 팀 네트워크에 허용하세요.
+Devices connect directly over the same LAN or team VPN. No central server is needed, but each device's `serve` must be running to synchronize. The example uses VPN addresses `10.8.0.2` for A and `10.8.0.3` for B. Substitute real addresses and expose the team listener port only to the team network.
 
-**관리자 A:** 앞 단계에서 만든 `team-app/dev`를 공유합니다. 이미 실행한 일반 `serve`가 있으면 종료하고 팀 리스너를 켜서 다시 실행합니다.
+### Administrator A
+
+Share the `team-app/dev` environment created above. If a normal `serve` process is already running, stop it and restart with a team listener.
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" team init
@@ -77,78 +79,84 @@ zeropw-admin --state-dir "$ZPW_STATE" team share --project team-app --environmen
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.2:47420
 ```
 
-다른 신뢰 터미널에서 같은 `ZPW_STATE`를 설정하고 초대합니다.
+In another trusted terminal, set the same `ZPW_STATE` and create the invitation:
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" team invite \
   --env team-app/dev --role user --name teammate --ttl 1h --address 10.8.0.2:47420
 ```
 
-초대는 일회용 가입 권한입니다. 초대 문자열은 가입할 팀원에게만 안전한 경로로 전달하세요. 에이전트나 이슈, 리뷰, 채팅 로그에 남기지 않습니다. 편집·초대가 필요한 팀원만 `admin`으로 초대합니다.
+An invitation is a one-time enrollment capability. Send it only to the intended teammate through a secure channel. Do not expose it to agents, issues, reviews, or chat logs. Give `admin` only to teammates who need editing and invitation authority.
 
-**팀원 B:** 자기 기기에서 빌드하고 자기 금고를 초기화한 뒤 기기 키를 만듭니다. 관리자 패스프레이즈는 공유하지 않습니다.
+### Teammate B
+
+Build the binaries on B, initialize B's own vault, and create its device keys. Do not share administrator passphrases.
 
 ```sh
 export ZPW_STATE="$HOME/.local/share/zeropw"
 zeropw-admin --state-dir "$ZPW_STATE" init
 zeropw-admin --state-dir "$ZPW_STATE" team init
-zeropw-admin --state-dir "$ZPW_STATE" team join '<일회용 초대>' --project team-app --environment dev
+zeropw-admin --state-dir "$ZPW_STATE" team join '<ONE_TIME_INVITATION>' --project team-app --environment dev
 zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev
 zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420
 ```
 
-`team join`은 현재 초대 문자열을 인자로 받습니다. B의 신뢰 터미널에서만 실행하고 셸 이력·프로세스 인자 노출을 관리하세요. A와 B에서 출력된 기기 지문과 멤버 목록을 확인합니다. 공유 전 A에서 만든 권한은 `stale` 상태가 되므로 다시 발급합니다. B도 자기 기기에서 `principal create`와 `grant create`를 실행합니다. 호출 주체와 권한, 호출 토큰은 기기 간에 공유하지 않습니다.
+`team join` currently receives the invitation as a command argument. Run it only in B's trusted terminal and account for shell history and process-argument visibility. Compare the device fingerprints and member lists on A and B. A's pre-sharing grants become `stale` and must be reissued. B must also run `principal create` and `grant create` locally. Caller identities, grants and tokens are not synchronized between devices.
 
-admin이 비밀이나 연결을 바꾸면 연결된 노드에도 반영됩니다. 각자 `team status`로 마지막 동기화와 상태를 확인합니다. 오프라인 기기는 다시 연결하면 변경 내용을 받습니다. 연결이 끊긴 동안에는 다른 기기에서 회수한 권한도 이전 상태로 사용할 수 있습니다. 초기 온보딩 중에는 `team compact`를 실행하지 마세요. 압축된 이력을 새 기기에 전송하는 기능은 없습니다.
+When an admin changes a secret or connection, connected nodes receive the change. Use `team status` to inspect synchronization state. Offline devices catch up after reconnecting, but can continue using their previous state in the meantime, including grants revoked elsewhere. Do not run `team compact` during initial onboarding: transferring compacted snapshots to new devices is not implemented.
 
-팀원을 제거하려면 관리자가 `team remove --env team-app/dev --device '<지문>'`을 실행합니다. 제거된 팀원이 과거에 읽을 수 있었던 키는 공급자에서 교체해야 무효가 됩니다. `user` 역할의 기기에서도 신뢰 프로세스는 비밀을 복호화할 수 있습니다. 신뢰할 수 있는 팀원만 초대하세요.
+If `team status` reports `rejected_removals`, an active administrator must review the targets and reissue the intended removals. Concurrent removals can leave different accepted fact sets until this reconciliation completes.
 
-## 4. 에이전트 사용
+To remove a member, the administrator runs `team remove --env team-app/dev --device '<FINGERPRINT>'`. Replace credentials at the provider to invalidate keys that the removed member could previously read. Even a `user` device's trusted process can decrypt shared secrets; invite only teammates you trust as people.
 
-관리자가 에이전트 실행 환경에 `ZEROPW_GATEWAY_URL`과 `ZEROPW_CALLER_TOKEN`을 설정합니다. 에이전트는 토큰을 출력하거나 설정 파일 내용을 읽을 필요가 없습니다.
+## 4. Agent usage
+
+The administrator configures `ZEROPW_GATEWAY_URL` and `ZEROPW_CALLER_TOKEN` in the agent runtime. The agent does not need to print the token or inspect configuration files.
 
 ```sh
 zeropw-agent list-connections
 zeropw-agent request --connection service-api --method GET --path /v1/items
 ```
 
-검증한 CLI 프로필 또는 SSH 연결을 관리자가 설정했다면:
+If the administrator has configured a validated CLI profile or SSH connection:
 
 ```sh
-zeropw-agent exec --connection '<연결 ID>' -- '<프로필의 명령 인자>'
-zeropw-agent status --run '<반환된 run_id>'
-zeropw-agent cancel --run '<반환된 run_id>'
+zeropw-agent exec --connection '<CONNECTION_ID>' -- '<PROFILE_ARGUMENTS>'
+zeropw-agent status --run '<RETURNED_RUN_ID>'
+zeropw-agent cancel --run '<RETURNED_RUN_ID>'
 ```
 
-`exec` 뒤에는 바이너리 경로 대신 연결 프로필의 인자를 줍니다. SSH 연결은 원격 명령 인자를 받습니다. SSH는 session-bind를 지원하는 OpenSSH 8.9 이상과 관리자가 검증한 서버 호스트 키가 필요하며, 개인키 파일을 에이전트에게 주지 않습니다. 같은 연결의 허용 범위 안에서는 작업마다 새 등록이 필요 없습니다.
+Arguments after `--` belong to the configured program; they are not a replacement executable path. For SSH they are remote-command arguments. SSH requires OpenSSH 8.9 or later with session-bind support and administrator-verified server host keys. Do not give the agent a private-key file. Different operations within the same connection's allowed scope need no new registration.
 
-## 5. 에이전트 스킬 설치
+After `exec`, inspect the returned run ID with `status` until it reaches a terminal state. Starting a run does not mean the command completed. SSH cancellation ends the local client; it cannot guarantee termination of an already-started remote process.
 
-[ZeroPW 에이전트 스킬](skills/zeropw-agent/SKILL.md)에는 연결을 골라 API와 CLI를 사용하고 실행 상태를 확인하는 방법이 들어 있습니다. 관리자 설정은 사람이 맡고 에이전트는 연결 사용만 하도록 안내합니다. 사용자가 Codex 개인 스킬 디렉터리에 복사하세요. 같은 이름이 이미 있으면 먼저 내용을 비교하세요.
+## 5. Install the agent skill
+
+The [ZeroPW agent skill](skills/zeropw-agent/SKILL.md) describes connection selection, API and CLI use, and execution status. It keeps human administration separate from agent usage. A human user copies it to the personal Codex skills directory. If a skill with the same name already exists, compare it first.
 
 ```sh
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 cp -R skills/zeropw-agent "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
 
-스킬이 로드된 에이전트에 이렇게 요청합니다:
+Once loaded, ask the agent:
 
-> $zeropw-agent 사용 가능한 연결을 확인하고 service-api로 /v1/items를 조회해 줘.
+> $zeropw-agent List available connections and use service-api to retrieve /v1/items.
 
-스킬에는 비밀, 관리자 상태 경로, 초대 문자열을 넣지 않습니다. 다른 에이전트에서도 `SKILL.md`의 지침을 해당 제품의 스킬 방식으로 등록할 수 있습니다.
+Never put secrets, administrator state paths or invitations into the skill. Other agents can load `SKILL.md` through their own skill mechanism.
 
-## 문제가 생기면
+## Troubleshooting
 
-| 증상 | 다음 행동 |
+| Symptom | Action |
 | --- | --- |
-| `zeropw-agent`가 없음 | 빌드·배포와 PATH를 확인 |
-| `gateway_unreachable` | 관리자가 `serve` 실행 여부와 루프백 접근 경로를 확인 |
-| 연결이 목록에 없음 | 해당 기기의 호출 주체·grant와 동기화를 관리자가 확인 |
-| `stale`, 만료, 회수, `principal_disabled` | 관리자에게 새 권한 또는 사건 상태 확인 요청. 에이전트가 재개·권한 확장하지 않음 |
-| `spawn_failed` | 관리자가 CLI 프로필과 `zeropw_session` 배치를 확인 |
-| 가입 연결 실패 | VPN·주소·포트·초대 만료를 관리자가 확인 |
-| 쓰기 결과 불명확 | 같은 작업을 무조건 재실행하지 말고 상태·업무 결과부터 확인 |
-| 미지원 인증 또는 인증 정보 반사 차단 | 평문 `.env`로 우회하지 않고 지원 통합을 확인 |
+| `zeropw-agent` is missing | Check the build, deployed binaries and PATH |
+| `gateway_unreachable` | Administrator checks `serve` and the loopback access path |
+| Connection absent from the list | Administrator checks this device's caller identity, grant and synchronization |
+| `stale`, expiry, revocation, `principal_disabled` | Ask the administrator to check grants or incident state; the agent must not resume or widen permissions |
+| `spawn_failed` | Administrator checks the CLI profile and `zeropw_session` placement |
+| Enrollment connection fails | Administrator checks VPN, listener address, port and invitation expiry |
+| Uncertain write result | Inspect status and business state before retrying |
+| Unsupported authentication or credential reflection blocked | Check the supported integration; do not fall back to plaintext `.env` injection |
 
-세부 동작과 한계는 [구현 현황](docs/implementation.md), [팀 동기화](docs/team-sync.md), [보안 경계](docs/security-design.md)를 참고하세요. 이 안내를 따른다고 운영 배포 준비가 끝나거나 새 보안 리뷰를 통과한 것은 아닙니다.
+Details: [implementation](docs/implementation.md), [team synchronization](docs/team-sync.md), and [security boundaries](docs/security-design.md). Following this guide does not establish production readiness or a new security review PASS.

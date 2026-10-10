@@ -738,7 +738,7 @@ fn email_render_has_ordered_sections_and_no_detail_or_value() {
         previous = found;
     }
     assert!(body.contains("recover"));
-    assert!(body.contains("공급자 콘솔"));
+    assert!(body.contains("provider console"));
     assert!(!body.contains("do not render me"));
     assert!(!body.contains(std::str::from_utf8(SECRET).unwrap()));
 }
@@ -890,7 +890,31 @@ fn smtp_delivery_uses_password_file_and_marks_sent_without_logging_password() {
     assert!(auth.contains("c210cHVzZXI="));
     assert!(auth.contains("c3ludGhldGljLXNtdHAtcGFzc3dvcmQtMDEyMzQ1Njc4OQ=="));
     let msg = String::from_utf8(message).unwrap();
-    assert!(msg.contains("Content-Transfer-Encoding: base64"));
+    // English notification text uses quoted-printable instead of the old
+    // Korean base64 representation. Verify the delivered content, not only
+    // the presence of an encoding header.
+    assert!(msg.contains("Content-Transfer-Encoding: quoted-printable"));
+    let (_, payload) = msg.split_once("\r\n\r\n").unwrap();
+    let payload = payload.replace("=\r\n", "");
+    let mut decoded = Vec::new();
+    let bytes = payload.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'=' {
+            assert!(at + 2 < bytes.len());
+            decoded.push(u8::from_str_radix(&payload[at + 1..at + 3], 16).unwrap());
+            at += 3;
+        } else {
+            decoded.push(bytes[at]);
+            at += 1;
+        }
+    }
+    let (_, expected_body) = notify::render_incident_email(&i, "2023-11-14T22:13:20Z");
+    assert_eq!(
+        String::from_utf8(decoded).unwrap().replace("\r\n", "\n"),
+        expected_body
+    );
+    assert!(!msg.contains("synthetic-smtp-password-0123456789"));
     let incident_bytes = ctx
         .state
         .read_bytes(&format!("incidents/{}.json", i.id))

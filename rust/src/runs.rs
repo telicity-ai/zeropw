@@ -581,10 +581,19 @@ impl RunRegistry {
         // missing or long user socket_dir cannot break HTTP-only exec runs.
         let setup = (|| -> std::io::Result<(PathBuf, tempfile::TempDir, UnixListener)> {
             let helper = session_helper()?;
+            // Keep Unix socket paths short, but honor short native test/runtime
+            // temporary roots (including Homebrew's permitted test directory).
+            let native_temp = std::env::temp_dir();
+            let ack_base =
+                if native_temp.as_os_str().as_encoded_bytes().len() <= 75 && native_temp.is_dir() {
+                    native_temp.as_path()
+                } else {
+                    std::path::Path::new("/tmp")
+                };
             let ack_dir = tempfile::Builder::new()
                 .prefix("zp-ack-")
                 .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir_in("/tmp")?;
+                .tempdir_in(ack_base)?;
             let ack_path = ack_dir.path().join("ack");
             let listener = UnixListener::bind(&ack_path)?;
             listener.set_nonblocking(true)?;

@@ -1,242 +1,223 @@
-# ZeroPW 실행 환경 침해 대응: 자동 봉쇄와 교체 안내
+# Compromise response: containment and rotation guidance
 
-작성일: 2026-09-15 · 갱신 2026-09-16 (결정 확정, 단계 1–5 구현 반영) · 설계와 구현 계획 · 단계 1–5 프로토타입 구현됨, 단계 6 미구현
+Written 2026-09-15; decisions and stages 1–5 updated 2026-09-16. Stages 1–5 were first implemented in the prototype, then ported to Rust. Stage 6 is not implemented.
 
-이 문서는 에이전트 실행 환경이 완전히 장악된 상황을 가정하고, ZeroPW가 침입을 판정해 서비스를 스스로 정지하고, 봉쇄 전에 노출된 자격증명의 교체를 관리자에게 이메일로 안내하는 기능을 정의한다. [제품 정의](product-intent.md) §4의 "권한·만료·회수"와 "사용 기록·알림", [보안 경계](security-design.md) §5의 "전체 실행 정지와 이상 사용 알림"을 구체화한 것이며 두 문서의 요구사항을 바꾸지 않는다. 단계 1–5는 Rust 구현(`rust/`)에 있으며 합성 자격증명과 시험용 서버로 시험했다. 코드가 실제로 하는 일과 한계는 [구현 현황](implementation.md) §7·§9에 있다. 시험 통과는 보안 인증을 뜻하지 않는다.
+This design assumes an agent runtime has been fully compromised. The trusted process detects suspicious behavior, contains its authority and emails the administrator guidance for rotating credentials potentially abused before containment. It elaborates the grant, revocation, audit and alert requirements in [product intent](product-intent.md) and [security design](security-design.md), without changing their boundaries. Tests use synthetic credentials and controlled servers. See [implementation](implementation.md), sections 7 and 9, for actual behavior and limits; test success is not security certification.
 
-## 1. 요약
+## 1. Response
 
-공격자가 실행 환경에서 모든 연결과 토큰을 긁어가려 하면, 신뢰 프로세스가 그 패턴을 침입으로 판정하고 한 번에 다음을 수행한다.
+When detection crosses its threshold, ZeroPW:
 
-1. 침해 유형에 따라 판정한 범위(호출 주체·실행 환경·전체) 안의 호출 주체 비활성화, 권한 회수, 진행 중 실행 취소와 서명기 소켓 닫기. 실행 환경 범위 이상이면 핸들 키 교체와 전체 정지.
-2. 감사 기록에서 침해된 호출 주체가 토큰 생성 이후 사용한 연결을 모두 골라 노출 판정을 만들고, 값 없는 사건 기록을 남긴다.
-3. 관리자에게 무슨 일이 있었는지, 무엇을 자동으로 했는지, 어떤 자격증명을 어떤 순서로 교체해야 하는지 이메일로 보낸다.
-4. 관리자가 사건을 검토하고 닫기 전까지 `resume`을 거부한다.
+1. Disables principals, revokes grants, cancels runs and closes signer sockets in the assessed principal/runtime/global scope. Runtime/global containment also rotates the handle key; global stop depends on scope as defined below.
+2. Uses audit records since each affected token's creation to assess exposed credentials and stores a value-free incident.
+3. Emails what happened, what was contained and which credentials need rotation, in order.
+4. Refuses `resume` while an incident remains open.
 
-[1Password 조사](#부록-a-1password-비교)의 결론대로, 이런 상황에서 탈취물을 최종적으로 무력화하는 방법은 외부 공급자 쪽 자격증명 교체뿐이다. ZeroPW는 실행 환경에 원본 키를 두지 않으므로 탈취 범위가 "사용 권한"으로 좁혀지지만, 공급자 쪽 교체는 여전히 관리자의 일이고 이 기능은 그 일을 빠짐없이 하도록 안내한다.
+Provider-side rotation is ultimately needed to invalidate abused credentials. ZeroPW narrows stolen material to usage capabilities by keeping original keys out of the runtime, but the administrator still performs provider-side rotation and reviews external activity. See the [dated 1Password comparison](#appendix-a-dated-1password-comparison).
 
-## 2. 시나리오와 가정
+## 2. Threat model
 
-**공격자가 가진 것.** 실행 환경의 모든 것: 호출 토큰(`zpwc_...`), 발급된 연결 핸들, 열려 있는 서명기 소켓, 게이트웨이 URL, 실행 디렉터리, 에이전트가 볼 수 있는 모든 업무 응답. 실행 환경의 root 권한도 가진다고 본다.
+The attacker may control the entire agent runtime, including root: caller tokens (`zpwc_...`), issued handles, open signer sockets, gateway URL, execution directories and all agent-visible business results.
 
-**공격자가 갖지 못한 것(설계상).** 원본 비밀, 상태 디렉터리, 관리자·복구 패스프레이즈, KMS 키, 감사 기록, 알림 발송 설정. 이는 신뢰 프로세스가 다른 신원·호스트에 있다는 [보안 경계](security-design.md) §1의 전제이며, 같은 호스트에 두 프로세스를 두는 현재 개발 구성에서는 성립하지 않는다([구현 현황](implementation.md) §9).
+The attacker must not control original secrets, trusted state, administrator/recovery passphrases, KMS keys, audit storage or notification configuration. This requires separate trusted identity/host boundaries. The same-host development setup does not establish it.
 
-**공격자의 행동.** 목표는 최대한 많은 자격증명과 접근 권한 확보다. 정상 에이전트와 구별되는 행동은 다음과 같다.
+Suspicious behavior includes:
 
-- 비밀값을 직접 달라는 요청: 존재하지 않는 도구 호출(`reveal_secret`, `export` 등), 상태 디렉터리 경로 탐색.
-- 핸들 위조·변조, 만료된 핸들 재사용, 권한이 없는 연결 ID 시도.
-- 서명기 오용: 키 추가·삭제·잠금 메시지, 임의 데이터 서명(`ssh-add -T`), forwarding 결합, 세션 결합 전 서명 요청.
-- 열거: `list_connections` 직후 권한이 있는 모든 연결을 짧은 시간에 한 번씩 사용.
-- 범위 밖 시도: 허용되지 않은 메서드·경로, 승인 없는 위험 메서드, 회수된 권한 사용.
-- 반출 시도: 실행 출력에 핸들이나 자격증명을 실어 보내기.
+- Requests for secret retrieval/export through nonexistent tools (`reveal_secret`, `export`) or trusted-state path probing.
+- Forged/malformed handles, expired-handle reuse and unauthorized connection IDs.
+- Signer key management, arbitrary signing (`ssh-add -T`), forwarding or signing before session binding.
+- Enumeration: first use of many permitted connections soon after listing them.
+- Out-of-scope methods/paths, risky operations without approval or use after revocation.
+- Output containing credentials or handles.
 
-**침해 유형.** 실행 환경 자체가 장악된 경우(멀웨어)와, 호출 주체 하나만 문제인 경우를 구분한다. 후자에는 유출된 토큰으로 밖에서 들어오는 외부 호출, 사용자가 운영하는 다른 에이전트의 침해 호출, 프롬프트 인젝션으로 폭주한 자기 에이전트가 모두 들어가며, 공격자는 토큰(과 새어 나간 핸들) 외에 아무것도 갖지 못한다. 전자에서는 위 "공격자가 가진 것" 전부를 갖는다. 구분 방법과 봉쇄 범위는 §4.3이다.
+Distinguish runtime malware from compromise of one caller token. The latter includes external use of a leaked token, another compromised agent or prompt-injected behavior by the user's agent; ZeroPW cannot distinguish those three. Such an attacker has the token and any leaked handles, not the entire runtime. Scope classification is in section 4.3.
 
-**범위 밖.** 신뢰 프로세스 호스트 자체의 침해는 자동 탐지 대상이 아니다. 공격자가 탐지기를 끌 수 있는 위치에 있기 때문이다. 이 경우는 관리자가 별도 호스트에서 수동으로 사건을 선언하며(§4), 노출 범위는 금고 전체로 판정한다(§5). 근본 대응은 관리형 KMS와 신뢰 프로세스의 분리 배포다.
+Trusted-host compromise is outside automatic detection: an attacker there can disable detection itself. A human declares it from a separate host; assess the entire vault and use managed KMS plus separately deployed trusted components as the underlying defense.
 
-## 3. 무엇이 탈취되고 무엇을 교체하는가
+## 3. Stolen material and rotation
 
-| 탈취물 | 성격 | ZeroPW가 스스로 하는 것 | 관리자가 해야 하는 것 |
+| Material | Meaning | Automatic response | Human response |
 | --- | --- | --- | --- |
-| 호출 토큰 | 호출 주체 신원 | 호출 주체 비활성화. 재개 뒤에도 되살리지 않는다. | 새 호출 주체를 만들고 실행 환경을 재구축한다. |
-| 연결 핸들 | 짧은 만료의 사용 권한 | 권한 회수로 무효(핸들은 권한에 묶인다). 실행 환경 범위 이상이면 핸들 키 교체로 전부 즉시 무효. | 없음. |
-| 서명기 소켓 | 실행 중인 사용 권한 | 소켓 닫기, 실행 취소. | 없음. |
-| 토큰 생성 이후 사용된 연결의 자격증명 | 원본은 나가지 않았지만 공격자가 그 자격증명으로 외부 서비스에 행위를 했을 수 있다. 응답으로 세션 토큰·목록·데이터를 받았을 수 있다. 봉쇄 전의 조용한 사용은 정당한 사용과 구별되지 않으므로 전부 의심한다. | 노출 판정에 "필수 교체"로 기록. | 공급자에서 폐기·재발급하고 금고 버전을 교체한다. 외부 서비스에서 일어난 행위를 검토한다. |
-| 사용된 SSH 연결 | 이미 인증된 원격 세션은 봉쇄로 끊기지 않는다. | 로컬 `ssh` 종료, 대상 서버와 키 지문을 기록. | 대상 서버에서 세션을 확인·종료하고 `authorized_keys`를 새 키로 교체한다. |
-| 침해된 호출 주체가 권한을 가졌으나 사용 기록이 없는 연결 | 감사 기록은 필수이므로 기록 없는 사용은 없다. 그 자격증명은 ZeroPW를 거쳐 나간 적이 없다. | "권장 교체"로 기록. | 판단 뒤 교체. |
-| 그 외 연결 | 침해된 호출 주체에 권한이 없었다. | "해당 없음". | 없음. |
+| Caller token | Principal identity | Disable permanently; resume does not revive it. | Create a new principal and rebuild the compromised runtime. |
+| Connection handle | Short-lived usage capability | Grant revocation invalidates bound handles; runtime/global handle-key rotation invalidates all handles. | None for the handle itself. |
+| Signer socket | Live usage capability | Close socket and cancel execution. | None for the socket itself. |
+| Credential for a connection used since token creation | Original value stayed trusted, but the attacker may have performed external actions or obtained sessions/data. Quiet abuse is indistinguishable from legitimate use. | Mark mandatory rotation. | Revoke/reissue at provider, rotate vault version and review provider activity. |
+| Used SSH connection | Existing authenticated remote work may survive containment. | End local client; record destination and public-key fingerprint. | Inspect/terminate server sessions and replace the key in `authorized_keys`. |
+| Granted connection without recorded use | Mandatory audit means there is no unaudited authentication through ZeroPW. | Mark recommended rotation. | Decide whether to rotate. |
+| Other connection | Compromised principal had no grant. | Not affected. | None. |
 
-신뢰 호스트 침해를 수동 선언하면 금고의 모든 활성 비밀이 "필수 교체"가 되고, 관리자·복구 패스프레이즈와 KMS 키 교체(`recover`)를 함께 안내한다.
+A manual trusted-host/global incident marks every active secret mandatory and requires KMS recovery plus administrator/recovery passphrase changes.
 
-## 4. 탐지와 봉쇄
+## 4. Detection and containment
 
-### 4.1 탐지기의 위치
+### 4.1 Detector placement
 
-탐지기는 `serve` 프로세스 안에서 감사 기록 스트림을 구독한다. 정책·실행 기록·서명기와 같은 프로세스에 있어야 봉쇄가 폴링 주기 없이 즉시 반영된다. 감사 기록은 이미 모든 필드가 허용 목록으로 걸러진 값 없는 데이터이므로 탐지기 입력으로 안전하다. 관리 CLI의 수동 선언은 별도 프로세스에서 상태 파일에 기록되고, `serve`가 기존 폴링(0.25초)으로 반영한다.
+The detector subscribes synchronously to sanitized audit events inside `serve`, alongside policy, run tracking and signer state. This allows immediate in-process containment without waiting for polling. Manual administrator declarations persist state from another process and are applied by the existing 0.25-second `serve` poll.
 
-### 4.2 판정 규칙
+### 4.2 Rules
 
-호출 주체별로 슬라이딩 창(기본 120초) 안의 신호를 본다. **강한 신호**는 정상 에이전트와 OpenSSH 클라이언트가 내지 않는 행동이라 임계 횟수에 도달하면 단독으로 봉쇄한다. **약한 신호**는 정상 사용에서도 드물게 나오므로 점수를 누적해 임계에 도달하면 봉쇄한다.
+Observe per-principal signals in a default 120-second sliding window. Strong signals are not expected from normal agents or supported OpenSSH clients and contain independently at their count threshold. Weak signals accumulate points because legitimate use can produce them.
 
-| 신호 | 근거가 되는 감사 기록 | 종류 | 기본 임계 |
+| Signal | Audit evidence | Strength | Default contribution/threshold |
 | --- | --- | --- | --- |
-| 미제공 도구 호출 | 신설 `tools_unknown` (거부, 도구 이름은 기록하지 않음) | 강함 | 2회 |
-| 핸들 위조·변조 | `http_relay` 거부 `handle_signature`, `handle_malformed`, `handle_version` | 강함 | 2회 |
-| 권한 없는 연결 사용 시도 | `tools_request`·`tools_exec` 거부 `no_grant`, `grant_unknown`, `connection_unknown` | 약함 | 2점 |
-| 서명기 키 관리·임의 서명·forwarding | `ssh_agent_refused` `unsupported_agent_message`, `unsupported_extension`; `ssh_bind` `agent_forwarding_not_allowed`; `ssh_sign` `not_userauth_request`, `no_session_bind`, `unsupported_sign_flags` | 강함 | 1회 |
-| 출력으로 자격증명·핸들 반출 시도 | `run_finish` `output_credential_blocked` | 강함 | 1회 |
-| 회수·정지된 권한 사용 시도 | 거부 사유 `grant_revoked`, `grant_stale`, `principal_disabled`. `global_stop`·`restore_pending`은 관리자가 켠 전역 상태라 모든 호출 주체가 똑같이 거부되므로 호출 주체별 근거가 되지 못해 제외한다 | 약함 | 3점 |
-| 범위 밖 메서드·경로, 승인 없는 위험 메서드 | `http_relay`·`tools_request` 거부 (범위·승인 사유) | 약함 | 1점 |
-| 만료 핸들 재사용 | `http_relay` 거부 `handle_expired` | 약함 | 1점 |
-| 열거 | 창 안에서 호출 주체가 권한을 가진 연결 중 처음 사용하는 연결의 수가 N개 이상(기본 4, 권한 연결 수의 절반 이상). "처음"은 `serve` 프로세스 안에서 그 호출 주체가 처음 쓰는 연결이다. 임계를 처음 넘을 때 한 번만 가산하고, 창이 지나 조건이 풀린 뒤에야 다시 가산한다 | 약함 | 4점 |
-| 속도 급증 | 창 안 요청 수(`tools_request`·`tools_exec`·`http_relay`)가 기본 60을 넘음. 처음 넘을 때 한 번만 가산한다. 상태 조회·핸들 발급·실행 기록은 세지 않는다 | 약함 | 2점 |
+| Unknown tool | `tools_unknown`, denied; do not record the submitted tool name. | Strong | 2 events |
+| Forged/malformed handle | `http_relay` denial: `handle_signature`, `handle_malformed`, `handle_version` | Strong | 2 events |
+| Unauthorized connection | `tools_request`/`tools_exec`: `no_grant`, `grant_unknown`, `connection_unknown` | Weak | 2 points |
+| Signer key management/arbitrary signing/forwarding | `ssh_agent_refused`: `unsupported_agent_message`, `unsupported_extension`; `ssh_bind`: `agent_forwarding_not_allowed`; `ssh_sign`: `not_userauth_request`, `no_session_bind`, `unsupported_sign_flags` | Strong | 1 event |
+| Credential/handle in execution output | `run_finish`: `output_credential_blocked` | Strong | 1 event |
+| Revoked/stale/disabled authority | `grant_revoked`, `grant_stale`, `principal_disabled`. Exclude `global_stop` and `restore_pending`: those administrator-wide states do not identify one principal. | Weak | 3 points |
+| Out-of-scope method/path or missing risky-operation approval | Scope/approval denials from `http_relay`/`tools_request` | Weak | 1 point |
+| Expired handle | `http_relay`: `handle_expired` | Weak | 1 point |
+| Enumeration | First-use connection count in the window reaches N (default 4) and at least half the principal's usable connections. First use is lifetime within this `serve` process. Add once on crossing; rearm after the window condition clears. | Weak | 4 points |
+| Request burst | More than default 60 `tools_request`/`tools_exec`/`http_relay` events in the window. Add once on crossing; exclude status polling, handle issuance and run records. | Weak | 2 points |
 
-약한 신호의 누적 점수가 8점에 도달하면 봉쇄한다. 유출된 핸들의 정상 범위 사용은 정당한 호출 주체의 사용과 구별되지 않는다. 핸들은 소지자 권한이므로 탐지가 아니라 봉쇄 시 핸들 키 교체로 다룬다. 호출 주체를 알 수 없는 신호(위조·변조·만료 핸들)는 전역으로 세고, 그로 인한 봉쇄는 모든 활성 호출 주체를 `principal` 범위로 비활성화한다. `all` 범위가 아니므로 전체 정지와 복구는 요구하지 않는다. 만료 핸들은 15분을 넘긴 실행의 CLI가 여러 번 호출할 때도 나오므로 오탐이 될 수 있다. 임계값은 설정으로 조정하되, 강한 신호를 끄는 설정은 두지 않는다. [제품 정의](product-intent.md)와 [하네스](harness.md) §1의 원칙대로 편의를 위해 보호를 완화하는 기본값을 택하지 않는다. 오탐의 비용은 관리자가 되돌릴 수 있는 정지이고, 미탐의 비용은 계속되는 탈취다.
+Contain at 8 weak-signal points. Legitimate-looking use of a stolen handle cannot be distinguished by detection; handle-key rotation addresses it during containment.
 
-**수동 선언.** `incident declare --scope principal --principal <id>`, `--scope runtime --runtime <id>`, `--scope all`로 관리자가 직접 사건을 연다. `--scope all`은 신뢰 호스트 침해용이며 관리자 패스프레이즈 재인증을 요구한다.
+Unattributed forged/malformed/expired-handle signals use a global bucket. Their containment disables all active principals under `principal` scope, not `all`, so it does not require global stop or vault recovery. Long-running CLI work past the default 15-minute handle lifetime can generate expired-handle false positives. Thresholds are configurable, but strong rules cannot be disabled. Preserve fail-closed defaults: false positives cause recoverable interruption; missed detection permits continued abuse.
 
-### 4.3 범위 판정
+Manual declarations use `incident declare --scope principal --principal ID`, `--scope runtime --runtime ID`, or `--scope all`. Global trusted-host declaration requires administrator reauthentication.
 
-봉쇄 범위는 침해 유형에 따라 다르다. 호출 주체는 생성할 때 실행 환경 ID에 묶인다(`principal create --runtime <id>`, 기본 `default`). 실행 환경은 에이전트가 도는 호스트나 컨테이너 하나를 뜻하며, 프로젝트의 dev·staging·prod 환경과는 다른 개념이다.
+### 4.3 Scope classification
 
-| 판정 | 근거 | 범위 |
+A principal is associated at creation with `--runtime ID` (default `default`). A runtime is an agent host/container, distinct from a project's dev/staging/prod environment.
+
+| Classification | Evidence | Scope |
 | --- | --- | --- |
-| 호출 주체 침해 | HTTP 도구·중계 경로만으로 낼 수 있는 신호. 유출된 토큰의 외부 호출, 다른 에이전트의 침해 호출, 프롬프트 인젝션으로 폭주한 자기 에이전트가 모두 여기이며 ZeroPW는 이 셋을 구별하지 못한다. | `principal`: 그 호출 주체 하나 |
-| 실행 환경 침해(멀웨어) | 실행 환경 안에 있어야만 낼 수 있는 신호: 서명기 소켓 오용, 실행 출력 반출 시도, 또는 같은 실행 환경의 둘 이상 호출 주체에서 온 신호. | `runtime`: 그 실행 환경에 묶인 모든 호출 주체 |
-| 신뢰 호스트 침해 | 자동 판정 없음. 관리자 수동 선언. | `all`: 모든 호출 주체와 정지 |
+| Caller compromise | Signals possible using only HTTP tools/relay: leaked-token use, another compromised agent or prompt injection. | `principal`: the affected caller |
+| Runtime compromise | Signer-socket misuse, execution-output exfiltration, or signals from at least two principals in one runtime. | `runtime`: every principal in that runtime |
+| Trusted-host compromise | Human declaration only. | `all`: every principal and global stop |
 
-`principal` 범위는 공격자가 가진 유일한 자격인 토큰을 끊는 것이므로 좁아도 열린 경로가 남지 않는다. 남는 위험은 실행 환경에 멀웨어가 있는데 관리자가 같은 환경에 새 호출 주체를 만드는 경우다. 이메일이 이를 경고하고, 관리자는 `incident escalate --id <id> --scope runtime|all`로 범위를 넓힐 수 있다. 사건이 열린 뒤 더 넓은 범위에 해당하는 신호가 오면 자동으로 넓힌다. 자동이든 수동이든 범위를 좁히는 경로는 없다.
+Principal containment removes the token authority, but malware may remain if the administrator recreates an identity on the same compromised runtime. The email warns against this and explains `incident escalate --id ID --scope runtime|all`. Wider subsequent signals also widen an open incident automatically. There is no scope-narrowing path.
 
-**호출 출처.** 게이트웨이가 루프백이 아닌 주소에서 수신하는 배포 구성에서는 호출 주체마다 처음 인증한 출처 주소를 기록하고, 다른 출처에서 온 신호는 사건에 `외부 출처`로 표시한다. 토큰이 실행 환경 밖으로 샜다는 뜻이므로 이메일에 그 사실과 새 출처를 적는다. 현재 `serve`는 루프백만 허용하므로 출처는 항상 같고, 이 표시는 배포 뒤에 의미를 갖는다.
+Origin tracking is future deployment work: record each principal's first authenticated source address and identify suspicious events from a different address as external-origin use. Current `serve` is loopback-only, so this signal has no useful deployment meaning and stage 6 is unimplemented.
 
-### 4.4 봉쇄 절차
+### 4.4 Containment order
 
-사건이 열리면 다음을 이 순서로 수행한다. 각 단계는 멱등이고, 실패해도 다음 단계로 진행한다. 봉쇄는 거부 방향이므로 감사 기록 실패가 봉쇄를 막지 않는다. 실패한 단계는 사건 기록에 남기고 다음 폴링에서 재시도한다.
+Each step is idempotent. Failure must not prevent subsequent denial steps; record failed steps and retry on polling. Audit failure must not prevent containment.
 
-1. 사건 ID·범위·판정 근거를 제어 문서에 `incident_open`으로 기록한다. 이 플래그가 켜져 있으면 범위와 무관하게 `resume`은 거부된다.
-2. `all`이거나, `runtime` 범위의 실행 환경이 활성 호출 주체 전부를 담고 있으면 `stop_all`. 단일 쓰기로 가장 빨리 효과가 난다. 그 밖의 경우는 정지하지 않고 범위 밖 호출 주체는 계속 동작한다.
-3. 범위 안 호출 주체 `disable_principal`: 토큰이 영구 무효가 된다.
-4. 범위 안 호출 주체의 권한 전부 회수. 핸들은 권한에 묶여 있으므로 회수된 권한의 핸들은 검증에서 떨어진다.
-5. `runtime`·`all`이면 `rotate_handle_key`: 그 실행 환경에서 발급된 어떤 핸들도 탈취됐을 수 있으므로 전부 무효로 만든다. 핸들 키는 하나뿐이라 교체는 범위 밖 호출 주체의 핸들도 함께 무효로 만든다. `principal`이면 하지 않는다. 회수된 권한의 핸들은 이미 검증에서 떨어지고, 범위 밖 호출 주체의 진행 중 실행을 깨지 않기 위해서다.
-6. 범위 안 실행 취소와 서명기 소켓 닫기. 같은 프로세스의 회수 알림으로 즉시 일어나며, 취소된 실행 수와 닫힌 소켓 수를 사건 기록에 남긴다.
-7. 노출 판정(§5)을 만들어 `incidents/<id>.json`에 쓴다.
-8. 알림(§6)을 보낸다. 실패하면 `notification: pending`으로 두고 재시도한다.
-9. 감사 기록 `incident_open`(사유, 범위, 호출 주체, 규칙)과 알림 `intrusion`을 남긴다.
+1. Persist incident ID, scope and evidence as `incident_open` in control state. Any open incident blocks `resume`, regardless of scope.
+2. Stop globally for `all`, or for `runtime` when its scope includes every active principal. Otherwise callers outside scope continue.
+3. Disable affected principals permanently.
+4. Revoke all affected grants; bound handles fail validation.
+5. For `runtime`/`all`, rotate the single handle key. This also invalidates handles outside scope. Do not rotate it for `principal`: grant revocation already rejects affected handles and unrelated runs should continue.
+6. Cancel affected runs and close signer sockets through in-process revocation callbacks. Record cancellation/socket counts.
+7. Compute assessment and write `incidents/ID.json`.
+8. Send notification; failures become `pending` retries.
+9. Record `incident_open` and an `intrusion` alert with sanitized reason, scope, principals and rule.
 
-봉쇄 중 추가로 들어오는 신호는 같은 사건에 누적한다. 범위가 넓어지는 신호면 3–6단계를 새 범위에 다시 적용하고 노출 판정과 이메일을 갱신해 한 통 더 보낸다. 그 밖에는 새 사건이나 새 이메일을 만들지 않는다. 사건이 닫힌 뒤의 신호는 새 사건이다.
+Further signals accumulate in the same open incident. Widening reapplies steps 3–6 to the new scope, updates assessment and sends a revised email. Other signals do not create duplicate incidents/emails. Signals after closure open a new incident.
 
-## 5. 노출 판정
+## 5. Exposure assessment
 
-판정은 감사 기록만으로 만든다. 값·헤더·본문은 감사 기록에 없으므로 판정에도 없다.
+Use audit evidence only: no values, headers or bodies enter assessment. For each affected principal, start at its token creation, without a narrowing time window. A connection is used if `http_relay` or `ssh_sign` succeeded, or `run_start` occurred, after that point. Quiet pre-detection abuse cannot be separated from legitimate use. Merge assessments across affected principals using each one's creation time.
 
-**시작점.** 범위 안 호출 주체의 토큰 생성 시각이다. 그 이후 `http_relay`·`ssh_sign`이 `ok`였거나 `run_start`가 있었던 연결이 "사용됨"이다. 시간 창은 두지 않는다. 봉쇄는 공격자가 눈에 띄는 행동을 한 순간에 일어나지만, 그 전에 공격자가 정상 범위 안에서 조용히 쓴 사용은 감사 기록에 남아도 정당한 사용과 구별할 수 없다. 사건이 열렸다는 것은 실제 침해를 전제한다는 뜻이므로 토큰이 존재한 기간 전체를 의심한다. 범위 안 호출 주체가 여럿이면 각각의 토큰 생성 시각부터 판정해 합친다.
+For example, a token created September 1 and contained September 15 makes every connection used in that period mandatory, including one last used September 5. An unused granted connection is recommended. Include first/last use and counts so the administrator can prioritize. There is no setting to narrow assessment; short principal lifetimes reduce its span.
 
-예를 들어 `agent-1`의 토큰이 9월 1일에 만들어졌고 9월 15일에 봉쇄됐다면, 그 사이 한 번이라도 사용된 `gh`, `aws-dev`, 그리고 9월 5일이 마지막 사용인 `slack`까지 셋 다 필수 교체다. 권한만 있고 한 번도 쓰지 않은 `jira`는 권장 교체다. 이메일에는 연결별 첫·마지막 사용 시각과 사용 횟수가 실려 관리자가 순서를 정할 수 있다. 판정을 좁히는 설정은 두지 않는다. 오래된 호출 주체일수록 교체 범위가 넓어지므로, 호출 주체를 주기적으로 재생성해 토큰 수명을 짧게 두는 것이 노출 범위를 좁히는 운영 방법이다.
-
-**등급.**
-
-| 등급 | 조건 | 안내 |
+| Tier | Condition | Guidance |
 | --- | --- | --- |
-| 필수 교체 | 토큰 생성 이후 사용된 연결의 자격증명 | 공급자 폐기·재발급, 금고 교체, 외부 서비스에서의 행위 검토 |
-| 권장 교체 | 침해된 호출 주체가 활성·stale 권한을 가졌으나 사용 기록이 없는 연결 | 관리자 판단 뒤 교체 |
-| 해당 없음 | 나머지 | 없음 |
-| 전체 | `--scope all` | 모든 활성 비밀이 필수. `recover`와 패스프레이즈 교체 안내 추가 |
+| Mandatory | Credential of a connection used since token creation. | Provider revoke/reissue, vault rotation and external activity review. |
+| Recommended | Active/stale grant without recorded use. | Administrator decision. |
+| Not affected | Other connections. | None. |
+| Global | `--scope all` | All active secrets mandatory; include recovery and passphrase changes. |
 
-**비밀별 기록 항목.** 비밀 ID, 종류(`api_key`·`password`·`env`·`ssh_private_key`), 프로젝트·환경, 서비스 이름, 사용한 연결 ID들, 대상(호스트·포트), 첫·마지막 사용 시각, 사용 횟수, 현재 활성 버전 번호. SSH 키는 공개키 지문과 사용자 이름을 더한다. 사건 파일은 `values_for_trusted_scan`으로 금고의 모든 값(모든 버전)과 대조해 값이 없음을 확인한 뒤에만 쓴다.
+Record secret ID/kind, project/environment, service, connection IDs, destinations, first/last use, count and active version. SSH adds public-key fingerprint and username. Validate incident files with `values_for_trusted_scan` against all vault values/versions before writing. Kind names in the original design include `env`; the implemented storage kind is `env_var`.
 
-## 6. 교체 안내 이메일
+## 6. Rotation email
 
-### 6.1 발송 경로
+### 6.1 Transport
 
-발송은 신뢰 프로세스 `serve`가 내장 SMTP 클라이언트(`rust/src/smtp.rs`)로 한다. SMTP 서버·포트·발신자·수신자·TLS 방식은 상태 디렉터리의 `notify.json`(0600, 현재 사용자 소유)에, SMTP 비밀번호는 별도 파일(0600) 경로로 지정한다. 항목은 `host`, `port`, `mode`(`starttls`·`smtps`, 시험용 `plain`은 루프백 주소에만 허용), `username`, `password_file`, `sender`, `recipients`, `timeout_seconds`다. TLS는 인증서 검증을 끌 수 없다. 설정 파일이 잘못되었거나 권한이 느슨하면 발송 실패와 같이 `pending`으로 두고 재시도한다. `incident notify-test`로 설정을 확인할 수 있다. 이 자격증명은 [제품 정의](product-intent.md) §4가 말하는 ZeroPW 자신의 기반 권한이며 업무용 연결이나 금고 비밀로 등록하지 않는다. 에이전트 프로세스는 이 파일들에 닿지 못한다.
+`serve` sends using the built-in client in `rust/src/smtp.rs`. State-local `notify.json` must be 0600 and owned by the current user; the SMTP password is a separate 0600 file. Configuration keys are `host`, `port`, `mode`, `username`, `password_file`, `sender`, `recipients`, `timeout_seconds`. Support verified STARTTLS or SMTPS. Test-only `plain` is allowed only on loopback; TLS verification cannot be disabled.
 
-설정이 없으면 이메일 없이 봉쇄만 하고, 사건 기록과 `serve` 표준 오류, `alerts`에 `notification: not_configured`를 남긴다. 발송 실패는 `pending`으로 두고 폴링 주기마다 지수 백오프로 재시도하며, 사건이 닫힐 때까지 계속한다. 이메일은 알림이지 인증 채널이 아니다. 이메일 없이도 봉쇄는 완전하다.
+Invalid or loose-permission configuration becomes `pending`, like delivery failure. `incident notify-test` checks setup. SMTP credentials are ZeroPW bootstrap authority, never business connections or vault entries, and must not be accessible to the agent.
 
-### 6.2 내용
+Absent configuration records `not_configured` in incident state, stderr and alerts while containment still completes. Failed delivery retries on polling with exponential backoff until incident closure. Email is notification, not authentication; containment does not depend on it.
 
-제목: `[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 <id>)`
+### 6.2 Content
 
-본문은 한국어 평문이며 다음 순서다.
+The current English subject is `[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident ID)`. English plain-text guidance preserves the original six-section contract:
 
-1. **무슨 일이 있었나.** 사건 시각, 범위와 판정 근거, 침해된 호출 주체 ID와 토큰 생성 시각, 판정 규칙과 신호 요약(횟수만).
-2. **ZeroPW가 이미 한 것.** 전체 정지, 호출 주체 비활성화, 회수한 권한 수, 핸들 무효화, 취소한 실행 수, 닫은 소켓 수.
-3. **지금 해야 할 것 — 필수 교체.** 비밀마다 한 블록. 종류별 절차:
-   - `api_key`·`env`: 공급자 콘솔에서 폐기·재발급 → `rotation start` → `rotation activate` → `rotation finish`. 공급자 감사 로그에서 토큰 생성 이후의 행위 검토.
-   - `password`(Basic): 서비스에서 비밀번호 변경 → 같은 교체 절차. 활성 세션 종료.
-   - `ssh_private_key`: 새 키 생성 → 대상 서버마다 `authorized_keys`에서 지문 `<fp>`인 키 제거·교체 → 서버에서 활성 세션 확인·종료(`who`, `ss -tnp`) → 금고 교체.
-4. **권장 교체.** 목록과 이유.
-5. **실행 환경.** `runtime`·`all` 범위면 침해된 호스트를 폐기·재구축하라고 안내한다. `principal` 범위면 실행 환경 침해를 배제할 수 없다면 새 호출 주체를 만들기 전에 재구축하고 `incident escalate`로 범위를 넓히라고 경고한다. 기존 토큰은 되살아나지 않는다.
-6. **복구 명령.** `incident show --id <id>` → 교체 완료 → `incident close --id <id>` → `principal create --runtime <id>` · `grant create` → `resume`.
+1. Incident time, scope, detection evidence/rule, affected IDs and token creation times; signal summaries contain counts only.
+2. Completed actions: global stop, disabled principals, revoked grants, handle-key rotation, cancelled runs and closed sockets.
+3. Mandatory rotation by secret kind:
+   - API/environment keys: provider revoke/reissue, then `rotation start` → `rotation activate` → `rotation finish`; review provider activity since token creation.
+   - Basic passwords: change at provider, rotate vault version and terminate service sessions.
+   - SSH keys: generate a new key, replace the fingerprint in each server's `authorized_keys`, inspect/terminate sessions (`who`, `ss -tnp`), then rotate the vault version.
+4. Recommended rotation list and reasons.
+5. Rebuild instructions for runtime/global compromise; principal scope warns to rebuild/escalate if malware cannot be excluded. Old tokens never revive.
+6. `incident show`, complete rotations, `incident close`, create new principal/grants and `resume`.
 
-본문에 링크를 넣지 않는다. 관리자가 실행할 명령만 적는다. 에이전트가 정한 문자열(경로, 헤더, 요청 ID, 인자)은 어떤 형태로도 넣지 않는다. 연결 ID·서비스 이름·비밀 ID는 관리자가 정한 값이며 감사 기록의 정제를 거친 것만 쓴다. 값·헤더·본문·핸들·토큰은 넣지 않는다. 렌더링 결과는 사건 파일과 같은 값 대조를 통과해야 발송된다.
+Do not include links or agent-selected paths, headers, request IDs or arguments. Only sanitized administrator-defined IDs/service names are allowed. Never include values, bodies, headers, handles or tokens. The rendered email must pass the same all-version secret scan before sending. Historical Korean fixtures remain unchanged; English golden output is tested separately.
 
-## 7. 복구 절차
+## 7. Recovery
 
-1. 관리자가 별도 호스트에서 `incident show --id <id>`로 사건과 노출 판정을 본다. `alerts`와 `audit tail`로 상황을 확인한다.
-2. 필수 교체를 공급자 쪽부터 수행한다. 금고 쪽 교체는 기존 `rotation` 명령이다. SSH는 대상 서버의 세션·`authorized_keys`까지 처리한다.
-3. `runtime`·`all` 범위면 침해된 실행 환경을 폐기하고 새로 만든다. `principal` 범위면 실행 환경 침해를 배제할 수 있을 때만 같은 환경을 유지하고, 배제할 수 없으면 `incident escalate`로 범위를 넓힌 뒤 재구축한다.
-4. `incident close --id <id>`: 관리자 패스프레이즈 재인증. 닫기는 정지를 풀지 않는다.
-5. `principal create --runtime <id>`, `grant create`로 새 호출 주체와 권한을 만든다. 비활성화된 호출 주체는 그대로 둔다.
-6. 정지된 경우 `resume`으로 푼다. 열린 사건이 있으면 거부된다.
+1. A human on a separate host inspects `incident show`, alerts and audit.
+2. Perform mandatory provider-side rotation first, then vault rotation. SSH requires server sessions and `authorized_keys` changes too.
+3. Rebuild affected runtimes for `runtime`/`all`. Keep the runtime for principal-only incidents only when runtime compromise can be excluded; otherwise escalate and rebuild.
+4. Close the incident with administrator reauthentication. Closure does not lift global stop.
+5. Create new principals and grants; leave disabled old principals disabled.
+6. Resume if stopped. An open incident rejects resume.
 
-`--scope all` 사건은 4번 전에 `recover`(새 KMS 키, 권한 전부 회수, 핸들 키 교체)와 관리자·복구 패스프레이즈 변경을 요구한다.
+Before closing a global incident, use `recover` for a new KMS key, grant revocation and handle-key rotation, and change both administrator and recovery passphrases.
 
-## 8. 하지 않는 것과 한계
+## 8. Limits
 
-- **신뢰 호스트 침해는 탐지하지 못한다.** 공격자가 탐지기·감사·알림을 끌 수 있다. 수동 선언과 분리 배포로 다룬다.
-- **이미 일어난 일은 되돌리지 못한다.** 외부 서비스가 처리한 요청, 이미 인증된 SSH 세션의 원격 명령은 [보안 경계](security-design.md) §5의 한계 그대로다. 이메일이 그 확인을 안내할 뿐이다.
-- **가용성 공격.** 호출 토큰을 가진 누구나 강한 신호를 내서 정지를 유발할 수 있다. 이는 의도된 fail-closed다. 자동 재개는 없다.
-- **범위 오판.** 멀웨어가 HTTP 경로만 쓰면 호출 주체 침해로 보인다. 그 경우 토큰은 끊기지만 멀웨어는 남는다. 이메일이 재구축 전 새 호출 주체 생성을 경고하고, 관리자는 범위를 넓힐 수 있다. 반대 방향의 오판(호출 주체 침해를 실행 환경 침해로)은 봉쇄가 넓어질 뿐이다.
-- **오탐.** 정상 에이전트가 없는 도구 이름을 지어내거나 잘린 핸들을 보낼 수 있다. 강한 신호의 임계를 2회로 둔 이유다. 정지는 되돌릴 수 있다.
-- **교체 부담.** 토큰 생성 이후 사용된 모든 연결이 필수이므로 오래된 호출 주체일수록 교체 범위가 넓다. 실제 침해가 확실하다는 전제의 선택이며 좁히는 설정은 없다. 호출 주체 재생성 주기로 다룬다(§5).
-- **공급자 쪽 교체는 수동이다.** 자동 교체는 [제품 정의](product-intent.md)의 후속 범위이며 이 기능의 안내 블록이 그 자리에 들어갈 준비다.
-- **SMTP 자격증명은 새 기반 비밀이다.** 발송 계정은 알림 전용으로 만들고 다른 권한을 주지 않는다.
-- **이메일은 유실될 수 있다.** 사건 기록·`alerts`·`serve` 표준 오류가 원본이고 이메일은 사본이다.
+- Trusted-host compromise cannot be automatically detected where the attacker can disable detector/audit/notification. Use separate deployment and human declaration.
+- Already-processed external actions and authenticated SSH remote work cannot be undone; email tells the administrator what to inspect.
+- A stolen caller token can deliberately trigger containment: this is fail-closed denial of service. There is no automatic resume.
+- HTTP-only malware can look like principal compromise. Tokens are removed, but malware may remain; rebuild/escalate guidance is essential. Misclassification in the opposite direction only broadens containment.
+- Normal agents can invent tool names or send truncated handles; thresholds permit two unknown-tool/handle-forgery events before containment.
+- Older principals imply more mandatory rotations. There is no narrowing assessment setting; replace identities periodically.
+- Provider-side automatic rotation remains future scope.
+- SMTP is additional bootstrap authority; use an alert-only account without other permissions.
+- Email can be lost. Incident state, alerts and stderr are authoritative; email is a copy.
 
-## 9. 구현 계획
+## 9. Implementation stages
 
-단계 1–5는 2026-09-16 Python 프로토타입으로 먼저 구현했고, 이후 같은 범위를 Rust로 옮겼다(2026-10-03 프로토타입 제거). 아래 모듈(`rust/src/`)과 시험(`rust/tests/<대상>.rs`, 각 모듈의 단위 시험)은 현재 Rust 구현 기준이다. 합성 자격증명과 시험용 서버로만 검증했다. 단계 6은 배포 작업과 함께 진행하며 미구현이다.
+Stages 1–5 were implemented in the 2026-09-16 Python prototype and ported to Rust before prototype removal on 2026-10-03. Paths below refer to `rust/src/` and integration targets under `rust/tests/`. Stage 6 remains future deployment work.
 
-### 단계 1 — 사건 기록과 수동 봉쇄
+### Stage 1: incident state and manual containment
 
-- `incident.rs`: `Incident` 모델(범위, 판정 근거, 범위 안 호출 주체 목록), `open_incident(ctx, trigger, scope, principals)`가 §4.4의 1–6·9단계를 범위에 맞게 수행. `widen_incident`로 넓히기만 허용. `incidents/<id>.json` 저장. `close_incident`.
-- `policy.rs`: 호출 주체에 `runtime` 필드(`principal create --runtime <id>`, 기본 `default`)와 `principals_in_runtime`. 제어 문서에 `incident_open`, `resume`이 열린 사건에서 `InvalidInput("incident_open")`으로 거부. `revoke_grants_of(principal_id)`.
-- `audit.rs`: 이벤트 `incident_open`, `incident_widen`, `incident_close`, `incident_notify`, `tools_unknown`. 추가 키 `incident_id`, `scope`, `runtime`, `rule`, `tier`.
-- `server.rs`·`tools.rs`: 미제공 도구 이름을 `tools_unknown` 거부로 기록(이름은 기록하지 않음).
-- `admin_cli.rs`: `incident declare|escalate|list|show|close`, `principal create --runtime`. `serve` 폴링에서 다른 프로세스가 연 사건을 감지해 범위에 맞는 3–6단계를 적용.
-- 시험 `response`, `native_response_cli`: 범위별 봉쇄(`principal` 범위에서 다른 호출 주체의 실행과 핸들이 살아 있음, `runtime` 범위에서 같은 실행 환경의 다른 호출 주체까지 비활성화되고 핸들 키가 바뀜, 활성 호출 주체가 전부 범위 안이면 `stop_all`), 순서와 멱등성, `escalate`로 넓히기와 좁히기 거부, 열린 사건에서 `resume` 거부, 비활성화된 호출 주체가 재개 뒤에도 인증 실패, 별도 `Context`에서 선언 시 실행 취소·소켓 닫기, 감사 실패 시에도 봉쇄 유지.
+`incident.rs` provides `Incident`, `open_incident`, widening-only `widen_incident`, persisted incident state and closure. `policy.rs` associates runtimes, finds runtime principals, records `incident_open`, rejects resume with `InvalidInput("incident_open")`, and revokes a principal's grants. `audit.rs` permits incident open/widen/close/notify and unknown-tool events plus sanitized `incident_id`, `scope`, `runtime`, `rule`, `tier`. Server/tools record unknown-tool denial without submitted names. Administrator CLI provides declare/escalate/list/show/close and runtime association; polling applies cross-process declarations.
 
-### 단계 2 — 노출 판정
+`response` and `native_response_cli` cover scope-specific containment, preservation of unrelated principal handles/runs, runtime invalidation, global stop when all active principals are covered, order/idempotence, widening and rejected narrowing, resume rejection, permanent disabled identities, cross-context cancellation/socket closure and containment despite audit failure.
 
-- `incident.rs`: `assess(ctx, principals)`가 각 호출 주체의 토큰 생성 시각부터 감사 기록을 읽어 §5의 등급표를 만든다. 연결별 첫·마지막 사용 시각과 횟수, SSH 지문·대상 포함.
-- 시험: 합성 감사 기록으로 등급 판정(사용됨은 필수, 권한만 있으면 권장, 나머지는 해당 없음), 여러 호출 주체의 합산, `--scope all` 승격, 사건 파일에 금고 값(모든 버전, 원문·base64·16진수)이 없음.
+### Stage 2: exposure assessment
 
-### 단계 3 — 자동 탐지
+`incident.rs::assess` reads audit since each principal's creation. Tests cover used/held/unaffected tiers, merging principals, global promotion, SSH fingerprints/destinations, first/last use/counts and absence of all-version plaintext/base64/hex values in incident state.
 
-- `audit.rs`: `subscribe(listener)`로 기록 직후 동기 호출. 리스너 예외는 기록을 막지 않는다.
-- `intrusion.rs`: `Detector`가 §4.2 규칙표를 구현. 호출 주체별 창, 강한 신호 카운터, 약한 신호 점수, 열거 판정(사용 가능한 연결 집합 대비 처음 사용 수). 규칙마다 필요한 접근 위치(HTTP 경로 / 실행 환경)를 표시해 §4.3의 범위를 판정하고, 같은 실행 환경의 둘 이상 호출 주체에서 신호가 오면 `runtime`으로 올린다. 임계 도달 시 `open_incident`, 열린 사건에 더 넓은 범위의 신호가 오면 `widen_incident`.
-- `context.rs`: `Config`에 임계값과 탐지 창 길이(§4.2의 슬라이딩 창).
-- `serve`에서 설치. 사건이 열려 있는 동안은 누적만 한다.
-- 시험 `response`, `response_contract`(규칙표): 강한 신호별 봉쇄, 약한 신호 누적, 정상 2요청 흐름과 `native_cli_e2e`의 흐름이 봉쇄를 일으키지 않음, 열거 판정, 범위 판정(HTTP 신호만이면 `principal`, 서명기·출력 신호면 `runtime`, 같은 실행 환경의 두 호출 주체면 `runtime`, 자동 확대는 되고 축소는 없음), 봉쇄가 같은 `record` 호출 안에서 완료됨(다음 요청은 이미 거부), 임계값 설정 반영, 강한 신호를 끄는 설정 부재.
+### Stage 3: automatic detection
 
-### 단계 4 — 이메일 알림
+Audit subscription invokes listeners synchronously after recording; listener exceptions do not block audit. `intrusion.rs::Detector` implements windows, strong counts, weak scores, first-use enumeration, request burst and signal-access classification. Two affected principals in a runtime escalate to runtime scope. Crossed thresholds open incidents; wider signals widen existing incidents. `context.rs::Config` exposes allowed thresholds/window settings; `serve` installs detection.
 
-- `notify.rs`, `smtp.rs`: `NotifyConfig` 로더(`notify.json`, 비밀번호 파일, 권한 검사), `render_incident_email` 순수 함수, SMTP 발송(STARTTLS 또는 SMTPS, 인증서 검증), 실패 시 `pending`과 백오프.
-- `serve` 폴링에서 `pending` 알림 재시도.
-- 시험 `response`, `native_response_cli`, `astra_response_*`: 렌더링 결과에 값·핸들·토큰·에이전트 문자열 부재, 종류별 안내 블록, 미설정 시 `not_configured`, 발송 실패 시 `pending`과 재시도. 시험 전용 최소 SMTP 수신 서버(`rust/tests/native_e2e`의 `FakeSmtp`, TLS 없이 127.0.0.1)를 쓴다.
+`response`, `response_contract` and native CLI E2E cover every strong rule, weak accumulation, non-triggering normal usage/status polling, enumeration, scope/widening, synchronous containment within `record`, configuration validation and the inability to disable strong rules.
 
-### 단계 5 — 종단 시험과 문서
+### Stage 4: notification
 
-- `native_cli_e2e::test_auto_lockdown_exposure_assessment_email_and_recovery`: 별도 프로세스의 공격자가 열거·핸들 변조·미제공 도구 호출을 하면 `serve`가 봉쇄하고, 시험용 SMTP 서버가 이메일을 받고, `resume`이 거부되고, `incident close` 뒤 새 호출 주체로 재개되는 흐름.
-- `demo.rs`(`zeropw-demo`): "침입 시뮬레이션" 단계.
-- `docs/implementation.md`: 구현 범위·한계·수용 시험 대응표 갱신.
-- 제품 문서 개정 제안(사용자 승인 대상, 이 계획이 직접 편집하지 않음): [제품 정의](product-intent.md) §4 "사용 기록·알림"에 자동 봉쇄와 교체 안내 추가, [보안 경계](security-design.md) §5에 침입 판정·범위와 사건 닫기 전 재개 금지, §7 수용 시험에 "침입 시 자동 봉쇄와 노출 판정" 행 추가.
+`notify.rs` and `smtp.rs` load protected configuration/password files, render guidance, deliver verified TLS and track pending/backoff. `serve` retries pending notifications. `response`, native response CLI and adversarial response targets cover leakage-free rendering, kind-specific guidance, absent settings, failures/retries and scripted loopback SMTP.
 
-### 단계 6 — 호출 출처 기록 (배포 구성과 함께)
+### Stage 5: E2E and documentation
 
-- 감사 기록 추가 키 `origin`(주소만, 포트 없음), 호출 주체 문서에 `first_origin`, 다른 출처에서 온 신호를 사건에 `외부 출처`로 표시하고 이메일에 적는다.
-- `serve`의 루프백 제한을 푸는 것은 신뢰 프로세스 분리 배포의 일부이며 이 계획 밖이다. 이 단계는 그 배포 작업과 함께 진행한다.
+`native_cli_e2e::test_auto_lockdown_exposure_assessment_email_and_recovery` exercises separate-process attacks, containment, SMTP receipt, refused resume and recovery with a new caller. The demo includes intrusion simulation. Implementation records describe tested scope and limits.
 
-### 결정 기록
+The original plan proposed product/security documentation changes for human approval; implementation of this plan did not itself authorize broader product scope or relax security requirements.
 
-2026-09-16 사용자 결정.
+### Stage 6: origin tracking
 
-| 항목 | 결정 |
-| --- | --- |
-| 자동 봉쇄 범위 | 침해 유형에 따른다. 호출 주체 침해는 `principal`, 실행 환경 침해(멀웨어)는 `runtime`, 신뢰 호스트 침해는 수동 `all`. 판정 규칙은 §4.3, 절차는 §4.4. |
-| 강한 신호 임계 | 미제공 도구·핸들 변조 2회, 나머지 1회. |
-| 발송 경로 | SMTP 직접 발송(`smtp.rs`). |
-| 노출 판정 | 시간 창 없음. 범위 안 호출 주체의 토큰 생성 이후 사용된 모든 연결이 필수 교체, 권한만 있고 사용 없는 연결은 권장. 사건이 열렸다면 실제 침해를 전제하므로 좁히지 않는다. §5. |
+Add sanitized address-only `origin` to audit, `first_origin` to principals and external-origin signals to incident/email. Removing loopback-only tool listening belongs to separate trusted-service deployment work, not this response plan.
 
-## 부록 A. 1Password 비교
+## Decision record
 
-2026-09-15 조사. 1Password는 완전히 장악된 기기에서는 어떤 도구도 비밀을 지킬 수 없다고 명시하고, 대응을 노출 최소화·회수와 재발급·접근 전 기기 검증으로 나눈다. 침해 후 절차는 Secret Key 재생성과 기기 해제이며, 로컬에 키셋을 확보한 공격자는 이후 암호화 데이터를 계속 복호화할 수 있다는 한계를 스스로 적었다. 최종 해결은 금고 안 자격증명의 교체이고 이는 사용자의 수동 작업이다. 자동화용 Service Account 토큰은 키셋 전체를 담아 침해 시 허용 금고 전체가 열린다.
+The 2026-09-16 user decision selected type-dependent principal/runtime/manual-global scope; two events for unknown-tool/forged-handle strong rules and one for other strong rules; direct SMTP; and mandatory rotation for every used connection since token creation, with recommended rotation for held-but-unused grants and no narrowing time window.
 
-ZeroPW는 실행 환경에 원본 키를 두지 않아 탈취물이 사용 권한으로 좁혀진다. 이 문서는 1Password의 "회수와 재발급"에 해당하는 절차를 자동화하고, 1Password가 사용자에게 맡긴 "무엇을 교체할지"를 감사 기록으로 판정해 안내하는 것이다. 1Password의 기기 검증(Device Trust)에 해당하는 것은 ZeroPW 모델에서 실행 환경을 처음부터 적대적으로 취급하는 설계 자체다.
+## Appendix A. Dated 1Password comparison
+
+The 2026-09-15 research found that a fully compromised device cannot be made safe by a secrets tool alone. The referenced 1Password materials describe exposure reduction, revocation/reissue, device verification, Secret Key regeneration and device deauthorization, while acknowledging previously acquired key material can retain access to ciphertext. Credential rotation remains the user's work. Service-account token compromise can expose its permitted vaults.
+
+ZeroPW instead keeps original keys out of the agent runtime and automates containment plus audit-based rotation guidance. This comparison is historical design context, not a claim about currently shipping features of another product.
 
 - [1Password Security Design White Paper, Appendix A](https://agilebits.github.io/security-design/leopard.html)
-- [How 1Password protects information on your devices (and when it can't)](https://1password.com/blog/local-threats-device-protections)
-- [If your device was lost or stolen](https://support.1password.com/lost-device/)
-- [About 1Password SSH Agent security](https://www.1password.dev/ssh/agent/security)
-- [1Password Service Account security](https://www.1password.dev/service-accounts/security/)
-- [1Password Device Trust](https://1password.com/product/device-trust)
+- [Local threats and device protections](https://1password.com/blog/local-threats-device-protections)
+- [Lost or stolen device](https://support.1password.com/lost-device/)
+- [SSH agent security](https://www.1password.dev/ssh/agent/security)
+- [Service-account security](https://www.1password.dev/service-accounts/security/)
+- [Device Trust](https://1password.com/product/device-trust)

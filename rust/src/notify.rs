@@ -135,7 +135,7 @@ impl NotifyConfig {
 fn display(v: &Value) -> String {
     v.as_str().map(str::to_owned).unwrap_or_else(|| {
         if v.is_null() {
-            "None".into()
+            "unknown".into()
         } else {
             crate::pystr::repr_value(v)
         }
@@ -154,7 +154,7 @@ fn or_default(v: &Value, default: &str) -> String {
     }
 }
 fn fallback(v: &Value) -> String {
-    or_default(v, "알 수 없음")
+    or_default(v, "unknown")
 }
 /// `mapping.get(key, 0)` inside an f-string.
 fn get_or_zero(v: &Value, key: &str) -> String {
@@ -173,13 +173,13 @@ fn python_items(v: &Value) -> Vec<Value> {
 fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
     let mut lines = vec![
         format!(
-            "* 비밀 ID: {}  (종류: {}, 서비스: {})",
+            "* Secret ID: {}  (kind: {}, service: {})",
             display(get(s, "secret_id")),
             display(get(s, "kind")),
             fallback(get(s, "service"))
         ),
         format!(
-            "  프로젝트/환경: {}/{}  현재 활성 버전: {}",
+            "  Project/environment: {}/{}  Active version: {}",
             display(get(s, "project")),
             display(get(s, "environment")),
             display(get(s, "active_version"))
@@ -188,7 +188,7 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
     let connections = python_items(&s["connections"]);
     if !connections.is_empty() {
         lines.push(format!(
-            "  연결: {}",
+            "  Connections: {}",
             connections
                 .iter()
                 .map(display)
@@ -214,34 +214,34 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
         })
         .collect();
     if !labels.is_empty() {
-        lines.push(format!("  대상: {}", labels.join(", ")));
+        lines.push(format!("  Targets: {}", labels.join(", ")));
     }
     if mandatory {
         lines.push(format!(
-            "  첫 사용: {}  마지막 사용: {}  사용 횟수: {}",
-            or_default(&s["first_used"], "없음"),
-            or_default(&s["last_used"], "없음"),
+            "  First use: {}  Last use: {}  Use count: {}",
+            or_default(&s["first_used"], "none"),
+            or_default(&s["last_used"], "none"),
             get_or_zero(s, "use_count")
         ));
     }
     let steps: &[&str] = match s["kind"].as_str().unwrap_or("") {
         "api_key" | "env_var" => &[
-            "공급자 콘솔에서 이 자격증명을 폐기하고 재발급하십시오.",
-            "`rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.",
-            "공급자 감사 로그에서 토큰 생성 시각 이후의 행위를 검토하십시오.",
+            "Revoke and reissue this credential in the provider console.",
+            "Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.",
+            "Review provider audit logs for activity since token creation.",
         ],
         "password" => &[
-            "서비스에서 비밀번호를 변경하십시오.",
-            "`rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.",
-            "해당 서비스의 활성 세션을 종료하십시오.",
+            "Change the password at the service.",
+            "Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.",
+            "Terminate active sessions at the service.",
         ],
         "ssh_private_key" => &[
-            "새 키를 생성하십시오.",
-            "대상 서버마다 authorized_keys에서 지문 {fingerprint}인 키를 제거하고 새 키로 교체하십시오.",
-            "대상 서버에서 활성 세션을 확인하고 종료하십시오 (who, ss -tnp).",
-            "`rotation start` -> `rotation activate` -> `rotation finish` 순서로 금고의 값을 교체하십시오.",
+            "Generate a new key.",
+            "On each target server, remove the key with fingerprint {fingerprint} from authorized_keys and replace it with the new key.",
+            "Inspect and terminate active sessions on target servers (who, ss -tnp).",
+            "Replace the vault value with `rotation start` -> `rotation activate` -> `rotation finish`.",
         ],
-        _ => &["공급자와 협의해 이 자격증명을 교체하십시오."],
+        _ => &["Coordinate with the provider to replace this credential."],
     };
     let fingerprint = fallback(get(s, "fingerprint"));
     for (n, step) in steps.iter().enumerate() {
@@ -256,7 +256,7 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
 
 pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
     let subject = format!(
-        "[ZeroPW] 침입 감지 — 서비스 정지, 자격증명 교체 필요 (사건 {})",
+        "[ZeroPW] Intrusion detected: action required (incident {})",
         i.id
     );
     let secrets = i.assessment["secrets"]
@@ -272,33 +272,28 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         .filter(|s| s["tier"] == "recommended")
         .collect();
     let mut l = vec![
-        format!("안내 생성 시각: {now}"),
+        format!("Report generated: {now}"),
         String::new(),
-        "1. 무슨 일이 있었나".into(),
-        format!("사건 ID: {}", i.id),
-        format!("사건 시각: {}  (판정 방식: {})", i.opened_at, i.trigger),
+        "1. What happened".into(),
+        format!("Incident ID: {}", i.id),
+        format!("Incident time: {}  (trigger: {})", i.opened_at, i.trigger),
     ];
-    let scope = match i.scope.as_str() {
-        "principal" => "호출 주체",
-        "runtime" => "실행 환경",
-        "all" => "전체",
-        s => s,
-    };
+    let scope = i.scope.as_str();
     // `incident.runtime`/`incident.rule` as loaded (any JSON value), each
     // rendered only when truthy.
     let raw = i.to_dict();
     l.push(format!(
-        "봉쇄 범위: {scope}{}",
+        "Containment scope: {scope}{}",
         if incident::python_truthy(&raw["runtime"]) {
-            format!(" (실행 환경: {})", display(&raw["runtime"]))
+            format!(" (runtime: {})", display(&raw["runtime"]))
         } else {
             String::new()
         }
     ));
     if incident::python_truthy(&raw["rule"]) {
-        l.push(format!("판정 규칙: {}", display(&raw["rule"])));
+        l.push(format!("Detection rule: {}", display(&raw["rule"])));
     }
-    l.push("침해된 호출 주체:".into());
+    l.push("Compromised principals:".into());
     let mut views: Vec<String> = i.assessment["principals"]
         .as_array()
         .into_iter()
@@ -306,7 +301,7 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
         .filter_map(|v| {
             v["id"]
                 .as_str()
-                .map(|pid| format!("  - {pid} (토큰 생성: {})", fallback(&v["created_at"])))
+                .map(|pid| format!("  - {pid} (token created: {})", fallback(&v["created_at"])))
         })
         .collect();
     if views.is_empty() {
@@ -315,44 +310,44 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
     l.extend(views);
     l.extend([
         String::new(),
-        "2. ZeroPW가 이미 한 것".into(),
+        "2. Actions already taken by ZeroPW".into(),
         format!(
-            "전체 정지: {}",
+            "Global stop: {}",
             if incident::python_truthy(&i.actions["stopped"]) {
-                "예"
+                "yes"
             } else {
-                "아니오"
+                "no"
             }
         ),
         format!(
-            "비활성화된 호출 주체 수: {}",
+            "Disabled principals: {}",
             get_or_zero(&i.actions, "principals_disabled")
         ),
         format!(
-            "회수한 권한 수: {}",
+            "Revoked grants: {}",
             get_or_zero(&i.actions, "grants_revoked")
         ),
         format!(
-            "핸들 키 교체: {}",
+            "Handle key rotated: {}",
             if incident::python_truthy(&i.actions["handle_key_rotated"]) {
-                "예"
+                "yes"
             } else {
-                "아니오"
+                "no"
             }
         ),
         format!(
-            "취소한 실행 수: {}",
+            "Cancelled runs: {}",
             get_or_zero(&i.actions, "runs_cancelled")
         ),
         format!(
-            "닫은 서명기 소켓 수: {}",
+            "Closed signer sockets: {}",
             get_or_zero(&i.actions, "sockets_closed")
         ),
         String::new(),
-        "3. 지금 해야 할 것 — 필수 교체".into(),
+        "3. Required credential rotation".into(),
     ]);
     if mandatory.is_empty() {
-        l.push("필수 교체 대상이 없습니다.".into());
+        l.push("No mandatory rotation targets.".into());
         l.push(String::new());
     } else {
         for s in mandatory {
@@ -360,50 +355,56 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
             l.push(String::new());
         }
     }
-    l.push("4. 권장 교체".into());
+    l.push("4. Recommended rotation".into());
     if recommended.is_empty() {
-        l.push("권장 교체 대상이 없습니다.".into());
+        l.push("No recommended rotation targets.".into());
         l.push(String::new());
     } else {
         for s in recommended {
             l.push(format!(
-                "* 비밀 ID: {}  (종류: {}) - 사용 기록 없이 권한만 보유",
+                "* Secret ID: {}  (kind: {}) - granted authority without recorded use",
                 display(get(s, "secret_id")),
                 display(get(s, "kind"))
             ));
         }
         l.push(String::new());
     }
-    l.push("5. 실행 환경".into());
+    l.push("5. Runtime".into());
     if i.scope == "runtime" || i.scope == "all" {
-        l.push("침해된 실행 환경(호스트)을 폐기하고 새로 구축하십시오. 기존 호출 주체의 토큰은 되살아나지 않습니다.".into());
+        l.push("Discard and rebuild the compromised runtime (host). Tokens for existing principals remain invalid.".into());
     } else {
-        l.push("실행 환경 자체의 침해를 배제할 수 없다면, 같은 실행 환경에 새 호출 주체를 만들기 전에 그 실행 환경을 재구축하고 다음 명령으로 범위를 넓히십시오:".into());
+        l.push("If runtime compromise cannot be ruled out, rebuild it before creating new principals there and escalate the incident with:".into());
         l.push(format!(
-            "  incident escalate --id {} --scope runtime|all",
+            "  zeropw-admin --state-dir <STATE_DIR> incident escalate --id {} --scope runtime",
             i.id
         ));
-        l.push("기존 호출 주체의 토큰은 되살아나지 않습니다.".into());
+        l.push("Use --scope all instead if the vault may also be compromised.".into());
+        l.push("Tokens for existing principals remain invalid.".into());
     }
     l.extend([
         String::new(),
-        "6. 복구 명령".into(),
-        format!("  incident show --id {}", i.id),
-        "  (위 필수 교체를 모두 완료한 뒤)".into(),
-        format!("  incident close --id {}", i.id),
-        "  principal create --runtime <실행 환경 ID>".into(),
-        "  grant create --principal <새 호출 주체 ID> --connection <연결 ID>".into(),
-        "  resume".into(),
+        "6. Recovery commands".into(),
+        "Replace <STATE_DIR> with the trusted vault directory before running these commands."
+            .into(),
+        format!(
+            "  zeropw-admin --state-dir <STATE_DIR> incident show --id {}",
+            i.id
+        ),
+        "  (after completing all required rotations above)".into(),
     ]);
     if i.scope == "all" || incident::python_truthy(&i.assessment["recover_required"]) {
         l.extend([
-            String::new(),
-            "이 사건은 금고 전체 노출로 판정되었습니다. `incident close` 전에 다음을 수행하십시오:"
-                .into(),
-            "  recover   (새 KMS 키, 권한 전부 회수, 핸들 키 교체)".into(),
-            "  관리자 패스프레이즈와 복구 패스프레이즈를 모두 변경하십시오.".into(),
+            "Full vault exposure: complete recovery before closing the incident.".into(),
+            "  zeropw-admin --state-dir <STATE_DIR> recover".into(),
+            "  Change both administrator and recovery passphrases.".into(),
         ]);
     }
+    l.extend([
+        format!("  zeropw-admin --state-dir <STATE_DIR> incident close --id {}", i.id),
+        "  zeropw-admin --state-dir <STATE_DIR> principal create --runtime <RUNTIME_ID>".into(),
+        "  zeropw-admin --state-dir <STATE_DIR> grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>".into(),
+        "  zeropw-admin --state-dir <STATE_DIR> resume".into(),
+    ]);
     (subject, l.join("\n") + "\n")
 }
 
@@ -554,8 +555,8 @@ pub fn send_test_message(ctx: &Arc<Context>) -> Result<Value> {
     };
     let result = crate::smtp::send(
         &config,
-        "[ZeroPW] 알림 설정 시험 메시지",
-        "ZeroPW 알림 설정을 확인하기 위한 시험 메시지입니다.\n실제 침입 사건이 아닙니다. 이 메시지가 도착했다면 SMTP 설정이 올바르게 동작합니다.\n",
+        "[ZeroPW] Notification configuration test",
+        "ZeroPW notification configuration test.\nThis is not a real intrusion incident. Receipt confirms the SMTP setup works.\n",
     );
     match result {
         Ok(()) => {

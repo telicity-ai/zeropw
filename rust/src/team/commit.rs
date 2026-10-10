@@ -1798,6 +1798,13 @@ fn validate_dek_rotate(op: &Map<String, Value>) -> Result<()> {
     if !valid_wraps(op.get("wraps")) {
         return Err(Error::invalid_input("invalid_wraps"));
     }
+    if let Some(hash) = op.get("removal_fact_hash")
+        && !hash
+            .as_str()
+            .is_some_and(|value| value.len() == 64 && value.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err(Error::invalid_input("invalid_removal_fact_hash"));
+    }
     Ok(())
 }
 

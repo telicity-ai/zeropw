@@ -211,7 +211,7 @@ fn test_live_serve_retries_pending_then_widening_sends_new_scope() {
     assert_eq!(messages.len(), 2);
     let (_, second_body) = parse_message(&messages[1].data);
     assert!(second_body.contains("rt-shared"));
-    assert!(second_body.contains("실행 환경"));
+    assert!(second_body.contains("runtime"));
     assert!(!second_body.contains(SYNTHETIC));
     assert!(!second_body.contains(SMTP_PASSWORD));
     let (code, _) = p.agent(&["list-connections"], None);

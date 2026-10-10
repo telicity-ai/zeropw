@@ -1,0 +1,87 @@
+{
+  "now": "2023-11-14T22:13:21Z",
+  "cases": [
+    {
+      "incident": {
+        "id": "inc-20231114T221320Z-0123abcd",
+        "opened_at": "2023-11-14T22:13:20Z",
+        "status": "open",
+        "scope": "principal",
+        "principals": [
+          "agent-1"
+        ],
+        "trigger": "manual",
+        "detail": null,
+        "closed_at": null,
+        "widened_from": [],
+        "notification": {
+          "status": "not_configured",
+          "attempts": 0
+        },
+        "actions": {
+          "stopped": false,
+          "principals_disabled": 1,
+          "grants_revoked": 0,
+          "handle_key_rotated": false,
+          "runs_cancelled": 0,
+          "sockets_closed": 0,
+          "failed_steps": []
+        },
+        "assessment": {
+          "principals": [
+            {
+              "id": "agent-1",
+              "created_at": "2023-11-14T22:00:00Z"
+            }
+          ],
+          "secrets": []
+        },
+        "runtime": null,
+        "rule": null
+      },
+      "subject": "[ZeroPW] Intrusion detected: action required (incident inc-20231114T221320Z-0123abcd)",
+      "body": "Report generated: 2023-11-14T22:13:21Z\n\n1. What happened\nIncident ID: inc-20231114T221320Z-0123abcd\nIncident time: 2023-11-14T22:13:20Z  (trigger: manual)\nContainment scope: principal\nCompromised principals:\n  - agent-1 (token created: 2023-11-14T22:00:00Z)\n\n2. Actions already taken by ZeroPW\nGlobal stop: no\nDisabled principals: 1\nRevoked grants: 0\nHandle key rotated: no\nCancelled runs: 0\nClosed signer sockets: 0\n\n3. Required credential rotation\nNo mandatory rotation targets.\n\n4. Recommended rotation\nNo recommended rotation targets.\n\n5. Runtime\nIf runtime compromise cannot be ruled out, rebuild it before creating new principals there and escalate the incident with:\n  zeropw-admin --state-dir <STATE_DIR> incident escalate --id inc-20231114T221320Z-0123abcd --scope runtime\nUse --scope all instead if the vault may also be compromised.\nTokens for existing principals remain invalid.\n\n6. Recovery commands\nReplace <STATE_DIR> with the trusted vault directory before running these commands.\n  zeropw-admin --state-dir <STATE_DIR> incident show --id inc-20231114T221320Z-0123abcd\n  (after completing all required rotations above)\n  zeropw-admin --state-dir <STATE_DIR> incident close --id inc-20231114T221320Z-0123abcd\n  zeropw-admin --state-dir <STATE_DIR> principal create --runtime <RUNTIME_ID>\n  zeropw-admin --state-dir <STATE_DIR> grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>\n  zeropw-admin --state-dir <STATE_DIR> resume\n"
+    },
+    {
+      "incident": {
+        "id": "inc-20231114T221320Z-0123abcd",
+        "opened_at": "2023-11-14T22:13:20Z",
+        "status": "open",
+        "scope": "principal",
+        "principals": [
+          "agent-1"
+        ],
+        "trigger": "manual",
+        "detail": null,
+        "closed_at": null,
+        "widened_from": [],
+        "notification": {
+          "status": "not_configured",
+          "attempts": 0
+        },
+        "actions": {
+          "stopped": false,
+          "principals_disabled": 1,
+          "grants_revoked": 0,
+          "handle_key_rotated": false,
+          "runs_cancelled": 0,
+          "sockets_closed": 0,
+          "failed_steps": []
+        },
+        "assessment": {
+          "principals": [
+            {
+              "id": "agent-1",
+              "created_at": "2023-11-14T22:00:00Z"
+            }
+          ],
+          "secrets": []
+        },
+        "runtime": "box-1",
+        "rule": "unknown_tool"
+      },
+      "subject": "[ZeroPW] Intrusion detected: action required (incident inc-20231114T221320Z-0123abcd)",
+      "body": "Report generated: 2023-11-14T22:13:21Z\n\n1. What happened\nIncident ID: inc-20231114T221320Z-0123abcd\nIncident time: 2023-11-14T22:13:20Z  (trigger: manual)\nContainment scope: principal (runtime: box-1)\nDetection rule: unknown_tool\nCompromised principals:\n  - agent-1 (token created: 2023-11-14T22:00:00Z)\n\n2. Actions already taken by ZeroPW\nGlobal stop: no\nDisabled principals: 1\nRevoked grants: 0\nHandle key rotated: no\nCancelled runs: 0\nClosed signer sockets: 0\n\n3. Required credential rotation\nNo mandatory rotation targets.\n\n4. Recommended rotation\nNo recommended rotation targets.\n\n5. Runtime\nIf runtime compromise cannot be ruled out, rebuild it before creating new principals there and escalate the incident with:\n  zeropw-admin --state-dir <STATE_DIR> incident escalate --id inc-20231114T221320Z-0123abcd --scope runtime\nUse --scope all instead if the vault may also be compromised.\nTokens for existing principals remain invalid.\n\n6. Recovery commands\nReplace <STATE_DIR> with the trusted vault directory before running these commands.\n  zeropw-admin --state-dir <STATE_DIR> incident show --id inc-20231114T221320Z-0123abcd\n  (after completing all required rotations above)\n  zeropw-admin --state-dir <STATE_DIR> incident close --id inc-20231114T221320Z-0123abcd\n  zeropw-admin --state-dir <STATE_DIR> principal create --runtime <RUNTIME_ID>\n  zeropw-admin --state-dir <STATE_DIR> grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>\n  zeropw-admin --state-dir <STATE_DIR> resume\n"
+    }
+  ]
+}

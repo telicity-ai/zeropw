@@ -37,8 +37,8 @@ Concurrent ordinary-fact duplicate application is the separate **ASTRA-TEAM-T7 /
 Commands ran locally on macOS from `rust/`, using synthetic disposable state and controlled local endpoints:
 
 ```text
-env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin /Users/ys/.cargo/bin/cargo test --offline --test astra_team_fact_catchup --test astra_team_reconnect_diagnostic --test team_remaining_contract -- --test-threads=1
-env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin /Users/ys/.cargo/bin/cargo test --offline --lib team::sync::retry_tests -- --test-threads=1
+env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin ${HOME}/.cargo/bin/cargo test --offline --test astra_team_fact_catchup --test astra_team_reconnect_diagnostic --test team_remaining_contract -- --test-threads=1
+env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin ${HOME}/.cargo/bin/cargo test --offline --lib team::sync::retry_tests -- --test-threads=1
 ```
 
 | Test target | Independently observed result |

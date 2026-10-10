@@ -1,0 +1,1013 @@
+[
+  {
+    "scenario": "plain_ok",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "helo_fallback",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "helo <local>\r\n",
+      "mail FROM:<zeropw@example.com>\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "ehlo_251",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com>\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "ehlo_garbage",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPServerDisconnected"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPServerDisconnected",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n"
+    ]
+  },
+  {
+    "scenario": "greeting_rejected",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPConnectError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPConnectError",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  },
+  {
+    "scenario": "sender_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPSenderRefused"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPSenderRefused",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rset\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "sender_421",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPSenderRefused"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPSenderRefused",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n"
+    ]
+  },
+  {
+    "scenario": "recipients_partial",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=333\r\n",
+      "rcpt TO:<bad@example.com>\r\n",
+      "rcpt TO:<good@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: bad@example.com, good@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "recipients_all_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPRecipientsRefused"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPRecipientsRefused",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=334\r\n",
+      "rcpt TO:<bad@example.com>\r\n",
+      "rcpt TO:<worse@example.com>\r\n",
+      "rset\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "rcpt_251",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "data_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPDataError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPDataError",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "data_final_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPDataError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPDataError",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "rset\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "quit_non_221",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPResponseException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPResponseException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "error_then_quit_non221",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPResponseException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPResponseException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rset\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "auth_plain",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH PLAIN AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "password_crlf",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH PLAIN AHN5bnRoZXRpYy11c2VyAHBhCnNzCndvcmQ=\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "auth_login",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH LOGIN c3ludGhldGljLXVzZXI=\r\n",
+      "c3ludGhldGljLXBhc3N3b3Jk\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "oldstyle_auth",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH LOGIN c3ludGhldGljLXVzZXI=\r\n",
+      "c3ludGhldGljLXBhc3N3b3Jk\r\n",
+      "mail FROM:<zeropw@example.com> size=317\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: admin@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "cram_six",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH CRAM-MD5\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "c3ludGhldGljLXVzZXIgZDMwNTJlYWM1NzE2YmI3YmE3YzUyNzNhNzE2NGQzZTY=\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "plain_five",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH PLAIN AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "bad_challenge",
+    "outcome": {
+      "exception": "Error"
+    },
+    "audit": [],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH PLAIN AHN5bnRoZXRpYy11c2VyAHN5bnRoZXRpYy1wYXNzd29yZA==\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "password_non_ascii",
+    "outcome": {
+      "exception": "UnicodeEncodeError"
+    },
+    "audit": [],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "cram_non_ascii",
+    "outcome": {
+      "exception": "UnicodeEncodeError"
+    },
+    "audit": [],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH CRAM-MD5\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "login_non_ascii",
+    "outcome": {
+      "exception": "UnicodeEncodeError"
+    },
+    "audit": [],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "AUTH LOGIN c3ludGhldGljLXVzZXI=\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "auth_no_suitable",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "auth_lowercase",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "auth_unadvertised",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPNotSupportedError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPNotSupportedError",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "password_directory",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "IsADirectoryError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "IsADirectoryError",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  },
+  {
+    "scenario": "password_non_utf8",
+    "outcome": {
+      "exception": "UnicodeDecodeError"
+    },
+    "audit": [],
+    "transcript": []
+  },
+  {
+    "scenario": "starttls_unsupported",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPNotSupportedError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPNotSupportedError",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "starttls_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPResponseException"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPResponseException",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "STARTTLS\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "smtputf8",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=333 SMTPUTF8 BODY=8BITMIME\r\n",
+      "rcpt TO:<사용자@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: 관리자 <사용자@example.com>\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "smtputf8_missing",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SMTPNotSupportedError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SMTPNotSupportedError",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "display_names",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=408\r\n",
+      "rcpt TO:<john@example.com>\r\n",
+      "rcpt TO:<admin@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: ZeroPW =?utf-8?b?7JWM66a8?= <zeropw@example.com>\r\n",
+      "To:\r\n",
+      " \"Doe, John\" <john@example.com>, =?utf-8?b?6rSA66as7J6Q?= <admin@example.com>\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "multi_address_entry",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=343\r\n",
+      "rcpt TO:<a@example.com>\r\n",
+      "rcpt TO:<b@example.com>\r\n",
+      "rcpt TO:<c@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: a@example.com, b@example.com, c@example.com\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "comment_refold",
+    "outcome": {
+      "result": {
+        "status": "sent"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "ok",
+        "sent",
+        "notify_test"
+      ]
+    ],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "mail FROM:<zeropw@example.com> size=394\r\n",
+      "rcpt TO:<ops@example.com>\r\n",
+      "data\r\n",
+      "Subject: [ZeroPW] Notification configuration test\r\n",
+      "From: zeropw@example.com\r\n",
+      "To: ops@example.com\r\n",
+      " (a very long comment that goes on and on and on and on and on and on and on)\r\n",
+      "Content-Type: text/plain; charset=\"utf-8\"\r\n",
+      "Content-Transfer-Encoding: 7bit\r\n",
+      "MIME-Version: 1.0\r\n",
+      "\r\n",
+      "ZeroPW notification configuration test.\r\n",
+      "This is not a real intrusion incident. Receipt confirms the SMTP setup works.\r\n",
+      ".\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "header_write_refused",
+    "outcome": {
+      "exception": "HeaderWriteError"
+    },
+    "audit": [],
+    "transcript": [
+      "ehlo <local>\r\n",
+      "QUIT\r\n"
+    ]
+  },
+  {
+    "scenario": "timeout_overflow",
+    "outcome": {
+      "exception": "OverflowError"
+    },
+    "audit": [],
+    "transcript": []
+  },
+  {
+    "scenario": "unresolvable",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "gaierror"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "gaierror",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  },
+  {
+    "scenario": "connection_refused",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "ConnectionRefusedError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "ConnectionRefusedError",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  },
+  {
+    "scenario": "tls_plaintext",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SSLError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SSLError",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  },
+  {
+    "scenario": "tls_eof",
+    "outcome": {
+      "result": {
+        "status": "failed",
+        "error": "SSLEOFError"
+      }
+    },
+    "audit": [
+      [
+        "incident_notify",
+        "denied",
+        "SSLEOFError",
+        "notify_test"
+      ]
+    ],
+    "transcript": []
+  }
+]

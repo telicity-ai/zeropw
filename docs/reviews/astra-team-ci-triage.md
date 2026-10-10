@@ -23,7 +23,7 @@ This is an actual failed CI run. Nothing below changes that result or makes it a
 On local macOS with Python 3.12.11, the unmodified case passed **10 of 10** sequential executions in 25.561s:
 
 ```sh
-env -i PATH=/Users/ys/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin python3.12 -c 'import unittest; name="tests.test_team_sync.FactsTestCase.test_removed_peer_session_is_receive_only_during_drain"; suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(name) for _ in range(10)); result=unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())'
+env -i PATH=${HOME}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin python3.12 -c 'import unittest; name="tests.test_team_sync.FactsTestCase.test_removed_peer_session_is_receive_only_during_drain"; suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromName(name) for _ in range(10)); result=unittest.TextTestRunner(verbosity=2).run(suite); raise SystemExit(not result.wasSuccessful())'
 ```
 
 This does not reproduce the hosted failure naturally and is not a Linux result.

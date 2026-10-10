@@ -126,13 +126,13 @@ fn offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact() {
         .unwrap();
     let lost_hash = sync::Fact::from_dict(&lost).unwrap().hash().unwrap();
     assert!(
-        sync::load_facts(a.ctx.state, &env)
+        sync::load_facts(&a.ctx, &env)
             .unwrap()
             .1
             .contains(&lost_hash)
     );
     assert!(
-        !sync::load_facts(b.ctx.state, &env)
+        !sync::load_facts(&b.ctx, &env)
             .unwrap()
             .1
             .contains(&lost_hash)
@@ -159,7 +159,7 @@ fn offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact() {
             >= barrier.author_seq
     });
     wait("offline fact catches up after reconnect", || {
-        sync::load_facts(fresh_b.ctx.state, &env)
+        sync::load_facts(&fresh_b.ctx, &env)
             .unwrap()
             .1
             .contains(&lost_hash)
@@ -174,7 +174,7 @@ fn offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact() {
         .unwrap();
     let delivered_hash = sync::Fact::from_dict(&delivered).unwrap().hash().unwrap();
     wait("connected fact arrives", || {
-        sync::load_facts(fresh_b.ctx.state, &env)
+        sync::load_facts(&fresh_b.ctx, &env)
             .unwrap()
             .1
             .contains(&delivered_hash)
@@ -187,7 +187,7 @@ fn offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact() {
         a.team.poll().unwrap();
         fresh_b.team.poll().unwrap();
     }
-    let hashes = sync::load_facts(fresh_b.ctx.state, &env).unwrap().1;
+    let hashes = sync::load_facts(&fresh_b.ctx, &env).unwrap().1;
     assert!(hashes.contains(&lost_hash));
     assert!(hashes.contains(&delivered_hash));
     let persisted = fresh_b

@@ -69,4 +69,4 @@ These distinctions do not invalidate the passing convergence/drain tests, but th
 
 ## Tool limitation
 
-An ordinary `apply_patch` attempt to add the unique supplemental `rust/tests/astra_team_round4.rs` failed with exit 1 and `Failed to write file /Users/ys/Code/zeropw-rust-complete/rust/tests/astra_team_round4.rs`, with no further cause returned. Read-only checks confirmed the tests directory exists, the new file does not, and the checkout was clean. No bypass, alternative write mechanism, or weakened assertion was used. The proposed tests were not executed and are not counted above.
+An ordinary `apply_patch` attempt to add the unique supplemental `rust/tests/astra_team_round4.rs` failed with exit 1 and `Failed to write file ${HOME}/Code/zeropw-rust-complete/rust/tests/astra_team_round4.rs`, with no further cause returned. Read-only checks confirmed the tests directory exists, the new file does not, and the checkout was clean. No bypass, alternative write mechanism, or weakened assertion was used. The proposed tests were not executed and are not counted above.

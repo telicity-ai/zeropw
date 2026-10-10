@@ -34,7 +34,7 @@ New controls cover missing syscall ABI, denied `/proc` access, and normal non-re
 On macOS, at exact worker commit `c5c191a3a3822958a2fc2b006ce4034c1441da56`:
 
 ```text
-env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin /Users/ys/.cargo/bin/cargo test --offline --test astra_cli_runtime_round3 --test astra_pty_portability --test astra_runtime_final
+env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin ${HOME}/.cargo/bin/cargo test --offline --test astra_cli_runtime_round3 --test astra_pty_portability --test astra_runtime_final
 ```
 
 | Target | Independently observed result |
