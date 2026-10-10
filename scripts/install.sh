@@ -25,6 +25,9 @@ while [ $# -gt 0 ]; do
     *) fail "unknown option: $1";;
   esac
 done
+if [ -z "$archive" ]; then
+  [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'specify a release version such as v0.1.0'
+fi
 [ -n "$prefix" ] || fail 'specify --prefix or configure HOME'
 [[ "$prefix" = /* ]] || fail 'prefix must be an absolute path'
 case "$prefix" in *$'\n'*|*$'\r'*) fail 'invalid prefix';; esac
