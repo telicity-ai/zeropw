@@ -307,3 +307,9 @@ All four stages were first implemented in 2026-09-16 prototype work and ported b
 ## 14. Defaults and design decisions
 
 Confirmed choices were immediate leaderless application, invitation auto-acceptance, device-specific keys and continued use of stale offline replicas. Original proposed defaults are 5-minute future-clock tolerance, 10-second sync, 24-hour invitation, 10-minute session regeneration, 30-day compaction, multicast `239.192.47.42:47420`, share-time passphrase reauthentication and node-dependent private-vault profile checks. Multicast is a planned default, not an implemented discovery claim.
+
+### Local fact admission and pre-release state
+
+Each locally accepted fact has a device-signed admission receipt in `fact_admissions.jsonl`. Receipts stay local; another peer must validate the original fact itself. Restart and live pickup use the same checks. Previously admitted facts retain their admission after an author's role changes. An unreceipted disable or version revocation also survives when signed commit history proves that its author was an administrator. New member removals require current authority, including the narrowly defined reciprocal-removal exception.
+
+Upgrading state from builds without admission receipts is unsupported. In particular, a historical member removal whose author later lost authority through a commit cannot be authenticated as previously admitted; reusing that state can lose its removal overlay. Do not upgrade or restore such a team environment in place. Keep its state for diagnosis, rotate the provider credentials, and establish a new environment with the intended current membership before sharing new secrets. There has been no public release with this older state format.

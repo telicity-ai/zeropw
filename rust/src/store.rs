@@ -123,6 +123,14 @@ impl StateDir {
     // ------------------------------------------------------------------- lock
     /// Exclusive, re-entrant lock across threads (in-process) and processes
     /// (`flock` on `<state>/.lock`). Port of `StateDir.lock`.
+    pub(crate) fn locked_by_current_thread(&self) -> bool {
+        self.lock_state
+            .lock()
+            .expect("lock_state mutex poisoned")
+            .owner
+            == Some(thread::current().id())
+    }
+
     pub fn lock(&self) -> Result<StateLock<'_>, Error> {
         let this = thread::current().id();
         let mut guard = self.lock_state.lock().expect("lock_state mutex poisoned");

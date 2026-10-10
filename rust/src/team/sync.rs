@@ -609,6 +609,114 @@ mod retry_tests {
     }
 
     #[test]
+    fn admission_observes_future_commits_and_send_waits_for_unlock() {
+        let f = owner_with_admin_peer();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let future = commit::sign_commit(
+            &f.peer_key,
+            &f.env_id,
+            1,
+            &format!("{}-0000", commit::now_ms() + 240_000),
+            &store.vector().unwrap(),
+            vec![json!({"op":"settings.update","sync_interval_seconds":42})],
+        )
+        .unwrap();
+        assert_eq!(
+            f.team.submit_commit(&f.env_id, &future).unwrap(),
+            "accepted"
+        );
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"settings.update","sync_interval_seconds":43})],
+        )
+        .unwrap();
+        f.recorder.sent.lock().unwrap().clear();
+        let before = 0;
+        let joined = DeviceKey::generate().record().unwrap();
+        let lock = f.ctx.state.lock().unwrap();
+        f.team
+            .admit_member(&f.env_id, &joined, "user", "invited")
+            .unwrap();
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), before);
+        assert_eq!(
+            f.team.document(&f.env_id).unwrap()["members"][joined.fingerprint()]["status"],
+            "active"
+        );
+        let owner = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let latest = store
+            .all_commits()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.author == owner)
+            .max_by_key(|c| c.author_seq.clone())
+            .unwrap();
+        assert!(Hlc::parse(&latest.hlc).unwrap() > Hlc::parse(&future.hlc).unwrap());
+        let state = f.ctx.state;
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || assert!(!state.locked_by_current_thread())));
+        drop(lock);
+        f.team.flush_deferred_sends();
+        assert!(f.recorder.sent.lock().unwrap().len() > before);
+    }
+
+    #[test]
+    fn live_pickup_preserves_receipted_revocation_after_role_change() {
+        let f = owner_with_admin_peer();
+        let owner = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms).unwrap();
+        let peer = f.peer_key.fingerprint().unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"owner.transfer","fingerprint":peer})],
+        )
+        .unwrap();
+        let disable = Fact::from_dict(
+            &crate::team::membership::author_fact(
+                &f.ctx,
+                None,
+                &f.env_id,
+                "connection_disabled",
+                json!({"connection_id":"gh"}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let demotion=commit::sign_commit(&f.peer_key,&f.env_id,1,&Hlc::new(0,0).tick(None),&store.vector().unwrap(),
+            vec![json!({"op":"member.set_role","fingerprint":owner.fingerprint().unwrap(),"role":"user"})]).unwrap();
+        assert_eq!(
+            f.team.submit_commit(&f.env_id, &demotion).unwrap(),
+            "accepted"
+        );
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .facts
+                .disabled_connections
+                .contains("gh")
+        );
+        f.team.pick_up_local_facts(&f.env_id).unwrap();
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .facts
+                .disabled_connections
+                .contains("gh")
+        );
+        assert!(
+            load_facts(&f.ctx, &f.env_id)
+                .unwrap()
+                .1
+                .contains(&disable.hash().unwrap())
+        );
+    }
+
+    #[test]
     fn historical_revocations_survive_unreceipted_author_role_changes() {
         for op in ["member.set_role", "member.remove"] {
             let f = owner_with_admin_peer();
@@ -2623,6 +2731,7 @@ pub struct TeamSync {
     commit_seen: Mutex<LruSet>,
     /// `TeamSync._session_threads`.
     receivers: Mutex<Vec<BoundedThread>>,
+    deferred_sends: Mutex<std::collections::VecDeque<(String, Value, Option<String>, bool)>>,
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
@@ -2644,6 +2753,7 @@ impl TeamSync {
             this: this.clone(),
             commit_seen: Mutex::new(LruSet::new(SEEN_CAPACITY)),
             receivers: Mutex::new(Vec::new()),
+            deferred_sends: Mutex::new(std::collections::VecDeque::new()),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -2882,15 +2992,7 @@ impl TeamSync {
     }
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
         let _lock = self.ctx.state.lock()?;
-        let facts = {
-            self.envs
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(env_id)
-                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?
-                .facts
-                .clone()
-        };
+        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
         let result = fold::fold_with_snapshot(
             env_id,
@@ -2919,6 +3021,7 @@ impl TeamSync {
         let env = envs
             .get_mut(env_id)
             .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
+        env.facts = facts;
         env.document = result.document.clone();
         env.relaxed_cache = None;
         env.relaxed_generation = env.relaxed_generation.wrapping_add(1);
@@ -3211,7 +3314,42 @@ impl TeamSync {
         }
         Ok(true)
     }
+    fn defer_send(&self, env_id: &str, message: Value, exclude: Option<&str>, notice: bool) {
+        let mut queue = self
+            .deferred_sends
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Sends are best effort; durable commit/fact logs support catch-up.
+        if queue.len() == 64 {
+            queue.pop_front();
+        }
+        queue.push_back((env_id.into(), message, exclude.map(str::to_owned), notice));
+    }
+    fn flush_deferred_sends(&self) {
+        if self.ctx.state.locked_by_current_thread() {
+            return;
+        }
+        let queued = std::mem::take(
+            &mut *self
+                .deferred_sends
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        for (env, message, exclude, notice) in queued {
+            if notice {
+                if let Ok(fact) = Fact::from_dict(&message) {
+                    self.send_removal_notice(&env, &fact, exclude.as_deref());
+                }
+            } else {
+                self.broadcast(&env, &message, exclude.as_deref());
+            }
+        }
+    }
     fn broadcast(&self, env_id: &str, message: &Value, exclude: Option<&str>) {
+        if self.ctx.state.locked_by_current_thread() {
+            self.defer_send(env_id, message.clone(), exclude, false);
+            return;
+        }
         let sessions = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get(env_id)
@@ -3235,6 +3373,10 @@ impl TeamSync {
         }
     }
     fn send_removal_notice(&self, env_id: &str, fact: &Fact, exclude: Option<&str>) {
+        if self.ctx.state.locked_by_current_thread() {
+            self.defer_send(env_id, fact.to_dict(), exclude, true);
+            return;
+        }
         let Some(target) = fact.target["fingerprint"].as_str() else {
             return;
         };
@@ -3317,7 +3459,22 @@ impl TeamSync {
                 .and_then(|env| env.pending_invites.remove(&fp))
         };
         if let Some((role, name)) = pending {
-            let _ = self.admit_member(&env_id, &session.peer(), &role, &name);
+            if self
+                .admit_member(&env_id, &session.peer(), &role, &name)
+                .is_err()
+            {
+                let _ = self.ctx.audit.record(
+                    "team_member_add",
+                    RecordArgs {
+                        result: Some("failed"),
+                        reason: Some("team_member_admission_failed"),
+                        extra: vec![("env_id", json!(env_id)), ("fingerprint", json!(fp))],
+                        ..Default::default()
+                    },
+                );
+                self.drop_session(&env_id, &fp, Some(&session));
+                return;
+            }
         }
         self.audit_event("team_session_open", &env_id, Some(&fp), None, None);
         self.start_receiver(env_id.clone(), session.clone());
@@ -3337,7 +3494,8 @@ impl TeamSync {
         name: &str,
     ) -> Result<()> {
         use crate::kms::WrappedKey;
-        let doc = self.document(env_id)?;
+        let _lock = self.ctx.state.lock()?;
+        let doc = crate::team::membership::load_environment(&self.ctx, env_id)?.document;
         let mut wraps = Map::new();
         if let Some(gens) = doc["dek"]["generations"].as_object() {
             for gen_id in gens.keys() {
@@ -3364,22 +3522,7 @@ impl TeamSync {
         if !wraps.is_empty() {
             op["wraps"] = Value::Object(wraps);
         }
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let fp = self.device.fingerprint()?;
-        let seq = &store.last_seq(&fp)? + 1;
-        let hlc = {
-            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            envs.get_mut(env_id)
-                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?
-                .hlc
-                .tick(None)
-        };
-        let commit =
-            commit::sign_commit(&self.device, env_id, seq, &hlc, &store.vector()?, vec![op])?;
-        let outcome = self.submit_commit(env_id, &commit)?;
-        if outcome != "accepted" {
-            return Err(Error::state(format!("team_local_commit_{outcome}")));
-        }
+        crate::team::membership::author_commit(&self.ctx, Some(self), env_id, vec![op])?;
         // Python: extra={"env_id", "fingerprint", "role"} (the role is not a
         // fact/op `kind`).
         let _ = self.ctx.audit.record(
@@ -4361,6 +4504,7 @@ impl TeamSync {
     }
 
     pub fn poll(&self) -> Result<()> {
+        self.flush_deferred_sends();
         let now = Instant::now();
         {
             let mut last = self
@@ -4376,6 +4520,7 @@ impl TeamSync {
         for id in self.known_envs() {
             self.poll_env(&id, now)?;
         }
+        self.flush_deferred_sends();
         Ok(())
     }
     fn poll_env(&self, env_id: &str, now: Instant) -> Result<()> {
@@ -4557,6 +4702,7 @@ impl TeamSync {
     }
 
     fn pick_up_local_facts(&self, env_id: &str) -> Result<()> {
+        let (_, admitted, _) = load_facts(&self.ctx, env_id)?;
         let lines = self
             .ctx
             .state
@@ -4587,7 +4733,7 @@ impl TeamSync {
             }
             if fact.env_id != env_id
                 || !FACT_KINDS.contains(&fact.kind.as_str())
-                || !self.validate_incoming_fact(env_id, &fact)?
+                || !admitted.contains(&hash)
             {
                 self.quarantine_local_fact(env_id, line, "team_fact_rejected")?;
                 continue;
