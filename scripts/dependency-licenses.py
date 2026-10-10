@@ -14,18 +14,33 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--manifest-path', default='rust/Cargo.toml')
     p.add_argument('--output', required=True, type=pathlib.Path)
+    p.add_argument('--target', required=True, help='release target triple')
+    p.add_argument('--include-development', action='store_true', help='also traverse test dependencies')
     args = p.parse_args()
     raw = subprocess.check_output(['cargo', 'metadata', '--locked', '--offline',
-                                   '--format-version', '1', '--manifest-path', args.manifest_path])
+                                   '--format-version', '1', '--filter-platform', args.target,
+                                   '--manifest-path', args.manifest_path])
     metadata = json.loads(raw)
     members = set(metadata['workspace_members'])
+    nodes = {node['id']: node for node in metadata['resolve']['nodes']}
+    included = set()
+    pending = list(members)
+    while pending:
+        package_id = pending.pop()
+        if package_id in included:
+            continue
+        included.add(package_id)
+        for dependency in nodes[package_id]['deps']:
+            if args.include_development or any(kind['kind'] != 'dev' for kind in dependency['dep_kinds']):
+                pending.append(dependency['pkg'])
     sections = ['# Third-party dependency licenses\n',
                 'Generated from the locked Cargo metadata and original dependency notice files.\n'
-                'This includes development/build dependencies as well as runtime dependencies.\n'
+                f'Target: {args.target}. Build/runtime dependency closure; development dependencies '
+                f'{"included" if args.include_development else "excluded"}.\n'
                 'Package names and versions identify the source; local cache paths are omitted.\n']
     missing = []
     for package in sorted(metadata['packages'], key=lambda item: (item['name'], item['version'])):
-        if package['id'] in members:
+        if package['id'] in members or package['id'] not in included:
             continue
         root = pathlib.Path(package['manifest_path']).parent
         sections.append(f"## {package['name']} {package['version']}\n\nDeclared license: {package.get('license') or 'unspecified'}\n")

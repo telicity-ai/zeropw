@@ -21,7 +21,7 @@ class InstallerTests(unittest.TestCase):
     def archive(self, extra=None, missing=None):
         path = self.root / 'package.tar.gz'
         with tarfile.open(path, 'w:gz') as archive:
-            for name in BINS + ('README.md', 'LICENSE'):
+            for name in BINS + ('README.md', 'LICENSE', 'THIRD_PARTY_LICENSES.md'):
                 if name == missing:
                     continue
                 content = b'#!/bin/sh\nprintf "synthetic fixture\\n"\n'
@@ -44,7 +44,9 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(set(p.name for p in (self.prefix / 'bin').iterdir()), set(BINS))
         for name in BINS:
             self.assertTrue((self.prefix / 'bin' / name).stat().st_mode & 0o111)
-        self.assertEqual(list(self.prefix.iterdir()), [self.prefix / 'bin'])
+        self.assertEqual({path.name for path in self.prefix.iterdir()}, {'bin', 'share'})
+        self.assertEqual({path.name for path in self.prefix.joinpath('share/doc/zeropw').iterdir()},
+                         {'README.md', 'LICENSE', 'THIRD_PARTY_LICENSES.md'})
 
     def test_bad_checksum_leaves_prefix_untouched(self):
         path, _ = self.archive()
@@ -73,6 +75,18 @@ class InstallerTests(unittest.TestCase):
             result = self.run_install(*self.archive(extra=info, missing='zeropw-agent'))
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(self.prefix.exists())
+
+    def test_missing_licenses_are_rejected(self):
+        self.assertNotEqual(self.run_install(*self.archive(missing='THIRD_PARTY_LICENSES.md')).returncode, 0)
+        self.assertFalse(self.prefix.exists())
+
+    def test_symlink_documentation_directory_is_rejected(self):
+        self.prefix.mkdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        self.prefix.joinpath('share').symlink_to(outside, target_is_directory=True)
+        self.assertNotEqual(self.run_install(*self.archive()).returncode, 0)
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_existing_install_requires_force(self):
         archive = self.archive()

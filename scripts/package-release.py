@@ -15,12 +15,14 @@ def main():
     p.add_argument('--target', required=True, choices=TARGETS)
     p.add_argument('--bin-dir', required=True, type=pathlib.Path)
     p.add_argument('--out-dir', required=True, type=pathlib.Path)
+    p.add_argument('--third-party-licenses', required=True, type=pathlib.Path)
     args = p.parse_args()
     if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.version):
         p.error('version must be vMAJOR.MINOR.PATCH')
     root = pathlib.Path(__file__).resolve().parents[1]
     files = [(args.bin_dir / name, name) for name in BINS]
     files += [(root / name, name) for name in ('README.md', 'LICENSE')]
+    files.append((args.third_party_licenses, 'THIRD_PARTY_LICENSES.md'))
     for path, _ in files:
         if not path.is_file() or path.is_symlink():
             p.error(f'missing regular package file: {path}')

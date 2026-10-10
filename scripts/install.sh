@@ -64,7 +64,7 @@ fi
 actual=$(hash "$work/release.tar.gz")
 [ "$actual" = "$(printf '%s' "$digest" | tr 'A-F' 'a-f')" ] || fail 'checksum mismatch'
 bins=(zeropw-admin zeropw-agent zeropw_session zeropw-demo zeropw-democli)
-printf '%s\n' "${bins[@]}" README.md LICENSE | LC_ALL=C sort > "$work/expected"
+printf '%s\n' "${bins[@]}" README.md LICENSE THIRD_PARTY_LICENSES.md | LC_ALL=C sort > "$work/expected"
 tar -tzf "$work/release.tar.gz" | LC_ALL=C sort > "$work/entries"
 cmp -s "$work/expected" "$work/entries" || fail 'unexpected, duplicate or missing archive entries'
 # Reject links, directories and special files before extraction, including hardlinks.
@@ -77,9 +77,13 @@ for bin in "${bins[@]}"; do
     || fail "invalid executable: $bin"
 done
 [ ! -L "$prefix" ] && [ ! -L "$prefix/bin" ] || fail 'prefix and bin directory must not be symlinks'
-mkdir -p "$prefix/bin"
-for bin in "${bins[@]}"; do
-  dest="$prefix/bin/$bin"
+docdir="$prefix/share/doc/zeropw"
+for dir in "$prefix/share" "$prefix/share/doc" "$docdir"; do
+  [ ! -L "$dir" ] || fail 'documentation directories must not be symlinks'
+done
+mkdir -p "$prefix/bin" "$docdir"
+for bin in "${bins[@]}" README.md LICENSE THIRD_PARTY_LICENSES.md; do
+  case "$bin" in README.md|LICENSE|THIRD_PARTY_LICENSES.md) dest="$docdir/$bin";; *) dest="$prefix/bin/$bin";; esac
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     [ "$force" = 1 ] || fail "$dest exists; use --force to replace installed binaries"
     [ ! -d "$dest" ] || fail "$dest is a directory"
@@ -87,7 +91,12 @@ for bin in "${bins[@]}"; do
 done
 # Stage every file before replacing existing executables. Never follow a destination symlink.
 stage=$(mktemp -d "$prefix/bin/.zeropw-install.XXXXXXXX")
-trap 'rm -rf "$work" "$stage"' EXIT
+docstage=$(mktemp -d "$docdir/.zeropw-docs.XXXXXXXX")
+trap 'rm -rf "$work" "$stage" "$docstage"' EXIT
 for bin in "${bins[@]}"; do install -m 755 "$work/unpack/$bin" "$stage/$bin"; done
+for doc in README.md LICENSE THIRD_PARTY_LICENSES.md; do
+  install -m 644 "$work/unpack/$doc" "$docstage/$doc"
+done
 for bin in "${bins[@]}"; do mv -f "$stage/$bin" "$prefix/bin/$bin"; done
+for doc in README.md LICENSE THIRD_PARTY_LICENSES.md; do mv -f "$docstage/$doc" "$docdir/$doc"; done
 printf 'Installed ZeroPW to %s/bin\nAdd this directory to PATH if needed.\n' "$prefix"
