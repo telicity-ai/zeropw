@@ -79,3 +79,7 @@ jobs:
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-agent" --help
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-admin" --help
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-demo"
+
+      - name: Validate Homebrew source installation at this commit
+        if: runner.os == 'macOS'
+        run: scripts/test-homebrew.sh
