@@ -20,3 +20,9 @@ Git history remains unchanged. Deleting a sensitive or personal file from the cu
 
 - OSS-INSTALL-OPENSSL: Source builds use OpenSSL. The Homebrew formula now declares openssl@3 and selects its prefix explicitly. Native Homebrew execution is still pending. Curl binary archives still need a checked portability policy for their OpenSSL linkage; success on a builder that already has system libraries does not prove a fresh machine can run them.
 - OSS-TEAM-SELFREMOVE: `team/membership.rs::remove_member` rotates the generation only when an admin removes another device. User/admin self-removal publishes a removal fact but does not rotate DEK. Removal denies synchronization, but the existing generation remains available to the removed device; the general promise of new-generation secrecy needs a fix or explicit acceptance rather than a documentation-only PASS. This is a coordinator finding, not an Opus review or severity assessment.
+
+## Tracked-tree path normalization
+
+Publication copies of 18 historical review/fixture-generation Markdown files replace the original personal home prefix with `${HOME}`. Finding IDs, severity, source SHAs, assertions and conclusions are preserved. The original unsanitized reports remain in their recorded Git revisions; normalized current copies are not byte-identical review inputs and must not be used to revalidate an old input digest.
+
+The remaining tracked-tree personal-path match is deliberately synthetic scanner-test input. Private-key markers are parser constants, scanner-test input and the documented synthetic OpenSSH fixture. `rust/tests/fixtures/python/sshwire/GENERATE.md` records the isolated, test-only generation of that fixture; no private-key bytes or original cryptographic fixture data were changed. Narrow pattern scanning does not prove absence of every credential format. Historical personal paths still require an owner decision before exposing the existing history.

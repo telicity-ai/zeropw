@@ -54,7 +54,7 @@ Fix criteria: restore optional sanitized logging with quiet as the default, and 
 Command from `rust/`:
 
 ```sh
-env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin /Users/ys/.cargo/bin/cargo test --offline --test runs --test tools_server --test astra_runtime_review --no-fail-fast
+env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin ${HOME}/.cargo/bin/cargo test --offline --test runs --test tools_server --test astra_runtime_review --no-fail-fast
 ```
 
 - Existing `runs`: 13 passed.

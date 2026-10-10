@@ -40,7 +40,7 @@ Sol `0b5eaa6f0bdf5217afcbed550078f92cf0562b73`, integrated as final `97a8d0f`, r
 
 ## Independent final validation
 
-All final commands ran locally on macOS at unchanged `97a8d0fe6027124df83944401a3f90e4061ecc0e`, using the existing integration build target. Cargo tests/Clippy used `env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin /Users/ys/.cargo/bin/cargo` from `rust/`.
+All final commands ran locally on macOS at unchanged `97a8d0fe6027124df83944401a3f90e4061ecc0e`, using the existing integration build target. Cargo tests/Clippy used `env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin ${HOME}/.cargo/bin/cargo` from `rust/`.
 
 | Command suffix | Independently observed result |
 | --- | --- |

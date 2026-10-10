@@ -15,7 +15,7 @@ The change does not make ledger persistence, derived policy refolding, auditing 
 
 ## Independent validation
 
-All commands used `env -i PATH=/Users/ys/.cargo/bin:/Users/ys/.local/bin:/usr/bin:/bin cargo test --offline` from `rust/`, with synthetic disposable state only.
+All commands used `env -i PATH=${HOME}/.cargo/bin:${HOME}/.local/bin:/usr/bin:/bin cargo test --offline` from `rust/`, with synthetic disposable state only.
 
 | Selected test invocation suffix | Result |
 | --- | --- |
