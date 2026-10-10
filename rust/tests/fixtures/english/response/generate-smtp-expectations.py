@@ -35,6 +35,11 @@ for row in rows:
         rcpt = [re.search(r'TO:<([^>]+)>', line, re.I).group(1)
                 for line in lines if line.lower().startswith('rcpt to:')]
         recipient = ', '.join(rcpt) if rcpt else 'admin@example.com'
+    if row['scenario'] == 'comment_refold':
+        # HeaderRegistry's string view omits comments. Preserve the original
+        # scenario input rather than reconstructing it from that lossy view.
+        recipient = ('ops@example.com (a very long comment that goes on and on '
+                     'and on and on and on and on and on)')
     message = email.message.EmailMessage()
     message['Subject'] = subject
     message['From'] = sender
