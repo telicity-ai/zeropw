@@ -70,9 +70,9 @@ jobs:
 
       - name: Build and install the release package
         run: |
-          cargo build --locked --release --manifest-path rust/Cargo.toml --bins
+          cargo build --locked --release --features bundled-openssl --manifest-path rust/Cargo.toml --bins
           cargo fetch --locked --manifest-path rust/Cargo.toml
-          python3 scripts/dependency-licenses.py --target aarch64-apple-darwin --output dist/THIRD_PARTY_LICENSES.md
+          python3 scripts/dependency-licenses.py --features bundled-openssl --target aarch64-apple-darwin --output dist/THIRD_PARTY_LICENSES.md
           python3 scripts/package-release.py --version v0.1.0 --target aarch64-apple-darwin \
             --bin-dir rust/target/release --out-dir dist --third-party-licenses dist/THIRD_PARTY_LICENSES.md
           archive=dist/zeropw-v0.1.0-aarch64-apple-darwin.tar.gz

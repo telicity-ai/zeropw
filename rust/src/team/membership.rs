@@ -208,6 +208,28 @@ pub fn author_commit(
     env_id: &str,
     ops: Vec<Value>,
 ) -> Result<Commit> {
+    if ops.iter().any(|op| op["op"] == "secret.put") {
+        ensure_self_removal_rotations(ctx, team, env_id)?;
+        let doc = if let Some(team) = team {
+            team.document(env_id)?
+        } else {
+            load_environment(ctx, env_id)?.document
+        };
+        let rekeyed = doc["dek"]["generations"]
+            .as_object()
+            .is_some_and(|generations| {
+                generations
+                    .values()
+                    .any(|generation| generation.get("removal_fact_hash").is_some())
+            });
+        if rekeyed
+            && ops
+                .iter()
+                .any(|op| op["op"] == "secret.put" && op["generation_id"] != doc["dek"]["current"])
+        {
+            return Err(Error::policy_denied("team_rekey_pending"));
+        }
+    }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let store = CommitStore::new(ctx.state, env_id);
     let _lock = ctx.state.lock()?;
@@ -559,6 +581,14 @@ pub fn remove_member(
     )
 }
 fn rotate_dek(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<String> {
+    rotate_dek_bound(ctx, team, env_id, None)
+}
+fn rotate_dek_bound(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    removal: Option<&str>,
+) -> Result<String> {
     let doc = if let Some(team) = team {
         team.document(env_id)?
     } else {
@@ -582,12 +612,11 @@ fn rotate_dek(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<St
             );
         }
     }
-    author_commit(
-        ctx,
-        team,
-        env_id,
-        vec![json!({"op":"dek.rotate","generation_id":generation,"wraps":wraps})],
-    )?;
+    let mut op = json!({"op":"dek.rotate","generation_id":generation,"wraps":wraps});
+    if let Some(hash) = removal {
+        op["removal_fact_hash"] = json!(hash);
+    }
+    author_commit(ctx, team, env_id, vec![op])?;
     audit(
         ctx,
         "team_dek_rotate",
@@ -596,6 +625,64 @@ fn rotate_dek(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<St
     );
     Ok(generation)
 }
+/// Repair a received or persisted self-removal before accepting new secret writes.
+/// The signed rotation marker survives restart and prevents repeated rekeying.
+pub(crate) fn ensure_self_removal_rotations(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+) -> Result<()> {
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    for line in ctx
+        .state
+        .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
+    {
+        let Ok(value) = pyjson::loads(&line) else {
+            continue;
+        };
+        let Ok(fact) = sync::Fact::from_dict(&value) else {
+            continue;
+        };
+        if fact.env_id != env_id
+            || fact.kind != "member_removed"
+            || fact.target["fingerprint"] != fact.author
+        {
+            continue;
+        }
+        let doc = if let Some(team) = team {
+            team.document(env_id)?
+        } else {
+            load_environment(ctx, env_id)?.document
+        };
+        if doc["members"][&fact.author]["status"] != "removed" {
+            continue;
+        }
+        let Ok(record) = DeviceRecord::from_dict(&doc["members"][&fact.author]["device"]) else {
+            continue;
+        };
+        if !sync::verify_fact(&fact, &record) {
+            continue;
+        }
+        let hash = fact.hash()?;
+        let completed = doc["dek"]["generations"]
+            .as_object()
+            .is_some_and(|generations| {
+                generations
+                    .values()
+                    .any(|generation| generation["removal_fact_hash"] == hash)
+            });
+        if completed {
+            continue;
+        }
+        if !sync::is_admin(&doc, &device.fingerprint()?) {
+            return Err(Error::policy_denied("team_rekey_pending"));
+        }
+        rotate_dek_bound(ctx, team, env_id, Some(&hash))?;
+        flag_rotation_recommended(ctx, team, env_id)?;
+    }
+    Ok(())
+}
+
 fn flag_rotation_recommended(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<()> {
     let doc = if let Some(team) = team {
         team.document(env_id)?

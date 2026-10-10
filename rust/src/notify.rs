@@ -135,7 +135,7 @@ impl NotifyConfig {
 fn display(v: &Value) -> String {
     v.as_str().map(str::to_owned).unwrap_or_else(|| {
         if v.is_null() {
-            "None".into()
+            "unknown".into()
         } else {
             crate::pystr::repr_value(v)
         }
@@ -256,7 +256,7 @@ fn secret_block(s: &Value, mandatory: bool) -> Vec<String> {
 
 pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
     let subject = format!(
-        "[ZeroPW] Intrusion detected: service stopped, credential rotation required (incident {})",
+        "[ZeroPW] Intrusion detected: action required (incident {})",
         i.id
     );
     let secrets = i.assessment["secrets"]
@@ -375,29 +375,36 @@ pub fn render_incident_email(i: &Incident, now: &str) -> (String, String) {
     } else {
         l.push("If runtime compromise cannot be ruled out, rebuild it before creating new principals there and escalate the incident with:".into());
         l.push(format!(
-            "  incident escalate --id {} --scope runtime|all",
+            "  zeropw-admin --state-dir <STATE_DIR> incident escalate --id {} --scope runtime",
             i.id
         ));
+        l.push("Use --scope all instead if the vault may also be compromised.".into());
         l.push("Tokens for existing principals remain invalid.".into());
     }
     l.extend([
         String::new(),
         "6. Recovery commands".into(),
-        format!("  incident show --id {}", i.id),
+        "Replace <STATE_DIR> with the trusted vault directory before running these commands."
+            .into(),
+        format!(
+            "  zeropw-admin --state-dir <STATE_DIR> incident show --id {}",
+            i.id
+        ),
         "  (after completing all required rotations above)".into(),
-        format!("  incident close --id {}", i.id),
-        "  principal create --runtime <RUNTIME_ID>".into(),
-        "  grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>".into(),
-        "  resume".into(),
     ]);
     if i.scope == "all" || incident::python_truthy(&i.assessment["recover_required"]) {
         l.extend([
-            String::new(),
-            "This incident is assessed as full vault exposure. Before `incident close`:".into(),
-            "  recover   (new KMS key, revoke all grants, rotate handle key)".into(),
+            "Full vault exposure: complete recovery before closing the incident.".into(),
+            "  zeropw-admin --state-dir <STATE_DIR> recover".into(),
             "  Change both administrator and recovery passphrases.".into(),
         ]);
     }
+    l.extend([
+        format!("  zeropw-admin --state-dir <STATE_DIR> incident close --id {}", i.id),
+        "  zeropw-admin --state-dir <STATE_DIR> principal create --runtime <RUNTIME_ID>".into(),
+        "  zeropw-admin --state-dir <STATE_DIR> grant create --principal <NEW_PRINCIPAL_ID> --connection <CONNECTION_ID>".into(),
+        "  zeropw-admin --state-dir <STATE_DIR> resume".into(),
+    ]);
     (subject, l.join("\n") + "\n")
 }
 

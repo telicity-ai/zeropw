@@ -967,6 +967,13 @@ fn op_dek_rotate(
         gen_id,
         json!({"wraps": wraps}),
     )?;
+    if let Some(hash) = op.get("removal_fact_hash") {
+        py_setitem(
+            py_getitem_mut(py_getitem_mut(dek, "generations")?, gen_id)?,
+            &json!("removal_fact_hash"),
+            hash.clone(),
+        )?;
+    }
     py_setitem(dek, &json!("current"), gen_id.clone())?;
     Ok(None)
 }

@@ -57,7 +57,7 @@ else
   curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
     "$base/$name" -o "$work/release.tar.gz"
   curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-    "$base/SHA256SUMS" -o "$work/SHA256SUMS"
+    "$base/$name.sha256" -o "$work/SHA256SUMS"
   digest=$(awk -v name="$name" '$2 == name {print $1}' "$work/SHA256SUMS")
   [[ "$digest" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'missing or ambiguous release checksum'
 fi
@@ -90,6 +90,8 @@ for bin in "${bins[@]}" README.md LICENSE THIRD_PARTY_LICENSES.md; do
   fi
 done
 # Stage every file before replacing existing executables. Never follow a destination symlink.
+stage='' docstage=''
+trap 'rm -rf "$work"; [ -z "$stage" ] || rm -rf "$stage"; [ -z "$docstage" ] || rm -rf "$docstage"' EXIT
 stage=$(mktemp -d "$prefix/bin/.zeropw-install.XXXXXXXX")
 docstage=$(mktemp -d "$docdir/.zeropw-docs.XXXXXXXX")
 trap 'rm -rf "$work" "$stage" "$docstage"' EXIT

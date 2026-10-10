@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Produce a flat, checksummed binary archive; never initialize product state."""
 import argparse
+import gzip
 import hashlib
 import pathlib
 import re
@@ -28,7 +29,7 @@ def main():
             p.error(f'missing regular package file: {path}')
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out = args.out_dir / f'zeropw-{args.version}-{args.target}.tar.gz'
-    with tarfile.open(out, 'w:gz', format=tarfile.USTAR_FORMAT) as archive:
+    with out.open('wb') as output, gzip.GzipFile(filename='', mode='wb', fileobj=output, mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w', format=tarfile.USTAR_FORMAT) as archive:
         for path, name in files:
             info = archive.gettarinfo(str(path), arcname=name)
             info.uid = info.gid = info.mtime = 0

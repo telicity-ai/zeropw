@@ -902,3 +902,25 @@ fn notify_test_cli_fails_closed_on_escaping_errors() {
         assert!(!all.contains("-password"), "{case}: {all}");
     }
 }
+
+#[test]
+fn english_incident_subject_is_neutral_and_recovery_precedes_close() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/english/response/incident_emails.json"
+    ))
+    .unwrap();
+    let mut value = fixture["cases"][0]["incident"].clone();
+    value["actions"]["stopped"] = json!(false);
+    value["assessment"]["secrets"] = json!([]);
+    value["assessment"]["recover_required"] = json!(true);
+    value["scope"] = json!("all");
+    let incident = zeropw::incident::Incident::from_dict(&value).unwrap();
+    let (subject, body) = zeropw::notify::render_incident_email(&incident, "synthetic-time");
+    assert!(subject.contains("action required"));
+    assert!(!subject.contains("service stopped"));
+    assert!(!body.contains("--scope runtime|all"));
+    assert!(
+        body.find("<STATE_DIR> recover").unwrap()
+            < body.find("<STATE_DIR> incident close").unwrap()
+    );
+}

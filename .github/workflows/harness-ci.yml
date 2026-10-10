@@ -62,7 +62,7 @@ jobs:
       - name: Build and install a native release archive
         shell: bash
         run: |
-          cargo build --locked --release --manifest-path rust/Cargo.toml --bins
+          cargo build --locked --release --features bundled-openssl --manifest-path rust/Cargo.toml --bins
           case "$(uname -s):$(uname -m)" in
             Darwin:arm64) target=aarch64-apple-darwin ;;
             Darwin:x86_64) target=x86_64-apple-darwin ;;
@@ -70,7 +70,7 @@ jobs:
             *) exit 1 ;;
           esac
           cargo fetch --locked --manifest-path rust/Cargo.toml
-          python3 scripts/dependency-licenses.py --target "$target" --output dist/THIRD_PARTY_LICENSES.md
+          python3 scripts/dependency-licenses.py --features bundled-openssl --target "$target" --output dist/THIRD_PARTY_LICENSES.md
           python3 scripts/package-release.py --version v0.1.0 --target "$target" \
             --bin-dir rust/target/release --out-dir dist --third-party-licenses dist/THIRD_PARTY_LICENSES.md
           archive="dist/zeropw-v0.1.0-${target}.tar.gz"

@@ -16,10 +16,11 @@ def main():
     p.add_argument('--output', required=True, type=pathlib.Path)
     p.add_argument('--target', required=True, help='release target triple')
     p.add_argument('--include-development', action='store_true', help='also traverse test dependencies')
+    p.add_argument('--features', default='', help='Cargo features used by the release build')
     args = p.parse_args()
     raw = subprocess.check_output(['cargo', 'metadata', '--locked', '--offline',
                                    '--format-version', '1', '--filter-platform', args.target,
-                                   '--manifest-path', args.manifest_path])
+                                   '--manifest-path', args.manifest_path, *(['--features', args.features] if args.features else [])])
     metadata = json.loads(raw)
     members = set(metadata['workspace_members'])
     nodes = {node['id']: node for node in metadata['resolve']['nodes']}
