@@ -12,7 +12,7 @@ The repository remains private. Its owner will change visibility after the relea
 
 ## Packaging tools
 
-`python3 scripts/package-release.py --version v0.1.0 --target TARGET --bin-dir DIR --out-dir DIR` creates a flat binary archive and its checksum. The license is MIT. Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`.
+`python3 scripts/package-release.py --version v0.1.0 --target TARGET --bin-dir DIR --out-dir DIR` creates a flat binary archive and its checksum. The license is MIT. Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`.
 
 `scripts/install.sh --version v0.1.0` downloads the matching archive and SHA256SUMS from GitHub Releases. Before publication, use `--archive FILE --sha256 HEX` with a verified local archive. The default prefix is `$HOME/.local`; `--prefix /absolute/path` overrides it. Existing binaries are preserved unless `--force` is supplied.
 
