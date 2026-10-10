@@ -17,7 +17,6 @@ class Zeropw < Formula
   end
 
   test do
-    ENV["TMPDIR"] = testpath.to_s
     assert_match "ZeroPW agent", shell_output("#{bin}/zeropw-agent --help")
     assert_match "ZeroPW administrator", shell_output("#{bin}/zeropw-admin --help")
     assert_path_exists bin/"zeropw_session"
