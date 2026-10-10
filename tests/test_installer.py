@@ -1,6 +1,7 @@
 """Installation boundaries using synthetic executables, never a real vault."""
 import hashlib
 import io
+import os
 import pathlib
 import subprocess
 import tarfile
@@ -96,6 +97,18 @@ class InstallerTests(unittest.TestCase):
         self.prefix.joinpath('bin').symlink_to(outside, target_is_directory=True)
         self.assertNotEqual(self.run_install(*self.archive()).returncode, 0)
         self.assertEqual(list(outside.iterdir()), [])
+
+    def test_explicit_prefix_and_help_work_without_home(self):
+        env = dict(os.environ)
+        env.pop('HOME', None)
+        path, digest = self.archive()
+        result = subprocess.run(['bash', str(ROOT / 'scripts/install.sh'), '--archive', str(path),
+                                 '--sha256', digest, '--prefix', str(self.prefix)],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(['bash', str(ROOT / 'scripts/install.sh'), '--help'],
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_version_is_rejected_without_network(self):
         result = subprocess.run(['bash', str(ROOT / 'scripts/install.sh'), '--version', '../bad'],

@@ -10,7 +10,7 @@ Installs the five ZeroPW binaries to DIR/bin (default: $HOME/.local).
 No vault is initialized, no service is started, and no shell profile is edited.
 EOF
 }
-version='' archive='' digest='' prefix="${HOME:?HOME is required}/.local" force=0
+version='' archive='' digest='' prefix="${HOME:+$HOME/.local}" force=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --version|--prefix|--archive|--sha256)
@@ -25,7 +25,8 @@ while [ $# -gt 0 ]; do
     *) fail "unknown option: $1";;
   esac
 done
-[ -n "$prefix" ] && [[ "$prefix" = /* ]] || fail 'prefix must be an absolute path'
+[ -n "$prefix" ] || fail 'specify --prefix or configure HOME'
+[[ "$prefix" = /* ]] || fail 'prefix must be an absolute path'
 case "$prefix" in *$'\n'*|*$'\r'*) fail 'invalid prefix';; esac
 command -v tar >/dev/null || fail 'tar is required'
 if command -v sha256sum >/dev/null; then
