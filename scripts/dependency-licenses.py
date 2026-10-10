@@ -29,8 +29,9 @@ def main():
             continue
         root = pathlib.Path(package['manifest_path']).parent
         sections.append(f"## {package['name']} {package['version']}\n\nDeclared license: {package.get('license') or 'unspecified'}\n")
-        notices = {file for pattern in ('LICENSE*', 'LICENCE*', 'COPYING*', 'NOTICE*')
-                   for file in root.glob(pattern) if file.is_file() and not file.is_symlink()}
+        notices = {file for file in root.iterdir()
+                   if file.name.lower().startswith(('license', 'licence', 'copying', 'notice'))
+                   and file.is_file() and not file.is_symlink()}
         if package.get('license_file'):
             file = root / package['license_file']
             if file.is_file() and not file.is_symlink() and file.resolve().is_relative_to(root.resolve()):
