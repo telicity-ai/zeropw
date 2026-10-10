@@ -1,0 +1,265 @@
+{
+  "head_sha": "9a9f007be51d11499275921ae47958b854cf4b96",
+  "verdict": "REVISE",
+  "verdict_basis": "R1-R9 and N1-N4 are resolved. NEW-1 (high) and NEW-2 (medium) from round 3 are only partially resolved. This head adds two high, one medium and one low new source finding. Cold re-evaluation of unreceipted facts can drop already-applied irreversible revocations. The release linkage gate checks binary names that do not exist. This is a scoped static review. Execution evidence names 06869b6 and e3d240e, not this head. It is not repository or release acceptance.",
+  "original_findings": [
+    {
+      "id": "R1",
+      "severity": "high",
+      "status": "resolved",
+      "evidence": [
+        "fact_role_ok for member_removed still requires owner, active admin (is_admin checks status active), or self. The reciprocal exception still requires an exact {target} removal-author set in role_document_for_removal and in local author_fact.",
+        "load_facts now applies the same predicate on the cold path. The cold_loader_rejects_unadmitted_removed_admin_fact test adds coverage."
+      ],
+      "residual_notes": [
+        "There is still no test of author_fact with team=None for a removed admin. The publish assertion checks is_err() rather than the reason."
+      ]
+    },
+    {
+      "id": "R2",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "The handle_message draining branch is unchanged: only a member_removed fact authored by the peer, targeting the peer or a member of removal_authors[peer], is forwarded. Others are audited and dropped. The drain deadline uses or_insert_with, so confirmations cannot extend it."
+      ]
+    },
+    {
+      "id": "R3",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "install.sh is not resupplied, so the round-3 text applies: it fetches <name>.sha256 and matches `$2 == name`. The TLS-served test covers valid, missing and duplicate entries."
+      ]
+    },
+    {
+      "id": "R4",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "notify.rs is not resupplied. The subject is neutral: 'action required'. The test covers stopped=false with no secrets."
+      ]
+    },
+    {
+      "id": "R5",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "homebrew-source.py pin() requires the head line exactly once and a 40-hex commit, and emits a single-quoted escaped Ruby literal. The Ruby parse test is unchanged."
+      ],
+      "residual_notes": [
+        "There is still no post-install check that the installed revision equals the commit."
+      ]
+    },
+    {
+      "id": "R6",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "The trap covering both stages is installed before either mktemp. The doc-stage failure test is present."
+      ]
+    },
+    {
+      "id": "R7",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "package-release.py uses GzipFile(filename='', mtime=0) around a USTAR tar with normalized metadata. The identical-bytes test is present."
+      ]
+    },
+    {
+      "id": "R8",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "notify.rs is not resupplied. Null renders as 'unknown', escalation uses a single --scope runtime line, commands carry the full prefix, and recover is listed before close."
+      ]
+    },
+    {
+      "id": "R9",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "releasing.md lists four targets and the English-status sentences are corrected."
+      ],
+      "residual_notes": [
+        "README-ko.md still says Python is not needed for verification. Not re-filed."
+      ]
+    }
+  ],
+  "round2_findings": [
+    {
+      "id": "N1",
+      "severity": "high",
+      "status": "resolved",
+      "evidence": [
+        "author_commit gates on the real `secret.put_version` op under the state lock. It runs ensure_removal_rotations and refuses any generation_id != dek.current with team_rekey_pending.",
+        "Tests use fully formed decryptable versions on both the receive and restart paths, plus ordinary admin removal.",
+        "store.rs is now supplied. It confirms StateDir::lock is re-entrant within a thread and uses an exclusive flock across threads and processes, so the serialization assumption holds."
+      ],
+      "residual_notes": [
+        "The guard compares only against dek.current. See NEW-1 (remaining gap) and NEW-3 (HLC ordering)."
+      ]
+    },
+    {
+      "id": "N2",
+      "severity": "medium",
+      "status": "resolved (documented limit plus rejected_removals and reissue)",
+      "evidence": [
+        "record_removal_conflict and status().rejected_removals are unchanged. The two-order reconciliation test is present."
+      ]
+    },
+    {
+      "id": "N3",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "Repair runs in poll_env with admin gating, a 1s backoff and a failure audit. Completion is checked before the identity fold.",
+        "pick_up_local_facts now queues repair for every member_removed fact, which closes the round-3 residual."
+      ],
+      "residual_notes": [
+        "Other poll_env steps still use `?` across environments."
+      ]
+    },
+    {
+      "id": "N4",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "sync::load_facts now takes the state lock and verifies each line's signature against an identity fold. It also requires either a valid local admission receipt or authority on the prefix-folded document; otherwise the line is quarantined to rejected_facts.jsonl and facts.jsonl is rewritten.",
+        "register_env, load_environment, author_fact and ensure_removal_rotations all go through it.",
+        "The cold_loader_rejects_unadmitted_removed_admin_fact test covers a line appended with no poll, then standalone load and fresh register."
+      ],
+      "residual_notes": [
+        "The authority basis chosen for cold lines introduces NEW-4."
+      ]
+    }
+  ],
+  "round3_findings": [
+    {
+      "id": "NEW-1",
+      "severity": "high",
+      "status": "partially_resolved",
+      "evidence": [
+        "ensure_removal_rotations now rotates again when the current generation's wraps contain any fingerprint in facts.removed_members, even if per-target bookkeeping is complete. The concurrent_rotations_cannot_leave_removed_device_in_current_wraps test covers rotation arriving before facts.",
+        "The unsafe-current check reads only fact-derived removed_members. A peer-authored, validated `member.remove` commit marks a member removed in the folded document, but it never enters facts.removed_members and never appears in the facts.jsonl removal loop. No rekey happens, and later writes under the generation that still wraps that device are accepted.",
+        "author_commit is not an independent guard. After ensure_removal_rotations it checks only generation_id == dek.current, never that the current wraps exclude every removed member. Any path where the repair loop does not rotate (commit-based removal, `continue` on an unparsable record, or NEW-3 ordering) still admits writes under an unsafe generation.",
+        "The test calls ensure_removal_rotations directly. It does not assert that a write is refused before re-rotation."
+      ],
+      "resolution_conditions": [
+        "In author_commit, refuse secret.put_version with team_rekey_pending whenever dek.generations[current].wraps contains any member whose folded status is not active. Use the folded document, not only the facts overlay.",
+        "Include member.remove commit removals in the repair trigger, or reject member.remove ops.",
+        "Add a test that writes before repair is refused, plus a commit-based removal variant."
+      ]
+    },
+    {
+      "id": "NEW-2",
+      "severity": "medium",
+      "status": "partially_resolved",
+      "evidence": [
+        "build-release.py controlled_environment scrubs OPENSSL*, PKG_CONFIG*, RUSTFLAGS, compiler/linker variables, DYLD_* and CARGO_TARGET_* before setting the SDK. build.rs fails on any conflicting OPENSSL* or PKG_CONFIG* variable. Tests cover both.",
+        "verify_linkage runs on ('zeropw', 'zeropw-admin', 'zeropw-gateway', 'zeropw-signer', 'zeropw-response').",
+        "The shipped binaries, per package-release.py BINS, install.sh and the Formula, are zeropw-admin, zeropw-agent, zeropw_session, zeropw-demo and zeropw-democli.",
+        "As written, otool or readelf on the nonexistent 'zeropw' fails, so check=True aborts every release build. If the names were patched ad hoc, agent, session, demo and democli would still go unverified.",
+        "No test exercises verify_linkage.",
+        "build.rs declares rerun-if-env-changed only for OPENSSL_DIR and OPENSSL_STATIC. With a cached build-script result in the reused output/cargo-target, the new override scan is not re-executed when other variables change."
+      ],
+      "resolution_conditions": [
+        "Verify exactly the package BINS list, ideally imported from one shared definition, and test it with a dynamic-dependency fixture.",
+        "Emit rerun-if-env-changed for every variable the gate inspects, or rely on the scrubbed environment plus the post-link check."
+      ]
+    }
+  ],
+  "known_open": [
+    {
+      "id": "OSS-TEAM-SELFREMOVE",
+      "status": "open (preserved)",
+      "note": "remove_member still rotates only when `is_admin && caller != fingerprint`. Receiving-admin repair exists for fact-based removals. Re-adjudication waits for NEW-1, NEW-3 and execution evidence at this head."
+    },
+    {
+      "id": "OSS-INSTALL-OPENSSL",
+      "status": "open",
+      "note": "The SDK pin and environment scrubbing are improved. The automated linkage check is non-functional (NEW-2). Final-source macOS rebuild and fresh-host glibc portability are unestablished. The Formula intentionally uses Homebrew openssl@3."
+    },
+    {
+      "id": "OSS-HOMEBREW-ACK",
+      "status": "open (pending final-source Homebrew validation)",
+      "note": "runs.rs and the Formula are not resupplied. ACK socket behavior is as reviewed previously. A real install and test passed only at an earlier commit."
+    }
+  ],
+  "new_findings": [
+    {
+      "id": "NEW-3",
+      "severity": "high",
+      "file": "rust/src/team/sync.rs (load_facts); rust/src/team/membership.rs (load_environment)",
+      "title": "Unreceipted facts are re-judged against current authority, so cold load can permanently drop already-applied irreversible revocations",
+      "evidence": [
+        "For a line with no local receipt, load_facts checks fact_role_ok against fold(all current commits, facts accepted earlier in the file), not against authority at admission time.",
+        "Every line written before this build has no receipt. The same applies to a missing or replaced fact_admissions.json.",
+        "Example: admin X authored a connection_disabled or secret_version_revoked fact that was accepted and applied. Later X is demoted (member.set_role commit) or removed by a member.remove commit. Commits are not ordered relative to fact lines, so both changes are present in every prefix fold.",
+        "On the next load_environment or register_env, X's earlier fact is quarantined and facts.jsonl is rewritten. The fact overlay loses it, so derive_local can re-activate the connection or version locally.",
+        "Peers still hold the fact and replay it, but validate_incoming_fact against the current document rejects it again, so the divergence is permanent.",
+        "This contradicts team-sync \u00a77.4: facts are monotone and cannot be undone.",
+        "The same rule also discards historic incident facts whose author is no longer active."
+      ],
+      "resolution_conditions": [
+        "Never quarantine a line that was previously applied. For example, add a one-time signed migration receipt for all existing lines on first load by this build, and keep receipts durable and outside restore.",
+        "Alternatively, evaluate cold lines only for member_removed under the existing reciprocal rules, and never retract connection_disabled or secret_version_revoked facts that pass signature checks from an author who was an admin at any point in signed history.",
+        "Add tests: an unreceipted disable or revoke followed by demotion via member.set_role commit, and removal via member.remove commit. Assert the fact survives restart and the connection stays disabled."
+      ]
+    },
+    {
+      "id": "NEW-4",
+      "severity": "medium",
+      "file": "rust/src/team/membership.rs (author_commit, rotate_dek_bound); rust/src/team/sync.rs (handle_commit, submit_commit)",
+      "title": "Local authors do not observe received HLCs, so a repair rotation can sort before the unsafe generation it is meant to replace",
+      "evidence": [
+        "author_commit builds Hlc::new(0,0), observes only this author's previous commit, then ticks the wall clock. handle_commit and submit_commit never advance env.hlc from received commits.",
+        "A peer rotation with an HLC up to MAX_CLOCK_SKEW_MS (5 minutes) ahead is accepted, not deferred. A deferred one is released later at its future HLC.",
+        "If that rotation's generation still wraps a removed device, ensure_removal_rotations' new rotation sorts earlier, so dek.current does not change.",
+        "author_commit then accepts writes prepared under the unsafe current generation (generation_id == current). Each write call creates another rotation commit until wall time passes the peer HLC.",
+        "This contradicts \u00a75.2: work authored after observing another commit always sorts later."
+      ],
+      "resolution_conditions": [
+        "Before ticking in author_commit and TeamSync, observe the maximum HLC in the store, including released deferred commits.",
+        "After a repair rotation, assert the new generation became current. Otherwise fail closed with team_rekey_pending.",
+        "Add a test with a peer rotation up to 4 minutes ahead."
+      ]
+    },
+    {
+      "id": "NEW-5",
+      "severity": "low",
+      "file": "rust/src/team/sync.rs (handle_fact, publish_fact, store_fact, receipt_fact, load_facts)",
+      "title": "State lock held across network I/O, and receipt bookkeeping is quadratic",
+      "evidence": [
+        "handle_fact and publish_fact now hold StateDir::lock, an exclusive flock shared with the admin CLI and every state writer, through refold, broadcast, and send_removal_notice session.send calls. A slow or blocked peer send stalls all local state transactions.",
+        "store_fact also calls receipt_fact, which unwraps the device key through KMS, while holding the envs mutex.",
+        "fact_admissions.json is rewritten in full for every admitted fact, so cost grows with the square of the fact count.",
+        "Each unreceipted cold line triggers a full fold.",
+        "Durability ordering is safe: the receipt is written before the line append, and the rewrite uses tmp+fsync+rename. Neither fsyncs the parent directory."
+      ],
+      "resolution_conditions": [
+        "Release the state lock before broadcast and notices.",
+        "Load the device key outside the envs mutex.",
+        "Bound or append-structure the receipt store.",
+        "Optionally fsync the parent directory after renames."
+      ]
+    }
+  ],
+  "non_findings_checked": [
+    "Lock ordering is consistent: state lock before the envs mutex in store_fact, quarantine_local_fact, refold and handle_fact. No path takes the state lock while holding envs. Re-entrant nested locks in author_fact, load_facts and receipt_fact are safe per the supplied store.rs.",
+    "Admission receipts are Ed25519 signatures by the local device key over a domain-separated {env_id, hash}. Without the KMS-wrapped key they cannot be forged by writing the receipts file. A non-object receipts document falls back to the cold check.",
+    "ensure_removal_rotations reads the raw removal lines after load_facts has quarantined unauthorized ones, so unauthorized removals no longer drive rekeying.",
+    "rotate_dek_bound issues a dek.rotate op with no secret.put_version, so author_commit does not recurse into ensure_removal_rotations.",
+    "build-release.py still verifies the source SHA-256 before extraction, rejects unsafe archive members and rebuilds the SDK every run."
+  ],
+  "limitations": [
+    "Static review only. Nothing was built, executed or installed, and the file hashes were not checked against 9a9f007.",
+    "Supplied execution evidence refers to 06869b6 (focused tests; tooling being rerun) and e3d240e (SDK build). The full macOS and Linux matrices, archive install, final-source Homebrew and the bundled-SDK rebuild are pending for this head. No earlier PASS carries over.",
+    "install.sh, package-release.py, homebrew-source.py, notify.rs, runs.rs, the Formula, the workflows and the docs were not resupplied. Their status is carried forward from the last supplied text, assumed unchanged.",
+    "Transport (including send blocking or timeout behavior), vault and CLI callers, incident.rs and smtp.rs were not supplied. It is unverified that every production shared-secret write goes through membership::author_commit, and whether any shipped client emits member.remove commits.",
+    "The binary names in NEW-2 are inferred from package-release BINS, the Formula and install.sh. Cargo bin targets were not supplied.",
+    "openssl-sys environment precedence follows that crate's documented behavior and was not observed in this build."
+  ],
+  "review_model": "claude-opus-5-5",
+  "scope": "static source review of the supplied current files; execution acceptance requires validation at this exact head"
+}

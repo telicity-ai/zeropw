@@ -212,6 +212,19 @@ pub fn author_commit(
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
         ensure_removal_rotations(ctx, team, env_id)?;
         let doc = load_environment(ctx, env_id)?.document;
+        let current = doc["dek"]["current"].as_str().unwrap_or("");
+        let unsafe_current = doc["dek"]["generations"][current]["wraps"]
+            .as_object()
+            .is_none_or(|wraps| {
+                doc["members"].as_object().is_none_or(|members| {
+                    members
+                        .iter()
+                        .any(|(fp, member)| member["status"] != "active" && wraps.contains_key(fp))
+                })
+            });
+        if unsafe_current {
+            return Err(Error::policy_denied("team_rekey_pending"));
+        }
         if ops.iter().any(|op| {
             op["op"] == "secret.put_version" && op["generation_id"] != doc["dek"]["current"]
         }) {
@@ -221,6 +234,9 @@ pub fn author_commit(
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let store = CommitStore::new(ctx.state, env_id);
     let mut hlc = Hlc::new(0, 0);
+    for observed in store.all_commits()? {
+        hlc.observe(&observed.hlc)?;
+    }
     let seq = &store.last_seq(&device.fingerprint()?)? + 1;
     if seq > 1
         && let Some(previous) = store.get(&device.fingerprint()?, &seq - 1)?
@@ -250,6 +266,7 @@ pub fn author_fact(
 ) -> Result<Value> {
     let _lock = ctx.state.lock()?;
     if let Some(team) = team {
+        drop(_lock);
         return team.publish_fact(env_id, kind, target);
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
@@ -598,6 +615,9 @@ fn rotate_dek_bound(
         op["removal_fact_hash"] = json!(hash);
     }
     author_commit(ctx, team, env_id, vec![op])?;
+    if load_environment(ctx, env_id)?.document["dek"]["current"] != generation {
+        return Err(Error::policy_denied("team_rekey_pending"));
+    }
     audit(
         ctx,
         "team_dek_rotate",
@@ -697,6 +717,23 @@ pub(crate) fn ensure_removal_rotations(
         flag_rotation_recommended(ctx, team, env_id)?;
         rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?))?;
         doc = load_environment(ctx, env_id)?.document;
+    }
+    let current = doc["dek"]["current"].as_str().unwrap_or("");
+    let unsafe_current = doc["dek"]["generations"][current]["wraps"]
+        .as_object()
+        .is_some_and(|wraps| {
+            doc["members"].as_object().is_some_and(|members| {
+                members
+                    .iter()
+                    .any(|(fp, member)| member["status"] != "active" && wraps.contains_key(fp))
+            })
+        });
+    if unsafe_current {
+        if !sync::is_admin(&doc, &device.fingerprint()?) {
+            return Err(Error::policy_denied("team_rekey_pending"));
+        }
+        flag_rotation_recommended(ctx, team, env_id)?;
+        rotate_dek_bound(ctx, team, env_id, None)?;
     }
     Ok(())
 }

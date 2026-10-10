@@ -609,6 +609,213 @@ mod retry_tests {
     }
 
     #[test]
+    fn historical_revocations_survive_unreceipted_author_role_changes() {
+        for op in ["member.set_role", "member.remove"] {
+            let f = owner_with_admin_peer();
+            let fp = f.peer_key.fingerprint().unwrap();
+            let disable = sign_fact(
+                &f.peer_key,
+                &f.env_id,
+                "connection_disabled",
+                json!({"connection_id":"gh"}),
+                "10000-0000",
+            )
+            .unwrap();
+            let revoke = sign_fact(
+                &f.peer_key,
+                &f.env_id,
+                "secret_version_revoked",
+                json!({"secret_id":"synthetic", "version_id":"11111111111111111111111111111111"}),
+                "10001-0000",
+            )
+            .unwrap();
+            for fact in [&disable, &revoke] {
+                f.ctx
+                    .state
+                    .append_line(
+                        &format!("team/{}/facts.jsonl", f.env_id),
+                        &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+                    )
+                    .unwrap();
+            }
+            // Sign the role-change commit directly to model a legacy store
+            // without causing a new-version loader to create admission receipts.
+            let owner = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms).unwrap();
+            let store = CommitStore::new(f.ctx.state, &f.env_id);
+            let mut change = json!({"op":op,"fingerprint":fp});
+            if op == "member.set_role" {
+                change["role"] = json!("user");
+            }
+            let commit = commit::sign_commit(
+                &owner,
+                &f.env_id,
+                &store.last_seq(&owner.fingerprint().unwrap()).unwrap() + 1,
+                &Hlc::new(0, 0).tick(None),
+                &store.vector().unwrap(),
+                vec![change],
+            )
+            .unwrap();
+            assert_eq!(
+                commit::receive_commit(&store, &commit, commit::now_ms(), None).unwrap(),
+                "accepted"
+            );
+            let (facts, hashes, _) = load_facts(&f.ctx, &f.env_id).unwrap();
+            assert!(hashes.contains(&disable.hash().unwrap()));
+            assert!(hashes.contains(&revoke.hash().unwrap()));
+            assert!(facts.disabled_connections.contains("gh"));
+            assert_eq!(load_facts(&f.ctx, &f.env_id).unwrap().1, hashes);
+        }
+    }
+
+    #[test]
+    fn removal_repair_sorts_after_a_received_future_rotation() {
+        let f = owner_with_admin_peer();
+        let owner = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms).unwrap();
+        let generation = "44444444444444444444444444444444";
+        let mut wraps = Map::new();
+        for record in [owner.record().unwrap(), f.peer_key.record().unwrap()] {
+            wraps.insert(
+                record.fingerprint(),
+                crate::team::envelope::wrap_dek(&[9u8; 32], &f.env_id, generation, &record)
+                    .unwrap(),
+            );
+        }
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let future = commit::sign_commit(
+            &f.peer_key,
+            &f.env_id,
+            1,
+            &format!("{}-0000", commit::now_ms() + 240_000),
+            &store.vector().unwrap(),
+            vec![json!({"op":"dek.rotate","generation_id":generation,"wraps":wraps})],
+        )
+        .unwrap();
+        assert_eq!(
+            f.team.submit_commit(&f.env_id, &future).unwrap(),
+            "accepted"
+        );
+        let stale = valid_secret_version(&f, &json!(generation), b"synthetic-future-clock");
+        let removal = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":f.peer_key.fingerprint().unwrap()}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":removal.to_dict()}),
+            )
+            .unwrap();
+        assert_eq!(
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale])
+                .unwrap_err()
+                .reason,
+            "team_rekey_pending"
+        );
+        assert_ne!(
+            f.team.document(&f.env_id).unwrap()["dek"]["current"],
+            generation
+        );
+        let latest = store
+            .all_commits()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.author == owner.fingerprint().unwrap())
+            .max_by_key(|c| c.author_seq.clone())
+            .unwrap();
+        assert!(Hlc::parse(&latest.hlc).unwrap() > Hlc::parse(&future.hlc).unwrap());
+    }
+
+    #[test]
+    fn commit_removal_blocks_writes_under_old_wrapped_generation() {
+        let f = owner_with_admin_peer();
+        let owner = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms).unwrap();
+        let generation = "55555555555555555555555555555555";
+        let mut wraps = Map::new();
+        for record in [owner.record().unwrap(), f.peer_key.record().unwrap()] {
+            wraps.insert(
+                record.fingerprint(),
+                crate::team::envelope::wrap_dek(&[10u8; 32], &f.env_id, generation, &record)
+                    .unwrap(),
+            );
+        }
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"dek.rotate","generation_id":generation,"wraps":wraps})],
+        )
+        .unwrap();
+        let current = f.team.document(&f.env_id).unwrap()["dek"]["current"].clone();
+        let stale = valid_secret_version(&f, &current, b"synthetic-commit-removal");
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"member.remove","fingerprint":f.peer_key.fingerprint().unwrap()})],
+        )
+        .unwrap();
+        assert_eq!(
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale])
+                .unwrap_err()
+                .reason,
+            "team_rekey_pending"
+        );
+    }
+
+    #[test]
+    fn stale_live_process_cannot_admit_after_standalone_removal() {
+        let f = owner_with_admin_peer();
+        let third = DeviceKey::generate().record().unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"member.add","device":third.to_dict(),"name":"third","role":"user"})],
+        )
+        .unwrap();
+        crate::team::membership::author_fact(
+            &f.ctx,
+            None,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":f.peer_key.fingerprint().unwrap()}),
+        )
+        .unwrap();
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":third.fingerprint()}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":fact.to_dict()}),
+            )
+            .unwrap();
+        assert!(
+            !load_facts(&f.ctx, &f.env_id)
+                .unwrap()
+                .1
+                .contains(&fact.hash().unwrap())
+        );
+        assert_eq!(
+            crate::team::membership::load_environment(&f.ctx, &f.env_id)
+                .unwrap()
+                .document["members"][third.fingerprint()]["status"],
+            "active"
+        );
+    }
+
+    #[test]
     fn cold_loader_rejects_unadmitted_removed_admin_fact() {
         let f = owner_with_admin_peer();
         let third = DeviceKey::generate().record().unwrap();
@@ -745,6 +952,41 @@ mod retry_tests {
                 .get(v.fingerprint())
                 .is_none()
         );
+        assert!(
+            doc["dek"]["generations"][current]["wraps"]
+                .get(w.fingerprint())
+                .is_none()
+        );
+        // A delayed rotation can arrive after both facts and their repairs.
+        let generation = "33333333333333333333333333333333";
+        let mut wraps = Map::new();
+        for record in [
+            owner.record().unwrap(),
+            f.peer_key.record().unwrap(),
+            w.clone(),
+        ] {
+            wraps.insert(
+                record.fingerprint(),
+                crate::team::envelope::wrap_dek(&[8u8; 32], &f.env_id, generation, &record)
+                    .unwrap(),
+            );
+        }
+        crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id,
+            vec![json!({"op":"dek.rotate","generation_id":generation,"wraps":wraps,"removal_fact_hash":fv.hash().unwrap()})]).unwrap();
+        let unsafe_write = valid_secret_version(&f, &json!(generation), b"synthetic-late-rotation");
+        assert_eq!(
+            crate::team::membership::author_commit(
+                &f.ctx,
+                Some(&f.team),
+                &f.env_id,
+                vec![unsafe_write]
+            )
+            .unwrap_err()
+            .reason,
+            "team_rekey_pending"
+        );
+        let doc = f.team.document(&f.env_id).unwrap();
+        let current = doc["dek"]["current"].as_str().unwrap();
         assert!(
             doc["dek"]["generations"][current]["wraps"]
                 .get(w.fingerprint())
@@ -1964,17 +2206,17 @@ pub fn fact_role_ok(doc: &Value, kind: &str, author: &str, target: &Value) -> bo
 pub(crate) fn receipt_fact(ctx: &Context, fact: &Fact) -> Result<()> {
     let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let path = format!("team/{}/fact_admissions.json", fact.env_id);
-    let mut receipts = ctx.state.read_json(&path, json!({}))?;
     let hash = fact.hash()?;
     let message = canon(
         &json!({"domain":"zeropw-local-fact-admission-v1","env_id":fact.env_id,"hash":hash}),
     )?;
-    receipts
-        .as_object_mut()
-        .ok_or_else(|| Error::state("state_corrupt"))?
-        .insert(hash, json!(pybase64::b64encode(&device.sign(&message)?)));
-    ctx.state.write_json(&path, &receipts)
+    ctx.state.append_line(
+        &format!("team/{}/fact_admissions.jsonl", fact.env_id),
+        &pyjson::dumps(
+            &json!({"hash":hash,"sig":pybase64::b64encode(&device.sign(&message)?)}),
+            DumpOptions::compact_sorted(),
+        )?,
+    )
 }
 
 pub fn load_facts(
@@ -1992,9 +2234,68 @@ pub fn load_facts(
         return Ok((facts, hashes, authors));
     }
     let local = DeviceKey::load_or_create(state, ctx.kms)?.record()?;
-    let receipts = state.read_json(&format!("team/{env_id}/fact_admissions.json"), json!({}))?;
+    let mut receipts =
+        state.read_json(&format!("team/{env_id}/fact_admissions.json"), json!({}))?;
+    for line in state.read_lines(&format!("team/{env_id}/fact_admissions.jsonl"), None)? {
+        if let Ok(entry) = pyjson::loads(&line)
+            && let (Some(hash), Some(sig)) = (entry["hash"].as_str(), entry["sig"].as_str())
+        {
+            if let Some(map) = receipts.as_object_mut() {
+                map.insert(hash.into(), json!(sig));
+            }
+        }
+    }
     let commits = CommitStore::new(state, env_id).all_commits()?;
     let identity = fold::fold(env_id, commits.clone(), None, None, None, None)?.document;
+    // Irreversible historical revocations survive later role changes. A
+    // signed history prefix proves the author once had the required role.
+    let mut historical_admins = HashSet::new();
+    let mut historical_members = HashSet::new();
+    let needs_history = lines
+        .iter()
+        .filter_map(|line| pyjson::loads(line).ok())
+        .filter_map(|value| Fact::from_dict(&value).ok())
+        .any(|fact| {
+            if fact.kind == "member_removed" {
+                return false;
+            }
+            let Ok(hash) = fact.hash() else {
+                return false;
+            };
+            let Ok(message) = canon(
+                &json!({"domain":"zeropw-local-fact-admission-v1","env_id":env_id,"hash":hash}),
+            ) else {
+                return false;
+            };
+            !receipts[&hash]
+                .as_str()
+                .and_then(|sig| pybase64::b64decode_strict(sig).ok())
+                .is_some_and(|sig| ed25519::verify(&local.sign_pub, &message, &sig))
+        });
+    if needs_history {
+        let mut ordered = commits.clone();
+        ordered.sort_by(|a, b| {
+            Hlc::parse(&a.hlc)
+                .unwrap_or_else(|_| (0.into(), 0.into()))
+                .cmp(&Hlc::parse(&b.hlc).unwrap_or_else(|_| (0.into(), 0.into())))
+                .then(a.author.cmp(&b.author))
+                .then(a.author_seq.cmp(&b.author_seq))
+        });
+        for count in 1..=ordered.len() {
+            let doc =
+                fold::fold(env_id, ordered[..count].to_vec(), None, None, None, None)?.document;
+            if let Some(members) = doc["members"].as_object() {
+                for (fp, member) in members {
+                    if member["status"] == "active" {
+                        historical_members.insert(fp.clone());
+                        if member["role"] == "admin" {
+                            historical_admins.insert(fp.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let mut retained = Vec::new();
     for line in &lines {
         let candidate = pyjson::loads(line)
@@ -2017,7 +2318,14 @@ pub fn load_facts(
                     .as_str()
                     .and_then(|s| pybase64::b64decode_strict(s).ok())
                     .is_some_and(|sig| ed25519::verify(&local.sign_pub, &message, &sig));
-                let authorized = if admitted {
+                let historical = match fact.kind.as_str() {
+                    "connection_disabled" | "secret_version_revoked" => {
+                        historical_admins.contains(&fact.author)
+                    }
+                    "incident" => historical_members.contains(&fact.author),
+                    _ => false,
+                };
+                let authorized = if admitted || historical {
                     true
                 } else {
                     let mut prefix = facts.clone();
@@ -2827,17 +3135,21 @@ impl TeamSync {
                 target["fingerprint"].as_str().unwrap_or(""),
             )?
         } else {
-            self.document(env_id)?
+            crate::team::membership::load_environment(&self.ctx, env_id)?.document
         };
         if !fact_role_ok(&doc, kind, &fp, &target) {
             return Err(Error::policy_denied("team_fact_not_authorized"));
         }
+        let observed = CommitStore::new(self.ctx.state, env_id).all_commits()?;
         let hlc = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            envs.get_mut(env_id)
-                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?
-                .hlc
-                .tick(None)
+            let env = envs
+                .get_mut(env_id)
+                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
+            for commit in observed {
+                env.hlc.observe(&commit.hlc)?;
+            }
+            env.hlc.tick(None)
         };
         let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
         if self.store_fact(env_id, &fact)? {
@@ -2847,6 +3159,7 @@ impl TeamSync {
                 self.drain_removed(env_id, fp);
             }
             self.refold(env_id)?;
+            drop(_lock);
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if kind == "member_removed" {
@@ -2860,6 +3173,16 @@ impl TeamSync {
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
         let hash = fact.hash()?;
         let _lock = self.ctx.state.lock()?;
+        {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let env = envs
+                .get(env_id)
+                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
+            if env.fact_hashes.contains(&hash) {
+                return Ok(false);
+            }
+        }
+        receipt_fact(&self.ctx, fact)?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -2867,7 +3190,6 @@ impl TeamSync {
         if env.fact_hashes.contains(&hash) {
             return Ok(false);
         }
-        receipt_fact(&self.ctx, fact)?;
         let line = pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?;
         self.ctx
             .state
@@ -3497,20 +3819,14 @@ impl TeamSync {
         member_device_record(self.relaxed_document(env_id).ok()?.as_ref(), fp)
     }
     fn role_document_for_removal(&self, env_id: &str, author: &str, target: &str) -> Result<Value> {
-        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        let env = envs
-            .get(env_id)
-            .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-        let mut facts = env.facts.clone();
+        let (mut facts, _, authors) = load_facts(&self.ctx, env_id)?;
         if facts.removed_members.contains(author)
-            && env
-                .removal_authors
+            && authors
                 .get(author)
                 .is_some_and(|set| set.len() == 1 && set.contains(target))
         {
             facts.removed_members.remove(author);
         }
-        drop(envs);
         Ok(fold::fold(
             env_id,
             CommitStore::new(self.ctx.state, env_id).all_commits()?,
@@ -3551,7 +3867,7 @@ impl TeamSync {
                 fact.target["fingerprint"].as_str().unwrap_or(""),
             )?
         } else {
-            self.document(env_id)?
+            crate::team::membership::load_environment(&self.ctx, env_id)?.document
         };
         if !fact_role_ok(&doc, &fact.kind, &fact.author, &fact.target) {
             self.audit_fact_rejected(env_id, fact, "team_fact_not_authorized");
@@ -3565,7 +3881,19 @@ impl TeamSync {
             let Some(env) = envs.get(env_id) else {
                 return Ok(());
             };
-            if env.pending_removal_repairs.is_empty() || Instant::now() < env.next_removal_repair {
+            let current = env.document["dek"]["current"].as_str().unwrap_or("");
+            let unsafe_current = env.document["dek"]["generations"][current]["wraps"]
+                .as_object()
+                .is_some_and(|wraps| {
+                    env.document["members"].as_object().is_some_and(|members| {
+                        members.iter().any(|(fp, member)| {
+                            member["status"] != "active" && wraps.contains_key(fp)
+                        })
+                    })
+                });
+            if (env.pending_removal_repairs.is_empty() && !unsafe_current)
+                || Instant::now() < env.next_removal_repair
+            {
                 return Ok(());
             }
             env.pending_removal_repairs.clone()
@@ -3618,6 +3946,7 @@ impl TeamSync {
                 self.drain_removed(env_id, fp);
             }
             self.refold(env_id)?;
+            drop(_lock);
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(
                 env_id,

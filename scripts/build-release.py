@@ -8,6 +8,7 @@ import pathlib
 import platform
 import subprocess
 import tarfile
+import importlib.util
 
 OPENSSL_VERSION = '3.5.9'
 OPENSSL_SHA256 = '603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a'
@@ -91,7 +92,10 @@ def main():
     environment.pop('OPENSSL_NO_VENDOR', None)
     run(['cargo', 'build', '--locked', '--release', '--features', 'bundled-openssl',
          '--target', args.target, '--manifest-path', str(root / 'rust/Cargo.toml'), '--bins'], root, environment)
-    for name in ('zeropw-admin', 'zeropw-agent', 'zeropw_session', 'zeropw-demo', 'zeropw-democli'):
+    spec = importlib.util.spec_from_file_location('package_release', root / 'scripts/package-release.py')
+    package = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package)
+    for name in package.BINS:
         verify_linkage(output / 'cargo-target' / args.target / 'release' / name, platform.system())
     notices = output / 'THIRD_PARTY_LICENSES.md'
     run(['python3', str(root / 'scripts/dependency-licenses.py'), '--features', 'bundled-openssl',

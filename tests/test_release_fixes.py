@@ -139,6 +139,18 @@ class ReleaseFixTests(unittest.TestCase):
         normal = subprocess.run([str(gate)],env={},capture_output=True,text=True)
         self.assertEqual(normal.returncode,0,normal.stderr)
 
+    def test_linkage_gate_rejects_dynamic_openssl(self):
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('release_builder', ROOT / 'scripts/build-release.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for system, text in [('Darwin','binary:\n /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib'),
+                             ('Linux',' 0x0001 (NEEDED) Shared library: [libcrypto.so.3]')]:
+            with patch.object(module.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=text)):
+                with self.assertRaises(SystemExit): module.verify_linkage(pathlib.Path('/tmp/synthetic'),system)
+        with patch.object(module.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='binary:\n /usr/lib/libSystem.B.dylib')):
+            module.verify_linkage(pathlib.Path('/tmp/synthetic'),'Darwin')
+
     def test_release_environment_removes_precedence_overrides(self):
         spec = importlib.util.spec_from_file_location('release_builder', ROOT / 'scripts/build-release.py')
         module = importlib.util.module_from_spec(spec)
