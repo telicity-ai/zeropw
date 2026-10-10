@@ -210,7 +210,7 @@ pub fn author_commit(
 ) -> Result<Commit> {
     let _lock = ctx.state.lock()?;
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
-        ensure_self_removal_rotations(ctx, team, env_id)?;
+        ensure_removal_rotations(ctx, team, env_id)?;
         let doc = load_environment(ctx, env_id)?.document;
         if ops.iter().any(|op| {
             op["op"] == "secret.put_version" && op["generation_id"] != doc["dek"]["current"]
@@ -534,12 +534,9 @@ pub fn remove_member(
     env_id: &str,
     fingerprint: &str,
 ) -> Result<Value> {
+    let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let doc = if let Some(team) = team {
-        team.document(env_id)?
-    } else {
-        load_environment(ctx, env_id)?.document
-    };
+    let doc = load_environment(ctx, env_id)?.document;
     if doc["owner"].is_null() {
         return Err(Error::not_found("team_env_not_found"));
     }
@@ -554,7 +551,8 @@ pub fn remove_member(
     )?;
     let mut rotated = None;
     if is_admin && caller != fingerprint {
-        rotated = Some(rotate_dek(ctx, team, env_id)?);
+        let hash = sync::Fact::from_dict(&fact)?.hash()?;
+        rotated = Some(rotate_dek_bound(ctx, team, env_id, Some(&hash))?);
         flag_rotation_recommended(ctx, team, env_id)?;
     }
     audit(
@@ -566,9 +564,6 @@ pub fn remove_member(
     Ok(
         json!({"env_id":env_id,"fingerprint":fingerprint,"fact":fact,"dek_rotated":rotated.is_some(),"new_generation":rotated}),
     )
-}
-fn rotate_dek(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<String> {
-    rotate_dek_bound(ctx, team, env_id, None)
 }
 fn rotate_dek_bound(
     ctx: &Context,
@@ -609,47 +604,57 @@ fn rotate_dek_bound(
     );
     Ok(generation)
 }
-/// Repair a received or persisted self-removal before accepting new secret writes.
+/// Repair a received or persisted removal before accepting new secret writes.
 /// The signed rotation marker survives restart and prevents repeated rekeying.
-pub(crate) fn ensure_self_removal_rotations(
+pub(crate) fn ensure_removal_rotations(
     ctx: &Context,
     team: Option<&TeamSync>,
     env_id: &str,
 ) -> Result<()> {
+    let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let mut doc = if let Some(team) = team {
-        team.document(env_id)?
-    } else {
-        load_environment(ctx, env_id)?.document
-    };
+    let mut doc = load_environment(ctx, env_id)?.document;
     let (facts, _, _) = sync::load_facts(ctx.state, env_id)?;
-    let mut identity_doc = None;
-    for line in ctx
+    let removals = ctx
         .state
         .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
-    {
-        let Ok(value) = pyjson::loads(&line) else {
-            continue;
-        };
-        let Ok(fact) = sync::Fact::from_dict(&value) else {
-            continue;
-        };
-        if fact.env_id != env_id
-            || fact.kind != "member_removed"
-            || fact.target["fingerprint"] != fact.author
-            || !facts.removed_members.contains(&fact.author)
-        {
+        .iter()
+        .filter_map(|line| pyjson::loads(line).ok())
+        .filter_map(|value| sync::Fact::from_dict(&value).ok())
+        .filter(|fact| {
+            fact.env_id == env_id
+                && fact.kind == "member_removed"
+                && sync::validate_fact_target(&fact.kind, &fact.target).is_ok()
+        })
+        .collect::<Vec<_>>();
+    let targets = removals
+        .iter()
+        .map(|fact| {
+            Ok((
+                fact.hash()?,
+                fact.target["fingerprint"].as_str().unwrap_or("").to_owned(),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let mut identity_doc = None;
+    for fact in removals {
+        let target = fact.target["fingerprint"].as_str().unwrap_or("");
+        if !facts.removed_members.contains(target) {
             continue;
         }
-        let hash = fact.hash()?;
-        if doc["dek"]["generations"]
+        // One completed rotation already excludes this permanently removed
+        // device; duplicate confirmations must not keep creating generations.
+        let completed = doc["dek"]["generations"]
             .as_object()
             .is_some_and(|generations| {
-                generations
-                    .values()
-                    .any(|generation| generation["removal_fact_hash"] == hash)
-            })
-        {
+                generations.values().any(|generation| {
+                    generation["removal_fact_hash"]
+                        .as_str()
+                        .and_then(|hash| targets.get(hash))
+                        .is_some_and(|fp| fp == target)
+                })
+            });
+        if completed {
             continue;
         }
         if identity_doc.is_none() {
@@ -667,9 +672,9 @@ pub(crate) fn ensure_self_removal_rotations(
                 .document,
             );
         }
-        let record_value = &identity_doc.as_ref().expect("identity fold exists")["members"]
-            [&fact.author]["device"];
-        let Ok(record) = DeviceRecord::from_dict(record_value) else {
+        let Ok(record) = DeviceRecord::from_dict(
+            &identity_doc.as_ref().expect("identity fold exists")["members"][&fact.author]["device"],
+        ) else {
             continue;
         };
         if !sync::verify_fact(&fact, &record) {
@@ -679,12 +684,8 @@ pub(crate) fn ensure_self_removal_rotations(
             return Err(Error::policy_denied("team_rekey_pending"));
         }
         flag_rotation_recommended(ctx, team, env_id)?;
-        rotate_dek_bound(ctx, team, env_id, Some(&hash))?;
-        doc = if let Some(team) = team {
-            team.document(env_id)?
-        } else {
-            load_environment(ctx, env_id)?.document
-        };
+        rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?))?;
+        doc = load_environment(ctx, env_id)?.document;
     }
     Ok(())
 }

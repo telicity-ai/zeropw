@@ -718,7 +718,7 @@ mod retry_tests {
             );
             assert!(doc["dek"]["generations"][gid]["wraps"].get(&peer).is_none());
             let vector = CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap();
-            f.team.repair_self_removals(&f.env_id).unwrap();
+            f.team.repair_member_removals(&f.env_id).unwrap();
             assert_eq!(
                 CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap(),
                 vector
@@ -816,7 +816,7 @@ mod retry_tests {
         );
         assert!(
             !f.team.envs.lock().unwrap()[&f.env_id]
-                .pending_self_removal_repairs
+                .pending_removal_repairs
                 .is_empty()
         );
         let events = f
@@ -1972,8 +1972,8 @@ struct EnvState {
     /// Bumped wherever Python clears `relaxed_cache` (`_refold`), so a fold
     /// computed concurrently with that invalidation is never cached.
     relaxed_generation: u64,
-    pending_self_removal_repairs: HashSet<String>,
-    next_self_removal_repair: Instant,
+    pending_removal_repairs: HashSet<String>,
+    next_removal_repair: Instant,
 }
 impl EnvState {
     fn new(
@@ -2006,8 +2006,8 @@ impl EnvState {
             alerted_overrides: HashSet::new(),
             relaxed_cache: None,
             relaxed_generation: 0,
-            pending_self_removal_repairs: HashSet::new(),
-            next_self_removal_repair: Instant::now(),
+            pending_removal_repairs: HashSet::new(),
+            next_removal_repair: Instant::now(),
         }
     }
 }
@@ -2209,9 +2209,8 @@ impl TeamSync {
             if let Ok(value) = pyjson::loads(&line)
                 && let Ok(fact) = Fact::from_dict(&value)
                 && fact.kind == "member_removed"
-                && fact.author == fact.target["fingerprint"]
             {
-                env.pending_self_removal_repairs.insert(fact.hash()?);
+                env.pending_removal_repairs.insert(fact.hash()?);
             }
         }
         // `snapshot = F.load_latest_snapshot(...)`; `if snapshot is not
@@ -2584,9 +2583,9 @@ impl TeamSync {
             .append_line(&format!("team/{env_id}/facts.jsonl"), &line)?;
         env.fact_hashes.insert(hash.clone());
         apply_fact(&mut env.facts, fact);
-        if fact.kind == "member_removed" && fact.target["fingerprint"] == fact.author {
-            env.pending_self_removal_repairs.insert(hash.clone());
-            env.next_self_removal_repair = Instant::now();
+        if fact.kind == "member_removed" {
+            env.pending_removal_repairs.insert(hash.clone());
+            env.next_removal_repair = Instant::now();
         }
         env.known_fact_lines += 1;
         if fact.kind == "member_removed" {
@@ -3211,16 +3210,15 @@ impl TeamSync {
         let env = envs
             .get(env_id)
             .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-        if !env.facts.removed_members.contains(author)
-            || env
+        let mut facts = env.facts.clone();
+        if facts.removed_members.contains(author)
+            && env
                 .removal_authors
                 .get(author)
-                .is_none_or(|set| set.len() != 1 || !set.contains(target))
+                .is_some_and(|set| set.len() == 1 && set.contains(target))
         {
-            return Ok(env.document.clone());
+            facts.removed_members.remove(author);
         }
-        let mut facts = env.facts.clone();
-        facts.removed_members.remove(author);
         drop(envs);
         Ok(fold::fold(
             env_id,
@@ -3270,33 +3268,31 @@ impl TeamSync {
         }
         Ok(true)
     }
-    fn repair_self_removals(&self, env_id: &str) -> Result<()> {
+    fn repair_member_removals(&self, env_id: &str) -> Result<()> {
         let pending = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get(env_id) else {
                 return Ok(());
             };
-            if env.pending_self_removal_repairs.is_empty()
-                || Instant::now() < env.next_self_removal_repair
-            {
+            if env.pending_removal_repairs.is_empty() || Instant::now() < env.next_removal_repair {
                 return Ok(());
             }
-            env.pending_self_removal_repairs.clone()
+            env.pending_removal_repairs.clone()
         };
         let doc = self.document(env_id)?;
         if !is_admin(&doc, &self.device.fingerprint()?) {
             return Ok(());
         }
         let result =
-            crate::team::membership::ensure_self_removal_rotations(&self.ctx, Some(self), env_id);
+            crate::team::membership::ensure_removal_rotations(&self.ctx, Some(self), env_id);
         {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(env) = envs.get_mut(env_id) {
                 if result.is_ok() {
-                    env.pending_self_removal_repairs
+                    env.pending_removal_repairs
                         .retain(|hash| !pending.contains(hash));
                 } else {
-                    env.next_self_removal_repair = Instant::now() + Duration::from_secs(1);
+                    env.next_removal_repair = Instant::now() + Duration::from_secs(1);
                 }
             }
         }
@@ -3342,7 +3338,7 @@ impl TeamSync {
                 }
             }
         }
-        self.repair_self_removals(env_id)?;
+        self.repair_member_removals(env_id)?;
         Ok(())
     }
     fn handle_peers(&self, env_id: &str, message: &Value) {
@@ -3765,7 +3761,7 @@ impl TeamSync {
     fn poll_env(&self, env_id: &str, now: Instant) -> Result<()> {
         self.pick_up_local_commits(env_id)?;
         self.pick_up_local_facts(env_id)?;
-        self.repair_self_removals(env_id)?;
+        self.repair_member_removals(env_id)?;
         self.poll_incident_outbox(env_id, now);
         let store = CommitStore::new(self.ctx.state, env_id);
         let released = store.release_deferred(commit::now_ms())?;
@@ -3984,8 +3980,8 @@ impl TeamSync {
                         if fact.kind == "member_removed"
                             && fact.target["fingerprint"] == fact.author
                         {
-                            env.pending_self_removal_repairs.insert(fact.hash()?);
-                            env.next_self_removal_repair = Instant::now();
+                            env.pending_removal_repairs.insert(fact.hash()?);
+                            env.next_removal_repair = Instant::now();
                         }
                         if fact.kind == "member_removed" {
                             if let Some(fp) = fact.target["fingerprint"].as_str() {
@@ -4131,6 +4127,15 @@ impl TeamSync {
             .ctx
             .state
             .read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
+        if conflicts.as_object().is_none_or(|values| {
+            values.values().any(|value| {
+                !value["target"].as_str().is_some_and(valid_fp)
+                    || !value["author"].as_str().is_some_and(valid_fp)
+                    || !value["hash"].as_str().is_some_and(valid_fp)
+            })
+        }) {
+            return Err(Error::state("state_corrupt").with_detail("team_removal_conflicts"));
+        }
         let rejected_removals: Vec<_> = conflicts
             .as_object()
             .ok_or_else(|| Error::state("state_corrupt"))?
