@@ -91,7 +91,7 @@ def main():
     environment.pop('OPENSSL_NO_VENDOR', None)
     run(['cargo', 'build', '--locked', '--release', '--features', 'bundled-openssl',
          '--target', args.target, '--manifest-path', str(root / 'rust/Cargo.toml'), '--bins'], root, environment)
-    for name in ('zeropw', 'zeropw-admin', 'zeropw-gateway', 'zeropw-signer', 'zeropw-response'):
+    for name in ('zeropw-admin', 'zeropw-agent', 'zeropw_session', 'zeropw-demo', 'zeropw-democli'):
         verify_linkage(output / 'cargo-target' / args.target / 'release' / name, platform.system())
     notices = output / 'THIRD_PARTY_LICENSES.md'
     run(['python3', str(root / 'scripts/dependency-licenses.py'), '--features', 'bundled-openssl',
