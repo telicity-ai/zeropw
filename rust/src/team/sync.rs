@@ -695,6 +695,13 @@ mod retry_tests {
                         &json!({"type":"FACT","fact":fact.to_dict()}),
                     )
                     .unwrap();
+                let pending = crate::team::membership::author_commit(
+                    &f.ctx,
+                    Some(&f.team),
+                    &f.env_id,
+                    vec![old_write.clone()],
+                );
+                assert_eq!(pending.unwrap_err().reason, "team_rekey_pending");
             } else {
                 assert!(f.team.validate_incoming_fact(&f.env_id, &fact).unwrap());
                 f.team.store_fact(&f.env_id, &fact).unwrap();
@@ -862,13 +869,14 @@ mod retry_tests {
                 &json!({"type":"FACT","fact":removal.to_dict()}),
             )
             .unwrap();
+
+        let result =
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale]);
+        assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
         assert_ne!(
             f.team.document(&f.env_id).unwrap()["dek"]["current"],
             before
         );
-        let result =
-            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale]);
-        assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
         let vector = CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap();
         let confirmation = sign_fact(
             &third_key,
@@ -885,6 +893,7 @@ mod retry_tests {
                 &json!({"type":"FACT","fact":confirmation.to_dict()}),
             )
             .unwrap();
+        f.team.repair_member_removals(&f.env_id).unwrap();
         assert_eq!(
             CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap(),
             vector
@@ -3396,7 +3405,6 @@ impl TeamSync {
                 }
             }
         }
-        self.repair_member_removals(env_id)?;
         Ok(())
     }
     fn handle_peers(&self, env_id: &str, message: &Value) {
@@ -4189,7 +4197,9 @@ impl TeamSync {
             values.values().any(|value| {
                 !value["target"].as_str().is_some_and(valid_fp)
                     || !value["author"].as_str().is_some_and(valid_fp)
-                    || !value["hash"].as_str().is_some_and(valid_fp)
+                    || !value["hash"].as_str().is_some_and(|hash| {
+                        hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
             })
         }) {
             return Err(Error::state("state_corrupt").with_detail("team_removal_conflicts"));
