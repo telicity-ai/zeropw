@@ -17,7 +17,7 @@ rust/target/debug/zeropw-demo
 
 Build and run tests on a disposable CI runner or isolated VM without vault, gateway, signer, or coordinator credentials. Rust must support edition 2024. The demo uses an embedded test server and synthetic credentials; exit code 0 means its checks passed.
 
-Release installation is being prepared. No release assets have been published yet. Until the release gate is complete, build from source. See [release preparation](docs/releasing.md) for the installation and validation checklist.
+Release installation is being prepared. No release assets have been published yet. You can build from source; the [release preparation guide](docs/releasing.md) also describes the Homebrew source formula and archive installer. Their full release validation is still pending.
 
 ## Binaries
 

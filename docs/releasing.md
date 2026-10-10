@@ -23,3 +23,17 @@ The installer does not use sudo, initialize a vault, start a service, modify she
 - Installer tests use synthetic executables and disposable directories.
 - Full product validation and real release-archive installation are pending for this preparation branch.
 - Release assets, Homebrew validation, English documentation migration, private-information audit, exact-commit adversarial review remain open.
+
+## Homebrew source installation
+
+Before versioned release bottles exist, use a source formula pinned to the repository's main branch:
+
+```sh
+brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
+brew install --HEAD telicity-ai/zeropw/zeropw
+brew test telicity-ai/zeropw/zeropw
+```
+
+This needs Git access while the repository is private. Public users can use the same commands after the owner changes visibility. `--HEAD` follows main and builds with Rust; it is not a versioned binary release. A versioned formula with exact archive checksums remains a release gate.
+
+For CI, create an isolated local Homebrew tap from the formula and point its source at the exact checked-out commit. This validates the formula without requiring product secrets or changing the public tap.
