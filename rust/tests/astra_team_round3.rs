@@ -154,6 +154,7 @@ impl Session for QueueSession {
         self.created
     }
 }
+#[track_caller]
 fn wait(mut predicate: impl FnMut() -> bool) {
     let end = Instant::now() + Duration::from_secs(8);
     while Instant::now() < end {
