@@ -2552,12 +2552,17 @@ impl TeamSync {
         };
         let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
         if self.store_fact(env_id, &fact)? {
+            if fact.kind == "member_removed"
+                && let Some(fp) = fact.target["fingerprint"].as_str()
+            {
+                self.drain_removed(env_id, fp);
+            }
             self.refold(env_id)?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if kind == "member_removed" {
-                if let Some(fp) = fact.target["fingerprint"].as_str() {
-                    self.drain_removed(env_id, fp);
+                if fact.target["fingerprint"].as_str().is_some() {
+                    self.send_removal_notice(env_id, &fact, None);
                 }
             }
         }
@@ -2617,6 +2622,29 @@ impl TeamSync {
             }
         }
     }
+    fn send_removal_notice(&self, env_id: &str, fact: &Fact, exclude: Option<&str>) {
+        let Some(target) = fact.target["fingerprint"].as_str() else {
+            return;
+        };
+        if exclude == Some(target) {
+            return;
+        }
+        let session = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .and_then(|env| env.sessions.get(target))
+            .cloned();
+        if let Some(session) = session
+            && session
+                .send(&json!({"type":"FACT","fact":fact.to_dict()}))
+                .is_err()
+        {
+            self.drop_session(env_id, target, Some(&session));
+        }
+    }
+
     fn drain_removed(&self, env_id: &str, fp: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
@@ -2626,11 +2654,10 @@ impl TeamSync {
             env.backoff.remove(fp);
             env.next_attempt.remove(fp);
             if env.sessions.contains_key(fp) {
-                env.draining.insert(
-                    fp.into(),
+                env.draining.entry(fp.into()).or_insert_with(|| {
                     Instant::now()
-                        + Duration::from_secs_f64(self.ctx.config.team_removed_drain_seconds),
-                );
+                        + Duration::from_secs_f64(self.ctx.config.team_removed_drain_seconds)
+                });
             }
         }
     }
@@ -3297,6 +3324,11 @@ impl TeamSync {
             return Ok(());
         }
         if self.validate_incoming_fact(env_id, &fact)? && self.store_fact(env_id, &fact)? {
+            if fact.kind == "member_removed"
+                && let Some(fp) = fact.target["fingerprint"].as_str()
+            {
+                self.drain_removed(env_id, fp);
+            }
             self.refold(env_id)?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(
@@ -3305,8 +3337,8 @@ impl TeamSync {
                 Some(&session.peer().fingerprint()),
             );
             if fact.kind == "member_removed" {
-                if let Some(fp) = fact.target["fingerprint"].as_str() {
-                    self.drain_removed(env_id, fp);
+                if fact.target["fingerprint"].as_str().is_some() {
+                    self.send_removal_notice(env_id, &fact, Some(&session.peer().fingerprint()));
                 }
             }
         }
@@ -3974,12 +4006,17 @@ impl TeamSync {
             if !inserted {
                 continue;
             }
+            if fact.kind == "member_removed"
+                && let Some(fp) = fact.target["fingerprint"].as_str()
+            {
+                self.drain_removed(env_id, fp);
+            }
             self.refold(env_id)?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if fact.kind == "member_removed" {
-                if let Some(fp) = fact.target["fingerprint"].as_str() {
-                    self.drain_removed(env_id, fp);
+                if fact.target["fingerprint"].as_str().is_some() {
+                    self.send_removal_notice(env_id, &fact, None);
                 }
             }
         }
