@@ -42,7 +42,7 @@ def main():
     environment = dict(os.environ)
     if not archive.exists():
         partial = archive.with_suffix('.partial')
-        run(['curl', '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
+        run(['curl', '--disable', '--fail', '--silent', '--show-error', '--location', '--proto', '=https',
              '--proto-redir', '=https', '--connect-timeout', '15', '--max-time', '300',
              '--max-filesize', '70000000', OPENSSL_URL, '-o', str(partial)], root, environment)
         partial.replace(archive)

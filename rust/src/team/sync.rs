@@ -833,6 +833,64 @@ mod retry_tests {
         );
     }
 
+    #[test]
+    fn received_ordinary_removal_rekeys_and_duplicate_confirmation_does_not_repeat_it() {
+        let f = owner_with_admin_peer();
+        let third_key = DeviceKey::generate();
+        let third = third_key.record().unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"member.add","device":third.to_dict(),"name":"third","role":"user"})],
+        )
+        .unwrap();
+        let before = f.team.document(&f.env_id).unwrap()["dek"]["current"].clone();
+        let stale = valid_secret_version(&f, &before, b"synthetic-pre-removal");
+        let removal = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":third.fingerprint()}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":removal.to_dict()}),
+            )
+            .unwrap();
+        assert_ne!(
+            f.team.document(&f.env_id).unwrap()["dek"]["current"],
+            before
+        );
+        let result =
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale]);
+        assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
+        let vector = CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap();
+        let confirmation = sign_fact(
+            &third_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":third.fingerprint()}),
+            "10001-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":confirmation.to_dict()}),
+            )
+            .unwrap();
+        assert_eq!(
+            CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap(),
+            vector
+        );
+    }
+
     /// Gap 1: `_relaxed_document` is cached by the store vector and cleared
     /// only by `_refold`, so a removed member's device record is resolved
     /// without re-folding the whole log per FACT/INCIDENT -- and the

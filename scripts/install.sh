@@ -54,9 +54,9 @@ else
   command -v curl >/dev/null || fail 'curl is required'
   name="zeropw-${version}-${target}.tar.gz"
   base="https://github.com/telicity-ai/zeropw/releases/download/${version}"
-  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
     "$base/$name" -o "$work/release.tar.gz"
-  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+  curl --disable --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
     "$base/$name.sha256" -o "$work/SHA256SUMS"
   digest=$(awk -v name="$name" '$2 == name {print $1}' "$work/SHA256SUMS")
   [[ "$digest" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'missing or ambiguous release checksum'

@@ -121,6 +121,24 @@ class ReleaseFixTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "/tmp/source#{raise 'unsafe'}/slash\\quote'")
 
+    def test_bundled_build_gate_rejects_missing_static_flag_and_wrong_sdk_version(self):
+        fixture = self.fixture()
+        gate = fixture.root / 'build-gate'
+        subprocess.run(['rustc', str(ROOT / 'rust/build.rs'), '-o', str(gate)], check=True, capture_output=True)
+        sdk = fixture.root / 'sdk'
+        (sdk / 'include/openssl').mkdir(parents=True)
+        (sdk / 'lib').mkdir()
+        for name in ('libssl.a', 'libcrypto.a'):
+            (sdk / 'lib' / name).write_bytes(b'not an actual SDK')
+        header = sdk / 'include/openssl/opensslv.h'
+        header.write_text('# define OPENSSL_VERSION_MAJOR 3\n# define OPENSSL_VERSION_MINOR 5\n# define OPENSSL_VERSION_PATCH 8\n')
+        for static in ('', '1'):
+            result = subprocess.run([str(gate)],env={'CARGO_FEATURE_BUNDLED_OPENSSL':'1',
+                'OPENSSL_DIR':str(sdk),'OPENSSL_STATIC':static},capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+        normal = subprocess.run([str(gate)],env={},capture_output=True,text=True)
+        self.assertEqual(normal.returncode,0,normal.stderr)
+
     def test_identical_release_inputs_produce_identical_archives(self):
         fixture = self.fixture()
         bins = fixture.root / 'bins'
