@@ -677,8 +677,8 @@ pub(crate) fn ensure_self_removal_rotations(
         if !sync::is_admin(&doc, &device.fingerprint()?) {
             return Err(Error::policy_denied("team_rekey_pending"));
         }
-        rotate_dek_bound(ctx, team, env_id, Some(&hash))?;
         flag_rotation_recommended(ctx, team, env_id)?;
+        rotate_dek_bound(ctx, team, env_id, Some(&hash))?;
     }
     Ok(())
 }

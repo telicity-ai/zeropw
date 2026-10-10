@@ -969,7 +969,10 @@ fn op_dek_rotate(
     )?;
     if let Some(hash) = op.get("removal_fact_hash") {
         py_setitem(
-            py_getitem_mut(py_getitem_mut(dek, "generations")?, gen_id)?,
+            py_getitem_mut(
+                py_getitem_mut(dek, "generations")?,
+                gen_id.as_str().ok_or_else(doc_corrupt)?,
+            )?,
             &json!("removal_fact_hash"),
             hash.clone(),
         )?;

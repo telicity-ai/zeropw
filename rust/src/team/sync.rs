@@ -544,7 +544,7 @@ mod retry_tests {
             .state
             .append_line(
                 &format!("team/{}/facts.jsonl", f.env_id),
-                &crate::pyjson::dumps(&bad.to_dict(), crate::pyjson::DumpOptions::default())
+                &crate::pyjson::dumps(&bad.to_dict(), crate::pyjson::DumpOptions::compact_sorted())
                     .unwrap(),
             )
             .unwrap();
@@ -674,7 +674,7 @@ mod retry_tests {
                 &f.env_id,
                 vec![json!({"op":"secret.put","generation_id":before})],
             );
-            assert_eq!(result.unwrap_err().code, "team_rekey_pending");
+            assert_eq!(result.unwrap_err().name, "team_rekey_pending");
         }
     }
 
