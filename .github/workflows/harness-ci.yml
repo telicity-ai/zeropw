@@ -55,5 +55,28 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
+      - name: Run installation boundary tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Run the Rust verification matrix
         run: rust/verify.sh
+
+      - name: Build and install a native release archive
+        shell: bash
+        run: |
+          cargo build --locked --release --manifest-path rust/Cargo.toml --bins
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64) target=aarch64-apple-darwin ;;
+            Darwin:x86_64) target=x86_64-apple-darwin ;;
+            Linux:x86_64) target=x86_64-unknown-linux-gnu ;;
+            *) exit 1 ;;
+          esac
+          python3 scripts/package-release.py --version v0.1.0 --target "$target" \
+            --bin-dir rust/target/release --out-dir dist
+          archive="dist/zeropw-v0.1.0-${target}.tar.gz"
+          checksum=$(awk '{print $1}' "$archive.sha256")
+          bash scripts/install.sh --archive "$archive" --sha256 "$checksum" --prefix "$RUNNER_TEMP/zeropw-installed"
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-agent" --help
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-admin" --help
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-demo"
+
