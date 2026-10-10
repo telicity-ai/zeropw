@@ -39,3 +39,5 @@ This needs Git access while the repository is private. Public users can use the 
 For CI, create an isolated local Homebrew tap from the formula and point its source at the exact checked-out commit. This validates the formula without requiring product secrets or changing the public tap.
 
 Default documentation already translated: README, GUIDE, product intent and security design. Remaining maintained documents and user-facing demo/notification strings are still being migrated. Historical fixtures remain unchanged.
+
+For the user-selected Mac mini execution path, see [self-hosted runner setup](self-hosted-runner.md). Hosted verification is manual-only to avoid consuming hosted minutes on pushes and PRs.

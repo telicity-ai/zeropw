@@ -12,7 +12,7 @@ Use the default `self-hosted`, `macOS`, and `ARM64` labels and add `zeropw-isola
 
 ## Enable and run
 
-GitHub Actions is currently disabled for this repository. Registering a runner is not enough: the owner must enable Actions when ready. Do not enable paid hosted runs inadvertently: the existing `Harness CI` workflow still targets hosted Linux/macOS runners on push/PR and needs an explicit operating decision before Actions is enabled. This preparation has not changed repository settings.
+GitHub Actions is currently disabled for this repository. Registering a runner is not enough: the owner must enable Actions when ready. The existing hosted `Harness CI` workflow is now manual-only, so pushes and PRs do not consume hosted minutes. Do not dispatch that hosted workflow if you want to avoid hosted charges. This preparation has not changed repository settings.
 
 The workflow is `.github/workflows/self-hosted-verification.yml`. After the workflow exists on the default branch:
 
