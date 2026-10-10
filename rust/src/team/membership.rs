@@ -208,31 +208,18 @@ pub fn author_commit(
     env_id: &str,
     ops: Vec<Value>,
 ) -> Result<Commit> {
-    if ops.iter().any(|op| op["op"] == "secret.put") {
+    let _lock = ctx.state.lock()?;
+    if ops.iter().any(|op| op["op"] == "secret.put_version") {
         ensure_self_removal_rotations(ctx, team, env_id)?;
-        let doc = if let Some(team) = team {
-            team.document(env_id)?
-        } else {
-            load_environment(ctx, env_id)?.document
-        };
-        let rekeyed = doc["dek"]["generations"]
-            .as_object()
-            .is_some_and(|generations| {
-                generations
-                    .values()
-                    .any(|generation| generation.get("removal_fact_hash").is_some())
-            });
-        if rekeyed
-            && ops
-                .iter()
-                .any(|op| op["op"] == "secret.put" && op["generation_id"] != doc["dek"]["current"])
-        {
+        let doc = load_environment(ctx, env_id)?.document;
+        if ops.iter().any(|op| {
+            op["op"] == "secret.put_version" && op["generation_id"] != doc["dek"]["current"]
+        }) {
             return Err(Error::policy_denied("team_rekey_pending"));
         }
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let store = CommitStore::new(ctx.state, env_id);
-    let _lock = ctx.state.lock()?;
     let mut hlc = Hlc::new(0, 0);
     let seq = &store.last_seq(&device.fingerprint()?)? + 1;
     if seq > 1
@@ -589,11 +576,8 @@ fn rotate_dek_bound(
     env_id: &str,
     removal: Option<&str>,
 ) -> Result<String> {
-    let doc = if let Some(team) = team {
-        team.document(env_id)?
-    } else {
-        load_environment(ctx, env_id)?.document
-    };
+    let _lock = ctx.state.lock()?;
+    let doc = load_environment(ctx, env_id)?.document;
     let mut dek = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut dek);
     let generation = token(16);
@@ -633,6 +617,13 @@ pub(crate) fn ensure_self_removal_rotations(
     env_id: &str,
 ) -> Result<()> {
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let mut doc = if let Some(team) = team {
+        team.document(env_id)?
+    } else {
+        load_environment(ctx, env_id)?.document
+    };
+    let (facts, _, _) = sync::load_facts(ctx.state, env_id)?;
+    let mut identity_doc = None;
     for line in ctx
         .state
         .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
@@ -646,46 +637,42 @@ pub(crate) fn ensure_self_removal_rotations(
         if fact.env_id != env_id
             || fact.kind != "member_removed"
             || fact.target["fingerprint"] != fact.author
+            || !facts.removed_members.contains(&fact.author)
         {
             continue;
         }
-        let doc = if let Some(team) = team {
-            team.document(env_id)?
-        } else {
-            load_environment(ctx, env_id)?.document
-        };
-        let (mut facts, _, _) = sync::load_facts(ctx.state, env_id)?;
-        if !facts.removed_members.contains(&fact.author) {
-            continue;
-        }
-        // The ordinary fold may omit a device removed before its enrollment
-        // operation. Resolve its signing record without granting it authority.
-        facts.removed_members.clear();
-        let identity_doc = fold::fold(
-            env_id,
-            CommitStore::new(ctx.state, env_id).all_commits()?,
-            Some(&facts),
-            None,
-            None,
-            None,
-        )?
-        .document;
-        let Ok(record) = DeviceRecord::from_dict(&identity_doc["members"][&fact.author]["device"])
-        else {
-            continue;
-        };
-        if !sync::verify_fact(&fact, &record) {
-            continue;
-        }
         let hash = fact.hash()?;
-        let completed = doc["dek"]["generations"]
+        if doc["dek"]["generations"]
             .as_object()
             .is_some_and(|generations| {
                 generations
                     .values()
                     .any(|generation| generation["removal_fact_hash"] == hash)
-            });
-        if completed {
+            })
+        {
+            continue;
+        }
+        if identity_doc.is_none() {
+            let mut relaxed = facts.clone();
+            relaxed.removed_members.clear();
+            identity_doc = Some(
+                fold::fold(
+                    env_id,
+                    CommitStore::new(ctx.state, env_id).all_commits()?,
+                    Some(&relaxed),
+                    None,
+                    None,
+                    None,
+                )?
+                .document,
+            );
+        }
+        let record_value = &identity_doc.as_ref().expect("identity fold exists")["members"]
+            [&fact.author]["device"];
+        let Ok(record) = DeviceRecord::from_dict(record_value) else {
+            continue;
+        };
+        if !sync::verify_fact(&fact, &record) {
             continue;
         }
         if !sync::is_admin(&doc, &device.fingerprint()?) {
@@ -693,6 +680,11 @@ pub(crate) fn ensure_self_removal_rotations(
         }
         flag_rotation_recommended(ctx, team, env_id)?;
         rotate_dek_bound(ctx, team, env_id, Some(&hash))?;
+        doc = if let Some(team) = team {
+            team.document(env_id)?
+        } else {
+            load_environment(ctx, env_id)?.document
+        };
     }
     Ok(())
 }

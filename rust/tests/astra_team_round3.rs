@@ -756,3 +756,74 @@ fn conflict_override_alert_is_exactly_once_and_only_on_loser_including_restart()
         b.team.document(&env).unwrap()
     );
 }
+
+#[test]
+fn concurrent_third_party_removals_are_visible_and_reconciled_by_active_owner() {
+    let root = TempDir::new().unwrap();
+    let a = Node::new(&root, "order-a");
+    let b = Node::new(&root, "order-b");
+    let x = Node::new(&root, "author-x");
+    let z = Node::new(&root, "remover-z");
+    let w = Node::new(&root, "target-w");
+    let env = commit::new_env_id(&a.fp()).unwrap();
+    let commits = vec![
+        genesis(&a, &env, "1000-0000"),
+        member(&a, &env, 2, "2000-0000", &b, "admin"),
+        member(&a, &env, 3, "3000-0000", &x, "admin"),
+        member(&a, &env, 4, "4000-0000", &z, "admin"),
+        member(&a, &env, 5, "5000-0000", &w, "user"),
+    ];
+    a.seed(&env, &commits);
+    b.seed(&env, &commits);
+    let ax = a.session(&env, &x);
+    let az = a.session(&env, &z);
+    let bx = b.session(&env, &x);
+    let bz = b.session(&env, &z);
+    let ba = b.session(&env, &a);
+    let remove_w = fact(
+        &x,
+        &env,
+        "member_removed",
+        json!({"fingerprint":w.fp()}),
+        "6000-0000",
+    );
+    let remove_x = fact(
+        &z,
+        &env,
+        "member_removed",
+        json!({"fingerprint":x.fp()}),
+        "7000-0000",
+    );
+    inject(&ax, &remove_w);
+    wait(|| has_fact(&a, &env, &remove_w));
+    inject(&az, &remove_x);
+    wait(|| has_fact(&a, &env, &remove_x));
+    inject(&bz, &remove_x);
+    wait(|| has_fact(&b, &env, &remove_x));
+    inject(&bx, &remove_w);
+    wait(|| {
+        !b.team.status(&env).unwrap()["rejected_removals"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    });
+    assert!(!a.team.is_active_member(&env, &w.fp()));
+    assert!(b.team.is_active_member(&env, &w.fp()));
+    assert_eq!(
+        b.team.status(&env).unwrap()["rejected_removals"][0]["target"],
+        w.fp()
+    );
+    let reconciliation = a
+        .team
+        .publish_fact(&env, "member_removed", json!({"fingerprint":w.fp()}))
+        .unwrap();
+    ba.push(json!({"type":"FACT","fact":reconciliation}));
+    wait(|| !b.team.is_active_member(&env, &w.fp()));
+    assert!(
+        b.team.status(&env).unwrap()["rejected_removals"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!a.team.is_active_member(&env, &w.fp()));
+}

@@ -225,6 +225,14 @@ Facts are a monotonic overlay reapplied after folding, restore and synchronizati
 
 Two admins concurrently removing each other can both produce valid reciprocal facts even after the peer-removal fact was received; both end removed and the owner can reenroll fresh keys. The protected owner remains available. Receive-only draining is necessary to avoid losing a reciprocal fact in flight: stop sends immediately, accept only the relevant removal exception during the bounded window, then close. Other traffic remains forbidden.
 
+### Concurrent removal admission
+
+The fact overlay is order-independent for the same accepted fact set. Admission uses the receiver's current authority state. If X removes W while Z removes X, a node receiving Z's removal first rejects X's removal of W; another node may already have accepted it. This conflict does not automatically converge. Backdating X's HLC does not restore X's authority.
+
+The rejecting node records the signed, peer-held removal in `team status` under `rejected_removals`, with its author, target and fact hash. An active admin reviews the target and reissues `team remove --env <PROJECT/ENVIRONMENT> --device <TARGET_FINGERPRINT>` if removal is intended. The new authorized fact converges on the nodes, and the resolved target disappears from the pending status list. Do not assume uniform revocation while an offline peer or a pending membership conflict remains. Provider-side credential rotation still invalidates previously known credentials.
+
+Local `secret.put_version` commits must use the current DEK generation, including after ordinary admin removal. Pending self-removal repair and generation validation are serialized with the local state transaction. Received historical commits may still contain versions encrypted under an older known generation; they retain their signed history and are not reencrypted. This does not give a removed device new signing or membership authority, and it is not an immediate global revocation guarantee for offline peers.
+
 ## 8. Local grants and roles
 
 Owners/admins edit connections/secrets and invite/manage non-owner members. Only the owner transfers ownership; the owner cannot be removed. A member can remove its own non-owner device. Every member can create/revoke local caller grants, authorize local risky requests and view sanitized environment/history. Only admins receive incident summaries.
@@ -247,6 +255,7 @@ Mutual authentication/encryption and independent verification preserve agent non
 | --- | --- |
 | Malicious user device owner | Local reveal requires passphrase/audit, but the owner controls state and can extract shared secrets. Trust humans explicitly. |
 | Runtime/trusted-process compromise | Local containment and the incident protocol help; trusted-process compromise exposes the shared environment and requires provider rotation. Automatic incident-hook wiring is still absent. |
+| Concurrent administrator removals | Check `team status` → `rejected_removals`; an active admin reviews and reissues intended removals. Automatic membership convergence is not guaranteed during this conflict. |
 | Removed member | Deny new sessions/traffic and rotate generations; prior credentials require provider rotation. |
 | Forgery/replay/sequence skipping | Signatures, environment binding, consecutive sequences, shape/role/target checks; signing-key compromise remains a limit. |
 | Clock manipulation | Defer over-5-minute future commits; within-limit skew can influence concurrent ordering, with signed history. |

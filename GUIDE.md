@@ -106,6 +106,8 @@ zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420
 
 When an admin changes a secret or connection, connected nodes receive the change. Use `team status` to inspect synchronization state. Offline devices catch up after reconnecting, but can continue using their previous state in the meantime, including grants revoked elsewhere. Do not run `team compact` during initial onboarding: transferring compacted snapshots to new devices is not implemented.
 
+If `team status` reports `rejected_removals`, an active administrator must review the targets and reissue the intended removals. Concurrent removals can leave different accepted fact sets until this reconciliation completes.
+
 To remove a member, the administrator runs `team remove --env team-app/dev --device '<FINGERPRINT>'`. Replace credentials at the provider to invalidate keys that the removed member could previously read. Even a `user` device's trusted process can decrypt shared secrets; invite only teammates you trust as people.
 
 ## 4. Agent usage

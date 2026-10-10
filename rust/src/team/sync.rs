@@ -572,6 +572,19 @@ mod retry_tests {
             f.team.document(&f.env_id).unwrap()["members"][third.fingerprint()]["status"],
             "active"
         );
+        assert!(
+            crate::team::membership::load_environment(&f.ctx, &f.env_id)
+                .unwrap()
+                .document["members"][third.fingerprint()]["status"]
+                == "active"
+        );
+        assert!(
+            !f.ctx
+                .state
+                .read_lines(&format!("team/{}/rejected_facts.jsonl", f.env_id), None)
+                .unwrap()
+                .is_empty()
+        );
         let peer_team = TeamSync::new(
             f.ctx.clone(),
             Arc::new(StubTransport {
@@ -580,6 +593,10 @@ mod retry_tests {
             f.peer_key,
         );
         peer_team.register_env(&f.env_id).unwrap();
+        assert_eq!(
+            peer_team.document(&f.env_id).unwrap()["members"][third.fingerprint()]["status"],
+            "active"
+        );
         assert!(
             peer_team
                 .publish_fact(
@@ -637,12 +654,31 @@ mod retry_tests {
         );
     }
 
+    fn valid_secret_version(f: &OwnerWithAdminPeer, generation: &Value, value: &[u8]) -> Value {
+        let doc = f.team.document(&f.env_id).unwrap();
+        let device = DeviceKey::load_or_create(f.ctx.state, f.ctx.kms).unwrap();
+        let gid = generation.as_str().unwrap();
+        let wrap = &doc["dek"]["generations"][gid]["wraps"][device.fingerprint().unwrap()];
+        let dek = crate::team::envelope::unwrap_dek(wrap, &f.env_id, gid, &device).unwrap();
+        let ciphertext = crate::team::envelope::encrypt_secret(
+            &dek,
+            &f.env_id,
+            "rekey-boundary",
+            "0123456789abcdef",
+            value,
+        )
+        .unwrap();
+        json!({"op":"secret.put_version","secret_id":"rekey-boundary","kind":"api_key", "generation_id":generation,
+            "version_id":"0123456789abcdef","ciphertext":ciphertext,"public":{}})
+    }
+
     #[test]
     fn self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation() {
         for receive in [true, false] {
             let f = owner_with_admin_peer();
             let peer = f.peer_key.fingerprint().unwrap();
             let before = f.team.document(&f.env_id).unwrap()["dek"]["current"].clone();
+            let old_write = valid_secret_version(&f, &before, b"synthetic-old-generation");
             let fact = sign_fact(
                 &f.peer_key,
                 &f.env_id,
@@ -660,41 +696,141 @@ mod retry_tests {
                     )
                     .unwrap();
             } else {
-                // Simulate a crash after the verified removal is durable but before rekeying.
                 assert!(f.team.validate_incoming_fact(&f.env_id, &fact).unwrap());
                 f.team.store_fact(&f.env_id, &fact).unwrap();
                 f.team.refold(&f.env_id).unwrap();
-                crate::team::membership::ensure_self_removal_rotations(&f.ctx, None, &f.env_id)
-                    .unwrap();
+                let pending = crate::team::membership::author_commit(
+                    &f.ctx,
+                    None,
+                    &f.env_id,
+                    vec![old_write.clone()],
+                );
+                assert_eq!(pending.unwrap_err().reason, "team_rekey_pending");
                 f.team.pick_up_local_commits(&f.env_id).unwrap();
             }
             let doc = f.team.document(&f.env_id).unwrap();
-            let generation = doc["dek"]["current"].as_str().unwrap();
-            assert_ne!(doc["dek"]["current"], before);
+            let generation = doc["dek"]["current"].clone();
+            assert_ne!(generation, before);
+            let gid = generation.as_str().unwrap();
             assert_eq!(
-                doc["dek"]["generations"][generation]["removal_fact_hash"],
+                doc["dek"]["generations"][gid]["removal_fact_hash"],
                 fact.hash().unwrap()
             );
-            assert!(
-                doc["dek"]["generations"][generation]["wraps"]
-                    .get(&peer)
-                    .is_none()
-            );
+            assert!(doc["dek"]["generations"][gid]["wraps"].get(&peer).is_none());
             let vector = CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap();
             f.team.repair_self_removals(&f.env_id).unwrap();
             assert_eq!(
                 CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap(),
                 vector
             );
-            // A newly prepared version cannot keep encrypting with the departed member's old key.
             let result = crate::team::membership::author_commit(
                 &f.ctx,
                 Some(&f.team),
                 &f.env_id,
-                vec![json!({"op":"secret.put","generation_id":before})],
+                vec![old_write],
             );
             assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
+            let fresh = valid_secret_version(&f, &generation, b"synthetic-new-generation");
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![fresh])
+                .unwrap();
+            assert_eq!(
+                f.team.document(&f.env_id).unwrap()["secrets"]["rekey-boundary"]["versions"]["0123456789abcdef"]
+                    ["generation"],
+                generation
+            );
         }
+    }
+
+    #[test]
+    fn ordinary_admin_removal_also_blocks_stale_generation_writes() {
+        let f = owner_with_admin_peer();
+        let before = f.team.document(&f.env_id).unwrap()["dek"]["current"].clone();
+        let stale = valid_secret_version(&f, &before, b"synthetic-pre-removal");
+        crate::team::membership::remove_member(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            &f.peer_key.fingerprint().unwrap(),
+        )
+        .unwrap();
+        let result =
+            crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![stale]);
+        assert_eq!(result.unwrap_err().reason, "team_rekey_pending");
+        let after = f.team.document(&f.env_id).unwrap()["dek"]["current"].clone();
+        let fresh = valid_secret_version(&f, &after, b"synthetic-post-removal");
+        crate::team::membership::author_commit(&f.ctx, Some(&f.team), &f.env_id, vec![fresh])
+            .unwrap();
+    }
+
+    #[test]
+    fn persistent_rekey_failure_does_not_stop_another_environment() {
+        let f = owner_with_admin_peer();
+        f.ctx.projects.create("other", &["dev"]).unwrap();
+        let second = crate::team::membership::share_environment(
+            &f.ctx,
+            None,
+            "other",
+            "dev",
+            "owner",
+            "synthetic-admin",
+        )
+        .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        f.team.register_env(&second).unwrap();
+        let peer = f.peer_key.fingerprint().unwrap();
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
+        std::fs::create_dir(
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/rotation_flags.json", f.env_id)),
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":fact.to_dict()}),
+            )
+            .unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            None,
+            &second,
+            vec![json!({"op":"settings.update","sync_interval_seconds":42})],
+        )
+        .unwrap();
+        f.team.poll().unwrap();
+        assert_eq!(
+            f.team.document(&second).unwrap()["settings"]["sync_interval_seconds"],
+            42
+        );
+        assert!(
+            !f.team.envs.lock().unwrap()[&f.env_id]
+                .pending_self_removal_repairs
+                .is_empty()
+        );
+        let events = f
+            .ctx
+            .state
+            .read_lines(crate::audit::AUDIT_FILE, None)
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .filter_map(|line| pyjson::loads(line).ok())
+                .any(|event| event["event"] == "team_dek_rotate"
+                    && event["reason"] == "team_rekey_repair_failed")
+        );
     }
 
     /// Gap 1: `_relaxed_document` is cached by the store vector and cleared
@@ -1836,6 +1972,8 @@ struct EnvState {
     /// Bumped wherever Python clears `relaxed_cache` (`_refold`), so a fold
     /// computed concurrently with that invalidation is never cached.
     relaxed_generation: u64,
+    pending_self_removal_repairs: HashSet<String>,
+    next_self_removal_repair: Instant,
 }
 impl EnvState {
     fn new(
@@ -1868,6 +2006,8 @@ impl EnvState {
             alerted_overrides: HashSet::new(),
             relaxed_cache: None,
             relaxed_generation: 0,
+            pending_self_removal_repairs: HashSet::new(),
+            next_self_removal_repair: Instant::now(),
         }
     }
 }
@@ -2060,11 +2200,20 @@ impl TeamSync {
                 );
             }
         }
-        env.known_fact_lines = self
+        let persisted_lines = self
             .ctx
             .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
-            .len();
+            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        env.known_fact_lines = persisted_lines.len();
+        for line in persisted_lines {
+            if let Ok(value) = pyjson::loads(&line)
+                && let Ok(fact) = Fact::from_dict(&value)
+                && fact.kind == "member_removed"
+                && fact.author == fact.target["fingerprint"]
+            {
+                env.pending_self_removal_repairs.insert(fact.hash()?);
+            }
+        }
         // `snapshot = F.load_latest_snapshot(...)`; `if snapshot is not
         // None: env.last_snapshot_total = sum((snapshot.get("vector") or
         // {}).values())`. A non-dict snapshot (even a falsy one) or a truthy
@@ -2428,8 +2577,12 @@ impl TeamSync {
         self.ctx
             .state
             .append_line(&format!("team/{env_id}/facts.jsonl"), &line)?;
-        env.fact_hashes.insert(hash);
+        env.fact_hashes.insert(hash.clone());
         apply_fact(&mut env.facts, fact);
+        if fact.kind == "member_removed" && fact.target["fingerprint"] == fact.author {
+            env.pending_self_removal_repairs.insert(hash.clone());
+            env.next_self_removal_repair = Instant::now();
+        }
         env.known_fact_lines += 1;
         if fact.kind == "member_removed" {
             if let Some(fp) = fact.target["fingerprint"].as_str() {
@@ -3091,9 +3244,45 @@ impl TeamSync {
         Ok(true)
     }
     fn repair_self_removals(&self, env_id: &str) -> Result<()> {
+        let pending = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get(env_id) else {
+                return Ok(());
+            };
+            if env.pending_self_removal_repairs.is_empty()
+                || Instant::now() < env.next_self_removal_repair
+            {
+                return Ok(());
+            }
+            env.pending_self_removal_repairs.clone()
+        };
         let doc = self.document(env_id)?;
-        if is_admin(&doc, &self.device.fingerprint()?) {
-            crate::team::membership::ensure_self_removal_rotations(&self.ctx, Some(self), env_id)?;
+        if !is_admin(&doc, &self.device.fingerprint()?) {
+            return Ok(());
+        }
+        let result =
+            crate::team::membership::ensure_self_removal_rotations(&self.ctx, Some(self), env_id);
+        {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(env) = envs.get_mut(env_id) {
+                if result.is_ok() {
+                    env.pending_self_removal_repairs
+                        .retain(|hash| !pending.contains(hash));
+                } else {
+                    env.next_self_removal_repair = Instant::now() + Duration::from_secs(1);
+                }
+            }
+        }
+        if result.is_err() {
+            let _ = self.ctx.audit.record(
+                "team_dek_rotate",
+                RecordArgs {
+                    result: Some("failed"),
+                    reason: Some("team_rekey_repair_failed"),
+                    extra: vec![("env_id", json!(env_id))],
+                    ..Default::default()
+                },
+            );
         }
         Ok(())
     }
@@ -3185,7 +3374,37 @@ impl TeamSync {
             None,
         );
     }
+    fn record_removal_conflict(&self, env_id: &str, fact: &Fact) -> Result<()> {
+        if validate_fact_target(&fact.kind, &fact.target).is_err() {
+            return Ok(());
+        }
+        let Some(record) = self.known_record(env_id, &fact.author) else {
+            return Ok(());
+        };
+        if !verify_fact(fact, &record) {
+            return Ok(());
+        }
+        let target = fact.target["fingerprint"].as_str().unwrap_or("");
+        if self.known_record(env_id, target).is_none() {
+            return Ok(());
+        }
+        let _lock = self.ctx.state.lock()?;
+        let path = format!("team/{env_id}/removal_conflicts.json");
+        let mut values = self.ctx.state.read_json(&path, json!({}))?;
+        let map = values
+            .as_object_mut()
+            .ok_or_else(|| Error::state("state_corrupt"))?;
+        map.insert(
+            target.into(),
+            json!({"target":target,"author":fact.author,"hash":fact.hash()?}),
+        );
+        self.ctx.state.write_json(&path, &values)
+    }
+
     fn audit_fact_rejected(&self, env_id: &str, fact: &Fact, reason: &str) {
+        if reason == "team_fact_not_authorized" && fact.kind == "member_removed" {
+            let _ = self.record_removal_conflict(env_id, fact);
+        }
         let _ = self.ctx.audit.record(
             "team_fact_rejected",
             RecordArgs {
@@ -3648,32 +3867,81 @@ impl TeamSync {
         }
         Ok(())
     }
+    fn quarantine_local_fact(&self, env_id: &str, rejected: &str, reason: &str) -> Result<()> {
+        let _lock = self.ctx.state.lock()?;
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        let env = envs
+            .get_mut(env_id)
+            .ok_or_else(|| Error::not_found("team_env_unknown"))?;
+        if let Ok(value) = pyjson::loads(rejected)
+            && let Ok(fact) = Fact::from_dict(&value)
+            && env.fact_hashes.contains(&fact.hash()?)
+        {
+            return Ok(());
+        }
+        let path = format!("team/{env_id}/facts.jsonl");
+        let lines = self.ctx.state.read_lines(&path, None)?;
+        let retained: Vec<_> = lines
+            .iter()
+            .filter(|line| line.as_str() != rejected)
+            .collect();
+        if retained.len() == lines.len() {
+            return Ok(());
+        }
+        self.ctx.state.append_line(
+            &format!("team/{env_id}/rejected_facts.jsonl"),
+            &pyjson::dumps(
+                &json!({"line":rejected,"reason":reason}),
+                DumpOptions::compact_sorted(),
+            )?,
+        )?;
+        let mut text = retained
+            .iter()
+            .map(|line| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        self.ctx.state.write_bytes(&path, text.as_bytes())?;
+        env.known_fact_lines = retained.len();
+        Ok(())
+    }
+
     fn pick_up_local_facts(&self, env_id: &str) -> Result<()> {
         let lines = self
             .ctx
             .state
             .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
-        let start = {
-            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            let env = envs
-                .get_mut(env_id)
-                .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-            let start = env.known_fact_lines;
-            env.known_fact_lines = lines.len();
-            start
-        };
-        for line in lines.iter().skip(start) {
+        // Scan by accepted fact hash, not a prefix count: another process may
+        // append an unvalidated line before an already accepted remote fact.
+        for line in &lines {
             let Ok(value) = pyjson::loads(line) else {
+                self.quarantine_local_fact(env_id, line, "team_fact_malformed")?;
                 continue;
             };
             let Ok(fact) = Fact::from_dict(&value) else {
+                self.quarantine_local_fact(env_id, line, "team_fact_malformed")?;
                 continue;
             };
+            let hash = fact.hash()?;
+            if self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(env_id)
+                .is_some_and(|env| env.fact_hashes.contains(&hash))
+            {
+                continue;
+            }
+            if fact.kind == "incident" {
+                continue;
+            }
             if fact.env_id != env_id
-                || fact.kind == "incident"
                 || !FACT_KINDS.contains(&fact.kind.as_str())
                 || !self.validate_incoming_fact(env_id, &fact)?
             {
+                self.quarantine_local_fact(env_id, line, "team_fact_rejected")?;
                 continue;
             }
             let inserted = {
@@ -3681,6 +3949,12 @@ impl TeamSync {
                 if let Some(env) = envs.get_mut(env_id) {
                     if env.fact_hashes.insert(fact.hash()?) {
                         apply_fact(&mut env.facts, &fact);
+                        if fact.kind == "member_removed"
+                            && fact.target["fingerprint"] == fact.author
+                        {
+                            env.pending_self_removal_repairs.insert(fact.hash()?);
+                            env.next_self_removal_repair = Instant::now();
+                        }
                         if fact.kind == "member_removed" {
                             if let Some(fp) = fact.target["fingerprint"].as_str() {
                                 env.removal_authors
@@ -3816,8 +4090,26 @@ impl TeamSync {
             .ok_or_else(|| Error::not_found("team_env_unknown"))?;
         let mut sessions: Vec<_> = env.sessions.keys().cloned().collect();
         sessions.sort();
+        let conflicts = self
+            .ctx
+            .state
+            .read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
+        let rejected_removals: Vec<_> = conflicts
+            .as_object()
+            .ok_or_else(|| Error::state("state_corrupt"))?
+            .values()
+            .filter(|value| {
+                value["target"].as_str().is_some_and(|target| {
+                    valid_fp(target) && !env.facts.removed_members.contains(target)
+                })
+            })
+            .map(|value| {
+                json!({"target":value["target"],"author":value["author"],"hash":value["hash"],
+                "reason":"team_fact_not_authorized"})
+            })
+            .collect();
         Ok(
-            json!({"env_id":env_id,"vector":CommitStore::new(self.ctx.state,env_id).vector()?,"sessions":sessions,"synced_at":env.synced_at.map(|ts|iso(Some(ts))),"pending_deferred":CommitStore::new(self.ctx.state,env_id).deferred_commits()?.len()}),
+            json!({"env_id":env_id,"vector":CommitStore::new(self.ctx.state,env_id).vector()?,"sessions":sessions,"synced_at":env.synced_at.map(|ts|iso(Some(ts))),"pending_deferred":CommitStore::new(self.ctx.state,env_id).deferred_commits()?.len(),"rejected_removals":rejected_removals}),
         )
     }
 
