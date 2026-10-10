@@ -69,3 +69,11 @@ The runtime/build dependency closure was collected for all four declared targets
 Packaging/installer tooling at `3c89f02` includes `THIRD_PARTY_LICENSES.md` alongside README and MIT license and installs them under `share/doc/zeropw`. In the isolated Linux ARM64 VM, repackaging the existing `a1a9ea7` release binaries and installing into a fresh prefix passed both installed CLI checks and all 47 demo checks, with `INSTALLED_NOTICES_VERIFICATION_PASS`. Binary source and packaging source are deliberately recorded separately. Notice collection covers declared licenses and upstream root notice files; it is not an independent legal review of all nested source.
 
 All 15 current installer/information-scanner tests pass, including refusal of a missing notice file and symlinked documentation directories.
+
+### Current verification and documentation status
+
+The unchanged product execution target at source snapshot `3c89f02` passed three complete default-parallel `runs` repetitions (19 tests each), retaining the original timeout assertions. This is stress evidence, not proof of the historical failure mechanism. A new complete Linux matrix at `d4a99ec` is in progress; its live job log and terminal exit file are preserved in the isolated VM.
+
+Compromise-response and implementation documentation are now English, including rule thresholds, recovery order, known limits, and all original acceptance-table test identifiers. Team protocol documentation remains to be translated. All 18 installer/scanner/licensing tests pass, and updated documentation links/shell examples were checked.
+
+The repository currently has zero registered self-hosted runners. Native macOS and Homebrew execution require the owner's isolated Mac mini runner setup; no hosted-minute or repository-setting changes were made.
