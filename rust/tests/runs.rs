@@ -611,3 +611,63 @@ fn patterns_match_python_oracle_for_binary_and_alignment_cases() {
         assert_eq!(runs::credential_patterns(&secret), expected, "{secret:?}");
     }
 }
+
+#[test]
+fn ack_socket_respects_short_sandbox_tmpdir_and_survives_long_tmpdir() {
+    use std::process::Command;
+    let root = TempDir::new().unwrap();
+    let short = root.path().join("native");
+    let long = root.path().join("long".repeat(30));
+    for base in [&short, &long] {
+        std::fs::create_dir(base).unwrap();
+        let mut command = if cfg!(target_os = "macos") {
+            let allowed = if base == &short {
+                base.to_str().unwrap()
+            } else {
+                "/tmp"
+            };
+            let mut sandbox = Command::new("/usr/bin/sandbox-exec");
+            sandbox.args(["-p", &format!("(version 1)(allow default)(deny network-outbound (to unix-socket))(allow network-outbound (to unix-socket (subpath \"{allowed}\")))")]);
+            sandbox.arg(std::env::current_exe().unwrap());
+            sandbox
+        } else {
+            Command::new(std::env::current_exe().unwrap())
+        };
+        let output = command
+            .args(["--exact", "ack_socket_boundary_child", "--nocapture"])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("TMPDIR", base)
+            .env("ZEROPW_ACK_BOUNDARY_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}{}",
+            base.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn ack_socket_boundary_child() {
+    if std::env::var_os("ZEROPW_ACK_BOUNDARY_CHILD").is_none() {
+        return;
+    }
+    let (temp, _ctx, registry) = setup(10);
+    let run = queued(&registry);
+    start(
+        &registry,
+        &run,
+        "printf sandbox-business-output",
+        &temp,
+        &[],
+        3.0,
+    );
+    let result = registry.wait(&run, Some(5.0));
+    assert_eq!(result.state, "completed");
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.stdout, b"sandbox-business-output");
+}
