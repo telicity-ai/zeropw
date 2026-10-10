@@ -615,7 +615,7 @@ fn patterns_match_python_oracle_for_binary_and_alignment_cases() {
 #[test]
 fn ack_socket_respects_short_sandbox_tmpdir_and_survives_long_tmpdir() {
     use std::process::Command;
-    let root = TempDir::new().unwrap();
+    let root = TempDir::new_in("/tmp").unwrap();
     let short = root.path().join("native");
     let long = root.path().join("long".repeat(30));
     for base in [&short, &long] {

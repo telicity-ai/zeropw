@@ -517,6 +517,25 @@ mod retry_tests {
     }
 
     #[test]
+    fn retained_admin_role_does_not_authorize_a_removed_author() {
+        let doc = json!({"owner":"owner","members":{"admin":{"role":"admin","status":"removed"}}});
+        assert!(!fact_role_ok(
+            &doc,
+            "member_removed",
+            "admin",
+            &json!({"fingerprint":"third"})
+        ));
+        let mut active = doc.clone();
+        active["members"]["admin"]["status"] = json!("active");
+        assert!(fact_role_ok(
+            &active,
+            "member_removed",
+            "admin",
+            &json!({"fingerprint":"third"})
+        ));
+    }
+
+    #[test]
     fn removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish() {
         let f = owner_with_admin_peer();
         let peer = f.peer_key.fingerprint().unwrap();

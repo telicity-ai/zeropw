@@ -48,6 +48,14 @@ def main():
         notices = {file for file in root.iterdir()
                    if file.name.lower().startswith(('license', 'licence', 'copying', 'notice'))
                    and file.is_file() and not file.is_symlink()}
+        # openssl-src bundles OpenSSL and build-time Text::Template notices;
+        # wrapper-crate root licenses alone do not cover those embedded sources.
+        if package['name'] == 'openssl-src':
+            for relative in ('openssl/LICENSE.txt', 'openssl/external/perl/Text-Template-1.56/LICENSE'):
+                nested = root / relative
+                if not nested.is_file() or nested.is_symlink():
+                    raise SystemExit('missing bundled OpenSSL notice: ' + relative)
+                notices.add(nested)
         if package.get('license_file'):
             file = root / package['license_file']
             if file.is_file() and not file.is_symlink() and file.resolve().is_relative_to(root.resolve()):

@@ -20,9 +20,7 @@ The installer does not use sudo, initialize a vault, start a service, modify she
 
 ## Current evidence
 
-- Installer tests use synthetic executables and disposable directories.
-- Full product validation and real release-archive installation are pending for this preparation branch. GitHub Actions was verified disabled; no hosted run has started. An isolated existing Linux VM has no host mounts, no agent forwarding and no product authority and is being prepared as an independent execution path.
-- Release assets, Homebrew validation, English documentation migration, private-information audit, exact-commit adversarial review remain open.
+Local Linux and macOS checks, archive installation and adversarial review are recorded against their source commits. See [local verification](local-validation-2026-10-10.md) for the initial macOS run and its failed Homebrew test. Fixes and final validation are in progress; no previous PASS covers a changed commit. Release assets have not been uploaded. The historical preparation logs below are evidence for earlier commits, not current release status.
 
 ## Homebrew source installation
 
@@ -72,7 +70,7 @@ All 15 current installer/information-scanner tests pass, including refusal of a 
 
 ### Current verification and documentation status
 
-The unchanged product execution target at source snapshot `3c89f02` passed three complete default-parallel `runs` repetitions (19 tests each), retaining the original timeout assertions. This is stress evidence, not proof of the historical failure mechanism. A new complete Linux matrix at `d4a99ec` is in progress; its live job log and terminal exit file are preserved in the isolated VM.
+The unchanged product execution target at source snapshot `3c89f02` passed three complete default-parallel `runs` repetitions (19 tests each), retaining the original timeout assertions. This is stress evidence, not proof of the historical failure mechanism. The complete Linux matrix at `d4a99ec` ended with Clippy and native CLI E2E failures; those original logs remain in the isolated VM. Subsequent fixes require separate exact-source evidence.
 
 Compromise-response and implementation documentation are now English, including rule thresholds, recovery order, known limits, and all original acceptance-table test identifiers. Team protocol documentation is now English. All 18 installer/scanner/licensing tests pass, and updated documentation links/shell examples were checked.
 

@@ -654,10 +654,24 @@ pub(crate) fn ensure_self_removal_rotations(
         } else {
             load_environment(ctx, env_id)?.document
         };
-        if doc["members"][&fact.author]["status"] != "removed" {
+        let (mut facts, _, _) = sync::load_facts(ctx.state, env_id)?;
+        if !facts.removed_members.contains(&fact.author) {
             continue;
         }
-        let Ok(record) = DeviceRecord::from_dict(&doc["members"][&fact.author]["device"]) else {
+        // The ordinary fold may omit a device removed before its enrollment
+        // operation. Resolve its signing record without granting it authority.
+        facts.removed_members.clear();
+        let identity_doc = fold::fold(
+            env_id,
+            CommitStore::new(ctx.state, env_id).all_commits()?,
+            Some(&facts),
+            None,
+            None,
+            None,
+        )?
+        .document;
+        let Ok(record) = DeviceRecord::from_dict(&identity_doc["members"][&fact.author]["device"])
+        else {
             continue;
         };
         if !sync::verify_fact(&fact, &record) {
