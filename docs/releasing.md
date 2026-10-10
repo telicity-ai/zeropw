@@ -21,7 +21,7 @@ The installer does not use sudo, initialize a vault, start a service, modify she
 ## Current evidence
 
 - Installer tests use synthetic executables and disposable directories.
-- Full product validation and real release-archive installation are pending for this preparation branch.
+- Full product validation and real release-archive installation are pending for this preparation branch. GitHub Actions was verified disabled; no hosted run has started. An isolated existing Linux VM has no host mounts, no agent forwarding and no product authority and is being prepared as an independent execution path.
 - Release assets, Homebrew validation, English documentation migration, private-information audit, exact-commit adversarial review remain open.
 
 ## Homebrew source installation
@@ -37,3 +37,5 @@ brew test telicity-ai/zeropw/zeropw
 This needs Git access while the repository is private. Public users can use the same commands after the owner changes visibility. `--HEAD` follows main and builds with Rust; it is not a versioned binary release. A versioned formula with exact archive checksums remains a release gate.
 
 For CI, create an isolated local Homebrew tap from the formula and point its source at the exact checked-out commit. This validates the formula without requiring product secrets or changing the public tap.
+
+Default documentation already translated: README, GUIDE, product intent and security design. Remaining maintained documents and user-facing demo/notification strings are still being migrated. Historical fixtures remain unchanged.
