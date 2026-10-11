@@ -16,7 +16,7 @@ There is no whole-file `.env` import or export. Store API keys in the vault and 
 
 ## 1. Install and demo
 
-On Apple Silicon macOS or ARM64 Linux:
+On Apple Silicon macOS:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -25,7 +25,7 @@ brew test telicity-ai/zeropw/zeropw
 zeropw-demo
 ```
 
-The formula installs all five checksummed release binaries. Linux uses an Ubuntu 24.04 glibc baseline. Intel macOS and x86-64 Linux release binaries are not available for v0.1.0. See [release installation](docs/releasing.md) for the archive installer.
+On ARM64 Linux, use the archive installer in the [release guide](docs/releasing.md). Linux Homebrew installation has not been verified. The macOS formula installs all five checksummed release binaries. Linux uses an Ubuntu 24.04 glibc baseline. Intel macOS and x86-64 Linux release binaries are not available for v0.1.0. See [release installation](docs/releasing.md) for the archive installer.
 
 ### Build from source
 

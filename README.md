@@ -19,6 +19,8 @@ Build and run tests on a disposable CI runner or isolated VM without vault, gate
 
 Version 0.1.0 binary downloads support Apple Silicon macOS and ARM64 GNU/Linux (Ubuntu 24.04 build baseline). Intel macOS and x86-64 Linux binaries are not included.
 
+On Apple Silicon macOS:
+
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
 brew install telicity-ai/zeropw/zeropw
@@ -26,7 +28,7 @@ brew test telicity-ai/zeropw/zeropw
 zeropw-demo
 ```
 
-The formula installs checksummed release binaries; Rust and Homebrew OpenSSL are not required for this version. The [release guide](docs/releasing.md) describes the archive installer and verification scope.
+On ARM64 Linux, use the archive installer described in the [release guide](docs/releasing.md). Linux Homebrew installation has not been verified. The macOS formula installs checksummed release binaries; Rust and Homebrew OpenSSL are not required for this version. The [release guide](docs/releasing.md) describes the archive installer and verification scope.
 
 ## Binaries
 

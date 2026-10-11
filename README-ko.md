@@ -26,6 +26,8 @@ ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰
 
 v0.1.0 바이너리는 Apple Silicon macOS와 ARM64 Linux를 지원한다. Linux 빌드 기준은 Ubuntu 24.04다. Intel macOS와 x86-64 Linux 바이너리는 이번 릴리스에 포함하지 않는다.
 
+Apple Silicon macOS에서는 Homebrew로 설치한다.
+
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
 brew install telicity-ai/zeropw/zeropw
@@ -33,7 +35,7 @@ brew test telicity-ai/zeropw/zeropw
 zeropw-demo
 ```
 
-Homebrew는 체크섬이 고정된 바이너리를 설치한다. 이 버전은 Rust나 Homebrew OpenSSL을 따로 설치할 필요가 없다. 자세한 검증 범위와 아카이브 설치 방법은 [릴리스 안내](docs/releasing.md)에 있다.
+ARM64 Linux에서는 [릴리스 안내](docs/releasing.md)의 아카이브 설치 절차를 따른다. Linux Homebrew 설치는 아직 검증하지 않았다. macOS Homebrew는 체크섬이 고정된 바이너리를 설치한다. 이 버전은 Rust나 Homebrew OpenSSL을 따로 설치할 필요가 없다. 자세한 검증 범위와 아카이브 설치 방법은 [릴리스 안내](docs/releasing.md)에 있다.
 
 ## 빌드와 실행
 

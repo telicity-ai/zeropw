@@ -28,15 +28,17 @@ The release archives statically link an authenticated OpenSSL 3.5.9 SDK. All fiv
 
 The tracked-tree and reachable-history scans classified key markers as SSH parser literals and synthetic fixtures. Historical personal paths are development evidence. No GitHub-token or AWS-access-key shape was found by these rules. This is a narrow scan, not a guarantee against every secret format.
 
+On Apple Silicon macOS:
+
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
 brew install telicity-ai/zeropw/zeropw
 brew test telicity-ai/zeropw/zeropw
 ```
 
-The stable formula installs the checksummed v0.1.0 archive without Rust or a separate OpenSSL dependency. `--HEAD` is an optional source build using Rust and Homebrew OpenSSL; it follows main and is not the versioned release. On Linux, the binary baseline is Ubuntu 24.04; older glibc versions are unverified.
+Linux Homebrew installation is unverified; ARM64 Linux users should use the archive installer below. The stable macOS formula installs the checksummed v0.1.0 archive without Rust or a separate OpenSSL dependency. `--HEAD` is an optional source build using Rust and Homebrew OpenSSL; it follows main and is not the versioned release. On Linux, the binary baseline is Ubuntu 24.04; older glibc versions are unverified.
 
-For installation without Homebrew, download `scripts/install.sh` from the release tag, inspect it, and run:
+For ARM64 Linux, or macOS without Homebrew, download `scripts/install.sh` from the release tag, inspect it, and run:
 
 ```sh
 bash install.sh --version v0.1.0 --prefix "$HOME/.local"
