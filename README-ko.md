@@ -8,6 +8,8 @@ ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰
 
 [시작 안내](GUIDE.md)에 데모 실행부터 관리자 설정, 팀 가입, 에이전트 사용까지 필요한 절차를 적었다. 에이전트에는 [ZeroPW 스킬](skills/zeropw-agent/SKILL.md)을 설치할 수 있다.
 
+팀원에게는 [한국어 HTML 매뉴얼](docs/team-onboarding.ko.html)이나 [영어 HTML 매뉴얼](docs/team-onboarding.en.html)을 전달하면 된다. 파일을 내려받아 브라우저에서 연다. 에이전트 검증 프롬프트도 [한국어](docs/team-agent-prompts.ko.txt)와 [영어](docs/team-agent-prompts.en.txt)로 제공한다.
+
 팀원을 동시에 제거하면 기기마다 처리 결과가 달라질 수 있다. `team status`의 `rejected_removals`에 충돌이 표시되면 현재 관리자가 대상을 확인하고 의도한 제거를 다시 실행해야 한다. 팀원이 제거되기 전에 접근할 수 있었던 자격증명은 외부 서비스에서 교체해야 무효화된다.
 
 ## 구성

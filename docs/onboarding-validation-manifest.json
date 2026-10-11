@@ -1,0 +1,143 @@
+{
+  "source_sha256": {
+    "Formula/zeropw.rb": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d",
+    "docs/onboarding-artifact.example.json": "c27838632757f5130948e123454f5491ab26934de334c1fb208584837f7b503b",
+    "docs/onboarding-opus-test-2026-10-11.md": "0d026767464beffd8d0d0dc98ecc9d7e4474d5327da5b76ab0d6e823bb10e5e2",
+    "docs/onboarding-policy.example.json": "d7706ec3b78f6b74e64e1ca0d975cabd3975798701a149ac3821e00b845e58d2",
+    "docs/onboarding-schemas/artifact.schema.json": "ebd794f3a036fcc61f9eca54bfdf26655d97c654bf4954a6845d4e2d21a3c466",
+    "docs/onboarding-schemas/install.schema.json": "1e222b23750b9c9b4b46c8f570e56ba89fcc67f9ba116d7b47aa4b23577c5bd1",
+    "docs/onboarding-schemas/local.schema.json": "52ef6a089d55f2c2c8792fe09ab32af8cb0a09b8ccccdb0cfbdaea36ae8c8507",
+    "docs/onboarding-schemas/pair.schema.json": "f2649dd01dca410411e2e0806c1fd3e05f16e88e60b99fc4a47fe401fd85bbef",
+    "docs/onboarding-schemas/policy.schema.json": "c2a9270639a4071635b1d81bb59d59c5bd29021e821d9ab7d1fe978c19470d43",
+    "docs/onboarding-validator.ko.md": "98e23e12e9351d952a9617e6df54b33d37ddf17ffae4c23fcbceb4c2e08d99da",
+    "docs/onboarding-validator.md": "6fe06fdc1960dcbfdb982da7c64c82e215b241f0f452cae7e9fb08615876c2df",
+    "docs/team-agent-prompts.en.txt": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+    "docs/team-agent-prompts.ko.txt": "6b8f4f5be6df58dd6060e1d1f934c57be15c16ccb7402a753251b88a7bfdbdae",
+    "docs/team-onboarding.en.html": "ec6f13a8ff023712dd700d0f04b3a9ae891ebc0ab73e66c14491d7ce522c709b",
+    "docs/team-onboarding.ko.html": "f6e858d8fa3f3ddc692f36c132773a9c5ebdca84b115726e2cedae66ccdd3639",
+    "scripts/observe-onboarding-brew.py": "539ad5a8ac6e6aea28aef12207faa05d5f0f8380ca35be5cea27336e26d9141a",
+    "scripts/validate-onboarding.py": "39c2e543ca628553e4d54064d16d8b1e8b3bbe15163dd6aa960f40cb4d6fcc77",
+    "tests/test_onboarding_brew_observer.py": "1f06a27cfc63d5afcb4022fe8c69c533bbd1bd2c7b64db79af8f836aa4ed5ff9",
+    "tests/test_onboarding_evidence.py": "bfc68722e7495e6020c784e7d2ad73ddac0aacfedaa5eb9e0eb8a84a77b6dd29",
+    "tests/test_onboarding_validator.py": "1c09c83d2e3752c05a9fd4985cc95c9fafe138391a2ad04c7dfe758ae3c88556"
+  },
+  "cases": [
+    {
+      "case": "A-final",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "d29ddd1adff16beb0b7c8697ad0f17b26f8a4a3d7ce17163007700502b90b4b4",
+      "response_sha256": "28fac469a004791ee0c1402ecabb86537689105cf0e013d1b265f6d8c2a4712b",
+      "tool_log_sha256": "5e1cdbcc9c10393ddef5f71bf50ed7103e4cca425d3f1b15a7cc6e37f946f660",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "pass",
+      "schema_valid": true
+    },
+    {
+      "case": "B-final",
+      "language": "ko",
+      "source_file": "docs/team-agent-prompts.ko.txt",
+      "source_sha256": "6b8f4f5be6df58dd6060e1d1f934c57be15c16ccb7402a753251b88a7bfdbdae",
+      "input_sha256": "974b06c7e52d2e79abd796401fc9bdf850d6f933aa6d442dadc9e18e2275d682",
+      "response_sha256": "549bf5fcd98bf6bba87a62f8b45fdf9af21750ea1a6641847a11b943aac5bae5",
+      "tool_log_sha256": "f252cc14b3bc6edc2b95f337faa6ae82d7617d7b66eac87617d21bcc26e13107",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "missing-final2",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "13e9cdb70bb03b8f67e54c98e60d8291b68b9cd89666768075eb368e747a04b6",
+      "response_sha256": "fe2cf0c897b5463197b92375357e67d23116df9feb544b3e29693f30044a91be",
+      "tool_log_sha256": "46e62bc07fbf7102289759da4b713cce83c01e35b99a95164a353b2b54d713d3",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "needs_human_install",
+      "schema_valid": true
+    },
+    {
+      "case": "installer-unapproved-blocked",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "2a54c15e988fc3c0a0b4d04ca92b5b937f4613df066e2794c50d533515dd8db9",
+      "response_sha256": "8e9321e12a092669d45b892beebb9c2f0d2e2a9e44162ca4c93235df102fc5b9",
+      "tool_log_sha256": null,
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "pair-actual-final",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "975ade705819ae9c7f758ee28a2df05cc263ba36c199c5a5ea3c8a619beb4e1b",
+      "response_sha256": "da141b9b971c2097d6ce94cf737aa0be848b180d46d1e48021f34ffa5a6bc6f9",
+      "tool_log_sha256": "a55733a61f97d29cb777d050f291d366d04d56c61442f6ec04da438b881b8b3f",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true,
+      "reported_matches_computed": true
+    },
+    {
+      "case": "pair-extra-member",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "96ad6bacf467dd417e95819bc0bfe0b4798326a15cdeb2ccf41c325b78c3dce1",
+      "response_sha256": "ed04161c8b091198a09e9f8fe7e4c34e96e2ab2120f41fa062959a65d9a83797",
+      "tool_log_sha256": "a8497ae5304e13822efb9a0e1edaf657e383836055f88e4b9a102cfcfd1045dd",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true,
+      "reported_matches_computed": false
+    },
+    {
+      "case": "pair-synthetic-positive",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "5e39ad56cacc88fd27ee0c7286963c457e9885fb77bc7a58d3671f56a2387026",
+      "input_sha256": "07adf3173770c3ca99cc8e5184563c92a926d31c8a57dff4aa3e14766b89a114",
+      "response_sha256": "a1ed01727e233626e42c46aa4c80db16197f3221dcb64015bbdfd8f83dd59ba6",
+      "tool_log_sha256": "9a1b0811d4d0f0ca1dbcafb6722e1eaaa6d06b3f81ed8fbab0983621d9ccd112",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "ready",
+      "schema_valid": true,
+      "reported_matches_computed": true
+    }
+  ],
+  "policy_sha256": "e2c3e23debed305865d8721d85b791c7926a97e8302005659763bbd393bef995",
+  "scope": "Synthetic bounded execution and comparator fixtures; no actual ready pair established."
+}
