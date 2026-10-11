@@ -4,7 +4,7 @@
 
 ZeroPW stores credentials in an encrypted vault and lets agents use supported HTTP APIs and SSH without receiving the original secrets. Configure a service connection once, then use different operations within its allowed scope. A trusted gateway adds HTTP authentication; a separate signer handles SSH authentication.
 
-ZeroPW is a Rust CLI project. It is pre-release software, tested with synthetic credentials and controlled endpoints. It does not support every CLI, and its local development setup does not isolate agents from the vault when they run as the same OS user. Read the [security design](docs/security-design.md) and [implementation limits](docs/implementation.md) before using real credentials.
+ZeroPW is a Rust CLI project. Version 0.1.0 is an initial release, tested with synthetic credentials and controlled endpoints. It does not support every CLI, and its local development setup does not isolate agents from the vault when they run as the same OS user. Read the [security design](docs/security-design.md) and [implementation limits](docs/implementation.md) before using real credentials.
 
 ## Start here
 
@@ -17,7 +17,16 @@ rust/target/debug/zeropw-demo
 
 Build and run tests on a disposable CI runner or isolated VM without vault, gateway, signer, or coordinator credentials. Rust must support edition 2024. The demo uses an embedded test server and synthetic credentials; exit code 0 means its checks passed.
 
-Release installation is being prepared. No release assets have been published yet. You can build from source; the [release preparation guide](docs/releasing.md) also describes the Homebrew source formula and archive installer. Their full release validation is still pending.
+Version 0.1.0 binary downloads support Apple Silicon macOS and ARM64 GNU/Linux (Ubuntu 24.04 build baseline). Intel macOS and x86-64 Linux binaries are not included.
+
+```sh
+brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
+brew install telicity-ai/zeropw/zeropw
+brew test telicity-ai/zeropw/zeropw
+zeropw-demo
+```
+
+The formula installs checksummed release binaries; Rust and Homebrew OpenSSL are not required for this version. The [release guide](docs/releasing.md) describes the archive installer and verification scope.
 
 ## Binaries
 

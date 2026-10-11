@@ -1,6 +1,6 @@
 # Getting started with ZeroPW
 
-ZeroPW synchronizes encrypted secrets between trusted devices. Agents use supported APIs and SSH without receiving the original keys. The product currently runs through Rust CLIs and is pre-release software.
+ZeroPW synchronizes encrypted secrets between trusted devices. Agents use supported APIs and SSH without receiving the original keys. The product currently runs through Rust CLIs and has an initial v0.1.0 release.
 
 ## Choose your starting point
 
@@ -14,7 +14,20 @@ ZeroPW synchronizes encrypted secrets between trusted devices. Agents use suppor
 
 There is no whole-file `.env` import or export. Store API keys in the vault and keep non-secret settings, such as service URLs, in application configuration. Applications that read a raw key from `process.env`, or database drivers that directly require a password, need a dedicated integration. The tested CLI paths are `zeropw-democli` and OpenSSH.
 
-## 1. Build and demo
+## 1. Install and demo
+
+On Apple Silicon macOS or ARM64 Linux:
+
+```sh
+brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
+brew install telicity-ai/zeropw/zeropw
+brew test telicity-ai/zeropw/zeropw
+zeropw-demo
+```
+
+The formula installs all five checksummed release binaries. Linux uses an Ubuntu 24.04 glibc baseline. Intel macOS and x86-64 Linux release binaries are not available for v0.1.0. See [release installation](docs/releasing.md) for the archive installer.
+
+### Build from source
 
 Run from the repository root. You need a toolchain supporting Rust edition 2024. On Linux, prepare your distribution's development build tools. Some dependency configurations may need OpenSSL development headers and pkg-config. If using Homebrew OpenSSL 3 on macOS, set:
 

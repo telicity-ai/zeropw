@@ -1,44 +1,49 @@
 # Release preparation
 
-The repository remains private. Its owner will change visibility after the release gates pass. No installer URL is advertised as working until its matching release assets have been uploaded and verified.
+The repository is public. The owner selected Apple Silicon macOS and ARM64 GNU/Linux binary support for v0.1.0 on 2026-10-11. Intel macOS and x86-64 Linux binaries are deferred until native execution is verified.
 
 ## Gates
 
 1. Run the complete Rust verification matrix on Linux and macOS at the release commit. Include real SSH, separate-process CLI, three-node team synchronization, incident response, revocation, recovery, and signer resource probes. Preserve skips and failures explicitly.
 2. Review current source and Git history for private information. English is the default for maintained documentation and product output; `README-ko.md` retains Korean. Preserve fixed interoperability fixtures instead of silently rewriting their bytes.
-3. Build the five binaries for Apple Silicon macOS, Intel macOS, x86-64 Linux, and ARM64 Linux. Install from the produced archive into a fresh prefix and run the installed demo and CLI checks on disposable runners.
+3. Build the five binaries natively for both v0.1.0 targets: Apple Silicon macOS and ARM64 Linux. Install from the produced archive into a fresh prefix and run the installed demo and CLI checks on disposable runners.
 4. Check archive SHA-256 values, reject unsafe archive entries, include the selected license, and test the Homebrew formula against the exact release.
 5. Obtain the required review for the exact commit; keep release artifacts tied to that commit. Do not reuse an earlier PASS.
 
 ## Packaging tools
 
-`python3 scripts/package-release.py --version v0.1.0 --target TARGET --bin-dir DIR --out-dir DIR --third-party-licenses NOTICES_FILE` creates a flat binary archive and its checksum. Generate the target notices first with `python3 scripts/dependency-licenses.py --target TARGET --output NOTICES_FILE`. The license is MIT. Supported targets are `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu`.
+`python3 scripts/package-release.py --version v0.1.0 --target TARGET --bin-dir DIR --out-dir DIR --third-party-licenses NOTICES_FILE` creates a flat binary archive and its checksum. Generate the target notices first with `python3 scripts/dependency-licenses.py --target TARGET --output NOTICES_FILE`. The license is MIT. The builder recognizes four targets; v0.1.0 publishes only `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`. Recognition by the tooling is not a support claim.
 
 `scripts/install.sh --version v0.1.0` downloads the matching archive and its matching `.tar.gz.sha256` asset from GitHub Releases. Before publication, use `--archive FILE --sha256 HEX` with a verified local archive. The default prefix is `$HOME/.local`; `--prefix /absolute/path` overrides it. Existing binaries are preserved unless `--force` is supplied.
 
 The installer does not use sudo, initialize a vault, start a service, modify shell profiles, or execute downloaded binaries. Checksums detect corruption but are not an independent signature: the release host and publisher remain trusted. Updates replace five staged binaries individually; this is not an atomic transaction across the entire installation. Stop running processes before an upgrade.
 
-## Current evidence
+## v0.1.0 evidence and installation
 
-Local Linux and macOS checks, archive installation and adversarial review are recorded against their source commits. See [local verification](local-validation-2026-10-10.md) for the initial macOS run and its failed Homebrew test. Fixes and final validation are in progress; no previous PASS covers a changed commit. Release assets have not been uploaded. The historical preparation logs below are evidence for earlier commits, not current release status.
+Product source is main commit `e157422353b5967cf5c7d61deccbbf30feba9b0e`, with the same complete tree as reviewed source `5f741334ac74ebb020fa27cb9ae75e925391f45b`. The release preparation changes formula and documentation only; binary hashes and product source remain bound to this baseline.
 
-## Homebrew source installation
+At that product source, native macOS ARM64 passed 1,384 Rust tests and four resource probes; native Ubuntu 24.04 ARM64 passed 1,381 Rust tests and four resource probes. Tooling passed 25 tests; the harness passed 80 tests and compilation. Installed archives passed all 47 demo checks on each native host. An empty Linux runtime containing glibc dependencies and no shared OpenSSL also passed all 47 checks. Claude Opus 5.5 completed the final local review with no unresolved findings. These counts do not claim Intel or x86-64 runtime verification.
 
-Before versioned release bottles exist, use a source formula pinned to the repository's main branch:
+The release archives statically link an authenticated OpenSSL 3.5.9 SDK. All five binaries on each target passed linkage checks. MIT and target-specific dependency notices are included. The source formula previously passed native macOS installation and all demo checks; the stable formula pins the two release archive SHA-256 values. Publication and public-download checks are recorded separately in the release verification asset.
+
+The tracked-tree and reachable-history scans classified key markers as SSH parser literals and synthetic fixtures. Historical personal paths are development evidence. No GitHub-token or AWS-access-key shape was found by these rules. This is a narrow scan, not a guarantee against every secret format.
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
-brew install --HEAD telicity-ai/zeropw/zeropw
+brew install telicity-ai/zeropw/zeropw
 brew test telicity-ai/zeropw/zeropw
 ```
 
-This needs Git access while the repository is private. Public users can use the same commands after the owner changes visibility. `--HEAD` follows main and builds with Rust; it is not a versioned binary release. A versioned formula with exact archive checksums remains a release gate.
+The stable formula installs the checksummed v0.1.0 archive without Rust or a separate OpenSSL dependency. `--HEAD` is an optional source build using Rust and Homebrew OpenSSL; it follows main and is not the versioned release. On Linux, the binary baseline is Ubuntu 24.04; older glibc versions are unverified.
 
-For CI, create an isolated local Homebrew tap from the formula and point its source at the exact checked-out commit. This validates the formula without requiring product secrets or changing the public tap.
+For installation without Homebrew, download `scripts/install.sh` from the release tag, inspect it, and run:
 
-Default documentation already translated: README, GUIDE, product intent and security design. Maintained documentation and demo/notification output are now English. Historical fixtures remain unchanged.
+```sh
+bash install.sh --version v0.1.0 --prefix "$HOME/.local"
+"$HOME/.local/bin/zeropw-demo"
+```
 
-For the user-selected Mac mini execution path, see [self-hosted runner setup](self-hosted-runner.md). Hosted verification is manual-only to avoid consuming hosted minutes on pushes and PRs.
+GitHub Actions remains disabled; native verification used the local Mac and an isolated ARM64 Linux VM. No hosted minutes were used. The historical records below retain their original failures and source bindings.
 
 ## Preparation evidence: 2026-10-10
 

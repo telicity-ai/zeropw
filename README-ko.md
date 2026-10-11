@@ -2,7 +2,7 @@
 
 ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰게 하는 개인용 금고다. 서비스와 자격증명을 한 번 연결하면 작업별 등록 없이 지원하는 CLI·API를 쓸 수 있다. 신뢰 프로세스 안의 중계기가 HTTP 인증 정보를 넣고 별도 서명기가 SSH 인증을 맡는다. 그래서 원본 키는 에이전트가 실행하는 코드에 들어가지 않는다.
 
-제품 코드는 `rust/`의 Rust 크레이트(`zeropw`)에 있다. 합성 자격증명과 시험용 서버로만 검증했고 배포 전이다. 2026-10-03 Rust 전환을 마친 뒤 기존 Python 프로토타입을 저장소에서 제거했다. 코드는 git 이력에 남아 있다.
+제품 코드는 `rust/`의 Rust 크레이트(`zeropw`)에 있다. v0.1.0은 첫 릴리스이며 합성 자격증명과 시험용 서버로 검증했다. 2026-10-03 Rust 전환을 마친 뒤 기존 Python 프로토타입을 저장소에서 제거했다. 코드는 git 이력에 남아 있다.
 
 ## 처음 사용한다면
 
@@ -21,6 +21,19 @@ ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰
 | `zeropw-democli` | `exec` 지원 CLI 예시. 연결 핸들이 든 base URL만 받는다 | 시험·시연 |
 
 에이전트가 받는 것은 게이트웨이 URL(`ZEROPW_GATEWAY_URL`)과 자기 호출 토큰(`ZEROPW_CALLER_TOKEN`)뿐이다. 관리자 패스프레이즈나 원본 자격증명은 받지 않는다. `exec`를 쓰는 배포는 `zeropw_session`을 `serve` 바이너리 옆에 함께 둬야 한다. 없으면 `exec`가 `spawn_failed`로 실패하며, 평문 자격증명 경로로 대체하지 않는다.
+
+## 설치
+
+v0.1.0 바이너리는 Apple Silicon macOS와 ARM64 Linux를 지원한다. Linux 빌드 기준은 Ubuntu 24.04다. Intel macOS와 x86-64 Linux 바이너리는 이번 릴리스에 포함하지 않는다.
+
+```sh
+brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
+brew install telicity-ai/zeropw/zeropw
+brew test telicity-ai/zeropw/zeropw
+zeropw-demo
+```
+
+Homebrew는 체크섬이 고정된 바이너리를 설치한다. 이 버전은 Rust나 Homebrew OpenSSL을 따로 설치할 필요가 없다. 자세한 검증 범위와 아카이브 설치 방법은 [릴리스 안내](docs/releasing.md)에 있다.
 
 ## 빌드와 실행
 
