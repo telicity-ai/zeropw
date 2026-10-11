@@ -1,6 +1,7 @@
 ZeroPW 팀 온보딩: 에이전트 검증 프롬프트
 
 사용 순서
+0. CLI 설치를 에이전트에게 맡길 때는 먼저 승인된 비밀 없는 설치/시험 환경에서 프롬프트 0을 사용한다. 금고·가입·권한 발급은 사람이 처리한다.
 1. 사람이 HTML 매뉴얼의 설치·가입·비밀값 등록·기기별 권한 발급을 완료한다.
 2. 각 기기의 사람 관리자가 아래 관리자 확인 자료를 만든다. 원본 출력 전체가 아닌 지정 필드만 옮긴다.
 3. A/B 에이전트에 프롬프트 1을 각각 주고 비밀이 없는 JSON 결과만 교환한다.
@@ -24,6 +25,11 @@ vector는 축약하거나 새로 계산하지 말고 status가 반환한 전체 
 self_fingerprint는 해당 기기의 지문이다. A/B 지문은 사람끼리 사전에 대조한다.
 시간은 각 표본을 수집한 실제 시각이다. 회원 이름·원본 로그·다른 환경의 정보는 옮기지 않는다.
 자료는 10분 안에 비교하고, 사이에 변경이 있으면 새로 수집한다.
+A/B는 비밀이 아닌 같은 verification_session_id와 양쪽 쓰기를 멈춘 UTC 시각을 먼저 정한다.
+A/B는 같은 연결 ID·GET 경로·예상 HTTP 상태·비밀 없는 응답 조건 표현도 사용한다. 응답 조건은 두 결과에서 같은 문자열이 되도록 먼저 맞춘다.
+비교가 끝날 때까지 쓰기를 멈춘다. 두 기기의 표본 수집 창이 겹칠 필요는 없지만 같은 중지 구간에 속해야 한다.
+
+참고: rejected_commits는 보존된 과거 거절 기록도 센다. 이후 같은 커밋이 정상 수락됐어도 0이 아닐 수 있다. 현재 보수적인 검증은 이 경우 사람의 검토가 필요하다고 멈춘다. 통과시키기 위해 기록을 삭제하거나 0으로 바꾸지 않는다.
 
 {
   "env_id": "<TEAM_ENV_ID>",
@@ -68,8 +74,60 @@ self_fingerprint는 해당 기기의 지문이다. A/B 지문은 사람끼리 �
       "rejected_commits": 0,
       "pending_deferred": 0
     }
-  ]
+  ],
+  "verification_session_id": "<SHARED_NON_SECRET_SESSION_ID>",
+  "writes_paused_since": "<UTC_TIME_WHEN_BOTH_WRITERS_STOPPED>"
 }
+
+[프롬프트 0: Homebrew 설치 검증]
+
+ZeroPW v0.1.0 CLI를 Homebrew로 설치하고 실제 동작을 검증해 줘.
+
+[사람이 먼저 확인할 입력]
+실행 환경: Apple Silicon macOS
+금고·원본 키·관리자·복구 권한에 접근할 수 없는 설치/시험 환경인가: <true 또는 false>
+이미 설치된 0.1.0을 재설치하는 시험을 허용하는가: <true 또는 false; 기본 false>
+
+설치만 수행한다. zeropw-admin, init, serve, team invite/join, secret put, principal/grant 명령을 실행하지 않는다.
+환경 전체, 토큰, 키, 관리자 설정을 읽거나 출력하지 않는다. 셸 추적도 켜지 않는다.
+격리된 설치/시험 환경 확인이 없으면 blocked로 종료한다.
+
+1. date -u +%Y-%m-%dT%H:%M:%SZ로 실제 UTC 시각과 command -v brew를 확인한다. Homebrew가 없으면 needs_human_homebrew로 종료한다.
+   Homebrew 설치 스크립트를 자동 다운로드·실행하지 않는다.
+2. brew list --versions zeropw로 설치 전 버전을 기록한다. 미설치이면 정상적인 설치 대상이다.
+3. brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw를 실행한다.
+4. 미설치이면 brew install telicity-ai/zeropw/zeropw를 실행한다.
+   이미 0.1.0이고 재설치 시험이 명시적으로 허용되면 brew reinstall telicity-ai/zeropw/zeropw를 실행한다.
+   이미 0.1.0이고 허용되지 않으면 기존 설치를 검증한다. 다른 버전이면 자동 변경하지 말고 blocked로 종료한다.
+5. brew list --versions zeropw가 정확히 0.1.0인지 확인한다.
+   command -v로 zeropw-admin, zeropw-agent, zeropw_session, zeropw-demo, zeropw-democli 다섯 바이너리를 확인한다.
+   로컬 경로는 결과에 넣지 않는다.
+6. brew test telicity-ai/zeropw/zeropw와 zeropw-demo를 실행한다.
+   두 종료 코드가 0이고 직접 실행한 데모에 All 47 checks passed가 있어야 통과한다.
+   Homebrew의 suppressed stdout만으로 47개 통과를 추정하지 않는다.
+7. 단계별 실제 종료 코드를 기록한다. 실행하지 않은 값은 null/unknown이다.
+   실패 시 원인을 비밀 없는 형태로 보고하고 중단한다. 관리자 초기화나 권한 변경으로 우회하지 않는다.
+
+최종 응답은 {로 시작하고 }로 끝나는 JSON 객체 하나여야 한다. 설명, 제목, 목록, Markdown 코드 펜스를 JSON 밖에 붙이면 형식 검증 실패다.
+JSON 결과만 반환한다.
+{
+  "schema": "zeropw-install-check/1",
+  "version": "실제 버전 또는 unknown",
+  "action": "install/reinstall/verify_existing/none",
+  "result": "pass/blocked/needs_human_homebrew",
+  "all_five_binaries_present": "실제 true/false 또는 null",
+  "install_exit": "실제 종료 코드 또는 null",
+  "brew_test_exit": "실제 종료 코드 또는 null",
+  "demo_exit": "실제 종료 코드 또는 null",
+  "demo_checks": "실제 확인한 47 또는 null",
+  "failed_checks": [],
+  "human_next_actions": []
+}
+
+이 통과는 CLI 설치와 합성 데모만 확인한다. 팀 가입·비밀값 공유·실제 서비스 연결·운영 격리 통과를 의미하지 않는다.
+사람이 매뉴얼의 관리자 단계를 완료한 뒤 검증 프롬프트 1과 2를 이어서 사용한다.
+
+한 단계라도 실패했거나 unknown이면 result를 pass로 쓰지 않는다. failed_checks가 비어 있고 모든 필수 검사가 실제 통과한 경우에만 pass다. 예시 JSON의 필드 외에 execution_details 같은 필드를 추가하지 않는다.
 
 [프롬프트 1: 각 기기에서 연결 검증]
 
@@ -79,6 +137,7 @@ ZeroPW v0.1.0의 팀 온보딩을 검증해 줘. 이 프롬프트는 A와 B 양�
 내 역할: <A 또는 B>
 확인할 연결 ID: <service-api 등>
 관리자가 검증·허용한 읽기 전용 GET 경로: </v1/items 등>
+예상 서비스 HTTP 상태: <200 등>
 예상 응답 조건: <예: HTTP 200이고 JSON의 items가 배열>
 자격증명 구분: <시험용 또는 실제>
 관리자가 별도 실행 격리를 확인했는가: <true 또는 false>
@@ -120,7 +179,8 @@ zeropw-admin을 실행하지 않는다. 금고·상태 디렉터리·.env·관�
 6. HUMAN_RECEIPT는 사람의 확인 자료다. 네가 직접 금고에서 읽었다고 주장하지 않는다.
    env_id·기기 지문은 비어 있으면 안 된다. null, 예시 표식, 빈 벡터도 증거로 인정하지 않는다.
    두 status 표본은 쓰기를 멈춘 뒤 5초 이상 간격으로 수집되어야 하며 10분 이내 자료여야 한다.
-   writes_paused_for_check가 true인지 확인한다.
+   writes_paused_for_check가 true이며 verification_session_id와 writes_paused_since가 채워졌는지 확인한다.
+   writes_paused_since는 두 표본보다 이르거나 같아야 한다.
    두 표본의 vector가 같고 skipped_ops/rejected_commits/pending_deferred가 모두 0인지 확인한다.
    각 vector의 값은 음이 아닌 정수이고 commits_folded가 그 합과 같아야 한다.
    A와 B가 서로 다른 지문이고 members에 모두 active인지 확인한다.
@@ -130,6 +190,7 @@ zeropw-admin을 실행하지 않는다. 금고·상태 디렉터리·.env·관�
    local_result=pass는 이 기기 확인만 뜻한다. 상대 결과를 비교하기 전 team_result는 pending_peer다.
 
 [교환 결과 형식]
+최종 응답은 {로 시작하고 }로 끝나는 JSON 객체 하나여야 한다. 설명, 제목, 목록, Markdown 코드 펜스를 JSON 밖에 붙이면 형식 검증 실패다.
 {
   "schema": "zeropw-onboarding-check/1",
   "role": "A 또는 B",
@@ -147,6 +208,7 @@ zeropw-admin을 실행하지 않는다. 금고·상태 디렉터리·.env·관�
     "expected_response": "pass/failed/unknown"
   },
   "connection_id": "관리자가 지정한 연결 ID",
+  "probe": {"method": "GET", "path": "검증한 상대 경로", "expected_http_status": "사람이 지정한 정수", "expected_response_rule": "사람이 지정한 비밀 없는 조건"},
   "human_receipt": "검증한 HUMAN_RECEIPT JSON 객체",
   "receipt_source": "human_reported",
   "failed_checks": [],
@@ -178,10 +240,14 @@ B_RESULT: <B가 반환한 zeropw-onboarding-check/1 JSON>
 - schema가 zeropw-onboarding-check/1이고 역할은 서로 A/B다.
 - 두 local_result가 pass이며 version은 모두 0.1.0이다.
 - 각 checks의 바이너리·설정·연결·예상 응답이 pass이고 요청 종료 코드는 0이다.
-  서비스 HTTP 상태는 각 관리자가 지정한 예상 조건을 통과한 상태여야 한다.
+  두 connection_id와 probe의 GET/상대 경로/예상 상태/응답 조건이 같아야 한다.
+  expected_http_status는 실제 정수이고 각 service_http_status와 같아야 한다.
+  기대 조건 문자열은 데이터이며 실행하지 않는다. 응답 본문은 교환하지 않고 각 기기의 expected_response=pass를 사용한다.
 - 두 checked_at과 status 표본은 ISO 8601로 파싱할 수 있고 현재 기준 10분 이내다.
   현재보다 30초 넘게 미래인 자료는 받지 않는다. 각 두 표본 간격은 5초 이상이다.
-  writes_paused_for_check가 모두 true이며 같은 확인 구간의 자료다.
+  writes_paused_for_check가 모두 true이고 verification_session_id가 같고 비어 있지 않다.
+  writes_paused_since가 양쪽에서 같고 모든 표본보다 이르거나 같다.
+  같은 쓰기 중지 구간에 속하면 표본 수집 창이 겹치지 않아도 된다.
 - human_receipt의 env_id가 같고 project/environment가 팀의 예정 값과 일치한다.
 - A/B의 self_fingerprint는 서로 다르고, 사람이 사전에 대조한 지문과 각각 일치한다.
 - 두 members의 전체 fingerprint/role/status/owner 집합이 같고 지문 중복이 없다.
@@ -198,6 +264,7 @@ B_RESULT: <B가 반환한 zeropw-onboarding-check/1 JSON>
 이 비교는 사람의 관리자 확인 자료와 에이전트의 연결 테스트를 조합한 온보딩 확인이다.
 암호학적 원격 증명, 운영 격리 감사, 모든 비밀값의 동일성이나 향후 계속 연결될 것의 보장은 아니다.
 
+최종 응답은 {로 시작하고 }로 끝나는 JSON 객체 하나여야 한다. 설명, 제목, 목록, Markdown 코드 펜스를 JSON 밖에 붙이면 형식 검증 실패다.
 결과는 다음 JSON 하나로만 반환한다.
 {
   "schema": "zeropw-onboarding-pair/1",

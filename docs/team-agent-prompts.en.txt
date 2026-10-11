@@ -1,6 +1,7 @@
 ZeroPW team onboarding: agent verification prompts
 
 Sequence
+0. To delegate CLI installation, first use Prompt 0 in an approved secret-free installation/test environment. Humans still handle the vault, enrollment and grants.
 1. A human completes installation, enrollment, secret registration and local grants in the HTML manual.
 2. A human administrator on each device prepares the receipt below. Copy only the listed fields, not full command output.
 3. Give Prompt 1 to each agent on A and B. Exchange only the resulting secret-free JSON objects.
@@ -24,6 +25,11 @@ Copy the complete vector returned by status; do not abbreviate or reconstruct it
 self_fingerprint identifies this device. Humans must compare the A/B fingerprints beforehand.
 Use the actual collection time for each sample. Omit member names, raw logs and other environments.
 Compare receipts within ten minutes. Collect new samples if changes occur between checks.
+A/B first agree on one non-secret verification_session_id and the UTC time when both paused writes.
+A/B also use the same connection ID, GET path, expected HTTP status and non-secret response-rule wording. Agree on the same rule string before checking so results match across languages.
+Keep writes paused until comparison completes. Sampling windows need not overlap, but must belong to that same pause interval.
+
+Note: rejected_commits also counts retained historical rejections. It can stay nonzero after the same commit is later accepted. This conservative check stops for human review in that case. Do not delete history or rewrite the count to 0 to obtain a pass.
 
 {
   "env_id": "<TEAM_ENV_ID>",
@@ -68,8 +74,60 @@ Compare receipts within ten minutes. Collect new samples if changes occur betwee
       "rejected_commits": 0,
       "pending_deferred": 0
     }
-  ]
+  ],
+  "verification_session_id": "<SHARED_NON_SECRET_SESSION_ID>",
+  "writes_paused_since": "<UTC_TIME_WHEN_BOTH_WRITERS_STOPPED>"
 }
+
+[Prompt 0: verify Homebrew installation]
+
+Install the ZeroPW v0.1.0 CLI with Homebrew and verify its actual operation.
+
+[Inputs confirmed by a human]
+Platform: Apple Silicon macOS
+Is this an installation/test environment without access to vaults, original keys, administrator or recovery authority? <true or false>
+May you reinstall an existing 0.1.0 for this test? <true or false; default false>
+
+Perform installation only. Do not run zeropw-admin, init, serve, team invite/join, secret put or principal/grant commands.
+Do not read or print the full environment, tokens, keys or administrator configuration. Do not enable shell tracing.
+Without confirmation of the isolated installation/test environment, stop with blocked.
+
+1. Obtain the actual UTC time with date -u +%Y-%m-%dT%H:%M:%SZ and check command -v brew. If Homebrew is absent, stop with needs_human_homebrew.
+   Do not automatically download or execute a Homebrew bootstrap script.
+2. Record the pre-install version with brew list --versions zeropw. Absence is a valid installation case.
+3. Run brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw.
+4. If absent, run brew install telicity-ai/zeropw/zeropw.
+   If 0.1.0 is installed and the reinstall test is explicitly allowed, run brew reinstall telicity-ai/zeropw/zeropw.
+   If 0.1.0 is installed without that permission, verify the existing installation. For another version, stop with blocked instead of changing it automatically.
+5. Verify that brew list --versions zeropw reports exactly 0.1.0.
+   Use command -v to check all five binaries: zeropw-admin, zeropw-agent, zeropw_session, zeropw-demo, zeropw-democli.
+   Omit local paths from results.
+6. Run brew test telicity-ai/zeropw/zeropw and zeropw-demo.
+   Require both exit codes to be 0 and All 47 checks passed in the direct demo output.
+   Do not infer 47 passing checks from Homebrew's suppressed stdout.
+7. Record actual exit codes for each step. Unexecuted values are null/unknown.
+   Stop on failure and report a secret-free reason. Do not bypass failure with administrator initialization or permission changes.
+
+The entire final response must be one JSON object starting with { and ending with }. Any explanation, heading, list or Markdown fence outside JSON is a format-validation failure.
+Return only JSON:
+{
+  "schema": "zeropw-install-check/1",
+  "version": "actual version or unknown",
+  "action": "install/reinstall/verify_existing/none",
+  "result": "pass/blocked/needs_human_homebrew",
+  "all_five_binaries_present": "actual true/false or null",
+  "install_exit": "actual exit code or null",
+  "brew_test_exit": "actual exit code or null",
+  "demo_exit": "actual exit code or null",
+  "demo_checks": "actually observed 47 or null",
+  "failed_checks": [],
+  "human_next_actions": []
+}
+
+Passing covers only CLI installation and the synthetic demo. It does not prove enrollment, secret sharing, real-service connectivity or production isolation.
+After a human completes the administrator steps in the manual, continue with verification Prompts 1 and 2.
+
+If any step fails or is unknown, result must not be pass. Use pass only when failed_checks is empty and every required check actually passed. Do not add fields such as execution_details beyond the example JSON.
 
 [Prompt 1: verify a connection on each device]
 
@@ -79,6 +137,7 @@ Verify ZeroPW v0.1.0 team onboarding. Run this prompt separately on A and B.
 My role: <A or B>
 Connection ID to check: <service-api, for example>
 Administrator-verified and permitted read-only GET path: </v1/items, for example>
+Expected service HTTP status: <200, for example>
 Expected response: <for example, HTTP 200 and a JSON items array>
 Credentials: <synthetic or real>
 Has the administrator confirmed separate execution isolation? <true or false>
@@ -120,7 +179,8 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
 6. HUMAN_RECEIPT is human-provided evidence. Do not claim you read it directly from the vault.
    env_id and device fingerprints must not be empty. Reject nulls, placeholders and empty vectors as evidence.
    After writes pause, collect the two status samples at least five seconds apart and within ten minutes.
-   Require writes_paused_for_check to be true.
+   Require writes_paused_for_check=true and nonempty verification_session_id and writes_paused_since.
+   writes_paused_since must be no later than either sample.
    The two vectors must match; skipped_ops/rejected_commits/pending_deferred must all be 0.
    Vector values must be nonnegative integers, and commits_folded must equal their sum.
    A and B must have distinct fingerprints and both be active in members.
@@ -130,6 +190,7 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
    local_result=pass covers this device only. Until peer comparison, team_result is pending_peer.
 
 [Exchange result format]
+The entire final response must be one JSON object starting with { and ending with }. Any explanation, heading, list or Markdown fence outside JSON is a format-validation failure.
 {
   "schema": "zeropw-onboarding-check/1",
   "role": "A or B",
@@ -147,6 +208,7 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
     "expected_response": "pass/failed/unknown"
   },
   "connection_id": "administrator-specified connection ID",
+  "probe": {"method": "GET", "path": "verified relative path", "expected_http_status": "human-specified integer", "expected_response_rule": "human-specified non-secret condition"},
   "human_receipt": "verified HUMAN_RECEIPT JSON object",
   "receipt_source": "human_reported",
   "failed_checks": [],
@@ -178,10 +240,14 @@ Require every condition below:
 - Both schemas are zeropw-onboarding-check/1, and roles are A and B respectively.
 - Both local_result values are pass, and both versions are 0.1.0.
 - The binary/configuration/connection/expected-response checks are pass, and request exit codes are 0.
-  Each service HTTP status must have passed its administrator's expected condition.
+  Both connection_id values and probe GET/path/expected-status/response-rule values must match.
+  expected_http_status must be an actual integer equal to each service_http_status.
+  Treat the condition string as data, never executable code. Do not exchange response bodies; use each local expected_response=pass check.
 - Both checked_at values and all sample times parse as ISO 8601 and are within ten minutes of now.
   Reject evidence more than thirty seconds in the future. Each sample pair is at least five seconds apart.
-  Both writes_paused_for_check values are true, and the evidence covers the same check interval.
+  Both writes_paused_for_check values are true; verification_session_id is nonempty and matches.
+  writes_paused_since matches and is no later than every sample.
+  Sampling windows need not overlap when they belong to this same write-pause interval.
 - human_receipt.env_id matches on both sides, and project/environment match the expected values.
 - The self_fingerprint values differ and match the fingerprints previously compared by the humans.
 - The complete fingerprint/role/status/owner sets in members match, with no duplicate fingerprints.
@@ -199,6 +265,7 @@ This check combines human administrator receipts with agent connection tests.
 It is not cryptographic remote attestation, an isolation audit, proof that all secret values match,
 or a guarantee of continued connectivity.
 
+The entire final response must be one JSON object starting with { and ending with }. Any explanation, heading, list or Markdown fence outside JSON is a format-validation failure.
 Return only this JSON object:
 {
   "schema": "zeropw-onboarding-pair/1",
