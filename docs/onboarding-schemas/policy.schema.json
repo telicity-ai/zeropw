@@ -175,13 +175,27 @@
               "enum": [
                 "human_verified_release"
               ]
+            },
+            "formula_sha256": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
             "release_tag",
             "archive_sha256",
             "tap_commit",
-            "source"
+            "source",
+            "formula_sha256"
           ],
           "additionalProperties": false
         },
@@ -225,13 +239,27 @@
               "enum": [
                 "human_verified_release"
               ]
+            },
+            "formula_sha256": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
             "release_tag",
             "archive_sha256",
             "tap_commit",
-            "source"
+            "source",
+            "formula_sha256"
           ],
           "additionalProperties": false
         }

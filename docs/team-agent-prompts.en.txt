@@ -99,7 +99,10 @@ Before any tap installation or test execution, require ARTIFACT_RECEIPT. A human
 1. Obtain the actual UTC time with date -u +%Y-%m-%dT%H:%M:%SZ and check command -v brew. If Homebrew is absent, stop with needs_human_homebrew.
    Do not automatically download or execute a Homebrew bootstrap script.
 2. Record the pre-install version with brew list --versions zeropw. Absence is a valid installation case.
-3. Run brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw.
+3. Set HOMEBREW_NO_AUTO_UPDATE=1 for all Homebrew commands. Run brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw.
+   Before install/test, obtain the actual tap HEAD with git -C "$(brew --repository telicity-ai/zeropw)" rev-parse HEAD and formula digest with shasum -a 256 "$(brew --repository telicity-ai/zeropw)/Formula/zeropw.rb". Require a clean git status --porcelain.
+   Compare observed HEAD and formula digest to ARTIFACT_RECEIPT.tap_commit/formula_sha256. A human already verified this formula URL and archive SHA-256 against v0.1.0. Missing/mismatched observations block with artifact_identity_mismatch; never echo the receipt as an observation.
+   Pause other Homebrew/tap changes for the test. Repeat these observations after install and after brew test; any drift blocks. Do not checkout/reset the tap to bypass a mismatch.
 4. If absent, run brew install telicity-ai/zeropw/zeropw.
    If 0.1.0 is installed and the reinstall test is explicitly allowed, run brew reinstall telicity-ai/zeropw/zeropw.
    If 0.1.0 is installed without that permission, verify the existing installation. For another version, stop with blocked instead of changing it automatically.
@@ -119,6 +122,8 @@ Return only JSON:
   "install_isolation_confirmed": false,
   "checked_at": "<ACTUAL_UTC_TIME_OR_NULL>",
   "artifact_receipt": "<ACTUAL_ARTIFACT_RECEIPT_OBJECT_OR_NULL>",
+  "observed_tap_commit": null,
+  "observed_formula_sha256": null,
   "version": "actual version or unknown",
   "action": "install/reinstall/verify_existing/none",
   "result": "pass/blocked/needs_human_homebrew",
@@ -175,7 +180,8 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
    Use command -v only to check whether zeropw-agent is installed. Omit local paths from results.
    On Homebrew, verify the version with brew list --versions zeropw.
    Otherwise use human-provided release-version evidence and mark it human_reported.
-   brew evidence requires a verified non-null tap_commit; human_reported evidence identifies an archive install with tap_commit=null.
+   For brew evidence, disable automatic updates and observe the clean tap HEAD and formula digest using the commands in Prompt 0. Compare them with the approved receipt before any brew test or acceptance. Record actual observed_tap_commit/observed_formula_sha256, not copied input; mismatch blocks with artifact_identity_mismatch.
+   brew evidence requires a verified non-null tap_commit and formula_sha256; human_reported evidence identifies an archive install with tap_commit=null, formula_sha256=null and both observed fields null.
    Without version evidence, report unknown. Do not infer 0.1.0 from --help.
    If the binary is missing, stop with needs_human_install and refer to the HTML installation section.
 3. Check only whether ZEROPW_GATEWAY_URL and ZEROPW_CALLER_TOKEN are present.
@@ -216,6 +222,8 @@ The entire final response must be one JSON object starting with { and ending wit
   "version": "0.1.0 or unknown",
   "version_evidence": "brew or human_reported or unknown",
   "artifact_receipt": "<ACTUAL_ARTIFACT_RECEIPT_OBJECT_OR_NULL>",
+  "observed_tap_commit": null,
+  "observed_formula_sha256": null,
   "credential_class": "synthetic or real",
   "isolation_confirmed": false,
   "local_result": "pass or blocked or needs_human_*",
@@ -316,3 +324,5 @@ Model output is provisional. A human/coordinator must independently run the dete
 Result templates illustrate fields, not valid evidence. Replace object placeholders with actual objects/null. Use integer exit/status/count fields, booleans for isolation and fixed reason codes (no prose) in failed_checks and human_next_actions. A pass/ready always requires empty failed_checks. Full types are in onboarding-schemas/*.schema.json.
 
 All failed_checks and human_next_actions values must match ^[a-z0-9_.-]{1,96}$, with no uppercase role prefix or prose. Use local_result_not_pass for a blocked local result and rejected_commits_nonzero for any rejection. Its actions are review_quarantine_records, confirm_identical_accepted_commit, confirm_author_approved_at_acceptance, confirm_rejection_set_stable. Never suggest clearing rejection history to obtain ready. Use the checker vocabulary in onboarding-validator.md; stale evidence returns blocked.
+
+Complete failure/outcome vocabulary (data codes, not commands): artifact_identity_mismatch, artifact_identity_unverified, credential_exposure_suspected, duplicate_json_key, duplicate_member, environment_mismatch, execution_context_mismatch, human_receipt_missing, input_too_large, installation_action_missing, installation_checks_failed, installation_exit_failed, installation_isolation_unconfirmed, installation_not_pass, invalid_arguments, invalid_expected_roster, invalid_input, invalid_probe_input, invalid_sampling_interval, invalid_utc_time, invalid_vector_count, local_result_not_pass, members_mismatch, needs_human_homebrew, needs_human_install, needs_human_receipt, needs_human_runtime_config, needs_human_settings, needs_human_version, nonfinite_json, planned_fingerprint_mismatch, probe_mismatch, production_isolation_unconfirmed, readonly_request_unverified, rejected_commits_nonzero, reported_pair_mismatch, role_mismatch, self_fingerprint_role_mismatch, skill_conflict, stale_or_future_evidence, unexecuted_install_exit, unexpected_member_present, unknown_vector_author, unresolved_team_state, unstable_vector, unsupported_schema_keyword, vectors_mismatch, verification_session_mismatch, version_unverified, writes_not_paused. Action vocabulary: review_quarantine_records, confirm_identical_accepted_commit, confirm_author_approved_at_acceptance, confirm_rejection_set_stable, review_evidence_and_repeat.

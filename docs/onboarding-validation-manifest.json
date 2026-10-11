@@ -1,32 +1,33 @@
 {
   "source_sha256": {
-    "docs/onboarding-artifact.example.json": "f5d792997f53d20203382faca979de01ff64900f1d157870230764fdce1c5805",
+    "Formula/zeropw.rb": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d",
+    "docs/onboarding-artifact.example.json": "c27838632757f5130948e123454f5491ab26934de334c1fb208584837f7b503b",
     "docs/onboarding-opus-test-2026-10-11.md": "0d026767464beffd8d0d0dc98ecc9d7e4474d5327da5b76ab0d6e823bb10e5e2",
-    "docs/onboarding-policy.example.json": "5d122b98976b54b21da8ecbcc88159a568bf4fd746765392130adb39ceca05b8",
-    "docs/onboarding-schemas/artifact.schema.json": "48872b564408d45b4489876f9dc4d962fe6f85f992bd61e175136969da1015c9",
-    "docs/onboarding-schemas/install.schema.json": "4cb2a81a411c0b50b488ae12d686aa2f8397a7c79791c766ecb60b12244c32a6",
-    "docs/onboarding-schemas/local.schema.json": "58493a4661712ab16b040b35a431ed043033992c4fb098f969cc23c8a1ea12e4",
+    "docs/onboarding-policy.example.json": "d7706ec3b78f6b74e64e1ca0d975cabd3975798701a149ac3821e00b845e58d2",
+    "docs/onboarding-schemas/artifact.schema.json": "ebd794f3a036fcc61f9eca54bfdf26655d97c654bf4954a6845d4e2d21a3c466",
+    "docs/onboarding-schemas/install.schema.json": "04dcb6cea5dcde329e50970f3d3cefc72679fb3ebe05cece477c46304c446d24",
+    "docs/onboarding-schemas/local.schema.json": "f75ed2c14d743d25a14ed7883f165a355d0ffb0b9d4ab759f18c33d9b8a907fc",
     "docs/onboarding-schemas/pair.schema.json": "f2649dd01dca410411e2e0806c1fd3e05f16e88e60b99fc4a47fe401fd85bbef",
-    "docs/onboarding-schemas/policy.schema.json": "f250709175e701d25eb1e56c2eba15211992a29a7a09c17e31bda1cfb701817e",
-    "docs/onboarding-validator.ko.md": "cfc2e1381a2b1abb9513b21efab0594881446fd35ef98ebe98c91b5c1f3ae4f9",
-    "docs/onboarding-validator.md": "19399c1f272b7031f684cdccf4702a8bdbd0491552a9552a9091e89180c7816c",
-    "docs/team-agent-prompts.en.txt": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-    "docs/team-agent-prompts.ko.txt": "c30c8e0246d614aa31fb1543d43390415257c369321ae319b29ee8ccff0b3d16",
-    "docs/team-onboarding.en.html": "31e598927f3af0ef8457905f32c6dd47c3a111a9a88aae71d064a29a5eb5d456",
-    "docs/team-onboarding.ko.html": "241a88fa00d4d49f5d82660a1017303dba166ca4d21c5c5d1de0c26bd802ea7b",
-    "scripts/validate-onboarding.py": "cc5293a23426b53e57557d907f9ac36b622aca4d53336083b450f4b6cf4637e3",
-    "tests/test_onboarding_evidence.py": "820bf48acbe39132a16fe6786148e49dcaef2d50788a8591786f9ca8842ce412",
-    "tests/test_onboarding_validator.py": "1687d69eb7d77fd9104a37277a553b81d110f253e1515071ca1561d079c4ebdf"
+    "docs/onboarding-schemas/policy.schema.json": "c2a9270639a4071635b1d81bb59d59c5bd29021e821d9ab7d1fe978c19470d43",
+    "docs/onboarding-validator.ko.md": "0b943232ae560dc23d574c8336a6e9d9880e0c06ac66746b4664cf68963d3966",
+    "docs/onboarding-validator.md": "0093ed668f1dc07173900dda5cfed2b56ca2d2f9d76427b4976f473dcef8a09f",
+    "docs/team-agent-prompts.en.txt": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+    "docs/team-agent-prompts.ko.txt": "7b8f9eb583c426e4808bdea44f1ed1770667bd0342e812c59301debdbffb95f5",
+    "docs/team-onboarding.en.html": "226a6ed2525aa91a095b1856df2d1edc766cb95fea7a0d781a0f32c3d18db183",
+    "docs/team-onboarding.ko.html": "fbc8cd849b0a4ccd70c2d2ab74a176b70ec24b455033fef03c815c831bad8ed2",
+    "scripts/validate-onboarding.py": "d0b16f70d76744629ac5a524201ccffe228fd0193adfc29ec00a9424ffd1f426",
+    "tests/test_onboarding_evidence.py": "cf97d213ce4071cf29376ddf03841506e22f0316730390a74d62b41ff137dcec",
+    "tests/test_onboarding_validator.py": "fa4fd63b02199029350004a5524ce84cad619882c23ac1742b664c21a2bae599"
   },
   "cases": [
     {
       "case": "A-final",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "82ab394cea42bfb0721a4acbc45c2b51f225debc5ed3d17a4908a455a313cd82",
-      "response_sha256": "b6d095d417b3b4241cfef5a284b19b7d80e1418fba26e77ba7f4c8e4051809cc",
-      "tool_log_sha256": "783678e02ea217ccf21df6758d3d36b09f2c20af0b4af6057240c953c3efa4bc",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "e07c7a979a45dec51e1fb6831c07d71b76892497ba4746a0dc845d038a130a78",
+      "response_sha256": "ad77a13a53d3ab64daafd8c2317b201a901a951c87d37e8d754a2c9d86b45f68",
+      "tool_log_sha256": "ba75ea931df50d375f010b625b83544f227f1535ee45263a7c80919c0781a994",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -39,10 +40,10 @@
       "case": "B-final",
       "language": "ko",
       "source_file": "docs/team-agent-prompts.ko.txt",
-      "source_sha256": "c30c8e0246d614aa31fb1543d43390415257c369321ae319b29ee8ccff0b3d16",
-      "input_sha256": "63f87bbb0db049829d037bbdd76b92fd59221f626e2bf69a0d1c888d9caf26f1",
-      "response_sha256": "337c216a22f72e92111b04ea3c493fd6e32c3752a4ca372bb480d463b0f68efe",
-      "tool_log_sha256": "6defbe0d6da673fc9bd19bb1c34f9b96d3eaf59fb0bff2f426895e28e80004b7",
+      "source_sha256": "7b8f9eb583c426e4808bdea44f1ed1770667bd0342e812c59301debdbffb95f5",
+      "input_sha256": "a7cd42122a17d25da044adbde8c90feed17450df605d7eb725cbc51bb52b41f2",
+      "response_sha256": "d68c806b785eb47f9d87dbacb509e1655bc48474202712e88ce5c5c697a9281c",
+      "tool_log_sha256": "032d96b3aef394da5dbab53b22392d1cd3233ed929a3aebd01df5e5a75086975",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -55,10 +56,10 @@
       "case": "missing-final2",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "ea622c8c51dc6339559430b28e276e4ea6351d20ba65039fbe76d27ae9aea51a",
-      "response_sha256": "95b267e32af89dd7ee740fae2bcbf9477051052a08c439c79502e985fc435222",
-      "tool_log_sha256": "c8bc5c773697d3365a6868e0fac9b75a86e34199fc80726e5a9dc8f91b6b00b8",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "6e4313d48d472974e0799223302382b9c7aa5fb927f7e1e52b322a49bf3fe258",
+      "response_sha256": "9bcb33ad26c34ba4d290e3c4867d9338da19984aea5844805ba090edc5d6261e",
+      "tool_log_sha256": "f3a312a2e91056888ba3cf6e90ba1776db41d22062668020aeccbe6fbbd3b988",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -71,9 +72,9 @@
       "case": "installer-unapproved-blocked",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "226865a450de3562804156b31021916c47303f00dda4991e627143c0ca45f2f7",
-      "response_sha256": "75afd5a007b78ee8913b2c5dcf76e06d085c8b7e0aee255e63e87523f978a8d6",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "f4b7bf9b0ec62fc6000bc109196f71131c01d774e9472f6c84f7f615fb4a2f8f",
+      "response_sha256": "da7a1832ac9a82e9e7cc939c491121cfba0c90af7ace2f63810fdadfa3bb8ca0",
       "tool_log_sha256": null,
       "actual_models": [
         "claude-opus-5-5"
@@ -87,10 +88,10 @@
       "case": "pair-actual-final",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "05a76a348f26cd08e4f1b0336419f62a27b3c1eb9d66e7787997952429bac165",
-      "response_sha256": "309ca8b461f4fabdd02b0dbfdd3cd412909d4a5257acfaf96ce87abf62b17feb",
-      "tool_log_sha256": "268b5c30f321c58392317fe39c31042a721d9ad612ad8772709fa6fd72f19e63",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "04cc25aa7147c9861fdf42dc16c6568a9018d85e258bcf8b8f5b533dda36a4f6",
+      "response_sha256": "f8d38a38fceff11a7794c5b61296f60eba0d313326ba9e1dcb3b2189984ac0d2",
+      "tool_log_sha256": "a85a6abe664120c0586e69b4b285f742d53dc1df52c4efd44fd7148846afcc21",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -103,10 +104,10 @@
       "case": "pair-extra-member",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "6b5bb560c38a2e2ad1ed3a96825fd8438dc90bcb29909c610b14434c3be76a6e",
-      "response_sha256": "016aa4b1ef6cb6daaa4d83b41c99f3f16a0452fd249b86c5ce3c6a840c461139",
-      "tool_log_sha256": "4d9e87067ce0e248ad040457311e4eb7d61228f5696d2ca01054b5ba22e2341e",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "b1144a267e0e9cccdf06f1b4e9beee344a1ae6e79157b15cc5b5028500c0852c",
+      "response_sha256": "482c8cb6e1a2fd7e74186ae23ded05596e74531f0f7c25599011defc93b2a8a3",
+      "tool_log_sha256": "480c8e3943496aef2e81b84732feee2075640db5061b53d2b524520ebbd5de4b",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -119,10 +120,10 @@
       "case": "pair-synthetic-positive",
       "language": "en",
       "source_file": "docs/team-agent-prompts.en.txt",
-      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
-      "input_sha256": "01e5a6122b8c7d769271131339297381d8df0b67f41d471738e318e376b8fc08",
-      "response_sha256": "a236aa7ea0dbbabe346b8ae14068b077070db08512846f66910a9384695a02c5",
-      "tool_log_sha256": "2ea422e1348813a7a423a17411259d408fa90f67df556a829e1c570fde608cf9",
+      "source_sha256": "2e775683229fb8bb74cc288e40b1136107f08ae2755e7b79e59593ee1fef553c",
+      "input_sha256": "18596eb5983636b9001c5cf801bcd0434df6c070b00be6f8ec1cab8ab74ba1ff",
+      "response_sha256": "05a7558b8c72848dd80b57107749626eaec9a338c7f32f42ecac8bf5cad19e61",
+      "tool_log_sha256": "02e83cd05b59914fba1d7b8535a5b4e12e25165b749f7e86bb2814d0ab77d763",
       "actual_models": [
         "claude-opus-5-5"
       ],
@@ -132,6 +133,6 @@
       "schema_valid": true
     }
   ],
-  "policy_sha256": "807f1839379d23b3fe1d0e7159a2968085907df557e9349e93e6826eb8a8b3b2",
+  "policy_sha256": "48d324e2a740c501550286c60e5190af2f3f48c7511f6dc684cb8059b4ce0f5b",
   "scope": "Synthetic bounded execution and comparator fixtures; no actual ready pair established."
 }

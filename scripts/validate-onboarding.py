@@ -137,8 +137,10 @@ def local_failures(result, policy, now):
     if result['version'] != '0.1.0' or result['version_evidence'] == 'unknown':
         failures.add('version_unverified')
     artifact = result['artifact_receipt']
-    if artifact is None or (result['version_evidence'] == 'brew' and artifact['tap_commit'] is None) or (result['version_evidence'] == 'human_reported' and artifact['tap_commit'] is not None):
+    if artifact is None or (result['version_evidence'] == 'brew' and (artifact['tap_commit'] is None or artifact['formula_sha256'] is None)) or (result['version_evidence'] == 'human_reported' and (artifact['tap_commit'] is not None or artifact['formula_sha256'] is not None)):
         failures.add('artifact_identity_unverified')
+    if artifact and (result['observed_tap_commit'] != artifact['tap_commit'] or result['observed_formula_sha256'] != artifact['formula_sha256']):
+        failures.add('artifact_identity_mismatch')
     if artifact != policy['artifact_receipts'][result['role']]:
         failures.add('artifact_identity_mismatch')
     if (result['credential_class'], result['isolation_confirmed']) != (policy['credential_class'], policy['isolation_confirmed']):
@@ -205,9 +207,9 @@ def installation_failures(result, now, expected_artifact):
     if result['action'] == 'none':
         failures.add('installation_action_missing')
     artifact = result['artifact_receipt']
-    if artifact != expected_artifact:
+    if artifact != expected_artifact or (artifact and (result['observed_tap_commit'] != artifact['tap_commit'] or result['observed_formula_sha256'] != artifact['formula_sha256'])):
         failures.add('artifact_identity_mismatch')
-    if artifact is None or artifact['tap_commit'] is None or artifact['archive_sha256'] != '7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9':
+    if artifact is None or artifact['tap_commit'] is None or artifact['formula_sha256'] is None or artifact['archive_sha256'] != '7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9':
         failures.add('artifact_identity_unverified')
     try:
         if not -30 <= (now - moment(result['checked_at'])).total_seconds() <= 600:
