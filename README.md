@@ -10,6 +10,8 @@ ZeroPW is a Rust CLI project. Version 0.1.0 is an initial release, tested with s
 
 The [guide](GUIDE.md) covers the demo, administrator setup, team sharing, and agent use. The [agent skill](skills/zeropw-agent/SKILL.md) helps agents select and use existing connections without reading secrets.
 
+For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt).
+
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml --bins
 rust/target/debug/zeropw-demo
