@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "release_tag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "v0.1.0"
+      ]
+    },
+    "archive_sha256": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+        "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+      ]
+    },
+    "tap_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "human_verified_release"
+      ]
+    }
+  },
+  "required": [
+    "release_tag",
+    "archive_sha256",
+    "tap_commit",
+    "source"
+  ],
+  "additionalProperties": false
+}

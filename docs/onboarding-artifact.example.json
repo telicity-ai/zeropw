@@ -1,0 +1,6 @@
+{
+  "release_tag": "v0.1.0",
+  "archive_sha256": "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+  "tap_commit": "<VERIFIED_40_HEX_TAP_COMMIT>",
+  "source": "human_verified_release"
+}

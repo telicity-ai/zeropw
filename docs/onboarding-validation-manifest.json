@@ -1,0 +1,137 @@
+{
+  "source_sha256": {
+    "docs/onboarding-artifact.example.json": "f5d792997f53d20203382faca979de01ff64900f1d157870230764fdce1c5805",
+    "docs/onboarding-opus-test-2026-10-11.md": "0d026767464beffd8d0d0dc98ecc9d7e4474d5327da5b76ab0d6e823bb10e5e2",
+    "docs/onboarding-policy.example.json": "5d122b98976b54b21da8ecbcc88159a568bf4fd746765392130adb39ceca05b8",
+    "docs/onboarding-schemas/artifact.schema.json": "48872b564408d45b4489876f9dc4d962fe6f85f992bd61e175136969da1015c9",
+    "docs/onboarding-schemas/install.schema.json": "4cb2a81a411c0b50b488ae12d686aa2f8397a7c79791c766ecb60b12244c32a6",
+    "docs/onboarding-schemas/local.schema.json": "58493a4661712ab16b040b35a431ed043033992c4fb098f969cc23c8a1ea12e4",
+    "docs/onboarding-schemas/pair.schema.json": "f2649dd01dca410411e2e0806c1fd3e05f16e88e60b99fc4a47fe401fd85bbef",
+    "docs/onboarding-schemas/policy.schema.json": "f250709175e701d25eb1e56c2eba15211992a29a7a09c17e31bda1cfb701817e",
+    "docs/onboarding-validator.ko.md": "cfc2e1381a2b1abb9513b21efab0594881446fd35ef98ebe98c91b5c1f3ae4f9",
+    "docs/onboarding-validator.md": "19399c1f272b7031f684cdccf4702a8bdbd0491552a9552a9091e89180c7816c",
+    "docs/team-agent-prompts.en.txt": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+    "docs/team-agent-prompts.ko.txt": "c30c8e0246d614aa31fb1543d43390415257c369321ae319b29ee8ccff0b3d16",
+    "docs/team-onboarding.en.html": "31e598927f3af0ef8457905f32c6dd47c3a111a9a88aae71d064a29a5eb5d456",
+    "docs/team-onboarding.ko.html": "241a88fa00d4d49f5d82660a1017303dba166ca4d21c5c5d1de0c26bd802ea7b",
+    "scripts/validate-onboarding.py": "cc5293a23426b53e57557d907f9ac36b622aca4d53336083b450f4b6cf4637e3",
+    "tests/test_onboarding_evidence.py": "820bf48acbe39132a16fe6786148e49dcaef2d50788a8591786f9ca8842ce412",
+    "tests/test_onboarding_validator.py": "1687d69eb7d77fd9104a37277a553b81d110f253e1515071ca1561d079c4ebdf"
+  },
+  "cases": [
+    {
+      "case": "A-final",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "82ab394cea42bfb0721a4acbc45c2b51f225debc5ed3d17a4908a455a313cd82",
+      "response_sha256": "b6d095d417b3b4241cfef5a284b19b7d80e1418fba26e77ba7f4c8e4051809cc",
+      "tool_log_sha256": "783678e02ea217ccf21df6758d3d36b09f2c20af0b4af6057240c953c3efa4bc",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "pass",
+      "schema_valid": true
+    },
+    {
+      "case": "B-final",
+      "language": "ko",
+      "source_file": "docs/team-agent-prompts.ko.txt",
+      "source_sha256": "c30c8e0246d614aa31fb1543d43390415257c369321ae319b29ee8ccff0b3d16",
+      "input_sha256": "63f87bbb0db049829d037bbdd76b92fd59221f626e2bf69a0d1c888d9caf26f1",
+      "response_sha256": "337c216a22f72e92111b04ea3c493fd6e32c3752a4ca372bb480d463b0f68efe",
+      "tool_log_sha256": "6defbe0d6da673fc9bd19bb1c34f9b96d3eaf59fb0bff2f426895e28e80004b7",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "missing-final2",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "ea622c8c51dc6339559430b28e276e4ea6351d20ba65039fbe76d27ae9aea51a",
+      "response_sha256": "95b267e32af89dd7ee740fae2bcbf9477051052a08c439c79502e985fc435222",
+      "tool_log_sha256": "c8bc5c773697d3365a6868e0fac9b75a86e34199fc80726e5a9dc8f91b6b00b8",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "needs_human_install",
+      "schema_valid": true
+    },
+    {
+      "case": "installer-unapproved-blocked",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "226865a450de3562804156b31021916c47303f00dda4991e627143c0ca45f2f7",
+      "response_sha256": "75afd5a007b78ee8913b2c5dcf76e06d085c8b7e0aee255e63e87523f978a8d6",
+      "tool_log_sha256": null,
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "pair-actual-final",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "05a76a348f26cd08e4f1b0336419f62a27b3c1eb9d66e7787997952429bac165",
+      "response_sha256": "309ca8b461f4fabdd02b0dbfdd3cd412909d4a5257acfaf96ce87abf62b17feb",
+      "tool_log_sha256": "268b5c30f321c58392317fe39c31042a721d9ad612ad8772709fa6fd72f19e63",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "pair-extra-member",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "6b5bb560c38a2e2ad1ed3a96825fd8438dc90bcb29909c610b14434c3be76a6e",
+      "response_sha256": "016aa4b1ef6cb6daaa4d83b41c99f3f16a0452fd249b86c5ce3c6a840c461139",
+      "tool_log_sha256": "4d9e87067ce0e248ad040457311e4eb7d61228f5696d2ca01054b5ba22e2341e",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "blocked",
+      "schema_valid": true
+    },
+    {
+      "case": "pair-synthetic-positive",
+      "language": "en",
+      "source_file": "docs/team-agent-prompts.en.txt",
+      "source_sha256": "e783992ecbe7a78d349480c1ed6cfe32983494e0417f32b250afa417db1d005f",
+      "input_sha256": "01e5a6122b8c7d769271131339297381d8df0b67f41d471738e318e376b8fc08",
+      "response_sha256": "a236aa7ea0dbbabe346b8ae14068b077070db08512846f66910a9384695a02c5",
+      "tool_log_sha256": "2ea422e1348813a7a423a17411259d408fa90f67df556a829e1c570fde608cf9",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "strict_json": true,
+      "cli_exit": 0,
+      "result": "ready",
+      "schema_valid": true
+    }
+  ],
+  "policy_sha256": "807f1839379d23b3fe1d0e7159a2968085907df557e9349e93e6826eb8a8b3b2",
+  "scope": "Synthetic bounded execution and comparator fixtures; no actual ready pair established."
+}

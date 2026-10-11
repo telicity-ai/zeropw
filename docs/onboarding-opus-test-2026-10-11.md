@@ -1,12 +1,14 @@
-# Local Opus onboarding test: 2026-10-11
+# Historical /1 local Opus onboarding test: 2026-10-11
 
 Actual model: `claude-opus-5-5`; local Claude Code CLI: `2.1.287`; effort: medium. Documentation baseline: PR #11 at `ef2d51cf1ccfc0ac01d53a90c2850e20af69ef65`, followed by the prompt changes bound to hashes below.
+
+These are preserved results for PR head `da616ac6dba609bb7e5f4bde91fc56ca1e49190f` and its /1 prompts. They do not validate the subsequent /2 prompts or validator. See the later security improvement report for current evidence.
 
 ## Scope
 
 The trusted local coordinator ran Claude Code with no built-in shell, file or other tools. A bounded MCP bridge executed fixed installation commands on the local Apple Silicon Mac and fixed agent commands under a separate Unix identity in an isolated Ubuntu 24.04 ARM64 VM. Model authentication stayed in the coordinator. The VM contained two synthetic trusted nodes; the fixture controller supplied the human-role receipts. These are two node identities in one VM, not two physical teammate machines. No production credentials were supplied.
 
-The installation test reinstalled an existing stable 0.1.0 through the public Homebrew tap. It does not establish first-time installation on a clean Mac or install Homebrew itself. The trusted fixture created the vaults, enrollment and grants; Opus did not perform administrator setup.
+The installation test reinstalled an existing stable 0.1.0 through the public Homebrew tap. It used the existing coordinator account with a bounded command bridge; this was not a disposable user/VM without coordinator authority. It therefore does not satisfy the later /2 installation isolation precondition and must not be reused as a /2 installation PASS. It does not establish first-time installation on a clean Mac or install Homebrew itself. The trusted fixture created the vaults, enrollment and grants; Opus did not perform administrator setup.
 
 ## Results
 

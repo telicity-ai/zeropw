@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "zeropw-onboarding-pair/2"
+      ]
+    },
+    "result": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "ready",
+        "blocked"
+      ]
+    },
+    "env_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "members_match": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "vectors_match": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "readonly_requests_passed": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "credential_class": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "synthetic",
+        "real"
+      ]
+    },
+    "isolation_confirmed": {
+      "type": "boolean"
+    },
+    "receipt_source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "human_reported"
+      ]
+    },
+    "failed_checks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[a-z0-9_.-]{1,96}$"
+      },
+      "minItems": 0,
+      "maxItems": 256
+    },
+    "human_next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[a-z0-9_.-]{1,96}$"
+      },
+      "minItems": 0,
+      "maxItems": 256
+    }
+  },
+  "required": [
+    "schema",
+    "result",
+    "env_id",
+    "members_match",
+    "vectors_match",
+    "readonly_requests_passed",
+    "credential_class",
+    "isolation_confirmed",
+    "receipt_source",
+    "failed_checks",
+    "human_next_actions"
+  ],
+  "additionalProperties": false
+}

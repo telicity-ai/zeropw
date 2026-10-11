@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "zeropw-install-check/2"
+      ]
+    },
+    "checked_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "artifact_receipt": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "release_tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "v0.1.0"
+              ]
+            },
+            "archive_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+                "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+              ]
+            },
+            "tap_commit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "human_verified_release"
+              ]
+            }
+          },
+          "required": [
+            "release_tag",
+            "archive_sha256",
+            "tap_commit",
+            "source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "0.1.0",
+        "unknown"
+      ]
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "install",
+        "reinstall",
+        "verify_existing",
+        "none"
+      ]
+    },
+    "result": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "pass",
+        "blocked",
+        "needs_human_homebrew"
+      ]
+    },
+    "all_five_binaries_present": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "install_exit": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "brew_test_exit": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "demo_exit": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "demo_checks": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failed_checks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[a-z0-9_.-]{1,96}$"
+      },
+      "minItems": 0,
+      "maxItems": 256
+    },
+    "human_next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[a-z0-9_.-]{1,96}$"
+      },
+      "minItems": 0,
+      "maxItems": 256
+    },
+    "install_isolation_confirmed": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "checked_at",
+    "artifact_receipt",
+    "version",
+    "action",
+    "result",
+    "all_five_binaries_present",
+    "install_exit",
+    "brew_test_exit",
+    "demo_exit",
+    "demo_checks",
+    "failed_checks",
+    "human_next_actions",
+    "install_isolation_confirmed"
+  ],
+  "additionalProperties": false
+}
