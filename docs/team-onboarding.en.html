@@ -109,11 +109,19 @@ zpw_check_tap() {
   [ -z &quot;$(git -C &quot;$ZPW_TAP_DIR&quot; status --porcelain)&quot; ]
 }
 zpw_check_tap || exit 1
-brew install telicity-ai/zeropw/zeropw || exit 1
+if brew list --versions zeropw &gt;/dev/null 2&gt;&amp;1; then
+  brew reinstall telicity-ai/zeropw/zeropw || exit 1
+else
+  brew install telicity-ai/zeropw/zeropw || exit 1
+fi
 zpw_check_tap || exit 1
+python3 scripts/observe-onboarding-brew.py --approved-tap &quot;$ZPW_APPROVED_TAP_COMMIT&quot; || exit 1
+# Require installed_tap_commit = ZPW_APPROVED_TAP_COMMIT and installed_spec = stable
+# Require binaries_resolve_to_keg = true; stop if any value differs
 brew test telicity-ai/zeropw/zeropw || exit 1
 zpw_check_tap || exit 1
 zeropw-demo</code></pre></div>
+<p>Use the observer only from a reviewed checkout. Existing installations are reinstalled under the guard; do not accept a no-op install as fresh provenance. Compare its actual installed tap commit/spec and all-five path binding before test or demo.</p>
 <p class="check">Check: the installed version is 0.1.0. The demo ends with <code>All 47 checks passed</code>.</p>
 <p class="minor">If Homebrew is missing, follow the <a href="https://brew.sh/">Official installation instructions</a>. On ARM64 Linux, use the <a href="https://github.com/telicity-ai/zeropw/blob/v0.1.0/docs/releasing.md">Archive installer</a>. Linux Homebrew, Intel Mac and x86-64 Linux binaries are outside this verification scope.</p>
 </section>
@@ -279,8 +287,9 @@ Before any tap installation or test execution, require ARTIFACT_RECEIPT. A human
    Pause other Homebrew/tap changes for the test. Repeat these observations after install and after brew test; any drift blocks. Do not checkout/reset the tap to bypass a mismatch.
 4. If absent, run brew install telicity-ai/zeropw/zeropw.
    If 0.1.0 is installed and the reinstall test is explicitly allowed, run brew reinstall telicity-ai/zeropw/zeropw.
-   If 0.1.0 is installed without that permission, verify the existing installation. For another version, stop with blocked instead of changing it automatically.
-5. Verify that brew list --versions zeropw reports exactly 0.1.0.
+   If 0.1.0 is installed without that permission, stop with blocked and artifact_identity_unverified; verify_existing is not eligible for an installation pass. For another version, stop with blocked instead of changing it automatically.
+5. Before any ZeroPW binary/test execution, run python3 scripts/observe-onboarding-brew.py --approved-tap &lt;APPROVED_40_HEX_TAP_COMMIT&gt; from an independently reviewed checkout. It reads only public package metadata, never vault state. Require installed_tap_commit to equal the approved tap_commit, installed_spec=stable (not HEAD), and binaries_resolve_to_keg=true for all five real paths under the keg bin directory. Missing/mismatched observations block with artifact_identity_unverified. Record actual values without local paths.
+   Verify that brew list --versions zeropw reports exactly 0.1.0.
    Use command -v to check all five binaries: zeropw-admin, zeropw-agent, zeropw_session, zeropw-demo, zeropw-democli.
    Omit local paths from results.
 6. Run brew test telicity-ai/zeropw/zeropw and zeropw-demo.
@@ -298,6 +307,9 @@ Return only JSON:
   &quot;artifact_receipt&quot;: &quot;&lt;ACTUAL_ARTIFACT_RECEIPT_OBJECT_OR_NULL&gt;&quot;,
   &quot;observed_tap_commit&quot;: null,
   &quot;observed_formula_sha256&quot;: null,
+  &quot;installed_tap_commit&quot;: null,
+  &quot;installed_spec&quot;: null,
+  &quot;binaries_resolve_to_keg&quot;: null,
   &quot;version&quot;: &quot;actual version or unknown&quot;,
   &quot;action&quot;: &quot;install/reinstall/verify_existing/none&quot;,
   &quot;result&quot;: &quot;pass/blocked/needs_human_homebrew&quot;,
@@ -352,7 +364,8 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
    On Homebrew, verify the version with brew list --versions zeropw.
    Otherwise use human-provided release-version evidence and mark it human_reported.
    For brew evidence, disable automatic updates and observe the clean tap HEAD and formula digest using the commands in Prompt 0. Compare them with the approved receipt before any brew test or acceptance. Record actual observed_tap_commit/observed_formula_sha256, not copied input; mismatch blocks with artifact_identity_mismatch.
-   brew evidence requires a verified non-null tap_commit and formula_sha256; human_reported evidence identifies an archive install with tap_commit=null, formula_sha256=null and both observed fields null.
+   For brew evidence, also run the reviewed observe-onboarding-brew.py before executing any ZeroPW binary. Require actual installed_tap_commit to equal the approved tap_commit, installed_spec=stable and binaries_resolve_to_keg=true for all five PATH resolutions. These fields come from the actual keg receipt/real paths, not the current tap or guessed values. Otherwise block with artifact_identity_unverified.
+   brew evidence requires a verified non-null tap_commit and formula_sha256; human_reported evidence identifies an archive install with tap_commit=null, formula_sha256=null and all five Homebrew observation/installation fields null.
    Without version evidence, report unknown. Do not infer 0.1.0 from --help.
    If the binary is missing, stop with needs_human_install and refer to the HTML installation section.
 3. Check only whether ZEROPW_GATEWAY_URL and ZEROPW_CALLER_TOKEN are present.
@@ -395,6 +408,9 @@ The entire final response must be one JSON object starting with { and ending wit
   &quot;artifact_receipt&quot;: &quot;&lt;ACTUAL_ARTIFACT_RECEIPT_OBJECT_OR_NULL&gt;&quot;,
   &quot;observed_tap_commit&quot;: null,
   &quot;observed_formula_sha256&quot;: null,
+  &quot;installed_tap_commit&quot;: null,
+  &quot;installed_spec&quot;: null,
+  &quot;binaries_resolve_to_keg&quot;: null,
   &quot;credential_class&quot;: &quot;synthetic or real&quot;,
   &quot;isolation_confirmed&quot;: false,
   &quot;local_result&quot;: &quot;pass or blocked or needs_human_*&quot;,

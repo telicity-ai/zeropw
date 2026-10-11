@@ -22,7 +22,7 @@ POLICY = {'env_id': A + '-' + 'e' * 32, 'A_fingerprint': A, 'B_fingerprint': B, 
 
 def local(role):
     samples = [{'sampled_at': t, 'vector': {A: 5}, 'commits_folded': 5, 'skipped_ops': 0, 'rejected_commits': 0, 'pending_deferred': 0} for t in ['2026-10-11T12:00:00Z', '2026-10-11T12:00:05Z']]
-    return copy.deepcopy({'schema': 'zeropw-onboarding-check/2', 'role': role, 'checked_at': '2026-10-11T12:00:10Z', 'version': '0.1.0', 'version_evidence': 'brew', 'artifact_receipt': ARTIFACT, 'observed_tap_commit': ARTIFACT['tap_commit'], 'observed_formula_sha256': ARTIFACT['formula_sha256'], 'credential_class': 'synthetic', 'isolation_confirmed': False, 'local_result': 'pass', 'team_result': 'pending_peer', 'checks': {'agent_binary': 'pass', 'runtime_config_present': 'pass', 'connection_visible': 'pass', 'readonly_request_exit': 0, 'service_http_status': 200, 'expected_response': 'pass'}, 'connection_id': 'service-api', 'probe': PROBE, 'human_receipt': {'env_id': A + '-' + 'e' * 32, 'project': 'team-app', 'environment': 'dev', 'self_fingerprint': A if role == 'A' else B, 'planned_A_fingerprint': A, 'planned_B_fingerprint': B, 'writes_paused_for_check': True, 'members': MEMBERS, 'status_samples': samples, 'verification_session_id': 'session-1', 'writes_paused_since': '2026-10-11T11:59:59Z'}, 'receipt_source': 'human_reported', 'failed_checks': [], 'human_next_actions': []})
+    return copy.deepcopy({'schema': 'zeropw-onboarding-check/2', 'role': role, 'checked_at': '2026-10-11T12:00:10Z', 'version': '0.1.0', 'version_evidence': 'brew', 'artifact_receipt': ARTIFACT, 'observed_tap_commit': ARTIFACT['tap_commit'], 'observed_formula_sha256': ARTIFACT['formula_sha256'], 'installed_tap_commit': ARTIFACT['tap_commit'], 'installed_spec': 'stable', 'binaries_resolve_to_keg': True, 'credential_class': 'synthetic', 'isolation_confirmed': False, 'local_result': 'pass', 'team_result': 'pending_peer', 'checks': {'agent_binary': 'pass', 'runtime_config_present': 'pass', 'connection_visible': 'pass', 'readonly_request_exit': 0, 'service_http_status': 200, 'expected_response': 'pass'}, 'connection_id': 'service-api', 'probe': PROBE, 'human_receipt': {'env_id': A + '-' + 'e' * 32, 'project': 'team-app', 'environment': 'dev', 'self_fingerprint': A if role == 'A' else B, 'planned_A_fingerprint': A, 'planned_B_fingerprint': B, 'writes_paused_for_check': True, 'members': MEMBERS, 'status_samples': samples, 'verification_session_id': 'session-1', 'writes_paused_since': '2026-10-11T11:59:59Z'}, 'receipt_source': 'human_reported', 'failed_checks': [], 'human_next_actions': []})
 
 
 class ValidatorTests(unittest.TestCase):
@@ -106,18 +106,20 @@ class ValidatorTests(unittest.TestCase):
         with self.assertRaises(ValueError): v.validate({}, {'type': 'object', 'unsupported': True})
 
     def test_installation_false_pass_and_provenance(self):
-        r = {'schema': 'zeropw-install-check/2', 'install_isolation_confirmed': True, 'checked_at': '2026-10-11T12:00:10Z', 'artifact_receipt': ARTIFACT, 'observed_tap_commit': ARTIFACT['tap_commit'], 'observed_formula_sha256': ARTIFACT['formula_sha256'], 'version': '0.1.0', 'action': 'reinstall', 'result': 'pass', 'all_five_binaries_present': True, 'install_exit': 0, 'brew_test_exit': 0, 'demo_exit': 0, 'demo_checks': 47, 'failed_checks': [], 'human_next_actions': []}
+        r = {'schema': 'zeropw-install-check/2', 'install_isolation_confirmed': True, 'checked_at': '2026-10-11T12:00:10Z', 'artifact_receipt': ARTIFACT, 'observed_tap_commit': ARTIFACT['tap_commit'], 'observed_formula_sha256': ARTIFACT['formula_sha256'], 'installed_tap_commit': ARTIFACT['tap_commit'], 'installed_spec': 'stable', 'binaries_resolve_to_keg': True, 'version': '0.1.0', 'action': 'reinstall', 'result': 'pass', 'all_five_binaries_present': True, 'install_exit': 0, 'brew_test_exit': 0, 'demo_exit': 0, 'demo_checks': 47, 'failed_checks': [], 'human_next_actions': []}
         self.assertEqual(v.installation_failures(r, NOW, ARTIFACT), [])
-        for key, value in [('failed_checks', ['clock_failed']), ('brew_test_exit', 1), ('demo_checks', 46), ('artifact_receipt', None), ('install_exit', None), ('install_isolation_confirmed', False), ('observed_tap_commit', 'e'*40), ('observed_formula_sha256', 'f'*64)]:
+        for key, value in [('failed_checks', ['clock_failed']), ('brew_test_exit', 1), ('demo_checks', 46), ('artifact_receipt', None), ('install_exit', None), ('install_isolation_confirmed', False), ('observed_tap_commit', 'e'*40), ('observed_formula_sha256', 'f'*64), ('installed_tap_commit','e'*40), ('installed_spec','head'), ('binaries_resolve_to_keg',False)]:
             bad = copy.deepcopy(r); bad[key] = value
-            expected={'failed_checks':'clock_failed','brew_test_exit':'installation_checks_failed','demo_checks':'installation_checks_failed','artifact_receipt':'artifact_identity_unverified','install_exit':'installation_exit_failed','install_isolation_confirmed':'installation_isolation_unconfirmed','observed_tap_commit':'artifact_identity_mismatch','observed_formula_sha256':'artifact_identity_mismatch'}[key]
+            expected={'failed_checks':'clock_failed','brew_test_exit':'installation_checks_failed','demo_checks':'installation_checks_failed','artifact_receipt':'artifact_identity_unverified','install_exit':'installation_exit_failed','install_isolation_confirmed':'installation_isolation_unconfirmed','observed_tap_commit':'artifact_identity_mismatch','observed_formula_sha256':'artifact_identity_mismatch','installed_tap_commit':'artifact_identity_unverified','installed_spec':'artifact_identity_unverified','binaries_resolve_to_keg':'artifact_identity_unverified'}[key]
             self.assertIn(expected,v.installation_failures(bad, NOW, ARTIFACT))
         for field,value in [('tap_commit',None),('formula_sha256',None),('archive_sha256','c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75')]:
             bad=copy.deepcopy(r);approved=copy.deepcopy(ARTIFACT)
             bad['artifact_receipt'][field]=value;approved[field]=value
-            if field=='tap_commit':bad['observed_tap_commit']=None
+            if field=='tap_commit':bad['observed_tap_commit']=None;bad['installed_tap_commit']=None
             if field=='formula_sha256':bad['observed_formula_sha256']=None
             self.assertEqual(v.installation_failures(bad,NOW,approved),['artifact_identity_unverified'])
+        existing=copy.deepcopy(r);existing['action']='verify_existing';existing['install_exit']=None
+        self.assertEqual(v.installation_failures(existing,NOW,ARTIFACT),['artifact_identity_unverified'])
         bad = copy.deepcopy(r); bad['brew_test_exit'] = True
         with self.assertRaises(ValueError): v.installation_failures(bad, NOW, ARTIFACT)
 
@@ -168,6 +170,12 @@ class ValidatorTests(unittest.TestCase):
             (d/'B.json').write_text('{"sensitive-secret":invalid-json}')
             run=subprocess.run(command,capture_output=True,text=True)
             self.assertEqual(run.returncode,1);self.assertNotIn('sensitive-secret',run.stdout+run.stderr);self.assertEqual(json.loads(run.stdout)['result'],'blocked')
+
+
+    def test_homebrew_local_keg_binding(self):
+        for field,value in [('installed_tap_commit','e'*40),('installed_spec','head'),('installed_spec',None),('binaries_resolve_to_keg',False),('binaries_resolve_to_keg',None)]:
+            b=local('B');b[field]=value
+            self.blocked(local('A'),b,code='artifact_identity_unverified')
 
 
 if __name__ == '__main__':

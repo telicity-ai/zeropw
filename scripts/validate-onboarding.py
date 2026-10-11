@@ -141,6 +141,10 @@ def local_failures(result, policy, now):
         failures.add('artifact_identity_unverified')
     if artifact and (result['observed_tap_commit'] != artifact['tap_commit'] or result['observed_formula_sha256'] != artifact['formula_sha256']):
         failures.add('artifact_identity_mismatch')
+    if result['version_evidence'] == 'brew' and (artifact is None or result['installed_tap_commit'] != artifact['tap_commit'] or result['installed_spec'] != 'stable' or result['binaries_resolve_to_keg'] is not True):
+        failures.add('artifact_identity_unverified')
+    if result['version_evidence'] == 'human_reported' and any(result[k] is not None for k in ['installed_tap_commit', 'installed_spec', 'binaries_resolve_to_keg']):
+        failures.add('artifact_identity_mismatch')
     if artifact != policy['artifact_receipts'][result['role']]:
         failures.add('artifact_identity_mismatch')
     if (result['credential_class'], result['isolation_confirmed']) != (policy['credential_class'], policy['isolation_confirmed']):
@@ -202,6 +206,8 @@ def installation_failures(result, now, expected_artifact):
         failures.add('installation_checks_failed')
     if result['action'] in ['install', 'reinstall'] and result['install_exit'] != 0:
         failures.add('installation_exit_failed')
+    if result['action'] == 'verify_existing':
+        failures.add('artifact_identity_unverified')
     if result['action'] == 'verify_existing' and result['install_exit'] is not None:
         failures.add('unexecuted_install_exit')
     if result['action'] == 'none':
@@ -209,6 +215,8 @@ def installation_failures(result, now, expected_artifact):
     artifact = result['artifact_receipt']
     if artifact != expected_artifact or (artifact and (result['observed_tap_commit'] != artifact['tap_commit'] or result['observed_formula_sha256'] != artifact['formula_sha256'])):
         failures.add('artifact_identity_mismatch')
+    if artifact is None or result['installed_tap_commit'] != artifact['tap_commit'] or result['installed_spec'] != 'stable' or result['binaries_resolve_to_keg'] is not True:
+        failures.add('artifact_identity_unverified')
     if artifact is None or artifact['tap_commit'] is None or artifact['formula_sha256'] is None or artifact['archive_sha256'] != '7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9':
         failures.add('artifact_identity_unverified')
     try:

@@ -31,6 +31,8 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(case['actual_models'], ['claude-opus-5-5'])
                 self.assertTrue(case['strict_json'])
                 self.assertEqual(case['cli_exit'], 0)
+                if case['case'].startswith('pair-'):
+                    self.assertIs(type(case['reported_matches_computed']), bool)
 
 
     def test_receipt_and_downloaded_html_acceptance_links(self):
@@ -65,7 +67,7 @@ class EvidenceTests(unittest.TestCase):
     def test_human_install_guard_stops_before_formula_execution(self):
         document=(ROOT/'docs/team-onboarding.en.html').read_text()
         recipe=html.unescape(re.findall(r'<pre><code>(.*?)</code></pre>',document,re.S)[0])
-        prefix=recipe.split('brew install telicity-ai/zeropw/zeropw',1)[0]
+        prefix=recipe.split('if brew list --versions zeropw',1)[0]
         with tempfile.TemporaryDirectory() as directory:
             d=Path(directory);(d/'Formula').mkdir();(d/'Formula/zeropw.rb').write_bytes((ROOT/'Formula/zeropw.rb').read_bytes())
             env={**os.environ,'GIT_CONFIG_GLOBAL':os.devnull,'GIT_CONFIG_SYSTEM':os.devnull}

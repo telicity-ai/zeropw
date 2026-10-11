@@ -224,6 +224,41 @@
           "type": "null"
         }
       ]
+    },
+    "installed_tap_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "installed_spec": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "stable",
+            "head"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "binaries_resolve_to_keg": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -242,7 +277,10 @@
     "human_next_actions",
     "install_isolation_confirmed",
     "observed_tap_commit",
-    "observed_formula_sha256"
+    "observed_formula_sha256",
+    "installed_tap_commit",
+    "installed_spec",
+    "binaries_resolve_to_keg"
   ],
   "additionalProperties": false
 }
