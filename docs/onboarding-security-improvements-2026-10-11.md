@@ -26,9 +26,9 @@ Two synthetic node identities run in one isolated ARM64 Ubuntu VM, not two physi
 | Unapproved additional member | blocked | Pure comparator fixture; no live membership changes. |
 | Hypothetical zero-rejection pair | ready, synthetic | Pure comparator positive fixture. **Not** evidence of actual ready enrollment. |
 
-All seven latest responses pass their `/2` JSON Schema. Strict `--reported` rejected `pair-extra-member` because their action/failure codes differed. Other pair objects matched exactly. Per-case reported_matches_computed is recorded in the manifest. Independently computed results remain authoritative. The independently computed comparator verdicts are blocked, blocked and synthetic ready respectively. Use the checker output, not the model verdict.
+All seven latest responses pass their `/2` JSON Schema. Strict `--reported` rejected `pair-extra-member` because its action/failure codes differed. Other pair objects matched exactly. Per-case reported_matches_computed is recorded in the manifest. Independently computed results remain authoritative. The independently computed comparator verdicts are blocked, blocked and synthetic ready respectively. Use the checker output, not the model verdict.
 
- actual assistant model IDs and process exit codes are recorded per case. The original native Homebrew reinstall/demo result is historical `/1` evidence, not a `/2` installation PASS: the existing coordinator account did not satisfy the new disposable-environment precondition. No fresh isolated macOS install is claimed.
+Actual assistant model IDs and process exit codes are recorded per case. The original native Homebrew reinstall/demo result is historical `/1` evidence, not a `/2` installation PASS: the existing coordinator account did not satisfy the new disposable-environment precondition. No fresh isolated macOS install is claimed.
 
 All earlier `/1` and intermediate `/2` executions are superseded for the current prompts. No history was deleted or receipt counter changed in the actual A/B cases. Counter changes exist only in separately labeled hypothetical comparator inputs, which must never be exchanged as actual evidence.
 
