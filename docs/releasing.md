@@ -28,7 +28,7 @@ The release archives statically link an authenticated OpenSSL 3.5.9 SDK. All fiv
 
 The tracked-tree and reachable-history scans classified key markers as SSH parser literals and synthetic fixtures. Historical personal paths are development evidence. No GitHub-token or AWS-access-key shape was found by these rules. This is a narrow scan, not a guarantee against every secret format.
 
-On Apple Silicon macOS:
+On Apple Silicon macOS (tested on macOS 26.5; older versions are unverified):
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw

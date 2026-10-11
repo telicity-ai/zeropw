@@ -26,7 +26,7 @@ ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰
 
 v0.1.0 바이너리는 Apple Silicon macOS와 ARM64 Linux를 지원한다. Linux 빌드 기준은 Ubuntu 24.04다. Intel macOS와 x86-64 Linux 바이너리는 이번 릴리스에 포함하지 않는다.
 
-Apple Silicon macOS에서는 Homebrew로 설치한다.
+Apple Silicon macOS에서는 Homebrew로 설치한다. macOS 26.5에서 검증했으며 이전 버전은 아직 검증하지 않았다.
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw

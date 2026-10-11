@@ -19,7 +19,7 @@ Build and run tests on a disposable CI runner or isolated VM without vault, gate
 
 Version 0.1.0 binary downloads support Apple Silicon macOS and ARM64 GNU/Linux (Ubuntu 24.04 build baseline). Intel macOS and x86-64 Linux binaries are not included.
 
-On Apple Silicon macOS:
+On Apple Silicon macOS (tested on macOS 26.5; older versions are unverified):
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw

@@ -16,7 +16,7 @@ There is no whole-file `.env` import or export. Store API keys in the vault and 
 
 ## 1. Install and demo
 
-On Apple Silicon macOS:
+On Apple Silicon macOS (tested on macOS 26.5; older versions are unverified):
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
