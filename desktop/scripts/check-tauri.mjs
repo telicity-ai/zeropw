@@ -2,8 +2,14 @@
 // Static checks for the Tauri shell (docs/desktop-app.md §8.2–§8.4, §9). No dependencies.
 //
 // - tauri.conf.json: the exact CSP of §8.3 (also verbatim in the doc), withGlobalTauri false,
-//   no CSP or IPC loosening, the main window as specified, deep links for `zeropw` only, no
-//   sidecars in the base config (they live in tauri.bundle.conf.json).
+//   no CSP or IPC loosening, the main window as specified, deep links for `zeropw` only, and a
+//   minimal bundle section: sidecars, resources and macOS settings are release-only.
+// - tauri.bundle.conf.json (the release config, §9): exactly the three sidecars, LICENSE and
+//   THIRD_PARTY_LICENSES.md as resources, and bundle.macOS with minimum macOS 11.0, the
+//   Info.release.plist that holds only the Local Network usage description, and an ad-hoc
+//   signing identity ("-") or none. No credential, certificate, notarization, entitlement,
+//   updater or signing-command setting in either config: Developer ID signing and
+//   notarization happen outside the build (docs/releasing.md).
 // - Object.prototype is frozen before any page script: by the shell's freeze_prototype.js,
 //   since Tauri's bare freezePrototype breaks @xterm/xterm (see checkFreezePrototype).
 // - The IPC surface is exactly desktop/src/ipc/contract.ts: the app manifest list in
@@ -39,6 +45,14 @@ const ALLOWED_RUST_PLUGINS = [
   'tauri-plugin-single-instance',
 ];
 const SIDECARS = ['binaries/zeropw-admin', 'binaries/zeropw_session', 'binaries/zeropw-agent'];
+const BASE_KEYS = ['$schema', 'productName', 'version', 'identifier', 'build', 'app', 'bundle', 'plugins'];
+const BASE_BUNDLE_KEYS = ['active', 'targets', 'category', 'shortDescription', 'icon'];
+const RELEASE_RESOURCES = { '../../LICENSE': 'LICENSE', 'notices/THIRD_PARTY_LICENSES.md': 'THIRD_PARTY_LICENSES.md' };
+const RELEASE_MACOS = { minimumSystemVersion: '11.0', infoPlist: 'Info.release.plist' };
+const RELEASE_PLIST_KEYS = ['NSLocalNetworkUsageDescription'];
+// Setting names that would carry or select signing material, notarization accounts or updater keys.
+const CREDENTIAL_KEY =
+  /certificate|password|secret|private.?key|pubkey|keychain|notar|apple.?id|team.?id|provider.?short.?name|api.?(key|issuer)|entitlement|sign.?command|signing.?identity|updater/i;
 const MAX_FILE_BYTES = 300_000;
 
 // ---- the contract -------------------------------------------------------------------------
@@ -67,11 +81,7 @@ if (conf.productName !== 'ZeroPW') fail('tauri.conf.json: productName must be Ze
 if (conf.identifier !== 'ai.telicity.zeropw') fail('tauri.conf.json: identifier must be ai.telicity.zeropw');
 if (conf.build?.frontendDist !== '../dist') fail('tauri.conf.json: build.frontendDist must be ../dist');
 if (conf.build?.devUrl !== 'http://localhost:1420') fail('tauri.conf.json: build.devUrl must be http://localhost:1420 (vite.config.ts server.port)');
-if (conf.bundle?.externalBin !== undefined) fail('tauri.conf.json: externalBin belongs in tauri.bundle.conf.json only');
-const bundleConf = json(join(tauriDir, 'tauri.bundle.conf.json'));
-if (!sameList(bundleConf.bundle?.externalBin ?? [], SIDECARS) || Object.keys(bundleConf).join() !== 'bundle' || Object.keys(bundleConf.bundle).join() !== 'externalBin') {
-  fail(`tauri.bundle.conf.json: must hold only bundle.externalBin = ${SIDECARS.join(', ')}`);
-}
+checkReleaseConfig();
 
 const windows = conf.app?.windows ?? [];
 const main = windows[0] ?? {};
@@ -155,7 +165,7 @@ if (/<style[\s>]/i.test(read(join(root, 'index.html')))) {
 }
 
 // ---- files the review harness would reject ------------------------------------------------
-const GENERATED = new Set(['node_modules', 'dist', 'target', 'src-tauri/gen', 'src-tauri/icons', 'src-tauri/binaries']);
+const GENERATED = new Set(['node_modules', 'dist', 'target', 'src-tauri/gen', 'src-tauri/icons', 'src-tauri/binaries', 'src-tauri/notices']);
 const files = walk(root, (rel, name) => GENERATED.has(rel) || name === '.DS_Store');
 for (const file of files) {
   const bytes = readFileSync(file);
@@ -204,6 +214,59 @@ function checkFreezePrototype() {
   expect("var o = {}; o.constructor = 1; o.hasOwnProperty = 2; return o.constructor + o.hasOwnProperty + ({}).constructor.name;", '3Object', 'own constructor/hasOwnProperty broke the prototype');
   expect('return Object.prototype.toString.call([]);', '[object Array]', 'Object.prototype.toString no longer works');
   expect("var m = JSON.parse('{\"__proto__\": {\"polluted\": 1}}'); var t = {}; for (var k in m) t[k] = m[k]; return ({}).polluted === undefined;", true, 'a __proto__ merge pollutes Object.prototype');
+}
+
+// ---- the release config ---------------------------------------------------------------------
+// tauri.conf.json stays minimal (it is also what `tauri dev`, Clippy and the tests build with);
+// what only the distributed app needs lives in tauri.bundle.conf.json, merged by `tauri build
+// --config` in npm run bundle and desktop/scripts/package-macos.py.
+function checkReleaseConfig() {
+  const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const extraTop = Object.keys(conf).filter((k) => !BASE_KEYS.includes(k));
+  if (extraTop.length) fail(`tauri.conf.json: top-level ${extraTop.join(', ')} not allowed`);
+  const extraBundle = Object.keys(conf.bundle ?? {}).filter((k) => !BASE_BUNDLE_KEYS.includes(k));
+  if (extraBundle.length) {
+    fail(`tauri.conf.json: bundle.${extraBundle.join(', bundle.')} not allowed; the base bundle holds only ${BASE_BUNDLE_KEYS.join(', ')} (sidecars, resources and macOS settings are release-only)`);
+  }
+  const release = json(join(tauriDir, 'tauri.bundle.conf.json'));
+  const bundle = isObject(release.bundle) ? release.bundle : {};
+  if (Object.keys(release).join() !== 'bundle') fail('tauri.bundle.conf.json: only a bundle section is allowed');
+  if (!sameList(sorted(Object.keys(bundle)), ['externalBin', 'macOS', 'resources'])) {
+    fail('tauri.bundle.conf.json: bundle must hold exactly externalBin, resources and macOS');
+  }
+  if (!sameList(bundle.externalBin ?? [], SIDECARS)) fail(`tauri.bundle.conf.json: bundle.externalBin must be ${SIDECARS.join(', ')}`);
+  const resources = isObject(bundle.resources) ? bundle.resources : {};
+  const wantResources = Object.entries(RELEASE_RESOURCES);
+  if (Object.keys(resources).length !== wantResources.length || wantResources.some(([from, to]) => resources[from] !== to)) {
+    fail(`tauri.bundle.conf.json: bundle.resources must map exactly ${wantResources.map(([from, to]) => `${from} -> ${to}`).join(', ')}`);
+  }
+  const macos = isObject(bundle.macOS) ? bundle.macOS : {};
+  for (const key of Object.keys(macos)) {
+    if (!(key in RELEASE_MACOS) && key !== 'signingIdentity') fail(`tauri.bundle.conf.json: bundle.macOS.${key} is not allowed`);
+  }
+  for (const [key, value] of Object.entries(RELEASE_MACOS)) {
+    if (macos[key] !== value) fail(`tauri.bundle.conf.json: bundle.macOS.${key} must be ${JSON.stringify(value)}`);
+  }
+  if ('signingIdentity' in macos && macos.signingIdentity !== '-') {
+    fail('tauri.bundle.conf.json: bundle.macOS.signingIdentity must be "-" (ad hoc) or absent; Developer ID signing happens outside the build (docs/releasing.md)');
+  }
+  const keyPaths = (value, path = []) =>
+    isObject(value) || Array.isArray(value)
+      ? Object.entries(value).flatMap(([k, v]) => [[...path, k], ...keyPaths(v, [...path, k])])
+      : [];
+  for (const [file, value] of [['tauri.conf.json', conf], ['tauri.bundle.conf.json', release]]) {
+    for (const path of keyPaths(value)) {
+      const dotted = path.join('.');
+      if (file === 'tauri.bundle.conf.json' && dotted === 'bundle.macOS.signingIdentity') continue;
+      if (CREDENTIAL_KEY.test(String(path.at(-1)))) fail(`${file}: ${dotted} is not allowed (no signing, credential or updater settings in the build config)`);
+    }
+  }
+  if (existsSync(join(tauriDir, 'Info.plist'))) fail('src-tauri/Info.plist would be merged into every build; release keys go in Info.release.plist');
+  const plist = read(join(tauriDir, 'Info.release.plist'));
+  const plistKeys = [...plist.matchAll(/<key>([^<]*)<\/key>/g)].map((m) => m[1]);
+  if (!sameList(plistKeys, RELEASE_PLIST_KEYS)) fail(`Info.release.plist: must hold only ${RELEASE_PLIST_KEYS.join(', ')}`);
+  const description = plist.match(/<key>NSLocalNetworkUsageDescription<\/key>\s*<string>([^<]*)<\/string>/);
+  if (!description || !description[1].trim()) fail('Info.release.plist: NSLocalNetworkUsageDescription needs a description');
 }
 
 if (problems.length) {
