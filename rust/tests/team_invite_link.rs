@@ -254,6 +254,88 @@ fn link_creation_rules() {
     assert_eq!(reason(86_400, &[], "bob"), None);
 }
 
+/// Creation and the strict join/preview parser apply one address rule, link
+/// or not: what `create_invite_with` stores, `parse_invite_or_link` accepts,
+/// and what that parser refuses is never stored.
+#[test]
+fn creation_and_join_apply_one_address_rule() {
+    let root = TempDir::new().unwrap();
+    let (ctx, _clock, env) = shared(&root, "a", now());
+    let create = |address: &str, link: bool| {
+        let ttl = if link {
+            membership::INVITE_LINK_TTL_SECONDS
+        } else {
+            3600
+        };
+        membership::create_invite_with(&ctx, &env, "user", "bob", ttl, &[address.into()], link)
+    };
+    let too_long = format!("{}.test:47001", "a".repeat(118));
+    assert_eq!(too_long.len(), membership::MAX_ADDRESS_BYTES + 1);
+    let refused = [
+        "",
+        "node-a",
+        "node-a:0",
+        "node-a:70000",
+        "node a:1",
+        ":1",
+        "[::1:1",
+        "2001:db8::5:47001",
+        "fe80::1%en0:47001",
+        " 192.0.2.10:47001",
+        "192.0.2.10:47001 ",
+        "192.0.2.10:47001\n",
+        "[fe80::1%]:47001",
+        "[fe80::1%en 0]:47001",
+        "[fe80::1%en0%1]:47001",
+        "[fe80::1%en0/1]:47001",
+        "[%en0]:47001",
+        "[fe80::1]%en0:47001",
+        "[fe80::g]:47001",
+        "[node-a]:47001",
+        "n\u{f6}de.test:47001",
+        too_long.as_str(),
+    ];
+    for address in refused {
+        for link in [false, true] {
+            let error = create(address, link)
+                .err()
+                .unwrap_or_else(|| panic!("created {address:?} (link {link})"));
+            assert_eq!(error.reason, "invalid_address", "{address:?} (link {link})");
+        }
+        // The lenient parser reads such an invite; join and preview refuse it.
+        let text = crafted(json!({ "addresses": [address] }));
+        membership::parse_invite(&text).unwrap();
+        assert_rejected_without_echo(&text, "synthetic-crafted");
+    }
+    assert_eq!(invites_file(&ctx, &env), json!({}));
+    let limit = format!("{}.test:47001", "a".repeat(117));
+    let accepted = [
+        "192.0.2.10:47001",
+        "node-a.example.test:1",
+        "localhost:65535",
+        "node_a-1:47001",
+        "[fd00::1]:47001",
+        "[::ffff:192.0.2.10]:47001",
+        "[fe80::1%en0]:47001",
+        "[fe80::1%2]:47001",
+        "[fe80::1%eth0.100]:47001",
+        "[fe80::1%br-1_a]:47001",
+        limit.as_str(),
+    ];
+    for address in accepted {
+        for link in [false, true] {
+            let created = create(address, link)
+                .unwrap_or_else(|e| panic!("refused {address:?} (link {link}): {e}"));
+            let texts = [Some(created.invite), created.link];
+            for text in texts.iter().flatten() {
+                let invite = membership::parse_invite_or_link(text)
+                    .unwrap_or_else(|e| panic!("join refuses {address:?}: {e}"));
+                assert_eq!(invite.addresses, [address]);
+            }
+        }
+    }
+}
+
 #[test]
 fn malformed_links_are_rejected_without_echo() {
     let root = TempDir::new().unwrap();
@@ -965,5 +1047,72 @@ fn cli_join_through_an_enveloped_link_records_the_joiner() {
     // Single use of the same link is covered by
     // `link_invite_is_single_use_and_records_the_joiner` (a refused joiner
     // waits out the join timeout).
+    node.stop();
+}
+
+/// `team invite` without `--link` refuses every address its own `team join`
+/// would refuse, and a plain invite to a bracketed IPv6 address with a zone
+/// is created, previewed and joined over TCP.
+#[test]
+fn cli_plain_invite_addresses_follow_the_join_rule() {
+    let tmp = TempDir::new().unwrap();
+    let inviter = cli_shared(&tmp.path().join("inviter"));
+    let invite = |address: &str| {
+        inviter.cmd(&[
+            "team",
+            "invite",
+            "--env",
+            "demo/dev",
+            "--role",
+            "user",
+            "--name",
+            "bob",
+            "--address",
+            address,
+        ])
+    };
+    for address in [
+        "2001:db8::5:47001",
+        " 192.0.2.10:47001",
+        "[fe80::1%]:47001",
+        "node-a",
+    ] {
+        let refused = invite(address).fail(1);
+        assert_eq!(refused["reason"], "invalid_address", "{address:?}");
+    }
+    let listing = inviter.ok(&["team", "invites", "--env", "demo/dev"]);
+    assert_eq!(listing["invites"], json!([]));
+
+    // The inviter's node listens on the IPv6 loopback; the invite names it
+    // with the numeric zone 1.
+    let Ok(probe) = std::net::TcpListener::bind("[::1]:0") else {
+        eprintln!("skipped the zoned join: this host has no IPv6 loopback");
+        return;
+    };
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let ctx = Arc::new(
+        Context::open(&inviter.state, Config::default(), zeropw::clock::system()).unwrap(),
+    );
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 8);
+    let node = sync::TeamSync::new(ctx.clone(), Arc::new(transport), device);
+    node.start(Some(&format!("[::1]:{port}"))).unwrap();
+    let address = format!("[::1%1]:{port}");
+    let plain = invite(&address).ok();
+    assert!(plain.get("link").is_none(), "{plain}");
+    let text = plain["invite"].as_str().unwrap().to_owned();
+    let preview = inviter
+        .cmd(&["team", "invite-info", "--stdin"])
+        .stdin(text.as_bytes())
+        .ok();
+    assert_eq!(preview["addresses"], json!([address]));
+    let joiner = Admin::new(&tmp.path().join("joiner"));
+    joiner.ok(&["init"]);
+    let joined = joiner.ok(&["team", "join", &text]);
+    assert_eq!(joined["env_id"], plain["env_id"]);
+    let listing = inviter.ok(&["team", "invites", "--env", "demo/dev"]);
+    assert_eq!(listing["invites"][0]["status"], "used");
+    assert_eq!(listing["invites"][0]["used_by"], joined["self_fingerprint"]);
     node.stop();
 }

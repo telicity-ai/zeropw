@@ -58,14 +58,14 @@ fn share_invite_join_and_secret_derivation() {
     let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
     let a_transport = Arc::new(InProcessTransport::new(a_device.clone(), empty));
     let a_sync = sync::TeamSync::new(a.clone(), a_transport.clone(), a_device);
-    a_sync.start(Some("rust-team-node-a")).unwrap();
+    a_sync.start(Some("rust-team-node-a:47001")).unwrap();
     let invite = membership::create_invite(
         &a,
         env_id,
         "admin",
         "bob",
         3600,
-        &["rust-team-node-a".into()],
+        &["rust-team-node-a:47001".into()],
     )
     .unwrap();
     let parsed = membership::parse_invite(&invite).unwrap();
