@@ -96,6 +96,10 @@ describe('copy table', () => {
       expect(COPY[k], k).toContain('남을 수 있어요');
     }
     expect(COPY['term.end.note.other']).toContain('{user} 계정');
+    // a same-account terminal can start programs as another account with sudo (the suggested
+    // `sudo --preserve-env=… -u <user> -i`): ending it cannot stop those either (DESIGN.md §5.3)
+    expect(COPY['term.end.note']).toContain('sudo');
+    expect(COPY['term.end.note']).toContain('다른 계정');
     expect(COPY['agents.disable.title']).toBe('에이전트 끄기');
     // a joined device syncs only with other-device access on
     for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');

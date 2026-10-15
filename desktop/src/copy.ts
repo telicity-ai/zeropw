@@ -456,7 +456,7 @@ export const COPY = {
   'term.end.aria': '{id} 터미널 끝내기',
   'term.end.title': '터미널 끝내기',
   'term.end.sub': '이 터미널의 셸과 거기서 시작한 프로그램을 멈춰요',
-  'term.end.note': 'setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트 끄기로만 막아요',
+  'term.end.note': 'sudo로 다른 계정에서 실행한 프로그램과 setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트 끄기로만 막아요',
   'term.end.note.other': '{user} 계정으로 도는 에이전트와 setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트 끄기로만 막아요',
   'term.end.confirm': '끝내기',
   'appr.approve': '승인',
