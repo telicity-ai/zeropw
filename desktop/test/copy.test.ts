@@ -99,6 +99,11 @@ describe('copy table', () => {
     expect(COPY['agents.disable.title']).toBe('에이전트 끄기');
     // a joined device syncs only with other-device access on
     for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
+    // turning that access off stops team changes until it is on again, and says so
+    expect(COPY['listen.off.note']).toMatch(/다시 켤 때까지/);
+    expect(COPY['listen.off.note']).toContain('키 폐기');
+    expect(COPY['listen.off.note']).toContain('팀원 내보내기');
+    expect(COPY['toast.listen.off']).toMatch(/다시 켤 때까지 팀 변경을 받지 못해요/);
     // stop and revocation block new requests only; open SSH sessions are named as a limit
     for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub', 'agents.disable.sub', 'conns.disable.sub'] as const) {
       expect(COPY[k], k).toContain('새 ');
@@ -125,6 +130,29 @@ describe('copy table', () => {
     const agents = appFiles.find(([, text]) => text.includes('id="sheet-term-end"'))?.[1] ?? '';
     const end = agents.slice(agents.indexOf('id="sheet-term-end"'), agents.indexOf('id="sheet-approve"'));
     for (const k of ["t('term.end.note')", "t('term.end.note.other'", "t('agents.disable.title')"]) expect(end, k).toContain(k);
+  });
+
+  it('turns other-device access off only through the confirmation sheet, offered only after a team failure (DESIGN.md §5.3)', () => {
+    // the one place that turns access off is the dashboard, behind its confirmation sheet
+    const users = appFiles.filter(([p, text]) => !p.endsWith('/relay.ts') && /\bturnOffListen\b/.test(text)).map(([p]) => p);
+    expect(users).toEqual([expect.stringMatching(/\/Dashboard\.tsx$/)]);
+    const dash = users[0] ? sources[users[0]] ?? '' : '';
+    const sheet = dash.slice(dash.indexOf('id="sheet-listen-off"'));
+    expect(sheet).toContain(`t('listen.off.note')`);
+    expect(sheet.slice(0, sheet.indexOf('/>'))).toContain('listenOff()');
+    // every button that offers it opens the sheet, and Home and the sidebar show it only on offer
+    let offers = 0;
+    for (const [p, text] of appFiles) {
+      for (const m of text.matchAll(/\{t\('(?:relay\.team\.off|set\.listen\.off)'\)\}<\/button>/g)) {
+        offers++;
+        const end = m.index ?? 0;
+        expect(text.slice(text.lastIndexOf('<button', end), end), p).toContain('confirmListenOff');
+      }
+    }
+    expect(offers).toBe(3);                                      // sidebar, Home, Settings
+    const home = appFiles.find(([p]) => p.endsWith('/Home.tsx'))?.[1] ?? '';
+    expect(home).toContain('relay.offerListenOff &&');
+    expect(dash).toContain('{offerListenOff && (');
   });
 
   it('fills placeholders and leaves unknown ones visible', () => {

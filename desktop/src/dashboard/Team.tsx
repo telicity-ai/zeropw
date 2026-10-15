@@ -105,7 +105,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           )}
         {/* a shared environment syncs only while other-device access is on */}
         {td?.shared && base.data && !parseListen(base.data.settings.team_listen) && (
-          <ListenSetup id="team-listen" interfaces={base.data.interfaces}
+          <ListenSetup id="team-listen" interfaces={base.data.interfaces} run={relay.run}
             onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
             onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
         )}
@@ -247,7 +247,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
     if (p === null || !ip) { setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
     setListenBusy(true); setListenErr(null);
     try {
-      await turnOnListen(ip, p);
+      await relay.run(() => turnOnListen(ip, p));
       toast(t('toast.listen.on')); field.ripple(0.05);
       onChanged();
       setTimeout(() => (shared ? nameRef.current : shareBtn.current)?.focus(), 60);
@@ -521,7 +521,7 @@ function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
   if (joined) {
     return (
       <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.joined.sub')} onClose={onJoined} closeLabel={t('sync.later')}>
-        <ListenSetup id="join-listen" interfaces={joined.interfaces}
+        <ListenSetup id="join-listen" interfaces={joined.interfaces} run={relay.run}
           onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
           onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
       </Sheet>

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COPY, hasCopy } from '../src/copy';
 import { call, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, INVITE_TTL_MS, type MockBackend } from '../src/ipc/mock';
-import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, relayError } from '../src/lib/reasons';
+import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, listenFailureLines, offersListenOff, relayError } from '../src/lib/reasons';
 import { holdSecureView, protectionOf } from '../src/ui/secure';
 
 let backend: MockBackend | null = null;
@@ -77,6 +77,31 @@ describe('relay start failures', () => {
     expect(relayError('serve_exited', undefined).key).toBe('relay.err.exited');
     expect(COPY['relay.err.portBusy']).toContain('중계기 포트');
     expect(COPY['relay.err.portBusy']).not.toContain('다른 기기 접속');
+  });
+
+  it('offers to turn other-device access off only after a start failed on the team address', () => {
+    const at = '100.64.1.7:47420';
+    const team = relayError('team_invalid_listen_address', 'team_listen');
+    expect(offersListenOff({ running: false, busy: false, teamListen: at, problem: team })).toBe(true);
+    expect(offersListenOff({ running: false, busy: false, teamListen: at, problem: relayError('invalid_listen', 'team_listen') })).toBe(true);
+    // a busy gateway port, a malformed gateway address or the generic code: access is not the cause
+    for (const [r, d] of [['listen_failed', 'gateway_port'], ['invalid_listen', 'gateway_port'], ['serve_exited', undefined], ['serve_start_timeout', undefined]] as const) {
+      expect(offersListenOff({ running: false, busy: false, teamListen: at, problem: relayError(r, d) }), r).toBe(false);
+    }
+    expect(offersListenOff({ running: false, busy: false, teamListen: at, problem: null })).toBe(false);   // nothing failed yet (the start at launch)
+    expect(offersListenOff({ running: false, busy: true, teamListen: at, problem: team })).toBe(false);    // a start is running
+    expect(offersListenOff({ running: true, busy: false, teamListen: at, problem: team })).toBe(false);
+    expect(offersListenOff({ running: false, busy: false, teamListen: null, problem: team })).toBe(false);
+  });
+
+  it('names the relay port, not the address, when turning access on failed on the gateway port', () => {
+    const base = { address: '100.64.1.7:47420', restored: true, relayBack: false };
+    expect(listenFailureLines({ ...base, reason: 'listen_failed', detail: 'gateway_port' }).map((l) => l.key)).toEqual(['listen.err.port', 'listen.err.relayOff']);
+    expect(listenFailureLines({ ...base, reason: 'listen_failed', detail: 'gateway_port' })[0]?.vars).toBeUndefined();
+    expect(COPY['listen.err.port']).toContain('중계기 포트');
+    expect(COPY['listen.err.port']).not.toContain('{address}');
+    expect(listenFailureLines({ ...base, reason: 'invalid_listen', detail: 'team_listen' })[0]?.key).toBe('set.listen.port.err');
+    expect(listenFailureLines({ ...base, reason: 'team_invalid_listen_address', detail: 'team_listen' })[0]).toEqual({ key: 'listen.err.open', vars: { address: base.address } });
   });
 });
 
