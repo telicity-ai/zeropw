@@ -534,7 +534,9 @@ fn attach_during_output_has_no_gap_and_no_repeat() {
             "-c".into(),
             // `stty -onlcr`: no CR insertion by the tty, so the bytes compared are exactly what
             // the program wrote (a BSD tty can emit "\r\r\n" when its output queue fills).
-            format!(r#"stty -onlcr; i=0; while [ $i -lt {LINES} ]; do echo "n$i"; i=$((i+1)); done"#),
+            format!(
+                r#"stty -onlcr; i=0; while [ $i -lt {LINES} ]; do echo "n$i"; i=$((i+1)); done"#
+            ),
         ],
     });
     let token = SecretString::from("zpw_synthetic_terminal_token");
