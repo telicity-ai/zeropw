@@ -1,11 +1,15 @@
-//! `zeropw-admin --input-envelope` and the read-only `status` command
-//! (docs/desktop-app.md §3.1), driven through the real binary.
+//! `zeropw-admin --input-envelope`, its `--require-admin` re-auth gate and
+//! the read-only `status` command (docs/desktop-app.md §3.1), driven through
+//! the real binary.
 //!
 //! Every passphrase and value here is synthetic. The [`Admin`] drop sweep
 //! already fails a test whose stdout (other than `secret reveal`) or stderr
 //! carries a `synthetic-...` token; each test also scans the audit and alert
 //! files, and the whole state directory, for every envelope value.
 mod native_e2e;
+
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use base64::Engine as _;
 use native_e2e::{Admin, events, find_secret_in_tree};
@@ -15,6 +19,7 @@ const ENVELOPE_ADMIN: &str = "synthetic-envelope-admin-pass-0001";
 const ENVELOPE_RECOVERY: &str = "synthetic-envelope-recovery-pass-0002";
 const ENV_ADMIN: &str = "synthetic-environment-admin-pass-0003";
 const VALUE: &str = "synthetic-envelope-secret-value-0004";
+const WRONG_ADMIN: &str = "synthetic-wrong-admin-pass-0006";
 
 fn b64(value: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(value)
@@ -358,14 +363,319 @@ fn help_and_usage_do_not_list_the_new_option_or_command() {
     let (code, out, _) = admin.cmd(&["--help"]).no_state().run();
     assert_eq!(code, 0);
     assert!(!out.contains("input-envelope"), "{out}");
+    assert!(!out.contains("require-admin"), "{out}");
     assert!(!out.contains("status"), "{out}");
     let (code, _, err) = admin.cmd(&["bogus"]).run();
     assert_eq!(code, 2);
     assert!(!err.contains("input-envelope"), "{err}");
+    assert!(!err.contains("require-admin"), "{err}");
     assert!(err.contains("(choose from init,"), "{err}");
     assert!(!err.contains("status"), "{err}");
-    // `--input-envelope` is a global option: after the command it is unknown.
-    let (code, _, err) = admin.cmd(&["status", "--input-envelope"]).run();
-    assert_eq!(code, 2, "{err}");
-    assert!(err.contains("unrecognized arguments"), "{err}");
+    // Both are global options: after the command they are unknown.
+    for option in ["--input-envelope", "--require-admin"] {
+        let (code, _, err) = admin.cmd(&["status", option]).run();
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("unrecognized arguments"), "{err}");
+    }
+}
+
+// ------------------------------------------------------------ --require-admin
+
+/// `--input-envelope --require-admin ARGS...` with `fields` on stdin.
+fn gated<'a>(admin: &'a Admin, args: &[&str], fields: Value) -> native_e2e::AdminCall<'a> {
+    let mut argv = vec!["--input-envelope", "--require-admin"];
+    argv.extend_from_slice(args);
+    admin.cmd(&argv).stdin(&envelope(fields))
+}
+
+fn right() -> Value {
+    json!({"admin_passphrase": ENVELOPE_ADMIN})
+}
+
+/// Every file of the state directory outside `audit/`, by relative path.
+fn state_files(state: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut dirs = vec![state.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let relative = path
+                .strip_prefix(state)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if relative == "audit" {
+                continue;
+            }
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.insert(relative, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+/// The `auth_failed` records of the audit log, oldest first.
+fn auth_failures(admin: &Admin) -> Vec<Value> {
+    std::fs::read_to_string(admin.state.join("audit/audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record["event"] == "auth_failed")
+        .collect()
+}
+
+/// The gate refuses `args` with a wrong and with a missing envelope
+/// passphrase (the environment's, here the right one, is never a fallback):
+/// the command does not run, no state file changes, and each refusal writes
+/// exactly one `auth_failed` record.
+fn assert_gate_refuses(admin: &Admin, args: &[&str]) {
+    let before = state_files(&admin.state);
+    let failures = auth_failures(admin).len();
+    let wrong = gated(admin, args, json!({"admin_passphrase": WRONG_ADMIN})).fail(1);
+    assert_eq!(wrong["error"], "AuthFailed", "{args:?}");
+    assert_eq!(wrong["reason"], "admin_reauth_failed", "{args:?}");
+    let missing = gated(
+        admin,
+        args,
+        json!({"admin_passphrase": "", "recovery_passphrase": ENVELOPE_RECOVERY}),
+    )
+    .env("ZEROPW_ADMIN_PASSPHRASE", ENVELOPE_ADMIN)
+    .fail(1);
+    assert_eq!(missing["error"], "AuthFailed", "{args:?}");
+    assert_eq!(missing["reason"], "passphrase_missing", "{args:?}");
+    let absent = gated(admin, args, json!({})).fail(1);
+    assert_eq!(absent["reason"], "passphrase_missing", "{args:?}");
+    assert!(
+        state_files(&admin.state) == before,
+        "{args:?} changed the state"
+    );
+    let records = auth_failures(admin);
+    assert_eq!(records.len(), failures + 3, "{args:?}");
+    for (record, reason) in records[failures..].iter().zip([
+        "admin_reauth_failed",
+        "passphrase_missing",
+        "passphrase_missing",
+    ]) {
+        assert_eq!(record["reason"], reason, "{args:?}");
+        assert_eq!(record["state"], "require_admin", "{args:?}");
+        assert_eq!(record["result"], "denied", "{args:?}");
+        assert_eq!(record["caller"], "admin", "{args:?}");
+    }
+}
+
+#[test]
+fn require_admin_gates_commands_the_cli_does_not() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let admin = bare_admin(tmp.path());
+    init_with_envelope(&admin);
+    admin.ok(&["project", "create", "demo"]);
+    with_envelope(
+        &admin,
+        &[
+            "secret",
+            "put",
+            "--id",
+            "api",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ],
+        json!({"value_b64": b64(VALUE.as_bytes())}),
+    )
+    .ok();
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    let archive = tmp.path().join("backup.json");
+    let archive = archive.to_str().unwrap();
+    admin.ok(&["backup", "--out", archive]);
+    admin.ok(&["stop-all"]);
+
+    let create = [
+        "connection",
+        "create-http",
+        "--id",
+        "gh",
+        "--project",
+        "demo",
+        "--environment",
+        "dev",
+        "--service",
+        "fake-github",
+        "--secret-id",
+        "api",
+        "--target",
+        "http://127.0.0.1:8080",
+        "--auth",
+        "bearer",
+        "--methods",
+        "GET",
+        "--path-prefixes",
+        "/repos",
+    ];
+    assert_gate_refuses(&admin, &create);
+    let created = gated(&admin, &create, right()).ok();
+    assert_eq!(created["id"], "gh");
+
+    let update = [
+        "connection",
+        "update",
+        "--id",
+        "gh",
+        "--methods",
+        "GET,POST",
+    ];
+    assert_gate_refuses(&admin, &update);
+    gated(&admin, &update, right()).ok();
+    let shown = admin.ok(&["connection", "show", "--id", "gh"]);
+    let methods = shown["http_scope"]["methods"].as_array().unwrap();
+    assert!(methods.contains(&json!("POST")), "{shown}");
+
+    let grant = [
+        "grant",
+        "create",
+        "--principal",
+        "agent-1",
+        "--connection",
+        "gh",
+    ];
+    assert_gate_refuses(&admin, &grant);
+    let granted = gated(&admin, &grant, right()).ok();
+    assert_eq!(granted["status"], "active");
+
+    assert_gate_refuses(&admin, &["resume"]);
+    assert_eq!(admin.ok(&["status"])["stopped"], true);
+    let resumed = gated(&admin, &["resume"], right()).ok();
+    assert_eq!(resumed["stopped"], false);
+
+    let restore = ["restore", "--in", archive];
+    assert_gate_refuses(&admin, &restore);
+    assert_eq!(admin.ok(&["status"])["restore_pending"], false);
+    let restored = gated(&admin, &restore, right()).ok();
+    assert_eq!(restored["restore_pending"], true);
+
+    // A read-only command passes the gate too, and prints its own output.
+    let listed = gated(&admin, &["principal", "list"], right()).ok();
+    assert_eq!(listed, admin.ok(&["principal", "list"]));
+    assert_values_absent_from_state(
+        &admin,
+        &[ENVELOPE_ADMIN, ENVELOPE_RECOVERY, VALUE, WRONG_ADMIN],
+    );
+}
+
+#[test]
+fn require_admin_gates_team_invite_and_serve() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let admin = bare_admin(tmp.path());
+    init_with_envelope(&admin);
+    admin.ok(&["project", "create", "demo"]);
+    with_envelope(
+        &admin,
+        &["team", "share", "--project", "demo", "--environment", "dev"],
+        right(),
+    )
+    .ok();
+    let invite = [
+        "team",
+        "invite",
+        "--env",
+        "demo/dev",
+        "--role",
+        "user",
+        "--name",
+        "bob",
+        "--address",
+        "127.0.0.1:47001",
+        "--link",
+    ];
+    let invites = || admin.ok(&["team", "invites", "--env", "demo/dev"])["invites"].clone();
+    assert_gate_refuses(&admin, &invite);
+    assert_eq!(invites(), json!([]));
+    let created = gated(&admin, &invite, right()).ok();
+    assert!(created["link"].is_string());
+    assert_eq!(invites().as_array().unwrap().len(), 1);
+
+    // `serve` is refused before it binds or prints its startup line (`fail`
+    // checks that stdout is empty).
+    assert_gate_refuses(&admin, &["serve", "--listen", "127.0.0.1:0", "--quiet"]);
+    assert_values_absent_from_state(&admin, &[ENVELOPE_ADMIN, ENVELOPE_RECOVERY, WRONG_ADMIN]);
+}
+
+#[test]
+fn require_admin_without_the_envelope_is_a_usage_error() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // The environment holds the right passphrase; it still does not count.
+    let admin = Admin::new(tmp.path());
+    admin.ok(&["init"]);
+    admin.ok(&["stop-all"]);
+    let before = state_files(&admin.state);
+    let audit = || std::fs::read_to_string(admin.state.join("audit/audit.jsonl")).unwrap();
+    let audit_before = audit();
+    for args in [
+        &["--require-admin", "resume"][..],
+        &["--require-admin", "status"],
+    ] {
+        let (code, out, err) = admin.cmd(args).run();
+        assert_eq!(code, 2, "{err}");
+        assert_eq!(out, "");
+        assert!(err.starts_with("usage: zeropw-admin"), "{err}");
+        let usage = err.lines().next().unwrap();
+        assert!(!usage.contains("require-admin"), "{err}");
+        let error: Value = serde_json::from_str(err.lines().last().unwrap()).unwrap();
+        assert_eq!(error["error"], "UsageError");
+        assert_eq!(error["reason"], "usage");
+        assert_eq!(
+            error["detail"],
+            "--require-admin is valid only with --input-envelope"
+        );
+    }
+    assert!(state_files(&admin.state) == before);
+    assert_eq!(audit(), audit_before, "a refused invocation wrote audit");
+    assert_eq!(admin.ok(&["status"])["stopped"], true);
+    // The two global options may come in either order.
+    let resumed = admin
+        .cmd(&["--require-admin", "--input-envelope", "resume"])
+        .stdin(&envelope(
+            json!({"admin_passphrase": native_e2e::ADMIN_PASSPHRASE}),
+        ))
+        .ok();
+    assert_eq!(resumed["stopped"], false);
+}
+
+#[test]
+fn require_admin_on_an_already_gated_command_still_closes_once() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let admin = bare_admin(tmp.path());
+    init_with_envelope(&admin);
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    let declared = admin.ok(&[
+        "incident",
+        "declare",
+        "--scope",
+        "principal",
+        "--principal",
+        "agent-1",
+    ]);
+    let id = declared["id"].as_str().unwrap().to_owned();
+    let close = ["incident", "close", "--id", id.as_str()];
+    // The gate refuses first, so the command's own re-auth never runs: one
+    // `require_admin` record per refusal, none for `incident_close`.
+    assert_gate_refuses(&admin, &close);
+    assert_eq!(admin.ok(&["status"])["incident_open"], json!(id));
+    // With the right passphrase both checks pass and the incident closes once.
+    let closed = gated(&admin, &close, right()).ok();
+    assert_eq!(closed["status"], "closed");
+    assert_eq!(admin.ok(&["status"])["incident_open"], Value::Null);
+    let closes = events(&admin.state)
+        .into_iter()
+        .filter(|event| event == "incident_close")
+        .count();
+    assert_eq!(closes, 1);
+    assert_eq!(auth_failures(&admin).len(), 3);
+    assert_values_absent_from_state(&admin, &[ENVELOPE_ADMIN, ENVELOPE_RECOVERY, WRONG_ADMIN]);
 }
