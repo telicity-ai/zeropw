@@ -128,15 +128,16 @@
     "rolldown 1.2.14": {
       "license": "MIT",
       "notices": ["LICENSE", "THIRD-PARTY-LICENSE"],
-      "bundler_runtime": "Rolldown's module runtime helper (__commonJSMin) heads dist/assets/index-*.js. Rolldown adapts its runtime from esbuild and Rollup, whose notices are in THIRD-PARTY-LICENSE.",
-      "source": "the only code without a source in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) was this helper, Vite's module-preload polyfill and the module wrappers Rolldown writes around bundled modules."
+      "upstream_notice": "es-module-shims-LICENSE-2d7ce60c.txt",
+      "bundler_runtime": "dist/assets/index-*.js starts with two pieces that Rolldown's native binding writes: its module runtime helper __commonJSMin (crates/rolldown/src/runtime/runtime-base.js, adapted from esbuild; THIRD-PARTY-LICENSE carries the esbuild and Rollup notices) and the module-preload polyfill of its builtin vite-module-preload-polyfill plugin, a port of the polyfill Vite adapted from es-module-shims (guybedford/es-module-shims LICENSE, the upstream notice below).",
+      "source": "in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) the only code without a source was these two pieces and the wrappers Rolldown writes around bundled modules; Vite 8.3.4 delegates the polyfill to rolldown/experimental, and Vite 7's modulePreloadPolyfill.ts names its es-module-shims origin."
     },
     "vite 8.3.4": {
       "license": "MIT",
       "notices": ["LICENSE.md"],
       "excerpt": { "file": "LICENSE.md", "from": "# Vite core license", "to": "# Licenses of bundled dependencies" },
-      "bundler_runtime": "Vite's module-preload polyfill follows the Rolldown helper in dist/assets/index-*.js. It is Vite's own code, so only the Vite core license of LICENSE.md applies; the rest of that file covers dependencies bundled into Vite itself, which are not emitted.",
-      "source": "the only code without a source in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) was this polyfill, Rolldown's module runtime helper and the module wrappers Rolldown writes around bundled modules."
+      "bundler_runtime": "the module-preload polyfill Rolldown emits is a port of Vite's own polyfill code, so the Vite core license of LICENSE.md applies to it; the rest of that file covers dependencies bundled into Vite's JavaScript, which is not emitted.",
+      "source": "in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) the only code without a source was the Rolldown runtime helper, the module-preload polyfill and the module wrappers Rolldown writes around bundled modules."
     }
   }
 }

@@ -83,6 +83,7 @@ class DesktopLicenseTests(unittest.TestCase):
         licenses.mkdir()
         (licenses / 'MIT.txt').write_text('Synthetic standard MIT text\n')
         (licenses / 'pretendard-LICENSE-0189074f.txt').write_bytes(REVIEWED_PRETENDARD.read_bytes())
+        (licenses / 'polyfill-origin.txt').write_text('Copyright (C) Synthetic polyfill origin\n')
         self.supplement = {
             'packages': {'objc2 0.6.5': {'license': 'MIT', 'standard_text': 'MIT', 'source': 'synthetic review.',
                                          'copyright': ['Copyright (c) Synthetic Original Author']}},
@@ -92,6 +93,7 @@ class DesktopLicenseTests(unittest.TestCase):
                 '@fontsource/jetbrains-mono 5.3.0': {'license': 'OFL-1.1', 'notices': ['LICENSE'],
                                                      'source': 'synthetic font review.'},
                 'rolldown 1.2.0': {'license': 'MIT', 'notices': ['LICENSE', 'THIRD-PARTY-LICENSE'],
+                                   'upstream_notice': 'polyfill-origin.txt',
                                    'bundler_runtime': 'Synthetic runtime helper.', 'source': 'synthetic bundle review.'},
                 'vite 8.0.0': {'license': 'MIT', 'notices': ['LICENSE.md'],
                                'excerpt': {'file': 'LICENSE.md', 'from': '# Vite core license',
@@ -223,7 +225,8 @@ class DesktopLicenseTests(unittest.TestCase):
         text = self.run_ok()
         tools = text[text.index('## Build tools whose own code is emitted'):text.index('# 5. Source code')]
         for fragment in ('## rolldown 1.2.0', 'Emitted code: Synthetic runtime helper.', 'Synthetic Rolldown MIT notice',
-                         '### THIRD-PARTY-LICENSE', 'Synthetic esbuild and Rollup notices', '## vite 8.0.0',
+                         '### THIRD-PARTY-LICENSE', 'Synthetic esbuild and Rollup notices',
+                         '### Upstream notice (polyfill-origin.txt)', 'Copyright (C) Synthetic polyfill origin', '## vite 8.0.0',
                          'Emitted code: Synthetic preload polyfill.', 'Synthetic Vite MIT notice',
                          '### LICENSE.md (its first section, up to "# Licenses of bundled dependencies")'):
             self.assertIn(fragment, tools)
@@ -315,6 +318,16 @@ class RepositorySupplementTests(unittest.TestCase):
         for key in npm:
             self.assertIn(tuple(key.rsplit(' ', 1)), locked, key)
         self.assertEqual(npm['pretendard 1.3.9']['upstream_notice'], REVIEWED_PRETENDARD.name)
+
+    def test_build_tool_upstream_notice_is_the_unchanged_upstream_file(self):
+        # LICENSE at guybedford/es-module-shims 2d7ce60c2fe3ecbc73f3628fd16821d3285e9798, the origin of the
+        # module-preload polyfill that Rolldown emits.
+        shims = ROOT / 'desktop/licenses/es-module-shims-LICENSE-2d7ce60c.txt'
+        self.assertEqual(hashlib.sha256(shims.read_bytes()).hexdigest(),
+                         '13dc18f97f767475f7ad48fdd12a2e45be30fb309c604730f406f625cf7d8f7f')
+        self.assertIn('Copyright (C) 2018-2021 Guy Bedford', shims.read_text(encoding='utf-8'))
+        rolldown = [entry for key, entry in self.supplement['npm'].items() if key.startswith('rolldown ')]
+        self.assertEqual([entry.get('upstream_notice') for entry in rolldown], [shims.name])
 
     def test_every_crate_entry_names_its_upstream_holders(self):
         lock = (ROOT / 'desktop/Cargo.lock').read_text(encoding='utf-8')

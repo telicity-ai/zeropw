@@ -15,10 +15,10 @@ The desktop app redistributes four groups of third-party code, and the file cove
    which scripts/dependency-licenses.py adds to both collections; they must agree;
 4. the web interface: every package in package-lock.json that is not development-only, read
    from node_modules (run `npm ci` first), plus the development-only build tools whose own
-   code the production build emits into dist (Rolldown's runtime helper, Vite's module-preload
-   polyfill). The reviewed npm entries of supplement.json name the notice files of each
-   OFL font (Pretendard's adds the upstream notice that names the fonts it is built from) and
-   pin the build tools' versions.
+   code the production build emits into dist (Rolldown's runtime helper and its port of Vite's
+   module-preload polyfill, which came from es-module-shims). The reviewed npm entries of
+   supplement.json name the notice files of each OFL font (Pretendard's adds the upstream
+   notice that names the fonts it is built from) and of each build tool, whose version they pin.
 
 It fetches the desktop crates (`cargo fetch --locked`, which runs no build scripts) so the
 offline Cargo metadata is available. Like scripts/dependency-licenses.py, this is an inventory of
