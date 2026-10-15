@@ -253,6 +253,7 @@ export const COPY = {
   'term.chip.aria': '{cmd} 입력',
   'term.closed': '터미널이 닫혔어요',
   'term.busy': '프로그램이 입력을 읽지 않아 방금 입력한 내용을 보내지 못했어요',
+  'term.tooLarge': '붙여넣은 내용이 64KB를 넘어서 보내지 않았어요',
   'term.err': '터미널을 열지 못했어요',
   'join.err.expired': '만료된 링크예요',
   'join.err.check': '링크를 확인하지 못했어요',

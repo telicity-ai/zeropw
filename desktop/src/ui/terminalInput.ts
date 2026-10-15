@@ -1,36 +1,35 @@
-// Keyboard input for one in-app terminal (docs/desktop-app.md §4.4). Input goes to the core one
-// `terminal_write` at a time, in the order it was typed, cut to the core's per-call limit.
-// The core refuses input with `terminal_busy` while the program leaves 256 KiB unread. The
-// refused chunk is dropped, and so is everything typed behind it before the refusal was known:
-// sent later, it would land after newer input and splice lines together. The terminal then says
-// that input was dropped (`busy`), and the next input typed after that is tried again.
+// Keyboard input for one in-app terminal (docs/desktop-app.md §4.4). Each input event (a key, a
+// typed suggestion or one paste) goes to the core whole, as one `terminal_write`, in the order it
+// was typed; the core queues a write all or nothing. An event over the core's per-call limit is
+// refused here whole (`tooLarge`) and never cut into several writes: a later piece could be
+// refused after earlier ones were taken, delivering only the head of a paste (and a bracketed
+// paste's start marker without its end). The core refuses input with `terminal_busy` while the
+// program leaves 256 KiB unread. The refused write is dropped, and so is everything typed behind
+// it before the refusal was known: sent later, it would land after newer input and splice lines
+// together. The terminal then says that input was dropped (`busy`), and the next input typed
+// after that is tried again.
 
 import { toIpcError } from '../ipc/client';
 
 /** The core refuses one `terminal_write` over this many UTF-8 bytes (`terminal_write_too_large`). */
 export const MAX_WRITE_BYTES = 64 * 1024;
 
-const utf8Length = (cp: number): number => (cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4);
-
-/** Cut text into pieces of at most `max` UTF-8 bytes, never inside a character. */
-export function splitUtf8(text: string, max = MAX_WRITE_BYTES): string[] {
-  const out: string[] = [];
-  let start = 0, bytes = 0, i = 0;
-  while (i < text.length) {
-    const cp = text.codePointAt(i) ?? 0;
-    const units = cp > 0xffff ? 2 : 1;
-    const n = utf8Length(cp);
-    if (bytes + n > max && i > start) {
-      out.push(text.slice(start, i));
-      start = i; bytes = 0;
-    }
-    bytes += n; i += units;
+/** UTF-8 length of `text`, as the core counts it against MAX_WRITE_BYTES. */
+export function utf8Bytes(text: string): number {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { n += 4; i++; }
+    else n += 3;
   }
-  if (i > start) out.push(text.slice(start, i));
-  return out;
+  return n;
 }
 
 export interface TerminalInputEvents {
+  /** One input (a paste) was over MAX_WRITE_BYTES: none of it was sent. */
+  tooLarge(): void;
   /** Input was refused because the program is not reading it; it was dropped. */
   busy(): void;
   /** Input went through again after a refusal. */
@@ -50,7 +49,8 @@ export class TerminalInput {
 
   write(data: string): void {
     if (this.stopped || !data) return;
-    this.queue.push(...splitUtf8(data));
+    if (utf8Bytes(data) > MAX_WRITE_BYTES) { this.on.tooLarge(); return; }
+    this.queue.push(data);
     if (!this.sending) this.running = this.pump();
   }
 
