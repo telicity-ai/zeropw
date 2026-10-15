@@ -106,11 +106,12 @@ fn exclude_from_history(set: arboard::Set<'_>) -> arboard::Set<'_> {
     set.exclude_from_history()
 }
 
-/// Whether this platform can keep a window out of screen capture. Linux window systems give
-/// an app no such control, and Tauri's content-protected flag does nothing there.
+/// Whether this platform lets a window ask to be left out of screen capture (best effort;
+/// capture APIs may ignore it). Linux window systems give an app no such control, and
+/// Tauri's content-protected flag does nothing there.
 pub const CONTENT_PROTECTION: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
-/// Screen-capture protection on one window (§8.8), where the platform has it.
+/// The screen-capture exclusion request on one window (§8.8), where the platform has it.
 pub struct WindowScreenGuard {
     window: WebviewWindow,
 }

@@ -98,8 +98,9 @@ export interface Commands {
   terminal_list: [void, { terminals: { terminal_id: string; principal: string; as_user: string | null; alive: boolean }[] }];
   /** Replays the buffered output (bounded ring) into on_data, then keeps streaming. */
   terminal_attach: [{ terminal_id: string; on_data: unknown /* Channel<string> */ }, { terminal_id: string; suggestions: string[] }];
-  /** Window content protection (screen-capture block) while a one-time value is visible.
-   *  `protected` is false when the platform has none (Linux): the UI must not claim it then. */
+  /** Asks the window system to leave the window out of screen capture while a one-time value
+   *  is visible (best effort; capture APIs may ignore it). `protected` says whether the request
+   *  was applied; it is false where the platform has none (Linux). The UI never claims it. */
   secure_view: [{ on: boolean }, { protected: boolean }];
 
   audit_tail: [{ limit: number }, { records: AuditRecord[]; unparseable_lines: number }];

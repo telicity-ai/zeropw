@@ -404,8 +404,9 @@ pub struct SecureViewIn {
     pub on: bool,
 }
 
-/// `secure_view` output: whether the window is now excluded from screen capture. `false`
-/// after `{on: true}` means this platform cannot do it (Linux), so the UI must not say so.
+/// `secure_view` output: whether the content-protection request was applied to the window.
+/// It is a best-effort request (macOS screen capture APIs may ignore it), not a guarantee;
+/// `false` after `{on: true}` means the platform has no such request (Linux).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct SecureViewOut {
     pub protected: bool,
@@ -1185,8 +1186,9 @@ impl Core {
 
     // -- screen capture -----------------------------------------------------------------------
 
-    /// `secure_view`: exclude the window from screen capture while a one-time value is shown.
-    /// Reports whether that protection is really in effect (never on Linux).
+    /// `secure_view`: ask the window system to keep the window out of screen capture while a
+    /// one-time value is shown. Reports whether the request was applied (never on Linux); a
+    /// capture tool may still ignore it, so nothing may claim the value cannot be captured.
     pub fn secure_view(
         &self,
         input: SecureViewIn,
