@@ -1,0 +1,154 @@
+//! End to end against the real binaries (ignored by default). Needs `ZEROPW_BIN_DIR` pointing at
+//! a build of `zeropw-admin` with the desktop CLI changes (docs/desktop-app.md §3:
+//! `--input-envelope`, `status`). Synthetic passphrases and values only, temp state directory.
+//!
+//! ```text
+//! cargo build --manifest-path rust/Cargo.toml --bins
+//! ZEROPW_BIN_DIR=$CARGO_TARGET_DIR/debug \
+//!   cargo test --manifest-path desktop/Cargo.toml --test e2e_real_admin -- --ignored
+//! ```
+
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use zeropw_desktop_core::commands::*;
+use zeropw_desktop_core::serve::{ServeConfig, ServeSupervisor, healthz};
+use zeropw_desktop_core::{AppPaths, Core, CoreConfig, NoEvents, Settings};
+
+fn bin_dir() -> PathBuf {
+    let bin = PathBuf::from(std::env::var_os("ZEROPW_BIN_DIR").expect("set ZEROPW_BIN_DIR"));
+    assert!(
+        bin.join("zeropw-admin").is_file(),
+        "no zeropw-admin in ZEROPW_BIN_DIR"
+    );
+    bin
+}
+
+fn free_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap().port()
+}
+
+/// The serve sidecar needs no input envelope, so this runs against today's CLI too. The state
+/// directory is created the pre-envelope way (passphrases in the child's environment; test only,
+/// synthetic values).
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with zeropw-admin"]
+fn real_serve_starts_attaches_and_stops() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), bin_dir());
+    zeropw_desktop_core::paths::ensure_private_dir(&paths.app_data_dir).unwrap();
+    let init = Command::new(paths.admin_bin())
+        .arg(format!("--state-dir={}", paths.state_dir().display()))
+        .arg("init")
+        .env("ZEROPW_ADMIN_PASSPHRASE", "velvet-ocean-27-quartz-lantern")
+        .env(
+            "ZEROPW_RECOVERY_PASSPHRASE",
+            "another-lantern-42-quartz-velvet",
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let port = free_port();
+    let first = ServeSupervisor::new(&paths);
+    let status = first
+        .start(&ServeConfig {
+            port,
+            team_listen: None,
+        })
+        .unwrap();
+    assert!(status.running);
+    assert_eq!(status.url, Some(format!("http://127.0.0.1:{port}")));
+    assert!(healthz(port, Duration::from_secs(2)).unwrap().is_zeropw());
+
+    let second = ServeSupervisor::new(&paths);
+    assert_eq!(second.attach().pid, status.pid);
+    let started = Instant::now();
+    assert!(!second.stop().running);
+    assert!(
+        started.elapsed() < Duration::from_secs(25),
+        "SIGTERM was not honored"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while healthz(port, Duration::from_millis(500)).is_ok() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(healthz(port, Duration::from_millis(500)).is_err());
+    assert!(!first.status().running);
+    assert!(!paths.serve_pid_file().exists());
+}
+
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with a zeropw-admin that supports --input-envelope"]
+fn init_project_secret_put_and_list_without_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = CoreConfig::new(AppPaths::new(dir.path().join("app"), bin_dir()));
+    config.serve_stop_grace = Duration::from_secs(10);
+    let core = Core::new(config, Arc::new(NoEvents));
+    core.settings_set(Settings {
+        gateway_port: free_port(),
+        team_listen: None,
+    })
+    .unwrap();
+
+    let code = core.recovery_generate().unwrap();
+    let init = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: "velvet-ocean-27-quartz-lantern".into(),
+            recovery: RecoveryInput::Ref(code.reference),
+        })
+        .unwrap();
+    assert!(!init.kms_key_id.is_empty());
+    let status = core.app_status().unwrap();
+    assert!(status.initialized);
+    assert!(status.serve.running);
+    assert_eq!(status.control.map(|c| c.stopped), Some(false));
+
+    let project = core
+        .project_create(ProjectCreateIn {
+            name: "demo".into(),
+            environments: vec!["dev".into()],
+        })
+        .unwrap();
+    assert_eq!(project["name"], "demo");
+
+    let value = "sk-synthetic-e2e-0123456789";
+    core.secret_put(SecretPutIn {
+        id: "api".into(),
+        kind: SecretKind::ApiKey,
+        project: "demo".into(),
+        environment: "dev".into(),
+        source: SecretSource::Typed(value.into()),
+    })
+    .unwrap();
+    let list = core.secret_list(SecretListIn::default()).unwrap();
+    let text = list.to_string();
+    assert!(text.contains("\"api\""), "{text}");
+    assert!(!text.contains(value), "secret list leaked the value");
+
+    let revealed = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: None,
+            admin_passphrase: "velvet-ocean-27-quartz-lantern".into(),
+        })
+        .unwrap();
+    let shown = core
+        .onetime_show(RefIn {
+            reference: revealed.reference,
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(shown.expose(), value);
+
+    core.shutdown();
+    assert!(!core.serve_status().running);
+}
