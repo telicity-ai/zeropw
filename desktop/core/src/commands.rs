@@ -56,7 +56,8 @@ use crate::terminal::{
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(60);
 /// How long app quit waits for the clipboard while clearing a copied value.
 const CLIPBOARD_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
-/// Copies whose clear is still pending; beyond this the oldest is forgotten.
+/// Copies app quit remembers to clear; beyond this the oldest is forgotten (it can only still
+/// be on the clipboard if every later copy failed). Its own 60 s timer still runs.
 const MAX_PENDING_CLEARS: usize = 64;
 const MAX_INVITE_CHARS: usize = 4096;
 /// The longest version text the core passes on (the CLI prints integers).
@@ -1559,16 +1560,13 @@ impl Core {
         let pending = self.pending_clears.clone();
         thread::spawn(move || {
             thread::sleep(after);
-            let due = {
+            {
                 let mut pending = lock(&pending);
-                let at = pending.items.iter().position(|p| p.id == id);
-                at.map(|at| pending.items.remove(at))
-            };
-            // Gone already: app quit has done this clear.
-            if due.is_some()
-                && clipboard
-                    .read_text()
-                    .is_some_and(|now| digest(now.expose()) == copied)
+                pending.items.retain(|p| p.id != id);
+            }
+            if clipboard
+                .read_text()
+                .is_some_and(|now| digest(now.expose()) == copied)
             {
                 let _ = clipboard.clear();
             }

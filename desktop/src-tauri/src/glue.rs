@@ -66,9 +66,17 @@ impl AppClipboard {
         f(clipboard).map_err(|_| AppError::unavailable("clipboard_unavailable"))
     }
 
-    /// App exit: let the clipboard connection go.
+    /// App exit: let the clipboard connection go. Never waits: if a clipboard call is still
+    /// running (the core gave up on it), the process exit drops the connection instead.
     pub fn release(&self) {
-        self.lock().take();
+        let inner = match self.inner.try_lock() {
+            Ok(inner) => Some(inner),
+            Err(std::sync::TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        if let Some(mut inner) = inner {
+            inner.take();
+        }
     }
 }
 
