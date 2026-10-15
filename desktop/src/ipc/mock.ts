@@ -584,7 +584,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!term) return;
       term.closed = true; term.out = null; term.timers.forEach((id) => clearTimeout(id)); terminals.delete(terminal_id);
     },
-    secure_view: ({ on }) => { secureView = on === true; },
+    secure_view: ({ on }) => { secureView = on === true; return { protected: secureView }; },
 
     // ---- records
     audit_tail: ({ limit }) => ({ records: audit.slice(-Math.max(0, limit)), unparseable_lines: 0 }),

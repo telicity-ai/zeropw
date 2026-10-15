@@ -68,9 +68,12 @@ pub trait Clipboard: Send + Sync {
 
 /// Window content protection (§8.8): while a one-time value (recovery code, caller token,
 /// invite link, revealed secret) is on screen, the window is excluded from screen capture.
-/// The Tauri layer implements this with the main window's content-protected flag.
+/// The Tauri layer implements this with the main window's content-protected flag, which only
+/// macOS and Windows honour.
 pub trait ScreenGuard: Send + Sync {
-    fn set_protected(&self, on: bool) -> Result<(), AppError>;
+    /// Turn protection on or off. Returns whether the window is protected from capture now:
+    /// `Ok(false)` after `on = true` means the platform has no such protection (Linux).
+    fn set_protected(&self, on: bool) -> Result<bool, AppError>;
 }
 
 /// `file_pick` purposes.

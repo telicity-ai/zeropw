@@ -805,21 +805,65 @@ fn ssh_connection_repeats_host_keys() {
     );
 }
 
+/// The envelopes of the `recover` calls after the first `skip`.
+fn recover_envelopes(fx: &Fixture, skip: usize) -> Vec<serde_json::Value> {
+    fx.calls()
+        .into_iter()
+        .filter(|c| c.key == "recover")
+        .skip(skip)
+        .map(|c| c.stdin_json()["recovery_passphrase"].clone())
+        .collect()
+}
+
 #[test]
-fn recover_and_typed_recovery_codes_are_canonicalized() {
+fn recover_tries_the_canonical_code_then_the_exact_text_and_no_more() {
     let fx = Fixture::new();
     let core = core(&fx);
-    core.recover(RecoverIn {
-        recovery_passphrase: "abcd efgh ijkl mnop qrst uvw2".into(),
-    })
-    .unwrap();
-    let call = fx.last("recover");
-    assert_eq!(call.args(), ["recover"]);
-    assert_eq!(
-        call.stdin_json(),
-        json!({"recovery_passphrase": "ABCD-EFGH-IJKL-MNOP-QRST-UVW2"})
+    let typed = "abcd efgh ijkl mnop qrst uvw2";
+    let canonical = "ABCD-EFGH-IJKL-MNOP-QRST-UVW2";
+    let recover = |text: &str| {
+        core.recover(RecoverIn {
+            recovery_passphrase: text.into(),
+        })
+    };
+
+    // A code the app made: the canonical form works at once, one call.
+    recover(typed).unwrap();
+    assert_eq!(fx.last("recover").args(), ["recover"]);
+    assert_eq!(recover_envelopes(&fx, 0), [json!(canonical)]);
+
+    // A vault whose recovery passphrase was given to `zeropw-admin init` as typed: the
+    // canonical form fails authentication, then the exact text is tried once. Never more
+    // than two attempts (two auth_failed records) for one request.
+    fx.respond_error(
+        "recover",
+        r#"{"error":"AuthFailed","reason":"recovery_failed"}"#,
+        1,
     );
-    assert_argv_clean(&fx, &["ABCD", "abcd"]);
+    let e = recover(typed).unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("AuthFailed", "recovery_failed")
+    );
+    assert_eq!(recover_envelopes(&fx, 1), [json!(canonical), json!(typed)]);
+
+    // Already canonical, or not shaped like a code: one attempt only.
+    for text in [canonical, "my own Recovery phrase 9"] {
+        let before = fx.count("recover");
+        assert!(recover(text).is_err());
+        assert_eq!(recover_envelopes(&fx, before), [json!(text)]);
+    }
+
+    // Any other failure is not retried.
+    fx.respond_error(
+        "recover",
+        r#"{"error":"StateError","reason":"state_corrupt"}"#,
+        1,
+    );
+    let before = fx.count("recover");
+    assert_eq!(recover(typed).unwrap_err().reason, "state_corrupt");
+    assert_eq!(recover_envelopes(&fx, before), [json!(canonical)]);
+    assert_argv_clean(&fx, &["ABCD", "abcd", "phrase"]);
 }
 
 #[test]
@@ -915,6 +959,159 @@ fn onetime_copy_clears_the_clipboard_only_if_unchanged() {
     assert_eq!(
         clipboard.0.lock().unwrap().as_deref(),
         Some("something the user copied")
+    );
+}
+
+#[test]
+fn quitting_clears_a_copied_value_still_on_the_clipboard() {
+    let fx = Fixture::new();
+    let core_with_long_clear = || {
+        let mut config = CoreConfig::new(fx.paths.clone());
+        config.clipboard_clear_after = Duration::from_secs(3600);
+        Core::new(config, Arc::new(NoEvents))
+    };
+    let copy = |core: &Core, clipboard: &Arc<FakeClipboard>| {
+        let created = core
+            .principal_create(PrincipalCreateIn {
+                id: "a".into(),
+                runtime: "default".into(),
+            })
+            .unwrap();
+        core.onetime_copy(
+            RefIn {
+                reference: created.token_ref,
+            },
+            clipboard.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            clipboard.0.lock().unwrap().as_deref(),
+            Some("zpw_synthetic_caller_token")
+        );
+    };
+
+    // Quit long before the 60 s clear: the token does not stay behind.
+    let core = core_with_long_clear();
+    let clipboard = Arc::new(FakeClipboard::default());
+    copy(&core, &clipboard);
+    core.shutdown();
+    assert_eq!(clipboard.0.lock().unwrap().as_deref(), None);
+
+    // Something the user copied since is left alone.
+    let core = core_with_long_clear();
+    let clipboard = Arc::new(FakeClipboard::default());
+    copy(&core, &clipboard);
+    *clipboard.0.lock().unwrap() = Some("something the user copied".into());
+    core.shutdown();
+    assert_eq!(
+        clipboard.0.lock().unwrap().as_deref(),
+        Some("something the user copied")
+    );
+}
+
+#[test]
+fn a_full_one_time_store_refuses_before_the_cli_changes_anything() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    // Fill the store with values that need no CLI call.
+    for _ in 0..zeropw_desktop_core::onetime::MAX_ENTRIES {
+        core.recovery_generate().unwrap();
+    }
+    let e = err(core.principal_create(PrincipalCreateIn {
+        id: "agent-1".into(),
+        runtime: "default".into(),
+    }));
+    assert_eq!(e.reason, "onetime_store_full");
+    let e = err(core.team_invite_create(TeamInviteCreateIn {
+        env: "demo/dev".into(),
+        role: TeamRole::User,
+        name: "bob".into(),
+        address: "192.168.1.20:47390".into(),
+        admin_passphrase: pass(),
+    }));
+    assert_eq!(e.reason, "onetime_store_full");
+    let e = err(core.secret_reveal(SecretRevealIn {
+        id: "api".into(),
+        version: None,
+        admin_passphrase: pass(),
+    }));
+    assert_eq!(e.reason, "onetime_store_full");
+    // No principal was created, no invite issued, no reveal audited.
+    for key in ["principal_create", "team_invite", "secret_reveal"] {
+        assert_eq!(fx.count(key), 0, "{key} ran");
+    }
+}
+
+#[test]
+fn deep_links_cannot_fill_the_one_time_store() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let opened: Vec<String> = (0..zeropw_desktop_core::onetime::MAX_INVITE_TEXTS + 8)
+        .map(|_| {
+            core.open_deep_link("zeropw://join#SYNTHETICINVITE")
+                .unwrap()
+                .reference
+        })
+        .collect();
+    // The newest previews are kept, the oldest gave way.
+    assert!(!core.invite_pending(&opened[0]));
+    assert!(core.invite_pending(opened.last().unwrap()));
+    // Everything the app itself makes still fits.
+    for _ in 0..zeropw_desktop_core::onetime::MAX_ENTRIES - 1 {
+        core.recovery_generate().unwrap();
+    }
+    let created = core
+        .principal_create(PrincipalCreateIn {
+            id: "agent-1".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    assert_eq!(created.token_ref.len(), 32);
+}
+
+/// WEB-2: `secret_list`/`secret_versions` pass the CLI's output through, and the CLI prints a
+/// secret's versions as JSON numbers (strings are accepted too). Feeding
+/// those values straight back into the version commands must work, unchanged.
+#[test]
+fn versions_go_back_to_the_cli_as_it_printed_them() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    fx.respond(
+        "secret_versions",
+        r#"{"active_version":2,"environment":"dev","id":"api","kind":"api_key","project":"demo","versions":[{"created_at":"2026-10-15T00:00:00Z","public":{},"status":"retired","version":1},{"created_at":"2026-10-15T00:00:00Z","public":{},"status":"active","version":2}]}"#,
+    );
+    let listed = core.secret_versions(IdIn { id: "api".into() }).unwrap();
+    let versions: Vec<serde_json::Value> = listed["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["version"].clone())
+        .collect();
+    assert_eq!(versions, [json!(1), json!(2)]);
+
+    // The webview sends back exactly what it got (deserialized like the IPC layer does).
+    let revoke: SecretVersionIn =
+        serde_json::from_value(json!({"id": "api", "version": versions[0]})).unwrap();
+    core.secret_revoke(revoke).unwrap();
+    assert_eq!(
+        fx.last("secret_revoke").args(),
+        ["secret", "revoke", "--id=api", "--version=1"]
+    );
+    let retire: SecretVersionIn =
+        serde_json::from_value(json!({"id": "api", "version": "9f86d081884c7d65"})).unwrap();
+    core.secret_retire(retire).unwrap();
+    assert_eq!(
+        fx.last("secret_retire").args(),
+        ["secret", "retire", "--id=api", "--version=9f86d081884c7d65"]
+    );
+    let reveal: SecretRevealIn = serde_json::from_value(json!({
+        "id": "api", "version": listed["active_version"], "admin_passphrase": ADMIN_PASS
+    }))
+    .unwrap();
+    core.secret_reveal(reveal).unwrap();
+    assert_eq!(
+        fx.last("secret_reveal").args(),
+        ["secret", "reveal", "--id=api", "--version=2"]
     );
 }
 

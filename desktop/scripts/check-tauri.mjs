@@ -34,7 +34,6 @@ export const CSP =
   "form-action 'none'; frame-ancestors 'none'";
 const FORBIDDEN_PLUGINS = ['shell', 'fs', 'http', 'opener'];
 const ALLOWED_RUST_PLUGINS = [
-  'tauri-plugin-clipboard-manager',
   'tauri-plugin-deep-link',
   'tauri-plugin-dialog',
   'tauri-plugin-single-instance',

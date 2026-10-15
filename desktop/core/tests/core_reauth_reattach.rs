@@ -584,15 +584,29 @@ fn attach_during_output_has_no_gap_and_no_repeat() {
 }
 
 #[test]
-fn secure_view_toggles_the_window_hook() {
+fn secure_view_toggles_the_window_hook_and_reports_what_it_got() {
     let fx = Fixture::new();
     let core = Core::new(CoreConfig::new(fx.paths.clone()), Arc::new(NoEvents));
     let screen = FakeScreen::default();
-    core.secure_view(SecureViewIn { on: true }, &screen)
+    let on = core
+        .secure_view(SecureViewIn { on: true }, &screen)
         .unwrap();
-    core.secure_view(SecureViewIn { on: false }, &screen)
+    assert_eq!(on, SecureViewOut { protected: true });
+    let off = core
+        .secure_view(SecureViewIn { on: false }, &screen)
         .unwrap();
+    assert_eq!(off, SecureViewOut { protected: false });
     assert_eq!(*screen.0.lock().unwrap(), [true, false]);
+    assert_eq!(
+        serde_json::to_value(on).unwrap(),
+        serde_json::json!({"protected": true})
+    );
+    // A platform without capture protection (Linux) says so instead of claiming it.
+    let linux = FakeScreen::unsupported();
+    assert_eq!(
+        core.secure_view(SecureViewIn { on: true }, &linux).unwrap(),
+        SecureViewOut { protected: false }
+    );
     assert!(fx.calls().is_empty());
     let parsed: SecureViewIn = serde_json::from_value(serde_json::json!({"on": true})).unwrap();
     assert!(parsed.on);

@@ -211,14 +211,20 @@ impl Events {
     }
 }
 
-/// Records `secure_view` toggles.
+/// Records `secure_view` toggles. `unsupported` plays a platform without capture protection.
 #[derive(Default)]
-pub struct FakeScreen(pub Mutex<Vec<bool>>);
+pub struct FakeScreen(pub Mutex<Vec<bool>>, pub bool);
+
+impl FakeScreen {
+    pub fn unsupported() -> Self {
+        Self(Mutex::default(), true)
+    }
+}
 
 impl zeropw_desktop_core::ScreenGuard for FakeScreen {
-    fn set_protected(&self, on: bool) -> Result<(), AppError> {
+    fn set_protected(&self, on: bool) -> Result<bool, AppError> {
         self.0.lock().unwrap().push(on);
-        Ok(())
+        Ok(on && !self.1)
     }
 }
 

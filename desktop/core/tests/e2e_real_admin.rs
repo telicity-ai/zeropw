@@ -152,3 +152,53 @@ fn init_project_secret_put_and_list_without_values() {
     core.shutdown();
     assert!(!core.serve_status().running);
 }
+
+/// CORE-5 against the real CLI: `zeropw-admin init` keeps a code-shaped recovery passphrase
+/// exactly as typed, so the app's canonical form fails once and the exact text then works.
+/// A wrong code-shaped passphrase costs exactly two `auth_failed` records, never more.
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with a zeropw-admin that supports --input-envelope"]
+fn recover_reaches_a_vault_whose_code_was_typed_into_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), bin_dir());
+    zeropw_desktop_core::paths::ensure_private_dir(&paths.app_data_dir).unwrap();
+    let typed = "abcd efgh ijkl mnop qrst uvw2";
+    let init = Command::new(paths.admin_bin())
+        .arg(format!("--state-dir={}", paths.state_dir().display()))
+        .arg("init")
+        .env("ZEROPW_ADMIN_PASSPHRASE", "velvet-ocean-27-quartz-lantern")
+        .env("ZEROPW_RECOVERY_PASSPHRASE", typed)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let core = Core::new(CoreConfig::new(paths), Arc::new(NoEvents));
+    let failures = |core: &Core| {
+        core.audit_tail(LimitIn { limit: 1000 }).unwrap()["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "auth_failed")
+            .count()
+    };
+
+    let wrong = core
+        .recover(RecoverIn {
+            recovery_passphrase: "zzzz zzzz zzzz zzzz zzzz zzzz".into(),
+        })
+        .unwrap_err();
+    assert_eq!(wrong.error, "AuthFailed");
+    assert_eq!(failures(&core), 2);
+
+    let out = core
+        .recover(RecoverIn {
+            recovery_passphrase: typed.into(),
+        })
+        .unwrap();
+    assert!(out["kms_key_id"].is_string(), "{out}");
+    assert_eq!(failures(&core), 3);
+}
