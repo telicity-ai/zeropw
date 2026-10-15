@@ -368,6 +368,38 @@ class ReleaseConfigCheckTests(unittest.TestCase):
         (self.tauri / 'Info.plist').write_text(original)
         self.assertIn('Info.plist would be merged into every build', self.check().stderr)
 
+    def test_files_tauri_merges_on_its_own_are_refused(self):
+        # A platform config could set bundle.macOS.entitlements, the CSP or capabilities, and
+        # Tauri merges it into every build for that platform without any --config.
+        platform_config = json.dumps({'bundle': {'macOS': {'entitlements': './x.plist'}}})
+        for name in ('tauri.macos.conf.json', 'tauri.linux.conf.json5', 'tauri.windows.conf.json',
+                     'tauri.ios.conf.json', 'tauri.android.conf.json', 'Tauri.macos.toml', 'Tauri.toml',
+                     'tauri.conf.json5', 'TAURI.MACOS.CONF.JSON', 'Entitlements.plist', 'release.entitlements',
+                     'info.plist'):
+            with self.subTest(name=name):
+                (self.tauri / name).write_text(platform_config)
+                result = self.check()
+                (self.tauri / name).unlink()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'src-tauri/{name}' if name != 'info.plist' else 'Info.plist would be merged', result.stderr)
+        self.assertEqual(self.check().returncode, 0)
+
+    def test_deep_link_is_exactly_the_zeropw_scheme(self):
+        cases = [
+            lambda c: c['plugins']['deep-link']['desktop'].update(domains=['example.com']),
+            lambda c: c['plugins']['deep-link'].update(mobile=[{'host': 'example.com'}]),
+            lambda c: c['plugins']['deep-link']['desktop'].update(name='ZeroPW link'),
+            lambda c: c['plugins']['deep-link'].update(desktop=[{'schemes': ['zeropw'], 'domains': ['example.com']}]),
+        ]
+        for index, change in enumerate(cases):
+            with self.subTest(case=index):
+                original = (self.tauri / 'tauri.conf.json').read_text()
+                self.edit('tauri.conf.json', change)
+                result = self.check()
+                (self.tauri / 'tauri.conf.json').write_text(original)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('plugins.deep-link must be exactly {"desktop":{"schemes":["zeropw"]}}', result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()
