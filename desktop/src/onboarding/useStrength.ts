@@ -2,11 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { CopyKey } from '../copy';
 import { call } from '../ipc/client';
 
+// Reason codes from desktop/core/src/strength.rs. The score is the zxcvbn score, 0 to 4.
 const REASONS: Record<string, CopyKey> = {
-  common: 'admin.reason.common',
-  repeat: 'admin.reason.repeat',
-  year: 'admin.reason.year',
-  short: 'admin.reason.short',
+  common_password: 'admin.reason.common',
+  similar_to_common: 'admin.reason.common',
+  single_word: 'admin.reason.common',
+  name: 'admin.reason.common',
+  repeated: 'admin.reason.repeat',
+  keyboard_pattern: 'admin.reason.repeat',
+  sequence: 'admin.reason.repeat',
+  date: 'admin.reason.year',
+  too_short: 'admin.reason.short',
+  too_guessable: 'admin.reason.short',
 };
 
 /** Map the core's stable reason code to copy; unknown codes show nothing. */

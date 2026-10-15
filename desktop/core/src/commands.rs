@@ -1386,7 +1386,7 @@ fn check_passphrase(
     pass: &SecretString,
     which: &str,
     related: &[&str],
-    min_score: f64,
+    min_score: u8,
 ) -> Result<(), AppError> {
     if pass.expose().chars().count() < strength::MIN_CHARS {
         return Err(AppError::invalid_input("passphrase_too_short").with_detail(which.to_owned()));

@@ -55,10 +55,10 @@ export function mockStrength(p: string): { score: number; reason: string | null 
   const n = [...p].length, uniq = new Set(p).size / n;
   let s = Math.min(1, Math.max(0, (n * Math.log2(Math.max(pool, 2)) * (0.55 + 0.45 * uniq)) / 90));
   let reason: string | null = null;
-  if (COMMON.test(p)) { s = Math.min(s, 0.3); reason = 'common'; }
-  else if (/(.)\1{2,}/.test(p) || /(.{3,})\1/.test(p)) { s = Math.min(s, 0.4); reason = 'repeat'; }
-  else if (/(19|20)\d\d$/.test(p)) { s = Math.min(s, 0.45); reason = 'year'; }
-  else if (n < 12) reason = 'short';
+  if (COMMON.test(p)) { s = Math.min(s, 0.3); reason = 'common_password'; }
+  else if (/(.)\1{2,}/.test(p) || /(.{3,})\1/.test(p)) { s = Math.min(s, 0.4); reason = 'repeated'; }
+  else if (/(19|20)\d\d$/.test(p)) { s = Math.min(s, 0.45); reason = 'date'; }
+  else if (n < 12) reason = 'too_guessable';
   const score = s >= 0.85 ? 4 : s >= 0.5 ? 3 : s >= 0.3 ? 2 : s >= 0.1 ? 1 : 0;
   return { score, reason };
 }

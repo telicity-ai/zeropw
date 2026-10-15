@@ -44,7 +44,7 @@ describe('mock onboarding flow', () => {
   it('runs password → recovery → vault → relay → project → agent → terminal', async () => {
     const b = fresh();
     const weak = await call('password_strength', { value: 'password123' });
-    expect(weak.reason).toBe('common');
+    expect(weak.reason).toBe('common_password');
     expect(weak.score).toBeLessThan(3);
     const strong = await call('password_strength', { value: ADMIN });
     expect(strong.score).toBeGreaterThanOrEqual(3);
@@ -168,9 +168,9 @@ describe('mock dashboard shell', () => {
 describe('placeholder strength score', () => {
   it('reports zxcvbn-style integers with stable reason codes', () => {
     expect(mockStrength('')).toEqual({ score: 0, reason: null });
-    expect(mockStrength('aaaaaaaaaaaa').reason).toBe('repeat');
-    expect(mockStrength('Sunshine2024').reason).toBe('year');
-    expect(mockStrength('Tr0ub4dor&3').reason).toBe('short');
+    expect(mockStrength('aaaaaaaaaaaa').reason).toBe('repeated');
+    expect(mockStrength('Sunshine2024').reason).toBe('date');
+    expect(mockStrength('Tr0ub4dor&3').reason).toBe('too_guessable');
     for (const v of ['x', 'password', ADMIN, 'correct horse battery staple']) expect(Number.isInteger(mockStrength(v).score)).toBe(true);
   });
 });

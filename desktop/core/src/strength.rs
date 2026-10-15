@@ -1,5 +1,5 @@
 //! Passphrase strength (`password_strength`, docs/desktop-app.md §7 steps 2–3): the zxcvbn
-//! score (0–4) mapped to 0..1 in quarter steps, plus a short reason code for the UI's copy
+//! score (0–4), plus a short reason code for the UI's copy
 //! table. `vault_init` enforces the same thresholds in Rust, so the webview's gauge is never
 //! the only check.
 
@@ -9,16 +9,16 @@ use zxcvbn::feedback::Warning;
 /// The CLI's own minimum (`passphrase_too_short`).
 pub const MIN_CHARS: usize = 8;
 /// Administrator passphrase: zxcvbn 3 (more than 10^8 guesses).
-pub const ADMIN_MIN_SCORE: f64 = 0.75;
+pub const ADMIN_MIN_SCORE: u8 = 3;
 /// A recovery passphrase the user picks instead of the generated code: zxcvbn 4.
-pub const RECOVERY_MIN_SCORE: f64 = 1.0;
+pub const RECOVERY_MIN_SCORE: u8 = 4;
 /// Words that make a passphrase about this product weaker.
 const PRODUCT_WORDS: [&str; 3] = ["zeropw", "zero", "vault"];
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Strength {
-    /// 0, 0.25, 0.5, 0.75 or 1.
-    pub score: f64,
+    /// The zxcvbn score, 0 to 4.
+    pub score: u8,
     /// Why the score is low (`too_short`, `common_password`, …); `null` when it is fine.
     pub reason: Option<&'static str>,
 }
@@ -29,16 +29,16 @@ pub fn evaluate(value: &str, related: &[&str]) -> Strength {
     let mut inputs: Vec<&str> = PRODUCT_WORDS.to_vec();
     inputs.extend(related.iter().copied().filter(|s| !s.is_empty()));
     let entropy = zxcvbn::zxcvbn(value, &inputs);
-    let score = f64::from(u8::from(entropy.score())) / 4.0;
+    let score = u8::from(entropy.score());
     if value.chars().count() < MIN_CHARS {
         return Strength {
-            score: score.min(0.25),
+            score: score.min(1),
             reason: Some("too_short"),
         };
     }
     let warning = entropy.feedback().and_then(|f| f.warning()).map(reason_for);
     let reason = match warning {
-        Some(reason) if score < 1.0 => Some(reason),
+        Some(reason) if score < RECOVERY_MIN_SCORE => Some(reason),
         _ if score < ADMIN_MIN_SCORE => Some("too_guessable"),
         _ => None,
     };
@@ -70,10 +70,10 @@ mod tests {
     #[test]
     fn short_values_are_capped_and_flagged() {
         let s = evaluate("x7#Qa9!", &[]);
-        assert!(s.score <= 0.25);
+        assert!(s.score <= 1);
         assert_eq!(s.reason, Some("too_short"));
         let empty = evaluate("", &[]);
-        assert_eq!(empty.score, 0.0);
+        assert_eq!(empty.score, 0);
         assert_eq!(empty.reason, Some("too_short"));
     }
 
@@ -94,7 +94,7 @@ mod tests {
         assert!(s.score >= RECOVERY_MIN_SCORE, "{s:?}");
         assert_eq!(s.reason, None);
         let code = crate::recovery::generate().unwrap();
-        assert_eq!(evaluate(code.passphrase.expose(), &[]).score, 1.0);
+        assert_eq!(evaluate(code.passphrase.expose(), &[]).score, 4);
     }
 
     #[test]
@@ -104,16 +104,14 @@ mod tests {
     }
 
     #[test]
-    fn score_is_a_quarter_step() {
+    fn score_stays_within_zxcvbn_range() {
         for v in [
             "a",
             "abcdefgh",
             "Tr0ub4dor&3",
             "velvet-ocean-27-quartz-lantern",
         ] {
-            let s = evaluate(v, &[]).score;
-            assert!((0.0..=1.0).contains(&s));
-            assert_eq!((s * 4.0).fract(), 0.0);
+            assert!(evaluate(v, &[]).score <= 4);
         }
     }
 }
