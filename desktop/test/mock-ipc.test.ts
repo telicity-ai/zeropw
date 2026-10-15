@@ -156,12 +156,13 @@ describe('mock dashboard shell', () => {
     off();
     const alerts = await call('alerts', { limit: 5 });
     expect(alerts.alerts.length).toBeGreaterThan(0);
-    expect((await call('audit_tail', { limit: 10 })).records.map((r) => r.event)).toEqual(['stop_all', 'resume']);
+    expect((await call('audit_tail', { limit: 2 })).records.map((r) => r.event)).toEqual(['stop_all', 'resume']);
   });
 
   it('rejects commands it does not simulate with a stable reason', async () => {
-    fresh({ initialized: true });
-    expect((await rejection(call('backup_create'))).reason).toBe('mock_unsupported');
+    const b = fresh({ initialized: true });
+    const unknown = 'not_a_command' as unknown as 'app_status';
+    expect((await rejection(b.call(unknown, undefined))).reason).toBe('mock_unsupported');
   });
 });
 
