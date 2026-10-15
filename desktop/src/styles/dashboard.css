@@ -146,4 +146,6 @@
 
 /* other-device access offered right after joining a team */
 .listen-setup { margin-top: 14px; text-align: left; }
+.listen-setup > .callout:first-child { margin-top: 0; }
+.sheet .step-body > .listen-setup:first-child { margin-top: 0; }
 .listen-setup .inline { margin-top: 10px; }

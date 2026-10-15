@@ -13,8 +13,10 @@ import { turnOnListen } from './relay';
  *  Without it this device's relay runs no team sync, so it never receives the team's changes
  *  (keys, revocations, removals). Picks an address from `net_interfaces`, saves it and restarts
  *  the relay. Works inside and outside the dashboard (no dashboard context needed). */
-export function ListenSetup({ id, settings, interfaces, onDone, className }: {
+export function ListenSetup({ id, settings, interfaces, onDone, className, note = true }: {
   id: string; settings: Settings | null; interfaces: NetInterface[]; onDone(address: string): void; className?: string;
+  /** Show why sync needs it (off where the surrounding text already says so). */
+  note?: boolean;
 }) {
   const [ip, setIp] = useState(() => defaultListenIp(interfaces));
   const [port, setPort] = useState(String(DEFAULT_TEAM_PORT));
@@ -42,7 +44,7 @@ export function ListenSetup({ id, settings, interfaces, onDone, className }: {
 
   return (
     <div className={'listen-setup' + (className ? ' ' + className : '')}>
-      <Callout kind="info">{t('sync.need')}</Callout>
+      {note && <Callout kind="info">{t('sync.need')}</Callout>}
       <div className="inline">
         <SelectField id={`${id}-if`} label={t('set.listen.iface')} mono value={ip} options={interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
           onChange={(v) => { setIp(v); setErr(null); }} style={{ flex: 1.7 }} />

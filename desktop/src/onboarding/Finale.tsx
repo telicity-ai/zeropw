@@ -54,7 +54,7 @@ export function Finale(props: {
     { k: t('done.tile.team'), v: t('done.tile.team.off'), s: '', st: 'idle' },
   ];
   return (
-    <section className={'finale' + (visible ? ' in' : ' away')} aria-labelledby="t-done" inert={!visible}>
+    <section className={'finale' + (visible ? ' in' : ' away') + (join ? ' tall' : '')} aria-labelledby="t-done" inert={!visible}>
       <h1 className="r" style={ri(0)} id="t-done" tabIndex={-1} ref={titleRef}>{t('done.title')}</h1>
       <p className="r" style={ri(1)}>{join ? t('done.msg.join') : t('done.msg.none')}</p>
       <div className="tiles r" style={ri(2)}>
@@ -67,7 +67,7 @@ export function Finale(props: {
       </div>
       {join && joinOutcome === 'failed' && joinError && <div className="foot warn r" style={ri(2)} role="status">{t(joinError)}</div>}
       {join && listen && (
-        <ListenSetup id="done-listen" className="finale-listen" settings={listen.settings} interfaces={listen.interfaces}
+        <ListenSetup id="done-listen" className="finale-listen" note={false} settings={listen.settings} interfaces={listen.interfaces}
           onDone={() => { setListen(null); toast(t('toast.listen.on')); }} />
       )}
       <div className="actions r" style={ri(3)}>
