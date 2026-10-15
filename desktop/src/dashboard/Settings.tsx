@@ -10,7 +10,7 @@ import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { useClearOnClose, useDash, useLoad, useSheets } from './context';
 import { Empty, SectionHead } from './parts';
-import { listenErrorLines, relayLeftOff, restartRelay, turnOffListen, turnOnListen } from './relay';
+import { listenErrorLines, relayLeftOff, restartRelay, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
@@ -55,7 +55,7 @@ export function SettingsPage() {
   /** Restart the relay after a saved change; a relay that does not come back shows why. */
   const restart = async (done: CopyKey) => {
     try {
-      await restartRelay();
+      await relay.run(restartRelay);
       toast(t(done));
     } catch (e) {
       relay.report(e);
@@ -83,28 +83,20 @@ export function SettingsPage() {
   };
 
   // on: the relay is started with the new address, and an address it cannot open is taken back
-  // (./relay.ts); off: saved, then the relay restarts without it
-  const setListen = async (on: boolean) => {
-    if (!s) return;
-    let p: number | null = null;
-    if (on) {
-      p = parsePort(tport);
-      if (p === null || !ip) { setTErr([{ key: 'set.listen.port.err' }]); tportRef.current?.focus(); return; }
-    }
+  // (./relay.ts); off is asked first, since team changes stop arriving (the dashboard's sheet)
+  const listenOn = async () => {
+    if (!s || busy) return;
+    const p = parsePort(tport);
+    if (p === null || !ip) { setTErr([{ key: 'set.listen.port.err' }]); tportRef.current?.focus(); return; }
     setBusy('listen'); setTErr(null);
     try {
-      if (on && p !== null) await turnOnListen(ip, p);
-      else await turnOffListen();
-      toast(t(on ? 'toast.listen.on' : 'toast.listen.off'));
+      await relay.run(() => turnOnListen(ip, p));
+      toast(t('toast.listen.on'));
     } catch (e) {
-      if (on) {
-        setTErr(listenErrorLines(e));
-        const down = relayLeftOff(e);
-        if (down) relay.report(down);
-        tportRef.current?.focus();
-      } else {
-        relay.report(e);
-      }
+      setTErr(listenErrorLines(e));
+      const down = relayLeftOff(e);
+      if (down) relay.report(down);
+      tportRef.current?.focus();
     }
     reload(); bump();
     setBusy(null);
@@ -148,10 +140,13 @@ export function SettingsPage() {
                 onChange={(v) => { setIp(v); setTErr(null); }} style={{ flex: 1.7 }} />
               <TextField id="set-tport" label={t('conn.ssh.port')} mono value={tport} inputRef={tportRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 92px' }}
                 error={tErr ? tLines(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
-              <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'listen' || undefined} onClick={() => void setListen(true)}>
+              <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'listen' || undefined} onClick={() => void listenOn()}>
                 {t(listen ? 'set.listen.change' : 'inv.pre1.btn')}
               </button>
-              {listen && <button className="btn btn-text btn-sm tall" type="button" onClick={() => void setListen(false)}>{t('set.listen.off')}</button>}
+              {listen && (
+                <button className="btn btn-text btn-sm tall" type="button" aria-busy={relay.busy || undefined}
+                  onClick={() => { if (!relay.busy) relay.confirmListenOff(); }}>{t('set.listen.off')}</button>
+              )}
             </div>
             <div className="help">{t('inv.pre1.note')}</div>
           </>
@@ -198,8 +193,10 @@ export function SettingsPage() {
  *  data key again (rust/src/context.rs, rust/src/vault.rs `Vault::recover`), every agent
  *  permission is revoked and the handles rotate, and a backup made before it no longer restores
  *  (`backup_kms_mismatch`). It needs the current key file. It is not a response to a leaked key
- *  file: whoever holds the old file and a copy of the vault still has the data key, so the sheet
- *  says to replace every stored key and revoke it at its service. The code goes to the core once. */
+ *  file: whoever holds the old file and a copy of the vault still has the data key, and so can
+ *  read values stored in this vault later too (telicity-ai/zeropw#22). The sheet says to revoke
+ *  every key at its service and to start a new vault (remove the app data) for new keys. The code
+ *  goes to the core once. */
 function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): void; onDone(): void }) {
   const { toast } = useApp();
   const [code, setCode] = useState('');

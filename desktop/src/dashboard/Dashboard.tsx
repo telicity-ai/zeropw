@@ -4,11 +4,12 @@ import { call, on, toIpcError } from '../ipc/client';
 import type { AppStatus, Control, InvitePreview, ServeStatus } from '../ipc/contract';
 import { newRecordCount, recordSig } from '../lib/dash';
 import { hostPort } from '../lib/format';
-import { relayError } from '../lib/reasons';
+import { offersListenOff, relayError } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { PassField } from '../ui/fields';
 import { Callout } from '../ui/form';
 import { AgentsPage } from './Agents';
+import { ConfirmSheet } from './Confirm';
 import { ConnectionsPage } from './Connections';
 import {
   DashContext, passErrorKey, SheetHostContext, type DashApi, type Intent, type RelayApi, type RelayProblem, type SheetHost,
@@ -39,7 +40,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   const [intent, setIntent] = useState<Intent | null>(startPage === 'team' ? 'invite' : null);
   const [serve, setServe] = useState<ServeStatus>(initialStatus.serve);
   const [control, setControl] = useState<Control>(initialStatus.control ?? NO_CONTROL);
-  const [sheet, setSheet] = useState<'stop' | 'resume' | null>(null);
+  const [sheet, setSheet] = useState<'stop' | 'resume' | 'listenOff' | null>(null);
   const [busy, setBusy] = useState(false);
   const [pass, setPass] = useState('');
   const [passErr, setPassErr] = useState<CopyKey | null>(null);
@@ -143,20 +144,26 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     title.current?.focus({ preventScroll: true });
   }, [page, announce]);
 
-  // the relay: a failed start is shown with its reason until the relay runs again
-  const [relayBusy, setRelayBusy] = useState(false);
+  // the relay: a failed start is shown with its reason until the relay runs again or another
+  // start from this window begins; while one runs the relay counts as busy
+  const [relayRuns, setRelayRuns] = useState(0);
+  const relayBusy = relayRuns > 0;
   const [relayProblem, setRelayProblem] = useState<RelayProblem | null>(null);
   useEffect(() => { if (serve.running) setRelayProblem(null); }, [serve.running]);
   const reportRelay = useCallback((e: unknown) => {
-    const p = relayError(toIpcError(e).reason, toIpcError(e).detail);
+    const err = toIpcError(e);
+    const p = relayError(err.reason, err.detail);
     setRelayProblem(p);
     toast(t(p.key, { reason: p.reason }), 'warn');
     announce(t(p.key, { reason: p.reason }));
   }, [toast, announce]);
+  const runRelay = useCallback(async <T,>(task: () => Promise<T>): Promise<T> => {
+    setRelayRuns((n) => n + 1); setRelayProblem(null);
+    try { return await task(); } finally { setRelayRuns((n) => Math.max(0, n - 1)); }
+  }, []);
   const startRelay = useCallback(async (): Promise<boolean> => {
-    setRelayBusy(true); setRelayProblem(null);
     try {
-      const s = await call('serve_start');
+      const s = await runRelay(() => call('serve_start'));
       setServe(s);
       if (!s.running) { reportRelay({ error: 'Unavailable', reason: 'serve_not_running' }); return false; }
       toast(t('toast.relay.on'));
@@ -164,32 +171,32 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     } catch (e) {
       reportRelay(e);
       return false;
-    } finally { setRelayBusy(false); }
-  }, [reportRelay, toast]);
-  // other-device access: an address the relay cannot open keeps it off (at launch too, when the
-  // core's own start failed), so a relay that is off offers to turn that access off
+    }
+  }, [runRelay, reportRelay, toast]);
+  // other-device access: an address the relay cannot open keeps the whole relay off, so after a
+  // start that failed on the team address (and only then) the relay status offers to turn that
+  // access off; turning it off stops team changes from arriving, so it is confirmed first
   const [teamListen, setTeamListen] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     call('settings_get').then((s) => { if (live) setTeamListen(s.team_listen); }, () => undefined);
     return () => { live = false; };
   }, [tick, serve.running]);
-  const listenOff = useCallback(async (): Promise<boolean> => {
-    setRelayBusy(true); setRelayProblem(null);
+  const offerListenOff = offersListenOff({ running: serve.running, busy: relayBusy, teamListen, problem: relayProblem });
+  const listenOff = useCallback(async (): Promise<void> => {
     try {
-      const s = await turnOffListen();
+      const s = await runRelay(turnOffListen);
       setTeamListen(null); setServe(s);
-      if (!s.running) { reportRelay({ error: 'Unavailable', reason: 'serve_not_running' }); return false; }
-      toast(t('toast.listen.off'));
-      return true;
+      if (!s.running) reportRelay({ error: 'Unavailable', reason: 'serve_not_running' });
+      else toast(t('toast.listen.off'));
     } catch (e) {
       reportRelay(e);
-      return false;
-    } finally { setRelayBusy(false); setTick((k) => k + 1); }
-  }, [reportRelay, toast]);
+    } finally { setTick((k) => k + 1); }
+  }, [runRelay, reportRelay, toast]);
+  const confirmListenOff = useCallback(() => setSheet('listenOff'), []);
   const relay: RelayApi = useMemo(
-    () => ({ busy: relayBusy, problem: relayProblem, start: startRelay, report: reportRelay, teamListen, listenOff }),
-    [relayBusy, relayProblem, startRelay, reportRelay, teamListen, listenOff],
+    () => ({ busy: relayBusy, problem: relayProblem, start: startRelay, run: runRelay, report: reportRelay, teamListen, offerListenOff, confirmListenOff }),
+    [relayBusy, relayProblem, startRelay, runRelay, reportRelay, teamListen, offerListenOff, confirmListenOff],
   );
 
   const go = useCallback((p: PageId, i?: Intent) => { setPage(p); setIntent(i ?? null); }, []);
@@ -259,9 +266,8 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               {!serve.running && relayProblem && (
                 <div className="help err side-err" id="side-relay-err">{t(relayProblem.key, { reason: relayProblem.reason })}</div>
               )}
-              {!serve.running && teamListen && (
-                <button className="btn btn-text btn-sm side-listen-off" type="button" aria-busy={relayBusy || undefined}
-                  onClick={() => { if (!relayBusy) void listenOff(); }}>{t('relay.team.off')}</button>
+              {offerListenOff && (
+                <button className="btn btn-text btn-sm side-listen-off" type="button" onClick={confirmListenOff}>{t('relay.team.off')}</button>
               )}
               {control.stopped
                 ? <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('resume')}>{t('side.resume')}</button>
@@ -295,6 +301,9 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
           <PassField id="resume-pass" value={pass} inputRef={passRef} label={t('resume.field')}
             onChange={(v) => { setPass(v); setPassErr(null); }} error={passErr ? t(passErr) : null} />
         </Sheet>
+        <ConfirmSheet id="sheet-listen-off" open={sheet === 'listenOff'} title={t('relay.team.off')} lead={t('listen.off.sub')}
+          confirmLabel={t('listen.off.confirm')} chips={teamListen ? [teamListen] : undefined} info={t('listen.off.note')} onClose={closeSheet}
+          run={async () => { await listenOff(); closeSheet(); }} />
       </SheetHostContext.Provider>
     </DashContext.Provider>
   );

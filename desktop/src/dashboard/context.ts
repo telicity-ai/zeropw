@@ -11,18 +11,26 @@ export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 
 export interface RelayProblem { key: CopyKey; reason: string }
 
 export interface RelayApi {
+  /** A start or restart from this window is running. */
   busy: boolean;
-  /** The last failure to start, until the relay runs again. */
+  /** The last failure to start, until the relay runs again or another start begins. */
   problem: RelayProblem | null;
   /** `serve_start`; on failure the reason is shown (toast and next to the relay status). */
   start(): Promise<boolean>;
+  /** Run a restart from elsewhere (settings, team): the relay counts as busy and the last
+   *  failure is cleared while it runs. */
+  run<T>(task: () => Promise<T>): Promise<T>;
   /** Show why a restart elsewhere (settings, team) left the relay off. */
   report(e: unknown): void;
   /** The saved other-device address, or null. The relay runs team sync in the same process, so
    *  an address it cannot open (a VPN that is down, a port in use) keeps the whole relay off. */
   teamListen: string | null;
-  /** Turn other-device access off and start the relay without it. */
-  listenOff(): Promise<boolean>;
+  /** Offer to turn other-device access off: only after the team address kept the relay off
+   *  (lib/reasons.ts `offersListenOff`). */
+  offerListenOff: boolean;
+  /** Ask before turning other-device access off (team changes stop arriving), then turn it off
+   *  and start the relay without it. */
+  confirmListenOff(): void;
 }
 
 export interface DashApi {

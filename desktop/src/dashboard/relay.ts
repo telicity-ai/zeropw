@@ -24,6 +24,8 @@ export class ListenError extends Error {
   readonly address: string;
   /** Why the relay did not start with it (the sidecar's reason, or `serve_exited` from an older core). */
   readonly reason: string;
+  /** The setting the core says failed to open (`gateway_port` or `team_listen`), when it says. */
+  readonly detail: string | undefined;
   /** The previous setting is saved again. */
   readonly restored: boolean;
   /** The relay is running again (with the previous setting). */
@@ -31,11 +33,12 @@ export class ListenError extends Error {
   /** Why the relay did not come back, when it did not. */
   readonly relayError: unknown;
 
-  constructor(f: { address: string; reason: string; restored: boolean; relayBack: boolean; relayError: unknown }) {
+  constructor(f: { address: string; reason: string; detail?: string; restored: boolean; relayBack: boolean; relayError: unknown }) {
     super(`listen_failed: ${f.reason}`);
     this.name = 'ListenError';
     this.address = f.address;
     this.reason = f.reason;
+    this.detail = f.detail;
     this.restored = f.restored;
     this.relayBack = f.relayBack;
     this.relayError = f.relayError;
@@ -57,7 +60,7 @@ export async function turnOnListen(ip: string, port: number): Promise<ServeStatu
     if (s.running) return s;
     throw { error: 'Unavailable', reason: 'serve_not_running' };
   } catch (e) {
-    const reason = toIpcError(e).reason;
+    const { reason, detail } = toIpcError(e);
     let restored = false, relayBack = false, relayError: unknown = e;
     try {
       await call('settings_set', { gateway_port: before.gateway_port, team_listen: before.team_listen });
@@ -67,18 +70,19 @@ export async function turnOnListen(ip: string, port: number): Promise<ServeStatu
     } catch (again) {
       if (restored) relayError = again;
     }
-    throw new ListenError({ address, reason, restored, relayBack, relayError });
+    throw new ListenError({ address, reason, detail, restored, relayBack, relayError });
   }
 }
 
 /** Why turning on other-device access failed, as sentences for one error slot. A ListenError
- *  names the address and says whether the previous setting and the relay are back. */
+ *  names the address (or the relay port, when the core says that is what failed) and says
+ *  whether the previous setting and the relay are back. */
 export function listenErrorLines(e: unknown): CopyLine[] {
   if (e instanceof ListenError) return listenFailureLines(e);
-  const reason = toIpcError(e).reason;
+  const { reason, detail } = toIpcError(e);
   if (reason === 'invalid_listen') return [{ key: 'set.listen.port.err' }];
   if (reason.startsWith('serve_') || reason === 'admin_binary_missing' || reason === 'invalid_port') {
-    const r = relayError(reason);
+    const r = relayError(reason, detail);
     return [{ key: r.key, vars: { reason: r.reason } }];
   }
   return [{ key: 'error.generic' }];

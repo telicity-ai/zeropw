@@ -16,7 +16,8 @@ const THEME = {
 // strip CSI/OSC sequences before looking for the list-connections answer
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]/g;
 const VERIFIED = /"connections"\s*:/;
-/** How long the "input was dropped" notice stays after input goes through again. */
+/** How long the "input was dropped" notice stays after input goes through again, and the
+ *  "paste too large" notice after it is shown. */
 const DROPPED_NOTE_MS = 6000;
 
 /** Open a new shell for a caller token, or reattach to one that is still running. */
@@ -43,6 +44,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   const [altOpen, setAltOpen] = useState(false);
   const [closed, setClosed] = useState(false);
   const [dropped, setDropped] = useState(false);
+  const [tooLarge, setTooLarge] = useState(false);
   const [tokenGone, setTokenGone] = useState(false);
   const verified = useRef(false);
   const cb = useRef({ onOpened, onVerified, onFailed, onClosed });
@@ -51,10 +53,18 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   const input = useRef<TerminalInput | null>(null);
   const droppedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const droppedShown = useRef(false);
+  const tooLargeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // input goes out in order; input the program did not read is dropped and said so (./terminalInput.ts)
+  // input goes out in order, each paste whole; a paste over the core's limit and input the program
+  // did not read are dropped and said so (./terminalInput.ts)
   const write = (data: string) => { input.current?.write(data); };
   const inputFor = (terminalId: string) => new TerminalInput((data) => call('terminal_write', { terminal_id: terminalId, data }), {
+    tooLarge: () => {
+      if (tooLargeTimer.current) clearTimeout(tooLargeTimer.current);
+      announce(t('term.tooLarge'));
+      setTooLarge(true);
+      tooLargeTimer.current = setTimeout(() => { tooLargeTimer.current = null; setTooLarge(false); }, DROPPED_NOTE_MS);
+    },
     busy: () => {
       if (droppedTimer.current) clearTimeout(droppedTimer.current);
       droppedTimer.current = null;
@@ -139,6 +149,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       idRef.current = null;
       input.current?.dispose(); input.current = null;
       if (droppedTimer.current) clearTimeout(droppedTimer.current);
+      if (tooLargeTimer.current) clearTimeout(tooLargeTimer.current);
       term.dispose();
       termRef.current = null;
     };
@@ -180,6 +191,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       <div className="term-body" ref={host} role="group" aria-label={t('term.aria')} />
       {closed && <div className="term-note" role="status">{t('term.closed')}</div>}
       {!closed && dropped && <div className="term-note warn">{t('term.busy')}</div>}
+      {!closed && tooLarge && <div className="term-note warn">{t('term.tooLarge')}</div>}
       {suggestions.length > 0 && (
         <div className="term-suggest" role="group" aria-labelledby={`${domId}-suggest`}>
           <span className="lbl" id={`${domId}-suggest`}>{t('term.suggest')}</span>

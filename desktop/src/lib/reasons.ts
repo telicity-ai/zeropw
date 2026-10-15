@@ -61,19 +61,29 @@ export function relayError(reason: string, detail?: string): { key: CopyKey; rea
   return { key, reason: /^[a-z0-9_]{1,64}$/.test(reason) ? reason : 'unknown' };
 }
 
+/** Whether to offer turning other-device access off so the relay can start: only while the relay
+ *  is off, no start is running, access is on and the last failure was the team address
+ *  (`relay.err.team`). Never for a busy gateway port or any other reason, which turning access
+ *  off would not fix and which would only stop team changes from arriving. */
+export function offersListenOff(f: { running: boolean; busy: boolean; teamListen: string | null; problem: { key: CopyKey } | null }): boolean {
+  return !f.running && !f.busy && f.teamListen !== null && f.problem?.key === 'relay.err.team';
+}
+
 /** What turning on other-device access did when the relay would not start with the new address
- *  (dashboard/relay.ts ListenError): which address failed, then whether the previous setting and
- *  the relay are back. Only the team address changed, so the gateway port is never blamed. The
- *  address is named as the cause when the sidecar said so, or when the relay starts again without
- *  it; a relay that stays off either way (`serve_exited`, the generic code) shows its own reason
- *  next to the relay status. */
-export function listenFailureLines(f: { address: string; reason: string; restored: boolean; relayBack: boolean }): Array<{ key: CopyKey; vars?: CopyVars }> {
+ *  (dashboard/relay.ts ListenError): what failed, then whether the previous setting and the relay
+ *  are back. When the core names the gateway port (`detail` `gateway_port`) the relay port is
+ *  named and the address is not. Otherwise the gateway port is never blamed: the address is named
+ *  as the cause when the sidecar said so, or when the relay starts again without it; a relay that
+ *  stays off either way (`serve_exited`, the generic code) shows its own reason next to the relay
+ *  status. */
+export function listenFailureLines(f: { address: string; reason: string; detail?: string; restored: boolean; relayBack: boolean }): Array<{ key: CopyKey; vars?: CopyVars }> {
   const vars = { address: f.address };
   const first: { key: CopyKey; vars?: CopyVars } =
     f.reason === 'admin_binary_missing' ? { key: 'relay.err.missing' }
-      : f.reason === 'invalid_listen' ? { key: 'set.listen.port.err' }
-        : isTeamListenReason(f.reason) || (f.restored && f.relayBack) ? { key: 'listen.err.open', vars }
-          : { key: 'listen.err.start', vars };
+      : f.detail === 'gateway_port' ? { key: 'listen.err.port' }
+        : f.reason === 'invalid_listen' ? { key: 'set.listen.port.err' }
+          : isTeamListenReason(f.reason) || f.detail === 'team_listen' || (f.restored && f.relayBack) ? { key: 'listen.err.open', vars }
+            : { key: 'listen.err.start', vars };
   const second: CopyKey = !f.restored ? 'listen.err.kept' : f.relayBack ? 'listen.err.restored' : 'listen.err.relayOff';
   return [first, { key: second }];
 }

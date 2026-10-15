@@ -54,12 +54,11 @@ export function Home() {
           <button className="btn btn-ghost btn-sm" type="button" aria-busy={relay.busy || undefined} aria-describedby={relay.problem ? 'home-relay-err' : undefined}
             onClick={() => { if (!relay.busy) void relay.start(); }}>{t(relay.problem ? 'relay.retry' : 'relay.start')}</button>
           {relay.problem && <span className="help err" id="home-relay-err" style={{ display: 'block' }}>{t(relay.problem.key, { reason: relay.problem.reason })}</span>}
-          {/* the team address may be what keeps it off: say so and offer to turn that access off */}
-          {relay.teamListen && (
+          {/* the last start failed on the team address: say so and offer to turn that access off */}
+          {relay.offerListenOff && relay.teamListen && (
             <span className="relay-team">
               {t('relay.team.hint', { address: relay.teamListen })}{' '}
-              <button className="btn btn-ghost btn-sm" type="button" aria-busy={relay.busy || undefined}
-                onClick={() => { if (!relay.busy) void relay.listenOff(); }}>{t('relay.team.off')}</button>
+              <button className="btn btn-ghost btn-sm" type="button" onClick={relay.confirmListenOff}>{t('relay.team.off')}</button>
             </span>
           )}
         </Callout>

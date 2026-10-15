@@ -12,12 +12,14 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOnListen } from './rel
  *  (keys, revocations, removals). Picks an address from `net_interfaces` and starts the relay
  *  with it; an address the relay cannot open is taken back (./relay.ts `turnOnListen`). Works
  *  inside and outside the dashboard (no dashboard context needed). */
-export function ListenSetup({ id, interfaces, onDone, onFailed, className, note = true }: {
+export function ListenSetup({ id, interfaces, onDone, onFailed, run, className, note = true }: {
   id: string; interfaces: NetInterface[];
   /** On, with the relay running again on `serve`. */
   onDone(address: string, serve: ServeStatus): void;
   /** After a failure: `relayDown` is why the relay is left off, or null when it runs again. */
   onFailed?(relayDown: unknown): void;
+  /** Runs the restart (the dashboard's relay status counts it as busy); as it is when absent. */
+  run?<T>(task: () => Promise<T>): Promise<T>;
   className?: string;
   /** Show why sync needs it (off where the surrounding text already says so). */
   note?: boolean;
@@ -35,7 +37,8 @@ export function ListenSetup({ id, interfaces, onDone, onFailed, className, note 
     if (p === null || !ip) { setErr([{ key: 'set.listen.port.err' }]); return; }
     setBusy(true); setErr(null);
     try {
-      onDone(`${ip}:${p}`, await turnOnListen(ip, p));
+      const on = () => turnOnListen(ip, p);
+      onDone(`${ip}:${p}`, await (run ? run(on) : on()));
     } catch (e) {
       setErr(listenErrorLines(e));
       if (e instanceof ListenError) onFailed?.(relayLeftOff(e));
