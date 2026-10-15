@@ -15,6 +15,9 @@ export interface AppStatus { initialized: boolean; state_dir: string; serve: Ser
 
 export interface Project { name: string; environments: string[]; created_at: string }
 export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
+/** A secret version exactly as the CLI printed it: a number for a local secret, a string for a
+ *  shared one. The version commands take it back unchanged; do not convert it. */
+export type VersionId = string | number;
 export interface SecretVersion { version: string; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
 export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: string | null; versions: SecretVersion[] }
 /** Where a new secret value comes from. `typed` crosses IPC once; `file_token` refers to a file picked natively in Rust. */
@@ -65,9 +68,9 @@ export interface Commands {
   secret_list: [{ project?: string; environment?: string }, { secrets: SecretView[] }];
   secret_versions: [{ id: string }, SecretView];
   secret_put: [{ id: string; kind: SecretKind; project: string; environment: string; source: SecretSource }, Record<string, unknown>];
-  secret_reveal: [{ id: string; version?: string; admin_passphrase: string }, { ref: string; id: string; version: string }];
-  secret_retire: [{ id: string; version: string }, Record<string, unknown>];
-  secret_revoke: [{ id: string; version: string }, Record<string, unknown>];
+  secret_reveal: [{ id: string; version?: VersionId; admin_passphrase: string }, { ref: string; id: string; version: string }];
+  secret_retire: [{ id: string; version: VersionId }, Record<string, unknown>];
+  secret_revoke: [{ id: string; version: VersionId }, Record<string, unknown>];
 
   connection_list: [void, { connections: ConnectionView[] }];
   connection_create_http: [HttpConnectionInput & { admin_passphrase: string }, ConnectionView];
@@ -82,15 +85,18 @@ export interface Commands {
   grant_revoke: [{ id: string }, Grant];
 
   terminal_open: [{ token_ref: string; as_user?: string; on_data: unknown /* Channel<string> */ }, { terminal_id: string; suggestions: string[] }];
+  /** Queued for the terminal's writer; Unavailable/terminal_busy while the program leaves 256 KiB unread. */
   terminal_write: [{ terminal_id: string; data: string }, void];
   terminal_resize: [{ terminal_id: string; cols: number; rows: number }, void];
+  /** Stops the shell and every process started in it; returns when done (up to about 2 s). */
   terminal_close: [{ terminal_id: string }, void];
   /** Terminals stay alive after onboarding so the agent keeps running; the Agents page lists and reattaches. */
   terminal_list: [void, { terminals: { terminal_id: string; principal: string; as_user: string | null; alive: boolean }[] }];
   /** Replays the buffered output (bounded ring) into on_data, then keeps streaming. */
   terminal_attach: [{ terminal_id: string; on_data: unknown /* Channel<string> */ }, { terminal_id: string; suggestions: string[] }];
-  /** Window content protection (screen-capture block) while a one-time value is visible. */
-  secure_view: [{ on: boolean }, void];
+  /** Window content protection (screen-capture block) while a one-time value is visible.
+   *  `protected` is false when the platform has none (Linux): the UI must not claim it then. */
+  secure_view: [{ on: boolean }, { protected: boolean }];
 
   audit_tail: [{ limit: number }, { records: AuditRecord[]; unparseable_lines: number }];
   alerts: [{ limit: number }, { alerts: Alert[]; unparseable_lines: number }];
@@ -131,6 +137,7 @@ export type CommandName = keyof Commands;
 /** Events the core emits. Payloads never contain secret values. */
 export interface Events {
   'invite://preview': { ref: string; preview: InvitePreview };
+  /** Reserved: the core does not emit it yet. The dashboard polls audit_tail instead. */
   'audit://records': { records: AuditRecord[] };
   'control://changed': Control;
   'serve://status': ServeStatus;

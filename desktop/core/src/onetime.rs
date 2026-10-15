@@ -3,6 +3,14 @@
 //! by random 128-bit references. Showing a value removes it. Revealed secrets live 60 s,
 //! everything else 10 minutes. Entries have a kind, so a reference minted for one purpose
 //! (a revealed value) can never be redeemed for another (a terminal token).
+//!
+//! Capacity: at most [`MAX_ENTRIES`] values the app made (codes, tokens, links, revealed
+//! values), counting [`Reservation`]s. A command whose CLI call changes state and prints a
+//! value only once (a caller token, an invite link, a revealed value with its audit record)
+//! reserves its slot before it runs the CLI, so a full store refuses it before anything
+//! happens instead of losing the value afterwards. Pasted and deep-linked invites have their
+//! own pool of [`MAX_INVITE_TEXTS`]; the oldest is dropped for a new one, so links opened from
+//! outside the app can never take the room the app's own values need.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -14,7 +22,10 @@ use crate::secret::SecretString;
 
 pub const SECRET_TTL: Duration = Duration::from_secs(60);
 pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);
-const MAX_ENTRIES: usize = 256;
+/// Values the app made, live or reserved.
+pub const MAX_ENTRIES: usize = 256;
+/// Pasted or deep-linked invites kept for `team_join`; the oldest goes first.
+pub const MAX_INVITE_TEXTS: usize = 16;
 
 /// What a stored value is, which fixes its lifetime and who may redeem it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,9 +51,11 @@ impl OneTimeKind {
     }
 
     /// Kinds `onetime_show`/`onetime_copy` may hand to the webview. A pasted invite stays in
-    /// Rust: the webview already had it, and only `team_join` needs it again.
+    /// Rust: the webview already had it, and only `team_join` needs it again. A recovery code
+    /// also stays: `recovery_generate` already returned its groups, once, and only
+    /// `vault_init` reads it again.
     pub fn showable(self) -> bool {
-        !matches!(self, OneTimeKind::InviteText)
+        !matches!(self, OneTimeKind::InviteText | OneTimeKind::RecoveryCode)
     }
 }
 
@@ -52,15 +65,112 @@ struct Entry {
     /// A value-free note about the entry (the principal a caller token belongs to).
     label: Option<String>,
     expires_at: Instant,
+    /// Insertion order (which invite is the oldest).
+    seq: u64,
 }
 
 type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
+#[derive(Default)]
+struct Entries {
+    map: HashMap<String, Entry>,
+    /// Slots held by live [`Reservation`]s.
+    reserved: usize,
+}
+
+impl Entries {
+    /// Room for one more value the app made (anything but an `InviteText`).
+    fn has_room(&self) -> bool {
+        let made = self
+            .map
+            .values()
+            .filter(|e| e.kind != OneTimeKind::InviteText)
+            .count();
+        made + self.reserved < MAX_ENTRIES
+    }
+
+    /// Drop the oldest invites until one more fits in their pool.
+    fn make_room_for_invite(&mut self) {
+        loop {
+            let invites = self
+                .map
+                .iter()
+                .filter(|(_, e)| e.kind == OneTimeKind::InviteText);
+            if invites.clone().count() < MAX_INVITE_TEXTS {
+                return;
+            }
+            let oldest = invites
+                .min_by_key(|(_, e)| (e.expires_at, e.seq))
+                .map(|(reference, _)| reference.clone());
+            match oldest {
+                Some(reference) => {
+                    self.map.remove(&reference);
+                }
+                None => return,
+            }
+        }
+    }
+}
+
 /// Short-lived single-use values keyed by unguessable references. No `Debug` or `Serialize`
 /// on the values; the store's own `Debug` prints only a count.
 pub struct OneTimeStore {
-    entries: Mutex<HashMap<String, Entry>>,
+    entries: Mutex<Entries>,
     now: Clock,
+    next_seq: std::sync::atomic::AtomicU64,
+}
+
+/// A slot held in the store for a value that does not exist yet (see the module docs). Fill
+/// it with [`Reservation::fill`]; dropping it unfilled gives the slot back.
+pub struct Reservation<'a> {
+    store: &'a OneTimeStore,
+    kind: OneTimeKind,
+    held: bool,
+}
+
+impl Reservation<'_> {
+    /// Store the value in the reserved slot and return its reference.
+    pub fn fill(self, value: SecretString) -> Result<String, AppError> {
+        self.fill_with(value, None)
+    }
+
+    /// [`Self::fill`] with a value-free label (see [`OneTimeStore::put_labeled`]).
+    pub fn fill_labeled(self, value: SecretString, label: &str) -> Result<String, AppError> {
+        self.fill_with(value, Some(label.to_owned()))
+    }
+
+    fn fill_with(mut self, value: SecretString, label: Option<String>) -> Result<String, AppError> {
+        let reference = random_ref()?;
+        let expires_at = (self.store.now)() + self.kind.ttl();
+        let seq = self.store.seq();
+        let mut entries = self.store.locked_live();
+        if self.held {
+            entries.reserved = entries.reserved.saturating_sub(1);
+            self.held = false;
+        } else {
+            entries.make_room_for_invite();
+        }
+        entries.map.insert(
+            reference.clone(),
+            Entry {
+                kind: self.kind,
+                value,
+                label,
+                expires_at,
+                seq,
+            },
+        );
+        Ok(reference)
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            let mut entries = self.store.lock();
+            entries.reserved = entries.reserved.saturating_sub(1);
+        }
+    }
 }
 
 impl Default for OneTimeStore {
@@ -72,7 +182,7 @@ impl Default for OneTimeStore {
 impl fmt::Debug for OneTimeStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OneTimeStore")
-            .field("entries", &self.lock().len())
+            .field("entries", &self.lock().map.len())
             .finish()
     }
 }
@@ -85,20 +195,43 @@ impl OneTimeStore {
     /// A store with an injected clock (tests advance it to check expiry).
     pub fn with_clock(now: Clock) -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(Entries::default()),
             now,
+            next_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
+    fn lock(&self) -> MutexGuard<'_, Entries> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn locked_live(&self) -> MutexGuard<'_, HashMap<String, Entry>> {
+    fn locked_live(&self) -> MutexGuard<'_, Entries> {
         let now = (self.now)();
         let mut entries = self.lock();
-        entries.retain(|_, entry| entry.expires_at > now);
+        entries.map.retain(|_, entry| entry.expires_at > now);
         entries
+    }
+
+    fn seq(&self) -> u64 {
+        self.next_seq
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Hold a slot for a value of `kind` that a CLI call is about to print (module docs).
+    /// Fails with `onetime_store_full` while the store is full, before anything has run.
+    pub fn reserve(&self, kind: OneTimeKind) -> Result<Reservation<'_>, AppError> {
+        let mut entries = self.locked_live();
+        if kind != OneTimeKind::InviteText {
+            if !entries.has_room() {
+                return Err(full());
+            }
+            entries.reserved += 1;
+        }
+        Ok(Reservation {
+            store: self,
+            kind,
+            held: kind != OneTimeKind::InviteText,
+        })
     }
 
     /// Store `value` and return its reference (32 hex characters, 128 random bits).
@@ -125,17 +258,21 @@ impl OneTimeStore {
     ) -> Result<String, AppError> {
         let reference = random_ref()?;
         let expires_at = (self.now)() + kind.ttl();
+        let seq = self.seq();
         let mut entries = self.locked_live();
-        if entries.len() >= MAX_ENTRIES {
-            return Err(AppError::unavailable("onetime_store_full"));
+        if kind == OneTimeKind::InviteText {
+            entries.make_room_for_invite();
+        } else if !entries.has_room() {
+            return Err(full());
         }
-        entries.insert(
+        entries.map.insert(
             reference.clone(),
             Entry {
                 kind,
                 value,
                 label,
                 expires_at,
+                seq,
             },
         );
         Ok(reference)
@@ -146,11 +283,11 @@ impl OneTimeStore {
     pub fn take_showable(&self, reference: &str) -> Result<(OneTimeKind, SecretString), AppError> {
         check_ref(reference)?;
         let mut entries = self.locked_live();
-        match entries.get(reference) {
+        match entries.map.get(reference) {
             Some(entry) if entry.kind.showable() => {}
             _ => return Err(unknown()),
         }
-        let entry = entries.remove(reference).ok_or_else(unknown)?;
+        let entry = entries.map.remove(reference).ok_or_else(unknown)?;
         Ok((entry.kind, entry.value))
     }
 
@@ -159,7 +296,7 @@ impl OneTimeStore {
     pub fn peek_showable(&self, reference: &str) -> Result<SecretString, AppError> {
         check_ref(reference)?;
         let entries = self.locked_live();
-        match entries.get(reference) {
+        match entries.map.get(reference) {
             Some(entry) if entry.kind.showable() => Ok(entry.value.duplicate()),
             _ => Err(unknown()),
         }
@@ -169,11 +306,12 @@ impl OneTimeStore {
     pub fn take_kind(&self, reference: &str, kind: OneTimeKind) -> Result<SecretString, AppError> {
         check_ref(reference)?;
         let mut entries = self.locked_live();
-        match entries.get(reference) {
+        match entries.map.get(reference) {
             Some(entry) if entry.kind == kind => {}
             _ => return Err(unknown()),
         }
         entries
+            .map
             .remove(reference)
             .map(|entry| entry.value)
             .ok_or_else(unknown)
@@ -185,7 +323,7 @@ impl OneTimeStore {
     pub fn peek_kind(&self, reference: &str, kind: OneTimeKind) -> Result<SecretString, AppError> {
         check_ref(reference)?;
         let entries = self.locked_live();
-        match entries.get(reference) {
+        match entries.map.get(reference) {
             Some(entry) if entry.kind == kind => Ok(entry.value.duplicate()),
             _ => Err(unknown()),
         }
@@ -199,7 +337,7 @@ impl OneTimeStore {
     ) -> Result<(SecretString, Option<String>), AppError> {
         check_ref(reference)?;
         let entries = self.locked_live();
-        match entries.get(reference) {
+        match entries.map.get(reference) {
             Some(entry) if entry.kind == kind => Ok((entry.value.duplicate(), entry.label.clone())),
             _ => Err(unknown()),
         }
@@ -210,18 +348,19 @@ impl OneTimeStore {
         check_ref(reference).is_ok()
             && self
                 .locked_live()
+                .map
                 .get(reference)
                 .is_some_and(|entry| entry.kind == kind)
     }
 
     /// `onetime_discard`: forget a value. Idempotent.
     pub fn discard(&self, reference: &str) {
-        self.lock().remove(reference);
+        self.lock().map.remove(reference);
     }
 
     /// Live entries.
     pub fn len(&self) -> usize {
-        self.locked_live().len()
+        self.locked_live().map.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -230,12 +369,16 @@ impl OneTimeStore {
 
     /// Drop everything (app shutdown, vault lock).
     pub fn clear(&self) {
-        self.lock().clear();
+        self.lock().map.clear();
     }
 }
 
 fn unknown() -> AppError {
     AppError::not_found("onetime_ref_unknown")
+}
+
+fn full() -> AppError {
+    AppError::unavailable("onetime_store_full")
 }
 
 fn check_ref(reference: &str) -> Result<(), AppError> {
@@ -357,6 +500,21 @@ mod tests {
     }
 
     #[test]
+    fn recovery_codes_are_never_shown_again() {
+        // recovery_generate already returned the groups; only vault_init reads the code.
+        let store = OneTimeStore::new();
+        let r = store
+            .put(OneTimeKind::RecoveryCode, "AAAA-BBBB".into())
+            .unwrap();
+        assert_eq!(
+            store.take_showable(&r).err().unwrap().reason,
+            "onetime_ref_unknown"
+        );
+        assert!(store.peek_showable(&r).is_err());
+        assert!(store.peek_kind(&r, OneTimeKind::RecoveryCode).is_ok());
+    }
+
+    #[test]
     fn peek_keeps_and_discard_removes() {
         let store = OneTimeStore::new();
         let r = store
@@ -417,6 +575,89 @@ mod tests {
                 .unwrap_err()
                 .reason,
             "onetime_store_full"
+        );
+        assert_eq!(
+            store
+                .reserve(OneTimeKind::CallerToken)
+                .err()
+                .unwrap()
+                .reason,
+            "onetime_store_full"
+        );
+    }
+
+    #[test]
+    fn reservations_hold_their_slot_until_filled_or_dropped() {
+        let store = OneTimeStore::new();
+        let held: Vec<Reservation<'_>> = (0..MAX_ENTRIES)
+            .map(|_| store.reserve(OneTimeKind::CallerToken).unwrap())
+            .collect();
+        assert!(store.is_empty());
+        assert!(store.reserve(OneTimeKind::RevealedSecret).is_err());
+        assert!(store.put(OneTimeKind::RecoveryCode, "x".into()).is_err());
+        let mut held = held.into_iter();
+        // A reserved slot always takes its value, even with the store otherwise full.
+        let first = held.next().unwrap();
+        let r = first
+            .fill_labeled("zpw_synthetic".into(), "agent-1")
+            .unwrap();
+        assert_eq!(
+            store
+                .peek_kind_labeled(&r, OneTimeKind::CallerToken)
+                .unwrap()
+                .1
+                .as_deref(),
+            Some("agent-1")
+        );
+        assert!(store.reserve(OneTimeKind::CallerToken).is_err());
+        // Dropping unfilled reservations gives the slots back.
+        drop(held);
+        assert_eq!(store.len(), 1);
+        let again = store.reserve(OneTimeKind::InviteLink).unwrap();
+        let link = again.fill("zeropw://join#X".into()).unwrap();
+        assert_eq!(
+            store.take_showable(&link).unwrap().1.expose(),
+            "zeropw://join#X"
+        );
+    }
+
+    #[test]
+    fn pasted_invites_have_their_own_pool_and_cannot_fill_the_store() {
+        let store = OneTimeStore::new();
+        let first: Vec<String> = (0..MAX_INVITE_TEXTS)
+            .map(|i| {
+                store
+                    .put(OneTimeKind::InviteText, format!("zeropw://join#{i}").into())
+                    .unwrap()
+            })
+            .collect();
+        // Many more (deep links opened from outside): the oldest give way, never an error.
+        let mut last = String::new();
+        for i in 0..(MAX_ENTRIES * 2) {
+            last = store
+                .put(
+                    OneTimeKind::InviteText,
+                    format!("zeropw://join#n{i}").into(),
+                )
+                .unwrap();
+        }
+        assert_eq!(store.len(), MAX_INVITE_TEXTS);
+        assert!(
+            first
+                .iter()
+                .all(|r| !store.contains_kind(r, OneTimeKind::InviteText))
+        );
+        assert!(store.contains_kind(&last, OneTimeKind::InviteText));
+        // The app's own values still have all their room.
+        let held: Vec<Reservation<'_>> = (0..MAX_ENTRIES)
+            .map(|_| store.reserve(OneTimeKind::CallerToken).unwrap())
+            .collect();
+        assert_eq!(held.len(), MAX_ENTRIES);
+        // And an invite still fits next to a full store.
+        assert!(
+            store
+                .put(OneTimeKind::InviteText, "zeropw://join#late".into())
+                .is_ok()
         );
     }
 }

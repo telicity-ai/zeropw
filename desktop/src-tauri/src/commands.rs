@@ -9,8 +9,8 @@
 //!   runs it on the blocking pool and returns `AppError {error, reason, detail?}` on failure.
 //! - Native pieces stay in Rust: `file_pick` and the backup commands open the dialog here
 //!   (the webview only gets a token and a base name), `onetime_copy` writes the clipboard
-//!   here, `secure_view` toggles the calling window's content protection, and the terminal
-//!   commands stream output through a `Channel<String>`.
+//!   here, `secure_view` toggles the calling window's content protection and says whether the
+//!   platform has it, and the terminal commands stream output through a `Channel<String>`.
 //! - `build.rs` allowlists exactly these commands in the app manifest, and
 //!   capabilities/default.json grants exactly their `allow-*` permissions to the main window;
 //!   scripts/check-tauri.mjs checks the three lists against the contract.
@@ -32,7 +32,7 @@ use zeropw_desktop_core::{
     AppError, Core, FilePick, FilePurpose, SecretString, ServeStatus, Settings,
 };
 
-use crate::glue::{AppClipboard, ChannelSink, WindowScreenGuard};
+use crate::glue::{ChannelSink, WindowScreenGuard};
 use crate::shell::Shell;
 
 type Out<T> = Result<T, AppError>;
@@ -362,13 +362,14 @@ pub async fn terminal_attach(
     blocking(move || core.terminal_attach(input, Box::new(ChannelSink::new(on_data)))).await
 }
 
-/// Content protection for the window that asked (the main window).
+/// Content protection for the window that asked (the main window). `{protected}` says
+/// whether the window is really kept out of screen capture (never on Linux).
 #[tauri::command(rename_all = "snake_case")]
 pub async fn secure_view(
     shell: State<'_, Shell>,
     window: WebviewWindow,
     request: Request<'_>,
-) -> Out<()> {
+) -> Out<SecureViewOut> {
     let input: SecureViewIn = input(&request)?;
     let core = core(&shell);
     blocking(move || core.secure_view(input, &WindowScreenGuard::new(window))).await
@@ -577,17 +578,14 @@ pub async fn onetime_show(shell: State<'_, Shell>, request: Request<'_>) -> Out<
     .await
 }
 
-/// The clipboard is written here, never by the webview, and cleared after 60 s if it still
-/// holds the value (the core's timer).
+/// The clipboard is written here, never by the webview, marked to stay out of clipboard
+/// history, and cleared after 60 s (or at quit, if sooner) if it still holds the value.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn onetime_copy(
-    app: AppHandle,
-    shell: State<'_, Shell>,
-    request: Request<'_>,
-) -> Out<CopyOut> {
+pub async fn onetime_copy(shell: State<'_, Shell>, request: Request<'_>) -> Out<CopyOut> {
     let input: RefIn = input(&request)?;
     let core = core(&shell);
-    blocking(move || core.onetime_copy(input, Arc::new(AppClipboard::new(app)))).await
+    let clipboard = shell.clipboard();
+    blocking(move || core.onetime_copy(input, clipboard)).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

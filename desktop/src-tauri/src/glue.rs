@@ -1,9 +1,10 @@
 //! The core's seams filled with Tauri: events to the webview, the system clipboard, window
 //! content protection and terminal output channels.
 
+use std::sync::{Mutex, MutexGuard};
+
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, WebviewWindow};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 use zeropw_desktop_core::{
     AppError, Clipboard, CoreEvent, EventSink, ScreenGuard, SecretString, TerminalSink,
 };
@@ -26,38 +27,82 @@ impl EventSink for AppEvents {
     }
 }
 
-/// The clipboard, written only from Rust (§8.7). The webview has no clipboard permission.
+/// The system clipboard, written only from Rust (§8.7); the webview has no clipboard
+/// permission. One arboard instance lives as long as the app (on Linux this process serves
+/// the copied text) and is released at exit, after the core's last clear.
+///
+/// Every value goes on the clipboard marked for exclusion from clipboard history, so history
+/// tools that honour the markers do not keep it past the 60 s clear: on macOS
+/// `org.nspasteboard.ConcealedType` (nspasteboard.org), on Linux the
+/// `x-kde-passwordManagerHint` type. A tool that ignores the markers can still record it.
 pub struct AppClipboard {
-    app: AppHandle,
+    inner: Mutex<Option<arboard::Clipboard>>,
+}
+
+impl Default for AppClipboard {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(arboard::Clipboard::new().ok()),
+        }
+    }
 }
 
 impl AppClipboard {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    fn lock(&self) -> MutexGuard<'_, Option<arboard::Clipboard>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn with<T>(
+        &self,
+        f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>,
+    ) -> Result<T, AppError> {
+        let mut inner = self.lock();
+        if inner.is_none() {
+            *inner = arboard::Clipboard::new().ok();
+        }
+        let clipboard = inner
+            .as_mut()
+            .ok_or_else(|| AppError::unavailable("clipboard_unavailable"))?;
+        f(clipboard).map_err(|_| AppError::unavailable("clipboard_unavailable"))
+    }
+
+    /// App exit: let the clipboard connection go.
+    pub fn release(&self) {
+        self.lock().take();
     }
 }
 
 impl Clipboard for AppClipboard {
     fn write_text(&self, text: &str) -> Result<(), AppError> {
-        self.app
-            .clipboard()
-            .write_text(text)
-            .map_err(|_| AppError::unavailable("clipboard_unavailable"))
+        self.with(|c| exclude_from_history(c.set()).text(text))
     }
 
     fn read_text(&self) -> Option<SecretString> {
-        self.app.clipboard().read_text().ok().map(SecretString::new)
+        self.with(|c| c.get_text()).ok().map(SecretString::new)
     }
 
     fn clear(&self) -> Result<(), AppError> {
-        self.app
-            .clipboard()
-            .clear()
-            .map_err(|_| AppError::unavailable("clipboard_unavailable"))
+        self.with(|c| c.clear())
     }
 }
 
-/// Screen-capture protection on one window (§8.8).
+#[cfg(target_os = "macos")]
+fn exclude_from_history(set: arboard::Set<'_>) -> arboard::Set<'_> {
+    use arboard::SetExtApple;
+    set.exclude_from_history()
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn exclude_from_history(set: arboard::Set<'_>) -> arboard::Set<'_> {
+    use arboard::SetExtLinux;
+    set.exclude_from_history()
+}
+
+/// Whether this platform can keep a window out of screen capture. Linux window systems give
+/// an app no such control, and Tauri's content-protected flag does nothing there.
+pub const CONTENT_PROTECTION: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// Screen-capture protection on one window (§8.8), where the platform has it.
 pub struct WindowScreenGuard {
     window: WebviewWindow,
 }
@@ -69,10 +114,14 @@ impl WindowScreenGuard {
 }
 
 impl ScreenGuard for WindowScreenGuard {
-    fn set_protected(&self, on: bool) -> Result<(), AppError> {
+    fn set_protected(&self, on: bool) -> Result<bool, AppError> {
+        if !CONTENT_PROTECTION {
+            return Ok(false);
+        }
         self.window
             .set_content_protected(on)
-            .map_err(|_| AppError::unavailable("content_protection_failed"))
+            .map_err(|_| AppError::unavailable("content_protection_failed"))?;
+        Ok(on)
     }
 }
 

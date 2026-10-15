@@ -9,6 +9,10 @@
 //! Every method blocks (it may run a child process for up to 60–90 s), so the Tauri layer
 //! should call them from async commands on a blocking thread.
 //!
+//! Commands whose CLI call changes state and prints a value once (`principal_create`,
+//! `team_invite_create`, `secret_reveal`) reserve their one-time store slot before running
+//! the CLI, so a full store refuses them up front instead of losing the token, link or value.
+//!
 //! "Re-auth" commands take the administrator passphrase and pass it to zeropw-admin in the
 //! input envelope; the core refuses an empty one. `secret reveal`, `restore-ack`, `incident
 //! close`, `incident declare --scope all` and `team share` verify it in the CLI itself. For
@@ -50,7 +54,13 @@ use crate::terminal::{
 
 /// How long a copied one-time value may stay on the clipboard (§8.7).
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(60);
+/// How long app quit waits for the clipboard while clearing a copied value.
+const CLIPBOARD_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+/// Copies whose clear is still pending; beyond this the oldest is forgotten.
+const MAX_PENDING_CLEARS: usize = 64;
 const MAX_INVITE_CHARS: usize = 4096;
+/// A version the CLI printed: digits for a local secret, a hex `version_id` for a shared one.
+const MAX_VERSION_CHARS: usize = 64;
 
 /// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
 /// re-authenticates them, the CLI alone would not).
@@ -203,12 +213,46 @@ pub struct SecretPutIn {
     pub source: SecretSource,
 }
 
+/// A secret version exactly as the CLI printed it in `secret_list`/`secret_versions`: a JSON
+/// number (a local secret's version) or a string. It goes to the CLI unchanged as
+/// `--version=<text>`; the CLI decides what it accepts. A number must be an integer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Version(String);
+
+impl Version {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for Version {
+    fn from(text: &str) -> Self {
+        Self(text.to_owned())
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Text(String),
+            Number(serde_json::Number),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Text(text) => Ok(Self(text)),
+            Raw::Number(n) if n.is_u64() || n.is_i64() => Ok(Self(n.to_string())),
+            Raw::Number(_) => Err(serde::de::Error::custom("version")),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecretRevealIn {
     pub id: String,
     #[serde(default)]
-    pub version: Option<String>,
+    pub version: Option<Version>,
     pub admin_passphrase: SecretString,
 }
 
@@ -224,7 +268,7 @@ pub struct RevealOut {
 #[serde(deny_unknown_fields)]
 pub struct SecretVersionIn {
     pub id: String,
-    pub version: String,
+    pub version: Version,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -357,6 +401,13 @@ pub struct TerminalIdIn {
 #[serde(deny_unknown_fields)]
 pub struct SecureViewIn {
     pub on: bool,
+}
+
+/// `secure_view` output: whether the window is now excluded from screen capture. `false`
+/// after `{on: true}` means this platform cannot do it (Linux), so the UI must not say so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SecureViewOut {
+    pub protected: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -563,6 +614,19 @@ impl CoreConfig {
     }
 }
 
+/// A copied value whose 60 s clear has not run yet (app quit clears it early).
+struct PendingClear {
+    id: u64,
+    digest: [u8; 32],
+    clipboard: Arc<dyn Clipboard>,
+}
+
+#[derive(Default)]
+struct PendingClears {
+    next_id: u64,
+    items: Vec<PendingClear>,
+}
+
 pub struct Core {
     paths: AppPaths,
     runner: AdminRunner,
@@ -573,6 +637,7 @@ pub struct Core {
     terminals: TerminalManager,
     events: Arc<dyn EventSink>,
     clipboard_clear_after: Duration,
+    pending_clears: Arc<Mutex<PendingClears>>,
     settings_lock: Mutex<()>,
 }
 
@@ -593,6 +658,7 @@ impl Core {
             ),
             events,
             clipboard_clear_after: config.clipboard_clear_after,
+            pending_clears: Arc::new(Mutex::new(PendingClears::default())),
             settings_lock: Mutex::new(()),
             paths,
         }
@@ -614,12 +680,36 @@ impl Core {
         status
     }
 
-    /// App quit: close terminals, forget one-time values, SIGTERM the sidecar.
+    /// App quit: clear the clipboard if it still holds a value copied in the last 60 s, forget
+    /// one-time values, stop every terminal and what runs in it, SIGTERM the sidecar.
     pub fn shutdown(&self) {
-        self.terminals.close_all();
+        self.clear_pending_clipboard();
         self.store.clear();
+        self.terminals.close_all();
         let status = self.serve.stop();
         self.events.emit(CoreEvent::ServeStatus(status));
+    }
+
+    /// The early run of every pending 60 s clear: the clipboard is emptied if it still holds
+    /// any value the app copied. Waits at most [`CLIPBOARD_SHUTDOWN_WAIT`] for the clipboard.
+    fn clear_pending_clipboard(&self) {
+        let pending = std::mem::take(&mut lock(&self.pending_clears).items);
+        let Some(clipboard) = pending.last().map(|p| p.clipboard.clone()) else {
+            return;
+        };
+        let digests: Vec<[u8; 32]> = pending.iter().map(|p| p.digest).collect();
+        drop(pending);
+        let (done, wait) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            if clipboard
+                .read_text()
+                .is_some_and(|now| digests.contains(&digest(now.expose())))
+            {
+                let _ = clipboard.clear();
+            }
+            let _ = done.send(());
+        });
+        let _ = wait.recv_timeout(CLIPBOARD_SHUTDOWN_WAIT);
     }
 
     fn run(&self, args: AdminArgs, envelope: Envelope) -> Result<Value, AppError> {
@@ -834,9 +924,10 @@ impl Core {
     pub fn secret_reveal(&self, input: SecretRevealIn) -> Result<RevealOut, AppError> {
         require_passphrase(&input.admin_passphrase)?;
         let mut args = AdminArgs::command(&["secret", "reveal"]).opt("id", &input.id)?;
-        if let Some(version) = input.version.as_deref().filter(|v| !v.is_empty()) {
-            args = args.opt("version", check_integer("version", version)?)?;
+        if let Some(version) = input.version.as_ref().filter(|v| !v.as_str().is_empty()) {
+            args = args.opt("version", check_version(version)?)?;
         }
+        let slot = self.store.reserve(OneTimeKind::RevealedSecret)?;
         #[derive(Deserialize)]
         struct Revealed {
             id: String,
@@ -854,7 +945,7 @@ impl Core {
             .value
             .or(out.value_base64)
             .ok_or_else(|| AppError::internal("admin_output_invalid"))?;
-        let reference = self.store.put(OneTimeKind::RevealedSecret, value)?;
+        let reference = slot.fill(value)?;
         Ok(RevealOut {
             reference,
             id: out.id,
@@ -878,7 +969,7 @@ impl Core {
         self.run_plain(
             AdminArgs::command(&["secret", action])
                 .opt("id", &input.id)?
-                .opt("version", check_integer("version", &input.version)?)?,
+                .opt("version", check_version(&input.version)?)?,
         )
     }
 
@@ -974,15 +1065,12 @@ impl Core {
             runtime: String,
             token: SecretString,
         }
-        let out: Created = self.runner.run_parsed(
-            &AdminArgs::command(&["principal", "create"])
-                .opt("id", &input.id)?
-                .opt_nonempty("runtime", Some(input.runtime.as_str()))?,
-            &Envelope::new(),
-        )?;
-        let token_ref = self
-            .store
-            .put_labeled(OneTimeKind::CallerToken, out.token, &out.id)?;
+        let args = AdminArgs::command(&["principal", "create"])
+            .opt("id", &input.id)?
+            .opt_nonempty("runtime", Some(input.runtime.as_str()))?;
+        let slot = self.store.reserve(OneTimeKind::CallerToken)?;
+        let out: Created = self.runner.run_parsed(&args, &Envelope::new())?;
+        let token_ref = slot.fill_labeled(out.token, &out.id)?;
         Ok(PrincipalCreateOut {
             id: out.id,
             runtime: out.runtime,
@@ -1097,12 +1185,16 @@ impl Core {
     // -- screen capture -----------------------------------------------------------------------
 
     /// `secure_view`: exclude the window from screen capture while a one-time value is shown.
+    /// Reports whether that protection is really in effect (never on Linux).
     pub fn secure_view(
         &self,
         input: SecureViewIn,
         guard: &dyn ScreenGuard,
-    ) -> Result<(), AppError> {
-        guard.set_protected(input.on)
+    ) -> Result<SecureViewOut, AppError> {
+        let protected = guard.set_protected(input.on)?;
+        Ok(SecureViewOut {
+            protected: input.on && protected,
+        })
     }
 
     // -- records ------------------------------------------------------------------------------
@@ -1195,17 +1287,31 @@ impl Core {
         )
     }
 
-    /// `recover` with the recovery passphrase in the envelope (a typed recovery code is
-    /// canonicalized exactly as at `vault_init`).
+    /// `recover` with the recovery passphrase in the envelope. A typed recovery code may be
+    /// in either of two forms: the canonical `XXXX-…` text `vault_init` stores for a code the
+    /// app made (or a code typed at `vault_init`), or exactly what someone gave
+    /// `zeropw-admin init` on the command line. When the input has a code's shape but is not
+    /// already canonical, the canonical form is tried first and, only if the CLI answers
+    /// `AuthFailed`, the input exactly as typed. So one attempt at most writes two
+    /// `auth_failed` audit records; anything else is a single call.
     pub fn recover(&self, input: RecoverIn) -> Result<Value, AppError> {
-        if input.recovery_passphrase.is_empty() {
+        let typed = &input.recovery_passphrase;
+        if typed.is_empty() {
             return Err(AppError::auth_failed("passphrase_missing"));
         }
-        let recovery = recovery::canonical_passphrase(&input.recovery_passphrase);
-        self.run(
-            AdminArgs::command(&["recover"]),
-            Envelope::new().recovery_passphrase(&recovery),
-        )
+        let attempt = |passphrase: &SecretString| {
+            self.run(
+                AdminArgs::command(&["recover"]),
+                Envelope::new().recovery_passphrase(passphrase),
+            )
+        };
+        match recovery::normalize(typed.expose()).filter(|c| c.expose() != typed.expose()) {
+            None => attempt(typed),
+            Some(canonical) => match attempt(&canonical) {
+                Err(e) if e.error == "AuthFailed" => attempt(typed),
+                other => other,
+            },
+        }
     }
 
     // -- team ---------------------------------------------------------------------------------
@@ -1260,14 +1366,16 @@ impl Core {
             #[serde(default)]
             inviter: Option<String>,
         }
+        let args = AdminArgs::command(&["team", "invite"])
+            .require_admin()
+            .opt("env", &input.env)?
+            .opt("role", input.role.as_str())?
+            .opt("name", &input.name)?
+            .opt("address", &input.address)?
+            .flag("link");
+        let slot = self.store.reserve(OneTimeKind::InviteLink)?;
         let out: Created = self.runner.run_parsed(
-            &AdminArgs::command(&["team", "invite"])
-                .require_admin()
-                .opt("env", &input.env)?
-                .opt("role", input.role.as_str())?
-                .opt("name", &input.name)?
-                .opt("address", &input.address)?
-                .flag("link"),
+            &args,
             &Envelope::new().admin_passphrase(&input.admin_passphrase),
         )?;
         drop(out.invite);
@@ -1279,7 +1387,7 @@ impl Core {
             Some(inviter) => inviter,
             None => self.invite_info(&link)?.inviter,
         };
-        let link_ref = self.store.put(OneTimeKind::InviteLink, link)?;
+        let link_ref = slot.fill(link)?;
         Ok(TeamInviteCreateOut {
             invite_id,
             link_ref,
@@ -1340,7 +1448,9 @@ impl Core {
     }
 
     /// `team invite-info --stdin`: preview a pasted invite without any network use. The text
-    /// stays in Rust (one-time store, 10 minutes) for `team_join`.
+    /// stays in Rust (one-time store, 10 minutes) for `team_join`. Previews have their own small
+    /// pool in the store; a new one drops the oldest, so links opened from outside the app
+    /// cannot fill the store.
     pub fn team_invite_preview(
         &self,
         input: TeamInvitePreviewIn,
@@ -1419,6 +1529,8 @@ impl Core {
 
     /// `onetime_copy`: write the value to the clipboard, then forget it, and clear the
     /// clipboard after 60 s if it still holds that value. A failed write keeps the value.
+    /// The pending clear is recorded in the core, so app quit runs it early
+    /// ([`Self::shutdown`]) instead of leaving the value behind.
     pub fn onetime_copy(
         &self,
         input: RefIn,
@@ -1427,15 +1539,37 @@ impl Core {
         let value = self.store.peek_showable(&input.reference)?;
         clipboard.write_text(value.expose())?;
         self.store.discard(&input.reference);
-        let digest = Sha256::digest(value.expose().as_bytes());
+        let copied = digest(value.expose());
         drop(value);
+        let id = {
+            let mut pending = lock(&self.pending_clears);
+            pending.next_id += 1;
+            let id = pending.next_id;
+            pending.items.push(PendingClear {
+                id,
+                digest: copied,
+                clipboard: clipboard.clone(),
+            });
+            if pending.items.len() > MAX_PENDING_CLEARS {
+                pending.items.remove(0);
+            }
+            id
+        };
         let after = self.clipboard_clear_after;
+        let pending = self.pending_clears.clone();
         thread::spawn(move || {
             thread::sleep(after);
-            let unchanged = clipboard
-                .read_text()
-                .is_some_and(|now| Sha256::digest(now.expose().as_bytes()) == digest);
-            if unchanged {
+            let due = {
+                let mut pending = lock(&pending);
+                let at = pending.items.iter().position(|p| p.id == id);
+                at.map(|at| pending.items.remove(at))
+            };
+            // Gone already: app quit has done this clear.
+            if due.is_some()
+                && clipboard
+                    .read_text()
+                    .is_some_and(|now| digest(now.expose()) == copied)
+            {
                 let _ = clipboard.clear();
             }
         });
@@ -1504,7 +1638,33 @@ fn same_passphrase(a: &str, b: &str) -> bool {
     *a == *b
 }
 
-/// A non-negative decimal integer argument (versions, max uses).
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn digest(text: &str) -> [u8; 32] {
+    Sha256::digest(text.as_bytes()).into()
+}
+
+/// A version as the CLI printed it (digits, or a hex `version_id`), passed on unchanged.
+fn check_version(version: &Version) -> Result<&str, AppError> {
+    let text = version.as_str();
+    if text.len() <= MAX_VERSION_CHARS
+        && text
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        Ok(text)
+    } else {
+        Err(AppError::invalid_input("invalid_argument").with_detail("version"))
+    }
+}
+
+/// A non-negative decimal integer argument (max uses).
 fn check_integer<'a>(what: &'static str, value: &'a str) -> Result<&'a str, AppError> {
     if !value.is_empty() && value.len() <= 20 && value.bytes().all(|b| b.is_ascii_digit()) {
         Ok(value)
@@ -1640,6 +1800,38 @@ mod tests {
         }
         let j: TeamJoinIn = serde_json::from_value(serde_json::json!({"ref": "r"})).unwrap();
         assert_eq!(j.reference, "r");
+        // Versions come back exactly as the CLI printed them: numbers or strings.
+        for (version, text) in [
+            (serde_json::json!(3), "3"),
+            (serde_json::json!("3"), "3"),
+            (serde_json::json!("9f86d081884c7d65"), "9f86d081884c7d65"),
+        ] {
+            let v: SecretVersionIn =
+                serde_json::from_value(serde_json::json!({"id": "a", "version": version})).unwrap();
+            assert_eq!(v.version.as_str(), text);
+        }
+        for bad in [
+            serde_json::json!(1.5),
+            serde_json::json!(true),
+            serde_json::json!(null),
+        ] {
+            assert!(
+                serde_json::from_value::<SecretVersionIn>(
+                    serde_json::json!({"id": "a", "version": bad})
+                )
+                .is_err()
+            );
+        }
+        let r: SecretRevealIn = serde_json::from_value(serde_json::json!({
+            "id": "a", "version": 2, "admin_passphrase": "p"
+        }))
+        .unwrap();
+        assert_eq!(r.version.map(|v| v.0), Some("2".to_owned()));
+        let r: SecretRevealIn = serde_json::from_value(serde_json::json!({
+            "id": "a", "version": null, "admin_passphrase": "p"
+        }))
+        .unwrap();
+        assert!(r.version.is_none());
         assert!(
             serde_json::from_value::<IdIn>(serde_json::json!({"id": "a", "extra": 1})).is_err()
         );
@@ -1677,6 +1869,18 @@ mod tests {
         assert_eq!(check_integer("v", "12").unwrap(), "12");
         for bad in ["", "-1", "1.0", "1e3", &"9".repeat(21)] {
             assert!(check_integer("v", bad).is_err());
+        }
+        for good in ["1", "007", "18446744073709551616", "9f86d081884c7d65"] {
+            assert_eq!(check_version(&Version::from(good)).unwrap(), good);
+        }
+        for bad in ["", "1; rm", "--help", "-1", "1 2", "1\n", &"9".repeat(65)] {
+            assert_eq!(
+                check_version(&Version::from(bad))
+                    .unwrap_err()
+                    .detail
+                    .as_deref(),
+                Some("version")
+            );
         }
         assert_eq!(check_limit(50).unwrap(), "50");
         assert!(check_limit(0).is_err());
