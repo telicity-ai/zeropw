@@ -10,7 +10,7 @@ import { AdminStep } from './AdminStep';
 import { AgentStep, type AgentInfo } from './AgentStep';
 import { CreateStep } from './CreateStep';
 import { Finale, type JoinOutcome } from './Finale';
-import { counted, fieldExtras, isCard, neighbour, progressOf, TITLE, type Step } from './flow';
+import { afterRelayFailure, counted, fieldExtras, isCard, neighbour, progressOf, TITLE, type Step } from './flow';
 import { JoinStep, type JoinPlan } from './JoinStep';
 import { ProjectStep } from './ProjectStep';
 import { RecoveryStep } from './RecoveryStep';
@@ -166,6 +166,15 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     return addr;
   }, [setPill]);
 
+  // the vault exists but the relay would not start (a port another program holds): go on without
+  // it; a join still happens on the finale, otherwise the dashboard has the start button and port
+  const skipRelay = useCallback(() => {
+    setCreated(true);
+    setPill({ kind: 'off' });
+    if (afterRelayFailure(!!joinRef.current) === 'done') go('done');
+    else onFinish('home');
+  }, [go, onFinish, setPill]);
+
   // ---- joining happens on the finale, after the vault exists
   useEffect(() => {
     if (step !== 'done' || !join || joinOutcome !== 'idle') return;
@@ -214,6 +223,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
               onBack={back('recovery')} onNext={(choice) => { secrets.current.recovery = choice; setRecNotice(null); go('create'); }} />
             <CreateStep frame={frame('create')} sectionRef={secRef('create')} created={created}
               initVault={initVault} startRelay={startRelay} onCreated={() => setCreated(true)} onRecoveryProblem={onRecoveryProblem}
+              onSkipRelay={skipRelay}
               onBack={() => go('recovery')} onNext={() => go(joinRef.current ? 'done' : 'project')} />
             <ProjectStep frame={frame('project')} sectionRef={secRef('project')} created={project} onBack={back('project')}
               onNext={(p) => { setProject(p); field.ripple(0.06); go('agent'); }} />

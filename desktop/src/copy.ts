@@ -243,6 +243,8 @@ export const COPY = {
   'boot.failed': '앱 상태를 읽지 못했어요',
   'create.err': '보관함을 만들지 못했어요',
   'create.err.serve': '중계기를 켜지 못했어요',
+  'create.relay.vaultOk': '보관함은 문제없이 만들어졌어요. 중계기는 대시보드에서 포트를 바꾸거나 다시 켤 수 있어요',
+  'create.relay.later': '나중에 켜기',
   'proj.err.exists': '이미 있는 이름이에요',
   'agent.err.name': '소문자, 숫자, . _ -만 쓰고 기호로 시작 못 해요',
   'agent.err.exists': '이미 있는 이름이에요',

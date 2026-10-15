@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { call, useMockBackend } from '../src/ipc/client';
+import { COPY } from '../src/copy';
+import { call, toIpcError, useMockBackend, type IpcError } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
+import { afterRelayFailure } from '../src/onboarding/flow';
 import { createVault, initFailureOf, InitError, type InitFailure } from '../src/onboarding/vault';
 
 // Vault creation during onboarding against the mock, which follows the core: `init` runs, then
@@ -22,6 +24,10 @@ async function failure(p: Promise<unknown>): Promise<InitFailure> {
   throw new Error('expected an InitError');
 }
 const initCalls = (b: MockBackend) => b.calls().filter((c) => c === 'vault_init').length;
+async function rejection(p: Promise<unknown>): Promise<IpcError> {
+  try { await p; } catch (e) { return toIpcError(e); }
+  throw new Error('expected a rejection');
+}
 
 describe('creating the vault', () => {
   it('treats a vault whose relay failed to start as created, and never runs init again', async () => {
@@ -34,6 +40,33 @@ describe('creating the vault', () => {
     expect(initCalls(b)).toBe(1);
     // the relay is what the retry starts
     expect((await call('serve_start')).running).toBe(true);
+  });
+
+  it('lets the user go on when the relay port stays busy: the vault is made and the dashboard has the relay controls', async () => {
+    const b = fresh({ relayFails: 3 });                          // another program keeps the gateway port
+    const rec = await call('recovery_generate');
+    await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, { unsure: false });
+    expect((await rejection(call('serve_start'))).reason).toBe('serve_exited');   // the create step's retry fails again
+    // going on: no join opens the dashboard, which finds the vault and the relay off
+    expect(afterRelayFailure(false)).toBe('dashboard');
+    const status = await call('app_status');
+    expect(status).toMatchObject({ initialized: true, serve: { running: false } });
+    // the port can be changed there and the relay started on it
+    await call('settings_set', { gateway_port: 48001, team_listen: null });
+    await rejection(call('serve_start'));                        // the last injected failure
+    expect(await call('serve_start')).toMatchObject({ running: true, url: 'http://127.0.0.1:48001' });
+    expect(initCalls(b)).toBe(1);
+    expect(COPY['create.relay.vaultOk']).toContain('대시보드');
+  });
+
+  it('still joins on the finale when the relay would not start during a join', async () => {
+    fresh({ relayFails: 2 });
+    const { ref } = await call('team_invite_preview', { text: 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(8) });
+    const rec = await call('recovery_generate');
+    await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, { unsure: false });
+    expect(afterRelayFailure(true)).toBe('done');
+    expect((await call('team_join', { ref, project: 'team-x', environment: 'shared' })).project).toBe('team-x');
+    expect((await call('serve_status')).running).toBe(false);
   });
 
   it('sends the user back for a new code when the generated one expired (and init never ran)', async () => {

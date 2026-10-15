@@ -29,6 +29,11 @@ export function neighbour(s: Step, joining: boolean, dir: -1 | 1): Step {
   return f[Math.min(f.length - 1, Math.max(0, i + dir))] ?? 'welcome';
 }
 
+/** Where the onboarding goes when the vault exists, the relay would not start and the user goes
+ *  on without it: a join still happens on the finale; otherwise the dashboard, which has the
+ *  relay's start button and the port setting (the agent step needs a running relay). */
+export const afterRelayFailure = (joining: boolean): 'done' | 'dashboard' => (joining ? 'done' : 'dashboard');
+
 /** Progress label "n/total" for the live region, or null outside the counted steps. */
 export function progressOf(s: Step, joining: boolean): { index: number; total: number } | null {
   const list = counted(joining), i = list.indexOf(s);

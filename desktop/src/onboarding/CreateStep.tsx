@@ -15,14 +15,18 @@ type Failed = 'init' | 'unsure' | 'relay';
 
 /** Step 3: create the vault. The list owns the clock: each finished line contracts the sphere,
  *  the last one bursts it. Lines 1-6 wait for `vault_init`, line 7 for the relay.
- *  A vault that exists is never made again: when only the relay failed, the retry starts the relay;
- *  when the core could not say whether the vault exists, only a retry is offered (going back could
- *  change secrets a vault may already use). A recovery code that expired or is too close to the
- *  admin passphrase sends the user back to the recovery step (`onRecoveryProblem`). */
-export function CreateStep({ frame, sectionRef, created, initVault, startRelay, onCreated, onRecoveryProblem, onBack, onNext }: {
+ *  A vault that exists is never made again: when only the relay failed, the retry starts the relay,
+ *  and the user can also go on without it (`onSkipRelay`): the vault is made, and the dashboard has
+ *  the relay's start button and port setting, so a port that stays busy is not a dead end. When the
+ *  core could not say whether the vault exists, only a retry is offered (going back could change
+ *  secrets a vault may already use). A recovery code that expired or is too close to the admin
+ *  passphrase sends the user back to the recovery step (`onRecoveryProblem`). */
+export function CreateStep({ frame, sectionRef, created, initVault, startRelay, onCreated, onRecoveryProblem, onSkipRelay, onBack, onNext }: {
   frame: FrameState; sectionRef: Ref<HTMLElement>; created: boolean;
   initVault(): Promise<void>; startRelay(): Promise<string | null>; onCreated(): void;
   onRecoveryProblem(kind: Extract<InitFailure, 'recovery_expired' | 'recovery_weak'>): void;
+  /** Go on with the vault made and the relay off. */
+  onSkipRelay(): void;
   onBack(): void; onNext(): void;
 }) {
   const { field, announce } = useApp();
@@ -81,7 +85,7 @@ export function CreateStep({ frame, sectionRef, created, initVault, startRelay, 
       if (k === RELAY) {
         const why = relayError(toIpcError(e).reason);
         setFailedAt('relay'); setError('create.err.serve'); setRelayWhy(why);
-        announce(`${t('create.err.serve')} ${t(why.key, { reason: why.reason })}`);
+        announce(`${t('create.err.serve')} ${t(why.key, { reason: why.reason })} ${t('create.relay.vaultOk')}`);
       } else if (kind === 'recovery_expired' || kind === 'recovery_weak') {
         setFailedAt('init');
         onRecoveryProblem(kind);
@@ -112,7 +116,9 @@ export function CreateStep({ frame, sectionRef, created, initVault, startRelay, 
   return (
     <StepFrame name="create" frame={frame} sectionRef={sectionRef} title={title}
       nav={<>
-        {failedAt === 'init' ? <BackButton onClick={onBack} label={t('common.back')} /> : <span />}
+        {failedAt === 'init' ? <BackButton onClick={onBack} label={t('common.back')} />
+          : failedAt === 'relay' ? <button className="btn btn-ghost" type="button" onClick={onSkipRelay}>{t('create.relay.later')}</button>
+            : <span />}
         {failedAt
           ? <button className="btn btn-primary" type="button" onClick={() => void run(retry)}>{t('common.retry')}</button>
           : <button className="btn btn-primary" type="button" ref={nextRef} aria-disabled={!done} onClick={() => { if (done) onNext(); }}>{t('common.next')}</button>}
@@ -131,6 +137,7 @@ export function CreateStep({ frame, sectionRef, created, initVault, startRelay, 
         })}
       </ul>
       {error && <div className="help err" role="alert">{t(error)}{relayWhy && <><br />{t(relayWhy.key, { reason: relayWhy.reason })}</>}</div>}
+      {failedAt === 'relay' && <Callout kind="info">{t('create.relay.vaultOk')}</Callout>}
       {/* same-account access is disclosed while the vault is being made, not only afterwards */}
       <Callout className="note on">{t('create.note')}</Callout>
     </StepFrame>
