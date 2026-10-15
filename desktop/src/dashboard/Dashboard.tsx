@@ -1,34 +1,55 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { t } from '../copy';
-import { call, on, toIpcError } from '../ipc/client';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { t, type CopyKey } from '../copy';
+import { call, on } from '../ipc/client';
 import type { AppStatus, Control, InvitePreview, ServeStatus } from '../ipc/contract';
+import { newRecordCount, recordSig } from '../lib/dash';
 import { hostPort } from '../lib/format';
 import { useApp } from '../ui/context';
+import { PassField } from '../ui/fields';
+import { AgentsPage } from './Agents';
+import { ConnectionsPage } from './Connections';
+import { DashContext, passErrorKey, SheetHostContext, type DashApi, type Intent, type SheetHost } from './context';
 import { Home } from './Home';
+import { KeysPage } from './Keys';
+import { LogsPage } from './Logs';
 import { pageMeta, PAGES, type PageId } from './pages';
+import { SettingsPage } from './Settings';
 import { Sheet } from './Sheet';
+import { TeamPage } from './Team';
 
 export type { PageId } from './pages';
 
-const SPHERE_PX = 30;   // radius of the parked sphere
+const SPHERE_PX = 30;          // radius of the parked sphere
+const AUDIT_POLL_MS = 4000;    // usage records are read while the window is visible
 const NO_CONTROL: Control = { stopped: false, restore_pending: false, incident_open: false };
+type Incoming = { ref: string; preview: InvitePreview };
 
-/** Dashboard shell: sidebar with the small sphere, menu, relay status and stop-all; a page area. */
+/** Dashboard shell: sidebar with the small sphere, menu, relay status and stop-all; a page area;
+ *  a host for the pages' sheets. */
 export function Dashboard({ initialStatus, startPage, incoming }: {
-  initialStatus: AppStatus; startPage: PageId; incoming: { ref: string; preview: InvitePreview } | null;
+  initialStatus: AppStatus; startPage: PageId; incoming: Incoming | null;
 }) {
   const { field, toast, announce, setPill } = useApp();
   const [page, setPage] = useState<PageId>(startPage);
+  const [intent, setIntent] = useState<Intent | null>(startPage === 'team' ? 'invite' : null);
   const [serve, setServe] = useState<ServeStatus>(initialStatus.serve);
   const [control, setControl] = useState<Control>(initialStatus.control ?? NO_CONTROL);
   const [sheet, setSheet] = useState<'stop' | 'resume' | null>(null);
   const [busy, setBusy] = useState(false);
   const [pass, setPass] = useState('');
-  const [passErr, setPassErr] = useState<'error.auth' | 'resume.err.empty' | 'error.generic' | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [passErr, setPassErr] = useState<CopyKey | null>(null);
+  const [tick, setTick] = useState(0);
+  const [activity, setActivity] = useState(0);
+  const [invite, setInvite] = useState<Incoming | null>(null);
+  const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
+  const [holds, setHolds] = useState(0);
   const slot = useRef<HTMLDivElement>(null);
   const title = useRef<HTMLHeadingElement>(null);
+  const passRef = useRef<HTMLInputElement>(null);
   const first = useRef(true);
+  const stopped = useRef(control.stopped);
+  stopped.current = control.stopped;
+  const lastIncoming = useRef<string | null>(null);
 
   // park the sphere in the sidebar header; it follows the slot when the window resizes
   useLayoutEffect(() => {
@@ -49,6 +70,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     return () => ro.disconnect();
   }, [field, serve.running]);
 
+  // stop-all: the sphere stops turning and cools to grey (DESIGN.md §3.2)
   useEffect(() => { field.setStopped(control.stopped); }, [field, control.stopped]);
   useEffect(() => () => field.setStopped(false), [field]);
 
@@ -57,22 +79,57 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   }, [control.stopped, serve, setPill]);
 
   const refresh = useCallback(() => {
-    call('app_status').then((s) => { setServe(s.serve); if (s.control) setControl(s.control); setRefreshKey((k) => k + 1); }, () => undefined);
+    call('app_status').then((s) => { setServe(s.serve); if (s.control) setControl(s.control); setTick((k) => k + 1); }, () => undefined);
   }, []);
 
-  // core events: relay status, stop-all changes, a small ripple for each new usage record
+  // core events: relay status and stop-all changes
   useEffect(() => {
     const offs: Array<() => void> = [];
     let dead = false;
     const keep = (p: Promise<() => void>) => p.then((un) => { if (dead) un(); else offs.push(un); }, () => undefined);
     keep(on('serve://status', (s) => setServe(s)));
     keep(on('control://changed', (c) => setControl(c)));
-    keep(on('audit://records', () => field.ripple(0.06)));
     window.addEventListener('focus', refresh);
     return () => { dead = true; offs.forEach((f) => f()); window.removeEventListener('focus', refresh); };
-  }, [field, refresh]);
+  }, [refresh]);
 
-  useEffect(() => { if (incoming) setPage('team'); }, [incoming]);
+  // usage records: read the tail while the window is visible; each new batch is one small ripple
+  useEffect(() => {
+    let dead = false, inflight = false, firstPoll = true, sig: string | null = null;
+    const poll = () => {
+      if (dead || inflight || document.hidden) return;
+      inflight = true;
+      call('audit_tail', { limit: 50 }).then(
+        (r) => {
+          if (dead) return;
+          const n = firstPoll ? 0 : newRecordCount(sig, r.records);
+          firstPoll = false;
+          sig = recordSig(r.records[r.records.length - 1]);
+          if (n > 0) {
+            if (!stopped.current) field.ripple(Math.min(0.12, 0.05 + 0.015 * n));
+            setActivity((k) => k + 1);
+          }
+        },
+        () => undefined,
+      ).finally(() => { inflight = false; });
+    };
+    poll();
+    const id = setInterval(poll, AUDIT_POLL_MS);
+    const vis = () => { if (!document.hidden) poll(); };
+    document.addEventListener('visibilitychange', vis);
+    let off: (() => void) | null = null;
+    on('audit://records', () => poll()).then((un) => { if (dead) un(); else off = un; }, () => undefined);
+    return () => { dead = true; clearInterval(id); document.removeEventListener('visibilitychange', vis); off?.(); };
+  }, [field]);
+
+  // a zeropw://join link opened while the dashboard is up: the team page shows its preview
+  useEffect(() => {
+    if (!incoming || incoming.ref === lastIncoming.current) return;
+    lastIncoming.current = incoming.ref;
+    setInvite(incoming);
+    setPage('team');
+    setIntent('join');
+  }, [incoming]);
 
   // a page change moves focus to its title and announces it
   useEffect(() => {
@@ -81,7 +138,13 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     title.current?.focus({ preventScroll: true });
   }, [page, announce]);
 
+  const go = useCallback((p: PageId, i?: Intent) => { setPage(p); setIntent(i ?? null); }, []);
+  const bump = useCallback(() => { refresh(); }, [refresh]);
+  const dash: DashApi = useMemo(() => ({ go, tick, activity, bump, control, serve, setControl, setServe }), [go, tick, activity, bump, control, serve]);
+  const sheetHost: SheetHost = useMemo(() => ({ el: hostEl, hold: (d) => setHolds((h) => Math.max(0, h + d)) }), [hostEl]);
+
   const closeSheet = useCallback(() => { setSheet(null); setPass(''); setPassErr(null); }, []);
+  const clearIntent = useCallback(() => setIntent(null), []);
 
   const stopAll = async () => {
     setBusy(true);
@@ -95,78 +158,76 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   };
 
   const resume = async () => {
-    if (!pass) { setPassErr('resume.err.empty'); return; }
+    if (!pass) { setPassErr('resume.err.empty'); passRef.current?.focus(); return; }
     setBusy(true);
     try {
       setControl(await call('resume', { admin_passphrase: pass }));
       toast(t('toast.resumed'));
       closeSheet();
     } catch (e) {
-      setPassErr(toIpcError(e).error === 'AuthFailed' ? 'error.auth' : 'error.generic');
-    } finally { setBusy(false); setPass(''); }
+      setPassErr(passErrorKey(e)); setPass('');
+      passRef.current?.focus();
+    } finally { setBusy(false); }
   };
 
   const meta = pageMeta(page);
   const relayCls = 'relay' + (control.stopped ? ' stopped' : serve.running ? ' live' : '');
   const relayText = control.stopped ? t('side.relay.stopped') : serve.running ? t('side.relay.on') : t('side.relay.off');
+  const pageIntent = intent ?? undefined;
 
   return (
-    <>
-      <div className="dash" inert={sheet !== null}>
-        <aside className="sidebar">
-          <div className="sphere-slot" ref={slot} role="img" aria-label={`${t('side.sphere.aria')} · ${relayText}`} />
-          <nav className="side-nav" aria-label={t('nav.aria')}>
-            <ul className="nav-list">
-              {PAGES.map((p) => (
-                <li key={p.id}>
-                  <button className="nav-item" type="button" aria-current={p.id === page ? 'page' : undefined} onClick={() => setPage(p.id)}>
-                    <span className="px" aria-hidden="true" />{t(p.label)}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </nav>
-          <div className="side-foot">
-            <div className={relayCls}>
-              <span className="dot" aria-hidden="true" /><span>{relayText}</span>
-              {serve.running && !control.stopped && <span className="mono">{hostPort(serve.url)}</span>}
+    <DashContext.Provider value={dash}>
+      <SheetHostContext.Provider value={sheetHost}>
+        <div className="dash" inert={holds > 0}>
+          <aside className="sidebar">
+            <div className="sphere-slot" ref={slot} role="img" aria-label={`${t('side.sphere.aria')} · ${relayText}`} />
+            <nav className="side-nav" aria-label={t('nav.aria')}>
+              <ul className="nav-list">
+                {PAGES.map((p) => (
+                  <li key={p.id}>
+                    <button className="nav-item" type="button" aria-current={p.id === page ? 'page' : undefined} onClick={() => go(p.id)}>
+                      <span className="px" aria-hidden="true" />{t(p.label)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+            <div className="side-foot">
+              <div className={relayCls}>
+                <span className="dot" aria-hidden="true" /><span>{relayText}</span>
+                {serve.running && !control.stopped && <span className="mono">{hostPort(serve.url)}</span>}
+              </div>
+              {control.stopped
+                ? <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('resume')}>{t('side.resume')}</button>
+                : <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('stop')}>{t('side.stop')}</button>}
             </div>
-            {control.stopped
-              ? <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('resume')}>{t('side.resume')}</button>
-              : <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('stop')}>{t('side.stop')}</button>}
-          </div>
-        </aside>
-        <div className="dash-main">
-          <div className="page">
-            <header className="page-head">
-              <h1 tabIndex={-1} ref={title}>{t(meta.label)}</h1>
-              <p>{t(meta.sub)}</p>
-            </header>
-            {page === 'home'
-              ? <Home serve={serve} control={control} refreshKey={refreshKey} />
-              : (
-                <div className="glass" style={{ marginTop: 22 }}>
-                  <div className="empty"><span className="line"><span className="px" aria-hidden="true" />{meta.empty ? t(meta.empty) : ''}</span></div>
-                </div>
-              )}
+          </aside>
+          <div className="dash-main">
+            <div className="page" key={page}>
+              <header className="page-head">
+                <h1 tabIndex={-1} ref={title}>{t(meta.label)}</h1>
+                <p>{t(meta.sub)}</p>
+              </header>
+              {page === 'home' && <Home />}
+              {page === 'keys' && <KeysPage intent={pageIntent} onIntent={clearIntent} />}
+              {page === 'connections' && <ConnectionsPage intent={pageIntent} onIntent={clearIntent} />}
+              {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
+              {page === 'logs' && <LogsPage />}
+              {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={() => setInvite(null)} />}
+              {page === 'settings' && <SettingsPage />}
+            </div>
           </div>
         </div>
-      </div>
+        <div className="sheet-host" ref={setHostEl} />
 
-      <Sheet id="sheet-stop" open={sheet === 'stop'} title={t('stop.title')} lead={t('stop.sub')}
-        primaryLabel={t('stop.confirm')} busy={busy} onPrimary={() => void stopAll()} onClose={closeSheet} />
-      <Sheet id="sheet-resume" open={sheet === 'resume'} title={t('resume.title')} lead={t('resume.sub')}
-        primaryLabel={t('resume.confirm')} busy={busy} onPrimary={() => void resume()} onClose={closeSheet}>
-        <div className="field">
-          <div className="label"><label htmlFor="resume-pass">{t('resume.field')}</label></div>
-          <div className="input" data-invalid={passErr ? '' : undefined}>
-            <input type="password" id="resume-pass" value={pass} autoComplete="current-password" spellCheck={false}
-              aria-invalid={passErr ? true : undefined} aria-describedby="resume-err"
-              onChange={(e) => { setPass(e.target.value); setPassErr(null); }} />
-          </div>
-          <div className="help err" id="resume-err" hidden={!passErr} role="alert">{passErr ? t(passErr) : ''}</div>
-        </div>
-      </Sheet>
-    </>
+        <Sheet id="sheet-stop" open={sheet === 'stop'} title={t('stop.title')} lead={t('stop.sub')}
+          primaryLabel={t('stop.confirm')} busy={busy} onPrimary={() => void stopAll()} onClose={closeSheet} />
+        <Sheet id="sheet-resume" open={sheet === 'resume'} title={t('resume.title')} lead={t('resume.sub')}
+          primaryLabel={t('resume.confirm')} busy={busy} onPrimary={() => void resume()} onClose={closeSheet}>
+          <PassField id="resume-pass" value={pass} inputRef={passRef} label={t('resume.field')}
+            onChange={(v) => { setPass(v); setPassErr(null); }} error={passErr ? t(passErr) : null} />
+        </Sheet>
+      </SheetHostContext.Provider>
+    </DashContext.Provider>
   );
 }
