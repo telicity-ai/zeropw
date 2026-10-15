@@ -11,11 +11,11 @@ name = "zeropw-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = "=2.7.1"
+tauri-build = { version = "=2.7.1", features = [] }
 
 [dependencies]
 zeropw-desktop-core = { path = "../core" }
-tauri = "=2.12.1"
+tauri = { version = "=2.12.1", features = [] }
 tauri-plugin-deep-link = "=2.6.1"
 tauri-plugin-dialog = "=2.8.1"
 # The clipboard, used directly so values can be marked to stay out of clipboard history.
