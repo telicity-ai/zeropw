@@ -143,8 +143,8 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
       await call('vault_init', { admin_passphrase: admin, recovery });
     } catch (e) {
       const err = toIpcError(e);
-      if (err.reason !== 'already_initialized') {
-        if (err.reason === 'recovery_ref_unknown') { secrets.current.recovery = null; setRecoveryKey((k) => k + 1); }
+      if (err.reason !== 'vault_exists') {
+        if (err.reason === 'onetime_ref_unknown' || err.reason === 'onetime_ref_invalid') { secrets.current.recovery = null; setRecoveryKey((k) => k + 1); }
         throw err;
       }
     }

@@ -22,7 +22,7 @@ type TeamSheet =
   | { kind: 'share'; env: string; then?: 'invite' }
   | { kind: 'remove'; env: string; member: Member }
   | { kind: 'join'; incoming?: Incoming };
-const NOT_SHARED = new Set(['team_env_unknown', 'team_not_initialized', 'env_not_shared', 'not_shared']);
+const NOT_SHARED = new Set(['team_env_not_found']);
 const INVITE_STATUS: Record<string, CopyKey> = { pending: 'st.pending', used: 'st.used', expired: 'st.expired', revoked: 'st.cancelled' };
 const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r === 'user' ? t('inv.role.user') : r);
 

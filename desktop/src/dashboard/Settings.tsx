@@ -13,7 +13,7 @@ import { Sheet } from './Sheet';
 import { restartRelay } from './Team';
 
 type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
-const CANCELLED = new Set(['cancelled', 'dialog_cancelled', 'canceled']);
+const CANCELLED = new Set(['file_dialog_cancelled']);
 
 /** Settings: the relay port, this device's address for other devices, backup, restore and
  *  recovery with the recovery code. Files are picked in native dialogs owned by the core. */

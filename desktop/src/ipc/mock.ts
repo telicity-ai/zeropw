@@ -173,7 +173,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const pair = typeof env === 'string' ? splitEnv(env) : null;
     if (!pair) throw fail('UsageError', 'invalid_env');
     const t = teams.get(`${pair.project}/${pair.environment}`);
-    if (!t) throw fail('InvalidInput', 'team_env_unknown');
+    if (!t) throw fail('NotFound', 'team_env_not_found');
     return t;
   };
 
@@ -313,12 +313,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return { ref, groups };
     },
     vault_init: async ({ admin_passphrase, recovery }) => {
-      if (initialized) throw fail('UsageError', 'already_initialized');
+      if (initialized) throw fail('StateError', 'vault_exists');
       if (typeof admin_passphrase !== 'string' || [...admin_passphrase].length < MIN_PASSPHRASE_CHARS) throw fail('InvalidInput', 'passphrase_too_short');
       let code: string;
       if ('ref' in recovery) {
         const item = onetime.get(recovery.ref);
-        if (!item || item.kind !== 'recovery') throw fail('InvalidInput', 'recovery_ref_unknown');
+        if (!item || item.kind !== 'recovery') throw fail('NotFound', 'onetime_ref_unknown');
         onetime.delete(recovery.ref);
         code = item.text;
       } else if (typeof recovery.typed !== 'string' || [...recovery.typed].length < MIN_PASSPHRASE_CHARS) {
@@ -445,8 +445,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const s = secrets.get(input.secret_id);
       if (!s || s.project !== input.project || s.environment !== input.environment) throw fail('InvalidInput', 'secret_not_found');
       const target = parseTarget(input.target);
-      if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'forbidden_address' : 'invalid_target');
-      if (target.private && !input.allow_private_network) throw fail('InvalidInput', 'private_address');
+      if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'metadata_address_not_allowed' : 'invalid_scheme');
+      if (target.private && !input.allow_private_network) throw fail('InvalidInput', 'target_address_not_allowed');
       if (!['bearer', 'basic', 'header'].includes(input.auth)) throw fail('InvalidInput', 'invalid_auth');
       if (!input.methods.length) throw fail('InvalidInput', 'invalid_methods');
       const now = iso();
@@ -472,8 +472,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!s || s.kind !== 'ssh_private_key') throw fail('InvalidInput', 'secret_not_found');
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
-      if (!isSshUser(input.username)) throw fail('InvalidInput', 'invalid_username');
-      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      if (!isSshUser(input.username)) throw fail('InvalidInput', 'invalid_ssh_username');
+      if (!input.host_keys.length) throw fail('InvalidInput', 'ssh_host_keys_required');
       if (!input.host_keys.every(isHostKey)) throw fail('InvalidInput', 'unsupported_host_key');
       const now = iso();
       const c: ConnectionView = {
@@ -558,7 +558,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     terminal_attach: async ({ terminal_id, on_data }) => {
       const term = terminals.get(terminal_id);
-      if (!term) throw fail('InvalidInput', 'terminal_unknown');
+      if (!term) throw fail('NotFound', 'terminal_not_found');
       const out = channelOf(on_data);
       await wait(120);
       term.out = out;
@@ -570,13 +570,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     }),
     terminal_write: ({ terminal_id, data }) => {
       const term = terminals.get(terminal_id);
-      if (!term) throw fail('InvalidInput', 'terminal_unknown');
+      if (!term) throw fail('NotFound', 'terminal_not_found');
       if (typeof data !== 'string' || data.length > 65536) throw fail('InvalidInput', 'data_invalid');
       termWrite(term, data);
     },
     terminal_resize: ({ terminal_id, cols, rows }) => {
       const term = terminals.get(terminal_id);
-      if (!term) throw fail('InvalidInput', 'terminal_unknown');
+      if (!term) throw fail('NotFound', 'terminal_not_found');
       term.cols = cols; term.rows = rows;
     },
     terminal_close: ({ terminal_id }) => {

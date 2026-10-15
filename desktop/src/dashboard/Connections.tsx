@@ -235,9 +235,10 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
       const r = ipc.reason;
       const map: Record<string, [ErrKey, CopyKey]> = {
         connection_exists: ['id', 'conn.err.exists'], invalid_connection_id: ['id', 'proj.err.name'], secret_identity_mismatch: ['id', 'conn.err.keyExists'],
-        invalid_target: ['target', 'conn.url.err.format'], forbidden_address: ['target', 'conn.url.err.meta'], private_address: ['target', 'conn.url.private'],
-        invalid_host: ['host', 'conn.ssh.host.err'], invalid_port: ['port', 'conn.ssh.port.err'], invalid_username: ['user', 'conn.ssh.user.err'],
-        invalid_host_key: ['hostKey', 'conn.ssh.hostkey.err'], unsupported_host_key: ['hostKey', 'conn.ssh.hostkey.err'], host_key_required: ['hostKey', 'conn.ssh.hostkey.err'],
+        invalid_scheme: ['target', 'conn.url.err.format'], target_must_be_origin: ['target', 'conn.url.err.format'],
+        metadata_address_not_allowed: ['target', 'conn.url.err.meta'], target_address_not_allowed: ['target', 'conn.url.private'],
+        invalid_host: ['host', 'conn.ssh.host.err'], invalid_port: ['port', 'conn.ssh.port.err'], invalid_ssh_username: ['user', 'conn.ssh.user.err'],
+        invalid_host_key: ['hostKey', 'conn.ssh.hostkey.err'], unsupported_host_key: ['hostKey', 'conn.ssh.hostkey.err'], ssh_host_keys_required: ['hostKey', 'conn.ssh.hostkey.err'],
         invalid_header_name: ['header', 'conn.header.err'], invalid_basic_username: ['basic', 'conn.basic.err'],
         invalid_secret_value: ['key', 'keys.err.value'], file_token_unknown: ['key', 'keys.err.value'],
       };

@@ -102,8 +102,8 @@ describe('connections', () => {
     expect((await rejection(call('connection_create_http', { ...http, admin_passphrase: PASS }))).reason).toBe('secret_not_found');
     await call('secret_put', { id: 'svc', kind: 'api_key', project: 'demo', environment: 'dev', source: { typed: 'k' } });
     expect((await rejection(call('connection_create_http', { ...http, admin_passphrase: 'nope' }))).error).toBe('AuthFailed');
-    expect((await rejection(call('connection_create_http', { ...http, target: 'http://169.254.169.254', admin_passphrase: PASS }))).reason).toBe('forbidden_address');
-    expect((await rejection(call('connection_create_http', { ...http, target: 'http://10.0.0.8', admin_passphrase: PASS }))).reason).toBe('private_address');
+    expect((await rejection(call('connection_create_http', { ...http, target: 'http://169.254.169.254', admin_passphrase: PASS }))).reason).toBe('metadata_address_not_allowed');
+    expect((await rejection(call('connection_create_http', { ...http, target: 'http://10.0.0.8', admin_passphrase: PASS }))).reason).toBe('target_address_not_allowed');
     const c = await call('connection_create_http', { ...http, methods: ['GET', 'POST'], confirm_methods: ['POST'], admin_passphrase: PASS });
     expect(c.status).toBe('active');
     expect(JSON.stringify(c)).not.toContain('"k"');
@@ -118,7 +118,7 @@ describe('connections', () => {
     await call('secret_put', { id: 'git', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
     const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', admin_passphrase: PASS };
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB'] }))).reason).toBe('unsupported_host_key');
-    expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('host_key_required');
+    expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('ssh_host_keys_required');
     const c = await call('connection_create_ssh', { ...ssh, host_keys: [HOST_KEY] });
     expect(c.kind).toBe('ssh');
   });
@@ -159,7 +159,7 @@ describe('agents, grants, terminals and approvals', () => {
     expect(first.length).toBe(seen);                          // output now goes to the attached view only
     await call('terminal_close', { terminal_id: term.terminal_id });
     expect((await call('terminal_list')).terminals.some((x) => x.terminal_id === term.terminal_id)).toBe(false);
-    expect((await rejection(call('terminal_attach', { terminal_id: term.terminal_id, on_data: outputChannel(() => undefined) }))).reason).toBe('terminal_unknown');
+    expect((await rejection(call('terminal_attach', { terminal_id: term.terminal_id, on_data: outputChannel(() => undefined) }))).reason).toBe('terminal_not_found');
   });
 
   it('copies a token once; the core forgets it afterwards', async () => {
@@ -231,7 +231,7 @@ describe('incidents, stop-all and recovery', () => {
 describe('team', () => {
   it('shares with the admin passphrase; an unshared environment has no members', async () => {
     ready();
-    expect((await rejection(call('team_members', { env: 'demo/dev' }))).reason).toBe('team_env_unknown');
+    expect((await rejection(call('team_members', { env: 'demo/dev' }))).reason).toBe('team_env_not_found');
     expect((await rejection(call('team_share', { project: 'demo', environment: 'dev', admin_passphrase: 'x' }))).error).toBe('AuthFailed');
     await call('team_share', { project: 'demo', environment: 'dev', admin_passphrase: PASS });
     const m = await call('team_members', { env: 'demo/dev' });

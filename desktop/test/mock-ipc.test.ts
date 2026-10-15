@@ -58,7 +58,7 @@ describe('mock onboarding flow', () => {
     const init = await call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } });
     expect(init.kms_key_id).toMatch(/^kms-dev-/);
     expect(b.inspect().onetime).toBe(0);                       // the recovery reference is used up
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('already_initialized');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('vault_exists');
 
     const serve = await call('serve_status');
     expect(serve.running).toBe(true);
@@ -95,13 +95,13 @@ describe('mock onboarding flow', () => {
     await call('terminal_resize', { terminal_id: term.terminal_id, cols: 100, rows: 30 });
     await call('terminal_close', { terminal_id: term.terminal_id });
     expect(b.inspect().terminals).toBe(0);
-    expect((await rejection(call('terminal_write', { terminal_id: term.terminal_id, data: 'x' }))).reason).toBe('terminal_unknown');
+    expect((await rejection(call('terminal_write', { terminal_id: term.terminal_id, data: 'x' }))).reason).toBe('terminal_not_found');
   });
 
   it('accepts a chosen recovery code but not the admin passphrase again', async () => {
     fresh();
     expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: ` ${ADMIN.toLowerCase()} ` } }))).reason).toBe('recovery_same_as_admin');
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: 'ref_unknown' } }))).reason).toBe('recovery_ref_unknown');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: 'ref_unknown' } }))).reason).toBe('onetime_ref_unknown');
     await call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: 'a different long recovery phrase' } });
     expect((await call('app_status')).initialized).toBe(true);
   });
@@ -111,7 +111,7 @@ describe('mock onboarding flow', () => {
     const rec = await call('recovery_generate');
     await call('onetime_discard', { ref: rec.ref });
     expect(b.inspect().onetime).toBe(0);
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('recovery_ref_unknown');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('onetime_ref_unknown');
   });
 });
 

@@ -49,7 +49,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     const id = idRef.current;
     if (!id) return;
     call('terminal_write', { terminal_id: id, data }).catch((e) => {
-      if (toIpcError(e).reason === 'terminal_unknown') { setClosed(true); cb.current.onClosed?.(); }
+      if (toIpcError(e).reason === 'terminal_not_found') { setClosed(true); cb.current.onClosed?.(); }
     });
   };
 
