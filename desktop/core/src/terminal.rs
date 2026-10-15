@@ -10,17 +10,24 @@
 //!   user presses Enter. For another macOS account the first suggestion is
 //!   `sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u <account> -i`.
 //! - Output goes to a [`TerminalSink`] (the Tauri layer wraps a `Channel<string>`).
+//! - Terminals outlive the view that opened them: each session stays in the registry with a
+//!   bounded output ring ([`RING_BYTES`]). [`TerminalManager::attach`] replays the ring into a
+//!   new sink and then keeps streaming to it, so the Agents page (or a reopened window) can
+//!   pick a running agent shell back up. An exited shell stays listed (not alive) until it is
+//!   closed or its slot is needed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde::Serialize;
+use zeroize::Zeroize;
 
 use crate::error::AppError;
 use crate::onetime::random_ref;
@@ -31,7 +38,12 @@ pub const GATEWAY_URL_VAR: &str = "ZEROPW_GATEWAY_URL";
 pub const CALLER_TOKEN_VAR: &str = "ZEROPW_CALLER_TOKEN";
 pub const NO_PROXY_VALUE: &str = "127.0.0.1,localhost";
 const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+/// Sessions kept in the registry, alive or exited.
 const MAX_TERMINALS: usize = 8;
+/// Output kept per terminal for reattaching.
+pub const RING_BYTES: usize = 256 * 1024;
+/// When the ring drops old output it also drops the rest of a cut line, looking this far.
+const RING_LINE_SEEK: usize = 4096;
 const MAX_WRITE_BYTES: usize = 64 * 1024;
 /// How long a closed shell gets to exit on SIGHUP before its process group is killed.
 const CLOSE_GRACE: Duration = Duration::from_secs(2);
@@ -76,6 +88,112 @@ pub struct TerminalRequest<'a> {
     pub bin_dir: &'a Path,
     pub cols: u16,
     pub rows: u16,
+    /// The principal whose caller token the shell holds (shown in `terminal_list`).
+    pub principal: &'a str,
+    /// The macOS account the first suggestion switches to, if any.
+    pub as_user: Option<&'a str>,
+}
+
+/// A `terminal_list` row. Value-free: no token, no output.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TerminalSummary {
+    pub terminal_id: String,
+    pub principal: String,
+    pub as_user: Option<String>,
+    pub alive: bool,
+}
+
+/// The last [`RING_BYTES`] of a terminal's output, cut only at UTF-8 character boundaries
+/// (and, when one is near, at a line end). The buffer is allocated once and wiped on drop.
+pub struct OutputRing {
+    buf: VecDeque<u8>,
+    cap: usize,
+}
+
+impl OutputRing {
+    pub fn new(cap: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Append `text`, dropping the oldest output beyond the capacity. Never grows the buffer.
+    /// When output is cut, the rest of the cut line goes too if its end is near.
+    pub fn push(&mut self, text: &str) {
+        if self.cap == 0 || text.is_empty() {
+            return;
+        }
+        let mut start = text.len().saturating_sub(self.cap);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        let mut bytes = &text.as_bytes()[start..];
+        let overflow = (self.buf.len() + bytes.len()).saturating_sub(self.cap);
+        let cut_mid_line = if overflow > 0 {
+            let drop = overflow.min(self.buf.len());
+            let mid_line = drop > 0 && self.buf.get(drop - 1) != Some(&b'\n');
+            self.buf.drain(..drop);
+            mid_line || (start > 0 && text.as_bytes()[start - 1] != b'\n')
+        } else {
+            start > 0 && text.as_bytes()[start - 1] != b'\n'
+        };
+        if cut_mid_line {
+            let old = self.buf.len();
+            let newline = self
+                .buf
+                .iter()
+                .chain(bytes.iter())
+                .take(RING_LINE_SEEK)
+                .position(|&b| b == b'\n');
+            match newline {
+                Some(end) if end < old => {
+                    self.buf.drain(..=end);
+                }
+                Some(end) => {
+                    self.buf.clear();
+                    bytes = &bytes[end - old + 1..];
+                }
+                None => {
+                    while self.buf.front().is_some_and(|b| b & 0xC0 == 0x80) {
+                        self.buf.pop_front();
+                    }
+                }
+            }
+        }
+        self.buf.extend(bytes);
+    }
+
+    /// Everything buffered, as text.
+    pub fn text(&self) -> String {
+        let (a, b) = self.buf.as_slices();
+        let mut bytes = Vec::with_capacity(a.len() + b.len());
+        bytes.extend_from_slice(a);
+        bytes.extend_from_slice(b);
+        match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        }
+    }
+}
+
+impl Drop for OutputRing {
+    fn drop(&mut self) {
+        // Fill the whole allocation (live and dropped slots) and wipe it.
+        let capacity = self.buf.capacity();
+        self.buf.resize(capacity, 0);
+        let (a, b) = self.buf.as_mut_slices();
+        a.zeroize();
+        b.zeroize();
+    }
 }
 
 /// The shell environment: allowlisted parent variables, terminal type, `PATH` with the bundle
@@ -214,30 +332,80 @@ impl Utf8Chunker {
     }
 }
 
+/// What the reader thread and `attach` share: the ring, the current sink and the exit status.
+/// Holding this lock while writing to the sink keeps replay and live output in order.
+struct Output {
+    ring: OutputRing,
+    sink: Option<Box<dyn TerminalSink>>,
+    /// `Some(code)` once the shell has exited.
+    exit: Option<Option<u32>>,
+}
+
 struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
     exited: Arc<AtomicBool>,
+    output: Arc<Mutex<Output>>,
+    principal: String,
+    as_user: Option<String>,
+    /// Open order, for listing and for evicting the oldest exited session.
+    seq: u64,
 }
 
-/// Open terminals by id.
+/// What `attach` tells the caller about the terminal it reattached to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachedTerminal {
+    pub principal: String,
+    pub as_user: Option<String>,
+    pub alive: bool,
+}
+
+/// Terminals by id: running shells and exited ones not yet closed.
 pub struct TerminalManager {
     program: TerminalProgram,
+    ring_bytes: usize,
     sessions: Mutex<HashMap<String, Session>>,
+    next_seq: AtomicU64,
 }
 
 impl TerminalManager {
     pub fn new(program: TerminalProgram) -> Self {
+        Self::with_ring_bytes(program, RING_BYTES)
+    }
+
+    /// A manager whose per-terminal ring holds `ring_bytes` (tests use a small one).
+    pub fn with_ring_bytes(program: TerminalProgram, ring_bytes: usize) -> Self {
         Self {
             program,
+            ring_bytes,
             sessions: Mutex::new(HashMap::new()),
+            next_seq: AtomicU64::new(0),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Session>> {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Make room for one more session: exited sessions go first, oldest first.
+    fn reserve_slot(&self) -> Result<(), AppError> {
+        let mut sessions = self.lock();
+        while sessions.len() >= MAX_TERMINALS {
+            let oldest_exited = sessions
+                .iter()
+                .filter(|(_, s)| s.exited.load(Ordering::SeqCst))
+                .min_by_key(|(_, s)| s.seq)
+                .map(|(id, _)| id.clone());
+            match oldest_exited {
+                Some(id) => {
+                    sessions.remove(&id);
+                }
+                None => return Err(AppError::unavailable("too_many_terminals")),
+            }
+        }
+        Ok(())
     }
 
     /// Start a shell and stream its output to `sink`. Returns the terminal id.
@@ -246,13 +414,7 @@ impl TerminalManager {
         req: &TerminalRequest<'_>,
         sink: Box<dyn TerminalSink>,
     ) -> Result<String, AppError> {
-        {
-            let mut sessions = self.lock();
-            sessions.retain(|_, s| !s.exited.load(Ordering::SeqCst));
-            if sessions.len() >= MAX_TERMINALS {
-                return Err(AppError::unavailable("too_many_terminals"));
-            }
-        }
+        self.reserve_slot()?;
         let size = PtySize {
             rows: req.rows.clamp(2, 500),
             cols: req.cols.clamp(10, 1000),
@@ -296,11 +458,18 @@ impl TerminalManager {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let exited = Arc::new(AtomicBool::new(false));
+        let output = Arc::new(Mutex::new(Output {
+            ring: OutputRing::new(self.ring_bytes),
+            sink: Some(sink),
+            exit: None,
+        }));
         let id = random_ref()?;
 
         let exited_flag = exited.clone();
-        thread::spawn(move || pump(reader, child, sink, exited_flag));
+        let pump_output = output.clone();
+        thread::spawn(move || pump(reader, child, pump_output, exited_flag));
 
+        let seq = self.next_seq.fetch_add(1, Ordering::SeqCst);
         self.lock().insert(
             id.clone(),
             Session {
@@ -309,9 +478,66 @@ impl TerminalManager {
                 killer,
                 pid,
                 exited,
+                output,
+                principal: req.principal.to_owned(),
+                as_user: req.as_user.map(str::to_owned),
+                seq,
             },
         );
         Ok(id)
+    }
+
+    /// Point a terminal's output at a new sink: the buffered output is replayed into it first
+    /// (and its exit, if the shell is gone), then live output follows with nothing lost or
+    /// repeated in between. The previous sink is dropped. Works for an exited terminal too.
+    pub fn attach(
+        &self,
+        id: &str,
+        mut sink: Box<dyn TerminalSink>,
+    ) -> Result<AttachedTerminal, AppError> {
+        let (output, mut attached) = {
+            let sessions = self.lock();
+            let session = sessions.get(id).ok_or_else(unknown)?;
+            (
+                session.output.clone(),
+                AttachedTerminal {
+                    principal: session.principal.clone(),
+                    as_user: session.as_user.clone(),
+                    alive: true,
+                },
+            )
+        };
+        let mut output = lock_output(&output);
+        if !output.ring.is_empty() {
+            sink.data(&output.ring.text());
+        }
+        if let Some(code) = output.exit {
+            sink.exit(code);
+            attached.alive = false;
+        }
+        output.sink = Some(sink);
+        Ok(attached)
+    }
+
+    /// Every session in the registry, oldest first.
+    pub fn list(&self) -> Vec<TerminalSummary> {
+        let sessions = self.lock();
+        let mut rows: Vec<(u64, TerminalSummary)> = sessions
+            .iter()
+            .map(|(id, s)| {
+                (
+                    s.seq,
+                    TerminalSummary {
+                        terminal_id: id.clone(),
+                        principal: s.principal.clone(),
+                        as_user: s.as_user.clone(),
+                        alive: !s.exited.load(Ordering::SeqCst),
+                    },
+                )
+            })
+            .collect();
+        rows.sort_by_key(|(seq, _)| *seq);
+        rows.into_iter().map(|(_, row)| row).collect()
     }
 
     /// Keyboard input from xterm.js.
@@ -342,8 +568,8 @@ impl TerminalManager {
             .map_err(|_| AppError::unavailable("terminal_resize_failed"))
     }
 
-    /// Hang up the shell (SIGHUP, then SIGKILL to its process group after a short grace).
-    /// Closing an unknown or already closed id succeeds.
+    /// Hang up the shell (SIGHUP, then SIGKILL to its process group after a short grace) and
+    /// forget the session. Closing an unknown or already closed id succeeds.
     pub fn close(&self, id: &str) {
         let session = self.lock().remove(id);
         if let Some(session) = session {
@@ -358,10 +584,12 @@ impl TerminalManager {
         }
     }
 
+    /// Shells still running.
     pub fn open_count(&self) -> usize {
-        let mut sessions = self.lock();
-        sessions.retain(|_, s| !s.exited.load(Ordering::SeqCst));
-        sessions.len()
+        self.lock()
+            .values()
+            .filter(|s| !s.exited.load(Ordering::SeqCst))
+            .count()
     }
 }
 
@@ -369,6 +597,10 @@ impl Drop for TerminalManager {
     fn drop(&mut self) {
         self.close_all();
     }
+}
+
+fn lock_output(output: &Mutex<Output>) -> MutexGuard<'_, Output> {
+    output.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn unknown() -> AppError {
@@ -406,9 +638,16 @@ fn hang_up(mut session: Session) {
 fn pump(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
-    mut sink: Box<dyn TerminalSink>,
+    output: Arc<Mutex<Output>>,
     exited: Arc<AtomicBool>,
 ) {
+    let deliver = |text: &str| {
+        let mut output = lock_output(&output);
+        output.ring.push(text);
+        if let Some(sink) = output.sink.as_mut() {
+            sink.data(text);
+        }
+    };
     let mut decoder = Utf8Chunker::default();
     let mut buf = [0u8; 8192];
     loop {
@@ -417,7 +656,7 @@ fn pump(
             Ok(n) => {
                 let text = decoder.push(&buf[..n]);
                 if !text.is_empty() {
-                    sink.data(&text);
+                    deliver(&text);
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -425,13 +664,18 @@ fn pump(
             Err(_) => break,
         }
     }
+    buf.zeroize();
     let rest = decoder.finish();
     if !rest.is_empty() {
-        sink.data(&rest);
+        deliver(&rest);
     }
     let code = child.wait().ok().map(|s| s.exit_code());
+    let mut output = lock_output(&output);
+    output.exit = Some(code);
     exited.store(true, Ordering::SeqCst);
-    sink.exit(code);
+    if let Some(sink) = output.sink.as_mut() {
+        sink.exit(code);
+    }
 }
 
 #[cfg(test)]
@@ -445,6 +689,8 @@ mod tests {
             bin_dir: bin,
             cols: 80,
             rows: 24,
+            principal: "agent-1",
+            as_user: None,
         }
     }
 
@@ -542,6 +788,43 @@ mod tests {
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
         assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
+    fn ring_keeps_the_newest_output_within_capacity() {
+        let mut ring = OutputRing::new(16);
+        ring.push("hello ");
+        ring.push("world");
+        assert_eq!(ring.text(), "hello world");
+        // Overflow cuts the oldest output, and the rest of the cut line with it.
+        ring.push("\nline two\n");
+        assert_eq!(ring.text(), "line two\n");
+        assert!(ring.len() <= 16);
+        // A single chunk larger than the ring keeps only its tail.
+        ring.push(&"x".repeat(40));
+        assert_eq!(ring.text(), "x".repeat(16));
+        let capacity = ring.buf.capacity();
+        for _ in 0..100 {
+            ring.push("0123456789");
+        }
+        assert!(ring.len() <= 16);
+        assert_eq!(ring.buf.capacity(), capacity, "the ring never reallocates");
+    }
+
+    #[test]
+    fn ring_cuts_only_at_character_boundaries() {
+        // 12 bytes into 10: the first character is dropped whole.
+        let mut ring = OutputRing::new(10);
+        ring.push("가나다라");
+        assert_eq!(ring.text(), "나다라");
+        ring.push("마");
+        assert_eq!(ring.text(), "다라마");
+        let mut ring = OutputRing::new(8);
+        ring.push("ab가나다");
+        assert_eq!(ring.text(), "나다");
+        let mut zero = OutputRing::new(0);
+        zero.push("x");
+        assert!(zero.is_empty());
     }
 
     #[test]

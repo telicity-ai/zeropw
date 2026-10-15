@@ -4,6 +4,9 @@
 //! - argv comes only from [`AdminArgs`]: fixed command words, `--flag=value` options (a value
 //!   can never be taken for an option) and pre-validated positionals. Secrets never go in argv.
 //! - Secrets travel in the stdin input envelope ([`Envelope`], §3.1), written once and closed.
+//! - Commands the app re-authenticates but the CLI would run without a passphrase carry the
+//!   hidden global `--require-admin` right after `--input-envelope` ([`AdminArgs::require_admin`]),
+//!   so zeropw-admin checks the envelope's admin passphrase before running them.
 //! - The environment is cleared; the child gets only `PATH=/usr/bin:/bin`, `HOME`,
 //!   `LANG=C.UTF-8` and `TMPDIR`, so no `ZEROPW_*` passphrase variable can leak in.
 //! - On success stdout is JSON; on failure the `{error, reason, detail}` line on stderr becomes
@@ -189,6 +192,7 @@ impl Envelope {
 pub struct AdminArgs {
     argv: Vec<String>,
     timeout: Option<Duration>,
+    require_admin: bool,
 }
 
 impl AdminArgs {
@@ -196,7 +200,20 @@ impl AdminArgs {
         Self {
             argv: words.iter().map(|w| (*w).to_owned()).collect(),
             timeout: None,
+            require_admin: false,
         }
+    }
+
+    /// Ask zeropw-admin to verify the envelope's admin passphrase before running a command
+    /// it would otherwise run without one (the hidden global `--require-admin`, placed right
+    /// after `--input-envelope`).
+    pub fn require_admin(mut self) -> Self {
+        self.require_admin = true;
+        self
+    }
+
+    pub fn requires_admin(&self) -> bool {
+        self.require_admin
     }
 
     /// `--name=value`. The value is checked (no control characters, bounded length); an
@@ -318,9 +335,11 @@ impl AdminRunner {
         state_dir_arg.push(self.state_dir.as_os_str());
 
         let mut cmd = Command::new(&self.admin_bin);
-        cmd.arg(state_dir_arg)
-            .arg("--input-envelope")
-            .args(args.argv())
+        cmd.arg(state_dir_arg).arg("--input-envelope");
+        if args.require_admin {
+            cmd.arg("--require-admin");
+        }
+        cmd.args(args.argv())
             .current_dir("/")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -500,6 +519,15 @@ mod tests {
             args.argv(),
             ["secret", "put", "--id=-rf", "--kind=api_key", "--stdin"]
         );
+    }
+
+    #[test]
+    fn require_admin_is_off_unless_asked_and_not_part_of_the_command() {
+        let plain = AdminArgs::command(&["resume"]);
+        assert!(!plain.requires_admin());
+        let strict = AdminArgs::command(&["resume"]).require_admin();
+        assert!(strict.requires_admin());
+        assert_eq!(strict.argv(), ["resume"]);
     }
 
     #[test]

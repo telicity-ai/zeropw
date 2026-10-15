@@ -53,6 +53,8 @@ fn open(
                 bin_dir,
                 cols: 80,
                 rows: 24,
+                principal: "agent-1",
+                as_user: None,
             },
             Box::new(Collect {
                 out: out.clone(),
@@ -85,6 +87,59 @@ fn the_token_is_in_the_environment_and_never_on_screen() {
     assert!(text.contains("term=xterm-256color"), "{text}");
     assert!(!text.contains(TOKEN), "token printed: {text}");
     assert!(wait_until(Duration::from_secs(2), || manager.open_count() == 0));
+    // The exited shell is still listed (not alive) for reattaching until it is closed.
+    let listed = manager.list();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].principal, "agent-1");
+    assert!(!listed[0].alive);
+}
+
+#[test]
+fn exited_terminals_give_way_when_the_registry_is_full() {
+    let manager = sh("echo bye");
+    let mut ids = Vec::new();
+    for _ in 0..8 {
+        let (id, _out, exit) = open(&manager, Path::new("/opt/zeropw-bundle"));
+        assert!(exit.recv_timeout(Duration::from_secs(10)).is_ok());
+        ids.push(id);
+    }
+    assert!(wait_until(Duration::from_secs(2), || manager.open_count() == 0));
+    assert_eq!(manager.list().len(), 8);
+    // A ninth terminal evicts the oldest exited one.
+    let (newest, _out, _exit) = open(&manager, Path::new("/opt/zeropw-bundle"));
+    let listed: Vec<String> = manager.list().into_iter().map(|t| t.terminal_id).collect();
+    assert_eq!(listed.len(), 8);
+    assert!(!listed.contains(&ids[0]));
+    assert_eq!(listed.last(), Some(&newest));
+
+    // Eight running shells fill the registry for real.
+    let busy = sh("while :; do sleep 1; done");
+    let running: Vec<String> = (0..8)
+        .map(|_| open(&busy, Path::new("/opt/zeropw-bundle")).0)
+        .collect();
+    let token = SecretString::from(TOKEN);
+    let refused = busy
+        .open(
+            &TerminalRequest {
+                gateway_url: "http://127.0.0.1:47380",
+                token: &token,
+                bin_dir: Path::new("/opt/zeropw-bundle"),
+                cols: 80,
+                rows: 24,
+                principal: "agent-1",
+                as_user: None,
+            },
+            Box::new(Collect {
+                out: Arc::new(Mutex::new(String::new())),
+                exit: mpsc::channel().0,
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(refused.reason, "too_many_terminals");
+    for id in running {
+        busy.close(&id);
+    }
+    assert!(busy.list().is_empty());
 }
 
 #[test]

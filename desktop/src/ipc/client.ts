@@ -69,11 +69,27 @@ export function useMockBackend(b: MockBackend | null): void {
   backend = b;
 }
 
+/** Commands whose `on_data` argument must reach the core as a Tauri `Channel<string>`. */
+const CHANNEL_COMMANDS: ReadonlySet<CommandName> = new Set<CommandName>(['terminal_open', 'terminal_attach']);
+
+/** In the app, `on_data` must be a real Channel (the core rejects anything else). A plain
+ *  `{onmessage}` sink, as the mock uses, is wrapped in one that forwards to it. */
+function withChannel(name: CommandName, input: Record<string, unknown>): Record<string, unknown> {
+  if (!CHANNEL_COMMANDS.has(name)) return input;
+  const sink = input.on_data;
+  if (sink instanceof Channel) return input;
+  const ch = new Channel<string>();
+  const forward = sink && typeof (sink as MockChannel).onmessage === 'function' ? (sink as MockChannel) : null;
+  ch.onmessage = (data) => forward?.onmessage(data);
+  return { ...input, on_data: ch };
+}
+
 export async function call<K extends CommandName>(name: K, ...args: CallArgs<K>): Promise<CommandOutput<K>> {
   const input = (args[0] ?? undefined) as CommandInput<K>;
   try {
     if (inDesktop()) {
-      return await invoke<CommandOutput<K>>(name, (input ?? {}) as Record<string, unknown>);
+      const payload = withChannel(name, (input ?? {}) as Record<string, unknown>);
+      return await invoke<CommandOutput<K>>(name, payload);
     }
     return await mockBackend().call(name, input);
   } catch (e) {
@@ -90,6 +106,20 @@ export function outputChannel(onMessage: (data: string) => void): unknown {
   }
   const sink: MockChannel = { onmessage: onMessage };
   return sink;
+}
+
+/** `terminal_open` with its output streamed to `onData` (xterm.js `write`). */
+export function terminalOpen(
+  input: { token_ref: string; as_user?: string },
+  onData: (data: string) => void,
+): Promise<CommandOutput<'terminal_open'>> {
+  return call('terminal_open', { ...input, on_data: outputChannel(onData) });
+}
+
+/** Reattach to a terminal that kept running: the buffered output is replayed into `onData`
+ *  first, then live output follows. */
+export function terminalAttach(terminal_id: string, onData: (data: string) => void): Promise<CommandOutput<'terminal_attach'>> {
+  return call('terminal_attach', { terminal_id, on_data: outputChannel(onData) });
 }
 
 /** Subscribe to a core event. Returns an unsubscribe function. */
