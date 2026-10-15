@@ -1,11 +1,12 @@
 {
   "identifier": "main-window",
-  "description": "The main window: Tauri's core defaults plus exactly the IPC commands of desktop/src/ipc/contract.ts. No plugin permissions (deep links, dialogs and the clipboard are used from Rust only).",
+  "description": "The main window: Tauri's core defaults, window dragging from the overlay title bar, plus exactly the IPC commands of desktop/src/ipc/contract.ts. No plugin permissions (deep links, dialogs and the clipboard are used from Rust only).",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "allow-app-status",
     "allow-password-strength",
     "allow-recovery-generate",

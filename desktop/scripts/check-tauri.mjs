@@ -8,8 +8,8 @@
 //   since Tauri's bare freezePrototype breaks @xterm/xterm (see checkFreezePrototype).
 // - The IPC surface is exactly desktop/src/ipc/contract.ts: the app manifest list in
 //   build.rs, the invoke handler and one snake_case command per entry in src-tauri/src, and
-//   a single capability for the main window holding core:default plus exactly the
-//   allow-<command> permissions.
+//   a single capability for the main window holding core:default, window dragging for the
+//   overlay title bar, plus exactly the allow-<command> permissions.
 // - No shell, fs, http or opener plugin is a direct dependency; no plugin is used from JS.
 // - No file under desktop/ (build outputs aside) contains a NUL byte or exceeds the review
 //   harness's 300,000-byte limit.
@@ -67,7 +67,7 @@ for (const key of Object.keys(security)) {
 if (conf.productName !== 'ZeroPW') fail('tauri.conf.json: productName must be ZeroPW');
 if (conf.identifier !== 'ai.telicity.zeropw') fail('tauri.conf.json: identifier must be ai.telicity.zeropw');
 if (conf.build?.frontendDist !== '../dist') fail('tauri.conf.json: build.frontendDist must be ../dist');
-if (conf.build?.devUrl !== 'http://localhost:5173') fail('tauri.conf.json: build.devUrl must be http://localhost:5173');
+if (conf.build?.devUrl !== 'http://localhost:1420') fail('tauri.conf.json: build.devUrl must be http://localhost:1420 (vite.config.ts server.port)');
 if (conf.bundle?.externalBin !== undefined) fail('tauri.conf.json: externalBin belongs in tauri.bundle.conf.json only');
 const bundleConf = json(join(tauriDir, 'tauri.bundle.conf.json'));
 if (!sameList(bundleConf.bundle?.externalBin ?? [], SIDECARS) || Object.keys(bundleConf).join() !== 'bundle' || Object.keys(bundleConf.bundle).join() !== 'externalBin') {
@@ -97,11 +97,11 @@ for (const key of Object.keys(cap)) {
 }
 const perms = cap.permissions ?? [];
 if (!perms.every((p) => typeof p === 'string')) fail('capabilities/default.json: permissions must be plain identifiers (no scoped entries)');
-const wantPerms = ['core:default', ...commands.map(permission)];
+const wantPerms = ['core:default', 'core:window:allow-start-dragging', ...commands.map(permission)];
 if (new Set(perms).size !== perms.length) fail('capabilities/default.json: duplicate permissions');
 const extra = perms.filter((p) => !wantPerms.includes(p));
 const missing = wantPerms.filter((p) => !perms.includes(p));
-if (extra.length) fail(`capabilities/default.json: permissions outside core:default and the contract: ${extra.join(', ')}`);
+if (extra.length) fail(`capabilities/default.json: permissions outside core:default, window dragging and the contract: ${extra.join(', ')}`);
 if (missing.length) fail(`capabilities/default.json: missing contract permissions: ${missing.join(', ')}`);
 
 // ---- build.rs manifest, handler and commands ----------------------------------------------
