@@ -109,7 +109,13 @@ export function mockStrength(p: string): { score: number; reason: string | null 
 interface MockTerminal {
   id: string; out: MockChannel | null; user: string; line: string; password: string | null; cols: number; rows: number; closed: boolean;
   timers: Set<ReturnType<typeof setTimeout>>; principal: string; asUser: string | null; ring: string; suggestions: string[];
+  /** While a foreground `sleep` runs the shell reads no input: it waits here, up to the core's limit. */
+  busyUntil: number; unread: string[]; unreadBytes: number;
 }
+/** desktop/core/src/terminal.rs: bytes per `terminal_write`, and input a terminal holds unread. */
+const MAX_WRITE_BYTES = 64 * 1024;
+const MAX_QUEUED_INPUT = 256 * 1024;
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret'; text: string; preview?: InvitePreview; principal?: string; expires: number }
 interface MockVersion { version: number; status: 'staged' | 'active' | 'retired' | 'revoked'; created_at: string; value: string; public: { public_key: string; fingerprint: string; algorithm: string } | null }
@@ -331,7 +337,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const id = 'term_' + randFrom(10, HEX);
     const list = `${BUNDLE}/zeropw-agent list-connections`;
     const suggestions = asUser ? [`sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u ${asUser} -i`, list] : [list];
-    const term: MockTerminal = { id, out: null, user: 'me', line: '', password: null, cols: 80, rows: 24, closed: false, timers: new Set(), principal, asUser, ring: '', suggestions };
+    const term: MockTerminal = {
+      id, out: null, user: 'me', line: '', password: null, cols: 80, rows: 24, closed: false, timers: new Set(), principal, asUser, ring: '', suggestions,
+      busyUntil: 0, unread: [], unreadBytes: 0,
+    };
     terminals.set(id, term);
     return term;
   }
@@ -358,6 +367,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!c) { termSend(term, prompt(term.user)); return; }
     const sudo = /^sudo\b.*\s-u\s+([A-Za-z0-9._-]+)\s+-i$/.exec(c);
     if (sudo) { term.password = sudo[1] ?? 'agent'; termSend(term, 'Password:', 200); return; }
+    // a foreground program that reads no input for a while (a build, an agent busy on a request)
+    const sleep = /^sleep\s+(\d{1,4})$/.exec(c);
+    if (sleep) {
+      term.busyUntil = Date.now() + Number(sleep[1]) * 1000;
+      if (latency > 0) {
+        const id = setTimeout(() => { term.timers.delete(id); readUnread(term); }, term.busyUntil - Date.now());
+        term.timers.add(id);
+      }
+      return;
+    }
     if (/(^|\/)zeropw-agent\s+list-connections$/.test(c)) {
       const visible = [...new Set(grants.filter((g) => g.principal === term.principal && grantLive(g)).map((g) => g.connection))];
       termSend(term, JSON.stringify({ connections: visible.map((id) => ({ id })) }) + '\r\n', 260);
@@ -371,15 +390,38 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const word = c.split(/\s+/)[0] ?? c;
     termSend(term, `zsh: command not found: ${word}\r\n` + prompt(term.user));
   }
+  /** The sleep is over: the shell prompts again and reads what waited, in order. */
+  function readUnread(term: MockTerminal) {
+    if (!term.busyUntil || Date.now() < term.busyUntil || term.closed) return;
+    term.busyUntil = 0;
+    termSend(term, prompt(term.user));
+    const waiting = term.unread;
+    term.unread = []; term.unreadBytes = 0;
+    for (const d of waiting) termWrite(term, d);
+  }
+  /** Input for a shell that is not reading waits, up to the core's limit (`terminal_busy`). */
+  function queueUnread(term: MockTerminal, data: string) {
+    const n = utf8Bytes(data);
+    if (term.unreadBytes + n > MAX_QUEUED_INPUT) throw fail('Unavailable', 'terminal_busy');
+    term.unread.push(data); term.unreadBytes += n;
+  }
   function termWrite(term: MockTerminal, data: string) {
     if (term.closed) return;
+    if (term.busyUntil) { queueUnread(term, data); return; }
     if (data.startsWith('\x1b')) return;                    // arrows and other escapes: ignored by this toy shell
-    for (const ch of data) {
-      if (ch === '\r' || ch === '\n') { const l = term.line; term.line = ''; runLine(term, l); }
-      else if (ch === '\x7f' || ch === '\b') { if (term.line) { term.line = term.line.slice(0, -1); if (term.password === null) termSend(term, '\b \b'); } }
-      else if (ch === '\x03') { term.line = ''; term.password = null; termSend(term, '^C\r\n' + prompt(term.user)); }
-      else if (ch >= ' ') { term.line += ch; if (term.password === null) termSend(term, ch); }
+    const chars = [...data];
+    let echo = '';                                          // typed text is echoed in one piece
+    const flush = () => { if (echo) { termSend(term, echo); echo = ''; } };
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i] as string;
+      // a command that stops reading leaves the rest of this input unread
+      if (term.busyUntil) { flush(); queueUnread(term, chars.slice(i).join('')); return; }
+      if (ch === '\r' || ch === '\n') { flush(); const l = term.line; term.line = ''; runLine(term, l); }
+      else if (ch === '\x7f' || ch === '\b') { if (term.line) { term.line = term.line.slice(0, -1); if (term.password === null) echo += '\b \b'; } }
+      else if (ch === '\x03') { flush(); term.line = ''; term.password = null; termSend(term, '^C\r\n' + prompt(term.user)); }
+      else if (ch >= ' ') { term.line += ch; if (term.password === null) echo += ch; }
     }
+    flush();
   }
   const channelOf = (on_data: unknown): MockChannel => {
     const out = on_data as MockChannel | undefined;
@@ -683,7 +725,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     terminal_write: ({ terminal_id, data }) => {
       const term = terminals.get(terminal_id);
       if (!term) throw fail('NotFound', 'terminal_not_found');
-      if (typeof data !== 'string' || data.length > 65536) throw fail('InvalidInput', 'data_invalid');
+      if (typeof data !== 'string') throw fail('InvalidInput', 'invalid_argument', 'data');
+      if (utf8Bytes(data) > MAX_WRITE_BYTES) throw fail('InvalidInput', 'terminal_write_too_large');
+      readUnread(term);
       termWrite(term, data);
     },
     terminal_resize: ({ terminal_id, cols, rows }) => {

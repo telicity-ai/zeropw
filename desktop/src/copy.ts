@@ -250,6 +250,7 @@ export const COPY = {
   'term.suggest': '제안 명령',
   'term.chip.aria': '{cmd} 입력',
   'term.closed': '터미널이 닫혔어요',
+  'term.busy': '프로그램이 입력을 읽지 않아 방금 입력한 내용을 보내지 못했어요',
   'term.err': '터미널을 열지 못했어요',
   'join.err.expired': '만료된 링크예요',
   'join.err.check': '링크를 확인하지 못했어요',
