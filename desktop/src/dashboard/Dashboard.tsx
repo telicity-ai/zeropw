@@ -148,7 +148,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   const [relayProblem, setRelayProblem] = useState<RelayProblem | null>(null);
   useEffect(() => { if (serve.running) setRelayProblem(null); }, [serve.running]);
   const reportRelay = useCallback((e: unknown) => {
-    const p = relayError(toIpcError(e).reason);
+    const p = relayError(toIpcError(e).reason, toIpcError(e).detail);
     setRelayProblem(p);
     toast(t(p.key, { reason: p.reason }), 'warn');
     announce(t(p.key, { reason: p.reason }));

@@ -83,7 +83,7 @@ export function CreateStep({ frame, sectionRef, created, initVault, startRelay, 
       field.setMode('create');
       field.set('scale', 1);
       if (k === RELAY) {
-        const why = relayError(toIpcError(e).reason);
+        const why = relayError(toIpcError(e).reason, toIpcError(e).detail);
         setFailedAt('relay'); setError('create.err.serve'); setRelayWhy(why);
         announce(`${t('create.err.serve')} ${t(why.key, { reason: why.reason })} ${t('create.relay.vaultOk')}`);
       } else if (kind === 'recovery_expired' || kind === 'recovery_weak') {

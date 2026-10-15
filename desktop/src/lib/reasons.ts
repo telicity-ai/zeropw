@@ -45,16 +45,19 @@ const TEAM_LISTEN = new Set(['team_invalid_listen_address', 'team_listen_failed'
 export const isTeamListenReason = (reason: string): boolean => TEAM_LISTEN.has(reason);
 
 /** `serve_start` failures (desktop/core/src/serve.rs). `serve_exited` is the generic code for a
- *  sidecar that exited without saying why. Unknown codes are shown as they are. */
+ *  sidecar that exited without saying why. When the sidecar could not open an address the core
+ *  passes its reason on with `detail` naming the setting: `gateway_port` (`listen_failed`) or
+ *  `team_listen`. Unknown codes are shown as they are. */
 const RELAY: Record<string, CopyKey> = {
   serve_exited: 'relay.err.exited',
+  listen_failed: 'relay.err.portBusy',
   serve_start_timeout: 'relay.err.timeout',
   admin_binary_missing: 'relay.err.missing',
   invalid_port: 'relay.err.port',
   invalid_listen: 'relay.err.listen',
 };
-export function relayError(reason: string): { key: CopyKey; reason: string } {
-  const key = isTeamListenReason(reason) ? 'relay.err.team' : RELAY[reason] ?? 'relay.err.other';
+export function relayError(reason: string, detail?: string): { key: CopyKey; reason: string } {
+  const key = isTeamListenReason(reason) || detail === 'team_listen' ? 'relay.err.team' : RELAY[reason] ?? 'relay.err.other';
   return { key, reason: /^[a-z0-9_]{1,64}$/.test(reason) ? reason : 'unknown' };
 }
 

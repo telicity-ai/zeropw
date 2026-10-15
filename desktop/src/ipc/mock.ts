@@ -26,7 +26,7 @@ export interface MockSeed {
   latency?: number;
   /** Emit a synthetic audit record now and then while the relay runs. */
   activity?: boolean;
-  /** The next n relay starts fail as when the port is taken (`serve_exited`), `vault_init` included. */
+  /** The next n relay starts fail as when the gateway port is taken (`listen_failed`, detail `gateway_port`), `vault_init` included. */
   relayFails?: number;
   /** Lifetime of one-time values other than revealed keys and previewed invites (the core keeps
    *  them 10 minutes). */
@@ -207,8 +207,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (p !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
   };
   const startServe = () => {
-    // a relay that cannot bind its port exits at once (desktop/core/src/serve.rs `serve_exited`)
-    if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'serve_exited'); }
+    // a relay that cannot bind its port exits at once; the core passes the sidecar's reason on
+    // with the setting that failed (desktop/core/src/serve.rs)
+    if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'listen_failed', 'gateway_port'); }
     // the sidecar opens other-device access before the gateway, so an address this machine does
     // not have stops the whole relay; the core passes the sidecar's reason on (rust/src/admin_cli.rs
     // `run_serve`, rust/src/team/transport.rs)

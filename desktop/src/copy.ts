@@ -582,6 +582,7 @@ export const COPY = {
   'relay.err.timeout': '중계기가 제때 켜지지 않았어요',
   'relay.err.missing': '중계기 실행 파일이 없어요. 앱을 다시 설치해 주세요',
   'relay.err.port': '중계기 포트를 확인해 주세요',
+  'relay.err.portBusy': '중계기 포트를 열지 못했어요. 다른 프로그램이 쓰고 있을 수 있어요',
   'relay.err.listen': '이 기기 주소를 확인해 주세요',
   'relay.err.other': '중계기를 켜지 못했어요 ({reason})',
   'relay.err.team': '다른 기기 접속 주소를 열지 못해 중계기를 켜지 못했어요',
