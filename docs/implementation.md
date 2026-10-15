@@ -245,6 +245,8 @@ $ zeropw-agent list-connections
 | 3 (§13 단계 3): 초대·가입·제거, 긴급 사실, CLI | `team/membership.rs`, `team/sync.rs`의 `Fact`/`facts.jsonl`, `admin_cli.rs`의 `team *`와 공유 환경의 `connection *`·`secret *`·`rotation *` | `team_membership_sync`, `astra_team_fact_catchup`, `astra_team_round2`~`4`, `native_team_cli` |
 | 4 (§13 단계 4): 사건 공유와 종단 시험 | `team/sync.rs`의 `send_incident`/`send_incident_for_all_envs`(`on_incident_open`)·`INCIDENT`/`INCIDENT_ACK`·`incident_outbox.jsonl`, `admin_cli.rs`의 `team incidents`, §7.2 `team_op_overridden` 알림(`team/fold.rs`의 감지 + `team/sync.rs`의 알림) | `team::sync` 단위 시험(정제·서명·admin 전용 전달·ack 큐잉·재시도), `astra_team_review`, `native_team_e2e`(별도 OS 프로세스 3개, §1 흐름 전체) |
 
+데스크톱 앱용 하루짜리 초대 링크([데스크톱 앱](desktop-app.md) §3.2)도 같은 `team/membership.rs`에 있다. 링크는 기존 초대 문자열을 `zeropw://join#`로 감쌀 뿐이라 와이어 형식은 그대로다. 미리보기와 가입은 `parse_invite_or_link`로 링크 모양, 주소 개수·길이·`HOST:PORT` 모양, 지문 형식, 만료 시각을 엄격하게 확인하고, 라이브러리의 `parse_invite`는 프로토타입과 같은 느슨한 문법을 유지한다. `invites.json` 항목에는 `created_at`, `revoked_at`, `used_at`, `used_by`가 선택 필드로 붙고, 쓰였거나 취소된 항목의 `wrapped_secret`은 지운다. 가입자 지문은 핸드셰이크의 초대 확인 콜백(`team/sync.rs`의 `invite_check`)에서 `consume_invite_by`로 넘긴다. CLI는 `team invite --link`, `team invites`, `team revoke-invite`, `team invite-info --stdin`, `team join --stdin`이고 시험은 `team_invite_link`다. 비밀번호·키 값·초대를 표준 입력의 JSON으로 받는 `--input-envelope`와 읽기 전용 `status`는 `admin_input_envelope`가 시험한다.
+
 `team_op_overridden` 알림은 같은 대상에 대한 연속된 성공 연산 사이의 작성자 전환을 `team/fold.rs`가 감지하고, `team/sync.rs`가 이 기기가 진 경우에만 재접기마다 중복 없이 한 번 알린다.
 
 ### 11.2 사건 공유 (§9)

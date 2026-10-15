@@ -2092,7 +2092,10 @@ impl TeamSync {
         );
     }
     fn invite_check(&self, env_id: &str, record: &DeviceRecord, hash: &[u8], proof: &[u8]) -> bool {
-        let Ok(info) = super::membership::consume_invite(&self.ctx, env_id, hash, proof) else {
+        let joiner = record.fingerprint();
+        let Ok(info) =
+            super::membership::consume_invite_by(&self.ctx, env_id, hash, proof, Some(&joiner))
+        else {
             return false;
         };
         let Some((role, name)) = info else {
@@ -2100,8 +2103,7 @@ impl TeamSync {
         };
         if let Ok(mut envs) = self.envs.lock() {
             if let Some(env) = envs.get_mut(env_id) {
-                env.pending_invites
-                    .insert(record.fingerprint(), (role, name));
+                env.pending_invites.insert(joiner, (role, name));
                 return true;
             }
         }
