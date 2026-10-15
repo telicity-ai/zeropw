@@ -251,8 +251,8 @@ def supplemental(package, supplement, packages, directory):
     note = (f'\nNo notice file is published with this package; it is used under {standard}. '
             + ('The copyright lines below were reviewed against upstream and precede the standard text. '
                if holders else 'Upstream names no copyright holder; the standard text follows. ')
-            + f'Reviewed: {entry["source"]} Authors in the package metadata: {authors or "none declared"}. '
-            f'Source repository: {repository}.\n')
+            + f'Reviewed: {entry["source"]} ' + (f'Authors in the package metadata: {authors}. ' if authors else '')
+            + f'Source repository: {repository}.\n')
     body = text.read_text(encoding='utf-8')
     if holders:
         return note, [(f'Copyright notice and {standard} license text', '\n'.join(holders) + '\n\n' + body)]

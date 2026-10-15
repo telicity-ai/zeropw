@@ -188,6 +188,12 @@ class DependencyLicenseTests(unittest.TestCase):
         self.assertIn('Authors in the package metadata: Synthetic Holder.', notices)
         self.assertNotIn('holder@example.invalid', notices)
         self.assertNotIn('none declared', notices)
+        metadata = json.loads(self.root.joinpath('metadata.json').read_text())
+        metadata['packages'][3]['authors'] = []
+        self.root.joinpath('metadata.json').write_text(json.dumps(metadata))
+        notices = self.run_ok('--include-development', '--supplement', str(self.root / 'reviewed/supplement.json'))
+        self.assertIn('Reviewed: LICENSE at the published commit. Source repository:', notices)
+        self.assertIn('    Copyright (c) Original Author\n', notices)
 
     def test_supplement_without_upstream_holder_is_refused_for_texts_that_need_one(self):
         for entry, message in (({'license': 'MIT', 'standard_text': 'MIT', 'source': 's', 'copyright': []},
