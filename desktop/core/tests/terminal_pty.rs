@@ -294,7 +294,14 @@ fn close_and_quit_stop_every_process_the_terminal_started() {
     for quit in [false, true] {
         let manager = TerminalManager::new(TerminalProgram::Program {
             path: PathBuf::from(bash),
-            args: vec!["--norc".into(), "--noprofile".into(), "-i".into()],
+            // `+H`: no history expansion, so the `$!` below is not rewritten from the history
+            // file of whoever runs the test (bash 3.2 on macOS expands `!"`).
+            args: vec![
+                "--norc".into(),
+                "--noprofile".into(),
+                "+H".into(),
+                "-i".into(),
+            ],
         });
         let (id, out, _exit) = open(&manager, Path::new("/opt/zeropw-bundle"));
         // A background job (its own process group), an orphan still on the terminal, and a
