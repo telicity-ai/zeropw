@@ -892,13 +892,26 @@ fn cli_join_reads_the_invite_from_stdin_and_checks_it_first() {
         .run();
     assert_eq!((code, out.as_str()), (1, ""));
     assert!(err.contains("invite_malformed"), "{err}");
-    // No team state was written for any refused invite.
-    assert!(!joiner.state.join("team").join("env_map.json").exists());
+    // No team state was written for any refused invite: no env mapping, no
+    // device key, no `team/` directory at all, and no team audit event.
+    let env_map = joiner.state.join(sync::ENVS_MAP_PATH);
+    let device_key = joiner.state.join(zeropw::team::identity::DEVICE_KEY_FILE);
+    assert!(!env_map.exists());
+    assert!(!device_key.exists());
+    assert!(!joiner.state.join("team").exists());
     assert!(
         !native_e2e::events(&joiner.state)
             .iter()
             .any(|event| event.starts_with("team_"))
     );
+    // Control: an invite that passes those checks gets as far as dialing
+    // (nothing listens on its address), and by then `team join` has written
+    // exactly the files checked above, so their absence was not vacuous.
+    let unreachable = crafted(json!({"addresses": [format!("127.0.0.1:{}", free_port())]}));
+    let failed = join(&[&unreachable]).fail(1);
+    assert_eq!(failed["reason"], "team_join_failed", "{failed}");
+    assert!(env_map.is_file());
+    assert!(device_key.is_file());
 }
 
 #[test]
