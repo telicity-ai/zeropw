@@ -4,8 +4,11 @@
     env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py \\
         --work-dir DIR --out-dir DIR [--tag vX.Y.Z]
 
-Run it on an Apple Silicon Mac that holds no vault, signing or notarization keys
-(docs/releasing.md, "Desktop app"). It:
+Run it on an Apple Silicon Mac account that holds no vault, gateway, signer, coordinator,
+signing, notarization or release-publishing credentials, or on a host the owner authorized for
+the release (docs/releasing.md, "Desktop app" and the release's owner decisions). It filters
+environment variables only; it does not keep build code away from the account's files, keychain
+or logged-in tools. It:
 
 1. refuses to start while a ZEROPW_* variable or any variable whose name contains TOKEN,
    SECRET, PASSW, PASSPHRASE, _KEY, AUTH, CSC_, P12 or APPLE_ (any case), or another signing,
