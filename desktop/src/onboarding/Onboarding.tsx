@@ -173,7 +173,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     call('team_join', { ref: join.ref, project: join.project, environment: join.environment }).then(
       () => { setJoinOutcome('ok'); field.ripple(0.08); },
       (e) => {
-        // a preview older than 10 minutes is gone from the core although the invite may be valid
+        // a preview older than 60 minutes is gone from the core although the invite may be valid
         const key = finaleJoinErrorKey(toIpcError(e).reason);
         setJoinOutcome('failed'); setJoinError(key); field.setPeerGhost(true);
         toast(t(key), 'warn');

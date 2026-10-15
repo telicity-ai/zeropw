@@ -12,7 +12,7 @@ export function invitePreviewErrorKey(reason: string): CopyKey {
   return INVITE_NOT_A_LINK.has(reason) ? 'join.err' : 'join.err.check';
 }
 
-/** The previewed invite is gone from the core: it keeps a preview for 10 minutes. */
+/** The previewed invite is gone from the core: it keeps a preview for 60 minutes. */
 export const isStaleRef = (reason: string): boolean => reason === 'onetime_ref_unknown' || reason === 'onetime_ref_invalid';
 
 /** `team_join` failures on the team page. */

@@ -42,7 +42,8 @@ describe('copy table', () => {
     const entries = [...block.matchAll(/^\s*'([^']+)':\s*'((?:[^'\\]|\\.)*)',?$/gm)].map((m) => [m[1] ?? '', m[2] ?? ''] as const);
     expect(entries.length).toBeGreaterThan(200);
     const dropped = new Set(['toast.dash', 'toast.file.mock', 'term.pw.mock']);
-    const changed = new Set(['join.local', 'toast.paste.mock']);
+    // changed after review: the core keeps a previewed invite 60 minutes (toast.join.later)
+    const changed = new Set(['join.local', 'toast.paste.mock', 'toast.join.later']);
     for (const [k, v] of entries) {
       if (dropped.has(k)) { expect(hasCopy(k)).toBe(false); continue; }
       expect(hasCopy(k), k).toBe(true);

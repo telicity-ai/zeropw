@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { hasCopy } from '../src/copy';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COPY, hasCopy } from '../src/copy';
 import { call, toIpcError, useMockBackend } from '../src/ipc/client';
-import { createMockBackend, type MockBackend } from '../src/ipc/mock';
+import { createMockBackend, INVITE_TTL_MS, type MockBackend } from '../src/ipc/mock';
 import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, relayError } from '../src/lib/reasons';
 import { holdSecureView, protectionOf } from '../src/ui/secure';
 
@@ -28,6 +28,30 @@ describe('invite reason codes', () => {
     expect(finaleJoinErrorKey('onetime_ref_unknown')).toBe('done.join.reopen');
     expect(finaleJoinErrorKey('invite_expired')).toBe('done.join.expired');
     expect(joinErrorKey('team_join_timeout')).toBe('join.err.failed');
+  });
+
+  it('keeps a previewed invite for an hour, long enough to make the vault first, and says so', async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 9, 15, 9, 0, 0) });
+    try {
+      backend = createMockBackend({ latency: 0 });
+      useMockBackend(backend);
+      const link = 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(8);
+      const kept = await call('team_invite_preview', { text: link });
+      const dropped = await call('team_invite_preview', { text: link });
+      const rec = await call('recovery_generate');
+      vi.setSystemTime(Date.now() + 9 * 60_000);                 // the recovery step can take most of 10 minutes
+      await call('vault_init', { admin_passphrase: 'Quiet-River-Lantern-82!', recovery: { ref: rec.ref } });
+      vi.setSystemTime(Date.now() + 40 * 60_000);                // 49 minutes after the preview
+      expect((await call('team_join', { ref: kept.ref, project: 'team-x', environment: 'shared' })).project).toBe('team-x');
+      vi.setSystemTime(Date.now() + 12 * 60_000);                // 61 minutes: gone from the core
+      const reason = await call('team_join', { ref: dropped.ref }).then(() => '', (e) => toIpcError(e).reason);
+      expect(finaleJoinErrorKey(reason)).toBe('done.join.reopen');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(INVITE_TTL_MS).toBe(60 * 60_000);
+    for (const k of ['toast.join.later', 'join.err.reopen', 'done.join.reopen'] as const) expect(COPY[k], k).toContain('1시간');
+    expect(Object.values(COPY).join('\n')).not.toContain('10분');
   });
 });
 

@@ -1,7 +1,8 @@
 // In-memory stand-in for the Tauri core, used only outside the desktop app (`npm run dev` in a
 // browser, and tests). Every value here is synthetic. It follows the contract and the real core
 // (desktop/core) and CLI (rust/) closely enough to review the onboarding and dashboard flows:
-// one-time references (32 hex digits, kinds, 10-minute and 60-second lifetimes), the core's
+// one-time references (32 hex digits, kinds, lifetimes of 60 seconds for a revealed key, 60
+// minutes for a previewed invite and 10 minutes for anything else), the core's
 // reason codes, the CLI's output shapes (versions and counts as JSON numbers, a grant's stored
 // status kept `active` after it expires or is used up), value-free errors and a small simulated
 // shell for the agent terminal. Where the contract's types still say otherwise, the mock follows
@@ -27,8 +28,11 @@ export interface MockSeed {
   activity?: boolean;
   /** The next n relay starts fail as when the port is taken (`serve_exited`), `vault_init` included. */
   relayFails?: number;
-  /** Lifetime of one-time values other than revealed keys (the core keeps them 10 minutes). */
+  /** Lifetime of one-time values other than revealed keys and previewed invites (the core keeps
+   *  them 10 minutes). */
   onetimeTtlMs?: number;
+  /** Lifetime of a previewed invite kept for `team_join` (the core keeps it 60 minutes). */
+  inviteTtlMs?: number;
   /** What `secure_view` answers: nothing (an older core), or whether the window is protected. */
   screenGuard?: 'void' | 'protected' | 'unprotected';
 }
@@ -72,6 +76,8 @@ const iso = (ms = Date.now()): string => new Date(ms).toISOString().replace(/\.\
 const HOUR = 3_600_000;
 const SECRET_TTL_MS = 60_000;
 const DEFAULT_TTL_MS = 10 * 60_000;
+/** A previewed invite stays long enough for a new device to make its vault before joining. */
+export const INVITE_TTL_MS = 60 * 60_000;
 
 /** Recovery codes compare in their canonical form (six groups, upper case, dashes). */
 function canonicalRecovery(v: string): string {
@@ -154,6 +160,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const callLog: CommandName[] = [];
   let relayFails = seed.relayFails ?? 0;
   const ttl = seed.onetimeTtlMs ?? DEFAULT_TTL_MS;
+  const inviteTtl = seed.inviteTtlMs ?? INVITE_TTL_MS;
   let adminPass: string | null = null;
   let recoveryCode: string | null = null;
   let initialized = false;
@@ -192,7 +199,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   // ---- one-time store: kinds, lifetimes and the core's reason codes
   const putOnce = (item: Omit<OneTime, 'expires'>): string => {
     const ref = newRef();
-    onetime.set(ref, { ...item, expires: Date.now() + (item.kind === 'secret' ? SECRET_TTL_MS : ttl) });
+    const life = item.kind === 'secret' ? SECRET_TTL_MS : item.kind === 'invite' ? inviteTtl : ttl;
+    onetime.set(ref, { ...item, expires: Date.now() + life });
     return ref;
   };
   const prune = () => { const now = Date.now(); for (const [k, v] of onetime) if (v.expires <= now) onetime.delete(k); };
@@ -860,7 +868,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     // desktop/core/src/commands.rs `team_invite_preview`: empty or overlong text is refused by the
     // core, anything that is not an invite by the CLI (`invite_malformed`); the text stays in the
-    // core for 10 minutes for `team_join`
+    // core for 60 minutes for `team_join`
     team_invite_preview: async ({ text }) => {
       const v = typeof text === 'string' ? text.trim() : '';
       if (!v) throw fail('InvalidInput', 'invite_missing');

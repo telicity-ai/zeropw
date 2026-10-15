@@ -225,7 +225,7 @@ export const COPY = {
   'toast.save.same': '저장했어요. 이 계정의 다른 프로그램도 읽을 수 있어요',
   'toast.share.done': '공유했어요. 에이전트 권한은 다시 승인하세요',
   'toast.listen.on': '접속을 켜고 중계기를 다시 시작했어요',
-  'toast.join.later': '보관함을 만든 뒤 바로 합류해요. 10분 안에 마쳐 주세요',
+  'toast.join.later': '보관함을 만든 뒤 바로 합류해요. 1시간 안에 마쳐 주세요',
   'toast.paste.mock': '시험용 예시 링크를 넣었어요',
 
   // ---- app (added for the desktop build, same voice as the table above)
@@ -567,8 +567,8 @@ export const COPY = {
   'rec.own.similar': '관리 비밀번호가 들어 있으면 안 돼요',
   'rec.verify.err': '{n}번째 묶음과 달라요',
   'rec.verify.need': '{n}번째 묶음을 넣어 주세요',
-  'join.err.reopen': '링크를 확인한 지 10분이 지났어요. 링크를 다시 넣어 주세요',
-  'done.join.reopen': '링크를 확인한 지 10분이 지났어요. 팀 화면에서 링크를 다시 넣어 주세요',
+  'join.err.reopen': '링크를 확인한 지 1시간이 지났어요. 링크를 다시 넣어 주세요',
+  'done.join.reopen': '링크를 확인한 지 1시간이 지났어요. 팀 화면에서 링크를 다시 넣어 주세요',
   'session.note': '이미 열린 SSH 세션과 끝난 작업은 되돌리지 않아요. 서버에서 세션을 끊으세요',
   'resume.err.incident': '처리 중인 사고가 있어요. 기록 화면에서 사고를 먼저 끝내 주세요',
   'relay.start': '켜기',
