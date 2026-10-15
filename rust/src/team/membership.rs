@@ -458,7 +458,7 @@ pub fn invite_string_of(text: &str) -> Result<&str> {
 }
 
 /// What `invalid_address` tells the inviter (no input is repeated).
-const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [fe80::1%en0]:47001";
+const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [2001:db8::5]:47001";
 
 fn is_host_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
@@ -468,8 +468,10 @@ fn is_host_name_byte(byte: u8) -> bool {
 /// [`MAX_ADDRESS_BYTES`], a port 1..=65535 in decimal, and a host name or
 /// IPv4 address of letters, digits, `.`, `-`, `_`, or a bracketed IPv6
 /// address (hex digits, `:` and `.`) with an optional zone of the same name
-/// characters (`[fe80::1%en0]`, `[fe80::1%2]`). The TCP dialer resolves every
-/// such form. [`create_invite_with`] stores only these addresses and
+/// characters (`[fe80::1%en0]`, `[fe80::1%2]`). This is a syntax rule: the
+/// dialer parses every such form, but a zone names an interface on the
+/// joining device, so a zoned link-local address only works where the joiner
+/// has an interface of that name on the same link. [`create_invite_with`] stores only these addresses and
 /// [`parse_invite_or_link`] accepts only these, so an invite this crate makes
 /// is never refused by its own `team join`; an unbracketed IPv6 address and
 /// surrounding whitespace are refused on both sides.
