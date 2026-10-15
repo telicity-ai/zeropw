@@ -5631,6 +5631,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "filedescriptor",
  "getrandom 0.2.17",
  "nix 0.30.1",
  "portable-pty",
