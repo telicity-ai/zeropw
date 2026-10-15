@@ -1449,9 +1449,10 @@ impl Core {
     }
 
     /// `team invite-info --stdin`: preview a pasted invite without any network use. The text
-    /// stays in Rust (one-time store, 10 minutes) for `team_join`. Previews have their own small
-    /// pool in the store; a new one drops the oldest, so links opened from outside the app
-    /// cannot fill the store.
+    /// stays in Rust (one-time store, 60 minutes, so an invitee can make a vault before
+    /// joining) for `team_join`, which removes it once the join succeeds. Previews have their
+    /// own pool of 16 in the store; a new one drops the oldest, so links opened from outside
+    /// the app cannot fill the store.
     pub fn team_invite_preview(
         &self,
         input: TeamInvitePreviewIn,

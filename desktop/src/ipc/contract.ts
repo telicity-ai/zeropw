@@ -124,6 +124,8 @@ export interface Commands {
   team_invite_create: [{ env: string; role: 'user' | 'admin'; name: string; address: string; admin_passphrase: string }, { invite_id: string; link_ref: string; expires_at: string; inviter: string }];
   team_invites: [{ env: string }, { env_id: string; invites: InviteListItem[] }];
   team_revoke_invite: [{ env: string; invite_id: string }, Record<string, unknown>];
+  /** The core keeps the invite behind `ref` for team_join for 60 minutes (at most 16, the
+   *  oldest dropped first) and forgets it once a join succeeds. */
   team_invite_preview: [{ text: string }, { ref: string; preview: InvitePreview }];
   team_join: [{ ref: string; project?: string; environment?: string }, { env_id: string; self_fingerprint: string; inviter_fingerprint: string; project: string; environment: string }];
 

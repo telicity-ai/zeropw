@@ -1,8 +1,9 @@
 //! [`OneTimeStore`] (docs/desktop-app.md §4.3): recovery codes, caller tokens, invite links,
 //! pasted invites and revealed secret values are held briefly in wiped buffers and handed out
 //! by random 128-bit references. Showing a value removes it. Revealed secrets live 60 s,
-//! everything else 10 minutes. Entries have a kind, so a reference minted for one purpose
-//! (a revealed value) can never be redeemed for another (a terminal token).
+//! pasted and deep-linked invites 60 minutes (an invitee previews the link first, then makes a
+//! vault, then joins), everything else 10 minutes. Entries have a kind, so a reference minted
+//! for one purpose (a revealed value) can never be redeemed for another (a terminal token).
 //!
 //! Capacity: at most [`MAX_ENTRIES`] values the app made (codes, tokens, links, revealed
 //! values), counting [`Reservation`]s. A command whose CLI call changes state and prints a
@@ -10,7 +11,8 @@
 //! reserves its slot before it runs the CLI, so a full store refuses it before anything
 //! happens instead of losing the value afterwards. Pasted and deep-linked invites have their
 //! own pool of [`MAX_INVITE_TEXTS`]; the oldest is dropped for a new one, so links opened from
-//! outside the app can never take the room the app's own values need.
+//! outside the app can never take the room the app's own values need. A joined invite is
+//! removed at once (`team_join`).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,6 +23,8 @@ use crate::error::AppError;
 use crate::secret::SecretString;
 
 pub const SECRET_TTL: Duration = Duration::from_secs(60);
+/// A pasted or deep-linked invite: long enough to preview it, make a vault and then join.
+pub const INVITE_TEXT_TTL: Duration = Duration::from_secs(60 * 60);
 pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);
 /// Values the app made, live or reserved.
 pub const MAX_ENTRIES: usize = 256;
@@ -46,6 +50,7 @@ impl OneTimeKind {
     pub fn ttl(self) -> Duration {
         match self {
             OneTimeKind::RevealedSecret => SECRET_TTL,
+            OneTimeKind::InviteText => INVITE_TEXT_TTL,
             _ => DEFAULT_TTL,
         }
     }
@@ -452,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn revealed_secrets_expire_after_60s_others_after_10min() {
+    fn revealed_secrets_expire_after_60s_invites_after_60min_others_after_10min() {
         let (store, clock) = store_with_clock();
         let secret = store
             .put(OneTimeKind::RevealedSecret, "synthetic-v".into())
@@ -460,15 +465,25 @@ mod tests {
         let token = store
             .put(OneTimeKind::CallerToken, "zpw_synthetic".into())
             .unwrap();
+        let invite = store
+            .put(OneTimeKind::InviteText, "zeropw://join#X".into())
+            .unwrap();
         clock.store(59, Ordering::SeqCst);
-        assert_eq!(store.len(), 2);
+        assert_eq!(store.len(), 3);
         clock.store(60, Ordering::SeqCst);
         assert!(store.take_showable(&secret).is_err());
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.len(), 2);
         clock.store(599, Ordering::SeqCst);
         assert!(store.peek_kind(&token, OneTimeKind::CallerToken).is_ok());
         clock.store(600, Ordering::SeqCst);
         assert!(store.take_showable(&token).is_err());
+        assert_eq!(store.len(), 1);
+        // A previewed invite outlives the 10 minutes: onboarding comes between it and joining.
+        clock.store(3599, Ordering::SeqCst);
+        assert!(store.contains_kind(&invite, OneTimeKind::InviteText));
+        clock.store(3600, Ordering::SeqCst);
+        assert!(!store.contains_kind(&invite, OneTimeKind::InviteText));
+        assert!(store.peek_kind(&invite, OneTimeKind::InviteText).is_err());
         assert!(store.is_empty());
     }
 
