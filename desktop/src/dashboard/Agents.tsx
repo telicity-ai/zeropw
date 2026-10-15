@@ -20,7 +20,7 @@ type AgentSheet =
   | { kind: 'grant'; principal?: string }
   | { kind: 'revoke'; grant: Grant }
   | { kind: 'disable'; id: string }
-  | { kind: 'end'; terminalId: string; principal: string }
+  | { kind: 'end'; terminalId: string; principal: string; asUser: string | null }
   | { kind: 'approve'; approval: ApprovalView };
 interface View { key: string; name: string; source: TerminalSource; terminalId: string | null }
 const TTL_LABEL: Record<GrantTtl, CopyKey> = { '1h': 'agent.ttl.1', '8h': 'agent.ttl.8', '24h': 'agent.ttl.24' };
@@ -163,7 +163,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
                 {t(shown ? 'term.hide' : 'term.attach')}
               </button>
               <button className="btn btn-text btn-sm" type="button" aria-label={t('term.end.aria', { id: x.principal })}
-                onClick={() => sheets.open({ kind: 'end', terminalId: x.terminal_id, principal: x.principal })}>{t('term.end')}</button>
+                onClick={() => sheets.open({ kind: 'end', terminalId: x.terminal_id, principal: x.principal, asUser: x.as_user })}>{t('term.end')}</button>
             </Row>
           );
         })}
@@ -208,6 +208,9 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
           if (!id) return;
           await call('principal_disable', { id }); toast(t('toast.agent.disabled')); sheets.close(); reload();
         }} />
+      {/* Ending a terminal stops what the app can reach. A program run as another account, or
+          detached with setsid, tmux or screen, can outlive it with its token; only disabling the
+          agent stops that token (docs/desktop-app.md §4.4). */}
       <ConfirmSheet key={sheets.key('end')} id="sheet-term-end" open={sheets.isOpen('end')} title={t('term.end.title')} lead={t('term.end.sub')}
         confirmLabel={t('term.end.confirm')} onClose={sheets.close} chips={[sheets.data('end')?.principal ?? '']}
         run={async () => {
@@ -216,7 +219,24 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
           await call('terminal_close', { terminal_id: x.terminalId });
           if (view?.terminalId === x.terminalId) setView(null);
           sheets.close(); reload();
-        }} />
+        }}>
+        {(() => {
+          const x = sheets.data('end');
+          if (!x) return null;
+          const active = !!d?.principals.some((p) => p.id === x.principal && p.status === 'active');
+          return (
+            <Callout kind="info">
+              {x.asUser ? t('term.end.note.other', { user: x.asUser }) : t('term.end.note')}
+              {active && (
+                <>
+                  {' '}
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'disable', id: x.principal })}>{t('agents.disable.title')}</button>
+                </>
+              )}
+            </Callout>
+          );
+        })()}
+      </ConfirmSheet>
       <ConfirmSheet key={sheets.key('approve')} id="sheet-approve" open={sheets.isOpen('approve')} title={t('appr.title')} lead={t('appr.sub')}
         confirmLabel={t('appr.confirm')} onClose={sheets.close} needPass
         errorFor={(e) => (toIpcError(e).reason === 'approval_not_pending' || toIpcError(e).reason === 'approval_not_found' ? 'appr.err.gone' : null)}
