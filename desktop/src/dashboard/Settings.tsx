@@ -193,8 +193,10 @@ export function SettingsPage() {
  *  data key again (rust/src/context.rs, rust/src/vault.rs `Vault::recover`), every agent
  *  permission is revoked and the handles rotate, and a backup made before it no longer restores
  *  (`backup_kms_mismatch`). It needs the current key file. It is not a response to a leaked key
- *  file: whoever holds the old file and a copy of the vault still has the data key, so the sheet
- *  says to replace every stored key and revoke it at its service. The code goes to the core once. */
+ *  file: whoever holds the old file and a copy of the vault still has the data key, and so can
+ *  read values stored in this vault later too (telicity-ai/zeropw#22). The sheet says to revoke
+ *  every key at its service and to start a new vault (remove the app data) for new keys. The code
+ *  goes to the core once. */
 function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): void; onDone(): void }) {
   const { toast } = useApp();
   const [code, setCode] = useState('');

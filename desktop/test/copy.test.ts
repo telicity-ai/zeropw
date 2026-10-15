@@ -84,7 +84,12 @@ describe('copy table', () => {
     }
     expect(COPY['set.recover.sub']).toContain('같은 데이터 키');
     expect(COPY['set.recover.leak']).toMatch(/새었을 수 있다면/);
-    expect(COPY['set.recover.leak']).toMatch(/서비스에서 예전 키를 폐기/);
+    expect(COPY['set.recover.leak']).toMatch(/서비스에서 키를 모두 폐기/);
+    // the same data key stays: values stored in this vault later are readable with the old key
+    // file too, so the advice is a fresh vault, never new values inside this one (zeropw#22)
+    expect(COPY['set.recover.leak']).toContain('나중에 넣는 키도');
+    expect(COPY['set.recover.leak']).toMatch(/앱 데이터를 지운 뒤 보관함을 새로 만들어/);
+    expect(COPY['set.recover.leak']).not.toMatch(/새 값으로 바꾸/);
     expect(COPY['set.recover.warn']).toContain('백업');
     expect(COPY['set.backup.help']).toContain('바꾼 기기 키');
     // ending a terminal cannot stop a program run as another account or detached from it; only
