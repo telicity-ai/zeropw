@@ -61,10 +61,29 @@ describe('copy table', () => {
       'grant.until': ['time'], 'grant.uses': ['n'], 'grant.usesOf': ['n', 'max'], 'grant.revoke.aria': ['conn'], 'grant.for.aria': ['id'],
       'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
       'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
+      'relay.err.other': ['reason'], 'toast.recovered': ['n'], 'appr.body.size': ['n'], 'rec.verify.err': ['n'], 'rec.verify.need': ['n'],
     };
     for (const [k, vars] of Object.entries(need)) {
       expect(hasCopy(k), k).toBe(true);
       for (const v of vars) expect(COPY[k as keyof typeof COPY], k).toContain(`{${v}}`);
+    }
+  });
+
+  it('claims only what the product does', () => {
+    const all = Object.values(COPY).join('\n');
+    // `recover` needs the existing device key file and only replaces it; a backup opens only with
+    // the device key that made it (rust/src/context.rs, rust/src/vault.rs)
+    expect(all).not.toMatch(/기기 키를 잃었을 때/);             // "기기 키를 잃었을 때"
+    expect(COPY['rec.warn']).toMatch(/열 수 없어요/);                         // losing the key file: the vault cannot be opened
+    expect(COPY['set.recover.warn']).toMatch(/회수/);                                     // the recover sheet says it revokes permissions
+    // a joined device syncs only with other-device access on
+    for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
+    // stop and revocation block new requests only; open SSH sessions are named as a limit
+    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub'] as const) expect(COPY[k]).toContain('새 ');
+    expect(COPY['session.note']).toContain('SSH');
+    // a key revoked or replaced in the vault still works at the service
+    for (const k of ['inc.close.note', 'team.remove.warn', 'toast.team.removed', 'toast.key.revoked', 'toast.key.replaced', 'keys.provider.note'] as const) {
+      expect(COPY[k], k).toContain('서비스');
     }
   });
 

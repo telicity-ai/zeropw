@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionView, Grant, Project, SecretView } from '../src/ipc/contract';
 import {
-  defaultMethodStates, envPairs, groupSecrets, interfaceLabel, inviteFraction, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText,
-  isSshHost, isSshUser, liveGrants, methodsPayload, msLeft, newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes,
-  parsePort, pendingApprovals, recordFields, recordSig, sortedVersions, splitEnv, summarizeConnection, valueText, writeConsequences,
+  blockText, countOf, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
+  newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
+  recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, summarizeConnection, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -102,10 +103,64 @@ describe('grants', () => {
     for (const bad of ['0', '-1', '1.5', 'ten', '1e3', '9999999999']) expect(parseMaxUses(bad).ok).toBe(false);
   });
 
-  it('shows only a principal’s active grants, latest expiry first', () => {
+  it('shows only a principal’s live grants, latest expiry first', () => {
+    const now = Date.parse('2026-10-15T00:00:00Z');
     const g = (id: string, principal: string, status: string, expires: string): Grant => ({ id, principal, connection: 'c', expires_at: expires, max_uses: null, uses: '0', status });
     const list = [g('a', 'p', 'active', '2026-10-15T01:00:00Z'), g('b', 'p', 'revoked', '2026-10-15T09:00:00Z'), g('c', 'p', 'active', '2026-10-15T05:00:00Z'), g('d', 'q', 'active', '2026-10-15T09:00:00Z')];
-    expect(liveGrants(list, 'p').map((x) => x.id)).toEqual(['c', 'a']);
+    expect(liveGrants(list, 'p', now).map((x) => x.id)).toEqual(['c', 'a']);
+  });
+
+  it('derives expired and used-up from time and uses, since the CLI keeps the stored status `active`', () => {
+    const now = Date.parse('2026-10-15T12:00:00Z');
+    // counts arrive as JSON numbers from the CLI; the contract still types them as text
+    const g = (expires: string | null, uses: unknown, max: unknown, status = 'active') =>
+      ({ id: 'g', principal: 'p', connection: 'c', expires_at: expires, uses, max_uses: max, status }) as unknown as Grant;
+    expect(grantState(g('2026-10-15T13:00:00Z', 3, null), now)).toBe('live');
+    expect(grantState(g('2026-10-15T11:59:59Z', 3, null), now)).toBe('expired');
+    expect(grantState(g('2026-10-15T12:00:00Z', 0, null), now)).toBe('expired');
+    expect(grantState(g('2026-10-15T13:00:00Z', 5, 5), now)).toBe('used');
+    expect(grantState(g('2026-10-15T13:00:00Z', '5', '5'), now)).toBe('used');
+    expect(grantState(g('2026-10-15T13:00:00Z', 4, 5), now)).toBe('live');
+    expect(grantState(g('2026-10-15T13:00:00Z', 1, null, 'revoked'), now)).toBe('revoked');
+    // without a readable expiry the grant is shown as live rather than hidden
+    expect(grantState(g(null, 0, null), now)).toBe('live');
+    expect(grantState(g('soon', 0, null), now)).toBe('live');
+    expect(liveGrants([g('2026-10-15T11:00:00Z', 0, null)], 'p', now)).toEqual([]);
+  });
+
+  it('reads counts as numbers or digit strings only', () => {
+    expect(countOf(3)).toBe(3);
+    expect(countOf(' 12 ')).toBe(12);
+    for (const bad of [null, undefined, '', 'x', '1.5', Number.NaN, Infinity, {}]) expect(countOf(bad)).toBeNull();
+  });
+});
+
+describe('stored keys for a connection', () => {
+  const s = (id: string, kind: SecretView['kind'], environment = 'dev', active: string | null = '1'): SecretView =>
+    ({ id, project: 'demo', environment, kind, active_version: active, versions: [] });
+  const secrets = [s('b-key', 'api_key'), s('a-env', 'env_var'), s('pw', 'password'), s('ssh', 'ssh_private_key'), s('other', 'api_key', 'prod'), s('none', 'api_key', 'dev', null)];
+
+  it('offers keys from the same environment that the connection type takes, with an active version', () => {
+    expect(keyChoices(secrets, 'demo/dev', 'http').map((x) => x.id)).toEqual(['a-env', 'b-key', 'pw']);
+    expect(keyChoices(secrets, 'demo/dev', 'ssh').map((x) => x.id)).toEqual(['ssh']);
+    expect(keyChoices(secrets, 'demo/prod', 'http').map((x) => x.id)).toEqual(['other']);
+    expect(keyChoices(secrets, 'demo/staging', 'http')).toEqual([]);
+  });
+
+  it('keeps the public half of a generated key from secret_put output', () => {
+    expect(publicKeyOf({ public_key: 'ssh-ed25519 AAAA deploy' })).toBe('ssh-ed25519 AAAA deploy');
+    expect(publicKeyOf({ id: 'x' })).toBeNull();
+    expect(publicKeyOf(null)).toBeNull();
+  });
+});
+
+describe('incident scope', () => {
+  it('a runtime incident stops everything when no active agent runs elsewhere', () => {
+    const p = (runtime: string, status = 'active') => ({ runtime, status });
+    expect(runtimeStopsAll([p('user-a'), p('user-a')], 'user-a')).toBe(true);
+    expect(runtimeStopsAll([p('user-a'), p('default', 'disabled')], 'user-a')).toBe(true);
+    expect(runtimeStopsAll([p('user-a'), p('default')], 'user-a')).toBe(false);
+    expect(runtimeStopsAll([], 'user-a')).toBe(true);
   });
 });
 
@@ -158,7 +213,32 @@ describe('records rendered as text', () => {
       { digest: 'd2', status: 'approved' }, { status: 'pending' }, { digest: 'd3', status: 'pending', path: { evil: true } },
     ]);
     expect(list.map((a) => a.digest)).toEqual(['d1', 'd3']);
-    expect(list[1]?.path).toBe('{"evil":true}');
+    expect(list[1]?.path).toBe('');                               // a path that is not text is not shown as one
+    expect(list[0]).toMatchObject({ target: '/v1/items', query: null, bodyBytes: null, bodyPreview: null, bodyTruncated: false });
+  });
+
+  it('shows everything an approval is bound to: full path, query, body size, type, hash and preview', () => {
+    const path = '/v1/transfers/' + 'segment/'.repeat(30) + 'confirm';
+    const [a] = pendingApprovals([{
+      digest: 'd', status: 'pending', caller: 'agent-1', connection: 'bank', method: 'POST', path, query: 'force=true', created_at: 't',
+      content_type: 'application/json', body_bytes: 31, body_sha256: 'ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+      body_preview: '{"amount":999999,\r\n"to":"x"}\u0007', body_preview_truncated: true, origin: 'https://bank.example.com:443',
+    }]);
+    expect(a?.path).toBe(path);                                   // not clipped at 160 characters
+    expect(a?.target).toBe(`${path}?force=true`);
+    expect(a?.bodyBytes).toBe(31);
+    expect(a?.bodyHash).toBe('abcd ef01 2345 6789');
+    expect(a?.bodyPreview).toBe('{"amount":999999,\n"to":"x"} ');  // line breaks kept, control characters gone
+    expect(a?.bodyTruncated).toBe(true);
+    expect(a?.contentType).toBe('application/json');
+    expect(a?.origin).toBe('https://bank.example.com:443');
+  });
+
+  it('removes bidirectional overrides so one request cannot look like another', () => {
+    expect(lineText('/v1/‮exe.txt')).toBe('/v1/exe.txt');
+    expect(blockText('a⁦b\tc\nd')).toBe('ab\tc\nd');
+    expect(lineText('x'.repeat(10_000)).length).toBe(8192);
+    expect(shortHash('nothex')).toBeNull();
   });
 });
 
@@ -178,5 +258,11 @@ describe('team helpers', () => {
   it('labels interfaces', () => {
     expect(interfaceLabel({ ip: '100.64.1.7', name: 'utun4', kind: 'vpn' })).toBe('100.64.1.7 · VPN');
     expect(interfaceLabel({ ip: '10.0.0.2', name: 'bridge0', kind: 'other' })).toBe('10.0.0.2 · bridge0');
+  });
+  it('picks a VPN address first for other-device access, then the LAN', () => {
+    expect(defaultListenIp([{ ip: '192.168.0.12', kind: 'lan' }, { ip: '100.64.1.7', kind: 'vpn' }])).toBe('100.64.1.7');
+    expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }, { ip: '192.168.0.12', kind: 'lan' }])).toBe('192.168.0.12');
+    expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }])).toBe('10.9.0.1');
+    expect(defaultListenIp([])).toBe('');
   });
 });

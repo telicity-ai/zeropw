@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { t } from './copy';
+import { t, type CopyKey } from './copy';
 import { Field } from './field/field';
 import { FieldLayer } from './field/FieldLayer';
-import { call, inDesktop, on } from './ipc/client';
+import { call, inDesktop, on, toIpcError } from './ipc/client';
 import { hostPort } from './lib/format';
 import type { AppStatus, InvitePreview } from './ipc/contract';
 import { Onboarding } from './onboarding/Onboarding';
@@ -24,6 +24,7 @@ export function App() {
   const win = useRef<HTMLDivElement>(null);
   const [motionOn, setMotionOn] = useState(field.motionOn);
   const [phase, setPhase] = useState<Phase>('loading');
+  const [failure, setFailure] = useState<CopyKey>('boot.failed');
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [startPage, setStartPage] = useState<PageId>('home');
   const [inFlow, setInFlow] = useState(false);
@@ -71,7 +72,12 @@ export function App() {
           setPhase('onboarding');
         }
       },
-      () => setPhase('failed'),
+      (e) => {
+        // a missing device key file cannot be recovered from: the recovery code only replaces a
+        // device key that is still there (rust/src/context.rs), so say what happened
+        setFailure(toIpcError(e).reason === 'kms_missing' ? 'boot.failed.kms' : 'boot.failed');
+        setPhase('failed');
+      },
     );
   }, []);
   useEffect(boot, [boot]);
@@ -103,7 +109,7 @@ export function App() {
         {phase === 'failed' && (
           <div className="boot" role="alert">
             <div>
-              <p>{t('boot.failed')}</p>
+              <p>{t(failure)}</p>
               <button className="btn btn-ghost btn-sm" type="button" onClick={boot}>{t('common.retry')}</button>
             </div>
           </div>

@@ -2,17 +2,20 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, interfaceLabel, envPairs, inviteFraction, msLeft, parseListen, parsePort, splitEnv } from '../lib/dash';
+import { DEFAULT_TEAM_PORT, defaultListenIp, interfaceLabel, envPairs, inviteFraction, msLeft, parseListen, parsePort, splitEnv } from '../lib/dash';
 import { shortTime } from '../lib/format';
+import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { Sigil } from '../ui/pixels';
-import { useSecureView } from '../ui/secure';
+import { useSecureGate } from '../ui/secure';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
+import { ListenSetup } from './ListenSetup';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
+import { turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type Incoming = { ref: string; preview: InvitePreview };
@@ -26,20 +29,12 @@ const NOT_SHARED = new Set(['team_env_not_found']);
 const INVITE_STATUS: Record<string, CopyKey> = { pending: 'st.pending', used: 'st.used', expired: 'st.expired', revoked: 'st.cancelled' };
 const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r === 'user' ? t('inv.role.user') : r);
 
-/** Restart the relay so a changed port or team address takes effect (the core keeps the old one
- *  until then). */
-export async function restartRelay(): Promise<void> {
-  const s = await call('serve_status');
-  if (s.running) await call('serve_stop');
-  await call('serve_start');
-}
-
 /** Team: share an environment, its members and invite links, and joining another device's team.
  *  Names, fingerprints and addresses written by other devices are rendered as text. */
 export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   intent?: Intent; onIntent(): void; incoming: Incoming | null; onIncomingTaken(): void;
 }) {
-  const { tick } = useDash();
+  const { tick, bump } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const reload = () => setN((x) => x + 1);
@@ -108,6 +103,11 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
               </div>
             </div>
           )}
+        {/* a shared environment syncs only while other-device access is on */}
+        {td?.shared && base.data && !parseListen(base.data.settings.team_listen) && (
+          <ListenSetup id="team-listen" settings={base.data.settings} interfaces={base.data.interfaces}
+            onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }} />
+        )}
       </div>
 
       {td?.shared && (
@@ -174,7 +174,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           toast(t('toast.team.removed'), 'warn'); sheets.close(); reload();
         }} />
       <JoinSheet key={sheets.key('join')} open={sheets.isOpen('join')} incoming={sheets.data('join')?.incoming ?? null}
-        onClose={sheets.close} onJoined={() => { sheets.close(); reload(); }} />
+        onClose={sheets.close} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
     </>
   );
 }
@@ -201,8 +201,9 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   onShare(): void; onChanged(): void; onClose(): void;
 }) {
   const { toast, field, announce } = useApp();
+  const { relay } = useDash();
   const listen = parseListen(settings?.team_listen);
-  const [ip, setIp] = useState(listen?.ip ?? interfaces[0]?.ip ?? '');
+  const [ip, setIp] = useState(listen?.ip ?? defaultListenIp(interfaces));
   const [port, setPort] = useState(String(listen?.port ?? DEFAULT_TEAM_PORT));
   const [role, setRole] = useState<Role>('user');
   const [name, setName] = useState('');
@@ -220,14 +221,17 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const shareBtn = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const now = useNow(!!made && open);
-  useSecureView(open && link !== null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  // the link is painted only once screen-capture protection is on
+  const linkVisible = useSecureGate(open && link !== null);
 
   const handedRef = useRef(handed);
   handedRef.current = handed;
 
-  useEffect(() => { if (!ip && interfaces[0]) setIp(interfaces[0].ip); }, [ip, interfaces]);
-  // closing drops a shown link from the screen at once
-  useEffect(() => { if (!open) { setLink(null); setPass(''); } }, [open]);
+  useEffect(() => { if (!ip && interfaces.length) setIp(defaultListenIp(interfaces)); }, [ip, interfaces]);
+  // closing drops a shown link and a typed passphrase at once
+  useClearOnClose(open, () => { setLink(null); setPass(''); });
   // a link nobody copied or looked at is dropped from the core too; the invite stays in the list
   // (pending until it expires) and can be cancelled there
   useEffect(() => {
@@ -241,13 +245,15 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
     if (p === null || !ip) { setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
     setListenBusy(true);
     try {
-      await call('settings_set', { gateway_port: settings?.gateway_port ?? 47380, team_listen: `${ip}:${p}` });
-      await restartRelay();
+      await turnOnListen(settings ?? await call('settings_get'), ip, p);
       toast(t('toast.listen.on')); field.ripple(0.05);
       onChanged();
       setTimeout(() => (shared ? nameRef.current : shareBtn.current)?.focus(), 60);
     } catch (e) {
-      setErrs({ listen: toIpcError(e).reason === 'invalid_listen' ? 'set.listen.port.err' : 'error.generic' });
+      const reason = toIpcError(e).reason;
+      if (reason === 'invalid_listen') setErrs({ listen: 'set.listen.port.err' });
+      else if (reason.startsWith('serve_') || reason === 'admin_binary_missing') { relay.report(e); onChanged(); }
+      else setErrs({ listen: 'error.generic' });
     } finally { setListenBusy(false); }
   };
 
@@ -294,11 +300,17 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
     if (!made || handed) return;
     try {
       const r = await call('onetime_show', { ref: made.link_ref });
-      setHanded('shown'); setLink(r.text);
-      announce(t('inv.link.shown'));
-      setTimeout(() => boxRef.current?.focus({ preventScroll: true }), 30);
+      setHanded('shown');
+      // a sheet closed while the core answered never keeps the link
+      if (openRef.current) setLink(r.text);
     } catch { toast(t('error.generic'), 'warn'); }
   };
+  useEffect(() => {
+    if (!linkVisible) return;
+    announce(t('inv.link.shown'));
+    const tm = setTimeout(() => boxRef.current?.focus({ preventScroll: true }), 30);
+    return () => clearTimeout(tm);
+  }, [linkVisible, announce]);
   const revoke = async () => {
     if (!made) return;
     try {
@@ -311,7 +323,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   };
 
   const left = made ? msLeft(made.expires_at, now) : 0;
-  const hash = link ? link.slice(link.indexOf('#') + 1) : '';
+  const hash = link && linkVisible ? link.slice(link.indexOf('#') + 1) : '';
 
   return (
     <Sheet id="sheet-invite" open={open} title={t('inv.title')} lead={t('inv.sub')} primaryLabel={t(made ? 'inv.done' : 'inv.create')} busy={busy}
@@ -365,9 +377,9 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
           <div className="invite-box" tabIndex={-1} role="region" aria-label={t('inv.title')} ref={boxRef}>
             <div className="sigil"><Sigil fp={made.inviter} /><span className="cap">{t('inv.picture')}</span></div>
             <div style={{ minWidth: 0 }}>
-              <div className={'link-line' + (link ? ' full' : '')}>
+              <div className={'link-line' + (hash ? ' full' : '')}>
                 <span className="scheme">zeropw://join#</span>
-                {link ? <span className="link-text">{hash}</span> : <span className="mask">{handed === 'revoked' ? t('st.cancelled') : handed === 'copied' ? t('inv.link.copied') : '••••••••••••'}</span>}
+                {hash ? <span className="link-text">{hash}</span> : <span className="mask">{handed === 'revoked' ? t('st.cancelled') : handed === 'copied' ? t('inv.link.copied') : '••••••••••••'}</span>}
               </div>
               <div className="fp-line">{formatFingerprint(made.inviter)}</div>
               <div className="ttl">
@@ -394,15 +406,20 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
 // ---------------------------------------------------------------- join
 
 /** Paste a link (or arrive from a zeropw://join link) → preview → explicit confirm. The preview
- *  is untrusted and shown as text; nothing joins until the button is pressed. */
-function JoinSheet({ open, incoming, onClose, onJoined }: { open: boolean; incoming: Incoming | null; onClose(): void; onJoined(): void }) {
-  const { desktop, toast, field } = useApp();
+ *  is untrusted and shown as text; nothing joins until the button is pressed. After joining, this
+ *  device syncs only with other-device access on, so the sheet offers to turn it on right there.
+ *  The pasted link leaves the sheet's state when the join is tried and when the sheet closes. */
+function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
+  open: boolean; incoming: Incoming | null; onClose(): void; onChanged(): void; onJoined(): void;
+}) {
+  const { desktop, toast, field, announce } = useApp();
   const [text, setText] = useState('');
   const [err, setErr] = useState<CopyKey | null>(null);
   const [held, setHeld] = useState<{ ref: string; preview: InvitePreview; fromLink: boolean } | null>(null);
   const [local, setLocal] = useState('');
   const [localErr, setLocalErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
+  const [joined, setJoined] = useState<{ settings: Settings; interfaces: NetInterface[] } | null>(null);
   const heldRef = useRef(held);
   heldRef.current = held;
   const seq = useRef(0);
@@ -423,12 +440,14 @@ function JoinSheet({ open, incoming, onClose, onJoined }: { open: boolean; incom
     hold({ ref: incoming.ref, preview: incoming.preview, fromLink: true });
   }, [incoming]); // a new deep link only
 
-  // the held reference is the core's; give it back when the sheet goes away without joining
-  useEffect(() => {
-    if (open) return;
+  // the held reference is the core's; give it back when the sheet goes away without joining, and
+  // drop the pasted link from the sheet's state
+  useClearOnClose(open, () => {
+    seq.current++;
+    setText('');
     const h = heldRef.current;
     if (h) { heldRef.current = null; call('onetime_discard', { ref: h.ref }).catch(() => undefined); }
-  }, [open]);
+  });
 
   const onLink = (v: string) => {
     setText(v);
@@ -444,8 +463,7 @@ function JoinSheet({ open, incoming, onClose, onJoined }: { open: boolean; incom
       },
       (e) => {
         if (k !== seq.current) return;
-        const reason = toIpcError(e).reason;
-        setErr(reason === 'invite_expired' ? 'join.err.expired' : reason === 'invite_invalid' ? 'join.err' : 'join.err.check');
+        setErr(invitePreviewErrorKey(toIpcError(e).reason));
         hold(null);
       },
     );
@@ -460,24 +478,50 @@ function JoinSheet({ open, incoming, onClose, onJoined }: { open: boolean; incom
   };
 
   const join = async () => {
+    if (joined) { onJoined(); return; }
     const h = heldRef.current;
     if (!h) { linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
     if (!parsed) { setLocalErr('join.local.err'); localRef.current?.focus(); return; }
     setBusy(true);
-    heldRef.current = null;   // the join call owns the reference now
+    seq.current++;
+    setText('');   // the core holds the invite behind the reference; the link is not needed any more
     try {
       await call('team_join', { ref: h.ref, project: parsed.project, environment: parsed.environment });
-      setHeld(null); setText('');
+      heldRef.current = null; setHeld(null);
       field.ripple(0.1);
-      toast(t('toast.join.done'));
-      onJoined();
+      // sync needs other-device access on this device (no team listener, no team sync)
+      const [s, i] = await Promise.all([
+        call('settings_get').catch(() => null),
+        call('net_interfaces').catch(() => [] as NetInterface[]),
+      ]);
+      if (s && !parseListen(s.team_listen)) {
+        setJoined({ settings: s, interfaces: i });
+        toast(t('toast.join.needListen'));
+        announce(t('team.joined.sub'));
+        onChanged();
+      } else {
+        toast(t('toast.join.done'));
+        onJoined();
+      }
     } catch (e) {
-      setHeld(null);
-      setErr(toIpcError(e).reason === 'invite_expired' ? 'join.err.expired' : 'join.err.failed');
+      const reason = toIpcError(e).reason;
+      // the core keeps a previewed invite until the join succeeds: a failed try can be repeated,
+      // unless the invite expired or the preview itself is gone
+      if (reason === 'invite_expired' || isStaleRef(reason)) { heldRef.current = null; setHeld(null); call('onetime_discard', { ref: h.ref }).catch(() => undefined); }
+      setErr(joinErrorKey(reason));
       linkRef.current?.focus();
     } finally { setBusy(false); }
   };
+
+  if (joined) {
+    return (
+      <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.joined.sub')} onClose={onJoined} closeLabel={t('sync.later')}>
+        <ListenSetup id="join-listen" settings={joined.settings} interfaces={joined.interfaces}
+          onDone={() => { toast(t('toast.listen.on')); onJoined(); }} />
+      </Sheet>
+    );
+  }
 
   const p = held?.preview;
   const addr = p ? (p.addresses[0] ?? '') + (p.addresses.length > 1 ? ' ' + t('join.pv.more', { n: p.addresses.length - 1 }) : '') : '';

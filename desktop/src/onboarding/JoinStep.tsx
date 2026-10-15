@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type Ref } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InvitePreview } from '../ipc/contract';
+import { invitePreviewErrorKey } from '../lib/reasons';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
 import { ri, useApp } from '../ui/context';
 import { Callout } from '../ui/form';
@@ -66,8 +67,7 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
       },
       (e) => {
         if (n !== seq.current) return;
-        const reason = toIpcError(e).reason;
-        setErr(reason === 'invite_expired' ? 'join.err.expired' : reason === 'invite_invalid' ? 'join.err' : 'join.err.check');
+        setErr(invitePreviewErrorKey(toIpcError(e).reason));
         hold(null);
       },
     );

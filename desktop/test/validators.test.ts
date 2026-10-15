@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  adminReady, adminRules, canonicalRecovery, defaultLocalName, formatCountdown, formatFingerprint, isAccountName, isInviteLink, isValidName,
-  meterCellsOn, meterLevel, parseLocalName, parseTarget, pickVerifySlots, recoveryOwnRules, runtimeFor, verifyRecoveryGroups,
+  adminReady, adminRules, canonicalRecovery, containsAdmin, defaultLocalName, formatCountdown, formatFingerprint, isAccountName, isInviteLink,
+  isValidName, meterCellsOn, meterLevel, parseLocalName, parseTarget, pickVerifySlots, RECOVERY_REF_TTL_MS, recoveryOwnRules, recoveryRefStale,
+  runtimeFor, verifyRecoveryGroups, verifyStates,
 } from '../src/lib/validators';
 import { counted, FULL, JOIN_FLOW, neighbour, progressOf } from '../src/onboarding/flow';
 
@@ -52,6 +53,18 @@ describe('recovery code confirmation', () => {
     expect(verifyRecoveryGroups(groups, [2, 2], ['IJKL', 'IJKL'])).toBe(false);
   });
   it('joins groups into the canonical code', () => expect(canonicalRecovery(groups)).toBe('ABCD-EFGH-IJKL-MNOP-QRST-UVWX'));
+  it('says per field what is wrong, so the error can sit under that field', () => {
+    expect(verifyStates(groups, [1, 4], ['efgh', 'QRST'])).toEqual([null, null]);
+    expect(verifyStates(groups, [1, 4], ['', 'QRSX'])).toEqual(['empty', 'wrong']);
+    expect(verifyStates(groups, [1, 4], ['0BCD', ' '])).toEqual(['wrong', 'empty']);
+  });
+  it('makes a generated code again before the core forgets it (10 minutes)', () => {
+    const t0 = 1_000_000;
+    expect(recoveryRefStale(t0, t0 + 60_000)).toBe(false);
+    expect(recoveryRefStale(t0, t0 + RECOVERY_REF_TTL_MS - 60_000)).toBe(false);
+    expect(recoveryRefStale(t0, t0 + RECOVERY_REF_TTL_MS - 30_000)).toBe(true);
+    expect(recoveryRefStale(t0, t0 + RECOVERY_REF_TTL_MS + 1)).toBe(true);
+  });
 });
 
 describe('passphrase rules', () => {
@@ -64,9 +77,18 @@ describe('passphrase rules', () => {
     expect(adminRules('가나다라마바사아', '가나다라마바사아', 3).len).toBe(true);
   });
   it('needs score 4 and a different value for a chosen recovery code', () => {
-    expect(recoveryOwnRules('long recovery words', 'long recovery words', 'admin pass', 4)).toEqual({ strong: true, match: true, same: false });
+    expect(recoveryOwnRules('long recovery words', 'long recovery words', 'admin pass', 4)).toEqual({ strong: true, match: true, same: false, similar: false });
     expect(recoveryOwnRules('long recovery words', 'long recovery words', 'admin pass', 3).strong).toBe(false);
     expect(recoveryOwnRules(' Admin Pass ', ' Admin Pass ', 'admin pass', 4)).toMatchObject({ strong: false, same: true });
+  });
+  it('refuses a chosen code that contains the admin passphrase, as the core scores it with that passphrase', () => {
+    const admin = 'Quiet-River-Lantern-82!';
+    // the finding's case: the UI's own score (without the admin passphrase) says 4, the core says weak
+    expect(recoveryOwnRules(`${admin}-spare-copy`, `${admin}-spare-copy`, admin, 4)).toMatchObject({ strong: false, similar: true });
+    expect(containsAdmin(`copy-${[...admin].reverse().join('')}`, admin)).toBe(true);
+    expect(containsAdmin('QUIET-RIVER-LANTERN-82!-x', admin)).toBe(true);
+    expect(containsAdmin('river lantern quiet', admin)).toBe(false);
+    expect(containsAdmin('abc', 'ab')).toBe(false);              // too short to mean anything
   });
   it('maps scores to meter levels and cells', () => {
     expect([0, 1, 2, 3, 4].map(meterLevel)).toEqual([1, 1, 2, 3, 4]);

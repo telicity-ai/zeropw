@@ -57,8 +57,13 @@ describe('mock onboarding flow', () => {
     expect((await rejection(call('project_create', { name: 'demo', environments: ['dev'] }))).reason).toBe('not_initialized');
     const init = await call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } });
     expect(init.kms_key_id).toMatch(/^kms-dev-/);
-    expect(b.inspect().onetime).toBe(0);                       // the recovery reference is used up
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('vault_exists');
+    expect(b.inspect().onetime).toBe(0);                       // the recovery reference is used up once `init` succeeded
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } }))).reason).toBe('onetime_ref_unknown');
+    // the state exists: `init` is refused as the CLI refuses it, and a fresh code is kept for a retry
+    const again = await call('recovery_generate');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: again.ref } }))).reason).toBe('state_exists');
+    expect(b.inspect().onetime).toBe(1);
+    await call('onetime_discard', { ref: again.ref });
 
     const serve = await call('serve_status');
     expect(serve.running).toBe(true);
@@ -73,7 +78,7 @@ describe('mock onboarding flow', () => {
     expect((await rejection(call('project_create', { name: 'Demo', environments: ['dev'] }))).reason).toBe('invalid_name');
 
     const agent = await call('principal_create', { id: 'agent-1', runtime: 'user-agent' });
-    expect(agent.token_ref).toMatch(/^ref_[0-9a-f]{32}$/);
+    expect(agent.token_ref).toMatch(/^[0-9a-f]{32}$/);         // 128 bits as the core makes them
     expect(JSON.stringify(agent)).not.toMatch(/zpwc_/);       // the token itself never comes back
     expect((await rejection(call('principal_create', { id: 'agent-1', runtime: 'default' }))).reason).toBe('principal_exists');
 
@@ -100,8 +105,12 @@ describe('mock onboarding flow', () => {
 
   it('accepts a chosen recovery code but not the admin passphrase again', async () => {
     fresh();
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: ` ${ADMIN.toLowerCase()} ` } }))).reason).toBe('recovery_same_as_admin');
-    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: 'ref_unknown' } }))).reason).toBe('onetime_ref_unknown');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: ` ${ADMIN.toLowerCase()} ` } }))).reason).toBe('passphrases_identical');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: 'ref_unknown' } }))).reason).toBe('onetime_ref_invalid');
+    expect((await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: '0'.repeat(32) } }))).reason).toBe('onetime_ref_unknown');
+    // the core scores a chosen code with the admin passphrase as a related input
+    const weak = await rejection(call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: `${ADMIN}-spare-copy` } }));
+    expect([weak.reason, weak.detail]).toEqual(['passphrase_weak', 'recovery']);
     await call('vault_init', { admin_passphrase: ADMIN, recovery: { typed: 'a different long recovery phrase' } });
     expect((await call('app_status')).initialized).toBe(true);
   });
@@ -118,8 +127,10 @@ describe('mock onboarding flow', () => {
 describe('mock join path', () => {
   it('previews without joining, then joins once after the vault exists', async () => {
     const b = fresh();
-    expect((await rejection(call('team_invite_preview', { text: 'zeropw://join#short' }))).reason).toBe('invite_invalid');
-    expect((await rejection(call('team_invite_preview', { text: 'https://example.com/#' + 'a'.repeat(100) }))).reason).toBe('invite_invalid');
+    expect((await rejection(call('team_invite_preview', { text: 'zeropw://join#short' }))).reason).toBe('invite_malformed');
+    expect((await rejection(call('team_invite_preview', { text: 'https://example.com/#' + 'a'.repeat(100) }))).reason).toBe('invite_malformed');
+    expect((await rejection(call('team_invite_preview', { text: '   ' }))).reason).toBe('invite_missing');
+    expect((await rejection(call('team_invite_preview', { text: 'zeropw://join#' + 'a'.repeat(5000) }))).reason).toBe('invite_too_long');
     const { ref, preview } = await call('team_invite_preview', { text: LINK });
     expect(preview.expired).toBe(false);
     expect(preview.inviter).toMatch(/^[A-Z2-7]{26}$/);
@@ -132,7 +143,7 @@ describe('mock join path', () => {
     await call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } });
     const joined = await call('team_join', { ref, project: 'team-x', environment: 'shared' });
     expect(joined).toMatchObject({ project: 'team-x', environment: 'shared', inviter_fingerprint: preview.inviter });
-    expect((await rejection(call('team_join', { ref }))).reason).toBe('invite_ref_unknown');
+    expect((await rejection(call('team_join', { ref }))).reason).toBe('onetime_ref_unknown');   // forgotten once joined
   });
 
   it('refuses an expired invite', async () => {

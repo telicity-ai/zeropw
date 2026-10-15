@@ -2,14 +2,14 @@ import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Incident, Principal } from '../ipc/contract';
-import { isPlainText, recordFields, valueText } from '../lib/dash';
+import { isPlainText, recordFields, runtimeStopsAll, valueText } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useDash, useLoad, useSheets } from './context';
+import { passErrorKey, useClearOnClose, useDash, useLoad, useSheets } from './context';
 import { ListCard, metaLine, Row, Tag } from './parts';
 import { Sheet } from './Sheet';
 
@@ -119,6 +119,9 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
   const passRef = useRef<HTMLInputElement>(null);
   const pick = who || principals[0]?.id || '';
   const rt = runtime || runtimes[0] || '';
+  // a runtime incident that covers every active agent stops everything, like the `all` scope
+  const stopsAll = scope === 'all' || (scope === 'runtime' && runtimeStopsAll(principals, rt));
+  useClearOnClose(open, () => setPass(''));
 
   const submit = async () => {
     const e: typeof errs = {};
@@ -167,9 +170,10 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
       <TextField id="inc-reason" label={t('inc.reason')} hint={t('inc.reason.hint')} value={reason} inputRef={reasonRef} maxLength={200}
         error={errs.reason ? t(errs.reason) : null} onChange={(v) => { setReason(v); setErrs((x) => ({ ...x, reason: undefined })); }} />
       <Callout>{t('inc.declare.warn')}</Callout>
+      {stopsAll && <Callout kind="info">{t('inc.all.note')}</Callout>}
+      <Callout kind="info">{t('session.note')}</Callout>
       {scope === 'all' && (
         <>
-          <Callout kind="info">{t('inc.all.note')}</Callout>
           <div style={{ marginTop: 16 }}>
             <PassField id="inc-pass" value={pass} inputRef={passRef} error={errs.pass ? t(errs.pass) : null}
               onChange={(v) => { setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />

@@ -47,9 +47,36 @@ export function groupSecrets(secrets: readonly SecretView[], projects: readonly 
     .map((g) => ({ ...g, secrets: g.secrets.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) }));
 }
 
+/** A secret version as the CLI printed it: a JSON number (or a numeric string). The UI shows it
+ *  as text and sends it back to the core unchanged. */
+export type VersionId = string | number;
+
 /** Versions newest first; the CLI prints them as numbers or numeric strings. */
 export function sortedVersions(s: SecretView): SecretView['versions'] {
   return s.versions.slice().sort((a, b) => Number(b.version) - Number(a.version));
+}
+
+/** Kinds of stored key the core accepts for each connection type (`secret_kind_mismatch`). */
+export const CONNECTION_KEY_KINDS: Record<'http' | 'ssh', readonly SecretView['kind'][]> = {
+  http: ['api_key', 'password', 'env_var'],
+  ssh: ['ssh_private_key'],
+};
+
+/** Stored keys a new connection in `env` can use: same project and environment, a kind the
+ *  connection type accepts and an active version. Sorted by id. */
+export function keyChoices(secrets: readonly SecretView[], env: string, type: 'http' | 'ssh'): SecretView[] {
+  const kinds = CONNECTION_KEY_KINDS[type];
+  return secrets
+    .filter((s) => envKey(String(s.project), String(s.environment)) === env && kinds.includes(s.kind)
+      && s.active_version !== null && s.active_version !== undefined && String(s.active_version) !== '')
+    .slice()
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** The public half of a generated SSH key in `secret_put` output, if there is one. */
+export function publicKeyOf(out: Record<string, unknown> | null | undefined): string | null {
+  const v = out?.public_key;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
 // ---------------------------------------------------------------- HTTP connection form
@@ -125,11 +152,43 @@ export function parseMaxUses(v: string): { ok: true; value: string | undefined }
 
 export const isActive = (status: string | null | undefined): boolean => status === 'active';
 
-/** Grants that still matter on the agents page: active ones first, newest expiry first. */
-export function liveGrants(grants: readonly Grant[], principal: string): Grant[] {
+/** A whole number from CLI output, which prints counts as JSON numbers (the contract types them as
+ *  strings); null for anything else. */
+export function countOf(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && /^\s*\d{1,15}\s*$/.test(v)) return Number(v);
+  return null;
+}
+
+export type GrantState = 'live' | 'expired' | 'used' | 'revoked' | 'other';
+
+/** What a grant means right now. The CLI keeps a grant's stored status `active` after it expires
+ *  or uses up its `max_uses`, so both are derived here from `expires_at` and `uses`/`max_uses`.
+ *  A grant without an expiry, or with one the UI cannot read, is not called expired: when in
+ *  doubt the page shows authority as live rather than hiding it. */
+export function grantState(g: Grant, now: number): GrantState {
+  if (g.status !== 'active') return g.status === 'revoked' ? 'revoked' : g.status === 'expired' ? 'expired' : 'other';
+  const exp = typeof g.expires_at === 'string' && g.expires_at ? Date.parse(g.expires_at) : NaN;
+  if (!Number.isNaN(exp) && exp <= now) return 'expired';
+  const max = countOf(g.max_uses), uses = countOf(g.uses);
+  if (max !== null && uses !== null && uses >= max) return 'used';
+  return 'live';
+}
+
+/** Grants that still give a principal access right now, latest expiry first. */
+export function liveGrants(grants: readonly Grant[], principal: string, now: number = Date.now()): Grant[] {
   return grants
-    .filter((g) => g.principal === principal && g.status === 'active')
+    .filter((g) => g.principal === principal && grantState(g, now) === 'live')
     .sort((a, b) => Date.parse(String(b.expires_at)) - Date.parse(String(a.expires_at)));
+}
+
+// ---------------------------------------------------------------- incidents
+
+/** An incident for this runtime also stops every relay and signature when no active principal
+ *  runs anywhere else (rust/src/incident.rs `runtime_covers_all_active`; vacuously true when no
+ *  principal is active). */
+export function runtimeStopsAll(principals: readonly { runtime: string; status: string }[], runtime: string): boolean {
+  return principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime);
 }
 
 // ---------------------------------------------------------------- connections (CLI output, untyped)
@@ -205,14 +264,63 @@ export function newRecordCount(prev: string | null, records: readonly AuditRecor
 
 // ---------------------------------------------------------------- approvals
 
-export interface ApprovalView { digest: string; caller: string; connection: string; method: string; path: string; created_at: string; status: string }
+// Text that decides an approval is shown in full (wrapped, not clipped), with control and
+// bidirectional formatting characters removed so one request cannot pass for another on screen.
+const BIDI = /[‎‏‪-‮⁦-⁩]/g;
+const APPROVAL_TEXT_MAX = 8192;
 
+/** One line of untrusted text, in full up to a generous limit. */
+export function lineText(v: unknown, max = APPROVAL_TEXT_MAX): string {
+  const s = typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : '';
+  const clean = s.replace(BIDI, '').replace(/[\x00-\x1f\x7f]+/g, ' ');
+  return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
+}
+
+/** Several lines of untrusted text (a request body preview): line breaks and tabs stay, every
+ *  other control or bidirectional formatting character goes. */
+export function blockText(v: unknown, max = APPROVAL_TEXT_MAX): string {
+  if (typeof v !== 'string') return '';
+  const clean = v.replace(BIDI, '').replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]+/g, ' ');
+  return clean.length > max ? clean.slice(0, max - 1) + '…' : clean;
+}
+
+/** First 16 hex digits of a SHA-256 in groups of four, to tell two similar requests apart. */
+export function shortHash(v: unknown): string | null {
+  if (typeof v !== 'string' || !/^[0-9a-f]{16,}$/i.test(v)) return null;
+  return (v.slice(0, 16).toLowerCase().match(/.{4}/g) ?? []).join(' ');
+}
+
+export interface ApprovalView {
+  digest: string; caller: string; connection: string; method: string;
+  /** The path without the query, in full. */
+  path: string;
+  /** The query string (without `?`), or null when the request had none. */
+  query: string | null;
+  /** `path?query` as the request was bound, in full. */
+  target: string;
+  created_at: string; status: string;
+  contentType: string | null; bodyBytes: number | null; bodyHash: string | null;
+  /** The start of a text body (the core keeps 256 characters), or null for none or binary. */
+  bodyPreview: string | null; bodyTruncated: boolean; origin: string | null;
+}
+
+/** Pending approvals with everything the core bound the approval to: the full path and query, the
+ *  body's size, type, hash and preview. Fields are read defensively and shown as text only. */
 export function pendingApprovals(list: readonly Record<string, unknown>[]): ApprovalView[] {
   return list
-    .map((a) => ({
-      digest: str(a.digest), caller: valueText(a.caller), connection: valueText(a.connection), method: valueText(a.method),
-      path: valueText(a.path), created_at: valueText(a.created_at), status: str(a.status),
-    }))
+    .map((a): ApprovalView => {
+      const path = lineText(a.path);
+      const query = typeof a.query === 'string' ? lineText(a.query) : null;
+      const preview = typeof a.body_preview === 'string' ? blockText(a.body_preview) : null;
+      return {
+        digest: str(a.digest), caller: valueText(a.caller), connection: valueText(a.connection), method: valueText(a.method),
+        path, query, target: query !== null ? `${path}?${query}` : path, created_at: valueText(a.created_at), status: str(a.status),
+        contentType: typeof a.content_type === 'string' && a.content_type ? lineText(a.content_type, 200) : null,
+        bodyBytes: countOf(a.body_bytes), bodyHash: shortHash(a.body_sha256),
+        bodyPreview: preview, bodyTruncated: a.body_preview_truncated === true,
+        origin: typeof a.origin === 'string' && a.origin ? lineText(a.origin, 300) : null,
+      };
+    })
     .filter((a) => a.digest && a.status === 'pending');
 }
 
@@ -230,6 +338,11 @@ export function parseListen(v: string | null | undefined): { ip: string; port: n
 }
 
 export const DEFAULT_TEAM_PORT = 47420;
+
+/** The address other devices most likely reach: a VPN address first, then the LAN. */
+export function defaultListenIp(interfaces: readonly { ip: string; kind: string }[]): string {
+  return (interfaces.find((i) => i.kind === 'vpn') ?? interfaces.find((i) => i.kind === 'lan') ?? interfaces[0])?.ip ?? '';
+}
 
 /** `100.64.1.7 · VPN` for the address picker; the interface name when the kind is unknown. */
 export const interfaceLabel = (i: { ip: string; name: string; kind: string }): string =>

@@ -7,18 +7,19 @@ import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { useDash, useLoad, useSheets } from './context';
+import { useClearOnClose, useDash, useLoad, useSheets } from './context';
 import { Empty, SectionHead } from './parts';
+import { restartRelay } from './relay';
 import { Sheet } from './Sheet';
-import { restartRelay } from './Team';
 
 type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
 const CANCELLED = new Set(['file_dialog_cancelled']);
 
 /** Settings: the relay port, this device's address for other devices, backup, restore and
- *  recovery with the recovery code. Files are picked in native dialogs owned by the core. */
+ *  replacing the device key with the recovery code. Files are picked in native dialogs owned by
+ *  the core. */
 export function SettingsPage() {
-  const { tick, bump, control } = useDash();
+  const { tick, bump, control, serve, relay } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
@@ -48,21 +49,34 @@ export function SettingsPage() {
     setTport((v) => v || String(listen?.port ?? DEFAULT_TEAM_PORT));
   }, [s, listen, ifaces]);
 
+  /** Restart the relay after a saved change; a relay that does not come back shows why. */
+  const restart = async (done: CopyKey) => {
+    try {
+      await restartRelay();
+      toast(t(done));
+    } catch (e) {
+      relay.report(e);
+    }
+    reload(); bump();
+  };
+
   const savePort = async () => {
     if (!s) return;
     const p = parsePort(port, MIN_GATEWAY_PORT);
     if (p === null) { setPortErr('set.port.err'); portRef.current?.focus(); return; }
-    if (p === s.gateway_port) return;
+    // the same port: nothing to save, but a relay that is off is started on it
+    if (p === s.gateway_port) { if (!serve.running && !relay.busy) void relay.start(); return; }
     setBusy('port');
     try {
       await call('settings_set', { gateway_port: p, team_listen: s.team_listen });
-      await restartRelay();
-      toast(t('toast.set.saved'));
-      reload(); bump();
     } catch (e) {
       setPortErr(toIpcError(e).reason === 'invalid_port' ? 'set.port.err' : 'error.generic');
       portRef.current?.focus();
-    } finally { setBusy(null); }
+      setBusy(null);
+      return;
+    }
+    await restart('toast.set.saved');
+    setBusy(null);
   };
 
   const setListen = async (on: boolean) => {
@@ -76,12 +90,13 @@ export function SettingsPage() {
     setBusy('listen');
     try {
       await call('settings_set', { gateway_port: s.gateway_port, team_listen: value });
-      await restartRelay();
-      toast(t(on ? 'toast.listen.on' : 'toast.listen.off'));
-      reload(); bump();
     } catch (e) {
       setTErr(toIpcError(e).reason === 'invalid_listen' ? 'set.listen.port.err' : 'error.generic');
-    } finally { setBusy(null); }
+      setBusy(null);
+      return;
+    }
+    await restart(on ? 'toast.listen.on' : 'toast.listen.off');
+    setBusy(null);
   };
 
   const backup = async () => {
@@ -132,7 +147,7 @@ export function SettingsPage() {
       </div>
 
       <SectionHead title={t('set.backup')} />
-      <p className="page-help">{t('done.backup')}</p>
+      <p className="page-help">{t('set.backup.help')}</p>
       <div className="glass pad">
         {control.restore_pending && (
           <Callout className="flush">
@@ -157,34 +172,39 @@ export function SettingsPage() {
       <ConfirmSheet key={sheets.key('ack')} id="sheet-ack" open={sheets.isOpen('ack')} title={t('set.ack.title')} lead={t('set.ack.sub')}
         confirmLabel={t('set.ack.confirm')} needPass onClose={sheets.close}
         run={async (pass) => {
-          await call('restore_ack', { admin_passphrase: pass });
-          toast(t('toast.ack.done')); sheets.close(); bump();
+          const out = await call('restore_ack', { admin_passphrase: pass });
+          // restore-ack lifts only the restore hold; a global stop stays until it is resumed
+          toast(t(out.stopped === true ? 'toast.ack.stopped' : 'toast.ack.done'), out.stopped === true ? 'warn' : 'info'); sheets.close(); bump();
         }} />
       <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); bump(); }} />
     </>
   );
 }
 
-/** Recovery with the recovery code: only for a lost device key. The code goes to the core once. */
+/** The recovery code replaces the device key with a new one (`recover`): for a device key that
+ *  may have leaked. It needs the current device key file, revokes every agent permission and
+ *  rotates the handles, so the sheet says so before anything runs. The code goes to the core once. */
 function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): void; onDone(): void }) {
   const { toast } = useApp();
   const [code, setCode] = useState('');
   const [err, setErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (!open) setCode(''); }, [open]);
+  useClearOnClose(open, () => setCode(''));
 
   const go = async () => {
     if (!code.trim()) { setErr('set.recover.empty'); ref.current?.focus(); return; }
     setBusy(true);
     try {
-      await call('recover', { recovery_passphrase: code });
+      const out = await call('recover', { recovery_passphrase: code });
       setCode('');
-      toast(t('toast.recovered'));
+      const n = out.grants_revoked;
+      toast(typeof n === 'number' ? t('toast.recovered', { n }) : t('toast.recovered.any'), 'warn');
       onDone();
     } catch (e) {
       setCode('');
-      setErr(toIpcError(e).error === 'AuthFailed' ? 'set.recover.err' : 'error.generic');
+      const ipc = toIpcError(e);
+      setErr(ipc.error === 'AuthFailed' ? 'set.recover.err' : ipc.reason === 'kms_missing' ? 'set.recover.noKey' : 'error.generic');
       ref.current?.focus();
     } finally { setBusy(false); }
   };
@@ -194,7 +214,7 @@ function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): voi
       onPrimary={() => void go()} onClose={onClose}>
       <TextField id="recover-code" label={t('rec.own.field')} type="password" mono value={code} inputRef={ref} placeholder="ABCD-EFGH-…"
         error={err ? t(err) : null} onChange={(v) => { setCode(v); setErr(null); }} />
-      <Callout>{t('rec.warn')}</Callout>
+      <Callout>{t('set.recover.warn')}</Callout>
     </Sheet>
   );
 }

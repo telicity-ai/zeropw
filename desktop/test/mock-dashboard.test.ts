@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
+import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
+import { relayError } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
 // rules the pages rely on: values never come back except through one-time references, the admin
@@ -14,7 +16,7 @@ async function rejection(p: Promise<unknown>): Promise<IpcError> {
   try { await p; } catch (e) { return toIpcError(e); }
   throw new Error('expected a rejection');
 }
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise<void>((r) => setTimeout(r, 0)); };
 
 let backend: MockBackend | null = null;
 function ready(): MockBackend {
@@ -45,7 +47,7 @@ describe('keys', () => {
     const r = await call('secret_reveal', { id: 'my-key', admin_passphrase: PASS });
     expect(JSON.stringify(r)).not.toContain(value);
     expect((await call('onetime_show', { ref: r.ref })).text).toBe(value);
-    expect((await rejection(call('onetime_show', { ref: r.ref }))).reason).toBe('onetime_unknown');
+    expect((await rejection(call('onetime_show', { ref: r.ref }))).reason).toBe('onetime_ref_unknown');
   });
 
   it('replaces a value: the new version is active, the old one retired, and retiring the active one is refused', async () => {
@@ -53,8 +55,9 @@ describe('keys', () => {
     await call('secret_put', { id: 'rot', kind: 'password', project: 'demo', environment: 'prod', source: { typed: 'first' } });
     await call('secret_put', { id: 'rot', kind: 'password', project: 'demo', environment: 'prod', source: { typed: 'second' } });
     const v = await call('secret_versions', { id: 'rot' });
-    expect(v.active_version).toBe('2');
-    expect(v.versions.map((x) => [x.version, x.status])).toEqual([['1', 'retired'], ['2', 'active']]);
+    // versions are JSON numbers, as the CLI prints them
+    expect(v.active_version as unknown).toBe(2);
+    expect(v.versions.map((x) => [x.version, x.status])).toEqual([[1, 'retired'], [2, 'active']]);
     expect((await rejection(call('secret_retire', { id: 'rot', version: '2' }))).reason).toBe('version_is_active');
     expect((await rejection(call('secret_put', { id: 'rot', kind: 'api_key', project: 'demo', environment: 'prod', source: { typed: 'x' } }))).reason)
       .toBe('secret_identity_mismatch');
@@ -63,7 +66,8 @@ describe('keys', () => {
   it('refuses to reveal a revoked version', async () => {
     ready();
     await call('secret_put', { id: 'gone', kind: 'env_var', project: 'demo', environment: 'staging', source: { typed: 'v' } });
-    await call('secret_revoke', { id: 'gone', version: '1' });
+    const out = await call('secret_revoke', { id: 'gone', version: '1' });
+    expect(out).toMatchObject({ secret_id: 'gone', version: 1, status: 'revoked', provider_revocation_required: true });
     expect((await rejection(call('secret_reveal', { id: 'gone', version: '1', admin_passphrase: PASS }))).reason).toBe('version_revoked');
   });
 
@@ -118,7 +122,7 @@ describe('connections', () => {
     await call('secret_put', { id: 'git', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
     const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', admin_passphrase: PASS };
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB'] }))).reason).toBe('unsupported_host_key');
-    expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('ssh_host_keys_required');
+    expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('host_key_required');
     const c = await call('connection_create_ssh', { ...ssh, host_keys: [HOST_KEY] });
     expect(c.kind).toBe('ssh');
   });
@@ -132,7 +136,7 @@ describe('agents, grants, terminals and approvals', () => {
     expect((await rejection(call('grant_create', { principal: 'agent-1', connection: 'example-api', ttl: '8h', max_uses: '0', admin_passphrase: PASS }))).reason)
       .toBe('invalid_argument');
     const g = await call('grant_create', { principal: 'agent-1', connection: 'example-api', ttl: '8h', max_uses: '5', admin_passphrase: PASS });
-    expect(g).toMatchObject({ principal: 'agent-1', connection: 'example-api', max_uses: '5', status: 'active' });
+    expect(g).toMatchObject({ principal: 'agent-1', connection: 'example-api', max_uses: 5, uses: 0, status: 'active' });   // counts as JSON numbers
     expect(Date.parse(g.expires_at) - Date.now()).toBeGreaterThan(7.9 * 3600_000);
     expect((await call('grant_list', { principal: 'agent-1' })).grants.some((x) => x.id === g.id)).toBe(true);
     expect((await call('grant_revoke', { id: g.id })).status).toBe('revoked');
@@ -166,8 +170,8 @@ describe('agents, grants, terminals and approvals', () => {
     ready();
     const a = await call('principal_create', { id: 'agent-c', runtime: 'default' });
     expect((await call('onetime_copy', { ref: a.token_ref })).copied).toBe(true);
-    expect((await rejection(call('onetime_copy', { ref: a.token_ref }))).reason).toBe('onetime_unknown');
-    expect((await rejection(call('terminal_open', { token_ref: a.token_ref, on_data: outputChannel(() => undefined) }))).reason).toBe('token_ref_unknown');
+    expect((await rejection(call('onetime_copy', { ref: a.token_ref }))).reason).toBe('onetime_ref_unknown');
+    expect((await rejection(call('terminal_open', { token_ref: a.token_ref, on_data: outputChannel(() => undefined) }))).reason).toBe('onetime_ref_unknown');
   });
 
   it('approves a pending request once, with the admin passphrase', async () => {
@@ -249,7 +253,7 @@ describe('team', () => {
     expect(Date.parse(inv.expires_at) - Date.now()).toBeGreaterThan(23.9 * 3600_000);
     const shown = await call('onetime_show', { ref: inv.link_ref });
     expect(shown.text).toMatch(/^zeropw:\/\/join#[a-z2-7]{80,}$/);
-    expect((await rejection(call('onetime_copy', { ref: inv.link_ref }))).reason).toBe('onetime_unknown');
+    expect((await rejection(call('onetime_copy', { ref: inv.link_ref }))).reason).toBe('onetime_ref_unknown');
     const list = await call('team_invites', { env: 'demo/dev' });
     expect(list.invites).toHaveLength(1);
     expect(list.invites[0]).toMatchObject({ invite_id: inv.invite_id, status: 'pending', link: true });
@@ -265,7 +269,7 @@ describe('team', () => {
     ready();
     const link = 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(4);
     const { ref, preview } = await call('team_invite_preview', { text: link });
-    expect((await rejection(call('onetime_show', { ref }))).reason).toBe('onetime_unknown');   // a pasted invite stays in the core
+    expect((await rejection(call('onetime_show', { ref }))).reason).toBe('onetime_ref_unknown');   // a pasted invite stays in the core
     const joined = await call('team_join', { ref, project: 'team-x', environment: 'shared' });
     expect(joined.inviter_fingerprint).toBe(preview.inviter);
     expect((await call('team_members', { env: 'team-x/shared' })).members.map((m) => m.owner)).toEqual([true, false]);
@@ -284,17 +288,159 @@ describe('settings and window protection', () => {
     expect(s).toMatchObject({ running: true, url: 'http://127.0.0.1:48000', team_listen: '100.64.1.7:47420' });
   });
 
-  it('turns window protection on while any holder needs it', async () => {
+  it('turns window protection on before a hold is ready and keeps it while any holder needs it', async () => {
     const b = ready();
-    const r1 = holdSecureView(), r2 = holdSecureView();
-    await tick();
+    const h1 = holdSecureView(), h2 = holdSecureView();
+    expect(b.inspect().secureView).toBe(false);                 // nothing is on yet: a value must wait
+    await h1.ready;
+    expect(b.inspect().secureView).toBe(true);                  // ready only once the core applied it
+    h1.release(); h1.release();                                 // releasing twice counts once
+    await settle();
     expect(b.inspect().secureView).toBe(true);
-    r1(); r1();                                               // releasing twice counts once
-    await tick();
-    expect(b.inspect().secureView).toBe(true);
-    r2();
-    await tick();
+    h2.release();
+    await settle();
     expect(b.inspect().secureView).toBe(false);
     expect(secureViewHolders()).toBe(0);
+  });
+
+  it('sends on and off in order, so a quick release and hold ends protected', async () => {
+    const b = ready();
+    const first = holdSecureView();
+    await first.ready;
+    first.release();                                            // queues "off"
+    const second = holdSecureView();                            // queues "on" after it
+    await second.ready;
+    await settle();
+    expect(b.inspect().secureView).toBe(true);
+    second.release();
+    await settle();
+    expect(b.inspect().secureView).toBe(false);
+  });
+});
+
+// ---- the shapes the real core sends (desktop/core passes the CLI's JSON through), fed back the
+// way the pages feed them back
+
+describe('versions as the CLI prints them', () => {
+  it('reveals, retires and revokes with the version exactly as listed (a number)', async () => {
+    ready();
+    await call('secret_put', { id: 'cli-shape', kind: 'api_key', project: 'demo', environment: 'dev', source: { typed: 'first-synthetic' } });
+    await call('secret_put', { id: 'cli-shape', kind: 'api_key', project: 'demo', environment: 'dev', source: { typed: 'second-synthetic' } });
+    const listed = (await call('secret_list', {})).secrets.find((s) => s.id === 'cli-shape');
+    expect(typeof listed?.active_version).toBe('number');
+    const versions = (await call('secret_versions', { id: 'cli-shape' })).versions;
+    for (const v of versions) expect(typeof v.version).toBe('number');
+    const old = versions.find((v) => v.status === 'retired');
+    if (!old) throw new Error('no retired version');
+    // the Keys page passes `x.version` back unchanged
+    const r = await call('secret_reveal', { id: 'cli-shape', version: old.version, admin_passphrase: PASS });
+    expect((await call('onetime_show', { ref: r.ref })).text).toBe('first-synthetic');
+    const revoked = await call('secret_revoke', { id: 'cli-shape', version: old.version });
+    expect(revoked).toMatchObject({ secret_id: 'cli-shape', status: 'revoked', provider_revocation_required: true });
+    expect(String(revoked.reminder)).toMatch(/provider/);
+    expect((await rejection(call('secret_revoke', { id: 'cli-shape', version: 'v2' }))).reason).toBe('invalid_argument');
+  });
+
+  it('lists a generated SSH key with its public half, so it can be shown again later', async () => {
+    ready();
+    const out = await call('secret_put', { id: 'deploy-key', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
+    const v = (await call('secret_versions', { id: 'deploy-key' })).versions[0];
+    expect(v?.public?.public_key).toBe(out.public_key);
+    const plain = (await call('secret_versions', { id: 'example-api' })).versions[0];
+    expect(plain?.public).toEqual({});                          // the CLI prints an empty object
+  });
+
+  it('creates a connection from a key stored on the Keys page, of any kind the connection takes', async () => {
+    ready();
+    await call('secret_put', { id: 'database-url', kind: 'env_var', project: 'demo', environment: 'staging', source: { typed: 'synthetic-dsn' } });
+    const http = {
+      id: 'db-api', project: 'demo', environment: 'staging', service: 'db-api', secret_id: 'database-url', target: 'https://db.example.com', auth: 'bearer' as const,
+      methods: ['GET'], confirm_methods: [], path_prefixes: [], allow_private_network: false, admin_passphrase: PASS,
+    };
+    expect((await call('connection_create_http', http)).secret_id).toBe('database-url');
+    expect((await rejection(call('connection_create_http', { ...http, id: 'x2', environment: 'dev' }))).reason).toBe('secret_scope_mismatch');
+    const ssh = { id: 'git2', project: 'demo', environment: 'staging', service: 'git2', secret_id: 'database-url', host: 'git.example.com', port: 22, username: 'git', host_keys: [HOST_KEY], admin_passphrase: PASS };
+    expect((await rejection(call('connection_create_ssh', ssh))).reason).toBe('secret_kind_mismatch');
+  });
+});
+
+describe('grants as the CLI keeps them', () => {
+  it('keeps an expired or used-up grant `active`; liveness is derived from time and uses', async () => {
+    ready();
+    const { grants } = await call('grant_list', { principal: 'agent-1' });
+    expect(grants.every((g) => g.status === 'active')).toBe(true);
+    const now = Date.now();
+    expect(grants.map((g) => grantState(g, now)).sort()).toEqual(['expired', 'live', 'used']);
+    expect(liveGrants(grants, 'agent-1', now)).toHaveLength(1);
+    // the agent's own view (list-connections) matches: one live grant, one connection
+    const term = (await call('terminal_list')).terminals[0];
+    if (!term) throw new Error('no terminal');
+    let out = '';
+    await call('terminal_attach', { terminal_id: term.terminal_id, on_data: outputChannel((d) => { out += d; }) });
+    out = '';
+    await call('terminal_write', { terminal_id: term.terminal_id, data: '/x/zeropw-agent list-connections\r' });
+    expect(out).toContain('{"connections":[{"id":"example-api"}]}');
+  });
+});
+
+describe('approvals carry what the approval is bound to', () => {
+  it('lists the query, the body and its hash next to the path', async () => {
+    ready();
+    const list = pendingApprovals((await call('approvals_list')).approvals);
+    expect(list).toHaveLength(2);
+    const long = list.find((a) => a.query !== null);
+    expect(long?.target).toBe(`${long?.path}?force=true&dry_run=false`);
+    expect(long?.path.length).toBeGreaterThan(160);             // shown whole, not clipped
+    expect(long?.bodyTruncated).toBe(true);
+    const json = list.find((a) => a.contentType === 'application/json');
+    expect(json?.bodyPreview).toContain('synthetic item');
+    expect(json?.bodyHash).toMatch(/^[0-9a-f]{4}( [0-9a-f]{4}){3}$/);
+  });
+});
+
+describe('stop, incidents, restore and recovery as the CLI does them', () => {
+  it('refuses to resume while an incident is open', async () => {
+    ready();
+    await call('stop_all');
+    await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    const e = await rejection(call('resume', { admin_passphrase: PASS }));
+    expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
+  });
+
+  it('stops everything when a runtime incident covers every active agent', async () => {
+    ready();
+    const principals = (await call('principal_list')).principals;
+    expect(runtimeStopsAll(principals, 'user-agent')).toBe(true);
+    await call('incident_declare', { scope: 'runtime', runtime: 'user-agent' });
+    expect((await call('control_get')).stopped).toBe(true);
+  });
+
+  it('keeps a global stop after acknowledging a restore', async () => {
+    ready();
+    await call('stop_all');
+    await call('backup_restore', { admin_passphrase: PASS });
+    const out = await call('restore_ack', { admin_passphrase: PASS });
+    expect(out.stopped).toBe(true);
+    expect((await call('control_get')).stopped).toBe(true);
+  });
+
+  it('replaces the device key with the recovery code and revokes every grant', async () => {
+    ready();
+    const out = await call('recover', { recovery_passphrase: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX' });
+    expect(out).toMatchObject({ grants_revoked: 3, handles_invalidated: true });
+    expect((await call('grant_list', {})).grants.every((g) => g.status === 'revoked')).toBe(true);
+  });
+});
+
+describe('relay start', () => {
+  it('reports why the relay did not start and starts on a retry', async () => {
+    backend?.dispose();
+    backend = createMockBackend({ latency: 0, initialized: true, relayFails: 2 });
+    useMockBackend(backend);
+    expect((await call('serve_status')).running).toBe(false);   // the seeded start failed
+    const e = await rejection(call('serve_start'));
+    expect(e.reason).toBe('serve_exited');
+    expect(relayError(e.reason).key).toBe('relay.err.exited');
+    expect((await call('serve_start')).running).toBe(true);
   });
 });

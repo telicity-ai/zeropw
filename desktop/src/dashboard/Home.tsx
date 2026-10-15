@@ -2,6 +2,7 @@ import { t, type CopyKey } from '../copy';
 import { call } from '../ipc/client';
 import { hostPort, shortTime } from '../lib/format';
 import { valueText } from '../lib/dash';
+import { Callout } from '../ui/form';
 import { useDash, useLoad, type Intent } from './context';
 import type { PageId } from './pages';
 import { ListCard, metaLine, Row, SectionHead } from './parts';
@@ -17,7 +18,7 @@ const QUICK: Array<{ label: CopyKey; page: PageId; intent: Intent }> = [
 /** Home: status summary, quick actions and recent alerts. Alert fields come from the audit log
  *  and are rendered as text only. */
 export function Home() {
-  const { serve, control, tick, activity, go } = useDash();
+  const { serve, control, tick, activity, go, relay } = useDash();
   const alerts = useLoad(() => call('alerts', { limit: 5 }), [tick, activity]);
   const list = alerts.data ? alerts.data.alerts.slice().reverse() : null;
   const skipped = alerts.data?.unparseable_lines ?? 0;
@@ -47,6 +48,14 @@ export function Home() {
           </div>
         ))}
       </div>
+      {!serve.running && (
+        <Callout kind="info" className="relay-note">
+          {t('home.relay.offNote')}{' '}
+          <button className="btn btn-ghost btn-sm" type="button" aria-busy={relay.busy || undefined} aria-describedby={relay.problem ? 'home-relay-err' : undefined}
+            onClick={() => { if (!relay.busy) void relay.start(); }}>{t(relay.problem ? 'relay.retry' : 'relay.start')}</button>
+          {relay.problem && <span className="help err" id="home-relay-err" style={{ display: 'block' }}>{t(relay.problem.key, { reason: relay.problem.reason })}</span>}
+        </Callout>
+      )}
       <SectionHead id="home-quick" title={t('quick.title')} />
       <div className="quick" role="group" aria-labelledby="home-quick">
         {QUICK.map((q) => (

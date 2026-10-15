@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { SecretKind, SecretSource, SecretView } from '../ipc/contract';
-import { envPairs, groupSecrets, REVEAL_SECONDS, sortedVersions, splitEnv } from '../lib/dash';
+import type { Commands, SecretKind, SecretSource, SecretView } from '../ipc/contract';
+import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
-import { useSecureView } from '../ui/secure';
+import { useSecureGate } from '../ui/secure';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { Empty, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
+
+/** The version goes back to the core exactly as the CLI printed it (a JSON number today). */
+type VersionArg = Commands['secret_revoke'][0]['version'];
+const versionArg = (v: VersionId): VersionArg => v as VersionArg;
 
 export const KIND_LABEL: Record<SecretKind, CopyKey> = {
   api_key: 'keys.kind.api_key', password: 'keys.kind.password', env_var: 'keys.kind.env_var', ssh_private_key: 'keys.kind.ssh_private_key',
@@ -26,8 +30,8 @@ const statusLabel = (s: string): string => (STATUS_LABEL[s] ? t(STATUS_LABEL[s])
 type KeySheet =
   | { kind: 'add'; replace?: SecretView }
   | { kind: 'versions'; id: string }
-  | { kind: 'confirm'; action: 'retire' | 'revoke'; id: string; version: string }
-  | { kind: 'reveal'; id: string; version?: string }
+  | { kind: 'confirm'; action: 'retire' | 'revoke'; id: string; version: VersionId }
+  | { kind: 'reveal'; id: string; version?: VersionId }
   | { kind: 'project' };
 
 /** Keys: secrets and environment variables grouped by project/environment. The list never holds a
@@ -118,6 +122,8 @@ function AddKeySheet({ open, data, projects, taken, onClose, onSaved }: {
   const ssh = kind === 'ssh_private_key';
 
   useEffect(() => { if (!env && pairs[0]) setEnv(pairs[0].key); }, [env, pairs]);
+  // a typed value never outlives the sheet
+  useClearOnClose(open, () => { setValue(''); setFile(null); });
 
   const pick = async () => {
     try {
@@ -150,11 +156,13 @@ function AddKeySheet({ open, data, projects, taken, onClose, onSaved }: {
     try {
       const out = await call('secret_put', { id, kind, project: pair.project, environment: pair.environment, source });
       setValue(''); setFile(null); setGen(false);
-      toast(t(replace ? 'toast.key.replaced' : 'toast.key.saved'));
+      // a replaced key still works at the service until it is revoked there
+      toast(t(replace ? 'toast.key.replaced' : 'toast.key.saved'), replace ? 'warn' : 'info');
       field.ripple(0.06);
       onSaved();
       // a generated SSH key: its public half has to go onto the server, so show it before closing
-      if (typeof out.public_key === 'string') setPub(out.public_key);
+      const pk = publicKeyOf(out);
+      if (pk) setPub(pk);
       else onClose();
     } catch (e) {
       const r = toIpcError(e).reason;
@@ -210,6 +218,7 @@ function AddKeySheet({ open, data, projects, taken, onClose, onSaved }: {
         </>}
         onChange={(v) => { setValue(v); setFile(null); setGen(false); setErrs((x) => ({ ...x, value: undefined })); }} />
       {errs.form && <div className="help err" role="alert">{t(errs.form)}</div>}
+      {replace ? <Callout kind="info">{t('keys.provider.note')}</Callout> : <Callout kind="info">{t('keys.sameAccount')}</Callout>}
     </Sheet>
   );
 }
@@ -283,8 +292,8 @@ function ProjectSheet({ open, onClose, onDone }: { open: boolean; onClose(): voi
 // ---------------------------------------------------------------- versions
 
 function VersionsSheet({ open, id, onClose, onAction, onReveal, onReplace }: {
-  open: boolean; id: string; onClose(): void; onAction(a: 'retire' | 'revoke', id: string, version: string): void;
-  onReveal(id: string, version: string): void; onReplace(s: SecretView): void;
+  open: boolean; id: string; onClose(): void; onAction(a: 'retire' | 'revoke', id: string, version: VersionId): void;
+  onReveal(id: string, version: VersionId): void; onReplace(s: SecretView): void;
 }) {
   const v = useLoad(() => (id ? call('secret_versions', { id }) : Promise.resolve(null)), [id]);
   const s = v.data;
@@ -293,21 +302,27 @@ function VersionsSheet({ open, id, onClose, onAction, onReveal, onReplace }: {
       {!s ? <Empty text={v.failed ? t('error.load') : t('boot.loading')} /> : (
         <>
           <ul className="list flat" aria-label={t('keys.versions.title')}>
-            {sortedVersions(s).map((x) => (
-              <Row key={x.version} dot={x.status === 'active' ? 'on' : x.status === 'revoked' ? 'warn' : 'idle'}
-                name={t('keys.version', { n: x.version })} tag={<Tag warn={x.status === 'revoked'}>{statusLabel(x.status)}</Tag>}
-                meta={metaLine(shortTime(x.created_at), x.public?.fingerprint ?? null)}>
-                {x.status !== 'revoked' && (
-                  <>
-                    <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.reveal.aria', { id: `${s.id} ${x.version}` })} onClick={() => onReveal(s.id, x.version)}>{t('keys.reveal')}</button>
-                    {x.status === 'staged' && (
-                      <button className="btn btn-text btn-sm" type="button" onClick={() => onAction('retire', s.id, x.version)}>{t('keys.retire')}</button>
-                    )}
-                    <button className="btn btn-text btn-sm danger" type="button" onClick={() => onAction('revoke', s.id, x.version)}>{t('keys.revoke')}</button>
-                  </>
-                )}
-              </Row>
-            ))}
+            {sortedVersions(s).map((x) => {
+              // the CLI prints versions as numbers; they go back to the core exactly as printed
+              const ver: VersionId = x.version as VersionId;
+              const pub = typeof x.public?.public_key === 'string' && x.public.public_key ? x.public.public_key : null;
+              return (
+                <Row key={String(ver)} dot={x.status === 'active' ? 'on' : x.status === 'revoked' ? 'warn' : 'idle'}
+                  name={t('keys.version', { n: String(ver) })} tag={<Tag warn={x.status === 'revoked'}>{statusLabel(x.status)}</Tag>}
+                  meta={metaLine(shortTime(x.created_at), x.public?.fingerprint ?? null)}
+                  sub={pub ? <div className="pub-line"><span className="sr-only">{t('conn.ssh.pub')} </span>{pub}</div> : undefined}>
+                  {x.status !== 'revoked' && (
+                    <>
+                      <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.reveal.aria', { id: `${s.id} ${String(ver)}` })} onClick={() => onReveal(s.id, ver)}>{t('keys.reveal')}</button>
+                      {x.status === 'staged' && (
+                        <button className="btn btn-text btn-sm" type="button" onClick={() => onAction('retire', s.id, ver)}>{t('keys.retire')}</button>
+                      )}
+                      <button className="btn btn-text btn-sm danger" type="button" onClick={() => onAction('revoke', s.id, ver)}>{t('keys.revoke')}</button>
+                    </>
+                  )}
+                </Row>
+              );
+            })}
           </ul>
           <div className="sheet-acts">
             <button className="btn btn-ghost btn-sm" type="button" onClick={() => onReplace(s)}>{t('keys.replace')}</button>
@@ -326,12 +341,15 @@ function ConfirmVersionSheet({ open, data, onBack, onClose, onDone }: {
   return (
     <ConfirmSheet id="sheet-key-confirm" open={open} title={t(revoke ? 'keys.revoke.title' : 'keys.retire.title')} lead={t(revoke ? 'keys.revoke.sub' : 'keys.retire.sub')}
       confirmLabel={t(revoke ? 'keys.revoke.confirm' : 'keys.retire.confirm')} onClose={onClose}
-      chips={data ? [data.id, t('keys.version', { n: data.version })] : []} warn={revoke ? t('keys.revoke.warn') : undefined}
+      chips={data ? [data.id, t('keys.version', { n: String(data.version) })] : []} warn={revoke ? t('keys.revoke.warn') : undefined}
+      notes={revoke ? [t('keys.provider.note'), t('session.note')] : undefined}
       back={data ? { label: t('keys.versions'), onClick: () => onBack(data.id) } : undefined}
       run={async () => {
         if (!data) return;
-        await call(revoke ? 'secret_revoke' : 'secret_retire', { id: data.id, version: data.version });
-        toast(t(revoke ? 'toast.key.revoked' : 'toast.key.retired'));
+        const out = await call(revoke ? 'secret_revoke' : 'secret_retire', { id: data.id, version: versionArg(data.version) });
+        // ZeroPW's revoke only stops the vault from using the version; the service still accepts it
+        const provider = revoke || out.provider_revocation_required === true;
+        toast(t(revoke ? 'toast.key.revoked' : provider ? 'toast.key.retired.provider' : 'toast.key.retired'), provider ? 'warn' : 'info');
         onDone(data.id);
       }} />
   );
@@ -339,8 +357,9 @@ function ConfirmVersionSheet({ open, data, onBack, onClose, onDone }: {
 
 // ---------------------------------------------------------------- reveal
 
-/** Admin passphrase → `secret_reveal` → `onetime_show`. The value is on screen for 30 seconds
- *  with screen capture blocked, then dropped from memory. */
+/** Admin passphrase → `secret_reveal` → `onetime_show`. The value is painted only after the core
+ *  has turned screen-capture protection on, stays for 30 seconds, then is dropped from memory;
+ *  the protection is lifted after the value has left the screen. */
 function RevealSheet({ open, data, onClose }: { open: boolean; data: Extract<KeySheet, { kind: 'reveal' }> | undefined; onClose(): void }) {
   const { announce } = useApp();
   const [pass, setPass] = useState('');
@@ -351,35 +370,38 @@ function RevealSheet({ open, data, onClose }: { open: boolean; data: Extract<Key
   const [hidden, setHidden] = useState(false);
   const passRef = useRef<HTMLInputElement>(null);
   const valueRef = useRef<HTMLDivElement>(null);
-  const shown = open && text !== null;
-  useSecureView(shown);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const visible = useSecureGate(open && text !== null);
 
   // closing drops the value at once, before the sheet has finished sliding out
-  useEffect(() => { if (!open) { setText(null); setPass(''); } }, [open]);
+  useClearOnClose(open, () => { setText(null); setPass(''); });
 
   useEffect(() => {
-    if (text === null) return;
+    if (!visible) return;
     const started = Date.now();
     setLeft(REVEAL_SECONDS);
+    announce(t('keys.reveal.shown'));
+    const focus = setTimeout(() => valueRef.current?.focus({ preventScroll: true }), 30);
     const id = setInterval(() => {
       const l = REVEAL_SECONDS - Math.floor((Date.now() - started) / 1000);
       if (l <= 0) { setText(null); setHidden(true); clearInterval(id); return; }
       setLeft(l);
     }, 250);
-    return () => clearInterval(id);
-  }, [text]);
+    return () => { clearInterval(id); clearTimeout(focus); };
+  }, [visible, announce]);
 
   const reveal = async () => {
     if (!data) return;
     if (!pass) { setErr('pass.err.empty'); passRef.current?.focus(); return; }
     setBusy(true);
     try {
-      const r = await call('secret_reveal', { id: data.id, admin_passphrase: pass, ...(data.version ? { version: data.version } : {}) });
+      const r = await call('secret_reveal', { id: data.id, admin_passphrase: pass, ...(data.version !== undefined ? { version: versionArg(data.version) } : {}) });
       setPass('');
+      // the sheet was closed while the core worked: the value is not fetched at all
+      if (!openRef.current) { call('onetime_discard', { ref: r.ref }).catch(() => undefined); return; }
       const v = await call('onetime_show', { ref: r.ref });
-      setText(v.text);
-      announce(t('keys.reveal.shown'));
-      setTimeout(() => valueRef.current?.focus({ preventScroll: true }), 30);
+      if (openRef.current) setText(v.text);
     } catch (e) {
       setPass('');
       const r = toIpcError(e).reason;
@@ -396,12 +418,13 @@ function RevealSheet({ open, data, onClose }: { open: boolean; data: Extract<Key
       {stage === 'pass' && (
         <PassField id="reveal-pass" value={pass} inputRef={passRef} error={err ? t(err) : null} onChange={(v) => { setPass(v); setErr(null); }} />
       )}
-      {stage === 'show' && (
+      {stage === 'show' && visible && (
         <div className="secret-box" role="region" aria-label={t('keys.reveal.region')} tabIndex={-1} ref={valueRef}>
           <code className="secret-val">{text}</code>
           <div className="secret-left" aria-hidden="true">{t('keys.reveal.left', { s: left })}</div>
         </div>
       )}
+      {stage === 'show' && !visible && <div className="help" role="status">{t('boot.loading')}</div>}
       {stage === 'hidden' && <div className="help" role="status">{t('keys.reveal.hidden')}</div>}
     </Sheet>
   );
