@@ -1,0 +1,11 @@
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; height: 100%; }
+body { background: #09090c; color: var(--fg); font-family: var(--font); font-size: var(--fs-base); line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden; word-break: keep-all; }
+button, input, select { font: inherit; color: inherit; }
+::selection { background: rgba(122, 124, 255, .35); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+[hidden] { display: none !important; }
+
+/* motion pause and reduced motion (DESIGN.md §4) */
+.still *, .still *::before, .still *::after { animation: none !important; transition-duration: .01ms !important; transition-delay: 0s !important; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; transition-delay: 0s !important; animation: none !important; } }
