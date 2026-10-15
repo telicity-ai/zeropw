@@ -4,6 +4,10 @@
 //!   --quiet` with the fixed child environment, stderr appended to a 0600 log in the app data
 //!   folder. The first stdout line is JSON carrying `url`; the sidecar counts as up once
 //!   `GET /healthz` answers 200 (60 s budget for both).
+//! - A sidecar that exits while starting is reported with the CLI's own `{error, reason}` from
+//!   that log. A failure to open an address names the setting it came from in `detail`
+//!   (`gateway_port` or `team_listen`), so the UI can tell the two apart (docs/desktop-app.md
+//!   §5); any other CLI detail is dropped when it contains either address.
 //! - Single instance: `serve.json` (pid, url, start time) in the app data folder. A later app
 //!   run attaches only when that pid is alive, its command line is `zeropw-admin … serve` for
 //!   this state directory, and `/healthz` answers 200 with `Server: zeropw-prototype`.
@@ -311,17 +315,17 @@ impl ServeSupervisor {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(line)) if !line.trim().is_empty() => break line,
                 Ok(_) | Err(RecvTimeoutError::Disconnected) => {
-                    return Err(self.fail_start(&mut child, log_offset, false));
+                    return Err(self.fail_start(&mut child, config, log_offset, false));
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if self.cancel_start.load(Ordering::SeqCst) {
                         return Err(self.cancelled_start(&mut child));
                     }
                     if !matches!(child.try_wait(), Ok(None)) {
-                        return Err(self.fail_start(&mut child, log_offset, false));
+                        return Err(self.fail_start(&mut child, config, log_offset, false));
                     }
                     if Instant::now() >= deadline {
-                        return Err(self.fail_start(&mut child, log_offset, true));
+                        return Err(self.fail_start(&mut child, config, log_offset, true));
                     }
                 }
             }
@@ -343,10 +347,10 @@ impl ServeSupervisor {
                 return Err(self.cancelled_start(&mut child));
             }
             if !matches!(child.try_wait(), Ok(None)) {
-                return Err(self.fail_start(&mut child, log_offset, false));
+                return Err(self.fail_start(&mut child, config, log_offset, false));
             }
             if Instant::now() >= deadline {
-                return Err(self.fail_start(&mut child, log_offset, true));
+                return Err(self.fail_start(&mut child, config, log_offset, true));
             }
             thread::sleep(Duration::from_millis(100));
         }
@@ -379,11 +383,30 @@ impl ServeSupervisor {
     }
 
     /// Stop a failed start and report why: the CLI's own `{error, reason}` from the log when it
-    /// printed one, otherwise a generic code.
-    fn fail_start(&self, child: &mut Child, log_offset: u64, timed_out: bool) -> AppError {
+    /// printed one, otherwise a generic code. A listen failure carries the setting it came
+    /// from as its `detail` ([`listen_setting`]); any other CLI detail is kept only when it
+    /// contains neither address.
+    fn fail_start(
+        &self,
+        child: &mut Child,
+        config: &ServeConfig,
+        log_offset: u64,
+        timed_out: bool,
+    ) -> AppError {
         terminate_child(child, Duration::from_secs(2));
         let tail = read_log_tail(&self.log_file, log_offset);
-        if let Some(error) = AppError::from_admin_stderr(&tail, &[]) {
+        let gateway = format!("127.0.0.1:{}", config.port);
+        let mut addresses = vec![gateway.as_str()];
+        if let Some(team) = config.team_listen.as_deref() {
+            addresses.push(team);
+            if let Some((host, _)) = team.rsplit_once(':') {
+                addresses.push(host);
+            }
+        }
+        if let Some(mut error) = AppError::from_admin_stderr(&tail, &addresses) {
+            if let Some(setting) = listen_setting(&error.reason, config.team_listen.is_some()) {
+                error.detail = Some(setting.to_owned());
+            }
             return error;
         }
         if timed_out {
@@ -397,6 +420,22 @@ impl ServeSupervisor {
 enum Recorded {
     Healthy(Running),
     Unhealthy(u32),
+}
+
+/// Which setting a sidecar's failure to open an address comes from: `gateway_port` for the
+/// loopback gateway, `team_listen` for the team sync listener. The gateway address is always
+/// `127.0.0.1:<port>` built from a checked port, so a malformed address is the team one
+/// whenever team sync is on. `None` for every other reason.
+pub fn listen_setting(reason: &str, team_listen: bool) -> Option<&'static str> {
+    match reason {
+        "listen_failed" => Some("gateway_port"),
+        "team_invalid_listen_address" | "team_listen_failed" | "team_address_in_use" => {
+            Some("team_listen")
+        }
+        "invalid_listen" if team_listen => Some("team_listen"),
+        "invalid_listen" => Some("gateway_port"),
+        _ => None,
+    }
 }
 
 fn status_of(running: &mut Running) -> ServeStatus {
@@ -682,6 +721,26 @@ mod tests {
         assert_eq!(sup.attach(), ServeStatus::stopped());
         assert!(!paths.serve_pid_file().exists());
         assert_eq!(sup.stop(), ServeStatus::stopped());
+    }
+
+    #[test]
+    fn listen_failures_name_their_setting() {
+        assert_eq!(listen_setting("listen_failed", true), Some("gateway_port"));
+        assert_eq!(listen_setting("listen_failed", false), Some("gateway_port"));
+        for team in [
+            "team_invalid_listen_address",
+            "team_listen_failed",
+            "team_address_in_use",
+        ] {
+            assert_eq!(listen_setting(team, true), Some("team_listen"), "{team}");
+        }
+        assert_eq!(listen_setting("invalid_listen", true), Some("team_listen"));
+        assert_eq!(
+            listen_setting("invalid_listen", false),
+            Some("gateway_port")
+        );
+        assert_eq!(listen_setting("state_missing", true), None);
+        assert_eq!(listen_setting("serve_exited", true), None);
     }
 
     #[test]

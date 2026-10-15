@@ -55,6 +55,10 @@ export interface Commands {
   password_strength: [{ value: string }, { score: number; reason: string | null }];
   recovery_generate: [void, { ref: string; groups: string[] }];
   vault_init: [{ admin_passphrase: string; recovery: { ref: string } | { typed: string } }, { state_dir: string; kms_key_id: string }];
+  /** A failed start carries the sidecar's own reason when it printed one (docs/desktop-app.md
+   *  §5). A failure to open an address has detail 'gateway_port' (listen_failed) or
+   *  'team_listen' (team_invalid_listen_address, team_listen_failed, invalid_listen). The
+   *  start at the end of vault_init fails the same way. */
   serve_start: [void, ServeStatus];
   serve_stop: [void, ServeStatus];
   serve_status: [void, ServeStatus];

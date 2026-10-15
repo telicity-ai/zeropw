@@ -84,6 +84,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 시작: `zeropw-admin --state-dir D serve --listen 127.0.0.1:<port> [--team-listen IP:PORT] --quiet`, 환경은 4.1과 같다. 첫 stdout 줄의 JSON에서 `url`을 읽고 `/healthz`가 200을 줄 때까지 기다린다(60초).
 - 단일 인스턴스: 앱 데이터 폴더의 `serve.json`(pid, url, 시작 시각). 다시 켤 때는 pid가 살아 있고 `/healthz`와 `Server: zeropw-prototype` 헤더가 맞을 때만 이어 붙는다.
 - 중지: SIGTERM, 최대 25초 기다린 뒤에만 SIGKILL.
+- 시작하다 사이드카가 끝나면 로그에 남은 CLI 오류를 돌려준다. 주소를 열지 못한 실패는 어느 설정(`gateway_port`, `team_listen`) 때문인지 알린다(§5).
 
 ### 4.3 일회용 보관소 (OneTimeStore)
 
@@ -121,7 +122,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `password_strength` | `{value}` | `{score, reason}` | 코어의 zxcvbn. 입력이 바뀔 때마다 값이 IPC로 온다(§7) | |
 | `recovery_generate` | | `{ref, groups[6]}` | 코어 CSPRNG, 값은 보관소 | |
 | `vault_init` | `{admin_passphrase, recovery: {ref}\|{typed}}` | `{state_dir, kms_key_id}` | `init` 후 `serve` 시작 | 두 비밀번호 |
-| `serve_start` / `serve_stop` / `serve_status` | | `ServeStatus` | §4.2 | |
+| `serve_start` / `serve_stop` / `serve_status` | | `ServeStatus`. 시작 실패 이유는 표 아래 | §4.2 | |
 | `control_get` / `stop_all` / `resume` | | `{stopped, restore_pending, incident_open}` | `status`, `stop-all`, `resume` | `resume`은 재인증 |
 | `project_list` / `project_create` | `{name, environments[]}` | 프로젝트 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
@@ -146,6 +147,23 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `onetime_show` / `onetime_copy` / `onetime_discard` | `{ref}` | 한 번만 값 / 복사 결과 | 보관소 | |
 | `file_pick` | `{purpose}` | `{file_token, name}` | 네이티브 창 | |
 | `settings_get` / `settings_set` / `net_interfaces` | | 설정 / 주소 목록 | 코어 | |
+
+중계기 시작(`serve_start`, `vault_init` 끝의 시작도 같다)이 실패하면, 사이드카가 끝나면서 로그(표준 오류)에 남긴 CLI 오류의 `error`와 `reason`을 그대로 돌려준다. 주소를 열지 못한 실패는 `detail`에 어느 설정 때문인지만 적어서, 화면이 중계기 포트 문제와 팀 동기화 주소 문제를 가릴 수 있다. 그 밖의 CLI `detail`은 중계기 주소나 팀 동기화 주소가 들어 있으면 버린다.
+
+| `reason` | `error` | `detail` | 뜻 |
+| --- | --- | --- | --- |
+| `listen_failed` | `StateError` | `gateway_port` | 중계기 포트(`127.0.0.1:<포트>`)를 열지 못했다. 대개 다른 프로그램이 그 포트를 쓰고 있다 |
+| `team_invalid_listen_address` | `InvalidInput` | `team_listen` | 팀 동기화 주소를 열지 못했다. 이 기기에 없는 주소이거나 그 포트를 이미 쓰고 있다 |
+| `team_listen_failed` | `StateError` | `team_listen` | 팀 동기화 주소를 연 뒤 준비하지 못했다 |
+| `invalid_listen` | `InvalidInput` | `team_listen` | 팀 동기화 주소 형식이 틀렸다. 설정을 저장하고 읽을 때 코어가 먼저 막으므로 보통은 나오지 않는다 |
+| 그 밖의 CLI 이유 | CLI 그대로 | 주소가 없을 때만 CLI 그대로 | 예: 상태 디렉터리 문제(`state_missing`, `state_corrupt`) |
+| `serve_exited` | `Unavailable` | 없음 | 사이드카가 이유를 남기지 않고 끝났다 |
+| `serve_start_timeout` | `Timeout` | 없음 | 60초 안에 첫 줄이나 `/healthz` 응답이 오지 않았다 |
+| `serve_output_invalid` | `InternalError` | 없음 | 첫 줄에 루프백 `url`이 없다 |
+| `serve_start_cancelled` | `StateError` | 없음 | 시작하는 동안 `serve_stop`이나 앱 종료가 왔다 |
+| `admin_binary_missing` | `Unavailable` | 없음 | `zeropw-admin`이 없다 |
+| `invalid_port` | `InvalidInput` | `gateway_port` | 코어가 실행 전에 막았다. 포트가 0이다 |
+| `serve_log_unavailable`, `serve_spawn_failed`, `serve_pid_file_unwritable` | `IoError` | 입출력 오류 종류 | 앱 데이터 폴더에 쓰지 못했거나 사이드카를 실행하지 못했다 |
 
 딥 링크(`zeropw://join#…`)를 받으면 코어가 `team invite-info`를 돌려 `invite://preview` 이벤트로 `{ref, preview}`만 보낸다. 합류는 사용자가 확인 화면에서 누를 때만 일어난다. 딥 링크는 합류 화면을 채우는 일 말고는 어떤 동작도 하지 않는다.
 
