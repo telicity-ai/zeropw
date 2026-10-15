@@ -64,7 +64,7 @@ describe('copy table', () => {
       'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
       'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
       'relay.err.other': ['reason'], 'toast.recovered': ['n'], 'appr.body.size': ['n'], 'rec.verify.err': ['n'], 'rec.verify.need': ['n'],
-      'term.end.note.other': ['user'],
+      'term.end.note.other': ['user'], 'relay.team.hint': ['address'], 'listen.err.open': ['address'], 'listen.err.start': ['address'],
     };
     for (const [k, vars] of Object.entries(need)) {
       expect(hasCopy(k), k).toBe(true);
