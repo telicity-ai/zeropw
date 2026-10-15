@@ -10,7 +10,8 @@
 - 팀 초대는 24시간 동안 한 번만 쓸 수 있는 링크(`zeropw://join#…`)로 주고받는다. 링크를 열면 미리보기만 띄우고 자동으로 합류하지 않는다.
 - 에이전트 설정처럼 셸에서 하던 일은 앱 안 터미널에서 미리 채운 명령을 엔터로 실행해 끝낸다.
 - 첫 실행 온보딩에는 서비스 연결을 넣지 않는다. 연결은 대시보드에서 만든다(2026-10-15 사용자 결정).
-- macOS에서는 시험용으로 ad-hoc 서명한 Apple Silicon(arm64)용 .dmg를 만들 수 있다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§10).
+- macOS용으로는 Apple Silicon(arm64) .dmg를 ad-hoc 서명한 미리 보기로 만든다. 소유자는 2026-10-16에 이 이미지를 Developer ID 서명과 공증 없이 v0.2.0 제품 릴리스에 싣기로 정했다. 아직 이 앱을 담은 릴리스는 없다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§9, §10).
+- 화면 문구는 한국어로만 쓴다. 관리 문서와 제품 출력은 영어가 기본이라는 릴리스 규칙([releasing.md](releasing.md)의 Gates 2번)의 예외로, 소유자가 정했다(2026-10-16). macOS 로컬 네트워크 권한 창에 나오는 설명(`Info.release.plist`)도 한국어다. 이 명세와 [DESIGN.md](../DESIGN.md)도 한국어로만 있다.
 
 하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, Developer ID 앱 서명·공증·자동 업데이트, Intel Mac용 빌드, 같은 macOS 계정의 에이전트로부터 보관함을 격리하는 일(§8.9).
 
@@ -227,11 +228,12 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 아이콘은 바이너리로 커밋하지 않는다. `src-tauri/build.rs`가 픽셀 로고 PNG를 생성한다.
 - 개발 실행: `npm run tauri dev`(Vite 1420번 포트). 사이드카는 디버그 빌드에서 `ZEROPW_BIN_DIR`로 가리킨다.
 - 배포 빌드: `npm run bundle`(먼저 `npm ci`). `scripts/prepare-sidecars.sh`가 두 가지를 준비하고 `tauri build --config src-tauri/tauri.bundle.conf.json`이 묶는다.
-  - 사이드카: `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 CLI 릴리스와 같은 방법으로 빌드한다. `scripts/build-release.py --bin`이 SHA-256으로 고정한 OpenSSL 3.5.9를 정적으로 넣고(`--features bundled-openssl`), Homebrew나 시스템의 libssl에 링크된 바이너리는 거부한다. 결과는 `src-tauri/binaries/<이름>-<타깃>`이다. 빌드하는 기기와 같은 타깃만 만든다.
-  - 고지: `scripts/third-party-licenses.py`가 `src-tauri/notices/THIRD_PARTY_LICENSES.md`를 쓴다. 앱 실행 파일의 Rust 크레이트, 사이드카의 크레이트와 OpenSSL, 웹 화면에 들어가는 npm 패키지(Pretendard·JetBrains Mono 글꼴은 OFL-1.1)를 다룬다. 고지 파일을 싣지 않은 크레이트는 버전별로 검토한 `desktop/licenses/supplement.json`으로 채우고, 그래도 빠진 고지가 있으면 아무것도 쓰지 않고 실패한다.
-- 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 세 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다.
-- macOS 배포 이미지: `python3 desktop/scripts/package-macos.py --work-dir <작업 폴더> --out-dir <출력 폴더>`. 두 폴더는 저장소 밖이어야 한다. Apple Silicon Mac에서 커밋된 HEAD를 복사해 빌드하고, `APPLE_*` 같은 서명·공증 자격 증명 변수가 있으면 시작하지 않는다. 결과는 `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg`와 `.sha256`, 고지 파일, 검증 기록이다. 버전은 데스크톱의 버전 필드가 모두 같을 때만 쓴다. 이미지를 확인하는 항목과 Developer ID 서명·공증 절차는 [releasing.md](releasing.md)의 "Desktop app"에 있다.
-- 임시 서명은 번들 전체를 봉인해 바뀐 파일을 찾아내지만 게시자를 증명하지 않는다. 공증하지 않았으므로 macOS 15 이후에는 처음 열 때 시스템 설정 › 개인정보 보호 및 보안에서 "그래도 열기"를 눌러야 한다.
+  - 사이드카: `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 CLI 릴리스와 같은 방법으로 빌드한다. `scripts/build-release.py --bin`이 SHA-256으로 고정한 OpenSSL 3.5.9를 정적으로 넣고(`--features bundled-openssl`), 허용한 환경변수만 넘겨 빌드한다. libssl·libcrypto나 Homebrew 라이브러리에 링크된 바이너리, macOS에서 `/usr/lib`·`/System/Library` 밖의 라이브러리에 링크된 바이너리, 홈 폴더·저장소·빌드 폴더·`CARGO_HOME`·`RUSTUP_HOME`·`/Volumes/` 경로가 남은 바이너리는 거부한다. 결과는 `src-tauri/binaries/<이름>-<타깃>`이다. 빌드하는 기기와 같은 타깃만 만든다. 빌드 폴더 `${CARGO_TARGET_DIR:-rust/target}/sidecars-<타깃>`은 새 폴더, 빈 폴더, 이전 실행이 남긴 폴더만 받으므로, 이 규칙이 생기기 전에 만든 폴더는 한 번 지워야 한다.
+  - 고지: `scripts/third-party-licenses.py`가 `src-tauri/notices/THIRD_PARTY_LICENSES.md`를 쓴다. 다루는 것은 다섯 가지다. 앱 실행 파일의 Rust 크레이트, 사이드카의 크레이트와 OpenSSL, 네 실행 파일에 모두 들어가는 Rust 표준 라이브러리(한 번만 싣는다), 웹 화면에 들어가는 npm 패키지(Pretendard·JetBrains Mono 글꼴은 OFL-1.1이고, Pretendard에는 바탕 글꼴의 저작권과 예약 글꼴 이름을 밝힌 원래 저장소의 고지를 더한다), 빌드 도구가 번들에 넣는 코드(Rolldown의 실행 도우미, Vite를 거쳐 es-module-shims에서 온 모듈 미리 불러오기 보완 코드)다. 고지 파일을 싣지 않은 크레이트, 모든 OFL 글꼴, 번들에 코드를 넣는 빌드 도구는 정확한 버전마다 검토한 `desktop/licenses/supplement.json` 항목이 있어야 한다. 빠진 고지가 있거나, 사이드카 고지가 불완전하거나, 다른 `rust/Cargo.lock`이나 다른 Rust 툴체인·타깃으로 모은 것이면 아무것도 쓰지 않고 실패한다. 그래서 Vite, Rolldown, 글꼴을 올리거나 보충한 크레이트를 바꾸면 그 항목을 다시 검토할 때까지 고지를 모으지 못한다([releasing.md](releasing.md)의 "Desktop app").
+- 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 세 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다. Tauri가 알아서 합치는 파일도 `src-tauri/`에 둘 수 없다(대소문자 구분 없이 `tauri.<플랫폼>.conf.json`·`.json5`, `Tauri.<플랫폼>.toml`, `tauri.conf.json5`, `Tauri.toml`, `Info.plist`, `Info.release.plist`가 아닌 `.plist`·`.entitlements`). 딥 링크 설정은 정확히 `zeropw` 스킴 하나이고 도메인은 둘 수 없다.
+- macOS 배포 이미지: `env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py --work-dir <작업 폴더> --out-dir <출력 폴더> --tag vX.Y.Z`. 두 폴더와 `CARGO_TARGET_DIR`는 저장소 밖이어야 하고, 작업 폴더는 새 폴더, 빈 폴더, 이전 실행이 남긴 폴더만 받는다. Apple Silicon Mac에서 커밋된 HEAD를 복사해 빌드한다. 이름이 `ZEROPW_`로 시작하거나 `TOKEN`, `SECRET`, `PASSW`, `PASSPHRASE`, `_KEY`, `AUTH`, `CSC_`, `P12`, `APPLE_`가 들어간(대소문자 무시) 변수나 서명·공증·업데이터 변수가 있으면 변수 이름만 알리고 시작하지 않는다. 보통 로그인 세션에 있는 `SSH_AUTH_SOCK`도 여기에 걸리므로 `env -i`로 시작한다. 빌드 단계에는 허용한 환경변수만 넘긴다. 결과는 `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg`와 `.sha256`, 고지 파일, 검증 기록이다. 버전은 `rust/Cargo.toml`, `rust/Cargo.lock`의 `zeropw`, 데스크톱의 버전 필드가 모두 같을 때만 쓰고, `--tag`를 주면 그 값도 `vX.Y.Z`와 같아야 한다. 이미지를 확인하는 항목과 Developer ID 서명·공증 절차는 [releasing.md](releasing.md)의 "Desktop app"에 있다.
+- 임시 서명은 번들 전체를 봉인해 바뀐 파일을 찾아내지만 게시자를 증명하지 않는다. 공증하지 않았으므로 macOS 15 이후에는 이렇게 연다. 내려받은 이미지를 열어 ZeroPW를 응용 프로그램 폴더로 끌어다 놓고 이미지를 꺼낸다. 응용 프로그램 폴더에서 한 번 열면 Gatekeeper가 막는다. 그 뒤 한 시간쯤 안에 시스템 설정 › 개인정보 보호 및 보안에서 "그래도 열기"를 누르고 로그인 암호로 확인한다. 이미지에서 바로 열면 macOS가 앱을 임시 위치에서 실행할 수 있고(App Translocation), 제안 명령의 `<번들 경로>`(§4.4)가 그 위치를 가리켜 다른 계정은 실행하지 못할 수 있다.
+- 릴리스 전에는 브라우저로 내려받아 응용 프로그램 폴더에 설치한 앱에서 이 계정과 다른 계정의 에이전트 명령을 직접 실행해 본다([releasing.md](releasing.md) "Desktop app"의 Gates 3번).
 - `desktop/verify.sh`: `npm ci`, `tsc --noEmit`, lint, `vitest run`, `vite build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`(실제 `zeropw-admin`으로 임시 상태 디렉터리를 쓰는 통합 시험 포함), 정적 검사(CSP·capabilities·금지 플러그인·`innerHTML`).
 - CI: `.github/workflows/harness-ci.yml`에 `desktop-tests` 작업(ubuntu-latest, macos-15)을 더한다. 우분투에는 webkit2gtk 4.1 개발 패키지를 설치한다.
 - 파일 크기 제한(하네스, 파일당 300,000바이트) 때문에 `package-lock.json`은 의존성을 최소로 유지한다.
@@ -239,7 +241,9 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ## 10. 남은 한계
 
 - 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
-- Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 만들 수 있는 것은 시험용으로 ad-hoc 서명한 .dmg뿐이다. 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다.
+- 화면은 한국어로만 나온다. 영어판은 없다(§1, 소유자 결정).
+- Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 배포하는 것은 ad-hoc 서명한 .dmg 미리 보기뿐이다(v0.2.0에 싣기로 한 소유자 결정, §1). 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다(§9). 앱은 응용 프로그램 폴더로 옮긴 뒤에 열어야 한다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다.
+- 복구 코드로 기기 키를 바꾸려면 지금 기기 키 파일이 있어야 한다. 바꾼 뒤에도 같은 데이터 키를 새 기기 키 파일로 다시 감쌀 뿐이라, 기기 키 파일이 새었을 때의 대책이 아니다. 바꾸기 전에 만든 백업은 더 이상 복원할 수 없다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 설정 화면은 되돌릴 수 없다는 점을 주황 알림(`src/copy.ts`의 `set.recover.warn`)으로, 키 파일이 새었을 수 있을 때 할 일을 파랑 알림(`set.recover.leak`)으로 알리며, 기기 키를 바꾸는 일을 유출 대책으로 소개하지 않는다([DESIGN.md](../DESIGN.md) §5.3).
 - Apple Silicon(arm64)용만 만든다. Intel Mac용이나 유니버설 빌드는 없다.
 - 새 버전이 나와도 앱이 알려 주거나 바꿔 주지 않는다. 사용자가 직접 받아 바꿔 넣어야 하고, 보안 수정도 그때까지 들어오지 않는다.
 - 팀 공유는 기존 명세대로 같은 LAN·VPN 안의 직접 연결만 지원한다.
