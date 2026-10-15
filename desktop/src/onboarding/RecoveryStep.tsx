@@ -1,27 +1,32 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type Ref } from 'react';
-import { t } from '../copy';
+import { t, type CopyKey } from '../copy';
 import { call } from '../ipc/client';
 import {
-  canonicalRecovery, meterFraction, normalizeGroup, pickVerifySlots, RECOVERY_GROUP_COUNT, recoveryOwnRules, verifyRecoveryGroups,
+  canonicalRecovery, meterFraction, normalizeGroup, pickVerifySlots, RECOVERY_GROUP_COUNT, recoveryOwnRules, recoveryRefStale, verifyRecoveryGroups,
+  verifyStates,
 } from '../lib/validators';
 import { ri, useApp } from '../ui/context';
 import { Callout, Meter, Rule } from '../ui/form';
-import { useSecureView } from '../ui/secure';
+import { useSecureGate } from '../ui/secure';
 import { BackButton, StepFrame, type FrameState } from './StepFrame';
 import { useStrength } from './useStrength';
+import type { RecoveryChoice } from './vault';
 
-export type RecoveryChoice = { ref: string } | { typed: string };
+export type { RecoveryChoice } from './vault';
 
 /** Step 2: recovery code. The core generates it (120 bits, six groups) and keeps it behind a
- *  one-time reference; the groups are shown once here, then confirmed by typing two of them. */
-export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
-  frame: FrameState; sectionRef: Ref<HTMLElement>; admin: string; onBack(): void; onNext(choice: RecoveryChoice): void;
+ *  one-time reference for 10 minutes; the groups are painted only once screen-capture protection
+ *  is on, then confirmed by typing two of them. `notice` explains why the user was sent back here
+ *  (the code expired, or a chosen code is too close to the admin passphrase). */
+export function RecoveryStep({ frame, sectionRef, admin, notice, onBack, onNext }: {
+  frame: FrameState; sectionRef: Ref<HTMLElement>; admin: string; notice: CopyKey | null; onBack(): void; onNext(choice: RecoveryChoice): void;
 }) {
   const { field, announce, toast } = useApp();
   const [groups, setGroups] = useState<string[]>([]);
   const [shownCount, setShownCount] = useState(0);
   const refRef = useRef<string | null>(null);
-  const [own, setOwn] = useState(false);
+  const madeAt = useRef(0);
+  const [own, setOwn] = useState(notice === 'rec.own.weak');
   const [code, setCode] = useState('');
   const [code2, setCode2] = useState('');
   const [ack, setAck] = useState(false);
@@ -29,17 +34,24 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
   const [slots, setSlots] = useState<[number, number]>([0, 3]);
   const [v1, setV1] = useState('');
   const [v2, setV2] = useState('');
+  const [tried, setTried] = useState(false);
   const [blurred, setBlurred] = useState(false);
+  const [note, setNote] = useState<CopyKey | null>(notice);
   const busy = useRef(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const ackRef = useRef<HTMLInputElement>(null);
   const codeRef = useRef<HTMLInputElement>(null);
   const code2Ref = useRef<HTMLInputElement>(null);
   const v1Ref = useRef<HTMLInputElement>(null);
+  const v2Ref = useRef<HTMLInputElement>(null);
   const { score } = useStrength(own ? code : '');
   const ownRules = recoveryOwnRules(code, code2, admin, score);
 
-  const resetAck = useCallback(() => { setAck(false); setVerifying(false); }, []);
+  // the groups are a one-time value: they are painted only after the core has turned screen
+  // capture protection on, and leave the screen before it is turned off again
+  const showGroups = useSecureGate(frame.active && !own && groups.length > 0);
+
+  const resetAck = useCallback(() => { setAck(false); setVerifying(false); setTried(false); }, []);
 
   const generate = useCallback(async () => {
     if (busy.current) return;
@@ -51,11 +63,9 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
     try {
       const r = await call('recovery_generate');
       refRef.current = r.ref;
+      madeAt.current = Date.now();
       setGroups(r.groups.slice(0, RECOVERY_GROUP_COUNT));
       setShownCount(0);
-      r.groups.forEach((_, k) => {
-        timers.current.push(setTimeout(() => { setShownCount((c) => Math.max(c, k + 1)); field.ripple(0.03); }, 60 * k + 30));
-      });
     } catch {
       setGroups([]);
       toast(t('error.generic'), 'warn');
@@ -63,15 +73,31 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
       busy.current = false;
       resetAck();
     }
-  }, [field, resetAck, toast]);
+  }, [resetAck, toast]);
+
+  // the staggered reveal starts when the groups are actually on screen
+  useEffect(() => {
+    if (!showGroups) return;
+    timers.current.forEach(clearTimeout); timers.current = [];
+    groups.forEach((_, k) => {
+      timers.current.push(setTimeout(() => { setShownCount((c) => Math.max(c, k + 1)); field.ripple(0.03); }, 60 * k + 30));
+    });
+  }, [showGroups, groups, field]);
 
   useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
+
+  // a new notice (sent back from vault creation) is shown; a weak chosen code is cleared
+  useEffect(() => {
+    setNote(notice);
+    if (notice === 'rec.own.weak') { setOwn(true); setCode(''); setCode2(''); resetAck(); }
+  }, [notice, resetAck]);
 
   // entering the step: make sure a code exists, ask for the confirmation again
   useEffect(() => {
     if (!frame.active) return;
     if (!own && !refRef.current) void generate();
     else resetAck();
+    if (notice === 'rec.own.weak') setTimeout(() => codeRef.current?.focus(), 300);
   }, [frame.active]); // runs on the activation edge only
 
   // sphere: fully formed for a generated code, follows the strength of a chosen one
@@ -90,13 +116,11 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
     return () => { window.removeEventListener('blur', blur); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', vis); };
   }, [frame.active]);
 
-  // the generated groups are a one-time value: block screen capture while they are on screen
-  useSecureView(frame.active && !own && groups.length > 0);
-
   const genOk = groups.length === RECOVERY_GROUP_COUNT && !!refRef.current;
   const ok = own ? ownRules.strong && ownRules.match : genOk;
   const verified = own ? ack : ack && verifyRecoveryGroups(groups, slots, [v1, v2]);
   const ready = ok && ack && verified;
+  const vstate = verifyStates(groups, slots, [v1, v2]);
   const wasReady = useRef(false);
   useEffect(() => {
     if (ready && !wasReady.current && frame.active) field.pulse();
@@ -105,17 +129,17 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
 
   const toggleOwn = () => {
     const next = !own;
-    setOwn(next); setCode(''); setCode2(''); resetAck();
+    setOwn(next); setCode(''); setCode2(''); resetAck(); setNote(null);
     field.setStrength(next ? 0 : 1);
     if (next) setTimeout(() => codeRef.current?.focus(), 0);
     else if (!refRef.current) void generate();
   };
 
-  const regen = () => { if (own) setOwn(false); setCode(''); setCode2(''); void generate(); field.setStrength(1); };
+  const regen = () => { if (own) setOwn(false); setCode(''); setCode2(''); setNote(null); void generate(); field.setStrength(1); };
 
   const onAck = (e: ChangeEvent<HTMLInputElement>) => {
     const on = e.target.checked;
-    setAck(on);
+    setAck(on); setTried(false);
     if (on && !own) {
       const bytes = new Uint8Array(2);
       globalThis.crypto.getRandomValues(bytes);
@@ -130,19 +154,39 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
   const ownInput = (set: (v: string) => void) => (e: ChangeEvent<HTMLInputElement>) => { field.ripple(0.04); set(e.target.value); resetAck(); };
 
   const next = () => {
-    if (!ready) { (!ack ? ackRef.current : own ? code2Ref.current : v1Ref.current)?.focus(); return; }
+    if (!ready) {
+      if (!ack) { ackRef.current?.focus(); return; }
+      if (own) { code2Ref.current?.focus(); return; }
+      // say which group does not match, under its field, and go there
+      setTried(true);
+      (vstate[0] ? v1Ref : v2Ref).current?.focus();
+      return;
+    }
     if (own) {
       const old = refRef.current;
       refRef.current = null;
       if (old) call('onetime_discard', { ref: old }).catch(() => undefined);
+      setNote(null);
       onNext({ typed: code });
     } else if (refRef.current) {
+      // the core forgets the code after 10 minutes: make a new one now rather than fail later
+      if (recoveryRefStale(madeAt.current, Date.now())) {
+        setNote('rec.expired'); announce(t('rec.expired'));
+        void generate();
+        return;
+      }
+      setNote(null);
       onNext({ ref: refRef.current });
     }
   };
 
   const hide = verifying || blurred;
-  const hint = own && ownRules.same ? t('rec.own.same') : '';
+  const hint = own && ownRules.same ? t('rec.own.same') : own && ownRules.similar ? t('rec.own.similar') : '';
+  const verifyErr = (i: 0 | 1): string | null => {
+    const s = vstate[i];
+    if (!tried || !s) return null;
+    return t(s === 'empty' ? 'rec.verify.need' : 'rec.verify.err', { n: slots[i] + 1 });
+  };
 
   return (
     <StepFrame name="recovery" frame={frame} sectionRef={sectionRef} title={t('rec.title')} lead={t('rec.sub')}
@@ -152,15 +196,16 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
           <span>{t('rec.next')}</span> <span className="arrow" aria-hidden="true">→</span>
         </button>
       </>}>
+      {note && <div className="help err" role="alert" style={{ margin: '0 0 12px' }}>{t(note)}</div>}
       <div className="r" style={ri(2)} data-focus-title={own ? undefined : ''}>
         {!own && (
           <div>
             <ol className={'groups' + (hide ? ' hide' : '')} aria-labelledby="t-recovery">
-              {groups.map((g, k) => (
+              {showGroups && groups.map((g, k) => (
                 <li key={k} className={k < shownCount ? 'on' : undefined}><span aria-hidden="true">{k + 1}</span>{g}</li>
               ))}
             </ol>
-            <div className={'canon' + (hide ? ' hide' : '')}><span>{t('rec.code.label')}</span><code>{canonicalRecovery(groups)}</code></div>
+            <div className={'canon' + (hide ? ' hide' : '')}><span>{t('rec.code.label')}</span><code>{showGroups && shownCount >= groups.length ? canonicalRecovery(groups) : ''}</code></div>
           </div>
         )}
         {own && (
@@ -195,15 +240,20 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
       </label>
       {verifying && !own && (
         <div className="verify-row">
-          {([0, 1] as const).map((i) => (
-            <div className="field" key={i}>
-              <div className="label"><label htmlFor={`ob-v${i + 1}`}>{t('rec.verify.slot', { n: slots[i] + 1 })}</label></div>
-              <div className="input mono">
-                <input id={`ob-v${i + 1}`} ref={i === 0 ? v1Ref : undefined} maxLength={4} autoComplete="off" spellCheck={false} autoCapitalize="characters"
-                  value={i === 0 ? v1 : v2} onChange={(e) => (i === 0 ? setV1 : setV2)(normalizeGroup(e.target.value))} />
+          {([0, 1] as const).map((i) => {
+            const e = verifyErr(i);
+            return (
+              <div className="field" key={i}>
+                <div className="label"><label htmlFor={`ob-v${i + 1}`}>{t('rec.verify.slot', { n: slots[i] + 1 })}</label></div>
+                <div className="input mono" data-invalid={e ? '' : undefined}>
+                  <input id={`ob-v${i + 1}`} ref={i === 0 ? v1Ref : v2Ref} maxLength={4} autoComplete="off" spellCheck={false} autoCapitalize="characters"
+                    aria-invalid={e ? true : undefined} aria-describedby={`ob-v${i + 1}-err`}
+                    value={i === 0 ? v1 : v2} onChange={(ev) => { (i === 0 ? setV1 : setV2)(normalizeGroup(ev.target.value)); setTried(false); }} />
+                </div>
+                <div className="help err" id={`ob-v${i + 1}-err`} hidden={!e}>{e ?? ''}</div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </StepFrame>

@@ -13,6 +13,8 @@
 .hero p, .finale p { margin: 0 auto; max-width: 520px; color: var(--fg-2); font-size: var(--fs-lg); }
 .hero .actions, .finale .actions { margin-top: 26px; display: flex; justify-content: center; gap: 10px; }
 .finale .foot { margin-top: 16px; font-size: var(--fs-sm); color: var(--fg-3); }
+.finale .foot.warn { color: var(--warn); }
+.finale .finale-listen { max-width: 560px; margin: 18px auto 0; }
 
 /* card: fixed height, pinned to the top; only the body scrolls (DESIGN.md §4) */
 .card-wrap { position: absolute; right: 44px; top: 92px; bottom: 52px; width: 452px; z-index: 4; transition: opacity .7s var(--ease-out), transform .9s var(--ease-out), filter .7s, visibility 0s; }

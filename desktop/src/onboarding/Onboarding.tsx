@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { t } from '../copy';
-import { call, toIpcError } from '../ipc/client';
+import { t, type CopyKey } from '../copy';
+import { call, IpcError, toIpcError } from '../ipc/client';
 import type { InvitePreview, Project } from '../ipc/contract';
 import type { PageId } from '../dashboard/Dashboard';
 import { hostPort } from '../lib/format';
+import { finaleJoinErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { AdminStep } from './AdminStep';
 import { AgentStep, type AgentInfo } from './AgentStep';
@@ -12,7 +13,8 @@ import { Finale, type JoinOutcome } from './Finale';
 import { counted, fieldExtras, isCard, neighbour, progressOf, TITLE, type Step } from './flow';
 import { JoinStep, type JoinPlan } from './JoinStep';
 import { ProjectStep } from './ProjectStep';
-import { RecoveryStep, type RecoveryChoice } from './RecoveryStep';
+import { RecoveryStep } from './RecoveryStep';
+import { createVault, type InitAttempts, type InitFailure, type RecoveryChoice } from './vault';
 import { Welcome } from './Welcome';
 import type { FrameState } from './StepFrame';
 
@@ -48,6 +50,9 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
   const [join, setJoin] = useState<JoinPlan | null>(null);
   const joinRef = useRef<JoinPlan | null>(null);
   const [joinOutcome, setJoinOutcome] = useState<JoinOutcome>('idle');
+  const [joinError, setJoinError] = useState<CopyKey | null>(null);
+  const [recNotice, setRecNotice] = useState<CopyKey | null>(null);
+  const attempts = useRef<InitAttempts>({ unsure: false });
   const [deepLink, setDeepLink] = useState<{ ref: string; preview: InvitePreview } | null>(null);
   const lastProgress = useRef<{ index: number; total: number } | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -135,28 +140,27 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     if (s !== 'join') { field.chipText('peer', t('join.pv.picture')); go('join'); }
   }, [incoming, created, go, onIncomingTaken, field]);
 
-  // ---- vault creation (the only place the two secrets cross into the core)
+  // ---- vault creation (the only place the two secrets cross into the core). A vault that exists
+  // (even when the relay failed right after `init`) is never created again; see ./vault.ts.
   const initVault = useCallback(async () => {
-    const { admin, recovery } = secrets.current;
-    if (!admin || !recovery) throw new Error('missing');
-    try {
-      await call('vault_init', { admin_passphrase: admin, recovery });
-    } catch (e) {
-      const err = toIpcError(e);
-      if (err.reason !== 'vault_exists') {
-        if (err.reason === 'onetime_ref_unknown' || err.reason === 'onetime_ref_invalid') { secrets.current.recovery = null; setRecoveryKey((k) => k + 1); }
-        throw err;
-      }
-    }
+    await createVault(secrets.current, attempts.current);
     secrets.current = { admin: '', recovery: null };
     setAdminForCheck('');
     setAdminKey((k) => k + 1); setRecoveryKey((k) => k + 1);   // drop the typed values with their steps
   }, []);
 
+  // the recovery code has to change: back to its step, with the reason on screen
+  const onRecoveryProblem = useCallback((kind: Extract<InitFailure, 'recovery_expired' | 'recovery_weak'>) => {
+    secrets.current.recovery = null;
+    if (kind === 'recovery_expired') { setRecoveryKey((k) => k + 1); setRecNotice('rec.expired'); }
+    else setRecNotice('rec.own.weak');
+    go('recovery');
+  }, [go]);
+
   const startRelay = useCallback(async () => {
     let s = await call('serve_status');
     if (!s.running) s = await call('serve_start');
-    if (!s.running) throw new Error('relay');
+    if (!s.running) throw new IpcError({ error: 'Unavailable', reason: 'serve_not_running' });
     const addr = hostPort(s.url);
     setPill({ kind: 'live', addr });
     return addr;
@@ -169,8 +173,10 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     call('team_join', { ref: join.ref, project: join.project, environment: join.environment }).then(
       () => { setJoinOutcome('ok'); field.ripple(0.08); },
       (e) => {
-        setJoinOutcome('failed'); field.setPeerGhost(true);
-        toast(t(toIpcError(e).reason === 'invite_expired' ? 'done.join.expired' : 'done.join.failed'), 'warn');
+        // a preview older than 10 minutes is gone from the core although the invite may be valid
+        const key = finaleJoinErrorKey(toIpcError(e).reason);
+        setJoinOutcome('failed'); setJoinError(key); field.setPeerGhost(true);
+        toast(t(key), 'warn');
       },
     );
   }, [step, join, joinOutcome, field, toast]);
@@ -204,10 +210,10 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
           <div className="card">
             <AdminStep key={`a${adminKey}`} frame={frame('admin')} sectionRef={secRef('admin')} onBack={back('admin')}
               onNext={(pass) => { secrets.current.admin = pass; setAdminForCheck(pass); go('recovery'); }} />
-            <RecoveryStep key={`r${recoveryKey}`} frame={frame('recovery')} sectionRef={secRef('recovery')} admin={adminForCheck}
-              onBack={back('recovery')} onNext={(choice) => { secrets.current.recovery = choice; go('create'); }} />
+            <RecoveryStep key={`r${recoveryKey}`} frame={frame('recovery')} sectionRef={secRef('recovery')} admin={adminForCheck} notice={recNotice}
+              onBack={back('recovery')} onNext={(choice) => { secrets.current.recovery = choice; setRecNotice(null); go('create'); }} />
             <CreateStep frame={frame('create')} sectionRef={secRef('create')} created={created}
-              initVault={initVault} startRelay={startRelay} onCreated={() => setCreated(true)}
+              initVault={initVault} startRelay={startRelay} onCreated={() => setCreated(true)} onRecoveryProblem={onRecoveryProblem}
               onBack={() => go('recovery')} onNext={() => go(joinRef.current ? 'done' : 'project')} />
             <ProjectStep frame={frame('project')} sectionRef={secRef('project')} created={project} onBack={back('project')}
               onNext={(p) => { setProject(p); field.ripple(0.06); go('agent'); }} />
@@ -225,7 +231,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
         </div>
 
         <Finale visible={step === 'done'} titleRef={doneTitle} project={project} agent={agent}
-          join={join ? { preview: join.preview, local: join.local } : null} joinOutcome={joinOutcome}
+          join={join ? { preview: join.preview, local: join.local } : null} joinOutcome={joinOutcome} joinError={joinError}
           onDashboard={() => onFinish('home')} onInvite={() => onFinish('team')} />
       </main>
     </>
