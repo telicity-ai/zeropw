@@ -1106,3 +1106,47 @@ mod version_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod address_tests {
+    use super::*;
+    use std::net::{Ipv6Addr, SocketAddr};
+
+    /// The bracketed IPv6 forms an invite may carry
+    /// (`membership::valid_invite_address`), zone included, are ones the
+    /// dialer's own address parsing and resolution handle.
+    #[test]
+    fn dialer_resolves_the_bracketed_ipv6_forms_an_invite_may_carry() {
+        let loopback = if cfg!(target_os = "linux") {
+            "lo"
+        } else {
+            "lo0"
+        };
+        let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
+        for (address, numeric_zone) in [
+            ("[fe80::1]:47001".to_owned(), Some(0)),
+            ("[fe80::1%1]:47001".to_owned(), Some(1)),
+            (format!("[fe80::1%{loopback}]:47001"), None),
+        ] {
+            assert!(
+                crate::team::membership::valid_invite_address(&address),
+                "{address}"
+            );
+            let (host, port) = TcpTransport::parse_address(&address).unwrap();
+            let resolved: Vec<SocketAddr> = (host.as_str(), port)
+                .to_socket_addrs()
+                .unwrap_or_else(|e| panic!("{address}: {e}"))
+                .collect();
+            assert!(
+                resolved.iter().any(|candidate| match candidate {
+                    SocketAddr::V6(v6) =>
+                        *v6.ip() == link_local
+                            && v6.port() == 47001
+                            && numeric_zone.map_or(v6.scope_id() != 0, |id| v6.scope_id() == id),
+                    SocketAddr::V4(_) => false,
+                }),
+                "{address}: {resolved:?}"
+            );
+        }
+    }
+}

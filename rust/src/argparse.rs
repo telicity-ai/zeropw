@@ -78,6 +78,8 @@ enum Nargs {
     One,
     /// `nargs=0` (flags and help).
     Zero,
+    /// `nargs="?"`: zero or one (an optional positional).
+    Optional,
     /// `nargs=PARSER` (`A...`), the subparsers action.
     Parser,
 }
@@ -91,6 +93,10 @@ pub struct Arg {
     nargs: Nargs,
     required: bool,
     choices: Option<Vec<String>>,
+    /// Values accepted like `choices` but never listed in help or in an
+    /// `invalid choice` message (subcommands added with
+    /// [`Parser::add_hidden_parser`]). Not an `argparse` feature.
+    hidden_choices: Vec<String>,
     ty: Option<TypeFn>,
     default: Val,
     metavar: Option<String>,
@@ -108,6 +114,7 @@ impl Arg {
             nargs: Nargs::One,
             required: false,
             choices: None,
+            hidden_choices: Vec::new(),
             ty: None,
             default: Val::None,
             metavar: None,
@@ -123,11 +130,20 @@ impl Arg {
             nargs: Nargs::One,
             required: true,
             choices: None,
+            hidden_choices: Vec::new(),
             ty: None,
             default: Val::None,
             metavar: None,
             help: None,
         }
+    }
+    /// `add_argument("name", nargs="?")`: a positional that may be omitted
+    /// (its default, `None`, is stored then).
+    pub fn optional_positional(name: &str) -> Self {
+        let mut arg = Self::positional(name);
+        arg.nargs = Nargs::Optional;
+        arg.required = false;
+        arg
     }
     /// `action="store_true"`.
     pub fn flag(mut self) -> Self {
@@ -169,8 +185,17 @@ impl Arg {
         self.help = Some(help.to_owned());
         self
     }
+    /// `help=argparse.SUPPRESS`: parsed as usual, but left out of the usage
+    /// line and the help listing.
+    pub fn suppress_help(mut self) -> Self {
+        self.help = Some(SUPPRESS.to_owned());
+        self
+    }
     fn is_optional(&self) -> bool {
         !self.option_strings.is_empty()
+    }
+    fn is_suppressed(&self) -> bool {
+        self.help.as_deref() == Some(SUPPRESS)
     }
 }
 
@@ -224,6 +249,7 @@ impl Parser {
             nargs: Nargs::Zero,
             required: false,
             choices: None,
+            hidden_choices: Vec::new(),
             ty: None,
             default: Val::None,
             metavar: None,
@@ -263,6 +289,7 @@ impl Parser {
             nargs: Nargs::Parser,
             required: true,
             choices: Some(Vec::new()),
+            hidden_choices: Vec::new(),
             ty: None,
             default: Val::None,
             metavar: metavar.map(str::to_owned),
@@ -314,6 +341,27 @@ impl Parser {
             subs.choice_help
                 .push((name.to_owned(), help.map(str::to_owned)));
         }
+        subs.parsers.push((
+            name.to_owned(),
+            Parser::new(&prog, description, allow_abbrev),
+        ));
+        &mut subs.parsers.last_mut().expect("just pushed").1
+    }
+
+    /// A subcommand that parses like any other but is listed nowhere: not in
+    /// the parent's help, not in its usage, and not among the names an
+    /// `invalid choice` message offers. `argparse` has no such parser (its
+    /// `add_parser` without `help=` still names the choice in that message);
+    /// this keeps the recorded command-line contract of the original CLI
+    /// byte-identical while a newer command is added beside it.
+    pub fn add_hidden_parser(&mut self, name: &str, description: Option<&str>) -> &mut Parser {
+        let prog = format!("{} {name}", self.subparser_prog_prefix());
+        let allow_abbrev = self.allow_abbrev;
+        let (index, subs) = self
+            .subparsers
+            .as_mut()
+            .expect("add_subparsers() before add_hidden_parser()");
+        self.actions[*index].hidden_choices.push(name.to_owned());
         subs.parsers.push((
             name.to_owned(),
             Parser::new(&prog, description, allow_abbrev),
@@ -641,11 +689,23 @@ impl Parser {
         // Invocation widths across every section (`_action_max_length`).
         let mut max_length = 0usize;
         let mut rows: Vec<(usize, &Arg)> = Vec::new();
-        for action in self.actions.iter().filter(|a| !a.is_optional()) {
+        // `HelpFormatter.add_argument` skips `help=SUPPRESS` actions entirely.
+        let listed = |a: &&Arg| !a.is_suppressed();
+        for action in self
+            .actions
+            .iter()
+            .filter(|a| !a.is_optional())
+            .filter(listed)
+        {
             rows.push((0, action));
         }
         let positional_count = rows.len();
-        for action in self.actions.iter().filter(|a| a.is_optional()) {
+        for action in self
+            .actions
+            .iter()
+            .filter(|a| a.is_optional())
+            .filter(listed)
+        {
             rows.push((1, action));
         }
         let pseudo: Vec<Arg> = self
@@ -915,6 +975,8 @@ fn nargs_pattern(action: &Arg) -> &'static str {
         (Nargs::One, false) => "(-*A-*)",
         (Nargs::Zero, true) => "()",
         (Nargs::Zero, false) => "(-*)",
+        (Nargs::Optional, true) => "(A?)",
+        (Nargs::Optional, false) => "(-*A?-*)",
         (Nargs::Parser, true) => "(A[AO]*)",
         (Nargs::Parser, false) => "(-*A[-AO]*)",
     }
@@ -929,6 +991,7 @@ fn match_argument(action: &Arg, pattern: &str) -> Result<usize, Failure> {
             let message = match action.nargs {
                 Nargs::One => "expected one argument".to_owned(),
                 Nargs::Zero => "expected 0 arguments".to_owned(),
+                Nargs::Optional => "expected at most one argument".to_owned(),
                 Nargs::Parser => "expected A... arguments".to_owned(),
             };
             Err(argument_error(action, &message))
@@ -961,7 +1024,21 @@ fn match_partial(actions: &[&Arg], pattern: &str) -> Vec<usize> {
 fn get_values(action: &Arg, strings: &[String]) -> Result<Val, Failure> {
     match action.nargs {
         Nargs::Zero => Ok(Val::None),
-        Nargs::One => {
+        // `not arg_strings and action.nargs == OPTIONAL`: the default, run
+        // through the type conversion and choices check when it is a string.
+        Nargs::Optional if strings.is_empty() => match (&action.default, action.ty) {
+            (Val::Str(default), Some(ty)) => {
+                let value = convert(action, ty, default)?;
+                check_value(action, &value)?;
+                Ok(value)
+            }
+            (Val::Str(_), None) => {
+                check_value(action, &action.default)?;
+                Ok(action.default.clone())
+            }
+            (default, _) => Ok(default.clone()),
+        },
+        Nargs::One | Nargs::Optional => {
             let value = match action.ty {
                 Some(ty) => convert(action, ty, &strings[0])?,
                 None => Val::Str(strings[0].clone()),
@@ -997,7 +1074,7 @@ fn check_value(action: &Arg, value: &Val) -> Result<(), Failure> {
         Val::Int(int) => int.to_string(),
         _ => return Ok(()),
     };
-    if choices.contains(&text) {
+    if choices.contains(&text) || action.hidden_choices.contains(&text) {
         return Ok(());
     }
     Err(argument_error(
@@ -1113,15 +1190,23 @@ fn format_actions_usage(actions: &[&Arg], groups: &[(bool, Vec<&Arg>)]) -> Strin
             inserts.insert(i, "|".to_owned());
         }
     }
-    let mut parts: Vec<String> = Vec::new();
-    for action in actions {
+    // `None` marks a `help=SUPPRESS` action, dropped after the inserts.
+    let mut parts: Vec<Option<String>> = Vec::new();
+    for (i, action) in actions.iter().enumerate() {
         let grouped = in_group.contains(&(*action as *const Arg));
-        if !action.is_optional() {
+        if action.is_suppressed() {
+            parts.push(None);
+            if inserts.get(&i).is_some_and(|s| s == "|") {
+                inserts.remove(&i);
+            } else if inserts.get(&(i + 1)).is_some_and(|s| s == "|") {
+                inserts.remove(&(i + 1));
+            }
+        } else if !action.is_optional() {
             let mut part = format_args(action, &action.dest);
             if grouped && part.starts_with('[') && part.ends_with(']') {
                 part = part[1..part.len() - 1].to_owned();
             }
-            parts.push(part);
+            parts.push(Some(part));
         } else {
             let option = &action.option_strings[0];
             let mut part = if action.nargs == Nargs::Zero {
@@ -1135,13 +1220,13 @@ fn format_actions_usage(actions: &[&Arg], groups: &[(bool, Vec<&Arg>)]) -> Strin
             if !action.required && !grouped {
                 part = format!("[{part}]");
             }
-            parts.push(part);
+            parts.push(Some(part));
         }
     }
     for (i, insert) in inserts.iter().rev() {
-        parts.insert(*i, insert.clone());
+        parts.insert(*i, Some(insert.clone()));
     }
-    let text = parts.join(" ");
+    let text = parts.into_iter().flatten().collect::<Vec<_>>().join(" ");
     static OPEN: std::sync::OnceLock<[Regex; 3]> = std::sync::OnceLock::new();
     let [open, close, empty] = OPEN.get_or_init(|| {
         [
@@ -1173,6 +1258,7 @@ fn format_args(action: &Arg, default: &str) -> String {
     match action.nargs {
         Nargs::One => m,
         Nargs::Zero => String::new(),
+        Nargs::Optional => format!("[{m}]"),
         Nargs::Parser => format!("{m} ..."),
     }
 }
@@ -1757,5 +1843,101 @@ mod tests {
             let expected: Vec<String> = serde_json::from_value(case["lines"].clone()).unwrap();
             assert_eq!(wrap(text, width, "", ""), expected, "{text:?} at {width}");
         }
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// `help=SUPPRESS` options and hidden subcommands parse normally but
+    /// leave every recorded help, usage and error text byte-identical.
+    #[test]
+    fn suppressed_options_and_hidden_parsers_leave_help_and_errors_unchanged() {
+        let plain = sample(false);
+        let mut extended = sample(false);
+        extended.arg(Arg::opt("--hidden-flag").flag().suppress_help());
+        extended
+            .add_hidden_parser("secretive", Some("not listed"))
+            .arg(Arg::opt("--id"));
+        for columns in [40, 80, 200] {
+            assert_eq!(
+                plain.format_help_at(columns),
+                extended.format_help_at(columns)
+            );
+            assert_eq!(
+                plain.format_usage_at(columns),
+                extended.format_usage_at(columns)
+            );
+        }
+        for argv in [
+            &["--state-dir", "d", "bogus"][..],
+            &["--state-dir", "d"],
+            &["-h"],
+            &["--state-dir", "d", "put", "--id", "x"],
+        ] {
+            assert_eq!(
+                plain.parse_known_args_at(&strings(argv), 80),
+                extended.parse_known_args_at(&strings(argv), 80),
+                "{argv:?}"
+            );
+        }
+        match extended.parse_known_args_at(
+            &strings(&[
+                "--state-dir",
+                "d",
+                "--hidden-flag",
+                "secretive",
+                "--id",
+                "7",
+            ]),
+            80,
+        ) {
+            Outcome::Parsed(namespace, extras) => {
+                assert!(extras.is_empty(), "{extras:?}");
+                assert_eq!(namespace["hidden_flag"], Val::Bool(true));
+                assert_eq!(namespace["command"], Val::Str("secretive".into()));
+                assert_eq!(namespace["id"], Val::Str("7".into()));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// `nargs="?"` positionals: zero or one argument, before or after
+    /// options, shown as `[name]` in usage.
+    #[test]
+    fn optional_positional_takes_zero_or_one_argument() {
+        let mut parser = Parser::new("prog", None, false);
+        parser.arg(Arg::optional_positional("invite"));
+        parser.arg(Arg::opt("--stdin").flag());
+        let parse = |argv: &[&str]| match parser.parse_known_args_at(&strings(argv), 80) {
+            Outcome::Parsed(namespace, extras) => (
+                namespace["invite"].clone(),
+                namespace["stdin"].clone(),
+                extras,
+            ),
+            other => panic!("{argv:?}: {other:?}"),
+        };
+        let none: Vec<String> = Vec::new();
+        assert_eq!(parse(&[]), (Val::None, Val::Bool(false), none.clone()));
+        assert_eq!(
+            parse(&["--stdin"]),
+            (Val::None, Val::Bool(true), none.clone())
+        );
+        assert_eq!(
+            parse(&["abc", "--stdin"]),
+            (Val::Str("abc".into()), Val::Bool(true), none.clone())
+        );
+        assert_eq!(
+            parse(&["--stdin", "abc"]),
+            (Val::Str("abc".into()), Val::Bool(true), none)
+        );
+        assert_eq!(
+            parse(&["a", "b"]),
+            (Val::Str("a".into()), Val::Bool(false), strings(&["b"]))
+        );
+        assert_eq!(
+            parser.format_usage_at(80),
+            "usage: prog [-h] [--stdin] [invite]\n"
+        );
     }
 }

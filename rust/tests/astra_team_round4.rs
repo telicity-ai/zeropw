@@ -111,7 +111,7 @@ fn original_user_role_self_removal_is_authored_and_propagated() {
     let root = TempDir::new().unwrap();
     let owner = Node::new(&root, "owner");
     let user = Node::new(&root, "user");
-    let address = "astra-team-round4-self-owner";
+    let address = "astra-team-round4-self-owner:47001";
     let env = owner.owner(address);
     user.join(&owner, &env, address, "user");
     let fp = user.fp();
@@ -144,7 +144,7 @@ fn original_local_mutual_removal_rotates_only_before_author_is_removed() {
     let owner = Node::new(&root, "owner");
     let bob = Node::new(&root, "bob");
     let carol = Node::new(&root, "carol");
-    let address = "astra-team-round4-mutual-owner";
+    let address = "astra-team-round4-mutual-owner:47001";
     let env = owner.owner(address);
     bob.join(&owner, &env, address, "admin");
     carol.join(&owner, &env, address, "admin");
