@@ -36,7 +36,9 @@
 ### 2.2 글자
 
 - 본문: Pretendard Variable. 코드·주소·ID: JetBrains Mono(한글은 Pretendard로 대체).
-- 글꼴 파일은 앱에 넣지 않는다. 설치돼 있지 않으면 시스템 글꼴(macOS는 Apple SD Gothic Neo와 Menlo)로 그린다.
+- 두 글꼴은 앱에 함께 묶는다. `src/main.tsx`가 npm 패키지 `pretendard`(가변 글꼴, 글자 범위별로 나눈 파일)와 `@fontsource/jetbrains-mono`(라틴 400·500·600)의 CSS를 불러오고, 빌드할 때 Vite가 글꼴 파일을 `dist`로 복사한다. 버전은 `package-lock.json`이 고정하고, 저장소에는 글꼴 바이너리를 커밋하지 않는다.
+- 두 글꼴은 SIL Open Font License 1.1이다. 저작권 고지와 라이선스 전문은 서드파티 고지에 들어간다([docs/desktop-app.md](docs/desktop-app.md) §8.3).
+- 두 글꼴에 없는 글자만 시스템 글꼴로 그린다. 순서는 `src/styles/tokens.css`의 `--font`, `--mono`를 따른다.
 - 크기: 12 / 13.5 / 14 / 15 / 24 (단계 제목) / 38 (시작 화면) px. 12px보다 작은 한글은 쓰지 않는다.
 - 줄바꿈은 `word-break: keep-all`.
 
