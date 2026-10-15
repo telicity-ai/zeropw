@@ -29,6 +29,15 @@ export function finaleJoinErrorKey(reason: string): CopyKey {
   return 'done.join.failed';
 }
 
+/** Why `backup_restore` was refused, when it was not the admin passphrase; null for anything
+ *  else. An archive made under another device key (any backup made before the key was replaced
+ *  with the recovery code) is refused with `backup_kms_mismatch` (rust/src/vault.rs). */
+export function restoreErrorKey(reason: string): CopyKey | null {
+  if (reason === 'file_dialog_cancelled') return 'set.restore.cancelled';
+  if (reason === 'backup_kms_mismatch') return 'set.restore.mismatch';
+  return null;
+}
+
 /** `serve_start` failures (desktop/core/src/serve.rs). Unknown codes are shown as they are. */
 const RELAY: Record<string, CopyKey> = {
   serve_exited: 'relay.err.exited',

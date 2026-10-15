@@ -42,8 +42,9 @@ describe('copy table', () => {
     const entries = [...block.matchAll(/^\s*'([^']+)':\s*'((?:[^'\\]|\\.)*)',?$/gm)].map((m) => [m[1] ?? '', m[2] ?? ''] as const);
     expect(entries.length).toBeGreaterThan(200);
     const dropped = new Set(['toast.dash', 'toast.file.mock', 'term.pw.mock']);
-    // changed after review: the core keeps a previewed invite 60 minutes (toast.join.later)
-    const changed = new Set(['join.local', 'toast.paste.mock', 'toast.join.later']);
+    // changed after review: the core keeps a previewed invite 60 minutes (toast.join.later), and
+    // replacing the device key is not a response to a leaked key file (rec.sub)
+    const changed = new Set(['join.local', 'toast.paste.mock', 'toast.join.later', 'rec.sub']);
     for (const [k, v] of entries) {
       if (dropped.has(k)) { expect(hasCopy(k)).toBe(false); continue; }
       expect(hasCopy(k), k).toBe(true);
@@ -77,6 +78,16 @@ describe('copy table', () => {
     expect(all).not.toMatch(/기기 키를 잃었을 때/);             // "기기 키를 잃었을 때"
     expect(COPY['rec.warn']).toMatch(/열 수 없어요/);                         // losing the key file: the vault cannot be opened
     expect(COPY['set.recover.warn']).toMatch(/회수/);                                     // the recover sheet says it revokes permissions
+    // `recover` wraps the same data key under a new key file: it is never offered for a leaked
+    // key file, the sheet says what a leak needs instead, and that earlier backups stop restoring
+    for (const k of ['rec.sub', 'set.recover', 'set.recover.sub', 'set.recover.confirm', 'toast.recovered', 'toast.recovered.any'] as const) {
+      expect(COPY[k], k).not.toMatch(/새었|유출/);
+    }
+    expect(COPY['set.recover.sub']).toContain('같은 데이터 키');
+    expect(COPY['set.recover.leak']).toMatch(/새었을 수 있다면/);
+    expect(COPY['set.recover.leak']).toMatch(/서비스에서 예전 키를 폐기/);
+    expect(COPY['set.recover.warn']).toContain('백업');
+    expect(COPY['set.backup.help']).toContain('바꾼 기기 키');
     // a joined device syncs only with other-device access on
     for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
     // stop and revocation block new requests only; open SSH sessions are named as a limit

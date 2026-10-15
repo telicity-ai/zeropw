@@ -3,7 +3,7 @@ import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../sr
 import { createMockBackend, type MockBackend } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
 import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
-import { relayError } from '../src/lib/reasons';
+import { relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
 // rules the pages rely on: values never come back except through one-time references, the admin
@@ -429,6 +429,21 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     const out = await call('recover', { recovery_passphrase: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX' });
     expect(out).toMatchObject({ grants_revoked: 3, handles_invalidated: true });
     expect((await call('grant_list', {})).grants.every((g) => g.status === 'revoked')).toBe(true);
+  });
+
+  it('refuses a backup made before the device key was replaced, and names why', async () => {
+    ready();
+    await call('backup_create');
+    await call('recover', { recovery_passphrase: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX' });
+    const e = await rejection(call('backup_restore', { admin_passphrase: PASS }));
+    expect([e.error, e.reason]).toEqual(['StateError', 'backup_kms_mismatch']);
+    expect(restoreErrorKey(e.reason)).toBe('set.restore.mismatch');
+    expect((await call('control_get')).restore_pending).toBe(false);   // nothing was restored
+    // a backup made afterwards, as the settings page asks for, restores
+    await call('backup_create');
+    expect(await call('backup_restore', { admin_passphrase: PASS })).toMatchObject({ restored: true });
+    expect(restoreErrorKey('file_dialog_cancelled')).toBe('set.restore.cancelled');
+    expect(restoreErrorKey('backup_digest_mismatch')).toBeNull();
   });
 });
 

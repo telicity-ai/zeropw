@@ -177,6 +177,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const teams = new Map<string, MockTeamEnv>();
   const files = new Map<string, MockFile>();
   let deviceFp: string | null = null;
+  /** Which device key file is current (`recover` makes a new one), and which made the newest backup. */
+  let deviceKey = 0;
+  let lastBackupKey = 0;
   let secureView = false;
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
@@ -770,15 +773,19 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return { ...x };
     },
 
-    // ---- backup and recovery (the native file dialogs are the core's; the mock skips them)
+    // ---- backup and recovery (the native file dialogs are the core's; the mock skips them and
+    // restores the newest backup, or one made with the first device key when none was made here)
     backup_create: async () => {
       needInit(); await wait(500);
+      lastBackupKey = deviceKey;
       record({ ts: iso(), event: 'backup' });
       return { path: '~/Desktop/zeropw-backup.zpwb', created_at: iso() };
     },
     backup_restore: async ({ admin_passphrase }) => {
       needInit(); await wait(700);
       checkAdmin(admin_passphrase);
+      // the archive's data key is wrapped under the device key that made it (rust/src/vault.rs)
+      if (lastBackupKey !== deviceKey) throw fail('StateError', 'backup_kms_mismatch');
       setControl({ ...control, restore_pending: true });
       record({ ts: iso(), event: 'restore' });
       return { restored: true, restore_pending: true };
@@ -795,11 +802,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         note: control.stopped ? 'restore_pending cleared; the global stop is still set (run resume to lift it)' : 'restore_pending cleared; execution is open under the restored grants',
       };
     },
-    // `recover` replaces the device key, revokes every grant and rotates handles (rust/src/context.rs)
+    // `recover` makes a new device key file that wraps the same data key, revokes every grant and
+    // rotates handles (rust/src/context.rs); earlier backups no longer restore
     recover: async ({ recovery_passphrase }) => {
       needInit(); await wait(700);
       if (typeof recovery_passphrase !== 'string' || !recovery_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!recoveryCode || canonicalRecovery(recovery_passphrase) !== recoveryCode) throw fail('AuthFailed', 'bad_recovery_passphrase');
+      deviceKey += 1;
       let revoked = 0;
       for (const g of grants) if (g.status === 'active') { g.status = 'revoked'; revoked += 1; }
       record({ ts: iso(), event: 'recover' });

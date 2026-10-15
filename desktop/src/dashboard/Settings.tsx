@@ -3,6 +3,7 @@ import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { NetInterface } from '../ipc/contract';
 import { DEFAULT_TEAM_PORT, interfaceLabel, MIN_GATEWAY_PORT, parseListen, parsePort } from '../lib/dash';
+import { restoreErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
@@ -38,6 +39,8 @@ export function SettingsPage() {
   const [tport, setTport] = useState('');
   const [tErr, setTErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState<'port' | 'listen' | 'backup' | null>(null);
+  // after the device key is replaced, earlier backups no longer restore: ask for a new one
+  const [needBackup, setNeedBackup] = useState(false);
   const portRef = useRef<HTMLInputElement>(null);
   const tportRef = useRef<HTMLInputElement>(null);
 
@@ -104,6 +107,7 @@ export function SettingsPage() {
     try {
       await call('backup_create');
       toast(t('toast.backup.done'));
+      setNeedBackup(false);
     } catch (e) {
       if (!CANCELLED.has(toIpcError(e).reason)) toast(t('error.generic'), 'warn');
     } finally { setBusy(null); }
@@ -149,6 +153,7 @@ export function SettingsPage() {
       <SectionHead title={t('set.backup')} />
       <p className="page-help">{t('set.backup.help')}</p>
       <div className="glass pad">
+        {needBackup && <Callout className="flush">{t('set.recover.backupNow')}</Callout>}
         {control.restore_pending && (
           <Callout className="flush">
             {t('set.ack.pending')}{' '}
@@ -164,7 +169,7 @@ export function SettingsPage() {
 
       <ConfirmSheet key={sheets.key('restore')} id="sheet-restore" open={sheets.isOpen('restore')} title={t('set.restore')} lead={t('set.restore.sub')}
         confirmLabel={t('set.restore.confirm')} needPass warn={t('set.restore.warn')} onClose={sheets.close}
-        errorFor={(e) => (CANCELLED.has(toIpcError(e).reason) ? 'set.restore.cancelled' : null)}
+        errorFor={(e) => restoreErrorKey(toIpcError(e).reason)}
         run={async (pass) => {
           await call('backup_restore', { admin_passphrase: pass });
           toast(t('toast.restore.done'), 'warn'); sheets.close(); bump();
@@ -176,14 +181,17 @@ export function SettingsPage() {
           // restore-ack lifts only the restore hold; a global stop stays until it is resumed
           toast(t(out.stopped === true ? 'toast.ack.stopped' : 'toast.ack.done'), out.stopped === true ? 'warn' : 'info'); sheets.close(); bump();
         }} />
-      <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); bump(); }} />
+      <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); setNeedBackup(true); bump(); }} />
     </>
   );
 }
 
-/** The recovery code replaces the device key with a new one (`recover`): for a device key that
- *  may have leaked. It needs the current device key file, revokes every agent permission and
- *  rotates the handles, so the sheet says so before anything runs. The code goes to the core once. */
+/** The recovery code replaces the device key file (`recover`): a new key file wraps the same
+ *  data key again (rust/src/context.rs, rust/src/vault.rs `Vault::recover`), every agent
+ *  permission is revoked and the handles rotate, and a backup made before it no longer restores
+ *  (`backup_kms_mismatch`). It needs the current key file. It is not a response to a leaked key
+ *  file: whoever holds the old file and a copy of the vault still has the data key, so the sheet
+ *  says to replace every stored key and revoke it at its service. The code goes to the core once. */
 function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): void; onDone(): void }) {
   const { toast } = useApp();
   const [code, setCode] = useState('');
@@ -215,6 +223,7 @@ function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): voi
       <TextField id="recover-code" label={t('rec.own.field')} type="password" mono value={code} inputRef={ref} placeholder="ABCD-EFGH-…"
         error={err ? t(err) : null} onChange={(v) => { setCode(v); setErr(null); }} />
       <Callout>{t('set.recover.warn')}</Callout>
+      <Callout kind="info">{t('set.recover.leak')}</Callout>
     </Sheet>
   );
 }
