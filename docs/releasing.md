@@ -14,9 +14,107 @@ The repository is public. The owner selected Apple Silicon macOS and ARM64 GNU/L
 
 `python3 scripts/package-release.py --version v0.1.0 --target TARGET --bin-dir DIR --out-dir DIR --third-party-licenses NOTICES_FILE` creates a flat binary archive and its checksum. Generate the target notices first with `python3 scripts/dependency-licenses.py --target TARGET --output NOTICES_FILE`. The license is MIT. The builder recognizes four targets; v0.1.0 publishes only `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`. Recognition by the tooling is not a support claim.
 
+`python3 scripts/build-release.py --target TARGET --out-dir DIR --bin NAME [--bin NAME ...]` builds only the named release binaries in the same way (pinned static OpenSSL, `--features bundled-openssl`, linkage check, `DIR/THIRD_PARTY_LICENSES.md`) and copies them to `DIR/bin` without creating an archive. The desktop app builds its sidecars this way.
+
 `scripts/install.sh --version v0.1.0` downloads the matching archive and its matching `.tar.gz.sha256` asset from GitHub Releases. Before publication, use `--archive FILE --sha256 HEX` with a verified local archive. The default prefix is `$HOME/.local`; `--prefix /absolute/path` overrides it. Existing binaries are preserved unless `--force` is supplied.
 
 The installer does not use sudo, initialize a vault, start a service, modify shell profiles, or execute downloaded binaries. Checksums detect corruption but are not an independent signature: the release host and publisher remain trusted. Updates replace five staged binaries individually; this is not an atomic transaction across the entire installation. Stop running processes before an upgrade.
+
+## Desktop app (macOS .dmg)
+
+The desktop app (docs/desktop-app.md) can be packaged as an Apple Silicon disk image without any signing credential. Packaging is not publishing: no desktop image has been released, and whether to publish one, under which tag and with which signature is the owner's decision. Never attach a desktop image to an existing release such as v0.1.0; its evidence is bound to its own commit and its archives contain different product source. Use a new tag.
+
+### Gates
+
+The five gates above apply to the desktop image:
+
+1. Run the complete Rust matrix and `desktop/verify.sh` on Linux and macOS at the release commit. The bundled `zeropw-admin`, `zeropw_session` and `zeropw-agent` are built from `rust/` at that commit, not taken from an earlier CLI release.
+2. Review current source and history for private information, including `desktop/`.
+3. Package natively on an Apple Silicon Mac that holds no vault, signing or notarization keys, with the command below. Then download the published image in a browser on a clean Apple Silicon Mac, verify its checksum, approve it in Gatekeeper, launch it, create a throwaway vault, start the relay and run an agent command, so the sidecars run from the installed app. The packaging script does not run the app.
+4. Keep the `.dmg.sha256` beside the image. The image contains the MIT `LICENSE` and the desktop `THIRD_PARTY_LICENSES.md`; publish the same notices as a separate asset.
+5. Obtain the required review for the exact commit and bind the image's SHA-256 to it. Do not reuse an earlier PASS.
+
+### Packaging
+
+```sh
+python3 desktop/scripts/package-macos.py --work-dir /path/outside/the/checkout/work --out-dir /path/outside/the/checkout/out
+```
+
+It needs Apple Silicon macOS with the Xcode command line tools, the Rust toolchain, Node.js and npm, Perl and make (for OpenSSL), and network access for crates, npm packages and the OpenSSL source. `CARGO_TARGET_DIR` is honored. The script:
+
+1. refuses to start while any `APPLE_*` variable or another signing, notarization or updater credential variable is set. Tauri reads those variables from the environment of the whole build, which also runs npm, Vite and every Cargo build script; credentials never belong there;
+2. requires a clean tracked tree and builds a copy of the committed `HEAD` in the work directory, so nothing is written into the checkout;
+3. requires the desktop version fields to agree: `tauri.conf.json`, `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `core/Cargo.toml` and the two workspace entries in `desktop/Cargo.lock`. They give the release version `vX.Y.Z`; bump them together. The sidecars report the version of `rust/Cargo.toml`;
+4. runs `npm ci --ignore-scripts`, then `desktop/scripts/prepare-sidecars.sh`, which builds the three sidecars with `scripts/build-release.py --bin` (pinned static OpenSSL 3.5.9, `--features bundled-openssl`, linkage check) and writes the notices, then `tauri build --config src-tauri/tauri.bundle.conf.json --bundles app,dmg` with `CI=true`, which skips the Finder window layout step;
+5. verifies the image before anything reaches the output directory: `hdiutil verify`; mounted read-only, the app, the three sidecars, `LICENSE` and `THIRD_PARTY_LICENSES.md` are present and equal to their sources; `otool -L` lists no `/opt/homebrew`, `/usr/local`, `libssl` or `libcrypto` library for any of the four executables; each executable is arm64 with minimum macOS 11.0 and an ad hoc signature with the hardened runtime; the bundle has sealed resources and passes `codesign --verify --deep --strict`; `Info.plist` has the version, `LSMinimumSystemVersion` 11.0 and `NSLocalNetworkUsageDescription`. `spctl -a -vv` is recorded and is expected to reject an ad hoc signed app; that is not a packaging failure.
+
+Artifacts, never replaced once present in the output directory:
+
+| File | Contents |
+| --- | --- |
+| `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg` | `ZeroPW.app` and an `Applications` link |
+| `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg.sha256` | `<hex>  <name>`, the same format as the CLI archives |
+| `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin-THIRD_PARTY_LICENSES.md` | the notices shipped in `Contents/Resources` |
+| `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin-verification.txt` | source commit, checksums and every verification command with its output; packaging evidence, not a release asset |
+
+`ZeroPW.app/Contents/MacOS` holds `zeropw-desktop`, `zeropw-admin`, `zeropw_session` and `zeropw-agent`; `Contents/Resources` holds `LICENSE` and `THIRD_PARTY_LICENSES.md`. The image is arm64 only; Intel Macs are not supported. `Info.plist` declares macOS 11.0 as the minimum, but only the macOS versions actually tested may be stated as supported.
+
+The notices cover the Rust crates of the app executable for `aarch64-apple-darwin`, the sidecars' crates with the statically linked OpenSSL, and the npm packages bundled into the web interface, including the Pretendard and JetBrains Mono fonts (OFL-1.1). A few crates publish no notice file; `desktop/licenses/supplement.json` names a reviewed replacement for each exact version, and a new version fails the collection until it is reviewed. The file ends with source locations for the MPL-2.0 components. Like the CLI notices, this is an inventory, not a legal review.
+
+### Ad hoc signature and Developer ID
+
+The release config signs with the ad hoc identity `"-"`: Tauri signs each sidecar, then the bundle, with the hardened runtime. The whole bundle is sealed, so `codesign --verify --deep --strict` detects modified or added files, but an ad hoc signature names no publisher, is not notarized and cannot be revoked. Gatekeeper rejects it, and users have to override that decision once.
+
+A Developer ID signature with notarization names the publisher, passes Apple's malware check, can be revoked and opens without the override. It requires a paid Apple Developer Program membership and is the recommended way to distribute an app that holds credentials. It is a separate procedure on a trusted Mac, never part of the build.
+
+### What users see on macOS 15 and later
+
+A browser download is quarantined. Opening the ad hoc signed app shows that Apple could not verify that ZeroPW is free of malware, with Done and Move to Trash; Control-click › Open no longer bypasses this since macOS 15. To open it anyway:
+
+1. Try to open ZeroPW once and close the dialog with Done.
+2. Open System Settings › Privacy & Security, scroll to Security, and click Open Anyway next to the message about ZeroPW. The button is offered for about an hour after the attempt.
+3. Confirm with the login password, then choose Open.
+
+Release notes must say that the app is not notarized and show these steps. Do not tell users to remove the quarantine attribute (`xattr -cr`) or to turn Gatekeeper off (`spctl --master-disable`). Whether macOS assesses the ad hoc signed sidecars again when the approved app starts them is not verified; gate 3 covers it. Sources: Apple's Mac User Guide, "Open a Mac app from an unknown developer", and Apple Developer News, 2024-08-06.
+
+### Checksum verification
+
+With both files in one folder:
+
+```sh
+shasum -a 256 -c zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg.sha256
+```
+
+It prints `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg: OK`. As with the CLI archives, a checksum published next to the image detects corruption but is not a signature; the release host and publisher remain trusted.
+
+### Developer ID signing and notarization
+
+Run this only on a trusted Mac that keeps the Developer ID Application identity in its keychain and a `notarytool` keychain profile, and that never builds or runs submitted code. Start from an image that `package-macos.py` produced and verified; do not rebuild there, and never pass the certificate, its password, an Apple ID, an app-specific password or an API key to a build.
+
+```sh
+dmg=zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg
+id="Developer ID Application: <name> (<team id>)"
+mkdir -p work/root
+hdiutil attach -readonly -nobrowse -mountpoint work/mnt "$dmg"
+ditto work/mnt/ZeroPW.app work/root/ZeroPW.app
+hdiutil detach work/mnt
+# inside out: the sidecars, then the bundle (which signs the app executable)
+for bin in zeropw-admin zeropw_session zeropw-agent; do
+  codesign --force --options runtime --timestamp --sign "$id" "work/root/ZeroPW.app/Contents/MacOS/$bin"
+done
+codesign --force --options runtime --timestamp --sign "$id" work/root/ZeroPW.app
+codesign --verify --deep --strict --verbose=2 work/root/ZeroPW.app
+codesign -dvv work/root/ZeroPW.app    # Authority=Developer ID Application, Timestamp=
+ln -s /Applications work/root/Applications
+hdiutil create -volname ZeroPW -srcfolder work/root -format UDZO -o "signed-$dmg"
+codesign --force --timestamp --sign "$id" "signed-$dmg"
+xcrun notarytool submit "signed-$dmg" --keychain-profile <profile> --wait
+xcrun stapler staple "signed-$dmg"
+xcrun stapler validate "signed-$dmg"
+spctl -a -vv -t open --context context:primary-signature "signed-$dmg"    # accepted, Notarized Developer ID
+```
+
+If notarization fails, read `xcrun notarytool log <submission id> --keychain-profile <profile>`. No entitlements are expected (the web view runs its JIT in Apple's WebContent process); add none without a failing launch that requires it. Then rename the signed image to the release name, write a new `.sha256`, mount it and repeat the `otool`, `codesign --verify --deep --strict` and `spctl -a -vv -t exec` checks (now accepted), and record the identity, the notarization submission ID and the new SHA-256 in the release evidence. The ad hoc and the Developer ID image have different checksums; publish only one.
 
 ## v0.1.0 evidence and installation
 
