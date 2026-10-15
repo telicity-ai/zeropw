@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react';
 import { call } from '../ipc/client';
 
-// Window content protection (docs/desktop-app.md §8.8) while a one-time value (recovery code,
-// revealed key, invite link) is on screen. The protection is switched on and confirmed by the
-// core before the value is painted, and switched off only after the value has left the screen.
-// Holders are counted so one view closing does not lift the protection another still needs, and
-// the `secure_view` calls go out one at a time so an "off" can never overtake a later "on".
-// Nothing in the UI claims the protection: where the platform cannot give it, values are shown
-// all the same and no text says otherwise.
+// Screen-capture exclusion request (docs/desktop-app.md §8.8) while a one-time value (recovery
+// code, revealed key, invite link) is on screen. It is a best-effort request to the window system
+// (on macOS NSWindow.sharingType = none), not a guarantee: capture tools may ignore it (tools built
+// on ScreenCaptureKit reportedly do from macOS 15), and it is untested on a release build. The
+// value is painted only after the core has answered the request, and the request is lifted only
+// after the value has left the screen. Holders are counted so one view closing does not lift the
+// request another still needs, and the `secure_view` calls go out one at a time so an "off" can
+// never overtake a later "on". Nothing in the UI claims the window is protected: where the
+// platform has no such request, or the request is ignored, values are shown all the same and no
+// text says otherwise.
 
-/** true: the core reports the window is protected; false: it is not (or the call failed);
- *  null: the core answered without saying (an older core whose `secure_view` returns nothing). */
+/** true: the core applied the exclusion request without error (best effort; it does not mean the
+ *  window cannot be captured); false: it did not (no such request on this platform, such as
+ *  Linux, or the call failed); null: the core answered without saying (an older core whose
+ *  `secure_view` returns nothing). */
 export type Protection = boolean | null;
 export interface SecureHold {
-  /** Settles once the core has applied the protection. */
+  /** Settles once the core has answered the exclusion request. */
   ready: Promise<Protection>;
   /** Give the hold back (idempotent). */
   release(): void;
@@ -37,7 +42,7 @@ function send(on: boolean): Promise<Protection> {
   return p;
 }
 
-/** Take a hold; `ready` settles after the core has turned the protection on. */
+/** Take a hold; `ready` settles after the core has answered the request to turn the exclusion on. */
 export function holdSecureView(): SecureHold {
   holders += 1;
   if (holders === 1) lastOn = send(true);
@@ -60,9 +65,10 @@ export function afterPaint(fn: () => void): void {
   else setTimeout(fn, 32);
 }
 
-/** Gate for a one-time value: returns true only while `want` is true and the core has confirmed
- *  the protection. When `want` turns false the gate closes in the same render (the value leaves
- *  the DOM at once) and the hold is given back after the next paint. */
+/** Gate for a one-time value: returns true only while `want` is true and the core has answered
+ *  the exclusion request (whatever the answer: the value is shown even where the request is not
+ *  available). When `want` turns false the gate closes in the same render (the value leaves the
+ *  DOM at once) and the hold is given back after the next paint. */
 export function useSecureGate(want: boolean): boolean {
   const [open, setOpen] = useState(false);
   useEffect(() => {
