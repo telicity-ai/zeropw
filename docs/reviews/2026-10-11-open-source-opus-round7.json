@@ -1,0 +1,186 @@
+{
+  "head_sha": "b94e8792436a82266c1ab0d9f5611c80f5cc846a",
+  "verdict": "PASS",
+  "verdict_scope": "Static source review only. This verdict does not grant execution, repository or release acceptance.",
+  "verdict_basis": "NEW-6 and NEW-7 are resolved in the supplied source, and no new source finding was identified. All earlier findings (R1-R9, N1-N4, NEW-1 to NEW-5) remain resolved, and the files they depend on are unchanged or still consistent. Zero source findings remain, so the static verdict is PASS. The execution gates below are separate and most are still pending for this exact head.",
+  "statuses": [
+    {
+      "id": "R1",
+      "severity": "high",
+      "status": "resolved",
+      "note": "fact_role_ok member_removed requires the owner, an active admin, or the target itself. The exact-{target} reciprocal exception is applied identically in role_document_for_removal, author_fact(team=None) and load_facts. Residual: there is no author_fact(team=None) test for a removed-admin caller, and the publish assertion checks is_err() rather than the reason."
+    },
+    {
+      "id": "R2",
+      "severity": "medium",
+      "status": "resolved",
+      "note": "The draining branch forwards only a reciprocal or self member_removed fact authored by the drained peer. Other facts are audited and dropped. The drain deadline cannot be extended (or_insert_with)."
+    },
+    {
+      "id": "R3",
+      "severity": "medium",
+      "status": "resolved",
+      "note": "install.sh fetches <name>.sha256 and matches `$2 == name`. The TLS-served test covers the valid, missing and duplicate cases."
+    },
+    {
+      "id": "R4",
+      "severity": "medium",
+      "status": "resolved",
+      "note": "The subject is the neutral 'action required'. A test covers stopped=false with no secrets."
+    },
+    {
+      "id": "R5",
+      "severity": "low",
+      "status": "resolved",
+      "note": "pin() requires the head line exactly once and a 40-hex commit, and emits an escaped single-quoted Ruby literal. Residual: there is no post-install revision assertion."
+    },
+    {
+      "id": "R6",
+      "severity": "low",
+      "status": "resolved",
+      "note": "The cleanup trap is installed before either mktemp. A doc-stage failure test is present."
+    },
+    {
+      "id": "R7",
+      "severity": "low",
+      "status": "resolved",
+      "note": "GzipFile(filename='', mtime=0) wraps a normalized USTAR tar. An identical-bytes test is present."
+    },
+    {
+      "id": "R8",
+      "severity": "low",
+      "status": "resolved",
+      "note": "Null renders as 'unknown'. Escalation is a single `--scope runtime` line. Every command has the full prefix. recover precedes close."
+    },
+    {
+      "id": "R9",
+      "severity": "low",
+      "status": "resolved",
+      "note": "Four targets are listed and the English-status sentences match current state. Residual (not re-filed): README-ko.md still says verification needs no Python."
+    },
+    {
+      "id": "N1",
+      "severity": "high",
+      "status": "resolved",
+      "note": "author_commit gates secret.put_version under the state lock. It fails closed on unsafe current wraps or on generation_id != dek.current."
+    },
+    {
+      "id": "N2",
+      "severity": "medium",
+      "status": "resolved (documented limit, rejected_removals, reissue)",
+      "note": "Conflicting removals are surfaced in status and can be reconciled by reissuing the removal."
+    },
+    {
+      "id": "N3",
+      "severity": "low",
+      "status": "resolved",
+      "note": "Repair is admin-gated, backs off and audits failures. The per-poll cost it originally addressed was reintroduced and then closed under NEW-7."
+    },
+    {
+      "id": "N4",
+      "severity": "low",
+      "status": "resolved",
+      "note": "All loaders share load_facts admission: signature, then a local receipt, the historical rule, or current authority. Rejected lines are quarantined."
+    },
+    {
+      "id": "NEW-1",
+      "severity": "high",
+      "status": "resolved",
+      "note": "Writes are refused and a rotation is forced whenever the current wraps include a non-active member, or a removed member from facts or commits."
+    },
+    {
+      "id": "NEW-2",
+      "severity": "medium",
+      "status": "resolved",
+      "note": "The release environment is scrubbed, build.rs rejects conflicting overrides, and verify_linkage iterates package BINS. All three are tested."
+    },
+    {
+      "id": "NEW-3",
+      "severity": "high",
+      "status": "resolved",
+      "note": "The historical-admin and historical-member rules keep revocations and incidents. The unsupported pre-receipt upgrade path is documented in team-sync.md \u00a714."
+    },
+    {
+      "id": "NEW-4",
+      "severity": "medium",
+      "status": "resolved",
+      "note": "admit_member goes through author_commit, which observes stored HLCs. Admission failures are audited."
+    },
+    {
+      "id": "NEW-5",
+      "severity": "low",
+      "status": "resolved",
+      "note": "broadcast and send_removal_notice defer while the state lock is held and are flushed by poll outside the lock. Residual: overflow drops are silent, and deliver_incident still sends directly but is not reachable under the lock today."
+    },
+    {
+      "id": "NEW-6",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "pick_up_local_facts now takes the state lock first and holds it across the stamp check, load_facts (admission snapshot), read_lines (file scan), every quarantine_local_fact, receipt, apply and refold, and the final stamp update.",
+        "membership::author_fact(team=None) appends only while holding the same state lock (an exclusive flock across processes, re-entrant per thread, per store.rs). A CLI append therefore cannot fall between the admission snapshot and the scan.",
+        "Receive and publish paths (store_fact) also append under the lock, and broadcasts made inside the pickup defer until the lock is released.",
+        "The test idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive runs 12 concurrent standalone author_fact writers against pickups. It asserts that all 12 facts survive both on disk (load_facts) and in memory (disabled_connections)."
+      ],
+      "residual_notes": [
+        "The concurrency test is probabilistic and does not deterministically force the old window. The guarantee is structural: one lock-held transaction."
+      ]
+    },
+    {
+      "id": "NEW-7",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "Under the lock, fact_file_stamp captures (inode, length, mtime, mtime_nsec) of facts.jsonl. When it equals the stored stamp, pickup returns before load_facts, so an idle poll does no fold and no signature verification.",
+        "The stamp is recorded only after a completed pickup, under the same lock. Any `?` error leaves it unchanged, so the next poll retries.",
+        "Appends change the length. Quarantine and load_facts rewrites go through write_bytes (tmp file and rename), which gives a new inode. Changes made during the pickup are therefore folded into the recorded stamp rather than missed.",
+        "The test asserts that 12 idle pickups do not increment fact_pickup_loads."
+      ],
+      "residual_notes": [
+        "Cost is now driven by change rather than by polling. A received or appended fact still triggers one full cold load on the next pickup, and refold runs load_facts once per newly inserted fact within that pickup. This is acceptable but grows with fact count during bursts.",
+        "A change could theoretically go undetected if inode reuse, identical length and identical mtime to the nanosecond all coincide. On a filesystem with coarse timestamps this is improbable but not impossible."
+      ]
+    }
+  ],
+  "new_findings": [],
+  "known_open": [
+    {
+      "id": "OSS-TEAM-SELFREMOVE",
+      "status": "open (preserved, not re-adjudicated)",
+      "note": "remove_member still rotates only when `is_admin && caller != fingerprint`. Receiving-admin repair is bound to removal_fact_hash and does not repeat, and writes fail closed until it completes. Owner re-adjudication requires exact-head execution evidence."
+    },
+    {
+      "id": "OSS-INSTALL-OPENSSL",
+      "status": "open",
+      "note": "The linkage gate and environment scrubbing are tested. Not yet established at this head: a pinned 3.5.9 SDK build with verify_linkage run on the real binaries, an Intel macOS build, and fresh-host glibc portability. The Formula intentionally uses Homebrew openssl@3."
+    },
+    {
+      "id": "OSS-HOMEBREW-ACK",
+      "status": "open (pending final-source Homebrew validation)",
+      "note": "runs.rs and the Formula are unchanged. A real Homebrew install and test passed only at an earlier commit."
+    }
+  ],
+  "execution_gates": {
+    "supplied": [
+      "Focused team::sync library tests: 26 passed, 0 failed, including idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive and admission_observes_future_commits_and_send_waits_for_unlock.",
+      "Clippy check finished without warnings or errors."
+    ],
+    "binding": "The evidence states the logs were produced from product source identical to b94e879. This reviewer did not independently verify that binding, and the logs come from a worktree path.",
+    "pending": [
+      "Exact-head immutable full Rust matrices on macOS and Linux, including astra_team_round3 and the other team integration targets.",
+      "Python tooling tests at this head.",
+      "Pinned SDK build plus verify_linkage on the five real binaries.",
+      "Archive install and installed demo from the bundled build.",
+      "Final-source Homebrew install and test."
+    ],
+    "note": "The static PASS does not satisfy any of these gates, and no earlier execution PASS carries over to this head."
+  },
+  "limitations": [
+    "Static review only, with no tools. Nothing was built, run or installed, and the supplied file SHA-256 values were not checked against the head.",
+    "Source and review contents were treated as data, not instructions.",
+    "Not supplied: incident.rs, smtp.rs, vault and CLI callers, and Cargo bin definitions. It is unverified that every production shared-secret write goes through membership::author_commit, and which commands pass Some(team) to remove_member.",
+    "Lock semantics (re-entrant per thread, exclusive flock across threads and processes) are taken from the supplied store.rs. openssl-sys environment precedence is taken from that crate's documentation.",
+    "This is not repository or release acceptance."
+  ],
+  "review_model": "claude-opus-5-5"
+}

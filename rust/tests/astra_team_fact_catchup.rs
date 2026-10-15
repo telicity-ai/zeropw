@@ -123,13 +123,13 @@ fn offline_fact_reaches_authenticated_replacement_and_remains_monotone() {
         .unwrap();
     let lost_hash = sync::Fact::from_dict(&lost).unwrap().hash().unwrap();
     assert!(
-        sync::load_facts(a.ctx.state, &env)
+        sync::load_facts(&a.ctx, &env)
             .unwrap()
             .1
             .contains(&lost_hash)
     );
     assert!(
-        !sync::load_facts(b.ctx.state, &env)
+        !sync::load_facts(&b.ctx, &env)
             .unwrap()
             .1
             .contains(&lost_hash)
@@ -158,14 +158,14 @@ fn offline_fact_reaches_authenticated_replacement_and_remains_monotone() {
     wait(
         "offline fact is caught up after authenticated reconnect",
         || {
-            sync::load_facts(fresh_b.ctx.state, &env)
+            sync::load_facts(&fresh_b.ctx, &env)
                 .unwrap()
                 .1
                 .contains(&lost_hash)
         },
     );
     assert!(
-        sync::load_facts(fresh_b.ctx.state, &env)
+        sync::load_facts(&fresh_b.ctx, &env)
             .unwrap()
             .0
             .disabled_connections
@@ -181,7 +181,7 @@ fn offline_fact_reaches_authenticated_replacement_and_remains_monotone() {
         .unwrap();
     let delivered_hash = sync::Fact::from_dict(&delivered).unwrap().hash().unwrap();
     wait("connected fact arrives", || {
-        sync::load_facts(fresh_b.ctx.state, &env)
+        sync::load_facts(&fresh_b.ctx, &env)
             .unwrap()
             .1
             .contains(&delivered_hash)
@@ -200,7 +200,7 @@ fn offline_fact_reaches_authenticated_replacement_and_remains_monotone() {
             .unwrap()
             >= after.author_seq
     });
-    let facts = sync::load_facts(fresh_b.ctx.state, &env).unwrap();
+    let facts = sync::load_facts(&fresh_b.ctx, &env).unwrap();
     assert!(facts.1.contains(&lost_hash));
     assert!(facts.1.contains(&delivered_hash));
     assert!(

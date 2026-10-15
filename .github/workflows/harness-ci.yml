@@ -1,10 +1,8 @@
 name: Harness CI
 
+# Hosted jobs are opt-in; pushes and PRs must not consume hosted minutes.
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -55,8 +53,33 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
+      - name: Run installation boundary tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Run the Rust verification matrix
         run: rust/verify.sh
+
+      - name: Build and install a native release archive
+        shell: bash
+        run: |
+          case "$(uname -s):$(uname -m)" in
+            Darwin:arm64) target=aarch64-apple-darwin ;;
+            Darwin:x86_64) target=x86_64-apple-darwin ;;
+            Linux:x86_64) target=x86_64-unknown-linux-gnu ;;
+            Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu ;;
+            *) exit 1 ;;
+          esac
+          python3 scripts/build-release.py --target "$target" --version v0.1.0 --out-dir dist
+          archive="dist/zeropw-v0.1.0-${target}.tar.gz"
+          checksum=$(awk '{print $1}' "$archive.sha256")
+          bash scripts/install.sh --archive "$archive" --sha256 "$checksum" --prefix "$RUNNER_TEMP/zeropw-installed"
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-agent" --help
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-admin" --help
+          "$RUNNER_TEMP/zeropw-installed/bin/zeropw-demo"
+
+      - name: Validate Homebrew source installation at this commit
+        if: runner.os == 'macOS'
+        run: scripts/test-homebrew.sh
 
   desktop-tests:
     strategy:

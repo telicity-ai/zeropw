@@ -126,7 +126,7 @@ struct Running {
 
 fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
     d.say(&format!(
-        "[1] 상태 디렉터리와 신뢰 프로세스 준비: {}",
+        "[1] Prepare state and trusted process: {}",
         root.display()
     ));
     let ctx = Arc::new(Context::initialize(
@@ -155,7 +155,7 @@ fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
 
     let mut upstream = FakeUpstream::new(synthetic.clone()).start();
     d.say(&format!(
-        "    시험용 외부 API: {} (합성 토큰만 인증)",
+        "    Test upstream API: {} (synthetic tokens only)",
         upstream.url()
     ));
 
@@ -175,7 +175,7 @@ fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
         "http",
         "gh-token",
         None,
-        "데모 코드 호스팅 API 연결",
+        "Demo code-hosting API connection",
         Some(HttpTarget::new(
             "http",
             "127.0.0.1",
@@ -224,7 +224,7 @@ fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
         "ssh",
         "box-key",
         None,
-        "데모 SSH 목적지",
+        "Demo SSH destination",
         None,
         None,
         None,
@@ -254,8 +254,10 @@ fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
     server.serve_in_thread()?;
     d.url = server.url();
     d.caller_token = caller_token;
-    d.say(&format!("    게이트웨이·도구 API: {}", d.url));
-    d.say("    에이전트가 받는 것: 게이트웨이 URL과 호출 토큰(zpwc_...)뿐. 금고 값은 없음.");
+    d.say(&format!("    Gateway and tools API: {}", d.url));
+    d.say(
+        "    The agent receives only the gateway URL and caller token (zpwc_...). No vault values.",
+    );
     Ok(Running {
         ctx,
         server,
@@ -269,7 +271,7 @@ fn setup(d: &mut Demo, root: &Path) -> Result<Running, Error> {
 }
 
 fn normal_flow(d: &mut Demo, r: &Running) {
-    d.say("[2] 연결 한 번으로 여러 작업 (개별 등록 없음)");
+    d.say("[2] Different operations on one connection (no per-operation registration)");
     let (status, body) = d.call("list_connections", json!({}));
     let mut ids: Vec<String> = body["connections"]
         .as_array()
@@ -286,7 +288,7 @@ fn normal_flow(d: &mut Demo, r: &Running) {
     );
     d.check(
         !body.to_string().contains("secret_id"),
-        "연결 목록에 비밀 참조·값 없음",
+        "Connection list contains no secret references or values",
     );
 
     let (status, body) = d.call(
@@ -332,7 +334,7 @@ fn normal_flow(d: &mut Demo, r: &Running) {
             .iter()
             .all(|q| q.headers.get("authorization") == Some(&expected))
             && recorded.len() >= 4,
-        "업스트림은 매번 실제 합성 토큰만 받음 (자리표시자 democli-placeholder 없음)",
+        "Upstream receives only the actual synthetic token, never democli-placeholder",
     );
 }
 
@@ -359,12 +361,12 @@ fn raw_status_line(port: u16, request: &str) -> String {
 }
 
 fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
-    d.say("[3] 추출·반사·우회 시도");
+    d.say("[3] Extraction, reflection and bypass attempts");
     let run = d.exec_and_wait(json!(["steal"]));
     let stdout = run["stdout"].as_str().unwrap_or("").to_owned();
     d.check(
         run["state"] == "completed" && !stdout.contains(&r.synthetic) && !stdout.contains("zpw1."),
-        "democli steal: 환경·인자·홈 디렉터리에 비밀 없음 (핸들도 가려짐)",
+        "democli steal: no secrets in environment, arguments or home directory (handles also blocked)",
     );
     let env_names: Vec<String> = if stdout.starts_with('{') {
         serde_json::from_str::<Value>(&stdout)
@@ -382,7 +384,7 @@ fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
     d.check(
         env_names.iter().any(|n| n == "ZEROPW_API_BASE_URL")
             && !env_names.iter().any(|n| n.starts_with("ZEROPW_STATE")),
-        &format!("자식 환경변수: {}", repr_list(&env_names)),
+        &format!("Child environment variables: {}", repr_list(&env_names)),
     );
 
     let cases = [
@@ -390,37 +392,37 @@ fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
             "GET",
             "/echo-headers",
             "credential_reflection_blocked",
-            "헤더 반사 응답 차단",
+            "Header-reflection response blocked",
         ),
         (
             "GET",
             "/debug/token",
             "credential_reflection_blocked",
-            "토큰 조회 엔드포인트 응답 차단",
+            "Token-query endpoint response blocked",
         ),
         (
             "GET",
             "/base64-leak",
             "credential_reflection_blocked",
-            "base64 인코딩 반사 차단",
+            "Base64-encoded reflection blocked",
         ),
         (
             "GET",
             "/set-cookie",
             "credential_reflection_blocked",
-            "Set-Cookie 반사 차단",
+            "Set-Cookie reflection blocked",
         ),
         (
             "GET",
             "/redirect",
             "redirect_not_followed",
-            "리다이렉트 미추적 (Location 미전달)",
+            "Redirect not followed; Location not returned",
         ),
         (
             "PUT",
             "/repos",
             "method_not_allowed",
-            "허용 범위 밖 메서드 거부",
+            "Out-of-scope method denied",
         ),
     ];
     for (method, path, reason, label) in cases {
@@ -449,21 +451,24 @@ fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
         });
     d.check(
         body["status"] == 428 && digest.as_deref().is_some_and(|s| !s.is_empty()),
-        "DELETE /repos/demo -> 428 승인 필요 (digest 발급)",
+        "DELETE /repos/demo -> 428 approval required (digest issued)",
     );
     if let Some(digest) = digest.filter(|s| !s.is_empty()) {
         r.ctx.policy.approve(&digest)?;
-        d.say("    관리자가 digest에 묶인 일회성 승인을 부여");
+        d.say("    Administrator grants one-time approval bound to the digest");
         let (_, body) = d.call(
             "request",
             json!({"connection": "gh", "method": "DELETE", "path": "/repos/demo"}),
         );
-        d.check(body["status"] == 204, "승인 후 같은 입력의 DELETE -> 204");
+        d.check(
+            body["status"] == 204,
+            "DELETE with unchanged approved input -> 204",
+        );
         let (_, body) = d.call(
             "request",
             json!({"connection": "gh", "method": "DELETE", "path": "/repos/demo"}),
         );
-        d.check(body["status"] == 428, "승인은 일회성: 재시도 -> 428");
+        d.check(body["status"] == 428, "One-time approval: retry -> 428");
     }
 
     // A stolen handle cannot be pointed at another target; the connection fixes the target.
@@ -487,13 +492,16 @@ fn attacks(d: &mut Demo, r: &Running) -> Result<(), Error> {
     );
     d.check(
         status.split(' ').nth(1) == Some("200"),
-        "Host 헤더 변조는 무시되고 고정 대상으로만 전달",
+        "Manipulated Host ignored; request goes only to the fixed destination",
     );
     let status = raw_status_line(
         port,
         "CONNECT evil.invalid:443 HTTP/1.1\r\nHost: evil.invalid:443\r\n\r\n",
     );
-    d.check(format!("{status} ").contains(" 405 "), "CONNECT 터널 거부");
+    d.check(
+        format!("{status} ").contains(" 405 "),
+        "CONNECT tunnel denied",
+    );
     Ok(())
 }
 
@@ -507,7 +515,7 @@ fn refused<E>(reply: Result<Vec<u8>, E>) -> bool {
 }
 
 fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
-    d.say("[4] SSH 서명 위임 (스크립트 클라이언트, sshd 없이)");
+    d.say("[4] SSH signing delegation (scripted client, no sshd)");
     let manager =
         crate::tools::signer_manager(&r.ctx).ok_or_else(|| Error::state("demo_signer_missing"))?;
     let binding = manager.bind("agent-1", "box", &r.ssh_grant)?;
@@ -548,16 +556,16 @@ fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     let keys = sshwire::parse_identities_answer(reply.get(1..).unwrap_or(&[])).map_err(failed)?;
     d.check(
         keys.len() == 1 && keys[0].0 == user_blob,
-        "identities: 연결에 묶인 공개키 하나만 노출",
+        "identities: expose only the connection-bound public key",
     );
     d.check(
         refused(conn.request(&sshwire::build_sign_request(&user_blob, &userauth, 0))),
-        "세션 결합 전 서명 요청 거부",
+        "Signing before session binding denied",
     );
     d.check(
         conn.request(&bind_msg(&r.host_key, false)?).ok().as_deref()
             == Some(sshwire::build_success().as_slice()),
-        "session-bind: 허용된 목적지 호스트 키 + 유효 서명",
+        "session-bind: allowed destination host key and valid signature",
     );
     let reply = conn
         .request(&sshwire::build_sign_request(&user_blob, &userauth, 0))
@@ -571,7 +579,7 @@ fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
             && signature
                 .as_ref()
                 .is_some_and(|s| r.user_key.public.verify(&userauth, s)),
-        "결합된 세션의 userauth 요청 서명 -> 유효",
+        "Bound-session userauth signature is valid",
     );
     d.check(
         refused(conn.request(&sshwire::build_sign_request(
@@ -579,7 +587,7 @@ fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
             b"arbitrary bytes",
             0,
         ))),
-        "임의 데이터 서명 거부",
+        "Arbitrary-data signing denied",
     );
     let other_user = sshwire::build_userauth_request(
         &session_id,
@@ -591,11 +599,11 @@ fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     );
     d.check(
         refused(conn.request(&sshwire::build_sign_request(&user_blob, &other_user, 0))),
-        "다른 사용자 이름(root) 서명 거부",
+        "Signing for another username (root) denied",
     );
     d.check(
         refused(conn.request(&[sshwire::SSH_AGENTC_REMOVE_ALL_IDENTITIES])),
-        "키 삭제 메시지 거부",
+        "Key-removal message denied",
     );
     drop(conn);
 
@@ -603,20 +611,20 @@ fn ssh_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     let mut conn = connect()?;
     d.check(
         refused(conn.request(&bind_msg(&impostor, false)?)),
-        "다른 호스트 키로 session-bind 거부",
+        "session-bind with another host key denied",
     );
     d.check(
         refused(conn.request(&bind_msg(&r.host_key, true)?)),
-        "agent forwarding 결합 거부",
+        "Agent-forwarding binding denied",
     );
     drop(conn);
     binding.close();
-    d.say("    실제 sshd·ssh 종단 시험은 tests/test_ssh_e2e.py 참고");
+    d.say("    See rust/tests/signer_e2e.rs for real sshd/ssh end-to-end tests");
     Ok(())
 }
 
 fn revocation(d: &mut Demo, r: &Running) -> Result<(), Error> {
-    d.say("[5] 회수와 전체 정지");
+    d.say("[5] Revocation and global stop");
     r.ctx.policy.revoke_grant(&r.http_grant)?;
     let (_, body) = d.call(
         "request",
@@ -624,13 +632,13 @@ fn revocation(d: &mut Demo, r: &Running) -> Result<(), Error> {
     );
     d.check(
         body["reason"] == "grant_revoked",
-        "권한 회수 직후 request -> grant_revoked",
+        "Request immediately after grant revocation -> grant_revoked",
     );
     r.ctx.policy.stop_all()?;
     let (_, body) = d.call("list_connections", json!({}));
     d.check(
         body["connections"] == json!([]),
-        "전체 정지 중 list_connections -> 빈 목록",
+        "list_connections during global stop -> empty list",
     );
     r.ctx.policy.resume()?;
     let (_, body) = d.call("list_connections", json!({}));
@@ -638,7 +646,10 @@ fn revocation(d: &mut Demo, r: &Running) -> Result<(), Error> {
         .as_array()
         .map(|a| a.iter().filter_map(|c| c["id"].as_str()).collect())
         .unwrap_or_default();
-    d.check(ids == ["box"], "재개 후 남은 권한(box)만 보임");
+    d.check(
+        ids == ["box"],
+        "After resume, only the remaining grant (box) is visible",
+    );
     Ok(())
 }
 
@@ -657,7 +668,7 @@ fn read_state_text(path: &Path, out: &mut String) {
 }
 
 fn sweep(d: &mut Demo, r: &Running, root: &Path) -> Result<(), Error> {
-    d.say("[6] 유출 검사");
+    d.say("[6] Leakage checks");
     let encodings = [
         r.synthetic.clone(),
         pybase64::b64encode(r.synthetic.as_bytes()),
@@ -667,20 +678,20 @@ fn sweep(d: &mut Demo, r: &Running, root: &Path) -> Result<(), Error> {
     let visible = d.visible.join("\n");
     d.check(
         !encodings.iter().any(|e| visible.contains(e.as_str())),
-        "에이전트가 본 모든 도구 응답·실행 출력에 토큰 없음",
+        "No original token in agent-visible tool responses or execution output",
     );
     let mut state_text = String::new();
     read_state_text(&root.join("state"), &mut state_text);
     d.check(
         !encodings.iter().any(|e| state_text.contains(e.as_str())),
-        "상태 디렉터리 파일(감사 기록 포함)에 평문 토큰 없음",
+        "No plaintext token in state files, including audit records",
     );
     d.check(
         !r.server
             .log_lines()
             .iter()
             .any(|line| line.contains("zpw1.")),
-        "서버 로그에 핸들 없음",
+        "No handles in server logs",
     );
     let raw_audit = fs::read(root.join("state").join("audit").join("audit.jsonl"))
         .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -688,9 +699,9 @@ fn sweep(d: &mut Demo, r: &Running, root: &Path) -> Result<(), Error> {
     d.check(
         !raw_audit.contains("PRIVATE KEY")
             && !raw_audit.contains(&hex::encode(r.user_key.seed().expose())),
-        "감사 기록에 SSH 개인키 없음",
+        "No SSH private key in audit records",
     );
-    d.say("    최근 감사 기록 (값 없음):");
+    d.say("    Recent audit records (without secret values):");
     let text = |v: &Value| match v {
         Value::String(s) if !s.is_empty() => s.clone(),
         _ => String::new(),
@@ -712,7 +723,7 @@ fn sweep(d: &mut Demo, r: &Running, root: &Path) -> Result<(), Error> {
     kinds.sort();
     kinds.dedup();
     d.say(&format!(
-        "    알림 {}건: {}",
+        "    {} alerts: {}",
         alerts.len(),
         repr_list(&kinds)
     ));
@@ -720,7 +731,7 @@ fn sweep(d: &mut Demo, r: &Running, root: &Path) -> Result<(), Error> {
 }
 
 fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
-    d.say("[7] 침입 시뮬레이션: 미제공 도구 반복 호출 -> 자동 봉쇄");
+    d.say("[7] Intrusion simulation: repeated unsupported-tool calls -> automatic containment");
     // The detector is installed only for this phase, so the weak signals from
     // [2]-[6] (pending approvals, revocations) do not mix with the two
     // unknown-tool calls that reach the strong-signal threshold of two.
@@ -729,22 +740,22 @@ fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     let (status, body) = d.call("reveal_secret", json!({}));
     d.check(
         status == 404 && body["reason"] == "tool_not_found",
-        "미제공 도구 1차 호출 -> tool_not_found",
+        "First unsupported-tool call -> tool_not_found",
     );
     d.check(
         r.ctx.policy.open_incident_id()?.is_none(),
-        "1차 호출만으로는 아직 봉쇄되지 않음 (강한 신호 임계 2회)",
+        "First call does not trigger containment (strong-signal threshold: 2)",
     );
     let (status, body) = d.call("reveal_secret", json!({}));
     d.check(
         status == 404 && body["reason"] == "tool_not_found",
-        "미제공 도구 2차 호출 -> tool_not_found",
+        "Second unsupported-tool call -> tool_not_found",
     );
 
     let incident_id = r.ctx.policy.open_incident_id()?;
     d.check(
         incident_id.is_some(),
-        "2차 호출로 사건 자동 개설 (같은 호출 안에서 봉쇄까지 완료)",
+        "Second call opens an incident and completes containment within that call",
     );
     let found = match &incident_id {
         Some(id) => Some(incident::get_incident(&r.ctx, id)?),
@@ -752,13 +763,16 @@ fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     };
     let rule = |i: &incident::Incident| i.rule.clone().unwrap_or_else(|| "None".into());
     if let Some(i) = &found {
-        d.check(i.scope == "principal", &format!("봉쇄 범위: {}", i.scope));
+        d.check(
+            i.scope == "principal",
+            &format!("Containment scope: {}", i.scope),
+        );
         d.check(
             i.rule.as_deref() == Some("unknown_tool"),
-            &format!("판정 규칙: {}", rule(i)),
+            &format!("Detection rule: {}", rule(i)),
         );
         d.say(&format!(
-            "    사건 {}: 범위={} 규칙={} 판정 방식={}",
+            "    Incident {}: scope={} rule={} trigger={}",
             i.id,
             i.scope,
             rule(i),
@@ -769,7 +783,7 @@ fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
     let (status, body) = d.call("list_connections", json!({}));
     d.check(
         status == 401 && body["reason"] == "principal_disabled",
-        "봉쇄 뒤 같은 호출 주체의 다음 호출 -> principal_disabled",
+        "Next call from the contained principal -> principal_disabled",
     );
     let intrusion_alerts = r
         .ctx
@@ -780,23 +794,23 @@ fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
         .count();
     d.check(
         intrusion_alerts >= 1,
-        &format!("침입 알림 {intrusion_alerts}건"),
+        &format!("{intrusion_alerts} intrusion alerts"),
     );
 
     if let Some(i) = found {
         d.check(
             i.notification["status"] == "not_configured",
-            "notify.json을 설정하지 않은 데모: notification=not_configured (이메일 없이도 봉쇄는 완전함)",
+            "No notify.json in this demo: notification=not_configured (containment does not depend on email)",
         );
         let now = store::iso(Some((r.ctx.clock)()));
         let (subject, body_text) = notify::render_incident_email(&i, &now);
-        d.say("    렌더링된 교체 안내 이메일 (notify.json 미설정이라 실제로 발송하지는 않음):");
-        d.say(&format!("    제목: {subject}"));
+        d.say("    Rendered rotation email (not sent because notify.json is absent):");
+        d.say(&format!("    Subject: {subject}"));
         for line in body_text.lines() {
             d.say(&format!("      {line}"));
         }
 
-        d.say("[8] 복구: 사건을 닫고 새 호출 주체로 재개");
+        d.say("[8] Recovery: close the incident and resume with a new principal");
         incident::close_incident(&r.ctx, &i.id)?;
         let new_token = r.ctx.policy.create_principal("agent-2", "default")?;
         r.ctx
@@ -810,13 +824,13 @@ fn intrusion_demo(d: &mut Demo, r: &Running) -> Result<(), Error> {
         );
         d.check(
             status == 200 && body["status"] == 200,
-            "사건을 닫고 새 호출 주체로 재개한 뒤 request 다시 성공",
+            "Request succeeds after closing the incident and resuming with a new principal",
         );
         d.caller_token = old_token;
         let (status, body) = d.call("list_connections", json!({}));
         d.check(
             status == 401 && body["reason"] == "principal_disabled",
-            "비활성화된 예전 호출 주체는 그대로 거부됨",
+            "The disabled old principal remains denied",
         );
     }
     Ok(())
@@ -879,7 +893,7 @@ pub fn main() -> i32 {
     }
     if !d.failures.is_empty() {
         d.say(&format!(
-            "\n{}개 확인 실패 / 총 {}개:",
+            "\n{} checks failed out of {}:",
             d.failures.len(),
             d.checks
         ));
@@ -889,7 +903,7 @@ pub fn main() -> i32 {
         return 1;
     }
     d.say(&format!(
-        "\n모든 확인 통과 ({}개). 합성 자격증명은 신뢰 프로세스 밖으로 나가지 않았다.",
+        "\nAll {} checks passed. Synthetic credentials stayed within the trusted process.",
         d.checks
     ));
     0

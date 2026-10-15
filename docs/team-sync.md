@@ -1,424 +1,318 @@
-# ZeroPW 팀 공유: 서버 없는 환경 복제와 노드 간 동기화
+# Team sharing: direct environment replication
 
-작성일: 2026-09-16 · 설계 명세 · 구현 전
+Written 2026-09-16 as a design specification. Four implementation stages were subsequently ported to Rust; current limitations are explicit below. This is not an independent security review PASS.
 
-이 문서는 한 팀원의 기기에 있는 프로젝트 환경 하나를 다른 팀원을 초대해 공유하고, 어느 기기에서 고치든 모든 기기에 같은 상태가 반영되게 하는 기능을 정의한다. 클라우드도 상시 서버도 리더 노드도 두지 않는다. 각 팀원의 기기가 동등한 노드가 되어 서로 직접 연결하고, 변경은 서명된 커밋으로 노드 사이에 전파하며, 동시에 일어난 변경은 모든 노드가 같은 규칙으로 접어 같은 상태에 수렴한다.
+Share one project environment between invited devices. There is no cloud service, central server or leader. Equal nodes exchange signed commits directly and fold concurrent changes under the same deterministic rules. Preserve the [product](product-intent.md) and [security](security-design.md) boundaries: original secrets never enter agent processes, execution code or tool responses.
 
-[제품 정의](product-intent.md) §4는 팀 공유를 첫 버전 다음 범위로 정의한다(2026-09-16 개정). 이 문서는 그 범위의 명세다. [보안 경계](security-design.md)의 요구사항은 바꾸지 않는다. 원본 비밀은 여전히 에이전트·실행 코드·도구 응답에 나가지 않는다. 여기 적힌 것은 설계이고, 구현·시험·Opus 리뷰 통과를 뜻하지 않는다.
+## 1. Workflow
 
-## 1. 요약
+1. A promotes `my-app/staging` with `team share`. Connection definitions and encrypted secret versions form an environment document; edits become commits.
+2. A invites B. B creates device keys, joins A and receives history. DEKs are wrapped to B's public key.
+3. B's agent uses B's trusted `serve`, which relays HTTP or signs SSH from its local replica without exposing original values.
+4. An admin edits locally and immediately applies/broadcasts a commit. Other nodes verify/derive it; widening makes their local grants stale and removed connections lose active authority.
+5. Concurrent edits converge under total ordering. Irreversible disable/revoke/remove facts always override ordinary commits.
 
-1. 팀원 A가 자기 기기의 프로젝트 환경(예: `my-app/staging`)을 `team share`로 공유 환경으로 만든다. 환경의 연결 정의와 비밀 암호문이 하나의 **환경 문서**가 되고, 이후의 모든 변경은 그 문서에 대한 **커밋**이 된다.
-2. A가 팀원 B를 초대한다. B의 기기는 자기 키쌍을 만들고 A의 노드에 붙어 커밋 이력을 받는다. 환경의 데이터 암호화 키(DEK)는 B 기기의 공개키로 감싸 전달된다.
-3. B의 에이전트는 B 기기의 `serve`를 통해 그 환경의 연결을 쓴다. 인증 중계와 SSH 서명은 B 기기의 신뢰 프로세스가 로컬 복제본으로 수행한다. 원본 비밀은 B의 에이전트에게 나가지 않는다.
-4. B(admin 역할)가 연결의 범위를 고치면 B의 노드가 커밋을 만들어 즉시 자기 상태에 적용하고 연결된 모든 노드에 보낸다. A의 노드는 커밋을 검증해 적용하고, 넓어진 범위의 기존 권한을 `stale`로, 없어진 연결의 진행 중 실행을 취소로 처리한다. 이것이 "B가 수정되면 A도 수정"의 의미다.
-5. A와 B가 동시에 같은 것을 고치면 두 커밋 모두 전파되고, 모든 노드가 같은 결정적 순서로 접어 같은 결과를 얻는다. 비활성화·폐기·팀원 제거·침해 사건은 그 순서와 무관하게 항상 이긴다.
+## 2. Decisions
 
-## 2. 결정 사항
+The 2026-09-16 user decision selected direct equal-node replication, not a leased-leader approval scheme. The shared unit is one project environment, independent of project Git. Personal environments remain local. Identities belong to devices; two devices owned by one person require two invitations. A valid one-time invitation is sufficient enrollment approval without a second human step.
 
-이 명세는 2026-09-16 사용자와의 문답으로 확정한 다음 결정 위에 서 있다.
+Admin/user roles are environment-specific; users consume connections and admins edit/invite. Every member receives the environment DEK because its trusted gateway authenticates locally. Roles are policy, not cryptographic isolation from a device owner.
 
-| 항목 | 결정 | 배경 |
-| --- | --- | --- |
-| 서버 | 없음. 클라우드도 리더 노드도 없음. 팀원 기기끼리 직접 연결하며 모든 노드가 동등하다 | "서버리스"는 서버를 두지 않는다는 뜻이다. 각 기기가 자기 신뢰 프로세스를 돌린다. 처음에 검토한 임대 리더 방식은 "리더가 승인하는 구조가 아니라 모든 노드가 동등하게 갱신하고 전파"라는 정정으로 대체했다. |
-| 공유 단위 | 프로젝트의 환경 하나 | 기존 프로젝트 → 환경 → 비밀·연결 모델을 유지한다. |
-| 작업 사본 | 프로젝트 git과 별도. CLI가 관리하는 노드 로컬 복제본 | 변경은 diff 형태 커밋으로 노드 통신으로 전파한다. 사람이 읽는 형태는 CLI가 렌더한다. |
-| 충돌 | 모든 노드가 같은 결정적 순서로 커밋을 접는다. 같은 대상의 동시 변경은 순서상 뒤가 이기고, 되돌리지 않는 변경은 항상 이긴다 | §7. |
-| 팀원 신원 | 기기별 키쌍 + 초대. 사람이 기기를 둘 쓰면 각각 초대 | 관리자 패스프레이즈 공유가 아니다. 비밀키는 기기를 떠나지 않는다. |
-| 초대 수락 | 유효한 일회용 초대면 초대한 노드가 자동 수락 | 사람의 두 번째 동작 없이 가입이 끝난다. |
-| 역할 | 환경별 admin/user | user는 사용만, admin은 편집·초대. |
-| 개인 환경 | 노드 로컬 유지. 공유한 환경만 복제 | 지금의 상태 디렉터리 모델을 그대로 둔다. |
-| 네트워크 | 같은 LAN 또는 팀 VPN 안에서 host:port 직접 연결 | NAT 통과와 공개 포트는 구현하지 않는다. |
-| 자격증명 위치 | 모든 팀원 노드가 환경 DEK를 받는다 | 각 노드의 중계기가 직접 인증해야 한다. admin/user 구분은 정책적 통제이지 암호학적 통제가 아니다(§10). |
-| 오래된 복제본 | 사용을 계속 허용하고 마지막 동기화 시각을 드러낸다 | 오프라인 사용을 막지 않는다. 회수 지연은 한계로 적는다. |
-| 기록 공유 | 침해 사건 요약만 admin 노드에 전파. 사용 기록은 노드 로컬 | |
-| 플랫폼 | 전송 계층을 인터페이스로 두고, 참조 구현은 TCP(`std::net`) | 다른 전송(VPN 전용 인터페이스 등)은 같은 인터페이스 뒤에 붙인다. |
-| 사람이 읽는 형식 | JSON 저장, YAML은 출력 전용 | YAML 파서를 두지 않는다. 출력은 `team/humanview.rs`의 YAML 부분집합 작성기가 만든다. |
+Use direct host:port connectivity over LAN/team VPN. No NAT traversal or public relay. Offline replicas remain usable and expose synchronization age; revocation cannot reach them until reconnection. Usage audit remains local; only sanitized incident summaries are sent to admins. JSON is input/storage; YAML is output-only through `team/humanview.rs`. TCP is the reference transport behind an interface.
 
-## 3. 용어와 모델
+## 3. Model
 
-| 용어 | 뜻 |
+| Term | Meaning |
 | --- | --- |
-| 노드 | 팀원 기기에서 도는 ZeroPW 신뢰 프로세스(`serve`)와 그 상태 디렉터리. 기기 하나가 노드 하나다. |
-| 기기 키 | 노드의 신원. Ed25519 서명 키와 X25519 합의 키 한 쌍. 지문은 서명 공개키의 SHA-256 앞 16바이트를 base32로 적은 것. |
-| 팀원 | 환경에 초대된 기기. 한 사람이 기기를 둘 쓰면 팀원 항목도 둘이다. 이름은 초대할 때 admin이 붙이는 표시용 문자열이다. |
-| 공유 환경 | `team share`로 만든 프로젝트 환경. 환경 ID는 `<소유자 기기 지문>-<128비트 무작위 16진수>`다. 소유자 지문이 ID에 들어 있으므로 첫 커밋(`env.init`)은 그 지문의 기기가 만든 것만 유효하고, 다른 기기가 시계를 앞당겨 소유권을 가로챌 수 없다. 프로젝트·환경 이름은 노드마다 달라도 되며 환경 ID로 식별한다. |
-| 커밋 | 한 노드가 만든 서명된 변경. 작성 기기와 그 기기의 순번, 논리 시계 값을 갖는다. §5.2. |
-| 환경 문서 | 알고 있는 모든 커밋을 §7의 순서로 접은 결과. 연결 정의, 비밀 메타데이터와 암호문, 팀원 목록, DEK 감싸기. §5.1. |
-| 긴급 사실 | 되돌리지 않는 변경. 연결 비활성화, 비밀 버전 폐기, 팀원 제거, 사건 공개. 커밋 순서와 무관하게 항상 적용된다. §7.4. |
+| Node | One device's trusted `serve` and state directory. |
+| Device keys | Ed25519 signing and X25519 agreement keys. Fingerprint is base32 of the first 16 SHA-256 bytes of the signing public key. |
+| Member | An invited device; display names do not merge identities across devices. |
+| Environment | ID `OWNER_FINGERPRINT-RANDOM_128_BIT_HEX`. Only that owner can author valid `env.init`; advancing another clock cannot claim initial ownership. Local project/environment names may differ. |
+| Commit | Signed edits with author fingerprint, consecutive author sequence and HLC. |
+| Document | The fold of known commits: connections, secret metadata/ciphertext, members and wrapped DEK generations. |
+| Fact | Monotonic irreversible connection disable, secret-version revoke, member removal or incident publication. |
 
-### 3.1 무엇이 공유되고 무엇이 노드에 남는가
+### 3.1 Replicated and local state
 
-| 공유(커밋으로 모든 팀원 노드에 복제) | 노드 로컬(복제하지 않음) |
-| --- | --- |
-| 연결 정의: 대상, 인증 방식, 범위, CLI 프로필, 상태 | 호출 주체(에이전트 신원)와 토큰 |
-| 비밀 메타데이터와 버전별 암호문(환경 DEK로 암호화) | 권한(grant), 승인, 핸들 키, 핸들, 연결의 정책 버전 |
-| 팀원 목록: 기기 키, 이름, 역할, 상태 | 실행 기록, 서명기 소켓 |
-| 환경 DEK 세대와 팀원 기기별 감싸기 | 감사 기록 전체와 알림 |
-| 침해 사건 요약(admin 노드에만, §9) | 관리자·복구 패스프레이즈, 로컬 KMS 키 |
-| | 공유하지 않은 프로젝트·환경 전부 |
+Replicate connection target/auth/scope/profile/status, secret metadata/version ciphertext, members/device records, DEK generations/wraps, and admin-only incident summaries. Keep caller identities/tokens, grants, approvals, handle key/handles, policy versions, runs/signer sockets, full audit/alerts, administrator/recovery passphrases, local KMS and unshared environments local.
 
-권한을 노드 로컬로 두는 이유는 두 가지다. 호출 주체는 그 기기의 실행 환경에 묶인 신원이라 다른 기기에서 의미가 없고, user 역할이 자기 에이전트에게 권한을 주는 일을 오프라인에서도 할 수 있어야 한다.
+Local callers represent that device's runtime. Users must be able to grant their local agents authority offline. On any effective connection-definition change, increment the local policy version monotonically. Widening (`HttpScope.widens` or target/auth changes) makes that node's grants stale. Every node applies these rules independently to its own authority.
 
-연결의 정책 버전도 노드 로컬이다. 핸들과 권한이 노드 로컬이므로 버전은 그 노드 안에서만 단조 증가하면 된다. 노드는 커밋을 접은 결과 연결의 실효 정의가 바뀔 때마다 자기 정책 버전을 올리고, 이전 실효 정의보다 넓어졌으면(기존 `HttpScope.widens`와 대상·인증 비교) 그 연결의 로컬 권한을 `stale`로 만든다. 어느 노드에서 범위가 넓어지든 모든 노드가 같은 규칙을 자기 권한에 적용한다.
+## 4. Identity and encryption
 
-## 4. 신원과 키
+### 4.1 Device keys
 
-### 4.1 기기 키
+`team init` creates keys with the Rust Ed25519/X25519 modules. Wrap private keys under local KMS in 0600 `team/device.key`. A signed device record binds the agreement key to the signing identity. Private keys never leave the device and have no export command. Device identity does not replace passphrase reauthentication for local secret reveal, recovery or incident closure.
 
-`team init`이 노드에 기기 키를 만든다. Ed25519 서명 키는 `rust/src/crypto/ed25519.rs`, X25519 합의 키(RFC 7748)는 `rust/src/crypto/x25519.rs`를 쓴다. 두 비밀키는 상태 디렉터리 `team/device.key`(0600)에 두고 로컬 KMS로 감싼다. 서명 공개키가 X25519 공개키를 서명해 묶은 **기기 기록**이 팀원 목록에 들어간다. 비밀키는 기기를 떠나지 않으며 내보내기 명령이 없다.
+### 4.2 Environment DEK generations
 
-기기 키는 관리자 패스프레이즈를 대체하지 않는다. 노드 로컬의 관리 작업(비밀 단일 조회, 복구, 사건 닫기)은 지금처럼 패스프레이즈 재인증을 요구한다. 기기 키는 노드 사이의 신원이다.
+A shared environment has its own DEK, distinct from the local vault DEK. Encrypt secret versions with ChaCha20-Poly1305 and AAD containing environment, secret and version IDs. Commits carry only ciphertext.
 
-### 4.2 환경 DEK와 비밀 암호문
+Every version records its generation. Retain all decryptable generations; removal creates a new generation and concurrent rotations remain valid, with the later folded generation used for future encryption. Generation IDs in the current implementation are random 128-bit hex tokens chosen before wrapping, not commit hashes. This corrects inconsistent wording in the original section 4.2; section 5.3 and `team/membership.rs::rotate_dek` already specified/generated random IDs.
 
-공유 환경은 자기 DEK를 갖는다. 로컬 금고의 DEK와 다르다. 공유 환경에 속한 비밀의 모든 버전은 환경 DEK로 ChaCha20-Poly1305 암호화하며 AAD는 `환경 ID + 비밀 ID + 버전 ID`다. 암호문은 커밋에 실려 복제된다.
+Wrap each generation separately for each member using ephemeral X25519 agreement, HKDF-SHA256 with `zeropw-team-dek-v1`, environment/generation/recipient context, then ChaCha20-Poly1305. Unwrap only the local share and rewrap under local KMS at `team/ENV_ID/dek/GENERATION.json`. Vault trusted-use/scanning/reveal contracts remain; shared versions select their generation key rather than local DEK.
 
-환경 DEK는 **세대**를 갖는다. 세대 ID는 그 세대를 만든 커밋의 해시다. 각 버전 암호문은 자기가 쓴 세대 ID를 기록하고, 노드는 자기가 풀 수 있는 모든 세대를 보관한다. 팀원 제거 뒤 DEK 교체(§4.4)가 새 세대를 만들며, 두 노드가 동시에 교체해 세대가 둘 생겨도 각각 유효하고 §7의 순서상 뒤의 세대가 이후 암호화에 쓰인다.
+An admin's `secret put` encrypts locally under the current generation. Messages contain neither plaintext secrets nor unwrapped DEKs.
 
-세대의 DEK는 팀원 기기마다 그 기기의 X25519 공개키로 감싼다. 감싸기는 임시 X25519 키와 수신자 공개키의 합의값을 HKDF-SHA256(정보 문자열 `zeropw-team-dek-v1`, 환경 ID, 세대 ID, 수신자 지문)으로 늘여 ChaCha20-Poly1305로 봉한 것이다. 노드는 자기 몫을 풀어 얻은 DEK를 로컬 KMS로 다시 감싸 `team/<env-id>/dek/<세대 ID>.json`에 둔다. 로컬 `Vault`는 공유 환경에 속한 비밀을 읽을 때 로컬 DEK 대신 그 버전의 세대 키를 쓴다. `secret_for_trusted_use`·`values_for_trusted_scan`·`reveal`의 계약은 그대로다.
+### 4.3 Invitation and enrollment
 
-비밀 값은 admin 노드에서 `secret put`으로 들어온다. 값은 그 노드 안에서 현재 세대의 DEK로 암호화되고 암호문만 커밋에 실린다. 어떤 노드 사이 메시지에도 평문 비밀이나 감싸지 않은 DEK는 실리지 않는다.
+An admin creates `team invite --env PROJECT/ENV --role user|admin --name NAME`. The base32 invitation contains environment ID, inviter fingerprint, addresses, a 32-byte secret, expiry (default 24 hours), role and name. Store the secret KMS-wrapped with metadata/consumption state in 0600 `team/ENV_ID/invites.json`. It is bootstrap enrollment material, not a vault credential; HMAC verification needs the original invitation secret.
 
-### 4.3 초대와 가입
+`team join INVITATION` creates device keys if needed and dials the inviter. Handshake message three proves the invite with ID (first 16 bytes of secret SHA-256) and HMAC over the transcript. The inviter verifies it, marks it used under the state lock, then creates/applies/broadcasts `member.add` with the new device and wraps for all generations the inviter can unwrap. No second approval: possession of the valid unused invitation is authorization.
 
-1. admin이 `team invite --env <project>/<env> --role user|admin --name <표시 이름>`을 실행한다. 노드는 일회용 초대를 만든다. 초대에는 환경 ID, 초대한 기기의 지문과 연결 주소 목록, 32바이트 초대 비밀, 만료 시각(기본 24시간), 역할과 이름이 들어간다. 초대는 base32 문자열로 출력된다. 초대한 노드는 초대 비밀을 로컬 KMS로 감싸 역할·이름·만료·사용 여부와 함께 `team/<env-id>/invites.json`(0600)에 둔다. 가입 증명이 초대 비밀을 키로 한 HMAC이므로 검증하려면 비밀 자체가 필요하고, 이 비밀은 금고 값이 아니라 기기 키와 같은 부트스트랩 자료로 취급한다.
-2. 초대받는 사람은 자기 기기에서 `team join <초대 문자열>`을 실행한다. 노드는 기기 키가 없으면 만들고, 초대에 적힌 주소로 초대한 노드에 연결한다. 핸드셰이크(§6.2)의 세 번째 메시지에 초대 ID(초대 비밀의 SHA-256 앞 16바이트)와 초대 비밀로 만든 HMAC(전사 해시 위)를 실어 초대를 증명한다. 초대한 노드는 그 ID의 초대를 찾아 비밀을 풀고 HMAC을 확인한 뒤, 상태 잠금 안에서 초대를 사용됨으로 표시하고 나서야 `member.add`를 만든다.
-3. 초대한 노드는 초대 해시가 있고 만료·사용 전이면 초대를 소진하고, `member.add` 커밋(기기 기록, 이름, 역할, 현재 모든 세대의 DEK 감싸기)을 만들어 즉시 적용·전파한다. 사람의 승인 단계는 없다. 초대 문자열이 곧 승인이다.
-4. 가입한 노드는 커밋 이력 전체를 받아 접고, 로컬 프로젝트·환경으로 만든다. 프로젝트·환경 이름은 초대에 적힌 것을 기본값으로 쓰되 로컬에서 바꿀 수 있다.
+The joining node receives/folds history and derives its local environment, with names overridable at join. Both nodes display fingerprints. Fingerprint comparison supplements the separately transmitted invitation. Keep invitation strings out of chat/issues/agent context. Before expiry, a leaked invite can enroll whoever consumes it first; enrollment is visible in members/audit and can be removed.
 
-두 노드는 핸드셰이크 뒤 서로의 지문을 출력한다. 초대 비밀이 채널 밖에서 전달되므로 지문 확인은 보조 수단이다. 초대 문자열은 비밀이며 채팅·이슈에 남기지 않도록 CLI 출력에 경고를 붙인다. 초대 문자열이 새면 만료 전까지 누구나 가입할 수 있고, 그 가입은 팀원 목록과 감사 기록에 남으므로 admin이 `team remove`로 되돌린다.
+### 4.4 Removal and rotation
 
-### 4.4 팀원 제거와 DEK 교체
+`team remove --env PROJECT/ENV --device FINGERPRINT` publishes an irreversible fact. On removal, stop every outbound path immediately, including VECTOR, COMMIT/FACT replay, PEERS and INCIDENT. Reject new handshakes.
 
-`team remove --env ... --device <지문>`은 긴급 사실이다(§7.4). 그 사실을 받은(또는 스스로 만든) 노드는 그 기기로 더 이상 아무것도 보내지 않는다 — 즉시, 매 전송 경로(`COMMIT`/`FACT` 재전송, `VECTOR`, `PEERS`, `INCIDENT`)에서 빠짐없이. 다만 그 기기와 이미 열려 있던 세션은 그 자리에서 끊지 않는다: 같은 순간 그 기기 쪽에서도 서로를 제거하는 사실을 보내고 있었을 수 있으므로(§7.4의 상호 제거 예), 세션을 몇 초(`team_removed_drain_seconds`, 기본 5초) 동안 수신 전용으로 열어 두고 그동안 들어오는 `member_removed` 사실 하나만은 여전히 받아 검증·적용한다. 그 밖의 메시지(다른 종류의 사실 포함)는 그 창 동안 조용히 무시하고, 답장도 하지 않는다. 창이 끝나면 세션을 닫는다. 이 기기가 다시 핸드셰이크를 시도해도 거부되는 것은 예나 지금이나 같다. 제거를 실행한 노드는 이어서 `dek.rotate` 커밋을 만든다. 새 DEK를 뽑아 남은 팀원 기기마다 감싼 새 세대이며, 이후의 새 비밀 버전은 새 세대로 암호화한다. 기존 암호문은 다시 암호화하지 않는다. 제거된 기기는 제거 시점까지의 암호문과 이전 세대 키를 이미 갖고 있으므로 다시 암호화해도 얻는 것이 없다.
+An already-open removed-member session gets a receive-only drain window (`team_removed_drain_seconds`, default 5 seconds), not an immediate unconditional disconnect. Accept only a valid `member_removed` fact signed by the drained peer: it may target a device that removed that peer, or the peer itself. A self-removal only confirms the already removed device and cannot remove another member. Reject and audit unrelated removal attempts; ignore other messages and send no responses. Close afterward. This permits simultaneous mutual removals to converge.
 
-따라서 제거된 팀원이 제거 시점에 읽을 수 있던 자격증명은 외부 공급자 쪽 교체로만 무효가 된다. [침해 대응](compromise-response.md) §5의 결론과 같다. `team remove`는 그 환경의 모든 활성 비밀에 `rotation_recommended` 표시를 남기고, 각 admin 노드의 `alerts`에 교체 안내를 쓴다. 자동 교체는 하지 않는다.
+An authorized admin removing another device then rotates DEK with wraps for remaining members. New secret versions use the new generation; old ciphertext is not reencrypted because removed members already possess old keys and data. For admin removal of another device, mark active secrets `rotation_recommended` and alert admins. Provider-side rotation alone invalidates previously accessible credentials. There is no automatic provider rotation. Members may remove their own non-owner device; the owner cannot be removed and must transfer ownership first. A received signed removal queues a new generation excluding the departed device. An active admin processes the queue during polling or before a new local secret write. The rotation records the removal fact hash, so a restart repairs an interrupted rotation without repeating a completed one. New local secret writes fail with `team_rekey_pending` until this rotation is complete; a version prepared with the previous generation must be prepared again. An offline peer cannot apply a removal it has not received. All participants must run a build containing this fix: older builds do not enforce this pending-rekey boundary. Provider-side rotation still invalidates credentials the departed member already knew.
 
-기기를 잃어버린 팀원 본인도 같은 명령으로 자기 기기를 제거한다. 그 기기의 노드가 다시 나타나도 핸드셰이크에서 거부된다.
+## 5. Documents and commits
 
-## 5. 환경 문서와 커밋
+### 5.1 Environment document
 
-### 5.1 환경 문서
+Store canonical JSON (sorted keys, compact separators) in `team/ENV_ID/document.json` with its folded version vector. Top-level fields are `env_id`, `format` (`zeropw-team-env-v1`), `owner`, `members`, `dek`, `connections`, `secrets`, `settings`.
 
-정규화 JSON(키 정렬, 구분자 최소) 하나이며 §7의 접기 결과다. 저장 위치는 `team/<env-id>/document.json`이고, 어떤 커밋까지 접었는지(§6.3의 버전 벡터)를 함께 적는다. 노드의 `policy/connections.json`과 `vault/secrets.json`에는 이 문서에서 파생한 항목이 `shared_env: <env-id>` 표시와 함께 들어간다. 파생은 접을 때마다 다시 계산하며 사람이 파생 문서를 직접 고치면 다음 접기에서 덮어쓴다. 파생은 공유 환경 표시가 없는 로컬 항목을 절대 덮어쓰지 않는다. 같은 ID의 로컬 연결·비밀이 있으면 그 항목을 건너뛰고 감사 기록과 알림에 `local_id_conflict`로 남긴다. 이 노드가 풀 수 없는 세대로 암호화된 버전은 로컬 금고 문서에 넣지 않으므로, 그 버전을 쓰는 연결만 `credential_unavailable`이 되고 다른 연결과 금고 전체 대조 검사는 영향을 받지 않는다.
+Members contain name, admin/user role, active/removed status and signed device record (`sign_pub`, `agree_pub`, `sig`). DEK state has `current` and `generations`, each with recipient `wraps` (`eph_pub`, `nonce`, `ciphertext`). Connections carry the existing serialized definition without local policy_version. Secrets contain kind, active_version and per-version staged/active/retired/revoked status, generation, nonce/ciphertext and public metadata. Default `sync_interval_seconds` is 10. Caller/grant/approval/handle/policy-version state is absent.
 
-```json
-{
-  "env_id": "…",
-  "format": "zeropw-team-env-v1",
-  "owner": "<기기 지문>",
-  "members": {"<지문>": {"name": "…", "role": "admin|user", "status": "active|removed",
-                        "device": {"sign_pub": "…", "agree_pub": "…", "sig": "…"}}},
-  "dek": {"current": "<세대 ID>",
-          "generations": {"<세대 ID>": {"wraps": {"<지문>": {"eph_pub": "…", "nonce": "…", "ciphertext": "…"}}}}},
-  "connections": {"<id>": { …기존 Connection.to_dict()에서 policy_version을 뺀 것… }},
-  "secrets": {"<id>": {"kind": "…", "active_version": "<버전 ID>",
-              "versions": {"<버전 ID>": {"status": "staged|active|retired|revoked", "generation": "<세대 ID>",
-                                        "nonce": "…", "ciphertext": "…", "public": {…}}}}},
-  "settings": {"sync_interval_seconds": 10}
-}
-```
+Recompute `shared_env: ENV_ID` entries in local policy/vault files after folding. Manual edits of derived shared entries are overwritten; unmarked local entries are never overwritten. Skip a colliding local ID and record `local_id_conflict`. Do not derive versions whose generation cannot be unwrapped: only dependent connections become `credential_unavailable`, without breaking other connections or all-vault scanning.
 
-버전 ID는 작성 노드가 `secret.put_version` 연산 안에 넣는 128비트 무작위 16진수다. 커밋 해시를 쓰지 않는 이유는 암호문의 AAD가 버전 ID를 포함해야 하는데 커밋 해시는 그 암호문에 의존하기 때문이다. ID는 커밋 서명으로 보호되고 같은 비밀 안에서 재사용하면 접기에서 건너뛴다. 파생된 로컬 금고 문서에서는 접기 순서대로 1부터 정수 번호를 매겨 기존 `Vault`·`Connection.secret_version`과 맞춘다. 늦게 도착한 동시 커밋이 순서 앞에 끼어들면 번호가 바뀔 수 있으므로 커밋과 연결 정의는 항상 버전 ID로 가리키고 정수 번호는 노드 로컬 표시용이다. 호출 주체·권한·승인·핸들·정책 버전은 이 문서에 없다.
+Version IDs are random 128-bit hex tokens in `secret.put_version`, not commit hashes: AAD needs the version ID before ciphertext exists, while commit hashes depend on that ciphertext. Signatures protect IDs; duplicate IDs within a secret are skipped. Local integer version numbers are assigned from fold order starting at 1 and may change after an earlier concurrent commit arrives. Commits and connection definitions reference stable version IDs; integer numbers are local display/API compatibility only.
 
-### 5.2 커밋
+### 5.2 Commit
 
 ```json
 {
   "format": "zeropw-team-commit-v1",
-  "env_id": "…",
-  "author": "<기기 지문>",
+  "env_id": "ENVIRONMENT_ID",
+  "author": "DEVICE_FINGERPRINT",
   "author_seq": 42,
   "hlc": "1789200000123-0007",
-  "seen": {"<지문>": 41, "<다른 지문>": 17},
-  "ops": [{"op": "connection.update", "id": "gh", "http_scope": {…}}],
-  "sig": "<author 서명 키의 Ed25519 서명, sig 필드를 뺀 정규화 JSON 위>"
+  "seen": {"DEVICE_FINGERPRINT": 41, "OTHER_FINGERPRINT": 17},
+  "ops": [{"op": "connection.update", "id": "gh", "http_scope": {}}],
+  "sig": "ED25519_SIGNATURE_OVER_CANONICAL_JSON_WITHOUT_SIG"
 }
 ```
 
-- `author_seq`는 작성 기기 안에서 1부터 빈틈없이 증가한다. 노드는 어떤 기기의 커밋을 순번 순서로만 받아들이고 빠진 순번이 있으면 §6.3으로 채운다. 같은 (기기, 순번)의 커밋을 다시 받으면 해시가 같을 때 조용히 무시하고, 해시가 다르면 그 기기가 같은 순번으로 두 커밋을 만든 것이므로 `team_author_equivocation`으로 거부하고 감사 기록에 남긴다.
-- 같은 기기의 `hlc`는 순번을 따라 엄격히 증가해야 한다. 아니면 `team_hlc_not_monotone`으로 거부한다. 그래서 기기는 자기 첫 커밋보다 앞으로는 어떤 커밋도 끼워 넣지 못하고, 첫 커밋은 그 기기를 들인 `member.add`보다 앞에 정렬되면 접기에서 팀원이 아니라는 이유로 건너뛰어진다.
-- `hlc`는 하이브리드 논리 시계다. 밀리초 벽시계와 논리 카운터의 쌍이며, 노드는 커밋을 만들 때 `max(벽시계, 마지막으로 본 hlc)`에 카운터를 더해 쓴다. 다른 노드의 커밋을 받을 때마다 자기 시계를 그 값 이상으로 올린다. 그래서 어떤 커밋을 보고 난 뒤 만든 커밋은 벽시계와 무관하게 항상 그보다 뒤에 정렬된다.
-- `seen`은 작성 시점에 작성 노드가 접은 버전 벡터다. 인과 관계 표시와 디버깅용이며 순서 결정에는 `hlc`만 쓴다.
-- 커밋 해시는 `sig`까지 포함한 정규화 JSON의 SHA-256이다. 저장은 `team/<env-id>/commits/<지문>/<author_seq>.json`이다.
+This illustrates shape, not a valid signed operation. Each author sequence starts at 1 and increases without gaps. Fill gaps through synchronization; identical sequence/hash is deduplicated, but a different hash for the same author/sequence is rejected/audited as `team_author_equivocation`.
 
-### 5.3 연산과 역할
+Per-author HLC must strictly increase or reject `team_hlc_not_monotone`. A device cannot insert work before its own first commit; work sorted before its admission is skipped because it lacks membership then. HLC consists of millisecond wall time and logical counter, advanced above the greatest observed clock when authoring/receiving. A commit authored after observing another always sorts later, irrespective of physical-clock skew.
 
-| 연산 | 인자 | 허용 역할 | 적용 |
-| --- | --- | --- | --- |
-| `connection.create` | 기존 `Policy.create_connection` 입력(비밀은 버전 ID로 지정) | admin | 같은 ID가 이미 있으면 순서상 앞의 것이 남고 이 연산은 건너뛴다. 비밀 ID는 이 환경 문서의 비밀이어야 한다(다른 노드의 로컬 비밀을 가리키지 못함) |
-| `connection.update` | 대상·인증·범위·CLI 프로필·설명 | admin | 실효 정의 교체. 노드별로 정책 버전 상승과 `stale` 판정(§3.1) |
-| `connection.switch_credential` | 비밀 ID·버전 ID 또는 비고정 | admin | 기존 규칙 |
-| `connection.disable` | ID | admin | 긴급 사실(§7.4). 재활성화 없음. 다시 쓰려면 새 ID로 만든다 |
-| `secret.put_version` | 비밀 ID, 종류, 세대 ID, 버전 ID, 암호문, 공개 메타데이터 | admin | 새 버전 `staged`. 세대가 문서에 없으면 건너뛴다 |
-| `secret.set_status` | 비밀 ID, 버전 ID, `active`·`retired` | admin | `revoked`는 이 연산이 아니라 긴급 사실 |
-| `secret.activate` | 비밀 ID, 버전 ID | admin | 활성 버전 교체, 비고정 연결 재바인딩 |
-| `member.add` | 기기 기록, 이름, 역할, 세대별 DEK 감싸기 | admin | 같은 지문이 `removed`면 건너뛴다(재가입은 새 기기 키로). 감싸기는 초대한 노드가 풀 수 있는 모든 세대에 대해 새 기기용으로 만든다 |
-| `member.set_role` | 지문, 역할 | admin(대상이 owner가 아닐 때) | |
-| `member.remove` | 지문 | admin(대상이 owner가 아닐 때), 본인 | 긴급 사실 |
-| `owner.transfer` | 지문 | owner | |
-| `dek.rotate` | 세대 ID(128비트 무작위 16진수), 새 세대의 감싸기 목록 | admin | 순서상 뒤의 세대가 `current` |
-| `settings.update` | 동기화 값 | admin | |
+`seen` records the author's folded vector for causality/debugging; ordering uses HLC plus fingerprint, not seen. Hash the canonical commit including sig with SHA-256; store at `team/ENV_ID/commits/FINGERPRINT/AUTHOR_SEQ.json`.
 
-user 역할은 어떤 연산도 커밋하지 못한다. user의 권한 부여는 노드 로컬 `grant create`이며 커밋이 아니다.
+### 5.3 Operations
 
-### 5.4 검증
-
-모든 노드는 받은 커밋마다 다음을 스스로 확인한다. 어느 노드도 다른 노드의 검증을 믿지 않는다.
-
-1. `env_id`가 자기 환경이고, `author_seq`가 그 기기에서 마지막으로 받은 순번 바로 다음이다.
-2. 서명이 `author`의 서명 공개키로 검증된다. 그 기기가 팀원 목록에 있어야 한다(순서상 그 커밋 앞에서 `member.add`가 접혀 있어야 한다. 접기 시점의 역할 검사는 §7.2).
-3. `hlc`의 벽시계 부분이 자기 시계보다 5분 이상 앞서면 받아들이지 않고 `team/<env-id>/deferred/`에 둔 채 그 시각이 될 때까지 기다린다. 시계가 앞선 노드가 항상 이기는 것을 막는다.
-4. 연산의 형식이 맞다(기존 `Connection.from_dict`·`HttpTarget`·`SshTarget`·`CliProfile`·`HttpScope`의 검증기). 형식 검증은 상태와 무관하므로 여기서 한 번 한다. 상태에 따른 검사(역할, 대상 존재, CLI 프로필 환경변수와 로컬 금고 값의 대조)는 접기(§7.2)에서 한다.
-
-1·2·4에 실패하면 커밋을 `team/<env-id>/rejected/`에 두고 감사 기록 `team_commit_rejected`(사유 코드, 작성자 지문, 순번)를 남기며, 그 기기의 이후 순번은 받지 않는다. 정상 팀에서 이 상태는 노드 사이의 코드 버전 차이를 뜻하며 관리자가 `team status`로 본다.
-
-### 5.5 사람이 읽는 형태
-
-`team show --env ... [--format json|yaml]`은 환경 문서에서 암호문·감싸기·서명을 뺀 뷰를 렌더한다. `team log`는 커밋을 접기 순서·시각·작성자·연산 요약으로, `team diff <커밋> <커밋>`은 두 시점의 뷰 차이를 보여 준다. YAML은 출력 전용 부분집합 작성기로 만들고, 입력은 CLI 명령과 JSON만 받는다.
-
-## 6. 동기화 프로토콜
-
-### 6.1 전송 계층 인터페이스
-
-```rust
-pub trait Transport: Send + Sync {
-    fn listen(&self, address: &str, on_session: OnSession) -> Result<()>;
-    fn dial(&self, address: &str, env_id: &str, invite_proof: Option<InviteProof>)
-        -> std::result::Result<Arc<dyn Session>, SessionClosed>;
-    fn close(&self);
-    // 팀원 확인·초대 확인·핸드셰이크 실패 알림 콜백 설정 메서드는 생략
-}
-
-pub trait Session: Send + Sync {
-    fn peer(&self) -> DeviceRecord;          // 핸드셰이크 뒤 확정된 상대 기기
-    fn send(&self, message: &Value) -> Result<()>;
-    fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed>;
-    fn close(&self);
-}
-```
-
-참조 구현(`rust/src/team/transport.rs`)은 TCP 위에 §6.2의 핸드셰이크와 프레임(4바이트 길이 + ChaCha20-Poly1305 암호문, 프레임당 최대 4MiB)을 얹는다. 시험용 구현은 같은 프로세스 안의 큐다. 다른 전송(VPN 전용 인터페이스 바인딩 등)은 이 인터페이스 뒤에 붙인다.
-
-팀 전송 리스너는 도구·중계 리스너와 별개다. 도구·중계 리스너는 지금처럼 루프백만 바인딩한다. 팀 리스너는 `serve --team-listen <host:port>`로 LAN·VPN 주소에 바인딩하며 기본값은 없다(명시하지 않으면 팀 동기화가 꺼진 채 뜬다). 팀 리스너는 핸드셰이크에 실패한 연결에 어떤 정보도 돌려주지 않고 끊는다.
-
-### 6.2 핸드셰이크
-
-상호 인증과 전방 비밀성을 가진 3단계다.
-
-1. 발신자 → 수신자: 프로토콜 버전, 환경 ID, 임시 X25519 공개키 `Ea`, 발신 기기 기록, 32바이트 nonce.
-2. 수신자 → 발신자: 임시 공개키 `Eb`, 수신 기기 기록, 전사(1단계 전체 + `Eb` + 수신 기록) 위의 Ed25519 서명. 수신자는 발신 기기가 환경의 활성 팀원이거나 가입 중(3단계에서 초대 증명을 낼 것)인 경우에만 응답한다.
-3. 발신자 → 수신자: 전사 위의 Ed25519 서명, 가입 중이면 초대 HMAC.
-
-세션 키는 HKDF-SHA256(X25519(`ea`,`Eb`), 전사 해시, 방향 문자열)로 두 방향 따로 만든다. 서명은 임시 키와 전사 전체를 덮으므로 다른 세션의 서명을 재사용할 수 없다. 프레임 nonce는 방향별 카운터다. 세션은 10분 뒤 또는 팀원 목록이 바뀔 때 다시 만든다.
-
-이 프로토콜은 SIGMA 계열의 표준 구성이며 새 암호를 발명하지 않는다. X25519 구현은 RFC 7748 시험 벡터로 검증하고, 합의 결과가 0이면(저차수 점) 핸드셰이크와 DEK 감싸기 모두 거부한다.
-
-### 6.3 메시지와 버전 벡터
-
-노드는 환경마다 **버전 벡터**(기기 지문 → 그 기기의 커밋을 몇 번까지 받았는지)를 유지한다.
-
-| 메시지 | 방향 | 내용 |
+| Operation | Input and effect | Authority |
 | --- | --- | --- |
-| `VECTOR` | 양방향, 세션 시작 시와 주기적으로 | 자기 버전 벡터. 받은 쪽은 상대에게 없는 커밋을 `COMMIT`으로 보낸다. |
-| `COMMIT` | 양방향 | 커밋 하나. 새로 만든 커밋은 즉시 모든 세션에 보내고, 받은 커밋은 검증 뒤 보낸 노드를 제외한 세션에 다시 보낸다(같은 해시는 한 번만). |
-| `FACT` | 양방향 | 긴급 사실. §7.4. |
-| `INCIDENT` | 노드 → admin 노드 | 사건 요약. §9. 재중계하지 않는다. |
-| `INCIDENT_ACK` | admin 노드 → 노드 | 받은 `INCIDENT`의 사실 해시. 받을 때까지 보낸 노드가 outbox에서 재시도한다. §9. |
-| `PEERS` | 양방향 | 자기가 아는 팀원 노드 주소 목록. 발견에 쓴다. |
+| `connection.create` | Existing definition with stable secret version ID; first same-ID creation wins. Secret must belong to this environment. | Admin |
+| `connection.update` | Replace target/auth/scope/profile/description; derive local version and stale decisions. | Admin |
+| `connection.switch_credential` | Shared secret/version or follow-active reference; existing rules. | Admin |
+| `connection.disable` | Irreversible fact; reuse requires a fresh ID. | Admin |
+| `secret.put_version` | Secret/kind/generation/version/ciphertext/public data; staged. Skip unknown generation. | Admin |
+| `secret.set_status` | Active/retired status; revoked uses a fact instead. | Admin |
+| `secret.activate` | Replace active version and rebind follow-active connections. | Admin |
+| `member.add` | Signed device/name/role/wraps for every available generation. Removed fingerprint cannot rejoin; use new keys. | Admin |
+| `member.set_role` | Change a non-owner member role. | Admin |
+| `member.remove` | Irreversible removal of non-owner member. | Admin or the target itself |
+| `owner.transfer` | Transfer ownership. | Owner |
+| `dek.rotate` | New random 128-bit generation ID and wraps; later ordered generation becomes current. | Admin |
+| `settings.update` | Synchronization settings. | Admin |
 
-메시지의 자유 문자열 필드는 없다. 이름·설명 같은 admin이 정한 값은 기존 감사 기록과 같은 문자 제한(제어 문자 없음, 길이 200)을 거친다.
+Users cannot author editing commits; local `grant create` is not a shared commit. Removal authority here follows implemented validation and the original detailed operation/mutual-removal rules. The original summary table incorrectly restricted admin removal to the owner and allowed owner self-removal; no product behavior is changed by this documentation correction.
 
-### 6.4 발견과 연결
+### 5.4 Validation
 
-노드는 `team/<env-id>/peers.json`에 팀원 기기별 마지막으로 성공한 주소를 둔다. 초대에 적힌 주소가 첫 항목이다. `PEERS`로 받은 주소는 그 기기와 핸드셰이크가 성공했을 때만 저장한다. 같은 LAN에서는 UDP 멀티캐스트 신호(기본 `239.192.47.42:47420`, 서명된 `환경 ID 해시 + 지문 + 포트`, 30초마다)로 주소를 찾는다. mDNS 전체를 구현하지 않는다. 신호는 핸드셰이크의 입력일 뿐 신뢰 근거가 아니다.
+Every node validates independently, never trusting another node's checks:
 
-노드는 알고 있는 모든 팀원 노드에 세션을 유지하려 시도한다(재시도는 5초에서 시작해 5분까지 지수 백오프). 노드 수는 팀 규모(수십 이하)를 가정하며 전체 연결 그래프로 충분하다. 두 노드가 서로 직접 닿지 않아도 제3의 노드를 거쳐 커밋이 전달된다.
+1. Correct environment and exactly next author sequence.
+2. Signature against the author's device key; membership admission must precede it in folding. Role checks occur at application time.
+3. Future wall-clock HLC more than 5 minutes ahead is deferred under `team/ENV_ID/deferred/` until the time catches up.
+4. State-independent operation format via existing Connection/HttpTarget/SshTarget/CliProfile/HttpScope validators. State/role/target/profile-secret checks occur while folding.
 
-### 6.5 적용: 노드가 커밋을 접었을 때
+Failed identity/sequence/signature/format checks go to `rejected/` with `team_commit_rejected` reason/author/sequence audit and block subsequent author sequence. Code-version disagreement can cause rejection; inspect `team status`.
 
-접기(§7.2) 결과 실효 문서가 바뀌면 상태 잠금 하나 안에서 다음을 한다. 이것이 "다른 기기의 수정에 적응"의 구체적 의미이며 대부분 기존 메커니즘이다.
+### 5.5 Human view
 
-| 변경 | 노드의 반응 |
+`team show --format json|yaml` omits ciphertext/wraps/signatures. Log shows ordered commits, times, authors and operations; diff compares views at two commits. YAML is an output-only subset; inputs are CLI/JSON.
+
+## 6. Synchronization
+
+### 6.1 Transport
+
+Transport exposes listen/dial/close, with environment ID and optional invitation proof when dialing. Sessions expose authenticated peer record, send, timed receive and close. Membership/invitation/failure callbacks are additional configuration. The in-process queue implementation is for tests; TCP is the reference.
+
+Frames contain a 4-byte length and ChaCha20-Poly1305 ciphertext, maximum 4 MiB. Team listening is separate from loopback tools/relay. `serve --team-listen HOST:PORT` explicitly binds LAN/VPN; without it synchronization is disabled. Failed handshakes return no descriptive information.
+
+### 6.2 Handshake
+
+Three mutually authenticated steps with ephemeral agreement:
+
+1. Initiator sends protocol version, environment ID, ephemeral X25519 `Ea`, device record and 32-byte nonce.
+2. Responder sends `Eb`, its device record and Ed25519 signature over the complete first message plus Eb/responder record. Respond only to an active member or an enrolling initiator that will prove an invitation.
+3. Initiator signs the transcript and, when joining, includes invitation HMAC.
+
+Derive directional session keys with HKDF-SHA256 from X25519 agreement, transcript hash and direction context. Full-transcript signatures prevent cross-session replay. Per-direction counters supply frame nonces. Recreate sessions after 10 minutes or membership changes. This is a SIGMA-style composition of standard primitives, not an independent protocol certification. RFC 7748 vectors test X25519; reject all-zero agreement in handshakes and DEK wrapping.
+
+### 6.3 Messages and vectors
+
+Maintain environment vectors mapping fingerprint to last accepted sequence.
+
+| Message | Purpose |
 | --- | --- |
-| 연결 생성 | `policy/connections.json`에 파생 항목 추가(정책 버전 1). 권한이 있는 호출 주체가 생기기 전까지 `list_connections`에 보이지 않는다. |
-| 연결의 실효 정의가 넓어짐(범위 확대, 대상·인증 변경) | 로컬 정책 버전 상승 → 그 연결의 모든 로컬 권한 `stale`, 승인 무효, 이전 핸들 거부. `serve` 폴링이 진행 중 실행을 취소하고 서명기 소켓을 닫는다. admin이 `grant regrant`로 다시 준다. |
-| 실효 정의가 좁아짐 | 로컬 정책 버전 상승, 로컬 권한 제자리 재평가. 진행 중 실행은 다음 중계·서명에서 새 범위로 판정. |
-| 연결 비활성화 | 즉시 거부, 실행 취소, 소켓 닫기(긴급 사실로 이미 적용되었을 수 있음). |
-| 비밀 새 버전·활성화·상태 변경 | 로컬 금고 문서의 파생 항목 갱신, 비고정 연결 재바인딩(기존 `credential_versions_changed`). |
-| 팀원 추가·제거·역할 변경 | 세션 정책 갱신. 제거된 기기의 세션은 즉시 끊는다. |
-| DEK 새 세대 | 자기 몫의 감싸기를 풀어 로컬 KMS로 다시 감싼다. 자기 몫이 없으면(제거된 것) 환경을 `detached`로 표시하고 그 환경의 모든 연결을 비활성화한다. |
+| `VECTOR` | At session start/periodically, exchange vector and send missing commits. |
+| `COMMIT` | Broadcast new commits immediately; verify and forward received commits except to their sender, deduplicated by hash. |
+| `FACT` | Verify/apply/forward irreversible facts. |
+| `INCIDENT` | Direct node-to-admin sanitized incident, not relayed. |
+| `INCIDENT_ACK` | Admin acknowledges fact hash; sender retries until acknowledged. |
+| `PEERS` | Exchange known member addresses for discovery. |
 
-적용마다 감사 기록 `team_commit_apply`(작성자 지문, 순번, 연산 종류 수, 정책 버전이 바뀐 연결 ID)를 남긴다. 값은 없다.
+Names/descriptions are bounded administrator data with no controls and length 200, not arbitrary agent strings.
 
-### 6.6 주기와 오프라인
+### 6.4 Discovery and connection
 
-세션이 있는 동안은 `COMMIT`·`FACT`가 밀려오므로 지연은 네트워크 왕복 정도다. 그 밖에 10초마다(설정) `VECTOR`를 교환해 놓친 것을 채운다. 오프라인 노드는 로컬 복제본으로 사용을 계속하고 admin이면 편집도 계속하며, 되돌아오면 벡터 교환으로 양방향으로 따라잡는다. 오프라인 중에 만든 커밋과 긴급 사실은 연결이 돌아오면 전달된다.
+Store per-device successful addresses in `team/ENV_ID/peers.json`. Invitations bootstrap addresses; save gossip addresses only after authenticating the expected device.
 
-오프라인 사용에는 한계가 있다. 그 사이 다른 노드에서 한 회수·비활성화가 이 노드에는 아직 닿지 않았다. 이는 로컬 복제본을 두기로 한 결정의 대가이며, 노드가 마지막으로 어떤 팀원 노드와 동기화한 시각을 `team status`와 `list_connections`의 `synced_at`으로 드러낸다. 오래됐다고 사용을 거부하지는 않는다.
+The original design includes signed UDP multicast discovery at `239.192.47.42:47420` every 30 seconds, containing environment hash/fingerprint/port, as an untrusted hint for a handshake rather than authentication. It is not implemented. Current discovery uses invitations, manual `team peers --add` and verified PEERS gossip; full mDNS is not provided.
 
-## 7. 동시 변경의 수렴
+Try to maintain sessions to all known members with exponential retry from 5 seconds to 5 minutes. Intended scale is at most dozens of devices. Commit forwarding through a third node permits synchronization without direct connectivity between every pair.
 
-리더가 없으므로 어느 admin 노드든 커밋을 만들어 즉시 자기 상태에 적용하고 전파한다. 여러 노드가 동시에 고쳐도 모든 노드가 결국 같은 상태를 갖게 하는 규칙이 이 절이다.
+### 6.5 Applying folded changes
 
-### 7.1 전순서
+Derive effective state under one state lock and audit `team_commit_apply` with author/sequence, operation-kind counts and changed connection IDs, never values.
 
-커밋의 순서는 `(hlc의 벽시계 정수, hlc의 카운터 정수, author 지문)`의 순이다. 문자열 사전순이 아니라 숫자 비교다. 두 커밋의 `hlc`가 같을 수는 있어도 지문까지 같을 수는 없으므로 전순서다. 모든 노드가 같은 커밋 집합을 가지면 같은 순서를 계산한다.
+| Change | Local reaction |
+| --- | --- |
+| Create connection | Derive at policy version 1; callers see it only with a local grant. |
+| Widen/change target or auth | Increment policy version, stale grants, invalidate approvals/old handles; poll cancels live runs/sockets. Admin regrants. |
+| Narrow scope | Increment policy version, reevaluate grants in place; live work uses the new scope at the next authentication. |
+| Disable | Deny immediately, cancel runs and close sockets. |
+| Version/activation/status | Derive vault entries and rebind follow-active connections via `credential_versions_changed`. |
+| Membership/roles | Reevaluate sessions; removed sessions stop outbound traffic immediately and follow the receive-only drain rule. |
+| DEK generation | Unwrap local share and rewrap with KMS; if no share exists, mark detached and disable that environment's connections. |
 
-한 노드가 다른 노드의 커밋을 보고 나서 만든 커밋은 §5.2의 시계 규칙 때문에 항상 뒤에 온다. 그러므로 "B가 A의 변경을 받은 뒤 고쳤다"면 B의 결과가 남는다. 서로 못 본 채 고친 동시 변경만 벽시계와 지문이 순서를 정한다.
+The drain rule resolves the original section 6.5 shorthand saying removal immediately closes a session; section 4.4 defines the actual bounded exception.
 
-### 7.2 접기
+### 6.6 Offline behavior
 
-노드는 알고 있는 커밋 전체를 전순서로 하나씩 적용해 환경 문서를 만든다. 적용 시점의 문서 상태를 기준으로 상태 검사를 한다.
+Push COMMIT/FACT immediately on live sessions; exchange VECTOR every configurable 10 seconds to repair gaps. Offline nodes use their replica and admins may edit. Reconnect exchanges both directions, including offline facts/commits. Show synchronization age in `team status` and `list_connections.synced_at`; age alone does not deny use. Offline revocation delay is an explicit limit.
 
-- 작성자가 그 시점에 활성 팀원이고 연산에 필요한 역할(§5.3)을 가졌는가. 아니면 그 연산은 건너뛴다.
-- 연산의 대상(연결·비밀·버전·팀원)이 그 시점에 존재하고 긴급 사실로 막히지 않았는가. 아니면 건너뛴다.
-- CLI 프로필의 환경변수 이름·값에 이 노드의 로컬 금고 값이 들어 있는가. 들어 있으면 그 연산을 건너뛰고 감사 기록 `team_op_skipped`(`cli_env_contains_credential`)를 남긴다. 이 검사는 노드마다 결과가 다를 수 있다(다른 노드의 개인 비밀은 모른다). 기존 코드가 연결 생성 시점에 하던 검사를 접기 시점으로 옮긴 것이며, 걸린 노드는 그 연결을 쓰지 못할 뿐 다른 노드에 영향을 주지 않는다.
-- 같은 대상에 대한 두 연산은 순서상 뒤의 것이 실효 상태를 정한다. 예를 들어 A가 범위를 넓히고 B가 동시에 좁혔다면 순서상 뒤가 남는다. 어느 쪽이 남든 모든 노드가 같은 쪽을 남기며, 두 노드 모두 자기 정책 버전을 올려 이전 권한과 핸들을 다시 판정한다.
+## 7. Convergence
 
-건너뛴 연산은 `team log`에 `skipped(사유)`로 표시되고, 작성자 노드는 자기 커밋의 연산이 다른 노드에서도 같은 이유로 건너뛰어졌을지 접기 결과로 안다(상태 검사는 로컬 금고 대조를 빼면 결정적이다). 작성자 노드의 `alerts`에 `team_op_overridden`(자기 연산 뒤에 같은 대상의 다른 노드 연산이 접힌 경우)을 남겨 사람이 최신 상태를 보고 다시 결정하게 한다.
+### 7.1 Total order
 
-새 커밋이 순서 앞에 끼어들면(오프라인이었던 노드의 커밋이 늦게 도착) 노드는 마지막 스냅샷부터 다시 접는다. 문서는 작고(연결·비밀 수십 개), 접기는 결정적이므로 비용은 무시할 만하다. 다시 접은 결과 실효 정의가 바뀐 연결은 §6.5대로 처리한다.
+Order by numeric HLC wall milliseconds, numeric logical counter, then author fingerprint, not lexicographic timestamp strings. Identical HLCs on different devices still order deterministically; one author's HLC is strictly monotone. Observed-before-authored work orders causally; unseen concurrent edits use clocks/fingerprints as tie resolution.
 
-### 7.3 압축
+### 7.2 Folding
 
-노드는 `team/<env-id>/snapshots/`에 접기 결과와 그 시점의 버전 벡터를 주기적으로 저장한다. 모든 활성 팀원의 벡터(`VECTOR` 교환으로 안다)가 어떤 커밋을 포함하고 그 커밋이 30일 이상 지났으면, 그 커밋 앞의 이력은 스냅샷으로 대체해도 어느 노드의 접기 결과도 바뀌지 않는다. `team compact`가 이 조건을 확인하고 지운다. 조건을 만족하지 않으면(오래 안 보인 팀원이 있으면) 지우지 않고 그 팀원을 알린다. 팀원 목록과 DEK 세대를 바꾸는 커밋(`env.init`, `member.*`, `owner.transfer`, `dek.rotate`)은 나이와 무관하게 지우지 않는다. 커밋 서명 검증이 기기 기록을 원본 커밋에서 재구성하기 때문이며, 이 이력은 팀 규모에 비례해 작다. 압축 뒤에 처음 붙는 노드나 오래 떨어져 있던 노드는 지워진 커밋을 받을 수 없다. 스냅샷 전송 메시지는 이 명세에 없으며 후속 범위다.
+Fold known commits in total order against state at each step. Skip operations when the author lacks active membership/role, targets are absent or facts forbid them. Inspect profile variables against local vault values; skip with `team_op_skipped`/`cli_env_contains_credential` if they match. This check can differ between nodes because their private vaults differ; it affects that node's usability, not other nodes' personal secrets.
 
-### 7.4 긴급 사실
+Later mutable same-target operations determine effective state; each node reevaluates its local authority. Skips appear in log. A losing author's node gets a deduplicated `team_op_overridden` alert so a human can inspect/reconsider. Late earlier-sorted commits trigger re-folding from the latest usable snapshot and the same derivation rules. Environments are expected to contain dozens of connections/secrets.
 
-되돌리지 않는 변경은 접기 순서와 무관하게 항상 적용된다. 종류는 연결 비활성화, 비밀 버전 폐기, 팀원 제거, 사건 공개다. 발신 노드는 서명한 `FACT`(환경 ID, 종류, 대상, 발신 지문, hlc, 서명)를 자기 상태에 즉시 적용하고 모든 세션에 보낸다. 받은 노드는 발신자가 그 시점 팀원 목록에서 필요한 역할을 가졌는지와 서명을 확인하고 즉시 적용한 뒤 자기 세션들에 다시 보낸다. 같은 사실은 해시로 한 번만 처리한다. 사실은 `team/<env-id>/facts.jsonl`에 쌓이며 백업 대상이 아니다(기존 `policy/revocations.jsonl`과 같은 이유).
+### 7.3 Compaction
 
-사실은 접기의 입력이 아니라 접기 결과 위에 항상 다시 적용되는 단조 증가 집합이다. 어떤 커밋도 사실을 되돌리지 못한다. 비활성화된 연결 ID를 다시 쓰는 `connection.create`, 제거된 지문을 다시 넣는 `member.add`, 폐기된 버전을 활성화하는 `secret.activate`는 접기에서 건너뛴다. 기존 회수 원장의 "식별자는 재사용하지 않는다" 규칙과 같다. 복원·재동기화 뒤에도 사실은 항상 다시 적용된다(기존 `reapply_revocations`와 같은 위치).
+Store folded snapshots/vectors under `team/ENV_ID/snapshots/`. Compact history before a commit only after every active member's vector includes it and it is at least 30 days old. Otherwise refuse and identify absent members. Never delete env.init, membership, ownership or DEK-generation commits because verification reconstructs identity history from them.
 
-팀원 제거 사실의 발신자가 그 사실 이전에 이미 제거되었다면(두 admin이 서로를 동시에 제거) 두 사실 모두 유효하다. 되돌리지 않는 변경끼리는 충돌이 없고, 결과는 두 기기 모두 제거된 것이다. 이후 owner가 새 초대로 다시 들인다. owner는 제거 대상이 아니므로 환경이 admin 없이 남는 일은 없다.
+Snapshot transfer is unimplemented and unspecified: a new/long-offline node after compaction cannot fetch deleted history. Do not promise automatic onboarding recovery from compacted snapshots.
 
-이 상호 제거가 실제로 수렴하려면 §4.4의 배출(drain) 창이 필요하다: 노드가 "B가 carol을 제거함" 사실을 받으면 그 즉시 carol의 세션으로는 아무것도 더 보내지 않지만, 세션 자체는 곧바로 끊지 않는다. carol이 같은 순간 "carol이 B를 제거함" 사실을 바로 그 세션으로 보내고 있을 수 있기 때문이다. 세션을 즉시 닫아 버리면 그 사실이 아직 도착하지 않은 채로 세션과 함께 버려지고, carol이 다시 걸어도 이미 팀원 목록에서 빠졌으므로 핸드셰이크가 거부되어 그 사실은 영영 전달되지 못한다 — 그러면 "두 기기 모두 제거"라는 위 결론에 이 노드만 도달하지 못하고 다른 노드와 어긋난다. 그래서 세션은 몇 초간 수신 전용으로 남아 그 하나의 `member_removed` 사실만 받아들이고(제거 예외 규칙은 그대로 적용), 그 밖의 어떤 것도 보내거나 처리하지 않다가 창이 끝나면 닫힌다. 예외 규칙 자체(§4.4, 위 문단)는 이 배출 창의 유무와 무관하게 그대로다.
+### 7.4 Irreversible facts
 
-## 8. 역할과 권한
+Signed facts contain environment, kind, target, author, HLC and signature. Validate authority/signature, apply immediately and forward with hash deduplication. Persist `facts.jsonl` outside backup, like the local revocation ledger.
 
-| 할 수 있는 일 | owner | admin | user |
-| --- | --- | --- | --- |
-| 연결 생성·수정·비활성화, 비밀 등록·교체 | ○ | ○ | |
-| 팀원 초대(user·admin), user 제거, 역할 변경 | ○ | ○ | |
-| admin 제거, 소유권 이전 | ○ | | |
-| 자기 기기 제거 | ○ | ○ | ○ |
-| 자기 노드의 호출 주체 생성, 자기 호출 주체에 권한 부여·회수 | ○ | ○ | ○ |
-| 환경 문서·이력 보기 | ○ | ○ | ○ |
-| 사건 요약 받기 | ○ | ○ | |
+Facts are a monotonic overlay reapplied after folding, restore and synchronization; ordinary commits cannot undo them. Disabled connection IDs, removed fingerprints and revoked versions cannot be reused/reactivated. Use new IDs/keys/versions instead.
 
-"자기 호출 주체"는 그 노드에서 만든 호출 주체다. 노드는 다른 노드의 호출 주체·권한을 볼 수 없다(복제하지 않는다). user는 공유 환경의 연결에 대해 자기 노드에서 `grant create`를 할 수 있고, 위험 메서드 승인도 자기 노드에서 한다. 권한의 만료·사용량·정책 버전 규칙은 그대로다.
+Two admins concurrently removing each other can both produce valid reciprocal facts even after the peer-removal fact was received; both end removed and the owner can reenroll fresh keys. The protected owner remains available. Receive-only draining is necessary to avoid losing a reciprocal fact in flight: stop sends immediately, accept only the relevant removal exception during the bounded window, then close. Other traffic remains forbidden.
 
-admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 같은 규칙으로 재평가된다. user는 이를 우회할 수 없다. 자기 노드의 파생 정책 문서를 손으로 고쳐도 다음 접기에서 덮어쓰고, 무엇보다 §10대로 user는 어차피 자기 기기에서 자격증명을 꺼낼 수 있으므로 역할 통제의 목적은 실수 방지와 이력이지 격리가 아니다.
+### Concurrent removal admission
 
-## 9. 사건 공유
+The fact overlay is order-independent for the same accepted fact set. Admission uses the receiver's current authority state. If X removes W while Z removes X, a node receiving Z's removal first rejects X's removal of W; another node may already have accepted it. This conflict does not automatically converge. Backdating X's HLC does not restore X's authority.
 
-한 노드에서 [침해 대응](compromise-response.md)의 사건이 열리면, 그 노드는 공유 환경마다 `INCIDENT` 메시지를 admin 노드에 보낸다. 내용은 사건 ID, 시각, 범위, 판정 규칙, 그 환경에서 노출 판정이 "필수 교체"·"권장 교체"인 비밀 ID와 연결 ID, 첫·마지막 사용 시각과 횟수다. 값·헤더·경로·요청 ID·핸들은 없다. 사건 파일과 같은 값 대조를 통과해야 보낸다. admin 노드가 하나도 닿지 않으면 큐에 남겼다가 닿을 때 보낸다.
+The rejecting node records the signed, peer-held removal in `team status` under `rejected_removals`, with its author, target and fact hash. An active admin reviews the target and reissues `team remove --env <PROJECT/ENVIRONMENT> --device <TARGET_FINGERPRINT>` if removal is intended. The new authorized fact converges on the nodes, and the resolved target disappears from the pending status list. Do not assume uniform revocation while an offline peer or a pending membership conflict remains. Provider-side credential rotation still invalidates previously known credentials.
 
-받은 admin 노드는 `team/<env-id>/incidents/<노드 지문>-<사건 ID>.json`에 두고, 해당 비밀에 `rotation_required`(필수) 또는 `rotation_recommended`(권장) 표시를 로컬에 남기며, `alerts`에 교체 안내를 쓴다. 다른 노드를 자동으로 정지시키지 않는다. 그 환경의 자격증명이 노출됐다면 공급자 쪽 교체가 답이고, 교체 뒤 `secret.activate`가 모든 노드에 새 버전을 전파한다. admin은 필요하면 `connection disable`(긴급 사실)로 환경 전체에서 연결을 즉시 막을 수 있다.
+Local `secret.put_version` commits must use the current DEK generation, including after ordinary admin removal. Pending removal repair and generation validation are serialized with the local state transaction. Received historical commits may still contain versions encrypted under an older known generation; they retain their signed history and are not reencrypted. This does not give a removed device new signing or membership authority, and it is not an immediate global revocation guarantee for offline peers.
 
-사건 요약은 사건이 닫혀도 지우지 않는다. 사용 기록(`http_relay`, `ssh_sign`, `run_*`)은 사건 요약에 담긴 집계 외에는 노드를 떠나지 않는다.
+## 8. Local grants and roles
 
-전달은 그 순간 admin 노드에 열린 세션으로만 하는 단발 메시지이며 §6.3의 `FACT`처럼 다른 노드를 거쳐 재중계하지 않는다. 세션이 없거나 전달이 끊겨도 잃지 않도록, 보낸 노드는 서명한 사건 요약(§7.4의 `Fact`와 같은 서명·중복 제거 방식을 쓰되 admin 여부와 무관하게 아무 활성 팀원이나 보낼 수 있다)을 `team/<env-id>/incident_outbox.jsonl`에 두고 admin 하나가 사건 해시를 담은 `INCIDENT_ACK`를 보낼 때까지 `poll()`이 지수 백오프로 다시 보낸다. `INCIDENT`/`INCIDENT_ACK`는 §6.3의 메시지 표에 있다.
+Owners/admins edit connections/secrets and invite/manage non-owner members. Only the owner transfers ownership; the owner cannot be removed. A member can remove its own non-owner device. Every member can create/revoke local caller grants, authorize local risky requests and view sanitized environment/history. Only admins receive incident summaries.
 
-## 10. 보안 경계와 위협
+No node sees another node's caller/grant state. A user's local grants are reevaluated when a shared admin narrows policy. Manual derived-policy edits are overwritten at folding. Roles deter mistakes and preserve accountable history; a device owner already has decryption capability, so they do not establish cryptographic secrecy from a malicious human.
 
-**유지되는 것.** 원본 비밀은 어느 노드에서도 에이전트·실행 코드·도구 응답·감사 기록에 나가지 않는다. 노드 사이 통신은 팀원 기기 키로 상호 인증되고 암호화되며, 어떤 메시지에도 평문 비밀이나 감싸지 않은 DEK가 없다. 모든 노드가 모든 커밋을 스스로 검증하고 접으므로, 어떤 노드도 자기 역할 이상을 다른 노드에 강제할 수 없다.
+## 9. Incident sharing
 
-**바뀌는 것.** 클라우드가 없으므로 자격증명의 복호화 가능한 사본이 팀원 수만큼의 기기에 놓인다. 이 결정의 결과를 숨기지 않는다.
+The protocol sends sanitized incident ID/time/scope/rule, affected secret/connection IDs, mandatory/recommended tiers and first/last-use/counts to admins. Exclude values, headers, paths, request IDs and handles; scan before sending. Queue signed summaries in `incident_outbox.jsonl` and retry with backoff until a directly connected admin acknowledges the fact hash. No intermediate-node relaying.
 
-| 위협 | 대응 | 남는 위험 |
-| --- | --- | --- |
-| user 역할 팀원이 자기 기기에서 값을 꺼냄 | 기기의 관리자 패스프레이즈와 `secret reveal` 감사 기록이 있지만 기기 소유자는 상태 디렉터리를 갖는다. | 막지 못한다. 팀원은 사람으로서 신뢰하고, 에이전트는 신뢰하지 않는다는 제품 경계의 연장이다. 문서와 초대 화면에 명시한다. |
-| 팀원 기기의 실행 환경 침해(멀웨어) | 기존 침해 대응이 그 노드에서 봉쇄하고 §9로 admin에게 알린다. | 침해된 노드의 신뢰 프로세스까지 뚫리면 그 환경의 모든 비밀이 노출된 것으로 보고 교체한다. |
-| 제거된 팀원 | 세션 거부, DEK 새 세대, 교체 권고 표시. | 제거 시점까지의 비밀은 공급자 교체로만 무효화. |
-| 위조·변조 커밋, 다른 환경의 커밋 재생, 순번 건너뛰기 | 서명, 환경 ID, 기기별 연속 순번, 형식·역할·대상 검증을 모든 노드가 수행. | 없음(키가 새지 않는 한). |
-| 시계를 앞당겨 항상 이기려는 admin | 벽시계가 5분 이상 앞선 커밋은 그 시각까지 보류. 논리 시계는 인과 순서를 보존. | 5분 안의 조작은 동시 변경의 승패에만 영향을 준다. admin이 어차피 할 수 있는 변경이며 이력이 남는다. |
-| 악의적 admin | admin 권한으로 할 수 있는 일을 한다. 모든 커밋에 서명과 이력이 남고 owner가 제거한다. | 제거 전까지의 변경과 그가 읽은 비밀. |
-| 네트워크 도청·변조 | 핸드셰이크와 프레임 암호화. 멀티캐스트 신호는 서명되고 신뢰 근거가 아니다. | 트래픽 존재와 크기는 보인다. |
-| 팀 리스너로의 무차별 연결 | 핸드셰이크 실패 시 정보 없이 끊음. 동시 연결 상한, 노드당 속도 제한. | 서비스 거부는 막지 못한다. LAN·VPN 안이라는 전제. |
-| 노드의 상태 디렉터리 백업 유출 | 환경 DEK는 로컬 KMS로 감싸여 있고 암호문뿐. 기존 백업 규칙과 같다. | 암호문 길이가 드러난다(기존과 같음). |
-| 초대 문자열 유출 | 일회용·만료. 가입은 팀원 목록과 감사 기록에 남는다. | 만료 전 먼저 쓴 쪽이 가입한다. admin이 보고 제거한다. |
+Admins persist `team/ENV_ID/incidents/FINGERPRINT-INCIDENT_ID.json`, local rotation flags and alerts. Do not automatically stop other nodes. Provider rotation followed by secret activation distributes a replacement; admins can publish connection-disable facts to contain environment-wide access. Keep summaries after closure; full usage records never leave the node.
 
-노드의 팀 리스너, 도구 리스너, 중계기는 같은 프로세스에 있다. 에이전트 실행 환경과 신뢰 프로세스가 같은 호스트에 있다는 개발 구성의 한계([구현 현황](implementation.md) §9)는 그대로이며, 팀 공유가 이를 개선하지도 악화시키지도 않는다.
+Current implementation provides and tests `send_incident_for_all_envs`/`on_incident_open`, but `incident.rs::open_incident` is not wired to it. The protocol exists; automatic incident creation does not yet trigger cross-device notifications. See [implementation](implementation.md), section 11.2.
 
-## 11. 하지 않는 것과 한계
+## 10. Threats
 
-- **NAT 통과, 공개 인터넷, 중계 서버.** 같은 LAN 또는 팀 VPN이 전제다. 다른 네트워크의 팀원은 VPN으로 들어온다.
-- **리더, 정족수, 쓰기 잠금.** 없다. 동시 변경은 사후에 결정적으로 수렴하며, 진 쪽의 작성자에게 알린다. "내 변경이 반드시 반영된다"는 보장은 없고 "모두가 같은 결과를 본다"는 보장만 있다.
-- **오프라인 노드의 회수 지연.** 오프라인 노드는 마지막 동기화 상태로 사용을 계속한다.
-- **사용 기록의 팀 공유.** 하지 않는다. 사건 요약만 공유한다.
-- **기기 간 팀원 신원 통합.** 사람 하나에 기기 둘이면 팀원 둘이다. 이름은 표시용이다.
-- **YAML 입력.** 출력만 지원한다.
-- **암호학적 역할 격리.** user도 DEK를 받는다.
-- **연결·팀원·버전의 재활성화.** 비활성화·제거·폐기는 되돌리지 않는다. 새 ID·새 기기 키·새 버전으로 만든다.
-- **자동 공급자 교체.** [제품 정의](product-intent.md)의 후속 범위 그대로다.
-- **환경 분리 해제(unshare).** 공유를 취소하려면 팀원을 전부 제거하고 자기 노드만 남긴다. 환경 ID는 유지되며, 제거된 팀원이 가진 비밀은 교체로만 무효화된다.
+Mutual authentication/encryption and independent verification preserve agent non-disclosure, but shared decryptable replicas increase the number of trusted devices.
+
+| Threat | Control and limit |
+| --- | --- |
+| Malicious user device owner | Local reveal requires passphrase/audit, but the owner controls state and can extract shared secrets. Trust humans explicitly. |
+| Runtime/trusted-process compromise | Local containment and the incident protocol help; trusted-process compromise exposes the shared environment and requires provider rotation. Automatic incident-hook wiring is still absent. |
+| Concurrent administrator removals | Check `team status` → `rejected_removals`; an active admin reviews and reissues intended removals. Automatic membership convergence is not guaranteed during this conflict. |
+| Removed member | Deny new sessions/traffic and rotate generations; prior credentials require provider rotation. |
+| Forgery/replay/sequence skipping | Signatures, environment binding, consecutive sequences, shape/role/target checks; signing-key compromise remains a limit. |
+| Clock manipulation | Defer over-5-minute future commits; within-limit skew can influence concurrent ordering, with signed history. |
+| Malicious admin | Can exercise granted administration until removed; signed history provides evidence, not prevention of authorized abuse. |
+| Network observation | Encrypted frames hide content, not traffic existence/size; discovery hints are not trust. |
+| Listener flooding | Failed handshakes disclose no detail; caps/rate limits reduce impact, not guaranteed DoS prevention. LAN/VPN remains assumed. |
+| Backup leakage | Wrapped DEKs/ciphertext protect values; ciphertext length remains visible. |
+| Leaked invitation | One-time expiry limits exposure, but first valid consumer can enroll; inspect/remove and rotate as needed. |
+
+Team listener, tools and relay share a trusted process. Team sharing does not fix same-host development isolation limits.
+
+## 11. Non-goals and limits
+
+No central server, leader, quorum, write locks, NAT traversal/public relay, full usage-audit replication, cross-device human identity merging, YAML input, cryptographic user/admin secrecy or provider auto-rotation. Convergence does not guarantee every author's edit wins. Offline replicas retain old authority until synchronization.
+
+There is no reactivation of disabled connections/removed members/revoked versions. To effectively unshare, remove other members and keep the environment ID; provider rotation is still needed to invalidate their previously accessible credentials.
 
 ## 12. CLI
 
-관리 CLI(`zeropw-admin`)에 `team` 명령군을 추가한다. 모든 출력은 기존처럼 값 없는 JSON이다.
+`zeropw-admin --state-dir DIR` provides:
 
-| 명령 | 동작 |
+| Command | Result |
 | --- | --- |
-| `team init` | 기기 키 생성. 이미 있으면 거부. 지문 출력. |
-| `team share --project P --environment E [--name N]` | 로컬 환경을 공유 환경으로 승격. 환경 ID·첫 DEK 세대 생성, 기존 비밀의 활성·대기 버전을 환경 DEK로 다시 암호화, 연결을 커밋으로 재발행. 공유되는 비밀을 참조하지 않는 연결은 로컬에 남기고 `not_shared`로 출력. 관리자 패스프레이즈 재인증. 로컬 연결의 기존 권한은 신뢰 경계가 바뀌었으므로 `stale`이 된다. |
-| `team invite --env P/E --role R --name N [--ttl 24h] [--address H:P] [--link]` | 일회용 초대 문자열 출력. `--link`를 주면 유효 기간이 24시간으로 고정되고(다른 `--ttl`은 `invite_link_ttl_fixed`), 주소는 `HOST:PORT` 모양이어야 하며, 출력에 `link`(`zeropw://join#<초대 문자열>`, 4096바이트 이하), `invite_id`, `expires_at`이 더해진다. |
-| `team invites --env P/E` | 이 노드가 만든 초대 목록. 항목마다 `invite_id`, 역할, 이름, 링크 여부, 만든·만료·사용·취소 시각, 사용한 기기 지문, 상태(`pending`, `used`, `expired`, `revoked`)를 보인다. 초대 문자열과 감싼 비밀은 나오지 않는다. |
-| `team revoke-invite --env P/E --id ID` | 아직 쓰이지 않은 초대를 막고 감싼 비밀을 지운다. 다시 불러도 성공하고, 없는 ID는 `invite_not_found`, 이미 쓰인 초대는 `invite_already_used`. 감사 기록 `team_invite_revoke`. 취소와 사용은 같은 상태 잠금을 거치므로 경합하면 한쪽만 성공한다. |
-| `team invite-info --stdin` | 표준 입력(또는 입력 봉투의 `invite`)의 초대 문자열이나 링크를 네트워크 없이 미리 본다. 상태 디렉터리가 없어도 된다. 비밀은 출력하지 않는다. |
-| `team join [<초대>] [--stdin] [--project P --environment E]` | 초대한 노드에 연결해 가입. 두 지문 출력. 초대는 인자, 표준 입력, 입력 봉투 중 하나로 받고 링크 형식도 받는다. 연결하기 전에 주소(16개, 각 128바이트 이하의 `HOST:PORT`)와 초대한 기기 지문 형식을 검사하고, 만료가 5분 넘게 지났으면 `invite_expired`로 멈춘다. 이후 다른 노드가 이 노드에 붙게 하려면 `serve --team-listen`을 켠다. |
-| `team members --env P/E` | 팀원 목록(지문, 이름, 역할, 상태, 마지막 동기화). |
-| `team remove --env P/E --device 지문` | 팀원 제거(긴급 사실)와 DEK 새 세대. owner 제거 불가. |
-| `team set-role`, `team transfer-owner` | §5.3. |
-| `team status --env P/E` | 버전 벡터, 접은 커밋 수, 건너뛴·거부된 연산 수, 세션 있는 노드, 마지막 동기화 시각, 보류 중 커밋. |
-| `team log`, `team show`, `team diff` | §5.5. |
-| `team peers --env P/E [--add host:port --device 지문]` | 주소 목록 관리. 주소는 항상 특정 기기에 속한다. |
-| `team compact --env P/E` | §7.3. |
-| `serve --team-listen host:port` | 팀 리스너 활성화. |
+| `team init` | Create device keys once, report fingerprint. |
+| `team share --project P --environment E [--name N]` | Reauthenticated promotion; create environment/generation, reencrypt active/staged versions, reissue shared connections as commits. Connections not referencing shared secrets remain local with not_shared. Old local grants become stale. |
+| `team invite --env P/E --role R --name N [--ttl 24h] [--address H:P] [--link]` | One-time invitation; use --address for reachable inviter addresses. With `--link` the lifetime is fixed at 24 hours (any other `--ttl` is `invite_link_ttl_fixed`), addresses must be `HOST:PORT`, and the output adds `link` (`zeropw://join#<invitation>`, at most 4096 bytes), `invite_id` and `expires_at`. |
+| `team invites --env P/E` | This node's invitations with `invite_id`, role, name, link flag, created/expiry/use/revocation times, the joining fingerprint and status (`pending`, `used`, `expired`, `revoked`). No invitation string or wrapped secret. |
+| `team revoke-invite --env P/E --id ID` | Block an unused invitation and drop its wrapped secret. Idempotent; unknown IDs are `invite_not_found`, used ones `invite_already_used`. Audited as `team_invite_revoke`. Revocation and consumption share the state lock, so a race has one winner. |
+| `team invite-info --stdin` | Offline preview of an invitation or link from stdin or the input envelope's `invite`; no state directory needed and no secret output. |
+| `team join [INVITATION] [--stdin] [--project P --environment E]` | Authenticate/enroll and display fingerprints; enable team-listen for inbound connections later. The invitation (or link) comes from the argument, stdin or the input envelope. Before dialing it checks the addresses (at most 16 `HOST:PORT` of 128 bytes each) and the inviter fingerprint shape, and stops with `invite_expired` more than five minutes past expiry. |
+| `team members --env P/E` | Fingerprints/names/roles/state/sync age. |
+| `team remove --env P/E --device FINGERPRINT` | Removal fact and eligible DEK rotation; cannot remove owner. |
+| `team set-role`, `team transfer-owner` | Role/ownership rules in section 5.3. |
+| `team status --env P/E` | Vectors, folded/skipped/rejected/pending counts, sessions and sync age. |
+| `team log`, `team show`, `team diff` | Sanitized history/views. |
+| `team peers --env P/E [--add host:port --device FINGERPRINT]` | Address management bound to specific devices. |
+| `team compact --env P/E` | Conditional local history compaction. |
+| `team incidents --env P/E` | Received admin incident summaries and rotation flags. |
+| `serve --team-listen host:port` | Enable the separate team listener. |
 
-기존 `connection *`, `secret *`, `rotation *` 명령은 대상이 공유 환경이면 커밋(되돌릴 수 있는 변경) 또는 긴급 사실(`connection disable`, `secret revoke`)을 만들어 즉시 적용한다. 명령 인터페이스는 바뀌지 않으며 출력에 `commit: {author_seq, hlc}` 또는 `fact: {hash}`와 `propagated_to: <세션 수>`가 추가된다. 관리 CLI는 `serve`와 별도 프로세스라 세션을 갖지 않으므로 `propagated_to`는 0이고, 떠 있는 `serve`가 다음 폴링에서 커밋 저장소와 사실 파일의 새 항목을 읽어 전파한다. 공유 환경의 `secret put`·`rotation start` 출력은 정수 번호 대신 `version_id`를 보인다. `grant *`, `principal *`, `approvals *`는 그대로 노드 로컬이다. `connection update-scope`는 `connection update`로 이름을 넓히되 기존 이름은 별칭으로 남긴다.
+Existing connection/secret/rotation commands emit commits for mutable changes or facts for disable/revoke, applying locally immediately. Results add `commit: {author_seq, hlc}` or `fact: {hash}` and `propagated_to`. The separate administrator process owns no sessions, so its propagated_to is 0; running serve discovers and forwards changes on its next poll. Shared secret/rotation output uses stable version_id. Principals/grants/approvals stay local. `connection update-scope` remains an alias for `connection update`.
 
-## 13. 구현 계획
+## 13. Implementation and validation stages
 
-네 단계 모두 2026-09-16 Python 프로토타입으로 먼저 구현했고, 이후 같은 범위를 Rust로 옮겼다(2026-10-03 프로토타입 제거). 아래 모듈과 시험은 현재 Rust 구현 기준이다. 시험 위치는 `rust/tests/<대상>.rs`와 각 모듈의 단위 시험이다.
+All four stages were first implemented in 2026-09-16 prototype work and ported before its 2026-10-03 removal. Test evidence belongs to exact commits, not this plan.
 
-### 단계 1 — 키, 봉투, 커밋, 접기 (네트워크 없음)
+1. **Keys/envelopes/commits/folding:** X25519 RFC vectors, device identity, HKDF wrapping, signatures/shape/HLC/sequence, deterministic fold/facts/snapshots/derivation and stable-version-to-local-number mapping. Targets include team_fold, team_oracle, team_envelope_parity_edges and module tests. Validate roles/skips, signature/environment/sequence failures, future-clock deferral, permutation convergence, late re-folding, monotonic local policies/stale widening, irreversible overlays, generation keys, overwritten derived edits and no plaintext in documents/history.
+2. **Transport/synchronization:** TCP/in-process transport, vectors/commits/facts/peers, replay/deduplication, sessions/retries and withdrawal effects. team_transport, team_parity_gaps, team_remaining_contract and sync tests cover membership/authentication, replay/frame tampering, bidirectional and three-node catch-up, concurrent convergence, socket/run withdrawal and no plaintext/DEK on wire. Multicast discovery remains absent.
+3. **Membership/facts/CLI:** Invitation consumption, enrollment, removal/generation rotation, monotonic facts and CLI integration. team_membership_sync, astra_team_fact_catchup, astra_team_round2–4 and native_team_cli cover expiry/single-use, history, removed-peer traffic/draining/reconnect denial, new-generation secrecy, mutual removal, restore/facts, conditional compaction and value-free output.
+4. **Incidents/E2E:** Signed outbox/ACK/admin flags, override alerts and three-process native_team_e2e. Verify scope narrowing at next request rather than immediate live-run cancellation, offline concurrent edits converging with loser alerts, removed members unable to decrypt new generations and no values in state/output/raw wire capture (`ZEROPW_TEAM_WIRE_CAPTURE`, test-only). Sync/adversarial team tests cover incident delivery and override details. Automatic incident-open hook wiring remains absent.
 
-- `crypto/x25519.rs`: RFC 7748. 시험 벡터.
-- `team/identity.rs`: 기기 키 생성·저장(로컬 KMS 감싸기), 기기 기록, 지문.
-- `team/envelope.rs`: DEK 세대 감싸기·풀기(HKDF + ChaCha20-Poly1305).
-- `team/commit.rs`: 커밋 모델, 서명, 형식 검증(§5.4), 하이브리드 논리 시계, 기기별 순번 저장.
-- `team/fold.rs`: 전순서 접기(§7.2), 긴급 사실 재적용, 스냅샷, 로컬 정책·금고 문서로의 파생과 정책 버전·`stale` 판정.
-- `vault.rs`: 공유 환경 비밀의 세대 키 선택과 버전 ID ↔ 정수 번호 대응.
-- 시험 `team_fold`, `team_oracle`(프로토타입이 쓴 기기 기록·봉투·서명된 커밋·접은 문서와 바이트 일치), `team_envelope_parity_edges`, `team::commit`·`team::fold`·`team::envelope`·`team::identity` 단위 시험: 역할별 연산 허용·건너뜀, 서명·순번·환경 ID 불일치 거부, 시계 5분 초과 보류, 같은 커밋 집합을 다른 도착 순서로 접어도 같은 문서(무작위 순열 시험), 늦게 끼어든 커밋으로 다시 접기와 정책 버전 단조 증가, 넓어짐의 로컬 권한 `stale`, 긴급 사실이 순서와 무관하게 이김, 비밀 암호문의 세대 키 사용과 로컬 DEK로 복호화 불가, 파생 문서 손수정이 덮어써짐, 커밋·문서·스냅샷에 금고 값(모든 인코딩)이 없음. **구현 완료.**
+## 14. Defaults and design decisions
 
-### 단계 2 — 전송과 동기화
+Confirmed choices were immediate leaderless application, invitation auto-acceptance, device-specific keys and continued use of stale offline replicas. Original proposed defaults are 5-minute future-clock tolerance, 10-second sync, 24-hour invitation, 10-minute session regeneration, 30-day compaction, multicast `239.192.47.42:47420`, share-time passphrase reauthentication and node-dependent private-vault profile checks. Multicast is a planned default, not an implemented discovery claim.
 
-- `team/transport.rs`: 인터페이스, 인프로세스 시험 전송, TCP 참조 전송(핸드셰이크·프레임).
-- `team/sync.rs`: 세션 관리, `VECTOR`·`COMMIT`·`FACT`·`PEERS`, 재전파와 중복 제거, 적용(§6.5), 주기 동기화, 재시도.
-- `serve --team-listen`.
-- 시험 `team_transport`, `team_parity_gaps`, `team_remaining_contract`, `team::sync` 단위 시험: 핸드셰이크 상호 인증(팀원 아님·제거됨·서명 불일치·환경 ID 불일치 거부, 재생 불가), 프레임 변조 거부, 두 `Context` 사이의 양방향 따라잡기, 세 노드에서 직접 닿지 않는 두 노드 사이의 전달, 동시 편집 뒤 세 노드가 같은 문서, 적용 시 실행 취소·소켓 닫기(기존 시험 패턴 재사용), 와이어 캡처에 평문 값·DEK 없음. **구현 완료. §6.4의 UDP 멀티캐스트 발견은 구현하지 않았다**([구현 현황](implementation.md) §11.3): 주소는 초대·`team peers --add`·`PEERS` 재전파로만 퍼진다.
+### Local fact admission and pre-release state
 
-### 단계 3 — 초대·가입·제거, 긴급 사실, CLI
+Each locally accepted fact has a device-signed admission receipt in `fact_admissions.jsonl`. Receipts stay local; another peer must validate the original fact itself. Restart and live pickup use the same checks. Previously admitted facts retain their admission after an author's role changes. An unreceipted disable or version revocation also survives when signed commit history proves that its author was an administrator. New member removals require current authority, including the narrowly defined reciprocal-removal exception.
 
-- `team/membership.rs`: 초대 생성·소진, 가입 핸드셰이크 확장, `member.*`, `dek.rotate`.
-- 긴급 사실 생성·검증·전파·재적용과 `facts.jsonl`은 `team/sync.rs`의 `TeamSync`에 있다: 서명·전파·재적용이 세션·동기화 상태와 얽혀 있어 그 상태를 쥔 쪽에 두었다.
-- `team` CLI 명령군과 기존 `connection *`·`secret *`·`rotation *`의 커밋 생성.
-- 시험 `team_membership_sync`, `astra_team_fact_catchup`, `astra_team_round2`~`4`, `team_membership_sync::compact_preserves_membership_history_and_snapshot_document`(§7.3 압축), `native_team_cli`: 초대 일회성·만료, 가입 뒤 이력 수신과 접기, 제거 즉시 세션 종료와 재접속 거부, 새 세대 뒤 새 버전 복호화 불가(제거된 노드), 서로 동시 제거, 긴급 사실의 중복 처리, 복원 뒤 사실 재적용, CLI 출력에 값 없음. **구현 완료.**
-
-### 단계 4 — 사건 공유와 종단 시험
-
-- `team/sync.rs`의 `send_incident`/`send_incident_for_all_envs`(공개 별칭 `on_incident_open`)와 `incident_outbox.jsonl`, `INCIDENT`/`INCIDENT_ACK`, admin 노드의 수신·표시(`team/<env-id>/incidents/`)·`rotation_flags.json`·알림. [침해 대응](compromise-response.md)의 `open_incident`(`incident.rs`)에서 `send_incident_for_all_envs`를 부르는 배선은 아직 없다([구현 현황](implementation.md) §11.2).
-- §7.2의 `team_op_overridden` 알림(3단계까지 미구현이던 항목)을 `team/fold.rs`(감지)와 `team/sync.rs`(이 기기가 진 경우만 1회 알림)에 추가.
-- `admin_cli.rs`의 `team incidents --env P/E`.
-- `native_team_e2e`: 별도 OS 프로세스 세 개(`serve` × 3)와 각자의 관리 CLI·에이전트 CLI로 §1의 흐름 전체. 한 노드의 범위 축소로 다른 노드의 그 경로 요청이 거부되고 그 경로를 계속 부르던 진행 중 실행도 다음 중계에서 같이 거부되어 끝나며(§6.5: 좁아짐은 진행 중 실행을 직접 취소하지 않고 다음 중계·서명에서 새 범위로 판정한다 — 명세 그대로), 두 노드가 오프라인에서 같은 연결을 고친 뒤 재연결하면 세 노드가 같은 상태가 되며 진 쪽에 `team_op_overridden` 알림이 남고, 팀원 제거 뒤 제거된 노드가 새 비밀 버전의 세대 키를 갖지 못하는지 확인. 모든 노드의 상태 디렉터리·출력·와이어 캡처(§6.1을 실제로 지나간 원시 바이트, `ZEROPW_TEAM_WIRE_CAPTURE` 시험 전용 환경변수로 켠다)에서 금고 값 부재 확인. `team::sync` 단위 시험과 `astra_team_review`가 사건 공유·`team_op_overridden`을 더 세밀하게 다룬다. **구현 완료.**
-
-## 14. 확정한 세부와 남은 확인
-
-작성 중 물어 확정한 것: 대기 커밋 대신 즉시 적용·전파(리더 없음), 초대 자동 수락, 기기별 키, 오래된 복제본의 사용 허용. 아직 사용자 확인이 없는 기본값은 다음이며 구현 전에 바꿔도 비용이 없다.
-
-1. 시계 보류 한계 5분, 동기화 주기 10초, 초대 만료 24시간, 세션 재생성 10분, 압축 조건 30일.
-2. 멀티캐스트 주소·포트 `239.192.47.42:47420`.
-3. `team share` 시 관리자 패스프레이즈 재인증 요구.
-4. 접기 시점의 CLI 프로필 환경변수 검사가 노드마다 다르게 걸릴 수 있다는 점을 받아들임(§7.2).
+Upgrading state from builds without admission receipts is unsupported. In particular, a historical member removal whose author later lost authority through a commit cannot be authenticated as previously admitted; reusing that state can lose its removal overlay. Do not upgrade or restore such a team environment in place. Keep its state for diagnosis, rotate the provider credentials, and establish a new environment with the intended current membership before sharing new secrets. There has been no public release with this older state format.

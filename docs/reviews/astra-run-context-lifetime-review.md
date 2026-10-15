@@ -26,7 +26,7 @@ The existing test now starts its completion deadline immediately before its orig
 Fresh independent command from `rust/`, exact integrated `ca9683adc651096b80991ae6921be10eb829da53`:
 
 ```sh
-env -i PATH=/Users/ys/.cargo/bin:/Users/ys/.local/bin:/usr/bin:/bin cargo test --offline --test runs --test astra_run_context_lease
+env -i PATH=${HOME}/.cargo/bin:${HOME}/.local/bin:/usr/bin:/bin cargo test --offline --test runs --test astra_run_context_lease
 ```
 
 Result: **19 passed** — independent lease test 1/1 (2.70s), complete runs suite 18/18 (6.81s). The latter includes no-worker immediate destruction, pre-completion cleanup, output/audit publication, cancellation, ownership and timeout boundaries.

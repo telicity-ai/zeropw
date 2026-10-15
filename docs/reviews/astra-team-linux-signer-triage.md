@@ -17,7 +17,7 @@ The unmodified failing test passed **10 of 10** sequential local macOS repetitio
 
 ```sh
 for trial in 1 2 3 4 5 6 7 8 9 10; do
-  env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin RUST_BACKTRACE=1 /Users/ys/.cargo/bin/cargo test --offline --test team_remaining_contract remote_connection_disabled_fact_closes_existing_signer_socket -- --exact --nocapture || break
+  env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin RUST_BACKTRACE=1 ${HOME}/.cargo/bin/cargo test --offline --test team_remaining_contract remote_connection_disabled_fact_closes_existing_signer_socket -- --exact --nocapture || break
 done
 ```
 

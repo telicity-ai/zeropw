@@ -1,0 +1,250 @@
+{
+  "actual_models": [
+    "claude-opus-5-5"
+  ],
+  "review": {
+    "head_sha": "a3351e8aa3d9a26f6f02872db48a570cf3a872a7",
+    "verdict": "REVISE",
+    "verdict_basis": "R1-R9 are resolved in source, but four new source findings remain. One is high: the pending-rekey and stale-generation write guard is dead code for the real secret-write operation. Source resolution is judged separately from final validation, which is still pending. This scoped static review makes no repository acceptance claim.",
+    "original_findings": [
+      {
+        "id": "R1",
+        "severity": "high",
+        "status": "resolved",
+        "evidence": [
+          "sync.rs fact_role_ok, member_removed branch: `doc[\"owner\"] == author || is_admin(doc, author) || author == target_fp`.",
+          "is_admin requires `status == \"active\"`. Owner targets are still refused.",
+          "The reciprocal exception is kept only through role_document_for_removal: the author's removal set must be exactly {target}, and the fold is rerun without that author's removal. The local no-team path in membership.rs author_fact uses the same exact-set rule.",
+          "publish_fact, validate_incoming_fact (receive and pick_up_local_facts replay) and the local author_fact path all call the same predicate.",
+          "Tests: retained_admin_role_does_not_authorize_a_removed_author (predicate); removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish; astra_team_round3 removed_by_third_party_cannot_remove_an_unrelated_admin (receive audits team_fact_not_authorized; publish fails).",
+          "The mutual-removal convergence test is preserved (mutual_removal_converges_when_second_fact_arrives_on_draining_peer)."
+        ],
+        "residual_notes": [
+          "No test drives membership::author_fact with team=None for a removed admin. It shares the fixed predicate, so this is a test gap, not a source gap.",
+          "The publish assertion checks is_err() rather than the exact reason.",
+          "The fix makes acceptance depend on arrival order. See N2."
+        ]
+      },
+      {
+        "id": "R2",
+        "severity": "medium",
+        "status": "resolved",
+        "evidence": [
+          "sync.rs handle_message, draining branch: a FACT is forwarded only if kind == member_removed and author == drained peer, and the target is either the peer itself or in removal_authors[peer].",
+          "removal_authors includes this node when this node published the removal (store_fact inserts fact.author).",
+          "Non-reciprocal FACTs are audited team_fact_not_authorized and dropped. Other message types are ignored with no reply.",
+          "Accepted facts still go through full signature and role validation in handle_fact.",
+          "Test draining_admin_cannot_send_a_non_reciprocal_removal shows the fact is otherwise valid (validate_incoming_fact == true) and is not stored while draining.",
+          "docs/team-sync.md §4.4 now states the reciprocal-or-self rule."
+        ]
+      },
+      {
+        "id": "R3",
+        "severity": "medium",
+        "status": "resolved",
+        "evidence": [
+          "install.sh now downloads `$base/$name.sha256` and selects `$2 == name`.",
+          "package-release.py writes `<hex>  <name>\\n` to `<archive>.sha256`, so the formats match.",
+          "Multiple matching lines fail the anchored 64-hex check.",
+          "tests/test_release_fixes.py serves release-shaped assets over locally verified TLS (curl --cacert / --connect-to) and covers three cases: valid with an unrelated line, missing entry, and duplicate entry.",
+          "docs/releasing.md describes the per-archive .sha256 asset."
+        ]
+      },
+      {
+        "id": "R4",
+        "severity": "medium",
+        "status": "resolved",
+        "evidence": [
+          "notify.rs render_incident_email subject is now `[ZeroPW] Intrusion detected: action required (incident {id})`.",
+          "Test english_incident_subject_is_neutral_and_recovery_precedes_close covers stopped=false with an empty secrets list."
+        ]
+      },
+      {
+        "id": "R5",
+        "severity": "low",
+        "status": "resolved",
+        "evidence": [
+          "scripts/homebrew-source.py pin() raises unless the exact head line occurs exactly once and the commit is a full 40-hex SHA.",
+          "The path is emitted as a single-quoted Ruby literal with \\\\ and \\' escaped, so `#{}` is not interpolated.",
+          "test-homebrew.sh uses this script.",
+          "Tests cover whitespace drift, a duplicate head line, and a Ruby parse of a hostile path that evaluates as data."
+        ],
+        "residual_notes": [
+          "The optional post-install check that the installed revision equals the commit was not added.",
+          "Homebrew support for `head <path>, using: :git, revision:` was not verified statically."
+        ]
+      },
+      {
+        "id": "R6",
+        "severity": "low",
+        "status": "resolved",
+        "evidence": [
+          "install.sh initializes `stage='' docstage=''` and installs a trap covering both before either mktemp runs.",
+          "Test test_doc_stage_failure_removes_already_created_binary_stage injects a failure into the docs mktemp and asserts the bin directory is empty."
+        ]
+      },
+      {
+        "id": "R7",
+        "severity": "low",
+        "status": "resolved",
+        "evidence": [
+          "package-release.py writes through gzip.GzipFile(filename='', mtime=0) wrapping a USTAR tarfile, with normalized uid, gid, mtime, uname, gname and mode.",
+          "Test test_identical_release_inputs_produce_identical_archives asserts identical bytes across output directories and a zero gzip MTIME."
+        ],
+        "residual_notes": [
+          "Byte identity across hosts with different zlib versions or settings is not guaranteed.",
+          "The docs claim same-file determinism only."
+        ]
+      },
+      {
+        "id": "R8",
+        "severity": "low",
+        "status": "resolved",
+        "evidence": [
+          "display() renders JSON null as `unknown`, and or_default uses `none`.",
+          "The escalate command is a single `--scope runtime` line, followed by separate prose for `--scope all`.",
+          "Every recovery command carries the `zeropw-admin --state-dir <STATE_DIR>` prefix.",
+          "The full-exposure recover block is emitted before `incident close`.",
+          "The test asserts recover precedes close and that `runtime|all` is absent."
+        ],
+        "residual_notes": [
+          "Non-string, non-null values still use Python repr (for example True or ['a']).",
+          "This is acceptable for operator output and is not a new finding."
+        ]
+      },
+      {
+        "id": "R9",
+        "severity": "low",
+        "status": "resolved",
+        "evidence": [
+          "docs/releasing.md Gate 3 now lists four targets, including ARM64 Linux, matching package-release.py and install.sh.",
+          "The 'still being migrated' and 'remains to be translated' sentences are replaced by statements that maintained docs and demo/notification output are English and that team protocol docs are English.",
+          "Historical evidence paragraphs remain scoped to their stated commits."
+        ],
+        "residual_notes": [
+          "The current-state translation sentences do not name a commit. They implicitly describe the commit that contains the doc."
+        ]
+      }
+    ],
+    "known_open": [
+      {
+        "id": "OSS-TEAM-SELFREMOVE",
+        "status": "open (preserved, not re-adjudicated)",
+        "note": [
+          "remove_member still rotates only when `is_admin && caller != fingerprint`.",
+          "Source now adds receiving-admin repair: ensure_self_removal_rotations creates a dek.rotate bound by removal_fact_hash. docs/team-sync.md §4.4 documents it.",
+          "The advertised companion boundary, that pending or stale-generation writes fail closed, does not work on the real write path (N1). Any re-adjudication must wait for N1."
+        ]
+      },
+      {
+        "id": "OSS-INSTALL-OPENSSL",
+        "status": "open",
+        "note": [
+          "CI and self-hosted workflows now build archives with `--features bundled-openssl`, and dependency-licenses.py collects the nested openssl-src notices.",
+          "The Formula still links Homebrew openssl@3 dynamically by design.",
+          "GNU/Linux archives still require a compatible glibc (documented baseline Ubuntu 24.04).",
+          "The bundled macOS evidence (otool) is claimed but unverified here. Fresh-host Linux portability is not established."
+        ]
+      },
+      {
+        "id": "OSS-HOMEBREW-ACK",
+        "status": "open (pending final-source validation)",
+        "note": [
+          "runs.rs puts the ACK socket under a short TMPDIR (75 bytes or less, must be a directory), otherwise /tmp, in a 0700 tempdir.",
+          "The Formula test sets TMPDIR to testpath, and the test ack_socket_respects_short_sandbox_tmpdir_and_survives_long_tmpdir covers both branches.",
+          "Evidence: a real Homebrew install and test passed at 112a431. The supplied evidence states the later team changes require Homebrew revalidation on the final source."
+        ]
+      }
+    ],
+    "new_findings": [
+      {
+        "id": "N1",
+        "severity": "high",
+        "title": "The pending-rekey and stale-generation write guard keys on a nonexistent op name, so real secret writes are never blocked",
+        "file": "rust/src/team/membership.rs (author_commit); rust/src/team/sync.rs (test self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation); docs/team-sync.md §4.4",
+        "evidence": [
+          "author_commit enters the guard only when `op[\"op\"] == \"secret.put\"`, and the generation comparison checks the same name.",
+          "The only valid secret-write op is `secret.put_version`: commit.rs dispatch_validator has no `secret.put`, and share_environment emits `secret.put_version`.",
+          "So ensure_self_removal_rotations and the `team_rekey_pending` refusal never run for a real write.",
+          "The regression test submits `{\"op\":\"secret.put\"}`. That op would fail validate_ops as op_unknown, but the dead guard fires first, so the test passes without covering the production path.",
+          "Separately, the stale-generation check runs only if some generation carries removal_fact_hash. After an ordinary admin removal (rotate_dek without a hash), a version encrypted under the pre-removal generation is still accepted.",
+          "op_secret_put_version in fold accepts any known generation, not only the current one.",
+          "docs/team-sync.md §4.4 and the supplied evidence ('pending and stale-generation local writes fail closed') claim behavior the source does not have."
+        ],
+        "impact": "New shared secret versions can be encrypted under a DEK generation the removed device holds. The fail-closed boundary that confines it is absent.",
+        "resolution_conditions": [
+          "Gate on `secret.put_version`. Preferably also enforce `generation_id == dek.current` for every local secret.put_version after any removal-driven rotation, or unconditionally.",
+          "Fail with team_rekey_pending while a verified self-removal lacks a completed bound rotation.",
+          "Replace the test's op with a valid, fully formed secret.put_version. Assert team_rekey_pending before rotation and success under the new generation. Assert that a stale-generation write fails after an ordinary admin removal.",
+          "Reconcile docs/team-sync.md §4.4 and the release evidence with the implemented behavior.",
+          "State whether peer-received stale-generation versions are accepted, and document that limit."
+        ]
+      },
+      {
+        "id": "N2",
+        "severity": "medium",
+        "title": "The R1 fix makes member_removed acceptance depend on arrival order, which can permanently diverge membership across nodes",
+        "file": "rust/src/team/sync.rs (validate_incoming_fact, role_document_for_removal, send_fact_catchup); docs/team-sync.md §7.4",
+        "evidence": [
+          "Authority is checked against the receiving node's current folded document, not the state when the fact was authored.",
+          "Scenario: admin X removes W, and concurrently admin Z removes X.",
+          "Node N1 receives X's fact first and accepts it, so W is removed and admins on N1 rotate the DEK away from W.",
+          "Node N2 receives Z's fact first. X is then removed, removal_authors[X] = {Z} and Z != W, so N2 rejects X's fact with team_fact_not_authorized.",
+          "send_fact_catchup on N1 replays the fact indefinitely, and N2 rejects it each time.",
+          "Facts are designed as an order-independent monotone overlay (§7.4), but W is now removed on N1 and active on N2.",
+          "The astra round-3 test covers only the after-removal ordering."
+        ],
+        "impact": "Permanent split of membership and DEK recipients between partitions; inconsistent revocation.",
+        "resolution_conditions": [
+          "Define an arrival-order-independent rule that cannot be bypassed by backdating the author-controlled HLC. For example, bind facts to verifiable causal evidence.",
+          "Alternatively, document this as an explicit limit in team-sync.md §7.4 and §11. Surface rejected-but-peer-held removals in `team status`, and give admins a reconciliation step such as re-issuing the removal.",
+          "Add a two-ordering test that asserts the chosen behavior."
+        ]
+      },
+      {
+        "id": "N3",
+        "severity": "low",
+        "title": "Self-removal repair runs a full fact reload and fold on every poll, and its errors halt sync for all environments",
+        "file": "rust/src/team/sync.rs (poll, poll_env, handle_fact, repair_self_removals); rust/src/team/membership.rs (ensure_self_removal_rotations)",
+        "evidence": [
+          "On an admin node, poll_env (every ~50 ms) calls repair_self_removals. For every self-removal line, already-completed ones included, it re-reads facts.jsonl, runs load_facts, and folds the full commit log before checking completion.",
+          "Any error propagates with `?`. In poll it stops the remaining environments. In handle_fact it ends the receive loop and drops the session, even when the incoming fact was rejected or unrelated."
+        ],
+        "resolution_conditions": [
+          "Check completion before the identity fold, and cache by fact hash.",
+          "Isolate repair failures per environment and audit them instead of aborting poll or the session.",
+          "Add a test where rotation persistently fails and other environments keep syncing."
+        ]
+      },
+      {
+        "id": "N4",
+        "severity": "low",
+        "title": "Locally appended facts that the serve process rejects remain in facts.jsonl and are applied unvalidated by load_facts",
+        "file": "rust/src/team/sync.rs (pick_up_local_facts, load_facts, register_env); rust/src/team/membership.rs (load_environment, author_fact)",
+        "evidence": [
+          "When pick_up_local_facts rejects a line, it only skips the in-memory apply. The line stays on disk.",
+          "load_facts (used by register_env after restart and by membership::load_environment in the admin CLI) applies every parseable line with no signature or authority check.",
+          "The R1 'replay' test appends an unauthorized fact and checks only the in-memory document. After a restart, or from the admin CLI's view, that member would read as removed.",
+          "Reaching this requires a local write or a CLI/serve authority disagreement. That is a write-boundary inconsistency, not a remote exploit."
+        ],
+        "resolution_conditions": [
+          "Either validate signature and authority in load_facts (or at register time), or quarantine rejected local lines.",
+          "Extend the replay test to restart and to load_environment, and assert the member stays active."
+        ]
+      }
+    ],
+    "non_findings_checked": [
+      "Native execution in runs.rs: the session helper is resolved from the executable directory, never from PATH. The ACK listener sits in a 0700 random tempdir. If the ACK is lost, the fallback group kill targets the child pid, which cannot name the coordinator's group before setsid. Signals require pid > 1 and fall back to the process when the group kill fails. A spoofed ACK from a same-uid process cannot redirect signals to the coordinator group.",
+      "Output withholding in runs.rs: when a pump wait times out, output is empty, not unscanned. Blocked output is zeroized and replaced by a marker. On audit failure output is dropped.",
+      "Licensing: archives include MIT LICENSE and THIRD_PARTY_LICENSES.md. With bundled-openssl, openssl-src's nested OpenSSL and Text::Template notices are required. The closure excludes dev-dependencies. The Formula's license matches Cargo.toml.",
+      "install.sh: the archive entry-set check and the non-regular-entry rejection are unchanged and sound. Destination symlinks are replaced, not followed."
+    ],
+    "limitations": [
+      "Static review only. Nothing was built, run or installed. Supplied evidence statements (tests passing, otool, Homebrew) were not independently verified.",
+      "Vault and CLI secret-write code, transport, incident, smtp and the fold-caller wiring were not supplied. N1's statement that every production write uses `secret.put_version` rests on commit.rs validation, which rejects any other name. How writers choose generation_id was not observed.",
+      "Homebrew semantics for `head <local path>, using: :git, revision:` and brew test sandboxing were not verified.",
+      "Cross-host gzip/zlib reproducibility and glibc portability are unverified.",
+      "This is not repository acceptance. The full macOS and Linux matrices, the bundled installed demo, and final-source Homebrew revalidation are still pending."
+    ]
+  }
+}

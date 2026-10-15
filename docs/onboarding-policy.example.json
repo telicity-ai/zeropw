@@ -1,0 +1,47 @@
+{
+  "A_fingerprint": "<A_FINGERPRINT>",
+  "B_fingerprint": "<B_FINGERPRINT>",
+  "B_role": "user",
+  "expected_members": [
+    {
+      "fingerprint": "<A_FINGERPRINT>",
+      "role": "admin",
+      "status": "active",
+      "owner": true
+    },
+    {
+      "fingerprint": "<B_FINGERPRINT>",
+      "role": "user",
+      "status": "active",
+      "owner": false
+    }
+  ],
+  "project": "team-app",
+  "environment": "dev",
+  "connection_id": "service-api",
+  "probe": {
+    "method": "GET",
+    "path": "/v1/items",
+    "expected_http_status": 200,
+    "expected_response_rule": "items_array"
+  },
+  "credential_class": "synthetic",
+  "isolation_confirmed": false,
+  "artifact_receipts": {
+    "A": {
+      "release_tag": "v0.1.0",
+      "archive_sha256": "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+      "tap_commit": "<VERIFIED_40_HEX_TAP_COMMIT>",
+      "source": "human_verified_release",
+      "formula_sha256": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+    },
+    "B": {
+      "release_tag": "v0.1.0",
+      "archive_sha256": "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+      "tap_commit": "<VERIFIED_40_HEX_TAP_COMMIT>",
+      "source": "human_verified_release",
+      "formula_sha256": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+    }
+  },
+  "env_id": "<INDEPENDENTLY_VERIFIED_TEAM_ENV_ID>"
+}

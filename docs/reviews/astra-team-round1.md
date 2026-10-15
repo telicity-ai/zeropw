@@ -1,7 +1,7 @@
 # Astra team port review, round 1
 
 - Actual reviewer model: `gpt-6-astra`. No Claude Opus review was performed or claimed.
-- Reviewed product commit: `06cf76f665937da557bf7a0272dbbc2d07735569` in `/Users/ys/Code/zeropw-rust-team`.
+- Reviewed product commit: `06cf76f665937da557bf7a0272dbbc2d07735569` in `${HOME}/Code/zeropw-rust-team`.
 - Review date: 2026-09-22.
 - Scope: defensive code-quality and compatibility review of Rust `team/transport.rs`, `team/sync.rs`, and `team/membership.rs` against the Python modules and their existing tests. The full-port requirement supersedes the old first-half exclusion in `rust/PORTING.md`.
 - Result: **NOT ACCEPTED; bounded review, incomplete coverage.** Five reproduced findings remain open. No product code was changed. The added regression file intentionally fails on the reviewed commit.
@@ -12,7 +12,7 @@
 Run from `rust/`:
 
 ```text
-/Users/ys/.cargo/bin/cargo test --offline --test astra_team_review -- --test-threads=1
+${HOME}/.cargo/bin/cargo test --offline --test astra_team_review -- --test-threads=1
 ```
 
 Last run: compilation succeeded; **0 passed, 5 failed**, finished in 9.70 seconds, exit status 101. All credentials, keys, and state were synthetic and temporary. The tests do not contact external systems. Python probes use `python3.12` and the repository's own Python modules. `rustfmt --edition 2024 rust/tests/astra_team_review.rs` was then applied; it changes formatting only.

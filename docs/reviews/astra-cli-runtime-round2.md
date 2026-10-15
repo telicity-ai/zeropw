@@ -7,7 +7,7 @@
 - Scope: original AR-RUNTIME-01–04, retained registry ownership, session helper/ACK/spawn/cancellation/descriptor boundaries, HEAD errors and optional logging; significant administrator CLI fixes, recovery/restore/audit/error paths and interactive passphrase entry.
 - Decision: **REVISE. Two new reproduced runtime findings and one new CLI finding remain open. This bounded review is not full-product acceptance.**
 
-All state, file contents, keys and passphrases used here were synthetic. Children and listeners were controlled locally. Test commands used `env -i PATH=/Users/ys/.local/bin:/Users/ys/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. No product code or old finding evidence was changed. The latest user decision in `docs/rust-completion.md` controls reviewer/model authority.
+All state, file contents, keys and passphrases used here were synthetic. Children and listeners were controlled locally. Test commands used `env -i PATH=${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`. No product code or old finding evidence was changed. The latest user decision in `docs/rust-completion.md` controls reviewer/model authority.
 
 ## Original runtime IDs
 

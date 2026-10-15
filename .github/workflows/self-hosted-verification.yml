@@ -1,0 +1,91 @@
+name: Self-hosted release verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Reviewed 40-character commit SHA to verify (not a branch name)'
+        required: true
+        type: string
+      isolated_runner:
+        description: 'This runner has no vault, gateway, signer, production or coordinator authority'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zeropw-self-hosted-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: inputs.isolated_runner
+    runs-on: [self-hosted, macOS, ARM64, zeropw-isolated]
+    timeout-minutes: 120
+    steps:
+      - name: Validate the requested revision
+        env:
+          VERIFY_COMMIT: ${{ inputs.commit }}
+        run: |
+          [[ "$VERIFY_COMMIT" =~ ^[a-fA-F0-9]{40}$ ]]
+
+      - name: Check out the reviewed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+          clean: true
+
+      - name: Refuse product credentials in the runner environment
+        run: |
+          python3 - <<'PY'
+          import os
+          forbidden = [name for name, value in os.environ.items()
+                       if value and name.startswith('ZEROPW_')]
+          if forbidden:
+              raise SystemExit('Runner has ZeroPW configuration; use an isolated verification runner')
+          PY
+
+      - name: Verify the exact source revision
+        env:
+          VERIFY_COMMIT: ${{ inputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$VERIFY_COMMIT"
+
+      - name: Select the runner's OpenSSL 3 installation
+        run: echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Test installation tooling and compile the harness
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 -m unittest discover -s harness -p 'test_*.py' -v
+          python3 -m compileall -q harness scripts tests
+
+      - name: Run all Rust checks including SSH and team E2E
+        run: |
+          set -o pipefail
+          rust/verify.sh 2>&1 | tee "$RUNNER_TEMP/zeropw-verification.log"
+
+      - name: Build and install the release package
+        run: |
+          python3 scripts/build-release.py --target aarch64-apple-darwin --version v0.1.0 --out-dir dist
+          archive=dist/zeropw-v0.1.0-aarch64-apple-darwin.tar.gz
+          checksum=$(awk '{print $1}' "$archive.sha256")
+          prefix=$(mktemp -d "$RUNNER_TEMP/zeropw-package.XXXXXXXX")
+          trap 'rm -rf "$prefix"' EXIT
+          bash scripts/install.sh --archive "$archive" --sha256 "$checksum" --prefix "$prefix"
+          "$prefix/bin/zeropw-agent" --help
+          "$prefix/bin/zeropw-admin" --help
+          "$prefix/bin/zeropw-demo"
+
+      - name: Test the Homebrew formula
+        run: scripts/test-homebrew.sh
+
+      - name: Record the verified commit
+        env:
+          VERIFY_COMMIT: ${{ inputs.commit }}
+        run: |
+          printf 'Verified commit: `%s`\n\nFull Rust matrix, archive installation, and Homebrew tests passed.\n' \
+            "$VERIFY_COMMIT" >> "$GITHUB_STEP_SUMMARY"

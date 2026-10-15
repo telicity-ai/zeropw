@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "A_fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z2-7]{26}$"
+    },
+    "B_fingerprint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z2-7]{26}$"
+    },
+    "B_role": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "admin",
+        "user"
+      ]
+    },
+    "expected_members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[a-z2-7]{26}$"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "enum": [
+              "admin",
+              "user"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "enum": [
+              "active",
+              "removed"
+            ]
+          },
+          "owner": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "role",
+          "status",
+          "owner"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 2,
+      "maxItems": 256
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z0-9_.-]{1,96}$"
+    },
+    "environment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z0-9_.-]{1,96}$"
+    },
+    "connection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "probe": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "enum": [
+            "GET"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expected_http_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "expected_response_rule": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "expected_http_status",
+        "expected_response_rule"
+      ],
+      "additionalProperties": false
+    },
+    "credential_class": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "enum": [
+        "synthetic",
+        "real"
+      ]
+    },
+    "isolation_confirmed": {
+      "type": "boolean"
+    },
+    "artifact_receipts": {
+      "type": "object",
+      "properties": {
+        "A": {
+          "type": "object",
+          "properties": {
+            "release_tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "v0.1.0"
+              ]
+            },
+            "archive_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+                "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+              ]
+            },
+            "tap_commit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "human_verified_release"
+              ]
+            },
+            "formula_sha256": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "release_tag",
+            "archive_sha256",
+            "tap_commit",
+            "source",
+            "formula_sha256"
+          ],
+          "additionalProperties": false
+        },
+        "B": {
+          "type": "object",
+          "properties": {
+            "release_tag": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "v0.1.0"
+              ]
+            },
+            "archive_sha256": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+                "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+              ]
+            },
+            "tap_commit": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "enum": [
+                "human_verified_release"
+              ]
+            },
+            "formula_sha256": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "release_tag",
+            "archive_sha256",
+            "tap_commit",
+            "source",
+            "formula_sha256"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "A",
+        "B"
+      ],
+      "additionalProperties": false
+    },
+    "env_id": {
+      "type": "string",
+      "pattern": "^[a-z2-7]{26}-[0-9a-f]{32}$"
+    }
+  },
+  "required": [
+    "A_fingerprint",
+    "B_fingerprint",
+    "B_role",
+    "expected_members",
+    "project",
+    "environment",
+    "connection_id",
+    "probe",
+    "credential_class",
+    "isolation_confirmed",
+    "artifact_receipts",
+    "env_id"
+  ],
+  "additionalProperties": false
+}

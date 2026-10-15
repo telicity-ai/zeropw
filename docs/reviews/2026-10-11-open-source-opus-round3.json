@@ -1,0 +1,261 @@
+{
+  "head_sha": "01ef0ca21194eb35741212e630c695811e224f14",
+  "verdict": "REVISE",
+  "verdict_basis": "R1-R9 and N1-N3 are resolved in the supplied source. N2 is resolved by documentation, status surfacing and a reconciliation path. N4 is only partly resolved. Two new source findings remain open: one high (removal rekey completion can leave the current DEK generation wrapped to a removed device) and one medium (the static OpenSSL gate does not bind what the linker actually uses). This is a scoped static review of supplied files. It is not repository or release acceptance. Final execution evidence for this head is still pending: the focused evidence names 06869b6 and e3d240e, not 01ef0ca.",
+  "original_findings": [
+    {
+      "id": "R1",
+      "severity": "high",
+      "status": "resolved",
+      "evidence": [
+        "sync.rs fact_role_ok for member_removed is `doc[\"owner\"] == author || is_admin(doc, author) || author == target_fp`. is_admin requires `status == \"active\"`. Owner targets are refused.",
+        "The reciprocal exception exists only in role_document_for_removal (sync) and the team=None branch of author_fact (membership). Both require the author's removal set to equal exactly {target} before refolding.",
+        "publish_fact, validate_incoming_fact (used by handle_fact and pick_up_local_facts) and local author_fact all use the same predicate.",
+        "Tests: retained_admin_role_does_not_authorize_a_removed_author, removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish, astra removed_by_third_party_cannot_remove_an_unrelated_admin. The mutual-removal convergence test is retained."
+      ],
+      "residual_notes": [
+        "There is still no test of membership::author_fact with team=None for a removed admin. It uses the same predicate.",
+        "The publish assertion checks is_err() rather than the reason team_fact_not_authorized."
+      ]
+    },
+    {
+      "id": "R2",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "handle_message draining branch forwards only `mtype == FACT && kind == member_removed`, with author equal to the drained peer and target equal to the peer itself or a member of removal_authors[peer].",
+        "Every other FACT is audited as team_fact_not_authorized and dropped. Non-FACT messages are ignored and nothing is sent.",
+        "drain_removed uses entry().or_insert_with, so a confirmation cannot extend the deadline. Draining is marked before refold in publish_fact, handle_fact and pick_up_local_facts.",
+        "Test draining_admin_cannot_send_a_non_reciprocal_removal shows the fact is otherwise valid and is not stored."
+      ]
+    },
+    {
+      "id": "R3",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "install.sh fetches `$base/$name.sha256` and selects the line with `$2 == name`. package-release.py writes `<hex>  <name>\\n`.",
+        "A duplicate matching line fails the anchored 64-hex check.",
+        "tests/test_release_fixes.py serves release-shaped assets over locally verified TLS. It covers a valid file with an unrelated line, a missing entry and a duplicate entry."
+      ]
+    },
+    {
+      "id": "R4",
+      "severity": "medium",
+      "status": "resolved",
+      "evidence": [
+        "notify.rs subject is now `[ZeroPW] Intrusion detected: action required (incident {id})`.",
+        "english_incident_subject_is_neutral_and_recovery_precedes_close covers stopped=false with an empty secrets list."
+      ]
+    },
+    {
+      "id": "R5",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "homebrew-source.py pin() requires exactly one occurrence of the head line and a 40-hex commit.",
+        "The path is emitted as a single-quoted Ruby literal with backslash and quote escaped.",
+        "test-homebrew.sh calls the pin script. Tests cover whitespace drift, a duplicate head line, and a Ruby parse of a hostile path."
+      ],
+      "residual_notes": [
+        "No post-install assertion that the built revision equals the commit.",
+        "Homebrew `head <path>, using: :git, revision:` semantics are not verified statically."
+      ]
+    },
+    {
+      "id": "R6",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "`stage='' docstage=''` and a trap covering both are installed before either mktemp.",
+        "Test test_doc_stage_failure_removes_already_created_binary_stage asserts the bin directory is empty after a failure."
+      ]
+    },
+    {
+      "id": "R7",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "package-release.py uses gzip.GzipFile(filename='', mtime=0) around a USTAR tar with normalized metadata. filename='' is not None, so GzipFile does not fall back to fileobj.name.",
+        "A test asserts byte-identical output across output directories and a zero gzip MTIME."
+      ],
+      "residual_notes": [
+        "Identical bytes across hosts with different zlib builds is not claimed. The docs limit the claim to the same packaging runtime."
+      ]
+    },
+    {
+      "id": "R8",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "display() renders null as `unknown`.",
+        "The escalate command is a single `--scope runtime` line, with separate prose for `--scope all`.",
+        "All commands carry the `zeropw-admin --state-dir <STATE_DIR>` prefix.",
+        "The recover block precedes `incident close`, and the test asserts that ordering."
+      ]
+    },
+    {
+      "id": "R9",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "releasing.md Gate 3 lists four targets, matching package-release.py, build-release.py HOSTS and install.sh.",
+        "The translation-status sentences now state that maintained docs, demo/notification output and team protocol docs are English.",
+        "Historical evidence remains scoped to its commits."
+      ],
+      "residual_notes": [
+        "README-ko.md still states that verification needs no Python, while README.md lists Python installation-tooling tests. The Korean README is retained by policy, so this is not re-filed."
+      ]
+    }
+  ],
+  "round2_findings": [
+    {
+      "id": "N1",
+      "severity": "high",
+      "status": "resolved (see NEW-1 for a remaining path to the same impact)",
+      "evidence": [
+        "membership.rs author_commit runs the guard when `op[\"op\"] == \"secret.put_version\"`, the real op name validated in commit.rs dispatch_validator and emitted by share_environment.",
+        "Under the state lock it calls ensure_removal_rotations, reloads the folded document, and rejects any local secret.put_version whose generation_id != dek.current with team_rekey_pending. This applies unconditionally, including after ordinary admin removal.",
+        "Tests build a fully formed, decryptable secret.put_version (valid_secret_version):",
+        "self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation covers both receive and restart paths, the bound removal_fact_hash, no repeated rotation, and success under the new generation.",
+        "ordinary_admin_removal_also_blocks_stale_generation_writes and received_ordinary_removal_rekeys_and_duplicate_confirmation_does_not_repeat_it are present.",
+        "docs/team-sync.md §4.4 and §7.4 now describe this behavior and the limit that received historical older-generation versions are still accepted."
+      ],
+      "residual_notes": [
+        "Serialization against the poll and receive threads depends on StateDir::lock excluding other threads while being re-entrant within one thread. Its implementation was not supplied (see limitations).",
+        "Completion is decided per removal target, not per current generation. NEW-1 shows this can still leave the write generation wrapped to a removed device."
+      ]
+    },
+    {
+      "id": "N2",
+      "severity": "medium",
+      "status": "resolved (by the documented-limit alternative)",
+      "evidence": [
+        "docs/team-sync.md §7.4 'Concurrent removal admission', §10 and README document arrival-order-dependent admission and state that backdated HLCs do not restore authority.",
+        "audit_fact_rejected records team_fact_not_authorized member_removed facts into removal_conflicts.json. status() surfaces them as rejected_removals until the target is actually removed.",
+        "concurrent_third_party_removals_are_visible_and_reconciled_by_active_owner covers both orderings and reconciliation by reissue."
+      ],
+      "residual_notes": [
+        "Divergence is still possible until an admin reconciles. A local CLI-authored removal that has become unauthorized by the time serve sees it is quarantined after the CLI already reported success. It does surface in rejected_removals."
+      ]
+    },
+    {
+      "id": "N3",
+      "severity": "low",
+      "status": "resolved",
+      "evidence": [
+        "Repair moved out of handle_fact into poll_env via repair_member_removals.",
+        "It is admin-gated. On failure it sets a 1s backoff and audits team_dek_rotate with reason team_rekey_repair_failed, without returning an error, so poll and the session continue.",
+        "pending_removal_repairs is cleared for the snapshot on success, so completed removals no longer cause a refold every poll.",
+        "ensure_removal_rotations checks completion before running the identity fold.",
+        "Test persistent_rekey_failure_does_not_stop_another_environment covers this."
+      ],
+      "residual_notes": [
+        "Other poll_env steps (pick_up_local_commits, pick_up_local_facts, validate_incoming_fact) still use `?`, so a failure in one environment can still stop later environments in that poll. This is outside N3's stated scope.",
+        "pick_up_local_facts queues repair only for self-removals. Other locally appended removals rely on the CLI's own rotation, the write-path guard, or re-queuing at register_env."
+      ]
+    },
+    {
+      "id": "N4",
+      "severity": "low",
+      "status": "partially_resolved",
+      "evidence": [
+        "pick_up_local_facts now quarantines malformed or rejected local lines into rejected_facts.jsonl and rewrites facts.jsonl under the state lock. The replay test asserts load_environment and a fresh register_env see the member as active.",
+        "This works only while a serve process polls a line that is new to it.",
+        "register_env and membership::load_environment still call sync::load_facts. That function inserts every parseable line into fact_hashes and the facts overlay with no signature or authority check.",
+        "A line appended while serve is stopped is applied unvalidated by the CLI and by the next serve start, and pick_up_local_facts then skips it because its hash is already known. The test quarantines before restart, so it does not cover this ordering.",
+        "ensure_removal_rotations also trusts load_facts.removed_members. It verifies only the signature, not authority, before rekeying away from the target."
+      ],
+      "resolution_conditions": [
+        "Validate signature and authority at register_env and load_environment, or run the quarantine pass before the first fold at startup and in the standalone CLI.",
+        "Add a test that appends an unauthorized signed line while no TeamSync is running, then starts one, and asserts the member stays active and the line is quarantined."
+      ]
+    }
+  ],
+  "known_open": [
+    {
+      "id": "OSS-TEAM-SELFREMOVE",
+      "status": "open (source repair present; re-adjudication deferred)",
+      "note": "remove_member still rotates only when `is_admin && caller != fingerprint`. Receiving admins now rekey through ensure_removal_rotations with removal_fact_hash, and the N1 write guard is effective. Re-adjudication should wait for NEW-1 and final-source execution evidence."
+    },
+    {
+      "id": "OSS-INSTALL-OPENSSL",
+      "status": "open",
+      "note": [
+        "build-release.py pins the official OpenSSL 3.5.9 source SHA-256 and builds a no-shared, no-module SDK.",
+        "rust/build.rs gates bundled-openssl on header version 3.5.9, the presence of the static libraries, and OPENSSL_STATIC=1.",
+        "No automated linkage assertion exists (see NEW-2). Final-source macOS rebuild and fresh-host Linux portability (glibc baseline) are unestablished.",
+        "The Formula intentionally links Homebrew openssl@3."
+      ]
+    },
+    {
+      "id": "OSS-HOMEBREW-ACK",
+      "status": "open (pending final-source Homebrew validation)",
+      "note": "runs.rs is unchanged from the prior review: the ACK socket is under a 0700 tempdir in a TMPDIR of 75 bytes or less, otherwise /tmp. The Formula test sets TMPDIR=testpath. A real install and test passed only at an earlier commit."
+    }
+  ],
+  "new_findings": [
+    {
+      "id": "NEW-1",
+      "severity": "high",
+      "file": "rust/src/team/membership.rs (ensure_removal_rotations, rotate_dek_bound, author_commit); docs/team-sync.md §4.4/§7.4/§13",
+      "title": "Rekey completion is decided per removal target, so the current generation can stay wrapped to a removed device and all new secret versions use it",
+      "evidence": [
+        "ensure_removal_rotations skips a removal as `completed` if any generation carries a removal_fact_hash whose fact targets the same fingerprint.",
+        "author_commit then accepts writes under doc.dek.current. Neither step checks whether the current generation's wraps include a removed member.",
+        "rotate_dek_bound wraps for every member that is active in the rotator's own document.",
+        "Scenario (concurrent or partitioned removals): admin A removes W and rotates to G_a (bound to W, excludes W, includes V). Admin B has not seen W's removal; it removes V and rotates to G_b (bound to V, excludes V, includes W). G_b has the later HLC, so the fold makes G_b current on every node.",
+        "Both removals now count as completed, so nothing rotates again. All subsequent local secret.put_version commits pass the guard under G_b.",
+        "B, before learning of W's removal, kept a live session with W and broadcast G_b's commit. Any peer unaware of the removal can also relay it.",
+        "W can therefore unwrap the current DEK and decrypt every future shared secret version indefinitely, until some later rotation.",
+        "This contradicts §4.4 ('New secret versions use the new generation') and the §13 stage-4 claim that removed members cannot decrypt new generations."
+      ],
+      "resolution_conditions": [
+        "Treat rekey as incomplete whenever dek.generations[dek.current].wraps contains any fingerprint in the removed-member set. In that case rotate again, bound to the relevant removal hash.",
+        "Make author_commit refuse secret.put_version with team_rekey_pending under the same condition. Do this independently of per-target bookkeeping.",
+        "Add a test with two concurrent removals by different admins, where the later-ordered rotation includes the other removed device. Assert that after both are received an admin rotates again, local writes are refused until it does, and the final current generation has no wrap for either removed fingerprint.",
+        "Also cover a pure ordering variant: the rotation commit arrives before its removal fact."
+      ]
+    },
+    {
+      "id": "NEW-2",
+      "severity": "medium",
+      "file": "rust/build.rs, scripts/build-release.py, .github/workflows/*.yml",
+      "title": "The static OpenSSL gate validates OPENSSL_DIR, but the linker can consume other variables, and nothing checks the linked result",
+      "evidence": [
+        "build.rs checks only the plain OPENSSL_DIR and OPENSSL_STATIC.",
+        "openssl-sys resolves target-prefixed variables first (for example AARCH64_APPLE_DARWIN_OPENSSL_DIR or ..._OPENSSL_STATIC). It also honors OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR and pkg-config inputs, and these take precedence over OPENSSL_DIR.",
+        "build-release.py copies os.environ and removes only OPENSSL_NO_VENDOR. An inherited OPENSSL_LIB_DIR or target-prefixed variable (for example a Homebrew environment on a runner) can link a different, possibly dynamic, OpenSSL while build.rs passes against the pinned SDK.",
+        "No step in build-release.py or either workflow runs otool -L, ldd or a symbol check to reject a dynamic libssl/libcrypto dependency or confirm the 3.5.9 version string.",
+        "docs/releasing.md states 'Bundled archives must not link to Homebrew or system OpenSSL', but the release tooling does not enforce it. The otool evidence is manual and was not supplied."
+      ],
+      "resolution_conditions": [
+        "In build-release.py, scrub OPENSSL_LIB_DIR, OPENSSL_INCLUDE_DIR, OPENSSL_LIBS, the target-prefixed OPENSSL_* variants and pkg-config overrides, or set them explicitly to the SDK.",
+        "Optionally make build.rs read the same target-prefixed variables that openssl-sys reads.",
+        "After cargo build, assert that no release binary has a dynamic libssl/libcrypto dependency (otool -L on macOS, readelf/ldd on Linux), and fail packaging if one does.",
+        "Add a test that sets a conflicting OPENSSL_LIB_DIR or target-prefixed variable and expects the build to fail."
+      ]
+    }
+  ],
+  "non_findings_checked": [
+    "The drain deadline cannot be extended (or_insert_with). Drain is marked before refold in every fact-application path. Removal notices are still sent to the removed target by design.",
+    "store_fact, quarantine_local_fact, author_fact (local) and the removal-repair rotation all write facts or commits under the state lock. Rejected-line rewrites match exact line content and skip hashes already accepted.",
+    "Completed-rotation dedup prevents repeated rekeys on duplicate confirmations and restart. Pending repairs are rebuilt from facts.jsonl at register_env.",
+    "Production op names: secret.put_version and dek.rotate match commit.rs validators and fold handlers. removal_fact_hash is validated as 64-hex, persisted in the document, and dek.rotate commits are never compacted.",
+    "install.sh: exact entry-set check, rejection of non-regular entries, private extraction directory, symlink-refusing destination directories, staged replace, and pre-mktemp trap.",
+    "build-release.py: source SHA-256 is verified before extraction, the archive is rejected on absolute, '..', link or special members, and the SDK is always rebuilt from the authenticated tarball.",
+    "dependency-licenses.py requires --openssl-source for bundled builds and appends the OpenSSL and Text::Template notices. The openssl-src branch is dead because the bundled-openssl feature adds no dependency; this is harmless.",
+    "Workflows are dispatch-only, use pinned action SHAs and persist-credentials:false, and the self-hosted job refuses ZEROPW_* environment."
+  ],
+  "limitations": [
+    "Static review only. Nothing was built, run or installed. File SHA-256 values were not checked against the head.",
+    "Supplied execution evidence references 06869b6 (focused tests) and e3d240e (SDK build), not 01ef0ca. Tooling tests were 'being rerun'. Full macOS and Linux matrices, archive installation, and final-source Homebrew are pending.",
+    "StateDir::lock, write_bytes and append_line were not supplied. The serialization claims for N1, N3 and N4 assume the lock is re-entrant within a thread, exclusive across threads and processes, and that write_bytes is atomic.",
+    "Transport, vault and CLI secret-write callers, incident.rs and smtp.rs were not supplied. It was not checked that every production shared-secret write goes through membership::author_commit.",
+    "openssl-sys environment-precedence behavior in NEW-2 is based on the crate's documented lookup order, not observed in this repository's build.",
+    "This is a scoped review of the supplied files and is not repository or release acceptance. No earlier PASS carries over."
+  ],
+  "review_model": "claude-opus-5-5",
+  "review_cli": "2.1.287",
+  "scope": "static source review; execution acceptance requires exact-head validation"
+}

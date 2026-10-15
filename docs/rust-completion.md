@@ -1,49 +1,51 @@
-# Rust 전환 인수 기록
+# Rust transition acceptance record
 
-작성 2026-10-04 · 대상 브랜치 `claude/rust-parity-close`
+Recorded 2026-10-04 for branch `claude/rust-parity-close`.
 
-ZeroPW의 제품 구현은 `rust/`의 Rust 크레이트다. 같은 요구사항을 먼저 구현했던 Python 프로토타입은 2026-10-03 저장소에서 제거했다. 이 문서는 전환을 마친 시점의 인수 근거를 적는다. 2026-09-22부터 10-03까지의 진행 기록(작업 단위, 검토 회차, 중간 검증)은 [archive/2026-10-03-rust-completion-history.md](archive/2026-10-03-rust-completion-history.md)에 있다.
+ZeroPW's product implementation is the Rust crate under `rust/`. The Python prototype that first implemented the same requirements was removed on 2026-10-03. This record describes acceptance evidence at that transition, not approval of later commits. The 2026-09-22 through 2026-10-03 work-unit, review-round and intermediate-validation history remains in [the archive](archive/2026-10-03-rust-completion-history.md).
 
-## 1. 인수 기준
+## 1. Acceptance boundary
 
-2026-10-03 사용자 결정으로, Rust는 프로토타입의 동작을 일반적으로 재현하지 않는다. 프로토타입과 맞춰야 하는 것은 다음 네 경계뿐이다([Rust 호환성 계약](../rust/PORTING.md) §1).
+The 2026-10-03 user decision stopped requiring Rust to reproduce arbitrary prototype behavior. Compatibility is required at four boundaries ([porting contract](../rust/PORTING.md), section 1):
 
-1. 프로토타입이 정상 운영 중 쓴 저장 상태(상태 디렉터리, 문서, 감사 기록, 백업, 팀 스냅샷·커밋)를 Rust가 읽고 의미를 유지한다.
-2. 상대가 검증·해석하는 통신·암호 형식이 바이트 단위로 같다. 서명·다이제스트용 정규 JSON, 핸들, 팀 통신, SSH agent 프로토콜, 업스트림 요청, 백업이 여기에 든다.
-3. 프로토타입이 제공한 모든 명령·API·도구·프로세스가 같은 목적과 출력으로 동작한다.
-4. [보안 경계](security-design.md)의 요구사항을 지킨다. 비밀은 에이전트 쪽 프로세스·출력·오류·로그에 나가지 않고, 미지원·손상 입력은 거부 쪽으로 닫힌다.
+1. Read persisted state written by normal prototype operation without changing meaning: state directories, documents, audit records, backups, team snapshots and commits.
+2. Preserve the bytes that peers validate or interpret: canonical JSON for signatures/digests, handles, team transport, SSH agent protocol, upstream requests and backups.
+3. Provide every prototype command, API, tool and process with the same purpose and output contract.
+4. Preserve the [security requirements](security-design.md). Original secrets must not enter agent-side processes, output, errors or logs. Unsupported or corrupt input must fail closed.
 
-이 기준을 세우면서, 앞서 CPython의 세부 동작까지 맞추려고 넣었던 코드를 되돌렸다. 대상은 encoded word용 코덱 테이블, 리졸버 FFI(`sys_hostent`), `email`·`http.client` 재구현, `str.lower()` 테이블이다.
+The transition removed code that had attempted to match CPython internals beyond those boundaries: encoded-word codec tables, resolver FFI (`sys_hostent`), reimplementations of `email` and `http.client`, and `str.lower()` tables.
 
-## 2. 호환성 확인 방법
+## 2. Compatibility evidence
 
-프로토타입을 실시간 비교 기준으로 쓰던 Rust 시험은 두 가지로 바꿨다.
+Tests that used the running prototype as an oracle changed in two ways:
 
-- **고정 자료로 확인:** 1·2번 경계(상태·통신 호환)를 확인하던 시험은, 제거 전에 프로토타입이 한 번 생성한 고정 자료(`rust/tests/fixtures/python/<영역>/`, 디스크 사용량 약 760KB)와 비교한다. 각 디렉터리의 `GENERATE.md`에 생성 스크립트와 명령을 남겼다.
-- **Rust 자체 기대값:** 나머지는 Rust 자체 기대값으로 바꾸거나, 경계 밖 동작만 확인하던 것이면 지웠다. 손상 상태에 대한 예외 종류, 정수 문법 경계, 유니코드·코덱 세부가 그런 예다. 거부 쪽으로 닫히는지와 비밀이 출력되지 않는지는 Rust 자체 시험으로 남겼다.
+- Stored-state and wire-format tests compare fixed fixtures generated once before prototype removal, under `rust/tests/fixtures/python/<area>/` (about 760KB). Each directory's `GENERATE.md` records its generation script and commands.
+- Other tests use Rust's own expected results, or were removed when they tested only out-of-scope CPython behavior, such as exception classes for corrupt state, integer grammar edges, Unicode and codec internals. Rust tests retain fail-closed and no-secret-output checks.
 
-## 3. 최종 검증
+## 3. Transition verification
 
-`f2042c0`에서 `rust/verify.sh`를 실행했다. 검증 단계는 fmt, 엄격한 Clippy, 라이브러리·바이너리 시험, 모든 통합 시험, 서명기 자원 측정, 문서 시험이다. `python`·`python3`·`python3.12`는 실행하면 바로 실패하도록 막았고, 호출 기록은 없었다.
+At `f2042c0`, `rust/verify.sh` ran formatting, strict Clippy, library/binary tests, every integration target, signer resource measurements and doc tests. Commands named `python`, `python3` and `python3.12` were blocked with immediate failure; no calls were recorded.
 
-| 플랫폼 | 환경 | 결과 |
+| Platform | Environment | Result |
 | --- | --- | --- |
-| Linux | 격리 Lima VM `zeropw-parity`, ARM64 Ubuntu 24.04, 비특권 사용자, OpenSSL 3.0.13, Rust 1.98.1 | 93/93 단계 통과. 시험 1,365개 통과, 실패 0 |
-| macOS | macOS 26.5 ARM64, Homebrew OpenSSL 3.6.5, Rust 1.98.1 | 93/93 단계 통과. 시험 1,368개 통과, 실패 0 |
+| Linux | Isolated Lima VM `zeropw-parity`, ARM64 Ubuntu 24.04, unprivileged user, OpenSSL 3.0.13, Rust 1.98.1 | 93/93 steps passed; 1,365 tests passed, 0 failed |
+| macOS | macOS 26.5 ARM64, Homebrew OpenSSL 3.6.5, Rust 1.98.1 | 93/93 steps passed; 1,368 tests passed, 0 failed |
 
-기본 실행에서 제외되는 서명기 자원 측정 시험 4개는 별도 단계에서 실행했다. macOS 검증은 2026-10-03 사용자 결정에 따라 조정 호스트에서 직접 실행했다. 실행 기록은 저장소 밖 `zeropw-parity-evidence-20261003/`에 있다(`isolated-runner/verify-sh-nopython-f2042c0.log`, `macos-verify-sh-final.log`).
+The four ignored signer resource probes ran as a separate verification step. Native macOS execution on the coordinator host was explicitly authorized by the 2026-10-03 user decision for that transition. This does not grant automatic permission for later execution on a trusted host. The original logs remain outside the repository in the transition evidence collection: `isolated-runner/verify-sh-nopython-f2042c0.log` and `macos-verify-sh-final.log`.
 
-전환 직전 상태(`116345f`)에서도, 프로토타입 실시간 비교와 프로토타입 시험 1,099개를 포함한 Linux 전체 매트릭스(107단계)가 통과했다.
+The pre-transition `116345f` also passed the 107-step full Linux matrix, including live prototype comparisons and all 1,099 prototype tests.
 
-## 4. 전환 중 발견해 고친 제품 결함
+## 4. Product defects fixed during transition
 
-- **macOS 서명기의 umask 경합.** 서명기가 소켓을 바인딩하는 동안 프로세스 전체의 umask를 좁혔다. 그 사이 다른 스레드가 만든 디렉터리에 실행 권한이 빠져, `exec` 실행이 `spawn_failed`로 실패할 수 있었다. 지금은 0700 소켓 디렉터리 안에서 바인딩한 뒤 0600으로 바꾼다. Linux는 바인딩 전에 `fchmod`로 처음부터 0600이다.
-- **CPython 시작 동작 흉내 제거.** Rust 바이너리가 `PYTHONINTMAXSTRDIGITS`를 읽고 CPython처럼 시작을 거부하던 동작을 없앴다. 정수 문자열은 고정 4,300자리 상한을 쓴다.
+- **macOS signer umask race.** Temporarily narrowing the process-wide umask while binding a signer socket could remove execute permission from directories another thread created, causing `exec` to fail with `spawn_failed`. The signer now binds inside a 0700 socket directory and then sets the socket to 0600. Linux uses `fchmod` before binding to establish 0600 from the start.
+- **CPython startup imitation.** Removed native binary startup rejection based on `PYTHONINTMAXSTRDIGITS`. Integer strings use a fixed 4,300-digit limit.
 
-## 5. 남은 것
+## 5. Remaining work at transition
 
-- `signer_e2e`는 OpenSSH(`ssh`, `sshd`, `ssh-keygen`)와 `perl`이 필요하다.
-- GitHub Actions는 꺼져 있다. 다시 켜면 `.github/workflows/harness-ci.yml`이 Linux·macOS에서 `rust/verify.sh`를 돌린다.
-- 침해 사건을 팀에 공유하는 훅(`send_incident_for_all_envs`)은 `open_incident`에 아직 연결하지 않았다([구현 현황](implementation.md) §11.2).
-- 통합 시험 대상 이름 중 `astra_*`, `*_parity`는 작업 단계 이름을 그대로 쓴다. 대상 이름이 기능을 나타내도록 바꾸는 일은 남아 있다.
-- 배포, 운영 격리, 관리형 KMS는 별도 결정과 작업이다.
+- `signer_e2e` requires OpenSSH (`ssh`, `sshd`, `ssh-keygen`) and `perl`.
+- GitHub Actions was disabled. Current release preparation uses manual self-hosted verification; see [runner setup](self-hosted-runner.md).
+- The team incident-sharing hook `send_incident_for_all_envs` was not connected to `open_incident` ([implementation](implementation.md), section 11.2).
+- Integration names such as `astra_*` and `*_parity` retain work-stage terminology. Renaming them to feature names remains a separate task.
+- Deployment, operational isolation and managed KMS remain separate decisions and implementation work.
+
+Later release preparation and exact-commit evidence belong in [releasing.md](releasing.md). This dated transition record must not be reused as a PASS for a newer commit.

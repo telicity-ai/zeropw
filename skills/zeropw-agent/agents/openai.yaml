@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeroPW Agent"
+  short_description: "Use ZeroPW API and SSH connections without raw keys"
+  default_prompt: "Use $zeropw-agent to find an available connection and complete my API or SSH task."
