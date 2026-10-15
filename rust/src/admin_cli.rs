@@ -543,11 +543,42 @@ fn build_parser() -> Parser {
             .append()
             .metavar("HOST:PORT")
             .help("this node's reachable address (repeatable)"),
+    )
+    .arg(Arg::opt("--link").flag().help(
+        "also print a one-day zeropw://join# link, its invite id and expiry (the TTL is fixed at 24h)",
+    ));
+    add(
+        team,
+        "invites",
+        "list the invites this node made (status only; no secrets)",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "revoke-invite",
+        "revoke an invite that has not been used",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--id").required().metavar("INVITE_ID"));
+    add(
+        team,
+        "invite-info",
+        "preview an invite string or link offline (never joins)",
+    )
+    .arg(
+        Arg::opt("--stdin")
+            .flag()
+            .help("read the invite from standard input (or the input envelope)"),
     );
     add(team, "join", "dial the inviter, prove the invite, and join")
-        .arg(Arg::positional("invite"))
+        .arg(Arg::optional_positional("invite"))
         .arg(Arg::opt("--project").help("local project name (default: derived from the inviter)"))
-        .arg(Arg::opt("--environment").help("local environment name (default: shared)"));
+        .arg(Arg::opt("--environment").help("local environment name (default: shared)"))
+        .arg(
+            Arg::opt("--stdin")
+                .flag()
+                .help("read the invite string or link from standard input (or the input envelope)"),
+        );
     add(team, "members", "list team members").arg(env_arg());
     add(
         team,
@@ -717,8 +748,11 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
         ("team", "diff") => &["left", "right"],
         _ => &[],
     };
+    // An omitted optional positional (`team join --stdin`) is left out.
     for positional in positionals {
-        a.positional.push(text(positional));
+        if let Some(Val::Str(value)) = namespace.get(*positional) {
+            a.positional.push(value.clone());
+        }
     }
     for (dest, value) in &namespace {
         if dest == "state_dir" || dest.ends_with("command") || positionals.contains(&dest.as_str())
@@ -1251,7 +1285,6 @@ const MAX_RAW_INVITE_BYTES: usize = 16 * 1024;
 /// `invite` field, or raw standard input when the command was given
 /// `--stdin` without an envelope, or else the positional argument when the
 /// command has one. One trailing newline of raw stdin is dropped.
-#[allow(dead_code)] // `team join --stdin` and `team invite-info --stdin` (docs/desktop-app.md §3.2)
 fn invite_text(a: &Args, positional: Option<&str>) -> Result<Zeroizing<String>, Error> {
     let required = || {
         Error::invalid_input("invite_source_required")
@@ -2724,9 +2757,16 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         identity::DeviceKey,
         membership as M, sync,
     };
+    if a.action == "invite-info" {
+        // Offline and stateless: an invited person previews the invite
+        // before this node even has a state directory.
+        let text = invite_text(a, None)?;
+        let invite = M::parse_invite_or_link(&text)?;
+        return Ok(Some(M::invite_preview(&invite, crate::clock::now())));
+    }
     let mutating = !matches!(
         a.action.as_str(),
-        "members" | "status" | "log" | "show" | "diff" | "incidents"
+        "members" | "status" | "log" | "show" | "diff" | "incidents" | "invites"
     ) && (a.action != "peers" || a.get("add").is_some_and(|v| !v.is_empty()));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
@@ -2761,6 +2801,16 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     }
     if a.action == "join" {
         use crate::team::transport::TcpTransport;
+        // Strict parsing of the untrusted invite (or link) and a local expiry
+        // check before anything is dialed.
+        let text = invite_text(a, a.positional.first().map(String::as_str))?;
+        let invite = M::parse_invite_or_link(&text)?;
+        if M::invite_expired(&invite, (ctx.clock)()) {
+            return Err(Error::invalid_input("invite_expired")
+                .with_detail("the invite is past its expiry; ask for a new one"));
+        }
+        drop(invite);
+        let invite_string = M::invite_string_of(&text)?;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
         let transport = TcpTransport::new(
             device.clone(),
@@ -2771,7 +2821,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         team.start(None)?;
         let result = M::join(
             &team.ctx,
-            &a.positional[0],
+            invite_string,
             &transport,
             &team,
             a.get("project"),
@@ -2789,16 +2839,26 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
-            let invite = M::create_invite(
+            let created = M::create_invite_with(
                 &ctx,
                 &env_id,
                 a.req("role"),
                 a.req("name"),
                 ttl,
                 &a.list("address"),
+                a.has("link"),
             )?;
-            json!({"env_id":env_id,"invite":invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"})
+            let mut out = json!({"env_id":env_id,"invite":created.invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"});
+            // Only `--link` adds keys; the plain output is unchanged.
+            if let Some(link) = created.link {
+                out["link"] = json!(link);
+                out["invite_id"] = json!(created.invite_id);
+                out["expires_at"] = json!(created.expires_at);
+            }
+            out
         }
+        "invites" => M::list_invites(&ctx, &env_id)?,
+        "revoke-invite" => M::revoke_invite(&ctx, &env_id, a.req("id"))?,
         "members" => {
             let doc = M::load_environment(&ctx, &env_id)?.document;
             let mut members = Vec::new();

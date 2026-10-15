@@ -281,8 +281,11 @@ There is no reactivation of disabled connections/removed members/revoked version
 | --- | --- |
 | `team init` | Create device keys once, report fingerprint. |
 | `team share --project P --environment E [--name N]` | Reauthenticated promotion; create environment/generation, reencrypt active/staged versions, reissue shared connections as commits. Connections not referencing shared secrets remain local with not_shared. Old local grants become stale. |
-| `team invite --env P/E --role R --name N [--ttl 24h]` | One-time invitation; use --address for reachable inviter addresses. |
-| `team join INVITATION [--project P --environment E]` | Authenticate/enroll and display fingerprints; enable team-listen for inbound connections later. |
+| `team invite --env P/E --role R --name N [--ttl 24h] [--address H:P] [--link]` | One-time invitation; use --address for reachable inviter addresses. With `--link` the lifetime is fixed at 24 hours (any other `--ttl` is `invite_link_ttl_fixed`), addresses must be `HOST:PORT`, and the output adds `link` (`zeropw://join#<invitation>`, at most 4096 bytes), `invite_id` and `expires_at`. |
+| `team invites --env P/E` | This node's invitations with `invite_id`, role, name, link flag, created/expiry/use/revocation times, the joining fingerprint and status (`pending`, `used`, `expired`, `revoked`). No invitation string or wrapped secret. |
+| `team revoke-invite --env P/E --id ID` | Block an unused invitation and drop its wrapped secret. Idempotent; unknown IDs are `invite_not_found`, used ones `invite_already_used`. Audited as `team_invite_revoke`. Revocation and consumption share the state lock, so a race has one winner. |
+| `team invite-info --stdin` | Offline preview of an invitation or link from stdin or the input envelope's `invite`; no state directory needed and no secret output. |
+| `team join [INVITATION] [--stdin] [--project P --environment E]` | Authenticate/enroll and display fingerprints; enable team-listen for inbound connections later. The invitation (or link) comes from the argument, stdin or the input envelope. Before dialing it checks the addresses (at most 16 `HOST:PORT` of 128 bytes each) and the inviter fingerprint shape, and stops with `invite_expired` more than five minutes past expiry. |
 | `team members --env P/E` | Fingerprints/names/roles/state/sync age. |
 | `team remove --env P/E --device FINGERPRINT` | Removal fact and eligible DEK rotation; cannot remove owner. |
 | `team set-role`, `team transfer-owner` | Role/ownership rules in section 5.3. |

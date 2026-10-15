@@ -31,6 +31,20 @@ pub const DEFAULT_INVITE_TTL_SECONDS: i64 = 24 * 3600;
 pub const MAX_INVITE_TTL_SECONDS: i64 = 30 * 24 * 3600;
 pub const MAX_ADDRESSES: usize = 16;
 pub const JOIN_TIMEOUT_SECONDS: f64 = 20.0;
+
+/// docs/desktop-app.md §3.2: an invite string wrapped as `zeropw://join#<invite>`.
+pub const INVITE_LINK_PREFIX: &str = "zeropw://join#";
+/// The longest invite link accepted or printed.
+pub const MAX_INVITE_LINK_BYTES: usize = 4096;
+/// The longest bare invite string the strict (untrusted-input) parser takes.
+pub const MAX_INVITE_TEXT_BYTES: usize = 16 * 1024;
+/// A link invite is valid for exactly one day.
+pub const INVITE_LINK_TTL_SECONDS: i64 = 24 * 3600;
+/// How far past its expiry a joiner's clock may be before `team join`
+/// refuses an invite locally (the inviter's check stays exact).
+pub const INVITE_CLOCK_SKEW_SECONDS: f64 = 300.0;
+/// The longest `HOST:PORT` address an invite may carry.
+pub const MAX_ADDRESS_BYTES: usize = 128;
 const B32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 fn b32e(raw: &[u8]) -> String {
@@ -382,6 +396,160 @@ pub fn parse_invite(text: &str) -> Result<Invite> {
         name,
     })
 }
+/// `invite_id`: the hex of the first 16 bytes of SHA-256 over the invite
+/// secret, the key of the invite in `invites.json` (never the secret).
+pub fn invite_id(secret: &[u8]) -> String {
+    hex::encode(&Sha256::digest(secret)[..16])
+}
+
+/// `zeropw://join#<invite>`.
+pub fn invite_link(invite: &str) -> String {
+    format!("{INVITE_LINK_PREFIX}{invite}")
+}
+
+/// An `invite_malformed` refusal whose detail is fixed text: untrusted input
+/// is never repeated.
+fn malformed(detail: &'static str) -> Error {
+    Error::invalid_input("invite_malformed").with_detail(detail)
+}
+
+fn is_b32_char(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || (b'2'..=b'7').contains(&byte)
+}
+
+/// The invite string inside a `zeropw://join#<invite>` link, parsed strictly:
+/// at most [`MAX_INVITE_LINK_BYTES`]; scheme and host case-insensitive; an
+/// optional `/` before `#`; no query, user info, port, further path, percent
+/// encoding, whitespace or second `#`; a fragment of base32 characters (and
+/// `=` padding) only.
+pub fn parse_invite_link(text: &str) -> Result<&str> {
+    if text.len() > MAX_INVITE_LINK_BYTES {
+        return Err(malformed("invite link is longer than 4096 bytes"));
+    }
+    let not_a_link = || malformed("not a zeropw://join# invite link");
+    let (scheme, rest) = text.split_once("://").ok_or_else(not_a_link)?;
+    if !scheme.eq_ignore_ascii_case("zeropw") {
+        return Err(not_a_link());
+    }
+    let (authority, fragment) = rest.split_once('#').ok_or_else(not_a_link)?;
+    let host = authority.strip_suffix('/').unwrap_or(authority);
+    if !host.eq_ignore_ascii_case("join") {
+        return Err(not_a_link());
+    }
+    let padding = fragment.bytes().rev().take_while(|b| *b == b'=').count();
+    let body = &fragment[..fragment.len() - padding];
+    if body.is_empty() || !body.bytes().all(is_b32_char) {
+        return Err(malformed("the invite link carries no valid invite"));
+    }
+    Ok(fragment)
+}
+
+/// The bare invite string of untrusted `text`: the fragment of a link
+/// (anything holding `:`, which base32 never does), else `text` itself,
+/// bounded to [`MAX_INVITE_TEXT_BYTES`].
+pub fn invite_string_of(text: &str) -> Result<&str> {
+    if text.contains(':') {
+        return parse_invite_link(text);
+    }
+    if text.len() > MAX_INVITE_TEXT_BYTES {
+        return Err(malformed("invite is too long"));
+    }
+    Ok(text)
+}
+
+/// A `HOST:PORT` address as an invite may carry it: at most
+/// [`MAX_ADDRESS_BYTES`], a port 1..=65535 in decimal, and a host name or
+/// address of letters, digits, `.`, `-`, `_` (or a bracketed IPv6 address).
+pub fn valid_invite_address(address: &str) -> bool {
+    if address.is_empty() || address.len() > MAX_ADDRESS_BYTES {
+        return false;
+    }
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return false;
+    };
+    if port.is_empty() || port.len() > 5 || !port.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    if !port.parse::<u32>().is_ok_and(|p| (1..=65_535).contains(&p)) {
+        return false;
+    }
+    match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        Some(inner) => {
+            inner.contains(':')
+                && inner
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+        }
+        None => {
+            !host.is_empty()
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        }
+    }
+}
+
+fn valid_fingerprint(text: &str) -> bool {
+    text.len() == 26
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+}
+
+/// `parse_invite` for untrusted input (a preview or a join): accepts an
+/// invite string or a `zeropw://join#` link, and additionally requires at most
+/// [`MAX_ADDRESSES`] valid `HOST:PORT` addresses, a device-fingerprint
+/// `inviter` and a UTC expiry. [`parse_invite`] keeps the prototype's lenient
+/// grammar for the library's own callers.
+pub fn parse_invite_or_link(text: &str) -> Result<Invite> {
+    let invite = parse_invite(invite_string_of(text)?)?;
+    if !valid_fingerprint(&invite.inviter) {
+        return Err(malformed("the inviter is not a device fingerprint"));
+    }
+    if invite.addresses.len() > MAX_ADDRESSES
+        || !invite.addresses.iter().all(|a| valid_invite_address(a))
+    {
+        return Err(malformed(
+            "addresses must be at most 16 HOST:PORT entries of at most 128 bytes",
+        ));
+    }
+    if parse_expiry(&json!(invite.expires_at)).is_none() {
+        return Err(malformed("the expiry is not a UTC timestamp"));
+    }
+    Ok(invite)
+}
+
+/// Whether `invite` is past its expiry on a clock reading `now`, allowing
+/// [`INVITE_CLOCK_SKEW_SECONDS`] of drift (an unreadable expiry counts as
+/// expired).
+pub fn invite_expired(invite: &Invite, now: f64) -> bool {
+    parse_expiry(&json!(invite.expires_at))
+        .is_none_or(|expires| now > expires + INVITE_CLOCK_SKEW_SECONDS)
+}
+
+/// The offline preview of an invite (`team invite-info`): no secret, only
+/// what the invited person needs to decide whether to join.
+pub fn invite_preview(invite: &Invite, now: f64) -> Value {
+    json!({
+        "env_id": invite.env_id,
+        "inviter": invite.inviter,
+        "addresses": invite.addresses,
+        "role": invite.role,
+        "name": invite.name,
+        "expires_at": invite.expires_at,
+        "expired": invite_expired(invite, now),
+        "invite_id": invite_id(invite.invite_secret.expose()),
+    })
+}
+
+/// What [`create_invite_with`] made. `link` is set for a link invite.
+pub struct CreatedInvite {
+    pub invite: String,
+    pub invite_id: String,
+    pub expires_at: String,
+    pub link: Option<String>,
+}
+
 pub fn create_invite(
     ctx: &Context,
     env_id: &str,
@@ -390,11 +558,32 @@ pub fn create_invite(
     ttl_seconds: i64,
     addresses: &[String],
 ) -> Result<String> {
+    create_invite_with(ctx, env_id, role, name, ttl_seconds, addresses, false)
+        .map(|created| created.invite)
+}
+
+/// `create_invite`, optionally as a one-day link invite (docs/desktop-app.md
+/// §3.2): the TTL must then be exactly 24 hours (`invite_link_ttl_fixed`),
+/// every address must be a valid `HOST:PORT` and the link must fit in
+/// [`MAX_INVITE_LINK_BYTES`]; all checked before anything is stored.
+pub fn create_invite_with(
+    ctx: &Context,
+    env_id: &str,
+    role: &str,
+    name: &str,
+    ttl_seconds: i64,
+    addresses: &[String],
+    link: bool,
+) -> Result<CreatedInvite> {
     if role != "admin" && role != "user" {
         return Err(Error::invalid_input("invalid_role"));
     }
     if name.is_empty() || name.chars().count() > 200 {
         return Err(Error::invalid_input("invalid_member_name"));
+    }
+    if link && ttl_seconds != INVITE_LINK_TTL_SECONDS {
+        return Err(Error::invalid_input("invite_link_ttl_fixed")
+            .with_detail("a link invite is valid for exactly 24h"));
     }
     if ttl_seconds <= 0 || ttl_seconds > MAX_INVITE_TTL_SECONDS {
         return Err(Error::invalid_input("invalid_ttl"));
@@ -405,6 +594,9 @@ pub fn create_invite(
     for address in addresses {
         if address.is_empty() || address.chars().count() > 128 {
             return Err(Error::invalid_input("invalid_address"));
+        }
+        if link && !valid_invite_address(address) {
+            return Err(Error::invalid_input("invalid_address").with_detail("use HOST:PORT"));
         }
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
@@ -417,14 +609,28 @@ pub fn create_invite(
     }
     let mut secret = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret);
-    let id = hex::encode(&Sha256::digest(secret)[..16]);
-    let expires = (ctx.clock)() + ttl_seconds as f64;
-    let payload = json!({"format":INVITE_FORMAT,"env_id":env_id,"inviter":device.fingerprint()?,"addresses":addresses,"invite_secret":pybase64::b64encode(&secret),"expires_at":iso(Some(expires)),"role":role,"name":name});
+    let id = invite_id(&secret);
+    let now = (ctx.clock)();
+    let expires = now + ttl_seconds as f64;
+    let expires_at = iso(Some(expires));
+    let payload = json!({"format":INVITE_FORMAT,"env_id":env_id,"inviter":device.fingerprint()?,"addresses":addresses,"invite_secret":pybase64::b64encode(&secret),"expires_at":expires_at,"role":role,"name":name});
     let invite = b32e(&pyjson::dumps(&payload, DumpOptions::compact_sorted())?.into_bytes());
+    let link = link.then(|| invite_link(&invite));
+    if link
+        .as_ref()
+        .is_some_and(|link| link.len() > MAX_INVITE_LINK_BYTES)
+    {
+        return Err(Error::invalid_input("invite_link_too_long")
+            .with_detail("use fewer or shorter addresses or a shorter name"));
+    }
     let _lock = ctx.state.lock()?;
     let path = format!("team/{env_id}/invites.json");
     let mut invites = ctx.state.read_json(&path, json!({}))?;
-    invites[&id] = json!({"wrapped_secret":ctx.kms.wrap(&secret)?.to_dict(),"role":role,"name":name,"expires_at":expires,"used":false});
+    let mut entry = json!({"wrapped_secret":ctx.kms.wrap(&secret)?.to_dict(),"role":role,"name":name,"expires_at":expires,"used":false,"created_at":now});
+    if link.is_some() {
+        entry["link"] = json!(true);
+    }
+    invites[&id] = entry;
     ctx.state.write_json(&path, &invites)?;
     audit(
         ctx,
@@ -432,13 +638,136 @@ pub fn create_invite(
         env_id,
         vec![("role", json!(role))],
     );
-    Ok(invite)
+    Ok(CreatedInvite {
+        invite,
+        invite_id: id,
+        expires_at,
+        link,
+    })
 }
+
+/// A stored timestamp (epoch seconds or the UTC text form) as ISO text.
+fn stored_time(entry: &Map<String, Value>, key: &str) -> Value {
+    entry
+        .get(key)
+        .and_then(parse_expiry)
+        .map_or(Value::Null, |ts| json!(iso(Some(ts))))
+}
+
+/// `team invites`: the invites this node made for `env_id`, oldest first
+/// (entries from before `created_at` was recorded lead), with their state.
+/// Secrets and wrapped secrets are never part of it.
+pub fn list_invites(ctx: &Context, env_id: &str) -> Result<Value> {
+    let now = (ctx.clock)();
+    let invites = ctx
+        .state
+        .read_json(&format!("team/{env_id}/invites.json"), json!({}))?;
+    let text = |entry: &Map<String, Value>, key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .map_or(Value::Null, |s| json!(s))
+    };
+    let mut items: Vec<(Option<f64>, Value)> = Vec::new();
+    for (id, entry) in invites.as_object().into_iter().flatten() {
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let created = entry.get("created_at").and_then(parse_expiry);
+        let expires = entry.get("expires_at").and_then(parse_expiry);
+        let status = if entry.get("revoked_at").is_some_and(|v| !v.is_null()) {
+            "revoked"
+        } else if entry.get("used") == Some(&Value::Bool(true)) {
+            "used"
+        } else if expires.is_none_or(|expires| now > expires) {
+            "expired"
+        } else {
+            "pending"
+        };
+        items.push((
+            created,
+            json!({
+                "invite_id": id,
+                "role": text(entry, "role"),
+                "name": text(entry, "name"),
+                "link": entry.get("link") == Some(&Value::Bool(true)),
+                "created_at": stored_time(entry, "created_at"),
+                "expires_at": expires.map_or(Value::Null, |ts| json!(iso(Some(ts)))),
+                "status": status,
+                "used_at": stored_time(entry, "used_at"),
+                "used_by": text(entry, "used_by"),
+                "revoked_at": stored_time(entry, "revoked_at"),
+            }),
+        ));
+    }
+    // `invites.json` is written key-sorted; order by creation (stable).
+    items.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let items: Vec<Value> = items.into_iter().map(|(_, item)| item).collect();
+    Ok(json!({"env_id": env_id, "invites": items}))
+}
+
+/// `team revoke-invite`: stop an invite that has not been used. Revoking
+/// again succeeds; an unknown ID is `invite_not_found` and a used invite
+/// `invite_already_used`. Revocation and consumption take the same state lock,
+/// so exactly one of them wins a race. The wrapped secret is deleted.
+pub fn revoke_invite(ctx: &Context, env_id: &str, id: &str) -> Result<Value> {
+    let path = format!("team/{env_id}/invites.json");
+    let (revoked_at, already, role) = {
+        let _lock = ctx.state.lock()?;
+        let mut invites = ctx.state.read_json(&path, json!({}))?;
+        let Some(entry) = invites.get_mut(id).and_then(Value::as_object_mut) else {
+            return Err(Error::not_found("invite_not_found"));
+        };
+        if entry.get("used") == Some(&Value::Bool(true)) {
+            return Err(Error::invalid_input("invite_already_used"));
+        }
+        let already = entry.get("revoked_at").is_some_and(|v| !v.is_null());
+        let had_secret = entry.remove("wrapped_secret").is_some();
+        if !already {
+            entry.insert("revoked_at".into(), json!((ctx.clock)()));
+        }
+        let revoked_at = stored_time(entry, "revoked_at");
+        let role = entry.get("role").cloned().unwrap_or(Value::Null);
+        if !already || had_secret {
+            ctx.state.write_json(&path, &invites)?;
+        }
+        (revoked_at, already, role)
+    };
+    if !already {
+        audit(
+            ctx,
+            "team_invite_revoke",
+            env_id,
+            vec![("role", role), ("detail", json!(id))],
+        );
+    }
+    Ok(json!({
+        "env_id": env_id,
+        "invite_id": id,
+        "status": "revoked",
+        "revoked_at": revoked_at,
+        "already_revoked": already,
+    }))
+}
+
 pub fn consume_invite(
     ctx: &Context,
     env_id: &str,
     transcript_hash: &[u8],
     proof: &[u8],
+) -> Result<Option<(String, String)>> {
+    consume_invite_by(ctx, env_id, transcript_hash, proof, None)
+}
+
+/// `consume_invite`, recording who used the invite (`used_by`, the joining
+/// device's fingerprint) and when (`used_at`). Revoked invites never match;
+/// the wrapped secret of the consumed invite is deleted.
+pub fn consume_invite_by(
+    ctx: &Context,
+    env_id: &str,
+    transcript_hash: &[u8],
+    proof: &[u8],
+    joiner: Option<&str>,
 ) -> Result<Option<(String, String)>> {
     if proof.is_empty() {
         return Ok(None);
@@ -449,15 +778,16 @@ pub fn consume_invite(
     let Some(entries) = invites.as_object() else {
         return Ok(None);
     };
+    let now = (ctx.clock)();
     let mut matched = None;
     for (id, entry) in entries {
-        if entry["used"] == true {
+        if entry["used"] == true || !entry["revoked_at"].is_null() {
             continue;
         }
         let Some(expires) = parse_expiry(&entry["expires_at"]) else {
             continue;
         };
-        if (ctx.clock)() > expires {
+        if now > expires {
             continue;
         }
         let Ok(wrapped) = WrappedKey::from_dict(&entry["wrapped_secret"]) else {
@@ -480,7 +810,15 @@ pub fn consume_invite(
         }
     }
     if let Some((id, role, name)) = matched {
-        invites[&id]["used"] = json!(true);
+        let entry = &mut invites[&id];
+        entry["used"] = json!(true);
+        entry["used_at"] = json!(now);
+        if let Some(joiner) = joiner {
+            entry["used_by"] = json!(joiner);
+        }
+        if let Some(entry) = entry.as_object_mut() {
+            entry.remove("wrapped_secret");
+        }
         ctx.state.write_json(&path, &invites)?;
         return Ok(Some((role, name)));
     }
