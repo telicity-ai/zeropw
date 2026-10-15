@@ -222,7 +222,12 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 배치: `desktop/`에 별도 Cargo 워크스페이스(`core`, `src-tauri`)와 `package.json`. 루트 워크스페이스는 만들지 않으며 `rust/`의 빌드와 `rust/verify.sh`는 그대로다.
 - 아이콘은 바이너리로 커밋하지 않는다. `src-tauri/build.rs`가 픽셀 로고 PNG를 생성한다.
 - 개발 실행: `npm run tauri dev`(Vite 1420번 포트). 사이드카는 디버그 빌드에서 `ZEROPW_BIN_DIR`로 가리킨다.
-- 배포 빌드: `npm run bundle`. `scripts/prepare-sidecars.sh`가 `rust/`에서 `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 릴리스로 빌드해 `src-tauri/binaries/<이름>-<타깃>`으로 복사하고, `tauri.bundle.conf.json`이 이들을 `externalBin`으로 묶는다.
+- 배포 빌드: `npm run bundle`(먼저 `npm ci`). `scripts/prepare-sidecars.sh`가 두 가지를 준비하고 `tauri build --config src-tauri/tauri.bundle.conf.json`이 묶는다.
+  - 사이드카: `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 CLI 릴리스와 같은 방법으로 빌드한다. `scripts/build-release.py --bin`이 SHA-256으로 고정한 OpenSSL 3.5.9를 정적으로 넣고(`--features bundled-openssl`), Homebrew나 시스템의 libssl에 링크된 바이너리는 거부한다. 결과는 `src-tauri/binaries/<이름>-<타깃>`이다. 빌드하는 기기와 같은 타깃만 만든다.
+  - 고지: `scripts/third-party-licenses.py`가 `src-tauri/notices/THIRD_PARTY_LICENSES.md`를 쓴다. 앱 실행 파일의 Rust 크레이트, 사이드카의 크레이트와 OpenSSL, 웹 화면에 들어가는 npm 패키지(Pretendard·JetBrains Mono 글꼴은 OFL-1.1)를 다룬다. 고지 파일을 싣지 않은 크레이트는 버전별로 검토한 `desktop/licenses/supplement.json`으로 채우고, 그래도 빠진 고지가 있으면 아무것도 쓰지 않고 실패한다.
+- 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 세 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다.
+- macOS 배포 이미지: `python3 desktop/scripts/package-macos.py --work-dir <작업 폴더> --out-dir <출력 폴더>`. 두 폴더는 저장소 밖이어야 한다. Apple Silicon Mac에서 커밋된 HEAD를 복사해 빌드하고, `APPLE_*` 같은 서명·공증 자격 증명 변수가 있으면 시작하지 않는다. 결과는 `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg`와 `.sha256`, 고지 파일, 검증 기록이다. 버전은 데스크톱의 버전 필드가 모두 같을 때만 쓴다. 이미지를 확인하는 항목과 Developer ID 서명·공증 절차는 [releasing.md](releasing.md)의 "Desktop app"에 있다.
+- 임시 서명은 번들 전체를 봉인해 바뀐 파일을 찾아내지만 게시자를 증명하지 않는다. 공증하지 않았으므로 macOS 15 이후에는 처음 열 때 시스템 설정 › 개인정보 보호 및 보안에서 "그래도 열기"를 눌러야 한다.
 - `desktop/verify.sh`: `npm ci`, `tsc --noEmit`, lint, `vitest run`, `vite build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`(실제 `zeropw-admin`으로 임시 상태 디렉터리를 쓰는 통합 시험 포함), 정적 검사(CSP·capabilities·금지 플러그인·`innerHTML`).
 - CI: `.github/workflows/harness-ci.yml`에 `desktop-tests` 작업(ubuntu-latest, macos-15)을 더한다. 우분투에는 webkit2gtk 4.1 개발 패키지를 설치한다.
 - 파일 크기 제한(하네스, 파일당 300,000바이트) 때문에 `package-lock.json`은 의존성을 최소로 유지한다.

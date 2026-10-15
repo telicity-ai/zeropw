@@ -1,0 +1,24 @@
+{
+  "about": "Reviewed notices for locked desktop dependencies (desktop/Cargo.lock, macOS and Linux) that publish no notice file of their own; read by scripts/dependency-licenses.py --supplement. Keys are exact versions, so an update fails the notice collection until it is reviewed again. license repeats the declared license. notices_from uses the root notice files of the one locked package from the same source repository; standard_text uses <id>.txt in this directory for one license the package is offered under, with the copyright holders from the package metadata. MPL-2.0.txt is the text published with cssparser 0.37.0 (Servo).",
+  "packages": {
+    "alloc-stdlib 0.3.0": { "license": "BSD-3-Clause", "notices_from": "alloc-no-stdlib" },
+    "block2 0.6.2": { "license": "MIT", "standard_text": "MIT" },
+    "defmt-parser 1.0.0": { "license": "MIT OR Apache-2.0", "notices_from": "defmt" },
+    "dispatch2 0.3.1": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "dlopen2 0.8.2": { "license": "MIT", "standard_text": "MIT" },
+    "dlopen2_derive 0.4.3": { "license": "MIT", "standard_text": "MIT" },
+    "libappindicator-sys 0.9.0": { "license": "Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2 0.6.5": { "license": "MIT", "standard_text": "MIT" },
+    "objc2-app-kit 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-core-foundation 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-core-graphics 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-encode 4.1.0": { "license": "MIT", "standard_text": "MIT" },
+    "objc2-exception-helper 0.1.1": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-foundation 0.3.2": { "license": "MIT", "standard_text": "MIT" },
+    "objc2-io-surface 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-quartz-core 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "objc2-web-kit 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
+    "selectors 0.38.0": { "license": "MPL-2.0", "standard_text": "MPL-2.0" },
+    "tauri-plugin 2.7.2": { "license": "Apache-2.0 OR MIT", "notices_from": "tauri" }
+  }
+}

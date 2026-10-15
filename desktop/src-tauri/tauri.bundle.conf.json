@@ -4,6 +4,15 @@
       "binaries/zeropw-admin",
       "binaries/zeropw_session",
       "binaries/zeropw-agent"
-    ]
+    ],
+    "resources": {
+      "../../LICENSE": "LICENSE",
+      "notices/THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "infoPlist": "Info.release.plist"
+    }
   }
 }
