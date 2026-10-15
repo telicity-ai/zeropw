@@ -1,0 +1,62 @@
+/* reveal */
+.r { opacity: 0; transform: translateY(14px); filter: blur(6px); transition: opacity .7s var(--ease-out), transform .8s var(--ease-out), filter .7s var(--ease-out); transition-delay: calc(var(--i, 0) * 60ms); }
+.in .r { opacity: 1; transform: none; filter: none; }
+
+/* welcome & finale */
+.hero, .finale { position: absolute; left: 50%; z-index: 4; text-align: center; transform: translateX(-50%); transition: opacity .7s var(--ease-out), transform .9s var(--ease-out), filter .7s var(--ease-out), visibility 0s; }
+.hero { top: 57%; width: 660px; }
+.finale { top: 50%; width: 800px; }
+.hero.away, .finale.away { opacity: 0; transform: translate(-50%, 28px); filter: blur(8px); pointer-events: none; visibility: hidden; transition: opacity .6s var(--ease-out), transform .8s var(--ease-out), filter .6s, visibility 0s linear .7s; }
+.hero h1, .finale h1 { margin: 0 0 14px; font-size: var(--fs-h1); line-height: 1.22; font-weight: 650; letter-spacing: -.025em; }
+.hero h1:focus, .finale h1:focus { outline: none; }
+.hero h1 .soft { color: var(--fg-3); font-weight: 500; }
+.hero p, .finale p { margin: 0 auto; max-width: 520px; color: var(--fg-2); font-size: var(--fs-lg); }
+.hero .actions, .finale .actions { margin-top: 26px; display: flex; justify-content: center; gap: 10px; }
+.finale .foot { margin-top: 16px; font-size: var(--fs-sm); color: var(--fg-3); }
+
+/* card: fixed height, pinned to the top; only the body scrolls (DESIGN.md §4) */
+.card-wrap { position: absolute; right: 44px; top: 92px; bottom: 52px; width: 452px; z-index: 4; transition: opacity .7s var(--ease-out), transform .9s var(--ease-out), filter .7s, visibility 0s; }
+.card-wrap.late { transition-delay: .25s; }
+.card-wrap.away { opacity: 0; transform: translateX(36px); filter: blur(8px); pointer-events: none; visibility: hidden; transition: opacity .6s var(--ease-out), transform .8s var(--ease-out), filter .6s, visibility 0s linear .7s; }
+.card { position: relative; height: 100%; border-radius: var(--radius-lg); background: linear-gradient(180deg, rgba(22, 22, 33, .72), rgba(10, 10, 16, .78)); -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 1px 0 rgba(255,255,255,.06), 0 40px 90px -30px rgba(0,0,0,.85); overflow: hidden; }
+.card::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 2; background: linear-gradient(150deg, rgba(91,140,255,.55), rgba(154,107,255,.10) 35%, transparent 55%, rgba(154,107,255,.30)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.step { position: absolute; inset: 0; display: flex; flex-direction: column; visibility: hidden; }
+.step.in, .step.out { visibility: visible; }
+.step.out .r, .step.out .nav > * { opacity: 0; transform: translateY(-10px); filter: blur(6px); transition-delay: 0ms; transition-duration: .35s; }
+.step-head { flex: none; padding: 30px 32px 0; }
+.step-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px 32px 26px; scroll-padding-bottom: 26px; -webkit-mask: linear-gradient(#000 calc(100% - 18px), transparent); mask: linear-gradient(#000 calc(100% - 18px), transparent); scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.12) transparent; }
+.step-head h2 { margin: 0 0 8px; font-size: var(--fs-h2); line-height: 1.3; font-weight: 650; letter-spacing: -.02em; }
+.step-head h2:focus { outline: none; }
+.lead { margin: 0; color: var(--fg-2); font-size: var(--fs-md); }
+.nav { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 32px 22px; border-top: 1px solid var(--line); background: rgba(8,8,13,.35); }
+.nav > * { opacity: 0; transition: opacity .45s var(--ease-out) .3s; }
+.step.in .nav > * { opacity: 1; }
+
+/* recovery code */
+.groups { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 8px; padding: 0; transition: filter .3s; }
+.groups li { height: 42px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 10px; padding: 0 12px; background: rgba(4,4,8,.5); box-shadow: inset 0 0 0 1px var(--line); font: 600 15px/1 var(--mono); letter-spacing: .16em; opacity: 0; transform: translateY(6px) scale(.98); transition: opacity .45s var(--ease-out), transform .45s var(--ease-out); }
+.groups li.on { opacity: 1; transform: none; }
+.groups li span { font: 500 11px/1 var(--mono); letter-spacing: 0; color: var(--fg-3); }
+.groups.hide, .canon.hide { filter: blur(7px); }
+.canon { margin: 0 0 12px; font-size: var(--fs-sm); color: var(--fg-3); transition: filter .3s; display: flex; gap: 8px; align-items: baseline; }
+.canon code { font: 600 12.5px/1.4 var(--mono); color: var(--fg); letter-spacing: .06em; user-select: text; }
+.tools { display: flex; gap: 6px; }
+.verify-row { display: flex; gap: 10px; margin-top: 12px; }
+.verify-row .field { flex: 1; margin: 0; min-width: 0; }
+
+/* create list: dots only */
+.mk-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.mk-list li { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: var(--fs-md); color: var(--fg-3); transition: background .4s, color .4s; }
+.mk-list li.active { background: rgba(91,140,255,.07); color: var(--fg); }
+.mk-list li.done { color: var(--fg); }
+.mk-list li.fail { color: var(--danger); }
+.mk-list .px { width: 10px; height: 10px; flex: none; background: var(--fg-4); transition: all .4s var(--ease-out); }
+.mk-list li.active .px { background: var(--azure); box-shadow: 0 0 10px var(--azure); }
+.mk-list li.done .px { background: var(--iris); box-shadow: 0 0 8px var(--iris); }
+.mk-list li.fail .px { background: var(--danger); }
+.mk-list .mono { margin-left: auto; font: 500 11.5px/1 var(--mono); color: var(--fg-3); }
+
+/* agent summary */
+.agent-sum { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.agent-sum span { height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; font: 500 12px/1 var(--mono); color: var(--fg-2); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.agent-sum span.warn { color: var(--warn); box-shadow: inset 0 0 0 1px rgba(243,195,111,.3); }

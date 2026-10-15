@@ -1,0 +1,43 @@
+import type { CopyKey } from '../copy';
+import type { ModeTargets } from '../field/field';
+
+// Onboarding v0.5 (DESIGN.md §5.2, docs/desktop-app.md §7): no service connection step.
+export type Step = 'welcome' | 'admin' | 'recovery' | 'create' | 'project' | 'agent' | 'join' | 'done';
+export type CardStep = Exclude<Step, 'welcome' | 'done'>;
+
+export const FULL: readonly Step[] = ['admin', 'recovery', 'create', 'project', 'agent'];
+export const JOIN_FLOW: readonly Step[] = ['admin', 'recovery', 'create'];
+
+export const TITLE: Record<Exclude<Step, 'welcome'>, CopyKey> = {
+  admin: 'admin.title',
+  recovery: 'rec.title',
+  create: 'create.title.run',
+  project: 'proj.title',
+  agent: 'agent.title',
+  join: 'join.title',
+  done: 'done.title',
+};
+
+export const counted = (joining: boolean): readonly Step[] => (joining ? JOIN_FLOW : FULL);
+export const flow = (joining: boolean): Step[] => ['welcome', ...counted(joining), 'done'];
+export const isCard = (s: Step): s is CardStep => s !== 'welcome' && s !== 'done';
+
+/** Previous / next step in the current flow (join is reached only from welcome). */
+export function neighbour(s: Step, joining: boolean, dir: -1 | 1): Step {
+  const f = flow(joining), i = f.indexOf(s);
+  if (i < 0) return 'welcome';
+  return f[Math.min(f.length - 1, Math.max(0, i + dir))] ?? 'welcome';
+}
+
+/** Progress label "n/total" for the live region, or null outside the counted steps. */
+export function progressOf(s: Step, joining: boolean): { index: number; total: number } | null {
+  const list = counted(joining), i = list.indexOf(s);
+  return i < 0 ? null : { index: i, total: list.length };
+}
+
+/** Extra field targets per step; onboarding never has a service connection. */
+export function fieldExtras(s: Step, ctx: { agent: boolean; joining: boolean }): ModeTargets | null {
+  if (s === 'agent') return { svc: 0, mem: 0.35 };
+  if (s === 'done') return { agent: ctx.agent ? 0.8 : 0, svc: 0, mem: 0.3, peer: ctx.joining ? 0.8 : 0 };
+  return null;
+}
