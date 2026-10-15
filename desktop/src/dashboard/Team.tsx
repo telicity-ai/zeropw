@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { t, type CopyKey } from '../copy';
+import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
 import { DEFAULT_TEAM_PORT, defaultListenIp, interfaceLabel, envPairs, inviteFraction, msLeft, parseListen, parsePort, splitEnv } from '../lib/dash';
@@ -15,7 +15,7 @@ import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
 import { ListenSetup } from './ListenSetup';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
-import { turnOnListen } from './relay';
+import { ListenError, listenErrorLines, relayLeftOff, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type Incoming = { ref: string; preview: InvitePreview };
@@ -34,7 +34,7 @@ const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r
 export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   intent?: Intent; onIntent(): void; incoming: Incoming | null; onIncomingTaken(): void;
 }) {
-  const { tick, bump } = useDash();
+  const { tick, bump, relay } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const reload = () => setN((x) => x + 1);
@@ -105,8 +105,9 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           )}
         {/* a shared environment syncs only while other-device access is on */}
         {td?.shared && base.data && !parseListen(base.data.settings.team_listen) && (
-          <ListenSetup id="team-listen" settings={base.data.settings} interfaces={base.data.interfaces}
-            onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }} />
+          <ListenSetup id="team-listen" interfaces={base.data.interfaces}
+            onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
+            onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
         )}
       </div>
 
@@ -208,7 +209,8 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const [role, setRole] = useState<Role>('user');
   const [name, setName] = useState('');
   const [pass, setPass] = useState('');
-  const [errs, setErrs] = useState<{ port?: CopyKey; name?: CopyKey; pass?: CopyKey; form?: CopyKey; listen?: CopyKey }>({});
+  const [errs, setErrs] = useState<{ port?: CopyKey; name?: CopyKey; pass?: CopyKey; form?: CopyKey }>({});
+  const [listenErr, setListenErr] = useState<CopyLine[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [listenBusy, setListenBusy] = useState(false);
   const [made, setMade] = useState<{ invite_id: string; link_ref: string; expires_at: string; inviter: string; env: string } | null>(null);
@@ -243,17 +245,18 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const turnOn = async () => {
     const p = parsePort(port);
     if (p === null || !ip) { setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
-    setListenBusy(true);
+    setListenBusy(true); setListenErr(null);
     try {
-      await turnOnListen(settings ?? await call('settings_get'), ip, p);
+      await turnOnListen(ip, p);
       toast(t('toast.listen.on')); field.ripple(0.05);
       onChanged();
       setTimeout(() => (shared ? nameRef.current : shareBtn.current)?.focus(), 60);
     } catch (e) {
-      const reason = toIpcError(e).reason;
-      if (reason === 'invalid_listen') setErrs({ listen: 'set.listen.port.err' });
-      else if (reason.startsWith('serve_') || reason === 'admin_binary_missing') { relay.report(e); onChanged(); }
-      else setErrs({ listen: 'error.generic' });
+      // an address the relay cannot open is taken back (./relay.ts); say which and what is running
+      setListenErr(listenErrorLines(e));
+      const down = relayLeftOff(e);
+      if (down) relay.report(down);
+      if (e instanceof ListenError) onChanged();
     } finally { setListenBusy(false); }
   };
 
@@ -337,13 +340,13 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
             <div className="pb">
               <div className="inline">
                 <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
-                  onChange={setIp} style={{ flex: 1.7 }} />
+                  onChange={(v) => { setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
                 <TextField id="inv-port" label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
-                  error={errs.port ? t(errs.port) : null} onChange={(v) => { setPort(v); setErrs((x) => ({ ...x, port: undefined, listen: undefined })); }} />
+                  error={errs.port ? t(errs.port) : null} onChange={(v) => { setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
                 <button className="btn btn-ghost btn-sm tall" type="button" ref={listenBtn} aria-busy={listenBusy || undefined} onClick={() => void turnOn()}>{t('inv.pre1.btn')}</button>
               </div>
               <div className="help">{t('inv.pre1.note')}</div>
-              {errs.listen && <div className="help err" role="alert">{t(errs.listen)}</div>}
+              {listenErr && <div className="help err" role="alert">{tLines(listenErr)}</div>}
             </div>
           </li>
           <li className={shared ? 'done' : undefined}>
@@ -419,7 +422,8 @@ function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
   const [local, setLocal] = useState('');
   const [localErr, setLocalErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
-  const [joined, setJoined] = useState<{ settings: Settings; interfaces: NetInterface[] } | null>(null);
+  const { relay } = useDash();
+  const [joined, setJoined] = useState<{ interfaces: NetInterface[] } | null>(null);
   const heldRef = useRef(held);
   heldRef.current = held;
   const seq = useRef(0);
@@ -496,7 +500,7 @@ function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
         call('net_interfaces').catch(() => [] as NetInterface[]),
       ]);
       if (s && !parseListen(s.team_listen)) {
-        setJoined({ settings: s, interfaces: i });
+        setJoined({ interfaces: i });
         toast(t('toast.join.needListen'));
         announce(t('team.joined.sub'));
         onChanged();
@@ -517,8 +521,9 @@ function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
   if (joined) {
     return (
       <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.joined.sub')} onClose={onJoined} closeLabel={t('sync.later')}>
-        <ListenSetup id="join-listen" settings={joined.settings} interfaces={joined.interfaces}
-          onDone={() => { toast(t('toast.listen.on')); onJoined(); }} />
+        <ListenSetup id="join-listen" interfaces={joined.interfaces}
+          onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
+          onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
       </Sheet>
     );
   }

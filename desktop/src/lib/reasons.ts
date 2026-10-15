@@ -1,7 +1,7 @@
 // Stable reason codes from the core (and the zeropw-admin CLI behind it) mapped to copy keys.
 // Codes the UI does not know fall back to a generic line; nothing here ever shows an input value.
 
-import type { CopyKey } from '../copy';
+import type { CopyKey, CopyVars } from '../copy';
 
 /** `team_invite_preview` failures: a link that is not a valid invite (the CLI says
  *  `invite_malformed`; the core says `invite_missing` or `invite_too_long` before asking it) is
@@ -38,7 +38,14 @@ export function restoreErrorKey(reason: string): CopyKey | null {
   return null;
 }
 
-/** `serve_start` failures (desktop/core/src/serve.rs). Unknown codes are shown as they are. */
+/** The sidecar could not open other-device access at the saved team address
+ *  (rust/src/team/transport.rs). The gateway and the SSH signer run in the same process, so the
+ *  whole relay stays off; the core passes the sidecar's reason on. */
+const TEAM_LISTEN = new Set(['team_invalid_listen_address', 'team_listen_failed', 'team_address_in_use', 'team_already_listening']);
+export const isTeamListenReason = (reason: string): boolean => TEAM_LISTEN.has(reason);
+
+/** `serve_start` failures (desktop/core/src/serve.rs). `serve_exited` is the generic code for a
+ *  sidecar that exited without saying why. Unknown codes are shown as they are. */
 const RELAY: Record<string, CopyKey> = {
   serve_exited: 'relay.err.exited',
   serve_start_timeout: 'relay.err.timeout',
@@ -47,5 +54,23 @@ const RELAY: Record<string, CopyKey> = {
   invalid_listen: 'relay.err.listen',
 };
 export function relayError(reason: string): { key: CopyKey; reason: string } {
-  return { key: RELAY[reason] ?? 'relay.err.other', reason: /^[a-z0-9_]{1,64}$/.test(reason) ? reason : 'unknown' };
+  const key = isTeamListenReason(reason) ? 'relay.err.team' : RELAY[reason] ?? 'relay.err.other';
+  return { key, reason: /^[a-z0-9_]{1,64}$/.test(reason) ? reason : 'unknown' };
+}
+
+/** What turning on other-device access did when the relay would not start with the new address
+ *  (dashboard/relay.ts ListenError): which address failed, then whether the previous setting and
+ *  the relay are back. Only the team address changed, so the gateway port is never blamed. The
+ *  address is named as the cause when the sidecar said so, or when the relay starts again without
+ *  it; a relay that stays off either way (`serve_exited`, the generic code) shows its own reason
+ *  next to the relay status. */
+export function listenFailureLines(f: { address: string; reason: string; restored: boolean; relayBack: boolean }): Array<{ key: CopyKey; vars?: CopyVars }> {
+  const vars = { address: f.address };
+  const first: { key: CopyKey; vars?: CopyVars } =
+    f.reason === 'admin_binary_missing' ? { key: 'relay.err.missing' }
+      : f.reason === 'invalid_listen' ? { key: 'set.listen.port.err' }
+        : isTeamListenReason(f.reason) || (f.restored && f.relayBack) ? { key: 'listen.err.open', vars }
+          : { key: 'listen.err.start', vars };
+  const second: CopyKey = !f.restored ? 'listen.err.kept' : f.relayBack ? 'listen.err.restored' : 'listen.err.relayOff';
+  return [first, { key: second }];
 }

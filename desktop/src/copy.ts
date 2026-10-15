@@ -582,6 +582,14 @@ export const COPY = {
   'relay.err.port': '중계기 포트를 확인해 주세요',
   'relay.err.listen': '이 기기 주소를 확인해 주세요',
   'relay.err.other': '중계기를 켜지 못했어요 ({reason})',
+  'relay.err.team': '다른 기기 접속 주소를 열지 못해 중계기를 켜지 못했어요',
+  'relay.team.hint': '다른 기기 접속이 {address}로 켜져 있어요. 이 주소를 열지 못하면 중계기도 켜지지 않아요',
+  'relay.team.off': '다른 기기 접속 끄기',
+  'listen.err.open': '{address}로 다른 기기 접속을 켜지 못했어요. 이 주소가 지금 없거나 다른 프로그램이 쓰고 있을 수 있어요',
+  'listen.err.start': '{address}로 다른 기기 접속을 켜지 못했어요',
+  'listen.err.restored': '예전 설정으로 되돌리고 중계기를 다시 켰어요',
+  'listen.err.relayOff': '예전 설정으로 되돌렸지만 중계기는 꺼져 있어요',
+  'listen.err.kept': '설정을 되돌리지 못해 중계기가 꺼져 있어요',
   'toast.relay.on': '중계기를 켰어요',
   'home.relay.offNote': '중계기가 꺼져 있어 에이전트 요청이 모두 실패해요',
   'set.backup.help': '백업은 만들 때의 기기 키로만 되돌릴 수 있어요. 다른 기기나 바꾼 기기 키로는 열리지 않아요',
@@ -626,6 +634,15 @@ export function t(key: CopyKey, vars?: CopyVars): string {
     const v = vars?.[name];
     return v === undefined ? whole : String(v);
   });
+}
+
+/** One line of a message built from several copy entries. */
+export interface CopyLine { key: CopyKey; vars?: CopyVars }
+
+/** Several sentences shown in one place (an error slot), as one text: a period between them and
+ *  none at the end (DESIGN.md §6.2). */
+export function tLines(lines: readonly CopyLine[]): string {
+  return lines.map((l) => t(l.key, l.vars)).join('. ');
 }
 
 export function hasCopy(key: string): key is CopyKey {

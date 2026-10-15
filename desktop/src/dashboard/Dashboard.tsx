@@ -17,6 +17,7 @@ import { Home } from './Home';
 import { KeysPage } from './Keys';
 import { LogsPage } from './Logs';
 import { pageMeta, PAGES, type PageId } from './pages';
+import { turnOffListen } from './relay';
 import { SettingsPage } from './Settings';
 import { Sheet } from './Sheet';
 import { TeamPage } from './Team';
@@ -165,7 +166,31 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
       return false;
     } finally { setRelayBusy(false); }
   }, [reportRelay, toast]);
-  const relay: RelayApi = useMemo(() => ({ busy: relayBusy, problem: relayProblem, start: startRelay, report: reportRelay }), [relayBusy, relayProblem, startRelay, reportRelay]);
+  // other-device access: an address the relay cannot open keeps it off (at launch too, when the
+  // core's own start failed), so a relay that is off offers to turn that access off
+  const [teamListen, setTeamListen] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    call('settings_get').then((s) => { if (live) setTeamListen(s.team_listen); }, () => undefined);
+    return () => { live = false; };
+  }, [tick, serve.running]);
+  const listenOff = useCallback(async (): Promise<boolean> => {
+    setRelayBusy(true); setRelayProblem(null);
+    try {
+      const s = await turnOffListen();
+      setTeamListen(null); setServe(s);
+      if (!s.running) { reportRelay({ error: 'Unavailable', reason: 'serve_not_running' }); return false; }
+      toast(t('toast.listen.off'));
+      return true;
+    } catch (e) {
+      reportRelay(e);
+      return false;
+    } finally { setRelayBusy(false); setTick((k) => k + 1); }
+  }, [reportRelay, toast]);
+  const relay: RelayApi = useMemo(
+    () => ({ busy: relayBusy, problem: relayProblem, start: startRelay, report: reportRelay, teamListen, listenOff }),
+    [relayBusy, relayProblem, startRelay, reportRelay, teamListen, listenOff],
+  );
 
   const go = useCallback((p: PageId, i?: Intent) => { setPage(p); setIntent(i ?? null); }, []);
   const bump = useCallback(() => { refresh(); }, [refresh]);
@@ -233,6 +258,10 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               </div>
               {!serve.running && relayProblem && (
                 <div className="help err side-err" id="side-relay-err">{t(relayProblem.key, { reason: relayProblem.reason })}</div>
+              )}
+              {!serve.running && teamListen && (
+                <button className="btn btn-text btn-sm side-listen-off" type="button" aria-busy={relayBusy || undefined}
+                  onClick={() => { if (!relayBusy) void listenOff(); }}>{t('relay.team.off')}</button>
               )}
               {control.stopped
                 ? <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('resume')}>{t('side.resume')}</button>

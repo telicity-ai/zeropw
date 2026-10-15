@@ -35,6 +35,10 @@ export interface MockSeed {
   inviteTtlMs?: number;
   /** What `secure_view` answers: nothing (an older core), or whether the window is protected. */
   screenGuard?: 'void' | 'protected' | 'unprotected';
+  /** Other-device access saved before the app starts (`team_listen`). */
+  teamListen?: string | null;
+  /** The VPN is down: its interface is gone, and a team address on it cannot be opened. */
+  vpnDown?: boolean;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -189,7 +193,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   let secureView = false;
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
-  let settings: Settings = { gateway_port: 47380, team_listen: null };
+  let settings: Settings = { gateway_port: 47380, team_listen: seed.teamListen ?? null };
+  const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' } as const;
+  const LAN = { name: 'en0', ip: '192.168.0.12', kind: 'lan' } as const;
+  const interfaces = () => (seed.vpnDown ? [LAN] : [VPN, LAN]).map((i) => ({ ...i }));
   let activity: ReturnType<typeof setInterval> | null = null;
 
   const wait = (ms: number) => new Promise<void>((r) => { if (latency > 0) setTimeout(r, ms * latency); else r(); });
@@ -202,6 +209,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const startServe = () => {
     // a relay that cannot bind its port exits at once (desktop/core/src/serve.rs `serve_exited`)
     if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'serve_exited'); }
+    // the sidecar opens other-device access before the gateway, so an address this machine does
+    // not have stops the whole relay; the core passes the sidecar's reason on (rust/src/admin_cli.rs
+    // `run_serve`, rust/src/team/transport.rs)
+    const team = parseListen(settings.team_listen);
+    if (settings.team_listen !== null && (!team || !interfaces().some((i) => i.ip === team.ip))) {
+      throw fail('InvalidInput', 'team_invalid_listen_address');
+    }
     serve = { running: true, url: `http://127.0.0.1:${settings.gateway_port}`, pid: 40000 + (randBytes(1)[0] ?? 0), team_listen: settings.team_listen };
     emit('serve://status', serve);
   };
@@ -986,7 +1000,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       settings = { gateway_port: next.gateway_port, team_listen: next.team_listen };
       return { ...settings };
     },
-    net_interfaces: () => [{ name: 'utun4', ip: '100.64.1.7', kind: 'vpn' }, { name: 'en0', ip: '192.168.0.12', kind: 'lan' }],
+    net_interfaces: () => interfaces(),
   };
 
   return {

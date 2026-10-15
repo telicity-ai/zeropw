@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { t, type CopyKey } from '../copy';
+import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { NetInterface } from '../ipc/contract';
 import { DEFAULT_TEAM_PORT, interfaceLabel, MIN_GATEWAY_PORT, parseListen, parsePort } from '../lib/dash';
@@ -10,7 +10,7 @@ import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { useClearOnClose, useDash, useLoad, useSheets } from './context';
 import { Empty, SectionHead } from './parts';
-import { restartRelay } from './relay';
+import { listenErrorLines, relayLeftOff, restartRelay, turnOffListen, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
@@ -37,7 +37,7 @@ export function SettingsPage() {
   const [portErr, setPortErr] = useState<CopyKey | null>(null);
   const [ip, setIp] = useState('');
   const [tport, setTport] = useState('');
-  const [tErr, setTErr] = useState<CopyKey | null>(null);
+  const [tErr, setTErr] = useState<CopyLine[] | null>(null);
   const [busy, setBusy] = useState<'port' | 'listen' | 'backup' | null>(null);
   // after the device key is replaced, earlier backups no longer restore: ask for a new one
   const [needBackup, setNeedBackup] = useState(false);
@@ -82,23 +82,31 @@ export function SettingsPage() {
     setBusy(null);
   };
 
+  // on: the relay is started with the new address, and an address it cannot open is taken back
+  // (./relay.ts); off: saved, then the relay restarts without it
   const setListen = async (on: boolean) => {
     if (!s) return;
-    let value: string | null = null;
+    let p: number | null = null;
     if (on) {
-      const p = parsePort(tport);
-      if (p === null || !ip) { setTErr('set.listen.port.err'); tportRef.current?.focus(); return; }
-      value = `${ip}:${p}`;
+      p = parsePort(tport);
+      if (p === null || !ip) { setTErr([{ key: 'set.listen.port.err' }]); tportRef.current?.focus(); return; }
     }
-    setBusy('listen');
+    setBusy('listen'); setTErr(null);
     try {
-      await call('settings_set', { gateway_port: s.gateway_port, team_listen: value });
+      if (on && p !== null) await turnOnListen(ip, p);
+      else await turnOffListen();
+      toast(t(on ? 'toast.listen.on' : 'toast.listen.off'));
     } catch (e) {
-      setTErr(toIpcError(e).reason === 'invalid_listen' ? 'set.listen.port.err' : 'error.generic');
-      setBusy(null);
-      return;
+      if (on) {
+        setTErr(listenErrorLines(e));
+        const down = relayLeftOff(e);
+        if (down) relay.report(down);
+        tportRef.current?.focus();
+      } else {
+        relay.report(e);
+      }
     }
-    await restart(on ? 'toast.listen.on' : 'toast.listen.off');
+    reload(); bump();
     setBusy(null);
   };
 
@@ -139,7 +147,7 @@ export function SettingsPage() {
               <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={ifaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
                 onChange={(v) => { setIp(v); setTErr(null); }} style={{ flex: 1.7 }} />
               <TextField id="set-tport" label={t('conn.ssh.port')} mono value={tport} inputRef={tportRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 92px' }}
-                error={tErr ? t(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
+                error={tErr ? tLines(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
               <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'listen' || undefined} onClick={() => void setListen(true)}>
                 {t(listen ? 'set.listen.change' : 'inv.pre1.btn')}
               </button>

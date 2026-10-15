@@ -18,6 +18,11 @@ export interface RelayApi {
   start(): Promise<boolean>;
   /** Show why a restart elsewhere (settings, team) left the relay off. */
   report(e: unknown): void;
+  /** The saved other-device address, or null. The relay runs team sync in the same process, so
+   *  an address it cannot open (a VPN that is down, a port in use) keeps the whole relay off. */
+  teamListen: string | null;
+  /** Turn other-device access off and start the relay without it. */
+  listenOff(): Promise<boolean>;
 }
 
 export interface DashApi {
