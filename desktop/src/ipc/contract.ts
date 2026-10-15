@@ -18,8 +18,8 @@ export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
 /** A secret version exactly as the CLI printed it (the CLI prints JSON numbers; a string is
  *  accepted too). The version commands take it back unchanged; do not convert it. */
 export type VersionId = string | number;
-export interface SecretVersion { version: string; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
-export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: string | null; versions: SecretVersion[] }
+export interface SecretVersion { version: VersionId; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
+export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: VersionId | null; versions: SecretVersion[] }
 /** Where a new secret value comes from. `typed` crosses IPC once; `file_token` refers to a file picked natively in Rust. */
 export type SecretSource = { typed: string } | { file_token: string } | { generate_ed25519: true };
 
@@ -68,7 +68,7 @@ export interface Commands {
   secret_list: [{ project?: string; environment?: string }, { secrets: SecretView[] }];
   secret_versions: [{ id: string }, SecretView];
   secret_put: [{ id: string; kind: SecretKind; project: string; environment: string; source: SecretSource }, Record<string, unknown>];
-  secret_reveal: [{ id: string; version?: VersionId; admin_passphrase: string }, { ref: string; id: string; version: string }];
+  secret_reveal: [{ id: string; version?: VersionId; admin_passphrase: string }, { ref: string; id: string; version: VersionId }];
   secret_retire: [{ id: string; version: VersionId }, Record<string, unknown>];
   secret_revoke: [{ id: string; version: VersionId }, Record<string, unknown>];
 

@@ -36,6 +36,7 @@
 ### 2.2 글자
 
 - 본문: Pretendard Variable. 코드·주소·ID: JetBrains Mono(한글은 Pretendard로 대체).
+- 글꼴 파일은 앱에 넣지 않는다. 설치돼 있지 않으면 시스템 글꼴(macOS는 Apple SD Gothic Neo와 Menlo)로 그린다.
 - 크기: 12 / 13.5 / 14 / 15 / 24 (단계 제목) / 38 (시작 화면) px. 12px보다 작은 한글은 쓰지 않는다.
 - 줄바꿈은 `word-break: keep-all`.
 
