@@ -6,7 +6,8 @@
 //! - Launch: adopt a serve sidecar left by an earlier run, otherwise start one when a vault
 //!   exists. Closing the window keeps the app (and so serve and the agent terminals) running;
 //!   the window comes back from the Dock (macOS) or by launching the app again. Quitting the
-//!   app (the app menu, or `zeropw-desktop --quit`) closes the terminals and SIGTERMs serve.
+//!   app (the app menu; on Linux also `zeropw-desktop --quit`) clears a copied value still on
+//!   the clipboard, stops the terminals and everything started in them, and SIGTERMs serve.
 //! - The single main window is created here from tauri.conf.json. It may only navigate within
 //!   the app's own origin and may not open new windows. Before any page script runs,
 //!   `freeze_prototype.js` freezes `Object.prototype` with override taming. Tauri's own

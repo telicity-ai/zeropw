@@ -125,6 +125,7 @@ pub struct OneTimeStore {
 pub struct Reservation<'a> {
     store: &'a OneTimeStore,
     kind: OneTimeKind,
+    /// Counted in `Entries::reserved`. Never for an invite, which has its own evicting pool.
     held: bool,
 }
 
