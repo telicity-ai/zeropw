@@ -6,6 +6,7 @@ import {
 } from '../lib/validators';
 import { ri, useApp } from '../ui/context';
 import { Callout, Meter, Rule } from '../ui/form';
+import { useSecureView } from '../ui/secure';
 import { BackButton, StepFrame, type FrameState } from './StepFrame';
 import { useStrength } from './useStrength';
 
@@ -88,6 +89,9 @@ export function RecoveryStep({ frame, sectionRef, admin, onBack, onNext }: {
     document.addEventListener('visibilitychange', vis);
     return () => { window.removeEventListener('blur', blur); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', vis); };
   }, [frame.active]);
+
+  // the generated groups are a one-time value: block screen capture while they are on screen
+  useSecureView(frame.active && !own && groups.length > 0);
 
   const genOk = groups.length === RECOVERY_GROUP_COUNT && !!refRef.current;
   const ok = own ? ownRules.strong && ownRules.match : genOk;
