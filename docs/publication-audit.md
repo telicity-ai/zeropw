@@ -1,6 +1,6 @@
 # Publication audit
 
-This record tracks work before the owner changes repository visibility. The repository is currently private. It is not a completed audit or an authorization to publish.
+This record tracks work before the owner changes repository visibility. The repository is now public (checked 2026-10-16). It is not a completed audit or an authorization to publish.
 
 ## Information categories
 
