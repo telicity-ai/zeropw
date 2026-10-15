@@ -48,6 +48,7 @@ export interface NetInterface { name: string; ip: string; kind: 'vpn' | 'lan' | 
 /** Command name → [input, output]. */
 export interface Commands {
   app_status: [void, AppStatus];
+  /** score: the zxcvbn score 0..4; reason: a code from desktop/core/src/strength.rs or null. */
   password_strength: [{ value: string }, { score: number; reason: string | null }];
   recovery_generate: [void, { ref: string; groups: string[] }];
   vault_init: [{ admin_passphrase: string; recovery: { ref: string } | { typed: string } }, { state_dir: string; kms_key_id: string }];
@@ -84,6 +85,12 @@ export interface Commands {
   terminal_write: [{ terminal_id: string; data: string }, void];
   terminal_resize: [{ terminal_id: string; cols: number; rows: number }, void];
   terminal_close: [{ terminal_id: string }, void];
+  /** Terminals stay alive after onboarding so the agent keeps running; the Agents page lists and reattaches. */
+  terminal_list: [void, { terminals: { terminal_id: string; principal: string; as_user: string | null; alive: boolean }[] }];
+  /** Replays the buffered output (bounded ring) into on_data, then keeps streaming. */
+  terminal_attach: [{ terminal_id: string; on_data: unknown /* Channel<string> */ }, { terminal_id: string; suggestions: string[] }];
+  /** Window content protection (screen-capture block) while a one-time value is visible. */
+  secure_view: [{ on: boolean }, void];
 
   audit_tail: [{ limit: number }, { records: AuditRecord[]; unparseable_lines: number }];
   alerts: [{ limit: number }, { alerts: Alert[]; unparseable_lines: number }];
