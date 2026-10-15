@@ -51,6 +51,13 @@ struct Allow {
 /// (PORTING.md §3b: "base64 (lenient `b64decode`, urlsafe, encode)").
 const BASE64_DECODE_ALLOWLIST: &[Allow] = &[
     Allow {
+        file: "input_envelope.rs",
+        marker: ".decode(text.as_bytes())",
+        reason: "the desktop app's input envelope (`value_b64`) is a new Rust-only interface, \
+                 not a port of a Python call; it deliberately takes only strict standard \
+                 base64 and rejects anything else as envelope_invalid",
+    },
+    Allow {
         file: "crypto/ed25519.rs",
         marker: ".decode(joined)",
         reason: "kms.rs's `_dearmor` (PEM key armor) calls Python's `base64.b64decode(text, \
