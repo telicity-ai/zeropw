@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "check": "node scripts/check-static.mjs"
+    "check": "node scripts/check-static.mjs && node scripts/check-tauri.mjs",
+    "tauri": "tauri",
+    "bundle": "sh scripts/prepare-sidecars.sh && tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.3.0",
@@ -19,6 +21,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
