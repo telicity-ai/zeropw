@@ -7,6 +7,19 @@ import type { PageId } from './pages';
 /** What a page should open when another page sends the user there (home quick actions). */
 export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 'invite' | 'join';
 
+/** Why the relay did not start: a copy key and the core's reason code it may show. */
+export interface RelayProblem { key: CopyKey; reason: string }
+
+export interface RelayApi {
+  busy: boolean;
+  /** The last failure to start, until the relay runs again. */
+  problem: RelayProblem | null;
+  /** `serve_start`; on failure the reason is shown (toast and next to the relay status). */
+  start(): Promise<boolean>;
+  /** Show why a restart elsewhere (settings, team) left the relay off. */
+  report(e: unknown): void;
+}
+
 export interface DashApi {
   go(page: PageId, intent?: Intent): void;
   /** Bumps when the shell re-reads its status (window focus, `bump`): pages reload their lists. */
@@ -19,6 +32,7 @@ export interface DashApi {
   serve: ServeStatus;
   setControl(c: Control): void;
   setServe(s: ServeStatus): void;
+  relay: RelayApi;
 }
 
 export const DashContext = createContext<DashApi | null>(null);
@@ -83,6 +97,15 @@ export function useSheets<S extends { kind: string }>() {
   const isOpen = (kind: K) => cur?.kind === kind;
   const data = <T extends K>(kind: T) => last[kind] as Extract<S, { kind: T }> | undefined;
   return { cur, open, close, key, isOpen, data };
+}
+
+/** Run `clear` whenever `open` turns false, so a sheet that stays mounted after it closes does not
+ *  keep a typed passphrase, secret value or link in its state (the sheet's DOM goes away after
+ *  the closing animation, its component state does not). */
+export function useClearOnClose(open: boolean, clear: () => void): void {
+  const fn = useRef(clear);
+  fn.current = clear;
+  useEffect(() => { if (!open) fn.current(); }, [open]);
 }
 
 /** Run an intent from another page once, when the page mounts or the intent changes. */

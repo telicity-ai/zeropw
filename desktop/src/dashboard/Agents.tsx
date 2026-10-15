@@ -10,7 +10,7 @@ import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { AppTerminal, focusTerminalIn, type TerminalSource } from '../ui/Terminal';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
@@ -39,6 +39,39 @@ function grantText(g: Grant): string {
   return metaLine(t('grant.until', { time: shortTime(String(g.expires_at)) }), uses);
 }
 
+/** The approval row's second line: who asked, through which connection, when, and the body. */
+function approvalMeta(a: ApprovalView): string {
+  return metaLine(a.caller, a.connection, shortTime(a.created_at), bodySummary(a));
+}
+
+function bodySummary(a: ApprovalView): string {
+  if (!a.bodyBytes) return t('appr.body.none');
+  return metaLine(t('appr.body.size', { n: a.bodyBytes }), a.contentType, a.bodyHash);
+}
+
+/** Everything the approval is bound to, as text (the request is untrusted). */
+function ApprovalDetails({ a }: { a: ApprovalView }) {
+  return (
+    <>
+      <dl className="kv sheet-kv">
+        <div className="kv-row"><dt>{t('appr.req')}</dt><dd>{`${a.method} ${a.target}`}</dd></div>
+        <div className="kv-row"><dt>{t('grant.agent')}</dt><dd>{a.caller}</dd></div>
+        <div className="kv-row"><dt>{t('grant.conn')}</dt><dd>{a.connection}</dd></div>
+        <div className="kv-row"><dt>{t('appr.when')}</dt><dd>{shortTime(a.created_at)}</dd></div>
+        {a.origin && <div className="kv-row"><dt>{t('appr.origin')}</dt><dd>{a.origin}</dd></div>}
+        <div className="kv-row"><dt>{t('appr.body')}</dt><dd>{bodySummary(a)}</dd></div>
+      </dl>
+      {a.bodyPreview !== null && a.bodyPreview !== '' && (
+        <div className="field">
+          <div className="label"><span id="appr-body-lbl">{t('appr.body.preview')}</span>{a.bodyTruncated && <span className="hint">{t('appr.body.cut')}</span>}</div>
+          <pre className="body-preview" role="region" aria-labelledby="appr-body-lbl" tabIndex={0}>{a.bodyPreview}</pre>
+        </div>
+      )}
+      {!!a.bodyBytes && a.bodyPreview === null && <div className="help">{t('appr.body.binary')}</div>}
+    </>
+  );
+}
+
 /** Agents: principals with their grants, the in-app terminals that are still running, and the
  *  queue of requests waiting for approval. Paths and names in requests are rendered as text. */
 export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
@@ -55,6 +88,8 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
   const sheets = useSheets<AgentSheet>();
   const [view, setView] = useState<View | null>(null);
   const d = load.data;
+  // grants expire while the page is open: liveness is derived from the clock, not the stored status
+  const now = useNow(!!d && d.grants.length > 0, 15_000);
   const activeConns = (d?.connections ?? []).filter((c) => c.status === 'active');
 
   useIntent(intent, onIntent, (i) => {
@@ -86,7 +121,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
       <ListCard items={d?.principals ?? null} failed={load.failed} empty="page.agents.empty" emptyAction={addBtn} label={t('agents.list')}>
         {(items) => items.map((p: Principal) => {
           const active = p.status === 'active';
-          const gs = liveGrants(d?.grants ?? [], p.id);
+          const gs = liveGrants(d?.grants ?? [], p.id, now);
           return (
             <Row key={p.id} dot={active ? (gs.length ? 'on' : 'idle') : 'idle'} mono name={p.id}
               tag={active ? undefined : <Tag>{t('st.disabled')}</Tag>}
@@ -144,8 +179,9 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
       <SectionHead title={t('agents.approvals')} />
       <ListCard items={d?.approvals ?? null} failed={load.failed} empty="appr.empty" label={t('agents.approvals')}>
         {(items) => items.map((a) => (
-          <Row key={a.digest} dot="warn" mono name={`${a.method} ${a.path}`} meta={metaLine(a.caller, a.connection, shortTime(a.created_at))}>
-            <button className="btn btn-primary btn-sm" type="button" aria-label={t('appr.approve.aria', { req: `${a.method} ${a.path}` })}
+          <Row key={a.digest} dot="warn" mono name={a.method} meta={approvalMeta(a)}
+            sub={<div className="target">{a.target}</div>}>
+            <button className="btn btn-primary btn-sm" type="button" aria-label={t('appr.approve.aria', { req: `${a.method} ${a.target}` })}
               onClick={() => sheets.open({ kind: 'approve', approval: a })}>{t('appr.approve')}</button>
           </Row>
         ))}
@@ -157,7 +193,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
         principals={(d?.principals ?? []).filter((p) => p.status === 'active')} connections={activeConns}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} onConnections={() => { sheets.close(); go('connections', 'add-connection'); }} />
       <ConfirmSheet key={sheets.key('revoke')} id="sheet-grant-revoke" open={sheets.isOpen('revoke')} title={t('grant.revoke.title')} lead={t('grant.revoke.sub')}
-        confirmLabel={t('grant.revoke.confirm')} onClose={sheets.close}
+        confirmLabel={t('grant.revoke.confirm')} onClose={sheets.close} notes={[t('session.note')]}
         chips={(() => { const g = sheets.data('revoke')?.grant; return g ? [g.principal, g.connection] : []; })()}
         run={async () => {
           const g = sheets.data('revoke')?.grant;
@@ -166,6 +202,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
         }} />
       <ConfirmSheet key={sheets.key('disable')} id="sheet-agent-disable" open={sheets.isOpen('disable')} title={t('agents.disable.title')} lead={t('agents.disable.sub')}
         confirmLabel={t('agents.disable.confirm')} onClose={sheets.close} chips={[sheets.data('disable')?.id ?? '']} warn={t('agents.disable.warn')}
+        notes={[t('session.note')]}
         run={async () => {
           const id = sheets.data('disable')?.id;
           if (!id) return;
@@ -182,17 +219,15 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
         }} />
       <ConfirmSheet key={sheets.key('approve')} id="sheet-approve" open={sheets.isOpen('approve')} title={t('appr.title')} lead={t('appr.sub')}
         confirmLabel={t('appr.confirm')} onClose={sheets.close} needPass
-        details={(() => {
-          const a = sheets.data('approve')?.approval;
-          return a ? [[t('appr.req'), `${a.method} ${a.path}`], [t('grant.agent'), a.caller], [t('grant.conn'), a.connection], [t('appr.when'), shortTime(a.created_at)]] : [];
-        })()}
         errorFor={(e) => (toIpcError(e).reason === 'approval_not_pending' || toIpcError(e).reason === 'approval_not_found' ? 'appr.err.gone' : null)}
         run={async (pass) => {
           const a = sheets.data('approve')?.approval;
           if (!a) return;
           await call('approvals_approve', { digest: a.digest, admin_passphrase: pass });
           toast(t('toast.appr.done')); sheets.close(); reload();
-        }} />
+        }}>
+        {(() => { const a = sheets.data('approve')?.approval; return a ? <ApprovalDetails a={a} /> : null; })()}
+      </ConfirmSheet>
     </>
   );
 }
@@ -323,6 +358,7 @@ function GrantSheet({ open, principal, principals, connections, onClose, onDone,
 
   useEffect(() => { if (!who && principals[0]) setWho(principal ?? principals[0].id); }, [who, principal, principals]);
   useEffect(() => { if (!conn && connections[0]) setConn(connections[0].id); }, [conn, connections]);
+  useClearOnClose(open, () => setPass(''));
 
   if (connections.length === 0) {
     return (

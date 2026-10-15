@@ -1,18 +1,19 @@
 import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { ConnectionView, Project, SecretKind, SecretSource } from '../ipc/contract';
+import type { ConnectionView, Project, SecretKind, SecretSource, SecretView } from '../ipc/contract';
 import {
-  defaultMethodStates, envPairs, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, METHODS, methodsPayload,
-  nextMethodState, parsePathPrefixes, parsePort, splitEnv, summarizeConnection, writeConsequences, type Method, type MethodStates,
+  defaultMethodStates, envPairs, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
+  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, summarizeConnection, writeConsequences, type Method,
+  type MethodStates,
 } from '../lib/dash';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
-import { PublicKey } from './Keys';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
+import { kindLabel, PublicKey } from './Keys';
 import { ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
@@ -27,7 +28,7 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [c, p, s] = await Promise.all([call('connection_list'), call('project_list'), call('secret_list', {})]);
-    return { connections: c.connections, projects: p.projects, secretIds: s.secrets.map((x) => x.id) };
+    return { connections: c.connections, projects: p.projects, secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<ConnSheet>();
@@ -56,7 +57,7 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
       </ListCard>
 
       <CreateConnectionSheet key={sheets.key('create')} open={sheets.isOpen('create')} projects={load.data?.projects ?? []}
-        connections={list ?? []} secretIds={load.data?.secretIds ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
+        connections={list ?? []} secrets={load.data?.secrets ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
       <DisableSheet key={sheets.key('disable')} open={sheets.isOpen('disable')} id={sheets.data('disable')?.id ?? ''}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
     </>
@@ -77,18 +78,24 @@ function DisableSheet({ open, id, onClose, onDone }: { open: boolean; id: string
 type ConnType = 'http' | 'ssh';
 type Auth = 'bearer' | 'basic' | 'header';
 type Cli = '' | 'democli' | 'custom';
+type KeySrc = 'new' | 'existing';
 type ErrKey = 'env' | 'id' | 'target' | 'basic' | 'header' | 'prefix' | 'methods' | 'paths' | 'cli' | 'host' | 'port' | 'user' | 'hostKey' | 'key' | 'pass' | 'form';
 type Errs = Partial<Record<ErrKey, CopyKey>>;
 
-/** The API/SSH form from the mockup's connection step. The key is stored first (`secret_put`,
- *  named after the connection), then the connection is created with the admin passphrase. A
- *  typed key leaves the screen as soon as it is stored. */
-function CreateConnectionSheet({ open, projects, connections, secretIds, onClose, onCreated }: {
-  open: boolean; projects: Project[]; connections: ConnectionView[]; secretIds: string[]; onClose(): void; onCreated(): void;
+/** The API/SSH form from the mockup's connection step. The key is either a stored one from the
+ *  same project/environment (Keys page) or a new one: a new key is stored first (`secret_put`,
+ *  named after the connection), then the connection is created with the admin passphrase. A typed
+ *  key leaves the screen as soon as it is stored. A generated SSH key's public half is kept until
+ *  the connection exists, so it is shown even when the first try failed. */
+function CreateConnectionSheet({ open, projects, connections, secrets, onClose, onCreated }: {
+  open: boolean; projects: Project[]; connections: ConnectionView[]; secrets: SecretView[]; onClose(): void; onCreated(): void;
 }) {
   const { toast, field, announce } = useApp();
   const pairs = envPairs(projects);
+  const secretIds = secrets.map((s) => s.id);
   const [type, setType] = useState<ConnType>('http');
+  const [src, setSrc] = useState<KeySrc>('new');
+  const [pickId, setPickId] = useState('');
   const [env, setEnv] = useState(pairs[0]?.key ?? '');
   const [id, setId] = useState('');
   const [target, setTarget] = useState('');
@@ -110,7 +117,7 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
   const [value, setValue] = useState('');
   const [file, setFile] = useState<{ file_token: string; name: string } | null>(null);
   const [gen, setGen] = useState(false);
-  const [stored, setStored] = useState<{ id: string; env: string; kind: SecretKind } | null>(null);
+  const [stored, setStored] = useState<{ id: string; env: string; kind: SecretKind; pub: string | null } | null>(null);
   const [pass, setPass] = useState('');
   const [errs, setErrs] = useState<Errs>({});
   const [busy, setBusy] = useState(false);
@@ -122,7 +129,7 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
     methods: useRef<HTMLButtonElement>(null), paths: useRef<HTMLInputElement>(null), cli: useRef<HTMLInputElement>(null),
     host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), user: useRef<HTMLInputElement>(null),
     hostKey: useRef<HTMLInputElement>(null), key: useRef<HTMLInputElement>(null), keyFile: useRef<HTMLButtonElement>(null),
-    pass: useRef<HTMLInputElement>(null), more: useRef<HTMLDetailsElement>(null),
+    pass: useRef<HTMLInputElement>(null), more: useRef<HTMLDetailsElement>(null), pick: useRef<HTMLSelectElement>(null),
   };
 
   const ssh = type === 'ssh';
@@ -132,6 +139,12 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
   const clear = (k: ErrKey) => setErrs((x) => (x[k] ? { ...x, [k]: undefined } : x));
   const err = (k: ErrKey) => (errs[k] ? t(errs[k] as CopyKey) : null);
   const keyStored = !!stored && stored.id === connId && stored.env === env && stored.kind === secretKind;
+  const existing = src === 'existing';
+  const choices = keyChoices(secrets, env, type);
+  const pick = choices.some((c) => c.id === pickId) ? pickId : choices[0]?.id ?? '';
+
+  // the typed key and the passphrase never outlive the sheet
+  useClearOnClose(open, () => { setValue(''); setFile(null); setPass(''); });
 
   // target line under the address: encrypted host, plain http, a private address or an error
   let tgtLine: { text: string; cls: string } | null = null;
@@ -162,7 +175,8 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
     if (!splitEnv(env)) e.env = 'keys.err.env';
     if (!isValidName(connId)) e.id = 'proj.err.name';
     else if (connections.some((c) => c.id === connId)) e.id = 'conn.err.exists';
-    else if (!keyStored && secretIds.includes(connId)) e.id = 'conn.err.keyExists';
+    // a new key is stored under the connection's name, which must not belong to another key yet
+    else if (!existing && !keyStored && secretIds.includes(connId)) e.id = 'conn.err.keyExists';
     if (!ssh) {
       if (!tgt.ok) e.target = tgt.error === 'meta' ? 'conn.url.err.meta' : 'conn.url.err.format';
       else if (tgt.private && !allowPriv) e.target = 'conn.url.private';
@@ -178,7 +192,8 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
       if (!isSshUser(user)) e.user = 'conn.ssh.user.err';
       if (!isHostKey(hostKey)) e.hostKey = 'conn.ssh.hostkey.err';
     }
-    if (!keyStored && !value && !file && !gen) e.key = ssh ? 'conn.ssh.keyerr' : 'conn.key.need';
+    if (existing) { if (!pick) e.key = 'conn.key.err.pick'; }
+    else if (!keyStored && !value && !file && !gen) e.key = ssh ? 'conn.ssh.keyerr' : 'conn.key.need';
     if (!pass) e.pass = 'pass.err.empty';
     setErrs(e);
     const order: ErrKey[] = ['env', 'id', 'target', 'basic', 'header', 'prefix', 'methods', 'paths', 'cli', 'host', 'port', 'user', 'hostKey', 'key', 'pass'];
@@ -187,7 +202,7 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
 
   const focusErr = (k: ErrKey) => {
     if ((k === 'paths' || k === 'cli') && refs.more.current) refs.more.current.open = true;
-    const el = k === 'key' && ssh ? refs.keyFile.current : (refs as Record<string, { current: HTMLElement | null }>)[k]?.current;
+    const el = k === 'key' && existing ? refs.pick.current : k === 'key' && ssh ? refs.keyFile.current : (refs as Record<string, { current: HTMLElement | null }>)[k]?.current;
     setTimeout(() => el?.focus(), 0);
   };
 
@@ -198,23 +213,27 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
     if (!pair) return;
     setBusy(true);
     try {
-      let pubKey: string | null = null;
-      if (!keyStored || value || file || gen) {
+      // the public half of a key generated by an earlier, failed try is still shown at the end
+      let pubKey: string | null = !existing && keyStored ? stored?.pub ?? null : null;
+      let secretId = connId;
+      if (existing) {
+        secretId = pick;
+      } else if (!keyStored || value || file || gen) {
         const source: SecretSource = file ? { file_token: file.file_token } : gen ? { generate_ed25519: true } : { typed: value };
         const out = await call('secret_put', { id: connId, kind: secretKind, project: pair.project, environment: pair.environment, source });
         setValue(''); setFile(null); setGen(false);
-        setStored({ id: connId, env, kind: secretKind });
-        if (typeof out.public_key === 'string') pubKey = out.public_key;
+        pubKey = publicKeyOf(out);
+        setStored({ id: connId, env, kind: secretKind, pub: pubKey });
       }
       if (ssh) {
         await call('connection_create_ssh', {
-          id: connId, project: pair.project, environment: pair.environment, service: connId, secret_id: connId,
+          id: connId, project: pair.project, environment: pair.environment, service: connId, secret_id: secretId,
           host, port: parsePort(port) ?? 22, username: user, host_keys: [hostKey.trim()], admin_passphrase: pass,
         });
       } else {
         const m = methodsPayload(methods);
         await call('connection_create_http', {
-          id: connId, project: pair.project, environment: pair.environment, service: connId, secret_id: connId,
+          id: connId, project: pair.project, environment: pair.environment, service: connId, secret_id: secretId,
           target: target.trim().replace(/\/$/, ''), auth, methods: m.methods, confirm_methods: m.confirm_methods,
           path_prefixes: parsePathPrefixes(paths) ?? [], allow_private_network: tgt.ok && tgt.private && allowPriv,
           ...(auth === 'basic' ? { basic_username: basicUser } : {}),
@@ -241,6 +260,9 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
         invalid_host_key: ['hostKey', 'conn.ssh.hostkey.err'], unsupported_host_key: ['hostKey', 'conn.ssh.hostkey.err'], ssh_host_keys_required: ['hostKey', 'conn.ssh.hostkey.err'],
         invalid_header_name: ['header', 'conn.header.err'], invalid_basic_username: ['basic', 'conn.basic.err'],
         invalid_secret_value: ['key', 'keys.err.value'], file_token_unknown: ['key', 'keys.err.value'],
+        host_key_required: ['hostKey', 'conn.ssh.hostkey.err'],
+        secret_kind_mismatch: ['key', 'conn.key.err.kind'], secret_scope_mismatch: ['key', 'conn.key.err.pick'],
+        secret_version_unusable: ['key', 'conn.key.err.unusable'], secret_not_found: ['key', 'conn.key.err.pick'],
       };
       const hit = ipc.error === 'AuthFailed' ? (['pass', passErrorKey(e)] as [ErrKey, CopyKey]) : map[r];
       if (hit) { setErrs({ [hit[0]]: hit[1] }); focusErr(hit[0]); }
@@ -366,7 +388,24 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
         </>
       )}
 
-      {!ssh ? (
+      <div className="field key-src">
+        <div className="label"><span id="conn-key-src-lbl">{t('conn.key.source')}</span></div>
+        <Segmented<KeySrc> name="conn-key-src" labelledBy="conn-key-src-lbl" value={src}
+          options={[{ value: 'new', label: t('conn.key.new') }, { value: 'existing', label: t('conn.key.existing') }]}
+          onChange={(v) => { setSrc(v); clear('key'); clear('id'); if (v === 'existing') { setValue(''); setFile(null); setGen(false); } }} />
+      </div>
+
+      {existing ? (
+        choices.length > 0 ? (
+          <SelectField id="conn-key-pick" label={t('conn.key.existing')} mono value={pick} selectRef={refs.pick} error={err('key')} help={t('conn.key.existing.help')}
+            options={choices.map((c) => ({ value: c.id, label: `${c.id} · ${kindLabel(c.kind)}` }))} onChange={(v) => { setPickId(v); clear('key'); }} />
+        ) : (
+          <div className="field">
+            <div className="help" id="conn-key-none">{t('conn.key.none')}</div>
+            <div className="help err" hidden={!errs.key}>{err('key') ?? ''}</div>
+          </div>
+        )
+      ) : !ssh ? (
         <TextField id="conn-key" label={keyLabel} type="password" mono value={value} inputRef={refs.key} error={err('key')} help={keyHelp}
           suffix={<button className="icon-btn" type="button" onClick={() => void pickKey()}>{t('conn.key.file')}</button>}
           onChange={(v) => { setValue(v); setFile(null); clear('key'); }} />
@@ -385,6 +424,7 @@ function CreateConnectionSheet({ open, projects, connections, secretIds, onClose
 
       <PassField id="conn-pass" value={pass} inputRef={refs.pass} error={err('pass')} onChange={(v) => { setPass(v); clear('pass'); }} />
       {errs.form && <div className="help err" role="alert">{t(errs.form)}</div>}
+      <Callout kind="info">{t('keys.sameAccount')}</Callout>
     </Sheet>
   );
 }

@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
-import { call, on } from '../ipc/client';
+import { call, on, toIpcError } from '../ipc/client';
 import type { AppStatus, Control, InvitePreview, ServeStatus } from '../ipc/contract';
 import { newRecordCount, recordSig } from '../lib/dash';
 import { hostPort } from '../lib/format';
+import { relayError } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { PassField } from '../ui/fields';
+import { Callout } from '../ui/form';
 import { AgentsPage } from './Agents';
 import { ConnectionsPage } from './Connections';
-import { DashContext, passErrorKey, SheetHostContext, type DashApi, type Intent, type SheetHost } from './context';
+import {
+  DashContext, passErrorKey, SheetHostContext, type DashApi, type Intent, type RelayApi, type RelayProblem, type SheetHost,
+} from './context';
 import { Home } from './Home';
 import { KeysPage } from './Keys';
 import { LogsPage } from './Logs';
@@ -138,9 +142,34 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     title.current?.focus({ preventScroll: true });
   }, [page, announce]);
 
+  // the relay: a failed start is shown with its reason until the relay runs again
+  const [relayBusy, setRelayBusy] = useState(false);
+  const [relayProblem, setRelayProblem] = useState<RelayProblem | null>(null);
+  useEffect(() => { if (serve.running) setRelayProblem(null); }, [serve.running]);
+  const reportRelay = useCallback((e: unknown) => {
+    const p = relayError(toIpcError(e).reason);
+    setRelayProblem(p);
+    toast(t(p.key, { reason: p.reason }), 'warn');
+    announce(t(p.key, { reason: p.reason }));
+  }, [toast, announce]);
+  const startRelay = useCallback(async (): Promise<boolean> => {
+    setRelayBusy(true); setRelayProblem(null);
+    try {
+      const s = await call('serve_start');
+      setServe(s);
+      if (!s.running) { reportRelay({ error: 'Unavailable', reason: 'serve_not_running' }); return false; }
+      toast(t('toast.relay.on'));
+      return true;
+    } catch (e) {
+      reportRelay(e);
+      return false;
+    } finally { setRelayBusy(false); }
+  }, [reportRelay, toast]);
+  const relay: RelayApi = useMemo(() => ({ busy: relayBusy, problem: relayProblem, start: startRelay, report: reportRelay }), [relayBusy, relayProblem, startRelay, reportRelay]);
+
   const go = useCallback((p: PageId, i?: Intent) => { setPage(p); setIntent(i ?? null); }, []);
   const bump = useCallback(() => { refresh(); }, [refresh]);
-  const dash: DashApi = useMemo(() => ({ go, tick, activity, bump, control, serve, setControl, setServe }), [go, tick, activity, bump, control, serve]);
+  const dash: DashApi = useMemo(() => ({ go, tick, activity, bump, control, serve, setControl, setServe, relay }), [go, tick, activity, bump, control, serve, relay]);
   const sheetHost: SheetHost = useMemo(() => ({ el: hostEl, hold: (d) => setHolds((h) => Math.max(0, h + d)) }), [hostEl]);
 
   const closeSheet = useCallback(() => { setSheet(null); setPass(''); setPassErr(null); }, []);
@@ -165,7 +194,8 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
       toast(t('toast.resumed'));
       closeSheet();
     } catch (e) {
-      setPassErr(passErrorKey(e)); setPass('');
+      // an open incident keeps everything stopped until it is closed (rust/src/policy.rs `resume`)
+      setPassErr(toIpcError(e).reason === 'incident_open' ? 'resume.err.incident' : passErrorKey(e)); setPass('');
       passRef.current?.focus();
     } finally { setBusy(false); }
   };
@@ -196,7 +226,14 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               <div className={relayCls}>
                 <span className="dot" aria-hidden="true" /><span>{relayText}</span>
                 {serve.running && !control.stopped && <span className="mono">{hostPort(serve.url)}</span>}
+                {!serve.running && (
+                  <button className="btn btn-text btn-sm relay-start" type="button" aria-busy={relayBusy || undefined} aria-describedby={relayProblem ? 'side-relay-err' : undefined}
+                    onClick={() => { if (!relayBusy) void startRelay(); }}>{t(relayProblem ? 'relay.retry' : 'relay.start')}</button>
+                )}
               </div>
+              {!serve.running && relayProblem && (
+                <div className="help err side-err" id="side-relay-err">{t(relayProblem.key, { reason: relayProblem.reason })}</div>
+              )}
               {control.stopped
                 ? <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('resume')}>{t('side.resume')}</button>
                 : <button className="btn btn-ghost btn-sm" type="button" onClick={() => setSheet('stop')}>{t('side.stop')}</button>}
@@ -221,7 +258,9 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
         <div className="sheet-host" ref={setHostEl} />
 
         <Sheet id="sheet-stop" open={sheet === 'stop'} title={t('stop.title')} lead={t('stop.sub')}
-          primaryLabel={t('stop.confirm')} busy={busy} onPrimary={() => void stopAll()} onClose={closeSheet} />
+          primaryLabel={t('stop.confirm')} busy={busy} onPrimary={() => void stopAll()} onClose={closeSheet}>
+          <Callout kind="info">{t('session.note')}</Callout>
+        </Sheet>
         <Sheet id="sheet-resume" open={sheet === 'resume'} title={t('resume.title')} lead={t('resume.sub')}
           primaryLabel={t('resume.confirm')} busy={busy} onPrimary={() => void resume()} onClose={closeSheet}>
           <PassField id="resume-pass" value={pass} inputRef={passRef} label={t('resume.field')}

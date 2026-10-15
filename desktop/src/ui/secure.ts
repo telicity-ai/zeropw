@@ -81,8 +81,3 @@ export function useSecureGate(want: boolean): boolean {
 
 /** Current number of holders (tests). */
 export const secureViewHolders = (): number => holders;
-
-/** Keep the window protected while `on` is true (replaced by useSecureGate in the pages). */
-export function useSecureView(on: boolean): void {
-  useEffect(() => (on ? holdSecureView().release : undefined), [on]);
-}

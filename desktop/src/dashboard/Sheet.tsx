@@ -12,9 +12,11 @@ let outsideOpener: HTMLElement | null = null;
 /** Right-hand sheet with the onboarding card's shape (DESIGN.md §5.3). It renders into the
  *  dashboard's sheet host so the page under it can be made inert while the list stays visible.
  *  Escape or the scrim closes it; focus moves to `[data-autofocus]`, the first field or the title on
- *  open and back to the trigger on close. Content mounts on open and unmounts after the closing
- *  animation, so typed values (passphrases included) never survive a close. A primary button that
- *  is not ready keeps focus (`aria-disabled`) and calls `onBlocked` to point at what is missing. */
+ *  open and back to the trigger on close. Content mounts on open and its DOM goes away after the
+ *  closing animation. The component that renders the sheet stays mounted, though (useSheets keeps
+ *  it until the same kind opens again), so a component that holds a passphrase, secret value or
+ *  link in its own state clears it when `open` turns false (`useClearOnClose`). A primary button
+ *  that is not ready keeps focus (`aria-disabled`) and calls `onBlocked` to point at what is missing. */
 export function Sheet({ id, open, title, lead, children, primaryLabel, busy, ready = true, onPrimary, onBlocked, onClose, back, closeLabel, noCancel, cancelLabel }: {
   id: string; open: boolean; title: string; lead?: string; children?: ReactNode;
   primaryLabel?: string; busy?: boolean; ready?: boolean; onPrimary?(): void; onBlocked?(): void; onClose(): void;
