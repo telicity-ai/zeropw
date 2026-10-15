@@ -1,0 +1,1138 @@
+//! `Core` against the fake zeropw-admin: argv shape (`--flag=value`, no secret in argv), the
+//! input envelope, the child environment, error parsing without echo, timeouts, and the
+//! one-time store wiring of tokens, links and revealed values.
+
+mod common;
+
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use base64::Engine as _;
+use common::{FakeClipboard, Fixture, arc_events, err, health_server, ok, wait_until};
+use serde_json::json;
+use zeropw_desktop_core::commands::*;
+use zeropw_desktop_core::{Core, CoreConfig, FilePurpose, NoEvents, SecretString, Settings};
+
+const ADMIN_PASS: &str = "velvet-ocean-27-quartz-lantern";
+
+fn core(fx: &Fixture) -> Core {
+    let mut config = CoreConfig::new(fx.paths.clone());
+    config.serve_stop_grace = Duration::from_secs(3);
+    config.serve_start_timeout = Duration::from_secs(10);
+    Core::new(config, Arc::new(NoEvents))
+}
+
+fn pass() -> SecretString {
+    SecretString::from(ADMIN_PASS)
+}
+
+/// No argv element contains any of `secrets`.
+fn assert_argv_clean(fx: &Fixture, secrets: &[&str]) {
+    for call in fx.calls() {
+        for arg in &call.argv {
+            for secret in secrets {
+                assert!(
+                    !arg.contains(secret),
+                    "secret in argv of {}: {arg}",
+                    call.key
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn vault_init_passes_passphrases_only_in_the_envelope_then_starts_serve() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let port = health_server();
+    core.settings_set(Settings {
+        gateway_port: port,
+        team_listen: None,
+    })
+    .unwrap();
+
+    let code = core.recovery_generate().unwrap();
+    assert_eq!(code.groups.len(), 6);
+    let recovery_text = code.groups.join("-");
+    let out = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Ref(code.reference.clone()),
+        })
+        .unwrap();
+    assert_eq!(out.kms_key_id, "kms-synthetic");
+
+    let init = fx.last("init");
+    assert_eq!(
+        init.argv,
+        [fx.state_dir_arg().as_str(), "--input-envelope", "init"]
+    );
+    assert_eq!(
+        init.stdin_json(),
+        json!({"admin_passphrase": ADMIN_PASS, "recovery_passphrase": recovery_text})
+    );
+    // Cleared environment: only the fixed variables (plus what sh itself sets).
+    // (PWD, SHLVL, _ and OLDPWD come from sh itself; macOS adds __CF_USER_TEXT_ENCODING.)
+    for (key, _) in &init.env {
+        assert!(
+            [
+                "PATH",
+                "HOME",
+                "LANG",
+                "TMPDIR",
+                "PWD",
+                "SHLVL",
+                "_",
+                "OLDPWD",
+                "__CF_USER_TEXT_ENCODING"
+            ]
+            .contains(&key.as_str()),
+            "unexpected env var {key}"
+        );
+    }
+    assert_eq!(init.env_var("PATH"), Some("/usr/bin:/bin"));
+    assert_eq!(init.env_var("LANG"), Some("C.UTF-8"));
+    assert!(init.env_var("HOME").is_some());
+
+    let serve = fx.last("serve");
+    assert_eq!(
+        serve.args(),
+        ["serve", &format!("--listen=127.0.0.1:{port}"), "--quiet"]
+    );
+    assert!(serve.stdin.is_none());
+    let status = core.serve_status();
+    assert!(status.running);
+    assert_eq!(status.url, Some(format!("http://127.0.0.1:{port}")));
+
+    assert_argv_clean(&fx, &[ADMIN_PASS, &recovery_text]);
+    // The generated code was used up by the successful init.
+    assert_eq!(
+        err(core.onetime_show(RefIn {
+            reference: code.reference
+        }))
+        .reason,
+        "onetime_ref_unknown"
+    );
+
+    let app = core.app_status().unwrap();
+    assert!(app.initialized);
+    assert_eq!(app.control.map(|c| c.stopped), Some(false));
+    assert!(app.serve.running);
+    assert!(!core.serve_stop().running);
+}
+
+#[test]
+fn vault_init_checks_passphrases_before_running_anything() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let weak = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: "password1".into(),
+            recovery: RecoveryInput::Typed("another-velvet-lantern-42-quartz".into()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (weak.reason.as_str(), weak.detail.as_deref()),
+        ("passphrase_weak", Some("admin"))
+    );
+    let short = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: "x7#Qa9!".into(),
+            recovery: RecoveryInput::Typed("another-velvet-lantern-42-quartz".into()),
+        })
+        .unwrap_err();
+    assert_eq!(short.reason, "passphrase_too_short");
+    let same = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Typed(format!(" {} ", ADMIN_PASS.to_uppercase()).into()),
+        })
+        .unwrap_err();
+    assert_eq!(same.reason, "passphrases_identical");
+    let weak_recovery = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Typed("password123".into()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (
+            weak_recovery.reason.as_str(),
+            weak_recovery.detail.as_deref()
+        ),
+        ("passphrase_weak", Some("recovery"))
+    );
+    let bad_ref = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Ref("00000000000000000000000000000000".into()),
+        })
+        .unwrap_err();
+    assert_eq!(bad_ref.reason, "onetime_ref_unknown");
+    for e in [&weak, &short, &same, &weak_recovery] {
+        let text = serde_json::to_string(e).unwrap();
+        assert!(
+            !text.contains("password") && !text.contains("velvet"),
+            "{text}"
+        );
+    }
+    assert!(fx.calls().is_empty());
+}
+
+#[test]
+fn failed_init_keeps_the_generated_code_for_a_retry() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    fx.respond_error(
+        "init",
+        r#"{"error":"StateError","reason":"state_exists","detail":"/x/state"}"#,
+        1,
+    );
+    let code = core.recovery_generate().unwrap();
+    let e = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Ref(code.reference.clone()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("StateError", "state_exists")
+    );
+    // Still redeemable by the next attempt.
+    fx.clear_response("init");
+    fx.respond("init", r#"{"kms_key_id":"k","state_dir":"/s"}"#);
+    fx.respond_error(
+        "serve",
+        r#"{"error":"StateError","reason":"state_missing"}"#,
+        1,
+    );
+    let e = core
+        .vault_init(VaultInitIn {
+            admin_passphrase: pass(),
+            recovery: RecoveryInput::Ref(code.reference.clone()),
+        })
+        .unwrap_err();
+    // init succeeded (code consumed), the sidecar did not start.
+    assert_eq!(e.reason, "state_missing");
+    assert_eq!(fx.count("init"), 2);
+    assert!(
+        err(core.onetime_show(RefIn {
+            reference: code.reference
+        }))
+        .reason
+            == "onetime_ref_unknown"
+    );
+}
+
+#[test]
+fn secret_put_typed_value_travels_as_value_b64() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let value = "sk-synthetic-0123456789";
+    let out = core
+        .secret_put(SecretPutIn {
+            id: "api".into(),
+            kind: SecretKind::ApiKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::Typed(value.into()),
+        })
+        .unwrap();
+    assert_eq!(out["version"], 1);
+    let call = fx.last("secret_put");
+    assert_eq!(
+        call.args(),
+        [
+            "secret",
+            "put",
+            "--id=api",
+            "--kind=api_key",
+            "--project=demo",
+            "--environment=dev",
+            "--stdin"
+        ]
+    );
+    assert_eq!(
+        call.stdin_json(),
+        json!({"value_b64": base64::engine::general_purpose::STANDARD.encode(value)})
+    );
+    assert_argv_clean(&fx, &[value]);
+}
+
+#[test]
+fn secret_put_generated_ssh_key_returns_only_public_parts() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let out = core
+        .secret_put(SecretPutIn {
+            id: "deploy".into(),
+            kind: SecretKind::SshPrivateKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::GenerateEd25519(true),
+        })
+        .unwrap();
+    let public = out["public_key"].as_str().unwrap();
+    assert!(public.starts_with("ssh-ed25519 AAAA"));
+    assert!(public.ends_with(" zeropw-deploy"));
+    assert!(out["fingerprint"].as_str().unwrap().starts_with("SHA256:"));
+    let text = out.to_string();
+    assert!(!text.contains("PRIVATE KEY"));
+
+    let envelope = fx.last("secret_put").stdin_json();
+    let pem = base64::engine::general_purpose::STANDARD
+        .decode(envelope["value_b64"].as_str().unwrap())
+        .unwrap();
+    let pem = String::from_utf8(pem).unwrap();
+    assert!(pem.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----\n"));
+    assert!(!text.contains(pem.lines().nth(1).unwrap()));
+    assert_argv_clean(&fx, &["PRIVATE KEY", pem.lines().nth(1).unwrap()]);
+
+    let mismatch = core
+        .secret_put(SecretPutIn {
+            id: "deploy".into(),
+            kind: SecretKind::ApiKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::GenerateEd25519(true),
+        })
+        .unwrap_err();
+    assert_eq!(mismatch.reason, "source_kind_mismatch");
+}
+
+#[test]
+fn secret_put_from_a_picked_file_uses_a_single_use_token() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let file = fx.dir.path().join("synthetic.key");
+    fs::write(&file, b"synthetic-file-secret\n").unwrap();
+    let pick = core.files().register(FilePurpose::Secret, &file).unwrap();
+    assert_eq!(pick.name, "synthetic.key");
+    let put = |token: &str| {
+        core.secret_put(SecretPutIn {
+            id: "file".into(),
+            kind: SecretKind::Password,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::FileToken(token.into()),
+        })
+    };
+    put(&pick.file_token).unwrap();
+    let envelope = fx.last("secret_put").stdin_json();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(envelope["value_b64"].as_str().unwrap())
+            .unwrap(),
+        b"synthetic-file-secret\n"
+    );
+    assert_eq!(
+        put(&pick.file_token).unwrap_err().reason,
+        "file_token_unknown"
+    );
+    assert_argv_clean(&fx, &["synthetic-file-secret", file.to_str().unwrap()]);
+}
+
+#[test]
+fn secret_reveal_returns_a_reference_shown_once() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let out = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: Some("1".into()),
+            admin_passphrase: pass(),
+        })
+        .unwrap();
+    assert_eq!((out.id.as_str(), out.version.as_str()), ("api", "1"));
+    let serialized = serde_json::to_string(&out).unwrap();
+    assert!(!serialized.contains("synthetic-revealed-value"));
+    let call = fx.last("secret_reveal");
+    assert_eq!(call.args(), ["secret", "reveal", "--id=api", "--version=1"]);
+    assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
+    let shown = core
+        .onetime_show(RefIn {
+            reference: out.reference.clone(),
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(shown.expose(), "synthetic-revealed-value");
+    assert!(
+        core.onetime_show(RefIn {
+            reference: out.reference
+        })
+        .is_err()
+    );
+    assert_argv_clean(&fx, &[ADMIN_PASS]);
+
+    let missing = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: None,
+            admin_passphrase: "".into(),
+        })
+        .unwrap_err();
+    assert_eq!(missing.reason, "passphrase_missing");
+    let bad_version = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: Some("1; rm".into()),
+            admin_passphrase: pass(),
+        })
+        .unwrap_err();
+    assert_eq!(bad_version.detail.as_deref(), Some("version"));
+}
+
+#[test]
+fn cli_errors_are_parsed_and_never_echo_secrets() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    fx.respond_error(
+        "secret_reveal",
+        &format!(
+            "usage: zeropw-admin [-h] --state-dir DIR\n{{\"detail\":\"passphrase {ADMIN_PASS} rejected\",\"error\":\"AuthFailed\",\"reason\":\"bad_passphrase\"}}\n"
+        ),
+        1,
+    );
+    let e = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: None,
+            admin_passphrase: pass(),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("AuthFailed", "bad_passphrase")
+    );
+    assert_eq!(e.detail, None);
+    assert!(!serde_json::to_string(&e).unwrap().contains(ADMIN_PASS));
+
+    fx.respond_error(
+        "secret_put",
+        "{\"detail\":\"value c3ludGhldGlj was refused\",\"error\":\"InvalidInput\",\"reason\":\"x\"}",
+        1,
+    );
+    let e = core
+        .secret_put(SecretPutIn {
+            id: "api".into(),
+            kind: SecretKind::ApiKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::Typed("synthetic".into()),
+        })
+        .unwrap_err();
+    assert_eq!(e.detail, None, "detail carried the value's base64");
+
+    fx.respond_error("project_list", "Traceback: something broke\n", 3);
+    let e = core.project_list().unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str(), e.detail.as_deref()),
+        ("InternalError", "admin_failed", Some("exit status 3"))
+    );
+
+    fx.clear_response("project_list");
+    fx.respond("project_list", "not json");
+    assert_eq!(
+        core.project_list().unwrap_err().reason,
+        "admin_output_invalid"
+    );
+}
+
+#[test]
+fn a_hung_cli_call_is_killed_at_the_timeout() {
+    let fx = Fixture::new();
+    let mut config = CoreConfig::new(fx.paths.clone());
+    config.admin_timeout = Duration::from_secs(1);
+    let core = Core::new(config, Arc::new(NoEvents));
+    fx.respond_sleep("status", 30);
+    let started = Instant::now();
+    let e = core.control_get().unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("Timeout", "admin_timeout")
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn project_create_checks_the_positional_name() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    for bad in ["-rf", "--help", "Demo", "a b", ""] {
+        let e = core
+            .project_create(ProjectCreateIn {
+                name: bad.into(),
+                environments: vec!["dev".into()],
+            })
+            .unwrap_err();
+        assert_eq!(e.detail.as_deref(), Some("name"));
+    }
+    let e = core
+        .project_create(ProjectCreateIn {
+            name: "demo".into(),
+            environments: vec!["dev".into(), "-x".into()],
+        })
+        .unwrap_err();
+    assert_eq!(e.detail.as_deref(), Some("environments"));
+    assert!(fx.calls().is_empty());
+    core.project_create(ProjectCreateIn {
+        name: "demo".into(),
+        environments: vec!["dev".into(), "prod".into()],
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("project_create").args(),
+        ["project", "create", "demo", "--environments=dev,prod"]
+    );
+}
+
+#[test]
+fn principal_token_goes_to_the_store_only() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let out = core
+        .principal_create(PrincipalCreateIn {
+            id: "agent-1".into(),
+            runtime: "".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        fx.last("principal_create").args(),
+        ["principal", "create", "--id=agent-1"]
+    );
+    assert!(
+        !serde_json::to_string(&out)
+            .unwrap()
+            .contains("zpw_synthetic_caller_token")
+    );
+    let token = core
+        .onetime_show(RefIn {
+            reference: out.token_ref,
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(token.expose(), "zpw_synthetic_caller_token");
+}
+
+#[test]
+fn invite_link_is_stored_and_the_raw_invite_dropped() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    // An output without `inviter` makes the core ask `team invite-info` with the link.
+    fx.respond(
+        "team_invite",
+        r#"{"env_id":"e","expires_at":"2026-10-16T00:00:00Z","invite":"SYNTHETICINVITE","invite_id":"aa","link":"zeropw://join#SYNTHETICINVITE"}"#,
+    );
+    let out = core
+        .team_invite_create(TeamInviteCreateIn {
+            env: "demo/dev".into(),
+            role: TeamRole::User,
+            name: "bob".into(),
+            address: "192.168.1.20:47390".into(),
+            admin_passphrase: pass(),
+        })
+        .unwrap();
+    assert_eq!(out.inviter, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    assert!(
+        !serde_json::to_string(&out)
+            .unwrap()
+            .contains("SYNTHETICINVITE")
+    );
+    let call = fx.last("team_invite");
+    assert_eq!(
+        call.args(),
+        [
+            "team",
+            "invite",
+            "--env=demo/dev",
+            "--role=user",
+            "--name=bob",
+            "--address=192.168.1.20:47390",
+            "--link"
+        ]
+    );
+    assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
+    let info = fx.last("team_invite-info");
+    assert_eq!(info.args(), ["team", "invite-info", "--stdin"]);
+    assert_eq!(
+        info.stdin_json(),
+        json!({"invite": "zeropw://join#SYNTHETICINVITE"})
+    );
+    let link = core
+        .onetime_show(RefIn {
+            reference: out.link_ref,
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(link.expose(), "zeropw://join#SYNTHETICINVITE");
+    assert_argv_clean(&fx, &["SYNTHETICINVITE", ADMIN_PASS]);
+}
+
+#[test]
+fn preview_then_join_keep_the_invite_out_of_argv_and_the_webview() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let preview = core
+        .team_invite_preview(TeamInvitePreviewIn {
+            text: "  zeropw://join#SYNTHETICINVITE\n".into(),
+        })
+        .unwrap();
+    assert_eq!(preview.preview.role, "user");
+    assert_eq!(preview.preview.addresses, ["192.168.1.20:47390"]);
+    assert_eq!(
+        fx.last("team_invite-info").stdin_json(),
+        json!({"invite": "zeropw://join#SYNTHETICINVITE"})
+    );
+    // The pasted invite is not showable back to the webview.
+    assert!(
+        core.onetime_show(RefIn {
+            reference: preview.reference.clone()
+        })
+        .is_err()
+    );
+    let joined = core
+        .team_join(TeamJoinIn {
+            reference: preview.reference.clone(),
+            project: Some("demo".into()),
+            environment: None,
+        })
+        .unwrap();
+    assert_eq!(joined["env_id"], "env-synthetic");
+    let call = fx.last("team_join");
+    assert_eq!(call.args(), ["team", "join", "--stdin", "--project=demo"]);
+    assert_eq!(
+        call.stdin_json(),
+        json!({"invite": "zeropw://join#SYNTHETICINVITE"})
+    );
+    // Used up by the successful join.
+    assert_eq!(
+        core.team_join(TeamJoinIn {
+            reference: preview.reference,
+            project: None,
+            environment: None,
+        })
+        .unwrap_err()
+        .reason,
+        "onetime_ref_unknown"
+    );
+    assert_argv_clean(&fx, &["SYNTHETICINVITE"]);
+}
+
+#[test]
+fn deep_links_only_preview_and_emit_an_event() {
+    let fx = Fixture::new();
+    let events = arc_events();
+    let core = Core::new(CoreConfig::new(fx.paths.clone()), events.clone());
+    for bad in [
+        "https://evil.example/join#X",
+        "zeropw://joi",
+        "javascript:alert(1)",
+    ] {
+        assert_eq!(
+            core.open_deep_link(bad).unwrap_err().reason,
+            "deep_link_invalid"
+        );
+    }
+    assert!(fx.calls().is_empty());
+    let out = core
+        .open_deep_link("ZeroPW://join#SYNTHETICINVITE")
+        .unwrap();
+    let emitted = events.named("invite://preview");
+    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted[0]["ref"], out.reference);
+    assert_eq!(
+        emitted[0]["preview"]["inviter"],
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    );
+    assert!(!emitted[0].to_string().contains("SYNTHETICINVITE"));
+    assert_eq!(fx.count("team_join"), 0);
+}
+
+#[test]
+fn invite_lists_never_forward_link_strings() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    fx.respond(
+        "team_invites",
+        r#"{"env_id":"e1","invites":[{"invite_id":"aa","role":"user","name":"bob","link":"zeropw://join#SYNTHETICINVITE","wrapped_secret":"c2VjcmV0","created_at":null,"expires_at":"t","status":"pending","used_at":null,"used_by":null,"revoked_at":null},{"invite_id":"bb","role":"admin","name":"amy","link":false,"expires_at":"t","status":"used"}]}"#,
+    );
+    let out = core
+        .team_invites(EnvIn {
+            env: "demo/dev".into(),
+        })
+        .unwrap();
+    let text = out.to_string();
+    assert!(
+        !text.contains("SYNTHETICINVITE") && !text.contains("wrapped_secret"),
+        "{text}"
+    );
+    assert_eq!(out["invites"][0]["link"], true);
+    assert_eq!(out["invites"][1]["link"], false);
+    assert_eq!(out["invites"][1]["used_at"], serde_json::Value::Null);
+    assert_eq!(out["env_id"], "e1");
+}
+
+#[test]
+fn control_commands_reduce_the_incident_id_and_emit_events() {
+    let fx = Fixture::new();
+    let events = arc_events();
+    let core = Core::new(CoreConfig::new(fx.paths.clone()), events.clone());
+    fx.respond(
+        "stop-all",
+        r#"{"incident_open":"inc-1","restore_pending":false,"stopped":true}"#,
+    );
+    let control = core.stop_all().unwrap();
+    assert!(control.stopped && control.incident_open);
+    assert_eq!(
+        events.named("control://changed"),
+        [json!({"stopped": true, "restore_pending": false, "incident_open": true})]
+    );
+    assert_eq!(
+        core.resume(PassphraseIn {
+            admin_passphrase: "".into()
+        })
+        .unwrap_err()
+        .reason,
+        "passphrase_missing"
+    );
+    core.resume(PassphraseIn {
+        admin_passphrase: pass(),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("resume").stdin_json(),
+        json!({"admin_passphrase": ADMIN_PASS})
+    );
+    assert_eq!(fx.last("resume").args(), ["resume"]);
+    assert_eq!(events.named("control://changed").len(), 2);
+}
+
+#[test]
+fn http_connection_argv_and_ca_file_token() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let ca = fx.dir.path().join("ca.pem");
+    fs::write(&ca, "synthetic ca").unwrap();
+    let pick = core.files().register(FilePurpose::Ca, &ca).unwrap();
+    core.connection_create_http(HttpConnectionIn {
+        id: "gh".into(),
+        project: "demo".into(),
+        environment: "dev".into(),
+        service: "github".into(),
+        secret_id: "api".into(),
+        target: "https://api.github.com".into(),
+        auth: HttpAuth::Header,
+        header_name: Some("Authorization".into()),
+        value_prefix: Some("token ".into()),
+        basic_username: None,
+        methods: vec!["GET".into(), "POST".into()],
+        confirm_methods: vec!["DELETE".into()],
+        path_prefixes: vec!["/repos".into()],
+        allow_private_network: false,
+        cli_program: None,
+        ca_file_token: Some(pick.file_token),
+        description: Some("synthetic".into()),
+        admin_passphrase: pass(),
+    })
+    .unwrap();
+    let call = fx.last("connection_create-http");
+    assert_eq!(
+        call.args(),
+        [
+            "connection",
+            "create-http",
+            "--id=gh",
+            "--project=demo",
+            "--environment=dev",
+            "--service=github",
+            "--secret-id=api",
+            "--target=https://api.github.com",
+            "--auth=header",
+            "--header-name=Authorization",
+            "--value-prefix=token ",
+            "--methods=GET,POST",
+            "--confirm-methods=DELETE",
+            "--path-prefixes=/repos",
+            "--description=synthetic",
+            &format!("--ca-file={}", ca.display()),
+        ]
+    );
+    assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
+}
+
+#[test]
+fn ssh_connection_repeats_host_keys() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    core.connection_create_ssh(SshConnectionIn {
+        id: "prod".into(),
+        project: "demo".into(),
+        environment: "prod".into(),
+        service: "ssh".into(),
+        secret_id: "deploy".into(),
+        host: "10.0.0.5".into(),
+        port: 2222,
+        username: "deploy".into(),
+        host_keys: vec!["ssh-ed25519 AAAAone".into(), "ssh-ed25519 AAAAtwo".into()],
+        description: None,
+        admin_passphrase: pass(),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("connection_create-ssh").args(),
+        [
+            "connection",
+            "create-ssh",
+            "--id=prod",
+            "--project=demo",
+            "--environment=prod",
+            "--service=ssh",
+            "--secret-id=deploy",
+            "--host=10.0.0.5",
+            "--port=2222",
+            "--username=deploy",
+            "--host-key=ssh-ed25519 AAAAone",
+            "--host-key=ssh-ed25519 AAAAtwo",
+        ]
+    );
+}
+
+#[test]
+fn recover_and_typed_recovery_codes_are_canonicalized() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    core.recover(RecoverIn {
+        recovery_passphrase: "abcd efgh ijkl mnop qrst uvw2".into(),
+    })
+    .unwrap();
+    let call = fx.last("recover");
+    assert_eq!(call.args(), ["recover"]);
+    assert_eq!(
+        call.stdin_json(),
+        json!({"recovery_passphrase": "ABCD-EFGH-IJKL-MNOP-QRST-UVW2"})
+    );
+    assert_argv_clean(&fx, &["ABCD", "abcd"]);
+}
+
+#[test]
+fn incident_all_scope_needs_the_passphrase() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let e = core
+        .incident_declare(IncidentDeclareIn {
+            scope: IncidentScope::All,
+            principal: None,
+            runtime: None,
+            reason: None,
+            admin_passphrase: None,
+        })
+        .unwrap_err();
+    assert_eq!(e.reason, "passphrase_missing");
+    core.incident_declare(IncidentDeclareIn {
+        scope: IncidentScope::Principal,
+        principal: Some("agent-1".into()),
+        runtime: None,
+        reason: Some("leaked log".into()),
+        admin_passphrase: None,
+    })
+    .unwrap();
+    let call = fx.last("incident_declare");
+    assert_eq!(
+        call.args(),
+        [
+            "incident",
+            "declare",
+            "--scope=principal",
+            "--principal=agent-1",
+            "--reason=leaked log"
+        ]
+    );
+    assert_eq!(call.stdin_json(), json!({}));
+}
+
+#[test]
+fn onetime_copy_clears_the_clipboard_only_if_unchanged() {
+    let fx = Fixture::new();
+    let mut config = CoreConfig::new(fx.paths.clone());
+    config.clipboard_clear_after = Duration::from_millis(200);
+    let core = Core::new(config, Arc::new(NoEvents));
+    let clipboard = Arc::new(FakeClipboard::default());
+
+    let first = core
+        .principal_create(PrincipalCreateIn {
+            id: "a".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    let out = core
+        .onetime_copy(
+            RefIn {
+                reference: first.token_ref.clone(),
+            },
+            clipboard.clone(),
+        )
+        .unwrap();
+    assert_eq!((out.copied, out.clears_in_s), (true, 0));
+    assert_eq!(
+        clipboard.0.lock().unwrap().as_deref(),
+        Some("zpw_synthetic_caller_token")
+    );
+    assert!(
+        core.onetime_show(RefIn {
+            reference: first.token_ref
+        })
+        .is_err()
+    );
+    assert!(wait_until(Duration::from_secs(3), || clipboard
+        .0
+        .lock()
+        .unwrap()
+        .is_none()));
+
+    let second = core
+        .principal_create(PrincipalCreateIn {
+            id: "b".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    core.onetime_copy(
+        RefIn {
+            reference: second.token_ref,
+        },
+        clipboard.clone(),
+    )
+    .unwrap();
+    *clipboard.0.lock().unwrap() = Some("something the user copied".into());
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(
+        clipboard.0.lock().unwrap().as_deref(),
+        Some("something the user copied")
+    );
+}
+
+#[test]
+fn terminal_needs_a_caller_token_reference_and_a_running_gateway() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let revealed = core
+        .secret_reveal(SecretRevealIn {
+            id: "api".into(),
+            version: None,
+            admin_passphrase: pass(),
+        })
+        .unwrap();
+    struct Null;
+    impl zeropw_desktop_core::TerminalSink for Null {
+        fn data(&mut self, _: &str) {}
+        fn exit(&mut self, _: Option<u32>) {}
+    }
+    // A revealed secret's reference cannot be used as a terminal token.
+    let e = err(core.terminal_open(
+        TerminalOpenIn {
+            token_ref: revealed.reference,
+            as_user: None,
+        },
+        Box::new(Null),
+    ));
+    assert_eq!(e.reason, "onetime_ref_unknown");
+    let token = core
+        .principal_create(PrincipalCreateIn {
+            id: "a".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    let e = err(core.terminal_open(
+        TerminalOpenIn {
+            token_ref: token.token_ref.clone(),
+            as_user: None,
+        },
+        Box::new(Null),
+    ));
+    assert_eq!(e.reason, "serve_not_running");
+    let e = err(core.terminal_open(
+        TerminalOpenIn {
+            token_ref: token.token_ref,
+            as_user: Some("bad user".into()),
+        },
+        Box::new(Null),
+    ));
+    assert_eq!(e.reason, "invalid_account");
+}
+
+#[test]
+fn list_commands_use_flag_equals_value() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    core.secret_list(SecretListIn {
+        project: Some("demo".into()),
+        environment: Some("".into()),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("secret_list").args(),
+        ["secret", "list", "--project=demo"]
+    );
+    core.audit_tail(LimitIn { limit: 20 }).unwrap();
+    assert_eq!(
+        fx.last("audit_tail").args(),
+        ["audit", "tail", "--limit=20"]
+    );
+    assert_eq!(
+        core.alerts(LimitIn { limit: 0 })
+            .unwrap_err()
+            .detail
+            .as_deref(),
+        Some("limit")
+    );
+    core.grant_create(GrantCreateIn {
+        principal: "agent-1".into(),
+        connection: "gh".into(),
+        ttl: "30m".into(),
+        max_uses: Some("5".into()),
+        admin_passphrase: pass(),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("grant_create").args(),
+        [
+            "grant",
+            "create",
+            "--principal=agent-1",
+            "--connection=gh",
+            "--ttl=30m",
+            "--max-uses=5"
+        ]
+    );
+    core.backup_create(Path::new("/tmp/zeropw-backup.zpw"))
+        .unwrap();
+    assert_eq!(
+        fx.last("backup").args(),
+        ["backup", "--out=/tmp/zeropw-backup.zpw"]
+    );
+    assert!(core.backup_create(Path::new("relative.zpw")).is_err());
+    core.team_revoke_invite(TeamRevokeInviteIn {
+        env: "demo/dev".into(),
+        invite_id: "aa".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("team_revoke-invite").args(),
+        ["team", "revoke-invite", "--env=demo/dev", "--id=aa"]
+    );
+    // An option value that looks like an option stays a value.
+    core.secret_versions(IdIn {
+        id: "--help".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        fx.last("secret_versions").args(),
+        ["secret", "versions", "--id=--help"]
+    );
+    let e = core
+        .secret_versions(IdIn { id: "a\nb".into() })
+        .unwrap_err();
+    assert_eq!(e.detail.as_deref(), Some("--id"));
+}
+
+#[test]
+fn terminal_open_injects_the_principal_token_from_the_store() {
+    use std::sync::Mutex;
+    use std::sync::mpsc;
+    use zeropw_desktop_core::{TerminalProgram, TerminalSink};
+
+    struct Collect(Arc<Mutex<String>>, mpsc::Sender<Option<u32>>);
+    impl TerminalSink for Collect {
+        fn data(&mut self, chunk: &str) {
+            self.0.lock().unwrap().push_str(chunk);
+        }
+        fn exit(&mut self, code: Option<u32>) {
+            let _ = self.1.send(code);
+        }
+    }
+
+    let fx = Fixture::new();
+    let mut config = CoreConfig::new(fx.paths.clone());
+    config.serve_stop_grace = Duration::from_secs(3);
+    config.terminal_program = TerminalProgram::Program {
+        path: "/bin/sh".into(),
+        args: vec![
+            "-c".into(),
+            r#"echo "len=${#ZEROPW_CALLER_TOKEN} url=$ZEROPW_GATEWAY_URL""#.into(),
+        ],
+    };
+    let core = Core::new(config, Arc::new(NoEvents));
+    let port = health_server();
+    core.settings_set(Settings {
+        gateway_port: port,
+        team_listen: None,
+    })
+    .unwrap();
+    core.serve_start().unwrap();
+    let principal = core
+        .principal_create(PrincipalCreateIn {
+            id: "agent-1".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    let out = Arc::new(Mutex::new(String::new()));
+    let (tx, rx) = mpsc::channel();
+    let opened = core
+        .terminal_open(
+            TerminalOpenIn {
+                token_ref: principal.token_ref.clone(),
+                as_user: Some("agent".into()),
+            },
+            Box::new(Collect(out.clone(), tx)),
+        )
+        .unwrap();
+    assert_eq!(
+        opened.suggestions,
+        [
+            "sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u agent -i"
+                .to_owned(),
+            format!(
+                "{}/zeropw-agent list-connections",
+                fx.paths.bin_dir.display()
+            ),
+        ]
+    );
+    assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Some(0));
+    let text = out.lock().unwrap().clone();
+    let token = "zpw_synthetic_caller_token";
+    assert!(
+        text.contains(&format!("len={} url=http://127.0.0.1:{port}", token.len())),
+        "{text}"
+    );
+    assert!(!text.contains(token));
+    // The terminal did not use up the token: it can still be shown once.
+    let shown = core
+        .onetime_show(RefIn {
+            reference: principal.token_ref,
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(shown.expose(), token);
+    core.shutdown();
+    assert!(!core.serve_status().running);
+}
+
+#[test]
+fn app_status_before_init_does_not_run_the_cli() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let status = core.app_status().unwrap();
+    assert!(!status.initialized);
+    assert_eq!(status.control, None);
+    assert!(!status.serve.running);
+    assert_eq!(status.state_dir, fx.paths.state_dir().display().to_string());
+    assert!(fx.calls().is_empty());
+    let _ = ok(core.recovery_generate());
+}
