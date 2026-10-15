@@ -33,7 +33,7 @@ export const COPY = {
   'admin.reason.year': '연도로 끝나요',
   'admin.reason.short': '12자 이상이면 더 안전해요',
   'rec.title': '복구 코드',
-  'rec.sub': '기기 키가 새었을 수 있을 때 이 코드로 기기 키를 새로 바꿔요. 적어서 따로 두세요',
+  'rec.sub': '기기 키 파일을 새로 바꿀 때 이 코드가 필요해요. 적어서 따로 두세요',
   'rec.code.label': '전체 코드',
   'rec.regen': '다시 만들기',
   'rec.own': '직접 정하기',
@@ -225,7 +225,7 @@ export const COPY = {
   'toast.save.same': '저장했어요. 이 계정의 다른 프로그램도 읽을 수 있어요',
   'toast.share.done': '공유했어요. 에이전트 권한은 다시 승인하세요',
   'toast.listen.on': '접속을 켜고 중계기를 다시 시작했어요',
-  'toast.join.later': '보관함을 만든 뒤 바로 합류해요. 10분 안에 마쳐 주세요',
+  'toast.join.later': '보관함을 만든 뒤 바로 합류해요. 1시간 안에 마쳐 주세요',
   'toast.paste.mock': '시험용 예시 링크를 넣었어요',
 
   // ---- app (added for the desktop build, same voice as the table above)
@@ -243,6 +243,8 @@ export const COPY = {
   'boot.failed': '앱 상태를 읽지 못했어요',
   'create.err': '보관함을 만들지 못했어요',
   'create.err.serve': '중계기를 켜지 못했어요',
+  'create.relay.vaultOk': '보관함은 문제없이 만들어졌어요. 중계기는 대시보드에서 포트를 바꾸거나 다시 켤 수 있어요',
+  'create.relay.later': '나중에 켜기',
   'proj.err.exists': '이미 있는 이름이에요',
   'agent.err.name': '소문자, 숫자, . _ -만 쓰고 기호로 시작 못 해요',
   'agent.err.exists': '이미 있는 이름이에요',
@@ -250,6 +252,7 @@ export const COPY = {
   'term.suggest': '제안 명령',
   'term.chip.aria': '{cmd} 입력',
   'term.closed': '터미널이 닫혔어요',
+  'term.busy': '프로그램이 입력을 읽지 않아 방금 입력한 내용을 보내지 못했어요',
   'term.err': '터미널을 열지 못했어요',
   'join.err.expired': '만료된 링크예요',
   'join.err.check': '링크를 확인하지 못했어요',
@@ -391,7 +394,7 @@ export const COPY = {
   'conns.disable': '끄기',
   'conns.disable.aria': '{id} 끄기',
   'conns.disable.title': '연결 끄기',
-  'conns.disable.sub': '이 연결로는 더 이상 중계하지 않아요',
+  'conns.disable.sub': '이 연결로 오는 새 요청을 바로 막아요',
   'conns.disable.warn': '끈 연결은 다시 켤 수 없어요',
   'conns.disable.confirm': '끄기',
   'conn.err.exists': '이미 있는 이름이에요',
@@ -451,7 +454,9 @@ export const COPY = {
   'term.end': '끝내기',
   'term.end.aria': '{id} 터미널 끝내기',
   'term.end.title': '터미널 끝내기',
-  'term.end.sub': '셸과 그 안에서 도는 에이전트가 함께 끝나요',
+  'term.end.sub': '이 터미널의 셸과 거기서 시작한 프로그램을 멈춰요',
+  'term.end.note': 'setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트 끄기로만 막아요',
+  'term.end.note.other': '{user} 계정으로 도는 에이전트와 setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트 끄기로만 막아요',
   'term.end.confirm': '끝내기',
   'appr.approve': '승인',
   'appr.approve.aria': '{req} 승인',
@@ -534,7 +539,7 @@ export const COPY = {
   'set.ack.sub': '복원한 내용을 확인했으면 중계를 다시 열어요. 전체 정지는 따로 다시 열어야 해요',
   'set.ack.confirm': '확인하고 열기',
   'set.recover': '복구 코드로 기기 키 바꾸기',
-  'set.recover.sub': '기기 키가 새었을 수 있을 때 써요. 지금 기기 키 파일이 있어야 해요',
+  'set.recover.sub': '새 기기 키 파일을 만들어 같은 데이터 키를 다시 감싸요. 지금 기기 키 파일이 있어야 해요',
   'set.recover.confirm': '바꾸기',
   'set.recover.empty': '복구 코드를 넣어 주세요',
   'set.recover.err': '복구 코드가 맞지 않아요',
@@ -567,8 +572,8 @@ export const COPY = {
   'rec.own.similar': '관리 비밀번호가 들어 있으면 안 돼요',
   'rec.verify.err': '{n}번째 묶음과 달라요',
   'rec.verify.need': '{n}번째 묶음을 넣어 주세요',
-  'join.err.reopen': '링크를 확인한 지 10분이 지났어요. 링크를 다시 넣어 주세요',
-  'done.join.reopen': '링크를 확인한 지 10분이 지났어요. 팀 화면에서 링크를 다시 넣어 주세요',
+  'join.err.reopen': '링크를 확인한 지 1시간이 지났어요. 링크를 다시 넣어 주세요',
+  'done.join.reopen': '링크를 확인한 지 1시간이 지났어요. 팀 화면에서 링크를 다시 넣어 주세요',
   'session.note': '이미 열린 SSH 세션과 끝난 작업은 되돌리지 않아요. 서버에서 세션을 끊으세요',
   'resume.err.incident': '처리 중인 사고가 있어요. 기록 화면에서 사고를 먼저 끝내 주세요',
   'relay.start': '켜기',
@@ -579,11 +584,22 @@ export const COPY = {
   'relay.err.port': '중계기 포트를 확인해 주세요',
   'relay.err.listen': '이 기기 주소를 확인해 주세요',
   'relay.err.other': '중계기를 켜지 못했어요 ({reason})',
+  'relay.err.team': '다른 기기 접속 주소를 열지 못해 중계기를 켜지 못했어요',
+  'relay.team.hint': '다른 기기 접속이 {address} 주소로 켜져 있어요. 이 주소를 열지 못하면 중계기도 켜지지 않아요',
+  'relay.team.off': '다른 기기 접속 끄기',
+  'listen.err.open': '{address} 주소로 다른 기기 접속을 켜지 못했어요. 이 주소가 지금 없거나 다른 프로그램이 쓰고 있을 수 있어요',
+  'listen.err.start': '{address} 주소로 다른 기기 접속을 켜지 못했어요',
+  'listen.err.restored': '예전 설정으로 되돌리고 중계기를 다시 켰어요',
+  'listen.err.relayOff': '예전 설정으로 되돌렸지만 중계기는 꺼져 있어요',
+  'listen.err.kept': '설정을 되돌리지 못해 중계기가 꺼져 있어요',
   'toast.relay.on': '중계기를 켰어요',
   'home.relay.offNote': '중계기가 꺼져 있어 에이전트 요청이 모두 실패해요',
-  'set.backup.help': '백업은 이 기기 키로만 되돌릴 수 있어요. 다른 기기에서는 열리지 않아요',
+  'set.backup.help': '백업은 만들 때의 기기 키로만 되돌릴 수 있어요. 다른 기기나 바꾼 기기 키로는 열리지 않아요',
   'toast.ack.stopped': '복원을 확인했어요. 전체 정지는 그대로라 사이드바에서 다시 열어 주세요',
-  'set.recover.warn': '기기 키를 새로 바꾸고 모든 에이전트 권한을 회수해요. 되돌릴 수 없고 권한은 다시 줘야 해요',
+  'set.recover.warn': '되돌릴 수 없어요. 에이전트 권한을 모두 회수하고 전에 만든 백업은 더는 복원할 수 없어요',
+  'set.recover.leak': '기기 키 파일이 새었을 수 있다면 바꾸는 것만으로는 넣어 둔 키를 지키지 못해요. 키를 모두 새 값으로 바꾸고 서비스에서 예전 키를 폐기하세요',
+  'set.recover.backupNow': '기기 키를 바꿔서 전에 만든 백업은 복원되지 않아요. 지금 새 백업을 만드세요',
+  'set.restore.mismatch': '지금 기기 키로 만든 백업이 아니에요. 기기 키를 바꾸기 전에 만든 백업은 복원할 수 없어요',
   'set.recover.noKey': '기기 키 파일이 없어 바꿀 수 없어요',
   'toast.recovered.any': '기기 키를 바꿨어요. 에이전트 권한은 다시 주세요',
   'keys.provider.note': '보관함에서 폐기해도 서비스에서는 예전 키가 그대로 통해요. 서비스에서도 폐기하세요',
@@ -620,6 +636,15 @@ export function t(key: CopyKey, vars?: CopyVars): string {
     const v = vars?.[name];
     return v === undefined ? whole : String(v);
   });
+}
+
+/** One line of a message built from several copy entries. */
+export interface CopyLine { key: CopyKey; vars?: CopyVars }
+
+/** Several sentences shown in one place (an error slot), as one text: a period between them and
+ *  none at the end (DESIGN.md §6.2). */
+export function tLines(lines: readonly CopyLine[]): string {
+  return lines.map((l) => t(l.key, l.vars)).join('. ');
 }
 
 export function hasCopy(key: string): key is CopyKey {

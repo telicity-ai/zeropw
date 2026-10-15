@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { t, type CopyKey } from '../copy';
+import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { NetInterface } from '../ipc/contract';
 import { DEFAULT_TEAM_PORT, interfaceLabel, MIN_GATEWAY_PORT, parseListen, parsePort } from '../lib/dash';
+import { restoreErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { useClearOnClose, useDash, useLoad, useSheets } from './context';
 import { Empty, SectionHead } from './parts';
-import { restartRelay } from './relay';
+import { listenErrorLines, relayLeftOff, restartRelay, turnOffListen, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
@@ -36,8 +37,10 @@ export function SettingsPage() {
   const [portErr, setPortErr] = useState<CopyKey | null>(null);
   const [ip, setIp] = useState('');
   const [tport, setTport] = useState('');
-  const [tErr, setTErr] = useState<CopyKey | null>(null);
+  const [tErr, setTErr] = useState<CopyLine[] | null>(null);
   const [busy, setBusy] = useState<'port' | 'listen' | 'backup' | null>(null);
+  // after the device key is replaced, earlier backups no longer restore: ask for a new one
+  const [needBackup, setNeedBackup] = useState(false);
   const portRef = useRef<HTMLInputElement>(null);
   const tportRef = useRef<HTMLInputElement>(null);
 
@@ -79,23 +82,31 @@ export function SettingsPage() {
     setBusy(null);
   };
 
+  // on: the relay is started with the new address, and an address it cannot open is taken back
+  // (./relay.ts); off: saved, then the relay restarts without it
   const setListen = async (on: boolean) => {
     if (!s) return;
-    let value: string | null = null;
+    let p: number | null = null;
     if (on) {
-      const p = parsePort(tport);
-      if (p === null || !ip) { setTErr('set.listen.port.err'); tportRef.current?.focus(); return; }
-      value = `${ip}:${p}`;
+      p = parsePort(tport);
+      if (p === null || !ip) { setTErr([{ key: 'set.listen.port.err' }]); tportRef.current?.focus(); return; }
     }
-    setBusy('listen');
+    setBusy('listen'); setTErr(null);
     try {
-      await call('settings_set', { gateway_port: s.gateway_port, team_listen: value });
+      if (on && p !== null) await turnOnListen(ip, p);
+      else await turnOffListen();
+      toast(t(on ? 'toast.listen.on' : 'toast.listen.off'));
     } catch (e) {
-      setTErr(toIpcError(e).reason === 'invalid_listen' ? 'set.listen.port.err' : 'error.generic');
-      setBusy(null);
-      return;
+      if (on) {
+        setTErr(listenErrorLines(e));
+        const down = relayLeftOff(e);
+        if (down) relay.report(down);
+        tportRef.current?.focus();
+      } else {
+        relay.report(e);
+      }
     }
-    await restart(on ? 'toast.listen.on' : 'toast.listen.off');
+    reload(); bump();
     setBusy(null);
   };
 
@@ -104,6 +115,7 @@ export function SettingsPage() {
     try {
       await call('backup_create');
       toast(t('toast.backup.done'));
+      setNeedBackup(false);
     } catch (e) {
       if (!CANCELLED.has(toIpcError(e).reason)) toast(t('error.generic'), 'warn');
     } finally { setBusy(null); }
@@ -135,7 +147,7 @@ export function SettingsPage() {
               <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={ifaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
                 onChange={(v) => { setIp(v); setTErr(null); }} style={{ flex: 1.7 }} />
               <TextField id="set-tport" label={t('conn.ssh.port')} mono value={tport} inputRef={tportRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 92px' }}
-                error={tErr ? t(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
+                error={tErr ? tLines(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
               <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'listen' || undefined} onClick={() => void setListen(true)}>
                 {t(listen ? 'set.listen.change' : 'inv.pre1.btn')}
               </button>
@@ -149,6 +161,7 @@ export function SettingsPage() {
       <SectionHead title={t('set.backup')} />
       <p className="page-help">{t('set.backup.help')}</p>
       <div className="glass pad">
+        {needBackup && <Callout className="flush">{t('set.recover.backupNow')}</Callout>}
         {control.restore_pending && (
           <Callout className="flush">
             {t('set.ack.pending')}{' '}
@@ -164,7 +177,7 @@ export function SettingsPage() {
 
       <ConfirmSheet key={sheets.key('restore')} id="sheet-restore" open={sheets.isOpen('restore')} title={t('set.restore')} lead={t('set.restore.sub')}
         confirmLabel={t('set.restore.confirm')} needPass warn={t('set.restore.warn')} onClose={sheets.close}
-        errorFor={(e) => (CANCELLED.has(toIpcError(e).reason) ? 'set.restore.cancelled' : null)}
+        errorFor={(e) => restoreErrorKey(toIpcError(e).reason)}
         run={async (pass) => {
           await call('backup_restore', { admin_passphrase: pass });
           toast(t('toast.restore.done'), 'warn'); sheets.close(); bump();
@@ -176,14 +189,17 @@ export function SettingsPage() {
           // restore-ack lifts only the restore hold; a global stop stays until it is resumed
           toast(t(out.stopped === true ? 'toast.ack.stopped' : 'toast.ack.done'), out.stopped === true ? 'warn' : 'info'); sheets.close(); bump();
         }} />
-      <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); bump(); }} />
+      <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); setNeedBackup(true); bump(); }} />
     </>
   );
 }
 
-/** The recovery code replaces the device key with a new one (`recover`): for a device key that
- *  may have leaked. It needs the current device key file, revokes every agent permission and
- *  rotates the handles, so the sheet says so before anything runs. The code goes to the core once. */
+/** The recovery code replaces the device key file (`recover`): a new key file wraps the same
+ *  data key again (rust/src/context.rs, rust/src/vault.rs `Vault::recover`), every agent
+ *  permission is revoked and the handles rotate, and a backup made before it no longer restores
+ *  (`backup_kms_mismatch`). It needs the current key file. It is not a response to a leaked key
+ *  file: whoever holds the old file and a copy of the vault still has the data key, so the sheet
+ *  says to replace every stored key and revoke it at its service. The code goes to the core once. */
 function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): void; onDone(): void }) {
   const { toast } = useApp();
   const [code, setCode] = useState('');
@@ -215,6 +231,7 @@ function RecoverSheet({ open, onClose, onDone }: { open: boolean; onClose(): voi
       <TextField id="recover-code" label={t('rec.own.field')} type="password" mono value={code} inputRef={ref} placeholder="ABCD-EFGH-…"
         error={err ? t(err) : null} onChange={(v) => { setCode(v); setErr(null); }} />
       <Callout>{t('set.recover.warn')}</Callout>
+      <Callout kind="info">{t('set.recover.leak')}</Callout>
     </Sheet>
   );
 }

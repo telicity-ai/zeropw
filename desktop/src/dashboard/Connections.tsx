@@ -68,7 +68,7 @@ function DisableSheet({ open, id, onClose, onDone }: { open: boolean; id: string
   const { toast } = useApp();
   return (
     <ConfirmSheet id="sheet-conn-disable" open={open} title={t('conns.disable.title')} lead={t('conns.disable.sub')}
-      confirmLabel={t('conns.disable.confirm')} chips={[id]} warn={t('conns.disable.warn')} onClose={onClose}
+      confirmLabel={t('conns.disable.confirm')} chips={[id]} warn={t('conns.disable.warn')} notes={[t('session.note')]} onClose={onClose}
       run={async () => { await call('connection_disable', { id }); toast(t('toast.conn.disabled')); onDone(); }} />
   );
 }

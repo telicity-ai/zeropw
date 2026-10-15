@@ -1,7 +1,8 @@
 // In-memory stand-in for the Tauri core, used only outside the desktop app (`npm run dev` in a
 // browser, and tests). Every value here is synthetic. It follows the contract and the real core
 // (desktop/core) and CLI (rust/) closely enough to review the onboarding and dashboard flows:
-// one-time references (32 hex digits, kinds, 10-minute and 60-second lifetimes), the core's
+// one-time references (32 hex digits, kinds, lifetimes of 60 seconds for a revealed key, 60
+// minutes for a previewed invite and 10 minutes for anything else), the core's
 // reason codes, the CLI's output shapes (versions and counts as JSON numbers, a grant's stored
 // status kept `active` after it expires or is used up), value-free errors and a small simulated
 // shell for the agent terminal. Where the contract's types still say otherwise, the mock follows
@@ -27,10 +28,17 @@ export interface MockSeed {
   activity?: boolean;
   /** The next n relay starts fail as when the port is taken (`serve_exited`), `vault_init` included. */
   relayFails?: number;
-  /** Lifetime of one-time values other than revealed keys (the core keeps them 10 minutes). */
+  /** Lifetime of one-time values other than revealed keys and previewed invites (the core keeps
+   *  them 10 minutes). */
   onetimeTtlMs?: number;
+  /** Lifetime of a previewed invite kept for `team_join` (the core keeps it 60 minutes). */
+  inviteTtlMs?: number;
   /** What `secure_view` answers: nothing (an older core), or whether the window is protected. */
   screenGuard?: 'void' | 'protected' | 'unprotected';
+  /** Other-device access saved before the app starts (`team_listen`). */
+  teamListen?: string | null;
+  /** The VPN is down: its interface is gone, and a team address on it cannot be opened. */
+  vpnDown?: boolean;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -72,6 +80,8 @@ const iso = (ms = Date.now()): string => new Date(ms).toISOString().replace(/\.\
 const HOUR = 3_600_000;
 const SECRET_TTL_MS = 60_000;
 const DEFAULT_TTL_MS = 10 * 60_000;
+/** A previewed invite stays long enough for a new device to make its vault before joining. */
+export const INVITE_TTL_MS = 60 * 60_000;
 
 /** Recovery codes compare in their canonical form (six groups, upper case, dashes). */
 function canonicalRecovery(v: string): string {
@@ -103,7 +113,13 @@ export function mockStrength(p: string): { score: number; reason: string | null 
 interface MockTerminal {
   id: string; out: MockChannel | null; user: string; line: string; password: string | null; cols: number; rows: number; closed: boolean;
   timers: Set<ReturnType<typeof setTimeout>>; principal: string; asUser: string | null; ring: string; suggestions: string[];
+  /** While a foreground `sleep` runs the shell reads no input: it waits here, up to the core's limit. */
+  busyUntil: number; unread: string[]; unreadBytes: number;
 }
+/** desktop/core/src/terminal.rs: bytes per `terminal_write`, and input a terminal holds unread. */
+const MAX_WRITE_BYTES = 64 * 1024;
+const MAX_QUEUED_INPUT = 256 * 1024;
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret'; text: string; preview?: InvitePreview; principal?: string; expires: number }
 interface MockVersion { version: number; status: 'staged' | 'active' | 'retired' | 'revoked'; created_at: string; value: string; public: { public_key: string; fingerprint: string; algorithm: string } | null }
@@ -154,6 +170,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const callLog: CommandName[] = [];
   let relayFails = seed.relayFails ?? 0;
   const ttl = seed.onetimeTtlMs ?? DEFAULT_TTL_MS;
+  const inviteTtl = seed.inviteTtlMs ?? INVITE_TTL_MS;
   let adminPass: string | null = null;
   let recoveryCode: string | null = null;
   let initialized = false;
@@ -170,10 +187,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const teams = new Map<string, MockTeamEnv>();
   const files = new Map<string, MockFile>();
   let deviceFp: string | null = null;
+  /** Which device key file is current (`recover` makes a new one), and which made the newest backup. */
+  let deviceKey = 0;
+  let lastBackupKey = 0;
   let secureView = false;
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
-  let settings: Settings = { gateway_port: 47380, team_listen: null };
+  let settings: Settings = { gateway_port: 47380, team_listen: seed.teamListen ?? null };
+  const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' } as const;
+  const LAN = { name: 'en0', ip: '192.168.0.12', kind: 'lan' } as const;
+  const interfaces = () => (seed.vpnDown ? [LAN] : [VPN, LAN]).map((i) => ({ ...i }));
   let activity: ReturnType<typeof setInterval> | null = null;
 
   const wait = (ms: number) => new Promise<void>((r) => { if (latency > 0) setTimeout(r, ms * latency); else r(); });
@@ -186,13 +209,21 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const startServe = () => {
     // a relay that cannot bind its port exits at once (desktop/core/src/serve.rs `serve_exited`)
     if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'serve_exited'); }
+    // the sidecar opens other-device access before the gateway, so an address this machine does
+    // not have stops the whole relay; the core passes the sidecar's reason on (rust/src/admin_cli.rs
+    // `run_serve`, rust/src/team/transport.rs)
+    const team = parseListen(settings.team_listen);
+    if (settings.team_listen !== null && (!team || !interfaces().some((i) => i.ip === team.ip))) {
+      throw fail('InvalidInput', 'team_invalid_listen_address');
+    }
     serve = { running: true, url: `http://127.0.0.1:${settings.gateway_port}`, pid: 40000 + (randBytes(1)[0] ?? 0), team_listen: settings.team_listen };
     emit('serve://status', serve);
   };
   // ---- one-time store: kinds, lifetimes and the core's reason codes
   const putOnce = (item: Omit<OneTime, 'expires'>): string => {
     const ref = newRef();
-    onetime.set(ref, { ...item, expires: Date.now() + (item.kind === 'secret' ? SECRET_TTL_MS : ttl) });
+    const life = item.kind === 'secret' ? SECRET_TTL_MS : item.kind === 'invite' ? inviteTtl : ttl;
+    onetime.set(ref, { ...item, expires: Date.now() + life });
     return ref;
   };
   const prune = () => { const now = Date.now(); for (const [k, v] of onetime) if (v.expires <= now) onetime.delete(k); };
@@ -204,8 +235,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!item || !kinds.includes(item.kind)) throw fail('NotFound', 'onetime_ref_unknown');
     return item;
   };
-  /** Kinds `onetime_show`/`onetime_copy` hand to the webview: all but a pasted invite. */
-  const SHOWABLE: readonly OneTime['kind'][] = ['recovery', 'token', 'link', 'secret'];
+  /** Kinds `onetime_show`/`onetime_copy` hand to the webview (desktop/core/src/onetime.rs
+   *  `showable`): not a pasted invite, which only `team_join` reads, and not a recovery code,
+   *  whose groups `recovery_generate` returned once and which only `vault_init` reads again. */
+  const SHOWABLE: readonly OneTime['kind'][] = ['token', 'link', 'secret'];
   const grantLive = (g: MockGrant) => grantState(grantOut(g), Date.now()) === 'live';
   const record = (rec: AuditRecord) => { audit.push(rec); if (audit.length > 500) audit.shift(); emit('audit://records', { records: [rec] }); };
   const setControl = (c: Control) => { control = c; emit('control://changed', control); };
@@ -318,7 +351,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const id = 'term_' + randFrom(10, HEX);
     const list = `${BUNDLE}/zeropw-agent list-connections`;
     const suggestions = asUser ? [`sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u ${asUser} -i`, list] : [list];
-    const term: MockTerminal = { id, out: null, user: 'me', line: '', password: null, cols: 80, rows: 24, closed: false, timers: new Set(), principal, asUser, ring: '', suggestions };
+    const term: MockTerminal = {
+      id, out: null, user: 'me', line: '', password: null, cols: 80, rows: 24, closed: false, timers: new Set(), principal, asUser, ring: '', suggestions,
+      busyUntil: 0, unread: [], unreadBytes: 0,
+    };
     terminals.set(id, term);
     return term;
   }
@@ -345,6 +381,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!c) { termSend(term, prompt(term.user)); return; }
     const sudo = /^sudo\b.*\s-u\s+([A-Za-z0-9._-]+)\s+-i$/.exec(c);
     if (sudo) { term.password = sudo[1] ?? 'agent'; termSend(term, 'Password:', 200); return; }
+    // a foreground program that reads no input for a while (a build, an agent busy on a request)
+    const sleep = /^sleep\s+(\d{1,4})$/.exec(c);
+    if (sleep) {
+      term.busyUntil = Date.now() + Number(sleep[1]) * 1000;
+      if (latency > 0) {
+        const id = setTimeout(() => { term.timers.delete(id); readUnread(term); }, term.busyUntil - Date.now());
+        term.timers.add(id);
+      }
+      return;
+    }
     if (/(^|\/)zeropw-agent\s+list-connections$/.test(c)) {
       const visible = [...new Set(grants.filter((g) => g.principal === term.principal && grantLive(g)).map((g) => g.connection))];
       termSend(term, JSON.stringify({ connections: visible.map((id) => ({ id })) }) + '\r\n', 260);
@@ -358,15 +404,38 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const word = c.split(/\s+/)[0] ?? c;
     termSend(term, `zsh: command not found: ${word}\r\n` + prompt(term.user));
   }
+  /** The sleep is over: the shell prompts again and reads what waited, in order. */
+  function readUnread(term: MockTerminal) {
+    if (!term.busyUntil || Date.now() < term.busyUntil || term.closed) return;
+    term.busyUntil = 0;
+    termSend(term, prompt(term.user));
+    const waiting = term.unread;
+    term.unread = []; term.unreadBytes = 0;
+    for (const d of waiting) termWrite(term, d);
+  }
+  /** Input for a shell that is not reading waits, up to the core's limit (`terminal_busy`). */
+  function queueUnread(term: MockTerminal, data: string) {
+    const n = utf8Bytes(data);
+    if (term.unreadBytes + n > MAX_QUEUED_INPUT) throw fail('Unavailable', 'terminal_busy');
+    term.unread.push(data); term.unreadBytes += n;
+  }
   function termWrite(term: MockTerminal, data: string) {
     if (term.closed) return;
+    if (term.busyUntil) { queueUnread(term, data); return; }
     if (data.startsWith('\x1b')) return;                    // arrows and other escapes: ignored by this toy shell
-    for (const ch of data) {
-      if (ch === '\r' || ch === '\n') { const l = term.line; term.line = ''; runLine(term, l); }
-      else if (ch === '\x7f' || ch === '\b') { if (term.line) { term.line = term.line.slice(0, -1); if (term.password === null) termSend(term, '\b \b'); } }
-      else if (ch === '\x03') { term.line = ''; term.password = null; termSend(term, '^C\r\n' + prompt(term.user)); }
-      else if (ch >= ' ') { term.line += ch; if (term.password === null) termSend(term, ch); }
+    const chars = [...data];
+    let echo = '';                                          // typed text is echoed in one piece
+    const flush = () => { if (echo) { termSend(term, echo); echo = ''; } };
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i] as string;
+      // a command that stops reading leaves the rest of this input unread
+      if (term.busyUntil) { flush(); queueUnread(term, chars.slice(i).join('')); return; }
+      if (ch === '\r' || ch === '\n') { flush(); const l = term.line; term.line = ''; runLine(term, l); }
+      else if (ch === '\x7f' || ch === '\b') { if (term.line) { term.line = term.line.slice(0, -1); if (term.password === null) echo += '\b \b'; } }
+      else if (ch === '\x03') { flush(); term.line = ''; term.password = null; termSend(term, '^C\r\n' + prompt(term.user)); }
+      else if (ch >= ' ') { term.line += ch; if (term.password === null) echo += ch; }
     }
+    flush();
   }
   const channelOf = (on_data: unknown): MockChannel => {
     const out = on_data as MockChannel | undefined;
@@ -670,7 +739,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     terminal_write: ({ terminal_id, data }) => {
       const term = terminals.get(terminal_id);
       if (!term) throw fail('NotFound', 'terminal_not_found');
-      if (typeof data !== 'string' || data.length > 65536) throw fail('InvalidInput', 'data_invalid');
+      if (typeof data !== 'string') throw fail('InvalidInput', 'invalid_argument', 'data');
+      if (utf8Bytes(data) > MAX_WRITE_BYTES) throw fail('InvalidInput', 'terminal_write_too_large');
+      readUnread(term);
       termWrite(term, data);
     },
     terminal_resize: ({ terminal_id, cols, rows }) => {
@@ -760,15 +831,19 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return { ...x };
     },
 
-    // ---- backup and recovery (the native file dialogs are the core's; the mock skips them)
+    // ---- backup and recovery (the native file dialogs are the core's; the mock skips them and
+    // restores the newest backup, or one made with the first device key when none was made here)
     backup_create: async () => {
       needInit(); await wait(500);
+      lastBackupKey = deviceKey;
       record({ ts: iso(), event: 'backup' });
       return { path: '~/Desktop/zeropw-backup.zpwb', created_at: iso() };
     },
     backup_restore: async ({ admin_passphrase }) => {
       needInit(); await wait(700);
       checkAdmin(admin_passphrase);
+      // the archive's data key is wrapped under the device key that made it (rust/src/vault.rs)
+      if (lastBackupKey !== deviceKey) throw fail('StateError', 'backup_kms_mismatch');
       setControl({ ...control, restore_pending: true });
       record({ ts: iso(), event: 'restore' });
       return { restored: true, restore_pending: true };
@@ -785,11 +860,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         note: control.stopped ? 'restore_pending cleared; the global stop is still set (run resume to lift it)' : 'restore_pending cleared; execution is open under the restored grants',
       };
     },
-    // `recover` replaces the device key, revokes every grant and rotates handles (rust/src/context.rs)
+    // `recover` makes a new device key file that wraps the same data key, revokes every grant and
+    // rotates handles (rust/src/context.rs); earlier backups no longer restore
     recover: async ({ recovery_passphrase }) => {
       needInit(); await wait(700);
       if (typeof recovery_passphrase !== 'string' || !recovery_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!recoveryCode || canonicalRecovery(recovery_passphrase) !== recoveryCode) throw fail('AuthFailed', 'bad_recovery_passphrase');
+      deviceKey += 1;
       let revoked = 0;
       for (const g of grants) if (g.status === 'active') { g.status = 'revoked'; revoked += 1; }
       record({ ts: iso(), event: 'recover' });
@@ -858,7 +935,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     // desktop/core/src/commands.rs `team_invite_preview`: empty or overlong text is refused by the
     // core, anything that is not an invite by the CLI (`invite_malformed`); the text stays in the
-    // core for 10 minutes for `team_join`
+    // core for 60 minutes for `team_join`
     team_invite_preview: async ({ text }) => {
       const v = typeof text === 'string' ? text.trim() : '';
       if (!v) throw fail('InvalidInput', 'invite_missing');
@@ -923,7 +1000,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       settings = { gateway_port: next.gateway_port, team_listen: next.team_listen };
       return { ...settings };
     },
-    net_interfaces: () => [{ name: 'utun4', ip: '100.64.1.7', kind: 'vpn' }, { name: 'en0', ip: '192.168.0.12', kind: 'lan' }],
+    net_interfaces: () => interfaces(),
   };
 
   return {

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { COPY, t, tLines } from '../src/copy';
+import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListen } from '../src/dashboard/relay';
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
-import { createMockBackend, type MockBackend } from '../src/ipc/mock';
+import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
 import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
-import { relayError } from '../src/lib/reasons';
+import { isTeamListenReason, listenFailureLines, relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
 // rules the pages rely on: values never come back except through one-time references, the admin
@@ -429,6 +431,105 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     const out = await call('recover', { recovery_passphrase: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX' });
     expect(out).toMatchObject({ grants_revoked: 3, handles_invalidated: true });
     expect((await call('grant_list', {})).grants.every((g) => g.status === 'revoked')).toBe(true);
+  });
+
+  it('refuses a backup made before the device key was replaced, and names why', async () => {
+    ready();
+    await call('backup_create');
+    await call('recover', { recovery_passphrase: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX' });
+    const e = await rejection(call('backup_restore', { admin_passphrase: PASS }));
+    expect([e.error, e.reason]).toEqual(['StateError', 'backup_kms_mismatch']);
+    expect(restoreErrorKey(e.reason)).toBe('set.restore.mismatch');
+    expect((await call('control_get')).restore_pending).toBe(false);   // nothing was restored
+    // a backup made afterwards, as the settings page asks for, restores
+    await call('backup_create');
+    expect(await call('backup_restore', { admin_passphrase: PASS })).toMatchObject({ restored: true });
+    expect(restoreErrorKey('file_dialog_cancelled')).toBe('set.restore.cancelled');
+    expect(restoreErrorKey('backup_digest_mismatch')).toBeNull();
+  });
+});
+
+describe('other-device access and the relay', () => {
+  function seeded(seed: MockSeed): MockBackend {
+    backend?.dispose();
+    backend = createMockBackend({ latency: 0, initialized: true, ...seed });
+    useMockBackend(backend);
+    return backend;
+  }
+
+  it('starts the relay with a new team address and keeps it when it opens', async () => {
+    seeded({});
+    const s = await turnOnListen('192.168.0.12', 47420);
+    expect(s).toMatchObject({ running: true, team_listen: '192.168.0.12:47420' });
+    expect((await call('settings_get')).team_listen).toBe('192.168.0.12:47420');
+  });
+
+  it('puts the previous setting back and restarts the relay when the new address cannot be opened', async () => {
+    seeded({ teamListen: '192.168.0.12:47420' });
+    expect((await call('serve_status')).running).toBe(true);
+    const e = await turnOnListen('100.64.1.9', 47420).then(() => null, (x: unknown) => x);   // not an address of this machine
+    expect(e).toBeInstanceOf(ListenError);
+    if (!(e instanceof ListenError)) throw new Error('expected a ListenError');
+    expect(e).toMatchObject({ address: '100.64.1.9:47420', reason: 'team_invalid_listen_address', restored: true, relayBack: true });
+    expect(relayLeftOff(e)).toBeNull();
+    expect((await call('settings_get')).team_listen).toBe('192.168.0.12:47420');
+    expect(await call('serve_status')).toMatchObject({ running: true, team_listen: '192.168.0.12:47420' });
+    // the message names the team address and never the gateway port
+    const text = tLines(listenErrorLines(e));
+    expect(text).toContain('100.64.1.9:47420');
+    expect(text).toContain(COPY['listen.err.restored']);
+    expect(text).not.toContain('47380');
+    expect(text).not.toContain(COPY['relay.err.exited']);
+  });
+
+  it('turns access on from off without leaving the address saved when the relay cannot use it', async () => {
+    seeded({ vpnDown: true });
+    const e = await turnOnListen('100.64.1.7', 47420).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ListenError);
+    expect((await call('settings_get')).team_listen).toBeNull();
+    expect((await call('serve_status')).running).toBe(true);
+  });
+
+  it('says the relay is still off, and why, when it does not start with the previous setting either', async () => {
+    seeded({ relayFails: 3 });                                   // the gateway port is taken: the seeded start and both below fail
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await turnOnListen('100.64.1.7', 47420).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ListenError);
+    if (!(e instanceof ListenError)) throw new Error('expected a ListenError');
+    expect(e).toMatchObject({ reason: 'serve_exited', restored: true, relayBack: false });
+    expect((await call('settings_get')).team_listen).toBeNull();
+    // not blamed on the address (the relay is off without it too); the relay's own reason is reported
+    expect(listenErrorLines(e).map((l) => l.key)).toEqual(['listen.err.start', 'listen.err.relayOff']);
+    expect(relayError(toIpcError(relayLeftOff(e)).reason).key).toBe('relay.err.exited');
+    // the other outcomes
+    expect(listenFailureLines({ ...e, reason: 'team_address_in_use' }).map((l) => l.key)).toEqual(['listen.err.open', 'listen.err.relayOff']);
+    expect(listenFailureLines({ ...e, restored: false }).map((l) => l.key)).toEqual(['listen.err.start', 'listen.err.kept']);
+    expect(listenFailureLines({ ...e, reason: 'admin_binary_missing' })[0]?.key).toBe('relay.err.missing');
+  });
+
+  it('names other-device access when a saved team address keeps the relay off at launch, and starts it with access off', async () => {
+    seeded({ teamListen: '100.64.1.7:47420', vpnDown: true });   // the core's start at launch failed
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await rejection(call('serve_start'));
+    expect(e.reason).toBe('team_invalid_listen_address');
+    expect(isTeamListenReason(e.reason)).toBe(true);
+    expect(relayError(e.reason).key).toBe('relay.err.team');
+    expect(COPY['relay.err.team']).toContain('다른 기기 접속');
+    expect(t('relay.team.hint', { address: '100.64.1.7:47420' })).toContain('100.64.1.7:47420');
+    const s = await turnOffListen();
+    expect(s.running).toBe(true);
+    expect((await call('settings_get')).team_listen).toBeNull();
+    // serve_exited stays the generic code for a sidecar that exited without saying why
+    expect(relayError('serve_exited').key).toBe('relay.err.exited');
+  });
+
+  it('refuses a malformed address before changing anything', async () => {
+    seeded({});
+    const e = await rejection(turnOnListen('0.0.0.0', 47420));
+    expect(e.reason).toBe('invalid_listen');
+    expect(listenErrorLines(e).map((l) => l.key)).toEqual(['set.listen.port.err']);
+    expect((await call('settings_get')).team_listen).toBeNull();
+    expect((await call('serve_status')).running).toBe(true);
   });
 });
 

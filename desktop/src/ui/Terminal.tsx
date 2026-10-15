@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { t } from '../copy';
-import { call, outputChannel, toIpcError } from '../ipc/client';
+import { call, outputChannel } from '../ipc/client';
 import { useApp } from './context';
+import { TerminalInput } from './terminalInput';
 
 const THEME = {
   background: '#05050a', foreground: '#bfbfcc', cursor: '#8fb0ff', cursorAccent: '#05050a',
@@ -15,6 +16,8 @@ const THEME = {
 // strip CSI/OSC sequences before looking for the list-connections answer
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]/g;
 const VERIFIED = /"connections"\s*:/;
+/** How long the "input was dropped" notice stays after input goes through again. */
+const DROPPED_NOTE_MS = 6000;
 
 /** Open a new shell for a caller token, or reattach to one that is still running. */
 export type TerminalSource =
@@ -30,7 +33,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   domId: string; name: string; source: TerminalSource;
   onOpened?(terminalId: string): void; onVerified?(): void; onFailed?(): void; onClosed?(): void;
 }) {
-  const { motionOn, toast } = useApp();
+  const { motionOn, toast, announce } = useApp();
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const idRef = useRef<string | null>(null);
@@ -39,19 +42,33 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   const [pending, setPending] = useState<number | null>(null);
   const [altOpen, setAltOpen] = useState(false);
   const [closed, setClosed] = useState(false);
+  const [dropped, setDropped] = useState(false);
   const [tokenGone, setTokenGone] = useState(false);
   const verified = useRef(false);
   const cb = useRef({ onOpened, onVerified, onFailed, onClosed });
   cb.current = { onOpened, onVerified, onFailed, onClosed };
   const tokenRef = source.kind === 'open' ? source.tokenRef : null;
+  const input = useRef<TerminalInput | null>(null);
+  const droppedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droppedShown = useRef(false);
 
-  const write = (data: string) => {
-    const id = idRef.current;
-    if (!id) return;
-    call('terminal_write', { terminal_id: id, data }).catch((e) => {
-      if (toIpcError(e).reason === 'terminal_not_found') { setClosed(true); cb.current.onClosed?.(); }
-    });
-  };
+  // input goes out in order; input the program did not read is dropped and said so (./terminalInput.ts)
+  const write = (data: string) => { input.current?.write(data); };
+  const inputFor = (terminalId: string) => new TerminalInput((data) => call('terminal_write', { terminal_id: terminalId, data }), {
+    busy: () => {
+      if (droppedTimer.current) clearTimeout(droppedTimer.current);
+      droppedTimer.current = null;
+      if (!droppedShown.current) announce(t('term.busy'));
+      droppedShown.current = true;
+      setDropped(true);
+    },
+    // keep the notice a moment after input flows again, so it is not missed
+    accepted: () => {
+      if (droppedTimer.current) clearTimeout(droppedTimer.current);
+      droppedTimer.current = setTimeout(() => { droppedShown.current = false; setDropped(false); }, DROPPED_NOTE_MS);
+    },
+    gone: () => { setClosed(true); cb.current.onClosed?.(); },
+  });
 
   useEffect(() => {
     const el = host.current;
@@ -103,6 +120,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       (r) => {
         if (disposed) return;   // detached before the core answered; the shell keeps running
         idRef.current = r.terminal_id;
+        input.current = inputFor(r.terminal_id);
         list = r.suggestions.slice(0, 4);
         setSuggestions(list);
         call('terminal_resize', { terminal_id: r.terminal_id, cols: term.cols, rows: term.rows }).catch(() => undefined);
@@ -119,6 +137,8 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       if (quiet) clearTimeout(quiet);
       ro?.disconnect(); sub.dispose(); subR.dispose();
       idRef.current = null;
+      input.current?.dispose(); input.current = null;
+      if (droppedTimer.current) clearTimeout(droppedTimer.current);
       term.dispose();
       termRef.current = null;
     };
@@ -159,6 +179,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       <div className="term-cmt"># {t('term.comment')}</div>
       <div className="term-body" ref={host} role="group" aria-label={t('term.aria')} />
       {closed && <div className="term-note" role="status">{t('term.closed')}</div>}
+      {!closed && dropped && <div className="term-note warn">{t('term.busy')}</div>}
       {suggestions.length > 0 && (
         <div className="term-suggest" role="group" aria-labelledby={`${domId}-suggest`}>
           <span className="lbl" id={`${domId}-suggest`}>{t('term.suggest')}</span>

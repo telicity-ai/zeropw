@@ -1,9 +1,10 @@
 import { useEffect, useState, type Ref } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call } from '../ipc/client';
-import type { InvitePreview, NetInterface, Settings } from '../ipc/contract';
+import type { InvitePreview, NetInterface } from '../ipc/contract';
 import { ListenSetup } from '../dashboard/ListenSetup';
 import { parseListen } from '../lib/dash';
+import { hostPort } from '../lib/format';
 import { ri, useApp } from '../ui/context';
 
 export type JoinOutcome = 'idle' | 'pending' | 'ok' | 'failed';
@@ -20,14 +21,14 @@ export function Finale(props: {
   onDashboard(): void; onInvite(): void;
 }) {
   const { visible, titleRef, project, agent, join, joinOutcome, joinError, onDashboard, onInvite } = props;
-  const { toast } = useApp();
+  const { toast, setPill } = useApp();
   // after joining: team sync runs only with other-device access on, so offer it right here
-  const [listen, setListen] = useState<{ settings: Settings; interfaces: NetInterface[] } | null>(null);
+  const [listen, setListen] = useState<{ interfaces: NetInterface[] } | null>(null);
   useEffect(() => {
     if (joinOutcome !== 'ok') return;
     let live = true;
     Promise.all([call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]).then(
-      ([s, i]) => { if (live && !parseListen(s.team_listen)) setListen({ settings: s, interfaces: i }); },
+      ([s, i]) => { if (live && !parseListen(s.team_listen)) setListen({ interfaces: i }); },
       () => undefined,
     );
     return () => { live = false; };
@@ -67,8 +68,9 @@ export function Finale(props: {
       </div>
       {join && joinOutcome === 'failed' && joinError && <div className="foot warn r" style={ri(2)} role="status">{t(joinError)}</div>}
       {join && listen && (
-        <ListenSetup id="done-listen" className="finale-listen" note={false} settings={listen.settings} interfaces={listen.interfaces}
-          onDone={() => { setListen(null); toast(t('toast.listen.on')); }} />
+        <ListenSetup id="done-listen" className="finale-listen" note={false} interfaces={listen.interfaces}
+          onDone={(_, s) => { setListen(null); setPill({ kind: 'live', addr: hostPort(s.url) }); toast(t('toast.listen.on')); }}
+          onFailed={(down) => { if (down) setPill({ kind: 'off' }); }} />
       )}
       <div className="actions r" style={ri(3)}>
         <button className="btn btn-primary" type="button" onClick={onDashboard}><span>{t('done.dash')}</span> <span className="arrow" aria-hidden="true">→</span></button>

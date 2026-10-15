@@ -42,7 +42,9 @@ describe('copy table', () => {
     const entries = [...block.matchAll(/^\s*'([^']+)':\s*'((?:[^'\\]|\\.)*)',?$/gm)].map((m) => [m[1] ?? '', m[2] ?? ''] as const);
     expect(entries.length).toBeGreaterThan(200);
     const dropped = new Set(['toast.dash', 'toast.file.mock', 'term.pw.mock']);
-    const changed = new Set(['join.local', 'toast.paste.mock']);
+    // changed after review: the core keeps a previewed invite 60 minutes (toast.join.later), and
+    // replacing the device key is not a response to a leaked key file (rec.sub)
+    const changed = new Set(['join.local', 'toast.paste.mock', 'toast.join.later', 'rec.sub']);
     for (const [k, v] of entries) {
       if (dropped.has(k)) { expect(hasCopy(k)).toBe(false); continue; }
       expect(hasCopy(k), k).toBe(true);
@@ -62,6 +64,7 @@ describe('copy table', () => {
       'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
       'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
       'relay.err.other': ['reason'], 'toast.recovered': ['n'], 'appr.body.size': ['n'], 'rec.verify.err': ['n'], 'rec.verify.need': ['n'],
+      'term.end.note.other': ['user'], 'relay.team.hint': ['address'], 'listen.err.open': ['address'], 'listen.err.start': ['address'],
     };
     for (const [k, vars] of Object.entries(need)) {
       expect(hasCopy(k), k).toBe(true);
@@ -76,15 +79,54 @@ describe('copy table', () => {
     expect(all).not.toMatch(/기기 키를 잃었을 때/);             // "기기 키를 잃었을 때"
     expect(COPY['rec.warn']).toMatch(/열 수 없어요/);                         // losing the key file: the vault cannot be opened
     expect(COPY['set.recover.warn']).toMatch(/회수/);                                     // the recover sheet says it revokes permissions
+    // `recover` wraps the same data key under a new key file: it is never offered for a leaked
+    // key file, the sheet says what a leak needs instead, and that earlier backups stop restoring
+    for (const k of ['rec.sub', 'set.recover', 'set.recover.sub', 'set.recover.confirm', 'toast.recovered', 'toast.recovered.any'] as const) {
+      expect(COPY[k], k).not.toMatch(/새었|유출/);
+    }
+    expect(COPY['set.recover.sub']).toContain('같은 데이터 키');
+    expect(COPY['set.recover.leak']).toMatch(/새었을 수 있다면/);
+    expect(COPY['set.recover.leak']).toMatch(/서비스에서 예전 키를 폐기/);
+    expect(COPY['set.recover.warn']).toContain('백업');
+    expect(COPY['set.backup.help']).toContain('바꾼 기기 키');
+    // ending a terminal cannot stop a program run as another account or detached from it; only
+    // disabling the agent stops its token (docs/desktop-app.md §4.4)
+    expect(COPY['term.end.sub']).not.toContain('에이전트');
+    for (const k of ['term.end.note', 'term.end.note.other'] as const) {
+      expect(COPY[k], k).toMatch(/setsid, tmux, screen/);
+      expect(COPY[k], k).toContain('에이전트 끄기');
+      expect(COPY[k], k).toContain('남을 수 있어요');
+    }
+    expect(COPY['term.end.note.other']).toContain('{user} 계정');
+    expect(COPY['agents.disable.title']).toBe('에이전트 끄기');
     // a joined device syncs only with other-device access on
     for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
     // stop and revocation block new requests only; open SSH sessions are named as a limit
-    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub'] as const) expect(COPY[k]).toContain('새 ');
+    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub', 'agents.disable.sub', 'conns.disable.sub'] as const) {
+      expect(COPY[k], k).toContain('새 ');
+    }
     expect(COPY['session.note']).toContain('SSH');
     // a key revoked or replaced in the vault still works at the service
     for (const k of ['inc.close.note', 'team.remove.warn', 'toast.team.removed', 'toast.key.revoked', 'toast.key.replaced', 'keys.provider.note'] as const) {
       expect(COPY[k], k).toContain('서비스');
     }
+  });
+
+  it('shows the open-session note on every sheet that blocks access (DESIGN.md §5.3)', () => {
+    // stop-all, grant revoke, agent disable, connection disable, key revoke, incident declare
+    const blocking = ['sheet-stop', 'sheet-grant-revoke', 'sheet-agent-disable', 'sheet-conn-disable', 'sheet-key-confirm', 'sheet-inc-declare'];
+    for (const id of blocking) {
+      const file = appFiles.find(([, text]) => text.includes(`id="${id}"`));
+      expect(file, id).toBeDefined();
+      const text = file?.[1] ?? '';
+      const from = text.indexOf(`id="${id}"`);
+      const next = text.indexOf('id="sheet-', from + 1);
+      expect(text.slice(from, next < 0 ? undefined : next), id).toContain(`t('session.note')`);
+    }
+    // the terminal end sheet names what it cannot stop, for both kinds of terminal
+    const agents = appFiles.find(([, text]) => text.includes('id="sheet-term-end"'))?.[1] ?? '';
+    const end = agents.slice(agents.indexOf('id="sheet-term-end"'), agents.indexOf('id="sheet-approve"'));
+    for (const k of ["t('term.end.note')", "t('term.end.note.other'", "t('agents.disable.title')"]) expect(end, k).toContain(k);
   });
 
   it('fills placeholders and leaves unknown ones visible', () => {

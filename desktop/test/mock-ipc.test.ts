@@ -115,6 +115,17 @@ describe('mock onboarding flow', () => {
     expect((await call('app_status')).initialized).toBe(true);
   });
 
+  it('never hands a recovery code out again through onetime_show or onetime_copy', async () => {
+    // desktop/core/src/onetime.rs `recovery_codes_are_never_shown_again`
+    const b = fresh();
+    const rec = await call('recovery_generate');
+    expect((await rejection(call('onetime_show', { ref: rec.ref }))).reason).toBe('onetime_ref_unknown');
+    expect((await rejection(call('onetime_copy', { ref: rec.ref }))).reason).toBe('onetime_ref_unknown');
+    expect(b.inspect().onetime).toBe(1);                       // the refusals leave the code for `vault_init`
+    await call('vault_init', { admin_passphrase: ADMIN, recovery: { ref: rec.ref } });
+    expect((await call('app_status')).initialized).toBe(true);
+  });
+
   it('discards one-time references', async () => {
     const b = fresh();
     const rec = await call('recovery_generate');
