@@ -1,24 +1,143 @@
 {
-  "about": "Reviewed notices for locked desktop dependencies (desktop/Cargo.lock, macOS and Linux) that publish no notice file of their own; read by scripts/dependency-licenses.py --supplement. Keys are exact versions, so an update fails the notice collection until it is reviewed again. license repeats the declared license. notices_from uses the root notice files of the one locked package from the same source repository; standard_text uses <id>.txt in this directory for one license the package is offered under, with the copyright holders from the package metadata. MPL-2.0.txt is the text published with cssparser 0.37.0 (Servo).",
+  "about": "Reviewed notices for the desktop app's third-party code. Keys are exact versions, so an update fails the notice collection until the entry is reviewed again. packages: locked crates (desktop/Cargo.lock, macOS and Linux) that publish no notice file of their own, read by scripts/dependency-licenses.py --supplement. license repeats the declared license; source says where the notice was checked against upstream, normally the repository's license files at the commit the version was published from (.cargo_vcs_info.json). notices_from uses the root notice files of one exact locked package from the same repository. standard_text uses <id>.txt in this directory for one license the package is offered under, preceded by the upstream copyright lines in copyright; MIT, BSD, ISC and Zlib texts cannot be used without them. MPL-2.0.txt is the text published with cssparser 0.37.0 (Servo). npm: packages of desktop/package-lock.json read by desktop/scripts/third-party-licenses.py. Every OFL font needs an entry, which lists the notice files that carry its copyright and Reserved Font Name statements and adds a reviewed upstream notice where the package's own is incomplete. bundler_runtime names a development-only package whose own code the production build emits into dist, as found in a source-mapped build; its notices are added and the build tool's version is pinned. excerpt keeps only the leading section of a notice file whose remainder covers code that is not emitted.",
   "packages": {
-    "alloc-stdlib 0.3.0": { "license": "BSD-3-Clause", "notices_from": "alloc-no-stdlib" },
-    "block2 0.6.2": { "license": "MIT", "standard_text": "MIT" },
-    "defmt-parser 1.0.0": { "license": "MIT OR Apache-2.0", "notices_from": "defmt" },
-    "dispatch2 0.3.1": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "dlopen2 0.8.2": { "license": "MIT", "standard_text": "MIT" },
-    "dlopen2_derive 0.4.3": { "license": "MIT", "standard_text": "MIT" },
-    "libappindicator-sys 0.9.0": { "license": "Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2 0.6.5": { "license": "MIT", "standard_text": "MIT" },
-    "objc2-app-kit 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-core-foundation 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-core-graphics 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-encode 4.1.0": { "license": "MIT", "standard_text": "MIT" },
-    "objc2-exception-helper 0.1.1": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-foundation 0.3.2": { "license": "MIT", "standard_text": "MIT" },
-    "objc2-io-surface 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-quartz-core 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "objc2-web-kit 0.3.2": { "license": "Zlib OR Apache-2.0 OR MIT", "standard_text": "MIT" },
-    "selectors 0.38.0": { "license": "MPL-2.0", "standard_text": "MPL-2.0" },
-    "tauri-plugin 2.7.2": { "license": "Apache-2.0 OR MIT", "notices_from": "tauri" }
+    "alloc-stdlib 0.3.0": {
+      "license": "BSD-3-Clause",
+      "notices_from": "alloc-no-stdlib 3.0.0",
+      "source": "the root LICENSE of alloc-no-stdlib 3.0.0 is byte-identical to LICENSE at dropbox/rust-alloc-no-stdlib 0a81fd6928ea3b33c8cd484aa4575d50ffb98012, the commit alloc-stdlib 0.3.0 was published from (Copyright (c) 2016 Dropbox, Inc.)."
+    },
+    "block2 0.6.2": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) Steven Sheldon", "Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 b4167b582b2f75f9a1be75495c41b765344fd03c (published commit) names no holder and keeps block2 MIT-only pending Steven Sheldon's consent (madsmtm/objc2#23). block2 was forked from Steven Sheldon's block (CHANGELOG); his line is the one in LICENSE.txt of SSheldon/rust-objc. Mads Marquart: LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "defmt-parser 1.0.0": {
+      "license": "MIT OR Apache-2.0",
+      "notices_from": "defmt 1.1.1",
+      "source": "the root LICENSE-MIT and LICENSE-APACHE of defmt 1.1.1 are byte-identical to those at knurling-rs/defmt 4a8cdb44891ed57b8ff5a023b6bec7137c48708f, the commit defmt-parser 1.0.0 was published from (Copyright (c) Ferrous Systems)."
+    },
+    "dispatch2 0.3.1": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 8852b424193ca41602281b3d7540d7c8ed51e49a (published commit) and the license files of the original marysaka/dispatch2 name no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "dlopen2 0.8.2": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) 2017 Szymon Wieloch", "Copyright (C) 2019 Ahmed Masud <ahmed.masud@saf.ai>", "Copyright (C) 2022 OpenByte <development.openbyte@gmail.com>"],
+      "source": "LICENSE at OpenByteDev/dlopen2 cc80e4a0a90d499b677fdf7743699b4b3a43a989 (published commit); its permission text is the standard MIT text."
+    },
+    "dlopen2_derive 0.4.3": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) 2017 Szymon Wieloch", "Copyright (C) 2019 Ahmed Masud <ahmed.masud@saf.ai>", "Copyright (C) 2022 OpenByte <development.openbyte@gmail.com>"],
+      "source": "LICENSE at OpenByteDev/dlopen2 cc80e4a0a90d499b677fdf7743699b4b3a43a989 (published commit); its permission text is the standard MIT text."
+    },
+    "libappindicator-sys 0.9.0": {
+      "license": "Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) 2017-2021 qDot", "Copyright (c) 2021 Tauri Apps Contributors"],
+      "source": "LICENSE-MIT at tauri-apps/libappindicator-rs eafd1e3682a1247f595410266091e9684021cb6f (published commit); its permission text is the standard MIT text."
+    },
+    "objc2 0.6.5": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) Steven Sheldon", "Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 d7d2fa23ceaa5e6096c923b081040e5d81b3b9df (published commit) names no holder and keeps objc2 MIT-only pending Steven Sheldon's consent (madsmtm/objc2#23). objc2 was forked from Steven Sheldon's objc (CHANGELOG); his line is LICENSE.txt of SSheldon/rust-objc. Mads Marquart: LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-app-kit 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-core-foundation 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-core-graphics 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-encode 4.1.0": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) Steven Sheldon", "Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 8d214f5477365ffcbcbb7de058c86ed9a518efb7 (published commit) names no holder and keeps objc2-encode MIT-only pending Steven Sheldon's consent (madsmtm/objc2#23). objc2-encode was forked from Steven Sheldon's objc-encode (CHANGELOG); his line is LICENSE.txt of SSheldon/rust-objc. Mads Marquart: LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-exception-helper 0.1.1": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 8d214f5477365ffcbcbb7de058c86ed9a518efb7 (published commit) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-foundation 0.3.2": {
+      "license": "MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright (c) Steven Sheldon", "Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder and keeps objc2-foundation MIT-only pending Steven Sheldon's consent (madsmtm/objc2#23). Its history starts as Steven Sheldon's objc-foundation (tag frameworks-0.0.1); his line is LICENSE.txt of SSheldon/rust-objc. Mads Marquart: LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-io-surface 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-quartz-core 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "objc2-web-kit 0.3.2": {
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "standard_text": "MIT",
+      "copyright": ["Copyright 2026 Mads Marquart"],
+      "source": "LICENSE.md at madsmtm/objc2 7b1abfd750a2cacaea71d6a56ecfb83cb7de560b (published commit, tag frameworks-0.3.2) names no holder. The line is the one in LICENSE-MIT.txt added to madsmtm/objc2 at ee9a7ada21."
+    },
+    "selectors 0.38.0": {
+      "license": "MPL-2.0",
+      "standard_text": "MPL-2.0",
+      "copyright": [],
+      "source": "servo/stylo 572ecba2d1600e7c3d490586692a209faf703baa (published commit) has no license file; its source files carry only the MPL-2.0 header, and the MPL-2.0 text names no holder."
+    },
+    "tauri-plugin 2.7.2": {
+      "license": "Apache-2.0 OR MIT",
+      "notices_from": "tauri 2.12.1",
+      "source": "the root LICENSE-MIT and LICENSE-APACHE-2.0 of tauri 2.12.1 are byte-identical to those at tauri-apps/tauri 59b63ab500da9859f12d8888c3298bc29bba0b92, the commit tauri-plugin 2.7.2 was published from (Copyright (c) 2017 - Present Tauri Apps Contributors)."
+    }
+  },
+  "npm": {
+    "pretendard 1.3.9": {
+      "license": "OFL-1.1",
+      "notices": ["dist/LICENSE.txt"],
+      "upstream_notice": "pretendard-LICENSE-0189074f.txt",
+      "source": "dist/LICENSE.txt in the package names only Kil Hyung-jin and the Reserved Font Name Pretendard. Pretendard is built from Source Han Sans, Inter and M PLUS 1p, and upstream added their copyright and Reserved Font Name statements after the 1.3.9 release (orioncactus/pretendard#191, commit 0189074fdad117a5e360aad00a59b47225429c31); pretendard-LICENSE-0189074f.txt is packages/pretendard/dist/LICENSE.txt at that commit, unchanged."
+    },
+    "@fontsource/jetbrains-mono 5.3.0": {
+      "license": "OFL-1.1",
+      "notices": ["LICENSE"],
+      "source": "the package LICENSE carries the copyright statement of JetBrains/JetBrainsMono OFL.txt (Copyright 2020 The JetBrains Mono Project Authors) and the full OFL-1.1 text; JetBrains Mono reserves no font name and is not derived from another font."
+    },
+    "rolldown 1.2.14": {
+      "license": "MIT",
+      "notices": ["LICENSE", "THIRD-PARTY-LICENSE"],
+      "upstream_notice": "es-module-shims-LICENSE-2d7ce60c.txt",
+      "bundler_runtime": "dist/assets/index-*.js starts with two pieces that Rolldown's native binding writes: its module runtime helper __commonJSMin (crates/rolldown/src/runtime/runtime-base.js, adapted from esbuild; THIRD-PARTY-LICENSE carries the esbuild and Rollup notices) and the module-preload polyfill of its builtin vite-module-preload-polyfill plugin, a port of the polyfill Vite adapted from es-module-shims (guybedford/es-module-shims LICENSE, the upstream notice below).",
+      "source": "in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) the only code without a source was these two pieces and the wrappers Rolldown writes around bundled modules; Vite 8.3.4 delegates the polyfill to rolldown/experimental, and Vite 7's modulePreloadPolyfill.ts names its es-module-shims origin."
+    },
+    "vite 8.3.4": {
+      "license": "MIT",
+      "notices": ["LICENSE.md"],
+      "excerpt": { "file": "LICENSE.md", "from": "# Vite core license", "to": "# Licenses of bundled dependencies" },
+      "bundler_runtime": "the module-preload polyfill Rolldown emits is a port of Vite's own polyfill code, so the Vite core license of LICENSE.md applies to it; the rest of that file covers dependencies bundled into Vite's JavaScript, which is not emitted.",
+      "source": "in a source-mapped production build (vite 8.3.4, rolldown 1.2.14) the only code without a source was the Rolldown runtime helper, the module-preload polyfill and the module wrappers Rolldown writes around bundled modules."
+    }
   }
 }
