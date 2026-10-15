@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Build native binary archives with a pinned, statically linked OpenSSL SDK."""
+"""Build native binary archives with a pinned, statically linked OpenSSL SDK.
+
+With --bin NAME (repeatable) it builds only the named release binaries the same way, checks
+their linkage, collects the notices and copies them to OUT_DIR/bin without packaging an
+archive (the desktop app ships zeropw-admin, zeropw_session and zeropw-agent this way).
+"""
 import argparse
 import hashlib
 import os
 import re
 import pathlib
 import platform
+import shutil
 import subprocess
 import tarfile
 import importlib.util
@@ -42,20 +48,43 @@ def verify_linkage(binary, system):
         raise SystemExit('release binary has an unexpected dynamic dependency: ' + binary.name)
 
 
-def main():
+def load_packager(root):
+    spec = importlib.util.spec_from_file_location('package_release', root / 'scripts/package-release.py')
+    package = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package)
+    return package
+
+
+def main(argv=None):
+    root = pathlib.Path(__file__).resolve().parents[1]
+    package = load_packager(root)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target', required=True)
-    parser.add_argument('--version', required=True)
+    parser.add_argument('--version', help='archive version vMAJOR.MINOR.PATCH (archive mode)')
     parser.add_argument('--out-dir', required=True, type=pathlib.Path)
-    args = parser.parse_args()
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.version):
-        parser.error('version must be vMAJOR.MINOR.PATCH')
+    parser.add_argument('--bin', action='append', dest='bins', metavar='NAME',
+                        help='build only this release binary into OUT_DIR/bin; repeatable; no archive')
+    args = parser.parse_args(argv)
+    if args.bins is None:
+        if args.version is None:
+            parser.error('--version is required unless --bin selects binaries')
+        if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.version):
+            parser.error('version must be vMAJOR.MINOR.PATCH')
+    else:
+        if args.version is not None:
+            parser.error('--bin builds binaries only; --version names an archive')
+        unknown = [name for name in args.bins if name not in package.BINS]
+        if unknown or len(set(args.bins)) != len(args.bins):
+            parser.error('--bin takes distinct release binaries: ' + ', '.join(package.BINS))
     host = HOSTS.get((platform.system(), platform.machine()))
     if not host or args.target != host[0]:
         parser.error('use a native builder matching the requested target')
-    root = pathlib.Path(__file__).resolve().parents[1]
     output = args.out_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    selected = output / 'bin'
+    if args.bins is not None:
+        # Nothing from an earlier run may pass for this build's output.
+        shutil.rmtree(selected, ignore_errors=True)
     work = output / 'openssl-build'
     work.mkdir(exist_ok=True)
     archive = work / ('openssl-' + OPENSSL_VERSION + '.tar.gz')
@@ -71,7 +100,6 @@ def main():
     source = work / ('openssl-' + OPENSSL_VERSION)
     sdk = work / 'sdk'
     # Always rebuild from the authenticated archive; an existing mutable SDK is not evidence.
-    import shutil
     shutil.rmtree(source, ignore_errors=True)
     shutil.rmtree(sdk, ignore_errors=True)
     with tarfile.open(archive) as contents:
@@ -90,18 +118,25 @@ def main():
     environment.update(OPENSSL_DIR=str(sdk), OPENSSL_STATIC='1',
                        CARGO_TARGET_DIR=str(output / 'cargo-target'))
     environment.pop('OPENSSL_NO_VENDOR', None)
+    names = package.BINS if args.bins is None else tuple(args.bins)
+    selection = ['--bins'] if args.bins is None else [part for name in names for part in ('--bin', name)]
     run(['cargo', 'build', '--locked', '--release', '--features', 'bundled-openssl',
-         '--target', args.target, '--manifest-path', str(root / 'rust/Cargo.toml'), '--bins'], root, environment)
-    spec = importlib.util.spec_from_file_location('package_release', root / 'scripts/package-release.py')
-    package = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(package)
-    for name in package.BINS:
-        verify_linkage(output / 'cargo-target' / args.target / 'release' / name, platform.system())
+         '--target', args.target, '--manifest-path', str(root / 'rust/Cargo.toml'), *selection], root, environment)
+    built = output / 'cargo-target' / args.target / 'release'
+    for name in names:
+        verify_linkage(built / name, platform.system())
     notices = output / 'THIRD_PARTY_LICENSES.md'
     run(['python3', str(root / 'scripts/dependency-licenses.py'), '--features', 'bundled-openssl',
          '--target', args.target, '--openssl-source', str(source), '--output', str(notices)], root, environment)
+    if args.bins is not None:
+        selected.mkdir()
+        for name in names:
+            shutil.copyfile(built / name, selected / name)
+            (selected / name).chmod(0o755)
+            print(selected / name)
+        return
     run(['python3', str(root / 'scripts/package-release.py'), '--version', args.version,
-         '--target', args.target, '--bin-dir', str(output / 'cargo-target' / args.target / 'release'),
+         '--target', args.target, '--bin-dir', str(built),
          '--out-dir', str(output), '--third-party-licenses', str(notices)], root, environment)
 
 
