@@ -449,7 +449,7 @@ fn user_authority_incident_retry_restart_and_admin_removal_dek_isolation() {
     let bt = Arc::new(InProcessTransport::new(bd.clone(), Arc::new(|_, _| None)));
     let team_a = sync::TeamSync::new(a.clone(), at.clone(), ad.clone());
     let team_b = sync::TeamSync::new(b.clone(), bt.clone(), bd.clone());
-    team_a.start(Some("astra-round2-removal-a")).unwrap();
+    team_a.start(Some("astra-round2-removal-a:47001")).unwrap();
     team_b.start(None).unwrap();
     let invite = membership::create_invite(
         &a,
@@ -457,7 +457,7 @@ fn user_authority_incident_retry_restart_and_admin_removal_dek_isolation() {
         "user",
         "bob",
         3600,
-        &["astra-round2-removal-a".into()],
+        &["astra-round2-removal-a:47001".into()],
     )
     .unwrap();
     membership::join(
@@ -517,13 +517,13 @@ fn user_authority_incident_retry_restart_and_admin_removal_dek_isolation() {
     let bt = Arc::new(InProcessTransport::new(bd.clone(), Arc::new(|_, _| None)));
     let team_a = sync::TeamSync::new(a.clone(), at.clone(), ad);
     let team_b = sync::TeamSync::new(b.clone(), bt.clone(), bd.clone());
-    team_a.start(Some("astra-round2-removal-a")).unwrap();
+    team_a.start(Some("astra-round2-removal-a:47001")).unwrap();
     team_b.start(None).unwrap();
     team_b
         .set_peer_address(
             &env,
             &team_a.device.fingerprint().unwrap(),
-            "astra-round2-removal-a",
+            "astra-round2-removal-a:47001",
         )
         .unwrap();
     wait(|| {
@@ -601,7 +601,7 @@ fn user_authority_incident_retry_restart_and_admin_removal_dek_isolation() {
         .is_err()
     );
     assert!(!b.state.exists(&format!("team/{env}/dek/{new_gen}.json")));
-    let refused = bt.dial("astra-round2-removal-a", &env, None).unwrap();
+    let refused = bt.dial("astra-round2-removal-a:47001", &env, None).unwrap();
     assert!(refused.recv(Duration::from_secs(3)).is_err());
     assert_eq!(
         b.vault

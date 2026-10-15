@@ -466,7 +466,7 @@ fn member_add_audit_records_role_like_python() {
     let a_key = DeviceKey::load_or_create(a.state, a.kms).unwrap();
     let a_transport = Arc::new(InProcessTransport::new(a_key.clone(), no_members()));
     let a_team = sync::TeamSync::new(a.clone(), a_transport, a_key);
-    let address = "gap-member-add-inviter";
+    let address = "gap-member-add-inviter:47001";
     a_team.start(Some(address)).unwrap();
     let invite =
         membership::create_invite(&a, &env, "user", "synthetic-b", 3600, &[address.into()])
@@ -662,7 +662,7 @@ fn join_with_non_dict_peers_document_fails_before_dialing() {
         Arc::new(InProcessTransport::new(a_key.clone(), no_members())),
         a_key,
     );
-    let address = "gap-join-corrupt-peers";
+    let address = "gap-join-corrupt-peers:47001";
     a_team.start(Some(address)).unwrap();
     let invite =
         membership::create_invite(&a, &env, "user", "synthetic-b", 3600, &[address.into()])

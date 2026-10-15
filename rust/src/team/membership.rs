@@ -457,9 +457,22 @@ pub fn invite_string_of(text: &str) -> Result<&str> {
     Ok(text)
 }
 
+/// What `invalid_address` tells the inviter (no input is repeated).
+const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [fe80::1%en0]:47001";
+
+fn is_host_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+}
+
 /// A `HOST:PORT` address as an invite may carry it: at most
 /// [`MAX_ADDRESS_BYTES`], a port 1..=65535 in decimal, and a host name or
-/// address of letters, digits, `.`, `-`, `_` (or a bracketed IPv6 address).
+/// IPv4 address of letters, digits, `.`, `-`, `_`, or a bracketed IPv6
+/// address (hex digits, `:` and `.`) with an optional zone of the same name
+/// characters (`[fe80::1%en0]`, `[fe80::1%2]`). The TCP dialer resolves every
+/// such form. [`create_invite_with`] stores only these addresses and
+/// [`parse_invite_or_link`] accepts only these, so an invite this crate makes
+/// is never refused by its own `team join`; an unbracketed IPv6 address and
+/// surrounding whitespace are refused on both sides.
 pub fn valid_invite_address(address: &str) -> bool {
     if address.is_empty() || address.len() > MAX_ADDRESS_BYTES {
         return false;
@@ -475,17 +488,17 @@ pub fn valid_invite_address(address: &str) -> bool {
     }
     match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
         Some(inner) => {
-            inner.contains(':')
-                && inner
+            let (ip, zone) = match inner.split_once('%') {
+                Some((ip, zone)) => (ip, Some(zone)),
+                None => (inner, None),
+            };
+            ip.contains(':')
+                && ip
                     .bytes()
                     .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+                && zone.is_none_or(|zone| !zone.is_empty() && zone.bytes().all(is_host_name_byte))
         }
-        None => {
-            !host.is_empty()
-                && host
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-        }
+        None => !host.is_empty() && host.bytes().all(is_host_name_byte),
     }
 }
 
@@ -563,9 +576,11 @@ pub fn create_invite(
 }
 
 /// `create_invite`, optionally as a one-day link invite (docs/desktop-app.md
-/// §3.2): the TTL must then be exactly 24 hours (`invite_link_ttl_fixed`),
-/// every address must be a valid `HOST:PORT` and the link must fit in
-/// [`MAX_INVITE_LINK_BYTES`]; all checked before anything is stored.
+/// §3.2). Every address, link or not, must pass [`valid_invite_address`] (the
+/// rule `team join` and `team invite-info` apply through
+/// [`parse_invite_or_link`]), else `invalid_address`. A link invite's TTL must
+/// be exactly 24 hours (`invite_link_ttl_fixed`) and the link must fit in
+/// [`MAX_INVITE_LINK_BYTES`]. All of it is checked before anything is stored.
 pub fn create_invite_with(
     ctx: &Context,
     env_id: &str,
@@ -591,13 +606,11 @@ pub fn create_invite_with(
     if addresses.len() > MAX_ADDRESSES {
         return Err(Error::invalid_input("too_many_addresses"));
     }
-    for address in addresses {
-        if address.is_empty() || address.chars().count() > 128 {
-            return Err(Error::invalid_input("invalid_address"));
-        }
-        if link && !valid_invite_address(address) {
-            return Err(Error::invalid_input("invalid_address").with_detail("use HOST:PORT"));
-        }
+    if !addresses
+        .iter()
+        .all(|address| valid_invite_address(address))
+    {
+        return Err(Error::invalid_input("invalid_address").with_detail(INVITE_ADDRESS_DETAIL));
     }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let doc = load_environment(ctx, env_id)?.document;
