@@ -95,6 +95,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 다른 macOS 계정에서 실행할 때 첫 제안 명령은 `sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u <계정> -i`다.
 - 제안 명령은 프롬프트에 입력만 해 두고 사용자가 엔터를 누르면 실행된다. 두 번째 제안은 `<번들 경로>/zeropw-agent list-connections`.
 - 출력은 Tauri 채널로 웹뷰의 xterm.js에 보낸다. 셸이 끝나면 토큰도 함께 사라진다.
+- 터미널은 화면을 떠나도 닫지 않는다. 에이전트가 계속 돌아야 하기 때문이다. 출력은 터미널마다 256 KiB 링 버퍼에 남고, 에이전트 화면이 `terminal_list`로 목록을 받아 `terminal_attach`로 다시 붙으면 버퍼를 먼저 재생한 뒤 이어서 보낸다. 채널은 출력만 나르므로 셸이 끝났는지는 `terminal_list`의 `alive`로 안다.
 
 ### 4.5 설정과 경로
 
@@ -171,17 +172,20 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 1. 관리 기능은 Tauri IPC로만 노출한다. 루프백 HTTP, 웹소켓, MCP로 내보내지 않는다.
 2. 명령은 하나하나 타입을 정하고 앱 매니페스트로 허용 목록을 고정한다. argv를 그대로 넘기는 명령, 임의 파일 읽기·쓰기, URL 열기는 없다.
 3. CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. 원격 리소스와 `devUrl`은 배포 빌드에 없다. 글꼴은 번들한다.
-4. 플러그인은 Rust에서만 쓴다(딥 링크, 단일 인스턴스, 대화상자, 클립보드 쓰기). 웹뷰 권한에는 `core:default`만 준다. shell·fs·http·opener 플러그인은 넣지 않는다.
+   `Object.prototype`은 페이지 스크립트보다 먼저 얼린다. Tauri의 `freezePrototype`은 그냥 `Object.freeze`라서 xterm.js가 읽어 들일 때 `toString`을 대입하다 멈춘다. 그래서 셸이 `src-tauri/src/freeze_prototype.js`를 초기화 스크립트로 넣는다. 데이터 속성을 접근자로 바꿔 상속받은 이름에 대입하면 받는 객체에 자기 속성이 생기게 한 뒤(SES의 override taming) 얼린다. 프로토타입 자체에는 여전히 속성을 더하거나 바꿀 수 없다. 설정의 `freezePrototype`은 `false`이고, `scripts/check-tauri.mjs`가 이 스크립트의 연결과 동작을 확인한다.
+4. 플러그인은 Rust에서만 쓴다(딥 링크, 단일 인스턴스, 대화상자, 클립보드 쓰기). 웹뷰 권한은 `core:default`, 겹친 제목 막대로 창을 끌기 위한 `core:window:allow-start-dragging`, 계약 명령의 `allow-*`뿐이다. shell·fs·http·opener 플러그인은 넣지 않는다. 대화상자 플러그인이 `tauri-plugin-fs`를 라이브러리로 끌어오지만 등록하지 않고 권한도 없다.
 5. 신뢰할 수 없는 문자열(승인 요청의 경로, 감사 기록 필드, 팀원 이름)은 텍스트로만 그린다. `innerHTML`과 `dangerouslySetInnerHTML`은 lint로 막는다.
 6. 비밀번호는 `Zeroizing<String>`으로 받아 봉투로 넘기고 곧바로 지운다. 어떤 환경변수에도 넣지 않는다. 웹뷰 상태 저장소, 로그, 이벤트에 남기지 않는다.
 7. 클립보드는 사용자가 누를 때만 Rust에서 쓰고, 60초 뒤 내용이 그대로면 비운다. 웹뷰는 클립보드를 읽지 못한다.
 8. 복구 코드·토큰·초대 링크·다시 본 값이 화면에 있는 동안 창 내용 보호(화면 캡처 차단)를 켠다.
-9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈로 다룬다.
+9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
 
 ## 9. 빌드·시험·CI
 
 - 배치: `desktop/`에 별도 Cargo 워크스페이스(`core`, `src-tauri`)와 `package.json`. 루트 워크스페이스는 만들지 않으며 `rust/`의 빌드와 `rust/verify.sh`는 그대로다.
 - 아이콘은 바이너리로 커밋하지 않는다. `src-tauri/build.rs`가 픽셀 로고 PNG를 생성한다.
+- 개발 실행: `npm run tauri dev`(Vite 1420번 포트). 사이드카는 디버그 빌드에서 `ZEROPW_BIN_DIR`로 가리킨다.
+- 배포 빌드: `npm run bundle`. `scripts/prepare-sidecars.sh`가 `rust/`에서 `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 릴리스로 빌드해 `src-tauri/binaries/<이름>-<타깃>`으로 복사하고, `tauri.bundle.conf.json`이 이들을 `externalBin`으로 묶는다.
 - `desktop/verify.sh`: `npm ci`, `tsc --noEmit`, lint, `vitest run`, `vite build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`(실제 `zeropw-admin`으로 임시 상태 디렉터리를 쓰는 통합 시험 포함), 정적 검사(CSP·capabilities·금지 플러그인·`innerHTML`).
 - CI: `.github/workflows/harness-ci.yml`에 `desktop-tests` 작업(ubuntu-latest, macos-15)을 더한다. 우분투에는 webkit2gtk 4.1 개발 패키지를 설치한다.
 - 파일 크기 제한(하네스, 파일당 300,000바이트) 때문에 `package-lock.json`은 의존성을 최소로 유지한다.
@@ -191,4 +195,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
 - 앱 서명·공증과 자동 업데이트는 없다. 개발 빌드만 만든다.
 - 팀 공유는 기존 명세대로 같은 LAN·VPN 안의 직접 연결만 지원한다.
+- 창을 닫아도 앱, 중계기, 에이전트 터미널은 계속 돈다. macOS는 Dock에서 다시 열고 Cmd+Q로 끝낸다. Linux에는 트레이가 없어서 다시 실행하면 창이 열리고 `zeropw-desktop --quit`로 끝낸다.
+- Linux에서 `zeropw://` 링크는 deb·AppImage로 설치해 `.desktop` 등록이 된 뒤에만 앱으로 온다. 실행 중에 스킴을 등록하지 않는다.
+- 웹뷰에서 보낸 비밀번호는 Tauri IPC 버퍼에 사본이 남을 수 있다. 코어로 넘어온 뒤에는 `Zeroizing`으로 지운다.
 - 관리 비밀번호를 바꾸는 기능은 아직 없다. 사고 종료 절차가 요구하는 비밀번호 교체 단계는 화면에서 수동 단계로 안내한다.
