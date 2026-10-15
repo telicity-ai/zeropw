@@ -10,6 +10,7 @@ import io
 import json
 import os
 import pathlib
+import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -58,6 +59,7 @@ class FakeRunner:
         self.otool = {}
         self.codesign_verify = 0
         self.omit = set()
+        self.attach_fails = False
         self.mounted = None
 
     def result(self, command, code=0, stdout='', stderr=''):
@@ -118,14 +120,18 @@ class FakeRunner:
         if command[1] == 'verify':
             return self.result(command, stdout=f'hdiutil: verify: checksum of "{command[2]}" is VALID\n')
         if command[1] == 'attach':
-            mount = pathlib.Path(command[command.index('-mountpoint') + 1])
+            self.test.assertIn('-readonly', command)
+            if self.attach_fails:
+                return self.result(command, 1, stderr='hdiutil: attach failed - synthetic\n')
+            # hdiutil chooses the mount point; here a folder inside the test's directory.
+            work = pathlib.Path(cwd).parent
+            mount = work.parent / 'Volumes/ZeroPW'
             contents = mount / 'ZeroPW.app/Contents'
             (contents / 'MacOS').mkdir(parents=True)
             (contents / 'Resources').mkdir()
             for name in EXECUTABLES:
                 if name not in self.omit:
                     (contents / 'MacOS' / name).write_bytes(b'synthetic executable')
-            work = pathlib.Path(command[-1]).parents[1]
             shutil.copyfile(work / 'source/LICENSE', contents / 'Resources/LICENSE')
             if 'THIRD_PARTY_LICENSES.md' not in self.omit:
                 shutil.copyfile(work / 'source/desktop/src-tauri/notices/THIRD_PARTY_LICENSES.md',
@@ -133,7 +139,8 @@ class FakeRunner:
             (contents / 'Info.plist').write_text('synthetic plist')
             (mount / 'Applications').symlink_to('/Applications')
             self.mounted = mount
-            return self.result(command, stdout='/dev/disk9\t/Volumes/synthetic\n')
+            entities = [{'dev-entry': '/dev/disk9s1', 'mount-point': str(mount)}, {'dev-entry': '/dev/disk9'}]
+            return self.result(command, stdout=plistlib.dumps({'system-entities': entities}).decode())
         if command[1] == 'detach':
             mount = pathlib.Path(command[2])
             shutil.rmtree(mount, ignore_errors=True)
@@ -226,6 +233,7 @@ class PackageMacosTests(unittest.TestCase):
         self.assertIn('ZeroPW.app: rejected', log)
         self.assertIn('spctl result: rejected (exit 3)', log)
         self.assertTrue(log.rstrip().endswith('RESULT: PASS'))
+        self.assertIn('Executable=<mount>/ZeroPW.app/Contents/MacOS/zeropw-admin', log)
         self.assertNotIn(str(self.base), log)
         self.assertIsNone(self.runner.mounted)
 
@@ -250,6 +258,16 @@ class PackageMacosTests(unittest.TestCase):
             self.package()
         self.assertIn('Resources/THIRD_PARTY_LICENSES.md is missing', str(raised.exception))
         self.assertIn('MacOS/zeropw_session is missing', str(raised.exception))
+        self.assertFalse(self.out.exists())
+
+    def test_image_that_does_not_mount_fails_with_its_record(self):
+        self.runner.attach_fails = True
+        with self.assertRaises(SystemExit) as raised:
+            self.package()
+        self.assertIn('hdiutil attach failed', str(raised.exception))
+        log = (self.work / 'artifacts/zeropw-desktop-v0.1.0-aarch64-apple-darwin-verification.txt').read_text()
+        self.assertIn('hdiutil: attach failed - synthetic', log)
+        self.assertTrue(log.rstrip().endswith('RESULT: FAIL'))
         self.assertFalse(self.out.exists())
 
     def test_existing_artifacts_and_dirty_trees_are_refused(self):
@@ -292,7 +310,8 @@ class ReleaseConfigCheckTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.copy = pathlib.Path(temp.name)
-        ignore = shutil.ignore_patterns('node_modules', 'dist', 'target', 'gen', 'icons', 'binaries', 'notices', '.DS_Store')
+        ignore = shutil.ignore_patterns('node_modules', 'dist', 'target', 'gen', 'icons', 'binaries', 'notices',
+                                        '.DS_Store', '__pycache__')
         shutil.copytree(ROOT / 'desktop', self.copy / 'desktop', ignore=ignore)
         (self.copy / 'docs').mkdir()
         shutil.copyfile(ROOT / 'docs/desktop-app.md', self.copy / 'docs/desktop-app.md')

@@ -166,7 +166,7 @@ if (/<style[\s>]/i.test(read(join(root, 'index.html')))) {
 
 // ---- files the review harness would reject ------------------------------------------------
 const GENERATED = new Set(['node_modules', 'dist', 'target', 'src-tauri/gen', 'src-tauri/icons', 'src-tauri/binaries', 'src-tauri/notices']);
-const files = walk(root, (rel, name) => GENERATED.has(rel) || name === '.DS_Store');
+const files = walk(root, (rel, name) => GENERATED.has(rel) || name === '.DS_Store' || name === '__pycache__');
 for (const file of files) {
   const bytes = readFileSync(file);
   if (bytes.length > MAX_FILE_BYTES) fail(`${relative(root, file)}: ${bytes.length} bytes (limit ${MAX_FILE_BYTES})`);

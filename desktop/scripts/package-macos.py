@@ -33,6 +33,7 @@ import json
 import os
 import pathlib
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -163,8 +164,15 @@ def inside(path, parent):
 
 
 class Verification:
-    def __init__(self, runner, scrub):
-        self.runner, self.scrub, self.lines, self.problems = runner, scrub, [], []
+    def __init__(self, runner, staging):
+        self.runner, self.lines, self.problems = runner, [], []
+        self.paths = [(str(staging), '<artifacts>')]
+
+    def scrub(self, text):
+        """Keep local paths out of the log: commands run on relative paths; outputs are rewritten."""
+        for path, label in self.paths:
+            text = text.replace(path, label)
+        return text
 
     def run(self, command, cwd, note=None):
         result = self.runner.run(command, cwd=cwd, check=False, capture=True)
@@ -179,22 +187,34 @@ class Verification:
             self.lines.append('PROBLEM: ' + problem + '\n')
 
 
-def verify_image(runner, staging, names, version, source, mount):
+def mount_points(attach_plist):
+    try:
+        entities = plistlib.loads(attach_plist.encode('utf-8')).get('system-entities', [])
+    except (plistlib.InvalidFileException, ValueError, AttributeError):
+        return []
+    return [entity['mount-point'] for entity in entities if entity.get('mount-point')]
+
+
+def verify_image(runner, staging, names, version, source):
     """Check the image as a user receives it. Returns (log text, problems)."""
-    scrub = lambda text: text.replace(str(mount), '<mount>').replace(str(staging), '<artifacts>')
-    check = Verification(runner, scrub)
+    check = Verification(runner, staging)
     result, _ = check.run(['hdiutil', 'verify', names['dmg']], staging)
     check.require(result.returncode == 0, 'hdiutil verify failed')
-    if mount.exists():
-        runner.run(['hdiutil', 'detach', str(mount), '-force'], check=False, capture=True)
-        shutil.rmtree(mount, ignore_errors=True)
-    mount.mkdir(parents=True)
-    attach = runner.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noautoopen', '-mountpoint', str(mount),
-                         str(staging / names['dmg'])], check=False, capture=True)
-    check.lines.append(f'$ hdiutil attach -readonly -nobrowse -noautoopen -mountpoint <mount> {names["dmg"]}\n[exit {attach.returncode}]\n')
-    if attach.returncode != 0:
-        check.require(False, 'hdiutil attach failed')
+    # hdiutil picks the mount point under /Volumes; a custom -mountpoint is refused on some volumes.
+    attach = runner.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noautoopen', '-plist', names['dmg']],
+                        cwd=staging, check=False, capture=True)
+    mounts = mount_points(attach.stdout or '') if attach.returncode == 0 else []
+    for path in mounts:
+        check.paths.insert(0, (path, '<mount>'))
+    check.lines.append(f'$ hdiutil attach -readonly -nobrowse -noautoopen -plist {names["dmg"]}\n'
+                       f'mounted read-only volumes (<mount>): {", ".join(pathlib.Path(p).name for p in mounts) or "none"}\n'
+                       + check.scrub(attach.stderr or '').rstrip('\n') + f'\n[exit {attach.returncode}]\n')
+    if len(mounts) != 1:
+        for path in mounts:
+            runner.run(['hdiutil', 'detach', path, '-force'], check=False, capture=True)
+        check.require(False, 'hdiutil attach failed or mounted more than one volume')
         return '\n'.join(check.lines), check.problems
+    mount = pathlib.Path(mounts[0])
     try:
         contents = mount / APP / 'Contents'
         listing = sorted(path.name for path in mount.iterdir())
@@ -312,7 +332,7 @@ def main(argv=None, environ=None, runner=None, system=None):
     shutil.copyfile(notices, staging / names['notices'])
     (staging / names['checksum']).write_text(checksum_line(staging / names['dmg']))
 
-    log, problems = verify_image(runner, staging, names, version, source, work / 'mnt')
+    log, problems = verify_image(runner, staging, names, version, source)
     header = (f'ZeroPW desktop {version} for {TARGET}\nsource commit: {commit}\n'
               f'{(staging / names["checksum"]).read_text()}{checksum_line(staging / names["notices"])}\n')
     (staging / names['log']).write_text(header + log + '\n' + ('RESULT: FAIL\n' if problems else 'RESULT: PASS\n'))
