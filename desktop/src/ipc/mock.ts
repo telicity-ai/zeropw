@@ -204,8 +204,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!item || !kinds.includes(item.kind)) throw fail('NotFound', 'onetime_ref_unknown');
     return item;
   };
-  /** Kinds `onetime_show`/`onetime_copy` hand to the webview: all but a pasted invite. */
-  const SHOWABLE: readonly OneTime['kind'][] = ['recovery', 'token', 'link', 'secret'];
+  /** Kinds `onetime_show`/`onetime_copy` hand to the webview (desktop/core/src/onetime.rs
+   *  `showable`): not a pasted invite, which only `team_join` reads, and not a recovery code,
+   *  whose groups `recovery_generate` returned once and which only `vault_init` reads again. */
+  const SHOWABLE: readonly OneTime['kind'][] = ['token', 'link', 'secret'];
   const grantLive = (g: MockGrant) => grantState(grantOut(g), Date.now()) === 'live';
   const record = (rec: AuditRecord) => { audit.push(rec); if (audit.length > 500) audit.shift(); emit('audit://records', { records: [rec] }); };
   const setControl = (c: Control) => { control = c; emit('control://changed', control); };
