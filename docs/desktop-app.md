@@ -10,8 +10,9 @@
 - 팀 초대는 24시간 동안 한 번만 쓸 수 있는 링크(`zeropw://join#…`)로 주고받는다. 링크를 열면 미리보기만 띄우고 자동으로 합류하지 않는다.
 - 에이전트 설정처럼 셸에서 하던 일은 앱 안 터미널에서 미리 채운 명령을 엔터로 실행해 끝낸다.
 - 첫 실행 온보딩에는 서비스 연결을 넣지 않는다. 연결은 대시보드에서 만든다(2026-10-15 사용자 결정).
+- macOS에서는 시험용으로 ad-hoc 서명한 Apple Silicon(arm64)용 .dmg를 만들 수 있다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§10).
 
-하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, 앱 서명·공증·자동 업데이트, 같은 macOS 계정의 에이전트로부터 보관함을 격리하는 일(§9).
+하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, Developer ID 앱 서명·공증·자동 업데이트, Intel Mac용 빌드, 같은 macOS 계정의 에이전트로부터 보관함을 격리하는 일(§8.9).
 
 ## 2. 구조
 
@@ -137,7 +138,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `grant_list` / `grant_create` / `grant_revoke` | `{principal, connection, ttl, max_uses?}` | 권한 정보 | `grant …` | 만들기 재인증 |
 | `terminal_open` / `terminal_write` / `terminal_resize` / `terminal_close` | `{token_ref, as_user?}` 등 | `{terminal_id, suggestions[]}`, 출력은 채널. `terminal_write`는 `terminal_busy`일 수 있고 `terminal_close`는 그 터미널의 프로세스를 멈춘 뒤 돌아온다 | §4.4 | |
 | `terminal_list` / `terminal_attach` | 없음 / `{terminal_id}`와 출력 채널 | `{terminals[{terminal_id, principal, as_user, alive}]}` / `{terminal_id, suggestions[]}`, 버퍼를 채널로 재생한 뒤 이어서 보낸다 | §4.4 | |
-| `secure_view` | `{on}` | `{protected}`: 창이 실제로 화면 캡처에서 빠졌는지. Linux에서는 늘 `false` | 창 내용 보호(§8.8) | |
+| `secure_view` | `{on}` | `{protected}`: 창 내용 보호 요청이 오류 없이 적용됐는지. 캡처 도구가 그 요청을 따르는지는 알려 주지 않는다. Linux에서는 늘 `false` | 창 내용 보호 요청(§8.8) | |
 | `audit_tail` / `alerts` | `{limit}` | 값 없는 기록 | `audit tail`, `alerts` | |
 | `approvals_list` / `approvals_approve` | `{digest}` | 승인 정보 | `approvals …` | 승인 재인증 |
 | `incident_list` / `incident_show` / `incident_declare` / `incident_close` | 사건 필드 | 사건 정보 | `incident …` | `all` 범위·종료 |
@@ -208,13 +209,16 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 1. 관리 기능은 Tauri IPC로만 노출한다. 루프백 HTTP, 웹소켓, MCP로 내보내지 않는다.
 2. 명령은 하나하나 타입을 정하고 앱 매니페스트로 허용 목록을 고정한다. argv를 그대로 넘기는 명령, 임의 파일 읽기·쓰기, URL 열기는 없다.
-3. CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. 원격 리소스와 `devUrl`은 배포 빌드에 없다. 글꼴 파일은 넣지 않고(저장소에 바이너리를 커밋하지 않는다) 설치된 글꼴을 쓴다.
+3. CSP: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. 원격 리소스와 `devUrl`은 배포 빌드에 없다. 글꼴은 앱에 함께 묶는다. `src/main.tsx`가 npm 패키지 `pretendard`와 `@fontsource/jetbrains-mono`의 CSS를 불러오면 빌드할 때 Vite가 글꼴 파일(woff2·woff)을 `dist/assets`로 복사하고, 웹뷰는 이를 `font-src 'self'`로 읽는다(`assetsInlineLimit: 0`이라 `data:` URI로 넣지 않는다). 글꼴 파일은 빌드할 때 npm 패키지에서 오므로 저장소에는 바이너리를 커밋하지 않는다. 두 글꼴은 SIL Open Font License 1.1이고, 저작권 고지와 라이선스 전문은 서드파티 고지에 들어간다.
    `Object.prototype`은 페이지 스크립트보다 먼저 얼린다. Tauri의 `freezePrototype`은 그냥 `Object.freeze`라서 xterm.js가 읽어 들일 때 `toString`을 대입하다 멈춘다. 그래서 셸이 `src-tauri/src/freeze_prototype.js`를 초기화 스크립트로 넣는다. 데이터 속성을 접근자로 바꿔 상속받은 이름에 대입하면 받는 객체에 자기 속성이 생기게 한 뒤(SES의 override taming) 얼린다. 프로토타입 자체에는 여전히 속성을 더하거나 바꿀 수 없다. 설정의 `freezePrototype`은 `false`이고, `scripts/check-tauri.mjs`가 이 스크립트의 연결과 동작을 확인한다.
 4. 플러그인은 Rust에서만 쓴다(딥 링크, 단일 인스턴스(macOS 제외, §10), 대화상자). 클립보드는 플러그인 없이 Rust의 arboard로 쓴다. 웹뷰 권한은 `core:default`, 겹친 제목 막대로 창을 끌기 위한 `core:window:allow-start-dragging`, 계약 명령의 `allow-*`뿐이다. shell·fs·http·opener 플러그인은 넣지 않는다. 대화상자 플러그인이 `tauri-plugin-fs`를 라이브러리로 끌어오지만 등록하지 않고 권한도 없다.
 5. 신뢰할 수 없는 문자열(승인 요청의 경로, 감사 기록 필드, 팀원 이름)은 텍스트로만 그린다. `innerHTML`과 `dangerouslySetInnerHTML`은 lint로 막는다.
 6. 비밀번호는 `Zeroizing<String>`으로 받아 봉투로 넘기고 곧바로 지운다. 어떤 환경변수에도 넣지 않는다. 웹뷰 상태 저장소, 로그, 이벤트에 남기지 않는다.
 7. 클립보드는 사용자가 누를 때만 Rust에서 쓰고, 60초 뒤 내용이 그대로면 비운다. 그 전에 앱을 끝내면 끝낼 때 같은 확인을 하고 비운다. 앱이 강제로 끝나면(강제 종료, 충돌) 비우지 못한다. 앱이 복사하는 값(호출 토큰, 초대 링크, 다시 본 값)에는 클립보드 기록에서 빼 달라는 표시를 붙인다(macOS `org.nspasteboard.ConcealedType`, Linux `x-kde-passwordManagerHint`). 붙이는 표시는 이것뿐이다. 이 표시를 따르지 않는 기록 도구는 값을 남길 수 있다. macOS에서는 이 기기에만 두라는 설정(`currentHostOnly`)을 쓰지 않으므로, 같은 Apple 계정으로 Handoff를 켠 다른 Apple 기기에 유니버설 클립보드로 값이 넘어갈 수 있다. 웹뷰는 클립보드를 읽지 못한다.
-8. 복구 코드·토큰·초대 링크·다시 본 값이 화면에 있는 동안 창 내용 보호(화면 캡처 차단)를 켠다. macOS와 Windows에서만 된다. Linux의 창 시스템에는 이런 장치가 없어서 `secure_view`가 `{protected: false}`를 돌려준다. 그때 화면은 캡처를 막는다고 말하지 않는다.
+8. 복구 코드·토큰·초대 링크·다시 본 값이 화면에 있는 동안 창 내용 보호를 요청한다. 화면 캡처를 막는다고 보장하지 않는 최선의 노력이다.
+   - macOS: Tauri의 `set_content_protected`로 창의 `NSWindow.sharingType`을 `none`으로 바꾸는 것이 전부다. macOS 15부터 ScreenCaptureKit을 쓰는 캡처·녹화·화면 공유 도구는 이 설정을 꼭 따르지 않는다는 개발자 보고가 있고, 배포 빌드에서 막히는지 시험하지 않았다. `secure_view`의 `{protected: true}`는 요청이 적용됐다는 뜻일 뿐이다.
+   - Linux: 창 시스템에 이런 장치가 없어서 아무것도 하지 않고, `secure_view`는 늘 `{protected: false}`를 돌려준다.
+   - 화면은 어느 플랫폼에서도 캡처를 막는다고 말하지 않는다.
 9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
 
 ## 9. 빌드·시험·CI
@@ -235,11 +239,13 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ## 10. 남은 한계
 
 - 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
-- 앱 서명·공증과 자동 업데이트는 없다. 개발 빌드만 만든다.
+- Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 만들 수 있는 것은 시험용으로 ad-hoc 서명한 .dmg뿐이다. 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다.
+- Apple Silicon(arm64)용만 만든다. Intel Mac용이나 유니버설 빌드는 없다.
+- 새 버전이 나와도 앱이 알려 주거나 바꿔 주지 않는다. 사용자가 직접 받아 바꿔 넣어야 하고, 보안 수정도 그때까지 들어오지 않는다.
 - 팀 공유는 기존 명세대로 같은 LAN·VPN 안의 직접 연결만 지원한다.
 - 창을 닫아도 앱, 중계기, 에이전트 터미널은 계속 돈다. macOS는 Dock에서 다시 열고 Cmd+Q로 끝낸다. Linux에는 트레이가 없어서 다시 실행하면 창이 열리고 `zeropw-desktop --quit`로 끝낸다.
 - 앱은 사용자마다 하나만 뜬다. Linux는 단일 인스턴스 플러그인이 사용자의 D-Bus 세션 버스에서 두 번째 실행의 인자(`--quit`, `zeropw://` 링크)를 첫 실행에 넘긴다. macOS에서는 그 플러그인이 모든 계정이 같이 쓰는 `/tmp`의 고정 소켓을 써서, 다른 계정이 그 자리를 차지하면 앱이 아예 뜨지 않는다. 그래서 macOS에서는 쓰지 않는다. LaunchServices가 사용자마다 하나만 띄우고 링크는 open-url 이벤트로 오며, 실행 파일을 직접 실행하거나 `open -n`으로 띄운 두 번째 앱은 앱 데이터 폴더(0700)의 잠금 파일을 보고 끝난다. 대신 macOS에서 `--quit`는 실행 중인 앱을 끝내지 못한다.
-- Linux에는 창 내용 보호가 없다. 복구 코드, 토큰, 초대 링크, 다시 본 값을 띄운 창도 스크린숏, 화면 녹화, 화면 공유에 그대로 찍힌다(§8.8).
+- 화면 캡처를 막는다고 약속하지 않는다(§8.8). macOS에서는 창 내용 보호를 요청할 뿐이고, macOS 15부터 ScreenCaptureKit을 쓰는 도구가 이를 따르지 않는다는 보고가 있으며 배포 빌드에서 시험하지 않았다. Linux에는 창 내용 보호가 없다. 복구 코드, 토큰, 초대 링크, 다시 본 값을 띄운 창도 스크린숏, 화면 녹화, 화면 공유에 그대로 찍힌다.
 - 터미널을 닫거나 앱을 끝내도 세션과 프로세스 트리를 떠난 프로세스(`setsid <명령> &`, tmux·screen 서버, 데몬)와 다른 계정의 프로세스(추천하는 다른 계정 실행의 에이전트 포함)는 멈추지 못한다(§4.4). 이들이 든 호출 토큰은 `principal_disable`로만 막는다. 앱이 강제로 끝나면 이 정리도 일어나지 않고, PTY가 닫힐 때 커널이 보내는 끊김 신호만 남는다.
 - 클립보드 기록에서 빼 달라는 표시를 따르지 않는 도구는 복사한 값을 남길 수 있고, macOS 유니버설 클립보드는 그 값을 다른 Apple 기기로 보낼 수 있다(§8.7).
 - Linux에서 `zeropw://` 링크는 deb·AppImage로 설치해 `.desktop` 등록이 된 뒤에만 앱으로 온다. 실행 중에 스킴을 등록하지 않는다.
