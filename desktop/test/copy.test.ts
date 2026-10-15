@@ -80,11 +80,26 @@ describe('copy table', () => {
     // a joined device syncs only with other-device access on
     for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
     // stop and revocation block new requests only; open SSH sessions are named as a limit
-    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub'] as const) expect(COPY[k]).toContain('새 ');
+    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub', 'agents.disable.sub', 'conns.disable.sub'] as const) {
+      expect(COPY[k], k).toContain('새 ');
+    }
     expect(COPY['session.note']).toContain('SSH');
     // a key revoked or replaced in the vault still works at the service
     for (const k of ['inc.close.note', 'team.remove.warn', 'toast.team.removed', 'toast.key.revoked', 'toast.key.replaced', 'keys.provider.note'] as const) {
       expect(COPY[k], k).toContain('서비스');
+    }
+  });
+
+  it('shows the open-session note on every sheet that blocks access (DESIGN.md §5.3)', () => {
+    // stop-all, grant revoke, agent disable, connection disable, key revoke, incident declare
+    const blocking = ['sheet-stop', 'sheet-grant-revoke', 'sheet-agent-disable', 'sheet-conn-disable', 'sheet-key-confirm', 'sheet-inc-declare'];
+    for (const id of blocking) {
+      const file = appFiles.find(([, text]) => text.includes(`id="${id}"`));
+      expect(file, id).toBeDefined();
+      const text = file?.[1] ?? '';
+      const from = text.indexOf(`id="${id}"`);
+      const next = text.indexOf('id="sheet-', from + 1);
+      expect(text.slice(from, next < 0 ? undefined : next), id).toContain(`t('session.note')`);
     }
   });
 

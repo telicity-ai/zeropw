@@ -391,7 +391,7 @@ export const COPY = {
   'conns.disable': '끄기',
   'conns.disable.aria': '{id} 끄기',
   'conns.disable.title': '연결 끄기',
-  'conns.disable.sub': '이 연결로는 더 이상 중계하지 않아요',
+  'conns.disable.sub': '이 연결로 오는 새 요청을 바로 막아요',
   'conns.disable.warn': '끈 연결은 다시 켤 수 없어요',
   'conns.disable.confirm': '끄기',
   'conn.err.exists': '이미 있는 이름이에요',
