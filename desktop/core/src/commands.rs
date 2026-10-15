@@ -1,19 +1,22 @@
 //! [`Core`]: one method per IPC command in desktop/src/ipc/contract.ts (docs/desktop-app.md §5).
 //!
 //! Tauri-only pieces stay outside: `file_pick` opens a native dialog and registers the chosen
-//! path with [`Core::files`]; `onetime_copy` receives a [`Clipboard`]; `terminal_open`
-//! receives a [`TerminalSink`] wrapping the output `Channel`; events go to an [`EventSink`];
-//! the backup commands receive the path the save/open dialog returned.
+//! path with [`Core::files`]; `onetime_copy` receives a [`Clipboard`]; `terminal_open` and
+//! `terminal_attach` receive a [`TerminalSink`] wrapping the output `Channel`; `secure_view`
+//! receives a [`ScreenGuard`]; events go to an [`EventSink`]; the backup commands receive the
+//! path the save/open dialog returned.
 //!
 //! Every method blocks (it may run a child process for up to 60–90 s), so the Tauri layer
 //! should call them from async commands on a blocking thread.
 //!
 //! "Re-auth" commands take the administrator passphrase and pass it to zeropw-admin in the
-//! input envelope; the core refuses an empty one. Whether the passphrase is verified is the
-//! CLI's decision: today `secret reveal`, `restore-ack`, `incident close`, `incident declare
-//! --scope all` and `team share` verify it, while `resume`, `connection create-*`,
-//! `grant create`, `approvals approve`, `team invite`, `team remove` and `restore` accept the
-//! envelope without checking the passphrase.
+//! input envelope; the core refuses an empty one. `secret reveal`, `restore-ack`, `incident
+//! close`, `incident declare --scope all` and `team share` verify it in the CLI itself. For
+//! the commands the app re-authenticates but the CLI would run without a passphrase
+//! (`resume`, `connection create-http`/`create-ssh`, `grant create`, `approvals approve`,
+//! `team invite`, `team remove` and `restore`) the core adds the hidden global
+//! `--require-admin` ([`REQUIRE_ADMIN_COMMANDS`]) so the CLI checks the envelope's passphrase
+//! before it runs them.
 
 use std::fs;
 use std::io::Read;
@@ -31,7 +34,7 @@ use crate::admin::{
     self, AdminArgs, AdminRunner, Envelope, JOIN_TIMEOUT, MAX_SECRET_BYTES, is_project_name,
 };
 use crate::error::AppError;
-use crate::hooks::{Clipboard, CoreEvent, EventSink, FilePurpose, FileTokens};
+use crate::hooks::{Clipboard, CoreEvent, EventSink, FilePurpose, FileTokens, ScreenGuard};
 use crate::netif::{self, NetInterface};
 use crate::onetime::{OneTimeKind, OneTimeStore};
 use crate::paths::{self, AppPaths};
@@ -41,11 +44,26 @@ use crate::serve::{self, ServeConfig, ServeStatus, ServeSupervisor};
 use crate::settings::{self, Settings};
 use crate::sshkey;
 use crate::strength::{self, Strength};
-use crate::terminal::{TerminalManager, TerminalProgram, TerminalRequest, TerminalSink};
+use crate::terminal::{
+    RING_BYTES, TerminalManager, TerminalProgram, TerminalRequest, TerminalSink, TerminalSummary,
+};
 
 /// How long a copied one-time value may stay on the clipboard (§8.7).
 pub const CLIPBOARD_CLEAR_AFTER: Duration = Duration::from_secs(60);
 const MAX_INVITE_CHARS: usize = 4096;
+
+/// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
+/// re-authenticates them, the CLI alone would not).
+pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 8] = [
+    &["resume"],
+    &["connection", "create-http"],
+    &["connection", "create-ssh"],
+    &["grant", "create"],
+    &["approvals", "approve"],
+    &["team", "invite"],
+    &["team", "remove"],
+    &["restore"],
+];
 const MAX_LIMIT: u32 = 10_000;
 
 // ---------------------------------------------------------------------------------------------
@@ -324,6 +342,23 @@ pub struct TerminalOpenOut {
     pub suggestions: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TerminalListOut {
+    pub terminals: Vec<TerminalSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalIdIn {
+    pub terminal_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecureViewIn {
+    pub on: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LimitIn {
@@ -510,6 +545,7 @@ pub struct CoreConfig {
     pub serve_stop_grace: Duration,
     pub clipboard_clear_after: Duration,
     pub terminal_program: TerminalProgram,
+    pub terminal_ring_bytes: usize,
 }
 
 impl CoreConfig {
@@ -522,6 +558,7 @@ impl CoreConfig {
             serve_stop_grace: serve::STOP_GRACE,
             clipboard_clear_after: CLIPBOARD_CLEAR_AFTER,
             terminal_program: TerminalProgram::LoginShell,
+            terminal_ring_bytes: RING_BYTES,
         }
     }
 }
@@ -550,7 +587,10 @@ impl Core {
                 .with_timeouts(config.serve_start_timeout, config.serve_stop_grace),
             store: OneTimeStore::new(),
             files: FileTokens::new(),
-            terminals: TerminalManager::new(config.terminal_program),
+            terminals: TerminalManager::with_ring_bytes(
+                config.terminal_program,
+                config.terminal_ring_bytes,
+            ),
             events,
             clipboard_clear_after: config.clipboard_clear_after,
             settings_lock: Mutex::new(()),
@@ -592,9 +632,14 @@ impl Core {
 
     // -- status and onboarding ------------------------------------------------------------
 
+    /// Whether a vault exists in the state directory (no CLI call).
+    pub fn initialized(&self) -> bool {
+        self.paths.state_dir().join("admin.json").is_file()
+    }
+
     pub fn app_status(&self) -> Result<AppStatus, AppError> {
         let state_dir = self.paths.state_dir();
-        let initialized = state_dir.join("admin.json").is_file();
+        let initialized = self.initialized();
         let serve = self.serve.status();
         let control = if initialized {
             Some(self.control_get()?)
@@ -704,7 +749,7 @@ impl Core {
     pub fn resume(&self, input: PassphraseIn) -> Result<Control, AppError> {
         require_passphrase(&input.admin_passphrase)?;
         let control = Control::from_cli(&self.run(
-            AdminArgs::command(&["resume"]),
+            AdminArgs::command(&["resume"]).require_admin(),
             Envelope::new().admin_passphrase(&input.admin_passphrase),
         )?)?;
         self.events.emit(CoreEvent::ControlChanged(control));
@@ -846,6 +891,7 @@ impl Core {
     pub fn connection_create_http(&self, input: HttpConnectionIn) -> Result<Value, AppError> {
         require_passphrase(&input.admin_passphrase)?;
         let mut args = AdminArgs::command(&["connection", "create-http"])
+            .require_admin()
             .opt("id", &input.id)?
             .opt("project", &input.project)?
             .opt("environment", &input.environment)?
@@ -887,6 +933,7 @@ impl Core {
             return Err(AppError::invalid_input("host_key_required"));
         }
         let mut args = AdminArgs::command(&["connection", "create-ssh"])
+            .require_admin()
             .opt("id", &input.id)?
             .opt("project", &input.project)?
             .opt("environment", &input.environment)?
@@ -933,7 +980,9 @@ impl Core {
                 .opt_nonempty("runtime", Some(input.runtime.as_str()))?,
             &Envelope::new(),
         )?;
-        let token_ref = self.store.put(OneTimeKind::CallerToken, out.token)?;
+        let token_ref = self
+            .store
+            .put_labeled(OneTimeKind::CallerToken, out.token, &out.id)?;
         Ok(PrincipalCreateOut {
             id: out.id,
             runtime: out.runtime,
@@ -955,6 +1004,7 @@ impl Core {
     pub fn grant_create(&self, input: GrantCreateIn) -> Result<Value, AppError> {
         require_passphrase(&input.admin_passphrase)?;
         let mut args = AdminArgs::command(&["grant", "create"])
+            .require_admin()
             .opt("principal", &input.principal)?
             .opt("connection", &input.connection)?
             .opt_nonempty("ttl", Some(input.ttl.as_str()))?;
@@ -975,16 +1025,18 @@ impl Core {
 
     /// Open a shell with the token from `token_ref` in its environment. The token entry is
     /// not consumed, so the "use in another terminal" menu can still show or copy it once.
+    /// The terminal stays in the registry after the view that opened it goes away
+    /// (`terminal_list`, `terminal_attach`) until `terminal_close` or app quit.
     pub fn terminal_open(
         &self,
         input: TerminalOpenIn,
         sink: Box<dyn TerminalSink>,
     ) -> Result<TerminalOpenOut, AppError> {
-        let suggestions =
-            crate::terminal::suggestions(&self.paths.bin_dir, input.as_user.as_deref())?;
-        let token = self
+        let as_user = input.as_user.as_deref();
+        let suggestions = crate::terminal::suggestions(&self.paths.bin_dir, as_user)?;
+        let (token, principal) = self
             .store
-            .peek_kind(&input.token_ref, OneTimeKind::CallerToken)?;
+            .peek_kind_labeled(&input.token_ref, OneTimeKind::CallerToken)?;
         let url = self
             .serve
             .url()
@@ -996,11 +1048,36 @@ impl Core {
                 bin_dir: &self.paths.bin_dir,
                 cols: 80,
                 rows: 24,
+                principal: principal.as_deref().unwrap_or_default(),
+                as_user,
             },
             sink,
         )?;
         Ok(TerminalOpenOut {
             terminal_id,
+            suggestions,
+        })
+    }
+
+    /// Terminals in the registry, oldest first, value-free.
+    pub fn terminal_list(&self) -> TerminalListOut {
+        TerminalListOut {
+            terminals: self.terminals.list(),
+        }
+    }
+
+    /// Replay a terminal's buffered output into `sink`, then keep streaming to it (the
+    /// previous view's sink is dropped). Returns the same suggestions `terminal_open` gave.
+    pub fn terminal_attach(
+        &self,
+        input: TerminalIdIn,
+        sink: Box<dyn TerminalSink>,
+    ) -> Result<TerminalOpenOut, AppError> {
+        let attached = self.terminals.attach(&input.terminal_id, sink)?;
+        let suggestions =
+            crate::terminal::suggestions(&self.paths.bin_dir, attached.as_user.as_deref())?;
+        Ok(TerminalOpenOut {
+            terminal_id: input.terminal_id,
             suggestions,
         })
     }
@@ -1015,6 +1092,17 @@ impl Core {
 
     pub fn terminal_close(&self, terminal_id: &str) {
         self.terminals.close(terminal_id)
+    }
+
+    // -- screen capture -----------------------------------------------------------------------
+
+    /// `secure_view`: exclude the window from screen capture while a one-time value is shown.
+    pub fn secure_view(
+        &self,
+        input: SecureViewIn,
+        guard: &dyn ScreenGuard,
+    ) -> Result<(), AppError> {
+        guard.set_protected(input.on)
     }
 
     // -- records ------------------------------------------------------------------------------
@@ -1036,7 +1124,9 @@ impl Core {
     pub fn approvals_approve(&self, input: ApproveIn) -> Result<Value, AppError> {
         require_passphrase(&input.admin_passphrase)?;
         self.run(
-            AdminArgs::command(&["approvals", "approve"]).opt("digest", &input.digest)?,
+            AdminArgs::command(&["approvals", "approve"])
+                .require_admin()
+                .opt("digest", &input.digest)?,
             Envelope::new().admin_passphrase(&input.admin_passphrase),
         )
     }
@@ -1090,7 +1180,9 @@ impl Core {
     pub fn backup_restore(&self, input: &Path, pass: PassphraseIn) -> Result<Value, AppError> {
         require_passphrase(&pass.admin_passphrase)?;
         self.run(
-            AdminArgs::command(&["restore"]).opt("in", &absolute(input)?)?,
+            AdminArgs::command(&["restore"])
+                .require_admin()
+                .opt("in", &absolute(input)?)?,
             Envelope::new().admin_passphrase(&pass.admin_passphrase),
         )
     }
@@ -1141,6 +1233,7 @@ impl Core {
         require_passphrase(&input.admin_passphrase)?;
         self.run(
             AdminArgs::command(&["team", "remove"])
+                .require_admin()
                 .opt("env", &input.env)?
                 .opt("device", &input.device)?,
             Envelope::new().admin_passphrase(&input.admin_passphrase),
@@ -1169,6 +1262,7 @@ impl Core {
         }
         let out: Created = self.runner.run_parsed(
             &AdminArgs::command(&["team", "invite"])
+                .require_admin()
                 .opt("env", &input.env)?
                 .opt("role", input.role.as_str())?
                 .opt("name", &input.name)?
@@ -1288,6 +1382,12 @@ impl Core {
         })?;
         self.events.emit(CoreEvent::InvitePreview(out.clone()));
         Ok(out)
+    }
+
+    /// Whether a preview reference from `team_invite_preview`/`open_deep_link` can still be
+    /// joined (not yet used, discarded or expired).
+    pub fn invite_pending(&self, reference: &str) -> bool {
+        self.store.contains_kind(reference, OneTimeKind::InviteText)
     }
 
     /// `team join --stdin` with the previewed invite (90 s limit). The invite is forgotten

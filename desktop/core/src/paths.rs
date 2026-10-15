@@ -77,7 +77,18 @@ pub fn default_app_data_dir() -> Option<PathBuf> {
 /// `ZEROPW_BIN_DIR` during development, otherwise the folder of the running executable
 /// (the bundle's `Contents/MacOS`, where the binaries ship next to the app).
 pub fn default_bin_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os(BIN_DIR_ENV).filter(|v| !v.is_empty()) {
+    bin_dir(true)
+}
+
+/// The folder holding the shipped binaries: the running executable's folder, or
+/// `ZEROPW_BIN_DIR` when `allow_override` is set and the variable is a non-empty absolute
+/// path. Release builds of the app pass `false`, so the environment cannot point the app at
+/// other binaries.
+pub fn bin_dir(allow_override: bool) -> Option<PathBuf> {
+    if allow_override
+        && let Some(dir) = std::env::var_os(BIN_DIR_ENV).filter(|v| !v.is_empty())
+        && Path::new(&dir).is_absolute()
+    {
         return Some(PathBuf::from(dir));
     }
     std::env::current_exe()

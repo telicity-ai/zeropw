@@ -7,7 +7,9 @@
 //! - Single instance: `serve.json` (pid, url, start time) in the app data folder. A later app
 //!   run attaches only when that pid is alive, its command line is `zeropw-admin … serve` for
 //!   this state directory, and `/healthz` answers 200 with `Server: zeropw-prototype`.
-//! - Stop: SIGTERM, then SIGKILL only after up to 25 s.
+//! - Stop: SIGTERM, then SIGKILL only after up to 25 s. A stop that arrives while a start is
+//!   still waiting for the sidecar cancels that start (the half-started sidecar is stopped)
+//!   instead of waiting out the 60 s start budget, so quitting the app is never held up.
 //! - Closing the window does not stop it; the app calls [`ServeSupervisor::stop`] on quit.
 
 use std::ffi::OsString;
@@ -17,6 +19,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
@@ -99,6 +102,8 @@ pub struct ServeSupervisor {
     start_timeout: Duration,
     stop_grace: Duration,
     running: Mutex<Running>,
+    /// Set by `stop` so a start in progress gives up at its next check.
+    cancel_start: AtomicBool,
 }
 
 impl ServeSupervisor {
@@ -112,6 +117,7 @@ impl ServeSupervisor {
             start_timeout: START_TIMEOUT,
             stop_grace: STOP_GRACE,
             running: Mutex::new(Running::Stopped),
+            cancel_start: AtomicBool::new(false),
         }
     }
 
@@ -156,6 +162,7 @@ impl ServeSupervisor {
             return Err(AppError::invalid_input("invalid_port").with_detail("gateway_port"));
         }
         let mut running = self.lock();
+        self.cancel_start.store(false, Ordering::SeqCst);
         self.refresh(&mut running);
         if !matches!(*running, Running::Stopped) {
             return Ok(status_of(&mut running));
@@ -177,6 +184,8 @@ impl ServeSupervisor {
     /// SIGTERM, wait up to the grace period, then SIGKILL. Also stops a sidecar recorded by an
     /// earlier app run that this run never attached to.
     pub fn stop(&self) -> ServeStatus {
+        // Before taking the lock: a start holding it notices and gives up.
+        self.cancel_start.store(true, Ordering::SeqCst);
         let mut running = self.lock();
         match std::mem::replace(&mut *running, Running::Stopped) {
             Running::Owned { mut child, .. } => terminate_child(&mut child, self.stop_grace),
@@ -305,6 +314,9 @@ impl ServeSupervisor {
                     return Err(self.fail_start(&mut child, log_offset, false));
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    if self.cancel_start.load(Ordering::SeqCst) {
+                        return Err(self.cancelled_start(&mut child));
+                    }
                     if !matches!(child.try_wait(), Ok(None)) {
                         return Err(self.fail_start(&mut child, log_offset, false));
                     }
@@ -326,6 +338,9 @@ impl ServeSupervisor {
         loop {
             if healthz(port, HEALTH_IO_TIMEOUT).is_ok_and(|h| h.is_zeropw()) {
                 break;
+            }
+            if self.cancel_start.load(Ordering::SeqCst) {
+                return Err(self.cancelled_start(&mut child));
             }
             if !matches!(child.try_wait(), Ok(None)) {
                 return Err(self.fail_start(&mut child, log_offset, false));
@@ -355,6 +370,12 @@ impl ServeSupervisor {
             url,
             team_listen: config.team_listen.clone(),
         })
+    }
+
+    /// A `stop` arrived while starting: stop the half-started sidecar.
+    fn cancelled_start(&self, child: &mut Child) -> AppError {
+        terminate_child(child, self.stop_grace);
+        AppError::state("serve_start_cancelled")
     }
 
     /// Stop a failed start and report why: the CLI's own `{error, reason}` from the log when it

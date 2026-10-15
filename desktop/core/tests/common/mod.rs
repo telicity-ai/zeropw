@@ -33,13 +33,30 @@ impl Call {
         serde_json::from_str(self.stdin.as_deref().expect("call had no envelope")).unwrap()
     }
 
-    /// argv after `--state-dir=… --input-envelope`.
+    /// argv after `--state-dir=… --input-envelope [--require-admin]`.
     pub fn args(&self) -> Vec<&str> {
         self.argv
             .iter()
             .map(String::as_str)
-            .filter(|a| !a.starts_with("--state-dir=") && *a != "--input-envelope")
+            .filter(|a| {
+                !a.starts_with("--state-dir=")
+                    && *a != "--input-envelope"
+                    && *a != "--require-admin"
+            })
             .collect()
+    }
+
+    /// `--require-admin` is present, exactly once, right after `--input-envelope`.
+    pub fn requires_admin(&self) -> bool {
+        let at = |i: usize| self.argv.get(i).map(String::as_str);
+        let present = at(1) == Some("--input-envelope") && at(2) == Some("--require-admin");
+        let count = self.argv.iter().filter(|a| *a == "--require-admin").count();
+        assert!(
+            count == usize::from(present),
+            "--require-admin out of place in {:?}",
+            self.argv
+        );
+        present
     }
 
     pub fn env_var(&self, key: &str) -> Option<&str> {
@@ -191,6 +208,17 @@ impl Events {
             .filter(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
             .collect()
+    }
+}
+
+/// Records `secure_view` toggles.
+#[derive(Default)]
+pub struct FakeScreen(pub Mutex<Vec<bool>>);
+
+impl zeropw_desktop_core::ScreenGuard for FakeScreen {
+    fn set_protected(&self, on: bool) -> Result<(), AppError> {
+        self.0.lock().unwrap().push(on);
+        Ok(())
     }
 }
 

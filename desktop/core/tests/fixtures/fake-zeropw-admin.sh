@@ -46,6 +46,23 @@ if [ "$envelope" = 1 ]; then
   cat > "$calls/$n.stdin"
 fi
 
+# The hidden global --require-admin: only right after --input-envelope, and like the real CLI
+# it refuses to run without an admin passphrase in the envelope.
+i=0
+for a in "$@"; do
+  i=$((i + 1))
+  if [ "$a" = "--require-admin" ]; then
+    if [ "$i" != 3 ] || [ "${2:-}" != "--input-envelope" ]; then
+      echo '{"error":"UsageError","reason":"usage","detail":"--require-admin out of place"}' >&2
+      exit 2
+    fi
+    if ! grep -q '"admin_passphrase":"[^"]' "$calls/$n.stdin"; then
+      echo '{"error":"AuthFailed","reason":"passphrase_missing"}' >&2
+      exit 1
+    fi
+  fi
+done
+
 r="$dir/responses/$key"
 if [ -f "$r.sleep" ]; then
   sleep "$(cat "$r.sleep")"

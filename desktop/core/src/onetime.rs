@@ -49,6 +49,8 @@ impl OneTimeKind {
 struct Entry {
     kind: OneTimeKind,
     value: SecretString,
+    /// A value-free note about the entry (the principal a caller token belongs to).
+    label: Option<String>,
     expires_at: Instant,
 }
 
@@ -101,6 +103,26 @@ impl OneTimeStore {
 
     /// Store `value` and return its reference (32 hex characters, 128 random bits).
     pub fn put(&self, kind: OneTimeKind, value: SecretString) -> Result<String, AppError> {
+        self.insert(kind, value, None)
+    }
+
+    /// [`Self::put`] with a value-free label kept next to the value (a caller token remembers
+    /// its principal, so a terminal opened with it can say whose it is).
+    pub fn put_labeled(
+        &self,
+        kind: OneTimeKind,
+        value: SecretString,
+        label: &str,
+    ) -> Result<String, AppError> {
+        self.insert(kind, value, Some(label.to_owned()))
+    }
+
+    fn insert(
+        &self,
+        kind: OneTimeKind,
+        value: SecretString,
+        label: Option<String>,
+    ) -> Result<String, AppError> {
         let reference = random_ref()?;
         let expires_at = (self.now)() + kind.ttl();
         let mut entries = self.locked_live();
@@ -112,6 +134,7 @@ impl OneTimeStore {
             Entry {
                 kind,
                 value,
+                label,
                 expires_at,
             },
         );
@@ -166,6 +189,29 @@ impl OneTimeStore {
             Some(entry) if entry.kind == kind => Ok(entry.value.duplicate()),
             _ => Err(unknown()),
         }
+    }
+
+    /// [`Self::peek_kind`] plus the entry's label.
+    pub fn peek_kind_labeled(
+        &self,
+        reference: &str,
+        kind: OneTimeKind,
+    ) -> Result<(SecretString, Option<String>), AppError> {
+        check_ref(reference)?;
+        let entries = self.locked_live();
+        match entries.get(reference) {
+            Some(entry) if entry.kind == kind => Ok((entry.value.duplicate(), entry.label.clone())),
+            _ => Err(unknown()),
+        }
+    }
+
+    /// Whether `reference` still holds a live value of `kind` (nothing is copied or consumed).
+    pub fn contains_kind(&self, reference: &str, kind: OneTimeKind) -> bool {
+        check_ref(reference).is_ok()
+            && self
+                .locked_live()
+                .get(reference)
+                .is_some_and(|entry| entry.kind == kind)
     }
 
     /// `onetime_discard`: forget a value. Idempotent.
@@ -328,6 +374,35 @@ mod tests {
         store.discard(&r);
         assert!(store.is_empty());
         assert_eq!(format!("{store:?}"), "OneTimeStore { entries: 0 }");
+    }
+
+    #[test]
+    fn labels_travel_with_the_value() {
+        let store = OneTimeStore::new();
+        let r = store
+            .put_labeled(OneTimeKind::CallerToken, "zpw_synthetic".into(), "agent-1")
+            .unwrap();
+        let (value, label) = store
+            .peek_kind_labeled(&r, OneTimeKind::CallerToken)
+            .unwrap();
+        assert_eq!(value.expose(), "zpw_synthetic");
+        assert_eq!(label.as_deref(), Some("agent-1"));
+        assert!(store.contains_kind(&r, OneTimeKind::CallerToken));
+        assert!(!store.contains_kind(&r, OneTimeKind::InviteText));
+        assert!(!store.contains_kind("not-a-ref", OneTimeKind::CallerToken));
+        let plain = store.put(OneTimeKind::CallerToken, "x".into()).unwrap();
+        assert_eq!(
+            store
+                .peek_kind_labeled(&plain, OneTimeKind::CallerToken)
+                .unwrap()
+                .1,
+            None
+        );
+        assert!(
+            store
+                .peek_kind_labeled(&r, OneTimeKind::RevealedSecret)
+                .is_err()
+        );
     }
 
     #[test]

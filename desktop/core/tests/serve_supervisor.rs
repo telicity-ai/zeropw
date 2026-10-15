@@ -165,6 +165,50 @@ fn a_serve_that_never_gets_healthy_times_out_and_is_stopped() {
     assert!(!fx.paths.serve_pid_file().exists());
 }
 
+/// Quitting the app while serve is still starting must not wait out the start budget.
+#[test]
+fn a_stop_during_a_start_cancels_it_promptly() {
+    let fx = Fixture::new();
+    // Prints its URL but never answers /healthz, so the start would wait the full 30 s.
+    let sup = std::sync::Arc::new(
+        ServeSupervisor::new(&fx.paths)
+            .with_timeouts(Duration::from_secs(30), Duration::from_secs(2)),
+    );
+    let starter = sup.clone();
+    let port = free_port();
+    let start = std::thread::spawn(move || {
+        starter.start(&ServeConfig {
+            port,
+            team_listen: None,
+        })
+    });
+    assert!(wait_until(Duration::from_secs(5), || fx.count("serve") == 1));
+    std::thread::sleep(Duration::from_millis(300));
+    let stopping = Instant::now();
+    assert_eq!(sup.stop(), ServeStatus::stopped());
+    assert!(
+        stopping.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        stopping.elapsed()
+    );
+    let e = start.join().unwrap().unwrap_err();
+    assert_eq!(e.reason, "serve_start_cancelled");
+    assert!(!sup.status().running);
+    assert!(!fx.paths.serve_pid_file().exists());
+    // A later start is not affected by the earlier cancellation.
+    let healthy = health_server();
+    let status = sup
+        .start(&ServeConfig {
+            port: healthy,
+            team_listen: None,
+        })
+        .unwrap();
+    assert!(status.running);
+    let pid = status.pid.unwrap();
+    sup.stop();
+    assert!(wait_until(Duration::from_secs(3), || gone(pid)));
+}
+
 #[test]
 fn a_serve_printing_a_non_loopback_url_is_refused() {
     let fx = Fixture::new();

@@ -1,5 +1,6 @@
-//! Seams the Tauri layer fills in: events to the webview, the clipboard, and native file
-//! dialogs (through [`FileTokens`]). The core stays free of any Tauri dependency.
+//! Seams the Tauri layer fills in: events to the webview, the clipboard, window content
+//! protection ([`ScreenGuard`]) and native file dialogs (through [`FileTokens`]). The core
+//! stays free of any Tauri dependency.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -63,6 +64,13 @@ pub trait Clipboard: Send + Sync {
     fn write_text(&self, text: &str) -> Result<(), AppError>;
     fn read_text(&self) -> Option<SecretString>;
     fn clear(&self) -> Result<(), AppError>;
+}
+
+/// Window content protection (§8.8): while a one-time value (recovery code, caller token,
+/// invite link, revealed secret) is on screen, the window is excluded from screen capture.
+/// The Tauri layer implements this with the main window's content-protected flag.
+pub trait ScreenGuard: Send + Sync {
+    fn set_protected(&self, on: bool) -> Result<(), AppError>;
 }
 
 /// `file_pick` purposes.

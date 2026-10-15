@@ -5,7 +5,8 @@
 //! - [`admin`]: one `zeropw-admin --input-envelope` child per command, secrets on stdin only.
 //! - [`serve`]: the `zeropw-admin serve` sidecar (start, attach, stop, status).
 //! - [`onetime`]: single-use, short-lived values handed to the webview by reference.
-//! - [`terminal`]: the in-app PTY terminal with the caller token in its environment.
+//! - [`terminal`]: the in-app PTY terminals (caller token in the environment), kept in a
+//!   registry with a bounded output ring so a view can reattach.
 //! - [`commands`]: [`Core`], one method per IPC command in desktop/src/ipc/contract.ts.
 //! - [`settings`], [`strength`], [`recovery`], [`sshkey`], [`netif`]: supporting pieces.
 
@@ -29,12 +30,14 @@ pub mod terminal;
 
 pub use commands::{Control, Core, CoreConfig};
 pub use error::AppError;
-pub use hooks::{Clipboard, CoreEvent, EventSink, FilePick, FilePurpose, FileTokens, NoEvents};
+pub use hooks::{
+    Clipboard, CoreEvent, EventSink, FilePick, FilePurpose, FileTokens, NoEvents, ScreenGuard,
+};
 pub use paths::AppPaths;
 pub use secret::SecretString;
 pub use serve::ServeStatus;
 pub use settings::Settings;
-pub use terminal::{TerminalProgram, TerminalSink};
+pub use terminal::{TerminalProgram, TerminalSink, TerminalSummary};
 
 const _: () = {
     const fn shared<T: Send + Sync>() {}
