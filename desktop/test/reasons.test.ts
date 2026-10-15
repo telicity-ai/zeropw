@@ -62,7 +62,21 @@ describe('relay start failures', () => {
     expect(relayError('admin_binary_missing').key).toBe('relay.err.missing');
     expect(relayError('serve_spawn_failed')).toEqual({ key: 'relay.err.other', reason: 'serve_spawn_failed' });
     expect(relayError('<b>not a code</b>').reason).toBe('unknown');
-    for (const r of ['serve_exited', 'serve_start_timeout', 'admin_binary_missing', 'invalid_port', 'invalid_listen', 'x']) expect(hasCopy(relayError(r).key)).toBe(true);
+    for (const r of ['serve_exited', 'serve_start_timeout', 'admin_binary_missing', 'invalid_port', 'invalid_listen', 'listen_failed', 'x']) expect(hasCopy(relayError(r).key)).toBe(true);
+  });
+
+  it('tells a busy gateway port from a team address by the setting the core names (desktop/core/src/serve.rs listen_setting)', () => {
+    expect(relayError('listen_failed', 'gateway_port')).toEqual({ key: 'relay.err.portBusy', reason: 'listen_failed' });
+    expect(relayError('invalid_listen', 'team_listen').key).toBe('relay.err.team');
+    expect(relayError('invalid_listen', 'gateway_port').key).toBe('relay.err.listen');
+    expect(relayError('invalid_listen').key).toBe('relay.err.listen');
+    for (const r of ['team_invalid_listen_address', 'team_listen_failed', 'team_address_in_use']) {
+      expect(relayError(r, 'team_listen').key, r).toBe('relay.err.team');
+      expect(relayError(r).key, r).toBe('relay.err.team');       // an older core without the detail
+    }
+    expect(relayError('serve_exited', undefined).key).toBe('relay.err.exited');
+    expect(COPY['relay.err.portBusy']).toContain('중계기 포트');
+    expect(COPY['relay.err.portBusy']).not.toContain('다른 기기 접속');
   });
 });
 

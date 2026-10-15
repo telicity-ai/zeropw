@@ -28,6 +28,8 @@ export interface MockSeed {
   activity?: boolean;
   /** The next n relay starts fail as when the gateway port is taken (`listen_failed`, detail `gateway_port`), `vault_init` included. */
   relayFails?: number;
+  /** The next n relay starts end with a sidecar that exited without saying why (`serve_exited`, the generic code). */
+  relayExits?: number;
   /** Lifetime of one-time values other than revealed keys and previewed invites (the core keeps
    *  them 10 minutes). */
   onetimeTtlMs?: number;
@@ -169,6 +171,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const failures = new Map<CommandName, AppError>();
   const callLog: CommandName[] = [];
   let relayFails = seed.relayFails ?? 0;
+  let relayExits = seed.relayExits ?? 0;
   const ttl = seed.onetimeTtlMs ?? DEFAULT_TTL_MS;
   const inviteTtl = seed.inviteTtlMs ?? INVITE_TTL_MS;
   let adminPass: string | null = null;
@@ -207,16 +210,18 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (p !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
   };
   const startServe = () => {
-    // a relay that cannot bind its port exits at once; the core passes the sidecar's reason on
-    // with the setting that failed (desktop/core/src/serve.rs)
-    if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'listen_failed', 'gateway_port'); }
+    // a sidecar that exits before it prints a reason gets the core's generic code
+    if (relayExits > 0) { relayExits -= 1; throw fail('Unavailable', 'serve_exited'); }
     // the sidecar opens other-device access before the gateway, so an address this machine does
-    // not have stops the whole relay; the core passes the sidecar's reason on (rust/src/admin_cli.rs
-    // `run_serve`, rust/src/team/transport.rs)
+    // not have stops the whole relay; the core passes the sidecar's reason on with the setting
+    // that failed (rust/src/admin_cli.rs `run_serve`, rust/src/team/transport.rs,
+    // desktop/core/src/serve.rs `listen_setting`)
     const team = parseListen(settings.team_listen);
     if (settings.team_listen !== null && (!team || !interfaces().some((i) => i.ip === team.ip))) {
-      throw fail('InvalidInput', 'team_invalid_listen_address');
+      throw fail('InvalidInput', 'team_invalid_listen_address', 'team_listen');
     }
+    // then the gateway: a port another program holds stops it (rust/src/server.rs `listen_failed`)
+    if (relayFails > 0) { relayFails -= 1; throw fail('StateError', 'listen_failed', 'gateway_port'); }
     serve = { running: true, url: `http://127.0.0.1:${settings.gateway_port}`, pid: 40000 + (randBytes(1)[0] ?? 0), team_listen: settings.team_listen };
     emit('serve://status', serve);
   };

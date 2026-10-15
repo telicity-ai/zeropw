@@ -496,24 +496,39 @@ describe('other-device access and the relay', () => {
     const e = await turnOnListen('100.64.1.7', 47420).then(() => null, (x: unknown) => x);
     expect(e).toBeInstanceOf(ListenError);
     if (!(e instanceof ListenError)) throw new Error('expected a ListenError');
-    expect(e).toMatchObject({ reason: 'serve_exited', restored: true, relayBack: false });
+    expect(e).toMatchObject({ reason: 'listen_failed', restored: true, relayBack: false });
     expect((await call('settings_get')).team_listen).toBeNull();
-    // not blamed on the address (the relay is off without it too); the relay's own reason is reported
-    expect(listenErrorLines(e).map((l) => l.key)).toEqual(['listen.err.start', 'listen.err.relayOff']);
-    expect(relayError(toIpcError(relayLeftOff(e)).reason).key).toBe('relay.err.exited');
+    // the relay's own reason is reported: the core names the gateway port as the setting that failed
+    const down = toIpcError(relayLeftOff(e));
+    expect([down.error, down.reason, down.detail]).toEqual(['StateError', 'listen_failed', 'gateway_port']);
+    expect(relayError(down.reason, down.detail).key).toBe('relay.err.portBusy');
     // the other outcomes
     expect(listenFailureLines({ ...e, reason: 'team_address_in_use' }).map((l) => l.key)).toEqual(['listen.err.open', 'listen.err.relayOff']);
     expect(listenFailureLines({ ...e, restored: false }).map((l) => l.key)).toEqual(['listen.err.start', 'listen.err.kept']);
     expect(listenFailureLines({ ...e, reason: 'admin_binary_missing' })[0]?.key).toBe('relay.err.missing');
   });
 
+  it('does not blame the address when the relay exits without saying why, with or without it', async () => {
+    seeded({ relayExits: 3 });                                   // the generic code: the seeded start and both below
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await turnOnListen('100.64.1.7', 47420).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ListenError);
+    if (!(e instanceof ListenError)) throw new Error('expected a ListenError');
+    expect(e).toMatchObject({ reason: 'serve_exited', restored: true, relayBack: false });
+    expect((await call('settings_get')).team_listen).toBeNull();
+    expect(listenErrorLines(e).map((l) => l.key)).toEqual(['listen.err.start', 'listen.err.relayOff']);
+    const down = toIpcError(relayLeftOff(e));
+    expect([down.reason, down.detail]).toEqual(['serve_exited', undefined]);
+    expect(relayError(down.reason, down.detail).key).toBe('relay.err.exited');
+  });
+
   it('names other-device access when a saved team address keeps the relay off at launch, and starts it with access off', async () => {
     seeded({ teamListen: '100.64.1.7:47420', vpnDown: true });   // the core's start at launch failed
     expect((await call('serve_status')).running).toBe(false);
     const e = await rejection(call('serve_start'));
-    expect(e.reason).toBe('team_invalid_listen_address');
+    expect([e.error, e.reason, e.detail]).toEqual(['InvalidInput', 'team_invalid_listen_address', 'team_listen']);
     expect(isTeamListenReason(e.reason)).toBe(true);
-    expect(relayError(e.reason).key).toBe('relay.err.team');
+    expect(relayError(e.reason, e.detail).key).toBe('relay.err.team');
     expect(COPY['relay.err.team']).toContain('다른 기기 접속');
     expect(t('relay.team.hint', { address: '100.64.1.7:47420' })).toContain('100.64.1.7:47420');
     const s = await turnOffListen();
@@ -540,8 +555,19 @@ describe('relay start', () => {
     useMockBackend(backend);
     expect((await call('serve_status')).running).toBe(false);   // the seeded start failed
     const e = await rejection(call('serve_start'));
-    expect(e.reason).toBe('serve_exited');
-    expect(relayError(e.reason).key).toBe('relay.err.exited');
+    expect([e.error, e.reason, e.detail]).toEqual(['StateError', 'listen_failed', 'gateway_port']);
+    expect(relayError(e.reason, e.detail).key).toBe('relay.err.portBusy');
+    expect((await call('serve_start')).running).toBe(true);
+  });
+
+  it('keeps the generic line for a relay that exited without saying why', async () => {
+    backend?.dispose();
+    backend = createMockBackend({ latency: 0, initialized: true, relayExits: 2 });
+    useMockBackend(backend);
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await rejection(call('serve_start'));
+    expect([e.error, e.reason, e.detail]).toEqual(['Unavailable', 'serve_exited', undefined]);
+    expect(relayError(e.reason, e.detail).key).toBe('relay.err.exited');
     expect((await call('serve_start')).running).toBe(true);
   });
 });

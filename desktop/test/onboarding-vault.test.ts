@@ -34,7 +34,7 @@ describe('creating the vault', () => {
     const b = fresh({ relayFails: 1 });
     const rec = await call('recovery_generate');
     const attempts = { unsure: false };
-    await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, attempts);   // vault_init failed with serve_exited
+    await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, attempts);   // vault_init failed with listen_failed
     expect((await call('app_status')).initialized).toBe(true);
     expect((await call('serve_status')).running).toBe(false);
     expect(initCalls(b)).toBe(1);
@@ -46,7 +46,8 @@ describe('creating the vault', () => {
     const b = fresh({ relayFails: 3 });                          // another program keeps the gateway port
     const rec = await call('recovery_generate');
     await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, { unsure: false });
-    expect((await rejection(call('serve_start'))).reason).toBe('serve_exited');   // the create step's retry fails again
+    const again = await rejection(call('serve_start'));          // the create step's retry fails again
+    expect([again.reason, again.detail]).toEqual(['listen_failed', 'gateway_port']);
     // going on: no join opens the dashboard, which finds the vault and the relay off
     expect(afterRelayFailure(false)).toBe('dashboard');
     const status = await call('app_status');
