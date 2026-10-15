@@ -11,11 +11,13 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 use crate::argparse::{Arg, Outcome, Parser, TypeFn, Val};
 use crate::audit::RecordArgs;
 use crate::context::{Config, Context, OwnedTempDirRegistry};
 use crate::errors::Error;
+use crate::input_envelope::InputEnvelope;
 use crate::policy::{
     CliProfile, Connection, ConnectionChanges, HttpAuth, HttpScope, HttpTarget, SshTarget,
 };
@@ -153,6 +155,10 @@ fn build_parser() -> Parser {
             .metavar("DIR")
             .help("trusted state directory (0700)"),
     );
+    // docs/desktop-app.md §3.1: passphrases, a secret value and an invite
+    // arrive as one JSON object on stdin. Left out of the usage line and the
+    // help listing (`help=SUPPRESS`) so the recorded help text is unchanged.
+    parser.arg(Arg::opt("--input-envelope").flag().suppress_help());
     parser.subparsers("command", Some("COMMAND"));
     let sub = &mut parser;
     add(
@@ -380,6 +386,13 @@ fn build_parser() -> Parser {
         "refuse every relay, signature and execution until resume",
     );
     add(sub, "resume", "lift the global stop");
+    // Read-only `{stopped, restore_pending, incident_open}` (docs/desktop-app.md
+    // §3.1). Hidden from the top-level listing and choice list, which the
+    // recorded command-line contract pins.
+    sub.add_hidden_parser(
+        "status",
+        Some("print the global stop, restore and incident state (read-only)"),
+    );
 
     let approvals = group(sub, "approvals", "one-shot approvals for risky methods");
     add(approvals, "list", "list approval requests");
@@ -530,11 +543,42 @@ fn build_parser() -> Parser {
             .append()
             .metavar("HOST:PORT")
             .help("this node's reachable address (repeatable)"),
+    )
+    .arg(Arg::opt("--link").flag().help(
+        "also print a one-day zeropw://join# link, its invite id and expiry (the TTL is fixed at 24h)",
+    ));
+    add(
+        team,
+        "invites",
+        "list the invites this node made (status only; no secrets)",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "revoke-invite",
+        "revoke an invite that has not been used",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--id").required().metavar("INVITE_ID"));
+    add(
+        team,
+        "invite-info",
+        "preview an invite string or link offline (never joins)",
+    )
+    .arg(
+        Arg::opt("--stdin")
+            .flag()
+            .help("read the invite from standard input (or the input envelope)"),
     );
     add(team, "join", "dial the inviter, prove the invite, and join")
-        .arg(Arg::positional("invite"))
+        .arg(Arg::optional_positional("invite"))
         .arg(Arg::opt("--project").help("local project name (default: derived from the inviter)"))
-        .arg(Arg::opt("--environment").help("local environment name (default: shared)"));
+        .arg(Arg::opt("--environment").help("local environment name (default: shared)"))
+        .arg(
+            Arg::opt("--stdin")
+                .flag()
+                .help("read the invite string or link from standard input (or the input envelope)"),
+        );
     add(team, "members", "list team members").arg(env_arg());
     add(
         team,
@@ -704,8 +748,11 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
         ("team", "diff") => &["left", "right"],
         _ => &[],
     };
+    // An omitted optional positional (`team join --stdin`) is left out.
     for positional in positionals {
-        a.positional.push(text(positional));
+        if let Some(Val::Str(value)) = namespace.get(*positional) {
+            a.positional.push(value.clone());
+        }
     }
     for (dest, value) in &namespace {
         if dest == "state_dir" || dest.ends_with("command") || positionals.contains(&dest.as_str())
@@ -1116,8 +1163,54 @@ fn prompt_password_without_echo_race(prompt: &str) -> io::Result<String> {
     Ok(password)
 }
 
-fn passphrase(name: &str) -> Result<String, Error> {
-    let value = env::var(name).unwrap_or_default();
+/// The input envelope of this invocation (`--input-envelope`), read from
+/// stdin once before the command runs and wiped when it finishes.
+static INPUT_ENVELOPE: Mutex<Option<InputEnvelope>> = Mutex::new(None);
+
+/// Installs the envelope for one command and drops (wipes) it afterwards.
+struct EnvelopeScope;
+
+impl EnvelopeScope {
+    fn install(envelope: InputEnvelope) -> EnvelopeScope {
+        *INPUT_ENVELOPE.lock().unwrap_or_else(|e| e.into_inner()) = Some(envelope);
+        EnvelopeScope
+    }
+}
+
+impl Drop for EnvelopeScope {
+    fn drop(&mut self) {
+        let envelope = INPUT_ENVELOPE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        drop(envelope);
+    }
+}
+
+/// `Some(f(envelope))` when this invocation was given `--input-envelope`.
+fn with_envelope<T>(f: impl FnOnce(&InputEnvelope) -> T) -> Option<T> {
+    INPUT_ENVELOPE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(f)
+}
+
+fn passphrase(name: &str) -> Result<Zeroizing<String>, Error> {
+    // With an envelope, its field is the only source: never the environment
+    // or a terminal prompt.
+    if let Some(value) = with_envelope(|envelope| envelope.passphrase_for(name)) {
+        let field = if name == "ZEROPW_RECOVERY_PASSPHRASE" {
+            "recovery_passphrase"
+        } else {
+            "admin_passphrase"
+        };
+        return value.ok_or_else(|| {
+            Error::auth_failed("passphrase_missing")
+                .with_detail(format!("the input envelope has no {field}"))
+        });
+    }
+    let value = Zeroizing::new(env::var(name).unwrap_or_default());
     if !value.is_empty() {
         return Ok(value);
     }
@@ -1127,45 +1220,112 @@ fn passphrase(name: &str) -> Result<String, Error> {
         } else {
             "Administrator passphrase: "
         };
-        return prompt_password_without_echo_race(prompt).map_err(|_| {
-            Error::auth_failed("passphrase_missing")
-                .with_detail(format!("set {name} or run on a terminal"))
-        });
+        return prompt_password_without_echo_race(prompt)
+            .map(Zeroizing::new)
+            .map_err(|_| {
+                Error::auth_failed("passphrase_missing")
+                    .with_detail(format!("set {name} or run on a terminal"))
+            });
     }
     Err(Error::auth_failed("passphrase_missing")
         .with_detail(format!("set {name} or run on a terminal")))
 }
 
-fn read_secret(a: &Args, kind: &str) -> Result<Vec<u8>, Error> {
+fn read_secret(a: &Args, kind: &str) -> Result<Zeroizing<Vec<u8>>, Error> {
     let mut data = if let Some(path) = a.get("value-file").filter(|p| !p.is_empty()) {
         let file = fs::File::open(path).map_err(|e| os_error(&e))?;
-        let mut data = Vec::new();
+        // Sized up front so reading never reallocates (and leaves) a copy.
+        let mut data = Zeroizing::new(Vec::with_capacity(MAX_SECRET_BYTES + 1));
         file.take((MAX_SECRET_BYTES + 1) as u64)
             .read_to_end(&mut data)
             .map_err(|e| os_error(&e))?;
         data
     } else if a.has("stdin") {
-        let mut data = Vec::new();
-        io::stdin()
-            .take((MAX_SECRET_BYTES + 1) as u64)
-            .read_to_end(&mut data)
-            .map_err(|_| Error::invalid_input("io_error"))?;
-        data
+        // With an envelope, stdin was already consumed: `value_b64` stands in
+        // for it.
+        match with_envelope(InputEnvelope::value) {
+            Some(Some(value)) => value,
+            Some(None) => {
+                return Err(Error::invalid_input("secret_source_required")
+                    .with_detail("the input envelope has no value_b64"));
+            }
+            None => {
+                let mut data = Zeroizing::new(Vec::with_capacity(MAX_SECRET_BYTES + 1));
+                io::stdin()
+                    .take((MAX_SECRET_BYTES + 1) as u64)
+                    .read_to_end(&mut data)
+                    .map_err(|_| Error::invalid_input("io_error"))?;
+                data
+            }
+        }
     } else {
         return Err(Error::invalid_input("secret_source_required")
             .with_detail("use --value-file or --stdin"));
     };
     if kind != "ssh_private_key" {
         if data.ends_with(b"\r\n") {
-            data.truncate(data.len() - 2);
+            let len = data.len() - 2;
+            data.truncate(len);
         } else if data.ends_with(b"\n") {
-            data.truncate(data.len() - 1);
+            let len = data.len() - 1;
+            data.truncate(len);
         }
     }
     if data.is_empty() {
         return Err(Error::invalid_input("empty_secret_value"));
     }
     Ok(data)
+}
+
+/// The most raw standard input `team join --stdin`/`team invite-info --stdin`
+/// read without an envelope.
+const MAX_RAW_INVITE_BYTES: usize = 16 * 1024;
+
+/// The invite text for `team join`/`team invite-info`: the envelope's
+/// `invite` field, or raw standard input when the command was given
+/// `--stdin` without an envelope, or else the positional argument when the
+/// command has one. One trailing newline of raw stdin is dropped.
+fn invite_text(a: &Args, positional: Option<&str>) -> Result<Zeroizing<String>, Error> {
+    let required = || {
+        Error::invalid_input("invite_source_required")
+            .with_detail("give the invite as an argument, or use --stdin")
+    };
+    if a.has("stdin") {
+        if positional.is_some() {
+            return Err(Error::invalid_input("invite_source_conflict")
+                .with_detail("give the invite either as an argument or on --stdin, not both"));
+        }
+        return match with_envelope(InputEnvelope::invite) {
+            Some(Some(invite)) => Ok(invite),
+            Some(None) => Err(Error::invalid_input("invite_source_required")
+                .with_detail("the input envelope has no invite")),
+            None => {
+                let mut raw = Zeroizing::new(Vec::with_capacity(MAX_RAW_INVITE_BYTES + 1));
+                io::stdin()
+                    .take(MAX_RAW_INVITE_BYTES as u64 + 1)
+                    .read_to_end(&mut raw)
+                    .map_err(|_| Error::invalid_input("io_error"))?;
+                if raw.len() > MAX_RAW_INVITE_BYTES {
+                    return Err(Error::invalid_input("invite_malformed")
+                        .with_detail("standard input is too long for an invite"));
+                }
+                if raw.ends_with(b"\r\n") {
+                    let len = raw.len() - 2;
+                    raw.truncate(len);
+                } else if raw.ends_with(b"\n") {
+                    let len = raw.len() - 1;
+                    raw.truncate(len);
+                }
+                let text = std::str::from_utf8(&raw).map_err(|_| {
+                    Error::invalid_input("invite_malformed").with_detail("not UTF-8 text")
+                })?;
+                Ok(Zeroizing::new(text.to_owned()))
+            }
+        };
+    }
+    positional
+        .map(|text| Zeroizing::new(text.to_owned()))
+        .ok_or_else(required)
 }
 
 fn secret_view(m: SecretMeta) -> Value {
@@ -1515,7 +1675,8 @@ fn local_command(a: &Args) -> Result<Value, Error> {
     }
     let mutating = !matches!(
         (a.command.as_str(), a.action.as_str()),
-        ("project", "list")
+        ("status", "")
+            | ("project", "list")
             | ("secret", "list" | "versions" | "reveal")
             | ("connection", "list" | "show")
             | ("principal", "list")
@@ -2117,6 +2278,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             v["replaces"] = json!(a.req("id"));
             Ok(v)
         }
+        ("status", "") => control(&ctx),
         ("stop-all", "") => {
             ctx.policy.stop_all()?;
             admin_record(&ctx, "stop_all", vec![])?;
@@ -2595,9 +2757,16 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         identity::DeviceKey,
         membership as M, sync,
     };
+    if a.action == "invite-info" {
+        // Offline and stateless: an invited person previews the invite
+        // before this node even has a state directory.
+        let text = invite_text(a, None)?;
+        let invite = M::parse_invite_or_link(&text)?;
+        return Ok(Some(M::invite_preview(&invite, crate::clock::now())));
+    }
     let mutating = !matches!(
         a.action.as_str(),
-        "members" | "status" | "log" | "show" | "diff" | "incidents"
+        "members" | "status" | "log" | "show" | "diff" | "incidents" | "invites"
     ) && (a.action != "peers" || a.get("add").is_some_and(|v| !v.is_empty()));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
@@ -2632,6 +2801,16 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     }
     if a.action == "join" {
         use crate::team::transport::TcpTransport;
+        // Strict parsing of the untrusted invite (or link) and a local expiry
+        // check before anything is dialed.
+        let text = invite_text(a, a.positional.first().map(String::as_str))?;
+        let invite = M::parse_invite_or_link(&text)?;
+        if M::invite_expired(&invite, (ctx.clock)()) {
+            return Err(Error::invalid_input("invite_expired")
+                .with_detail("the invite is past its expiry; ask for a new one"));
+        }
+        drop(invite);
+        let invite_string = M::invite_string_of(&text)?;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
         let transport = TcpTransport::new(
             device.clone(),
@@ -2642,7 +2821,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         team.start(None)?;
         let result = M::join(
             &team.ctx,
-            &a.positional[0],
+            invite_string,
             &transport,
             &team,
             a.get("project"),
@@ -2660,16 +2839,26 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
-            let invite = M::create_invite(
+            let created = M::create_invite_with(
                 &ctx,
                 &env_id,
                 a.req("role"),
                 a.req("name"),
                 ttl,
                 &a.list("address"),
+                a.has("link"),
             )?;
-            json!({"env_id":env_id,"invite":invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"})
+            let mut out = json!({"env_id":env_id,"invite":created.invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"});
+            // Only `--link` adds keys; the plain output is unchanged.
+            if let Some(link) = created.link {
+                out["link"] = json!(link);
+                out["invite_id"] = json!(created.invite_id);
+                out["expires_at"] = json!(created.expires_at);
+            }
+            out
         }
+        "invites" => M::list_invites(&ctx, &env_id)?,
+        "revoke-invite" => M::revoke_invite(&ctx, &env_id, a.req("id"))?,
         "members" => {
             let doc = M::load_environment(&ctx, &env_id)?.document;
             let mut members = Vec::new();
@@ -3046,7 +3235,23 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
+    // `--input-envelope`: stdin is read once, now, before any command runs;
+    // the values are wiped when `envelope_scope` drops at the end of this call.
+    let envelope_scope = if args.has("input-envelope") {
+        match InputEnvelope::read_from(io::stdin().lock()) {
+            Ok(envelope) => Some(EnvelopeScope::install(envelope)),
+            Err(error) => {
+                output(&error.to_dict(), true);
+                return 2;
+            }
+        }
+    } else {
+        None
+    };
     if args.command == "serve" {
+        // The server never reads the envelope; do not hold its values for the
+        // lifetime of the process.
+        drop(envelope_scope);
         let stop = Arc::new(AtomicBool::new(false));
         for signal in [
             signal_hook::consts::signal::SIGINT,

@@ -363,8 +363,11 @@ admin이 한 노드에서 연결을 좁히면 모든 노드의 user 권한이 �
 | --- | --- |
 | `team init` | 기기 키 생성. 이미 있으면 거부. 지문 출력. |
 | `team share --project P --environment E [--name N]` | 로컬 환경을 공유 환경으로 승격. 환경 ID·첫 DEK 세대 생성, 기존 비밀의 활성·대기 버전을 환경 DEK로 다시 암호화, 연결을 커밋으로 재발행. 공유되는 비밀을 참조하지 않는 연결은 로컬에 남기고 `not_shared`로 출력. 관리자 패스프레이즈 재인증. 로컬 연결의 기존 권한은 신뢰 경계가 바뀌었으므로 `stale`이 된다. |
-| `team invite --env P/E --role R --name N [--ttl 24h]` | 일회용 초대 문자열 출력. |
-| `team join <초대> [--project P --environment E]` | 초대한 노드에 연결해 가입. 두 지문 출력. 이후 다른 노드가 이 노드에 붙게 하려면 `serve --team-listen`을 켠다. |
+| `team invite --env P/E --role R --name N [--ttl 24h] [--address H:P] [--link]` | 일회용 초대 문자열 출력. `--link`를 주면 유효 기간이 24시간으로 고정되고(다른 `--ttl`은 `invite_link_ttl_fixed`), 주소는 `HOST:PORT` 모양이어야 하며, 출력에 `link`(`zeropw://join#<초대 문자열>`, 4096바이트 이하), `invite_id`, `expires_at`이 더해진다. |
+| `team invites --env P/E` | 이 노드가 만든 초대 목록. 항목마다 `invite_id`, 역할, 이름, 링크 여부, 만든·만료·사용·취소 시각, 사용한 기기 지문, 상태(`pending`, `used`, `expired`, `revoked`)를 보인다. 초대 문자열과 감싼 비밀은 나오지 않는다. |
+| `team revoke-invite --env P/E --id ID` | 아직 쓰이지 않은 초대를 막고 감싼 비밀을 지운다. 다시 불러도 성공하고, 없는 ID는 `invite_not_found`, 이미 쓰인 초대는 `invite_already_used`. 감사 기록 `team_invite_revoke`. 취소와 사용은 같은 상태 잠금을 거치므로 경합하면 한쪽만 성공한다. |
+| `team invite-info --stdin` | 표준 입력(또는 입력 봉투의 `invite`)의 초대 문자열이나 링크를 네트워크 없이 미리 본다. 상태 디렉터리가 없어도 된다. 비밀은 출력하지 않는다. |
+| `team join [<초대>] [--stdin] [--project P --environment E]` | 초대한 노드에 연결해 가입. 두 지문 출력. 초대는 인자, 표준 입력, 입력 봉투 중 하나로 받고 링크 형식도 받는다. 연결하기 전에 주소(16개, 각 128바이트 이하의 `HOST:PORT`)와 초대한 기기 지문 형식을 검사하고, 만료가 5분 넘게 지났으면 `invite_expired`로 멈춘다. 이후 다른 노드가 이 노드에 붙게 하려면 `serve --team-listen`을 켠다. |
 | `team members --env P/E` | 팀원 목록(지문, 이름, 역할, 상태, 마지막 동기화). |
 | `team remove --env P/E --device 지문` | 팀원 제거(긴급 사실)와 DEK 새 세대. owner 제거 불가. |
 | `team set-role`, `team transfer-owner` | §5.3. |
