@@ -10,6 +10,15 @@
 //   signing identity ("-") or none. No credential, certificate, notarization, entitlement,
 //   updater or signing-command setting in either config: Developer ID signing and
 //   notarization happen outside the build (docs/releasing.md).
+// - No other file Tauri merges on its own: src-tauri/ holds no platform config
+//   (tauri.<platform>.conf.json[5], Tauri.<platform>.toml), no tauri.conf.json5 or Tauri.toml,
+//   no Info.plist and no other .plist or .entitlements file; these two configs and
+//   Info.release.plist are the whole build configuration. The deep-link plugin config is
+//   exactly {"desktop": {"schemes": ["zeropw"]}}: universal-link domains would make the Tauri
+//   CLI sign the app with the com.apple.developer.associated-domains entitlement. The Tauri
+//   CLI (2.12.1) derives macOS entitlements only from bundle.macOS.entitlements, refused above,
+//   and those deep-link domains. desktop/scripts/package-macos.py also checks that the shipped
+//   executables and the bundle carry no entitlements.
 // - Object.prototype is frozen before any page script: by the shell's freeze_prototype.js,
 //   since Tauri's bare freezePrototype breaks @xterm/xterm (see checkFreezePrototype).
 // - The IPC surface is exactly desktop/src/ipc/contract.ts: the app manifest list in
@@ -50,6 +59,9 @@ const BASE_BUNDLE_KEYS = ['active', 'targets', 'category', 'shortDescription', '
 const RELEASE_RESOURCES = { '../../LICENSE': 'LICENSE', 'notices/THIRD_PARTY_LICENSES.md': 'THIRD_PARTY_LICENSES.md' };
 const RELEASE_MACOS = { minimumSystemVersion: '11.0', infoPlist: 'Info.release.plist' };
 const RELEASE_PLIST_KEYS = ['NSLocalNetworkUsageDescription'];
+const DEEP_LINK = { desktop: { schemes: ['zeropw'] } };
+// The only files in src-tauri/ that Tauri reads as build configuration.
+const REVIEWED_CONFIG = ['tauri.conf.json', 'tauri.bundle.conf.json', 'Info.release.plist'];
 // Setting names that would carry or select signing material, notarization accounts or updater keys.
 const CREDENTIAL_KEY =
   /certificate|password|secret|private.?key|pubkey|keychain|notar|apple.?id|team.?id|provider.?short.?name|api.?(key|issuer)|entitlement|sign.?command|signing.?identity|updater/i;
@@ -93,6 +105,9 @@ if (main.dragDropEnabled !== false) fail('tauri.conf.json: dragDropEnabled must 
 const plugins = conf.plugins ?? {};
 if (Object.keys(plugins).join() !== 'deep-link') fail('tauri.conf.json: only the deep-link plugin is configured');
 if (!sameList(plugins['deep-link']?.desktop?.schemes ?? [], ['zeropw'])) fail('tauri.conf.json: deep links for the zeropw scheme only');
+if (JSON.stringify(plugins['deep-link']) !== JSON.stringify(DEEP_LINK)) {
+  fail(`tauri.conf.json: plugins.deep-link must be exactly ${JSON.stringify(DEEP_LINK)} (domains would add the associated-domains entitlement)`);
+}
 
 // ---- capabilities -------------------------------------------------------------------------
 const capDir = join(tauriDir, 'capabilities');
@@ -261,7 +276,19 @@ function checkReleaseConfig() {
       if (CREDENTIAL_KEY.test(String(path.at(-1)))) fail(`${file}: ${dotted} is not allowed (no signing, credential or updater settings in the build config)`);
     }
   }
-  if (existsSync(join(tauriDir, 'Info.plist'))) fail('src-tauri/Info.plist would be merged into every build; release keys go in Info.release.plist');
+  // Tauri merges tauri.<platform>.conf.json[5] / Tauri.<platform>.toml into tauri.conf.json
+  // and src-tauri/Info.plist into the bundle's Info.plist on its own; refuse every such file
+  // (any case: macOS file systems usually ignore it) besides the reviewed ones.
+  for (const name of readdirSync(tauriDir)) {
+    const lower = name.toLowerCase();
+    if (lower === 'info.plist') {
+      fail('src-tauri/Info.plist would be merged into every build; release keys go in Info.release.plist');
+    } else if (/^tauri(\..+)?\.(json5?|toml)$/.test(lower) && !REVIEWED_CONFIG.includes(name)) {
+      fail(`src-tauri/${name}: Tauri would merge it into the build configuration; only ${REVIEWED_CONFIG.slice(0, 2).join(' and ')} are allowed`);
+    } else if (/\.(plist|entitlements)$/.test(lower) && !REVIEWED_CONFIG.includes(name)) {
+      fail(`src-tauri/${name}: no property list or entitlements file besides Info.release.plist`);
+    }
+  }
   const plist = read(join(tauriDir, 'Info.release.plist'));
   const plistKeys = [...plist.matchAll(/<key>([^<]*)<\/key>/g)].map((m) => m[1]);
   if (!sameList(plistKeys, RELEASE_PLIST_KEYS)) fail(`Info.release.plist: must hold only ${RELEASE_PLIST_KEYS.join(', ')}`);

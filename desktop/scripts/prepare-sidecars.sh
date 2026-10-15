@@ -16,8 +16,11 @@
 #
 # Usage: scripts/prepare-sidecars.sh [target-triple]   (default: the host triple; the release
 # builder refuses any other). The sidecar build lives in ${CARGO_TARGET_DIR:-rust/target}/
-# sidecars-<triple>. Like any build of product code, run it on a development machine or CI,
-# never on a host that holds real vault, signing or administrator keys.
+# sidecars-<triple>, which build-release.py owns: it must be new, empty or left by an earlier
+# run. build-release.py builds with its allowlisted environment and remaps local source paths
+# out of the binaries (see its docstring). Like any build of product code, run it on a
+# development machine or CI, never on a host that holds real vault, signing or administrator
+# keys.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
