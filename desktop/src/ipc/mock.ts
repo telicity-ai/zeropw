@@ -1,7 +1,11 @@
 // In-memory stand-in for the Tauri core, used only outside the desktop app (`npm run dev` in a
-// browser, and tests). Every value here is synthetic. It follows the contract and the core's
-// rules closely enough to review the onboarding and dashboard flows: one-time references,
-// value-free errors and a small simulated shell for the agent terminal.
+// browser, and tests). Every value here is synthetic. It follows the contract and the real core
+// (desktop/core) and CLI (rust/) closely enough to review the onboarding and dashboard flows:
+// one-time references (32 hex digits, kinds, 10-minute and 60-second lifetimes), the core's
+// reason codes, the CLI's output shapes (versions and counts as JSON numbers, a grant's stored
+// status kept `active` after it expires or is used up), value-free errors and a small simulated
+// shell for the agent terminal. Where the contract's types still say otherwise, the mock follows
+// what the core actually sends.
 // Seeded review state (`?state=ready`): the synthetic admin passphrase is `mock-admin-pass` and
 // the synthetic recovery code is `ABCD-EFGH-IJKL-MNOP-QRST-UVWX`.
 
@@ -10,8 +14,8 @@ import type {
   Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings,
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
-import { isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
-import { isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
+import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
+import { CONNECTION_KEY_KINDS, countOf, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
 
 export interface MockChannel { onmessage: (data: string) => void }
 export interface MockSeed {
@@ -21,6 +25,12 @@ export interface MockSeed {
   latency?: number;
   /** Emit a synthetic audit record now and then while the relay runs. */
   activity?: boolean;
+  /** The next n relay starts fail as when the port is taken (`serve_exited`), `vault_init` included. */
+  relayFails?: number;
+  /** Lifetime of one-time values other than revealed keys (the core keeps them 10 minutes). */
+  onetimeTtlMs?: number;
+  /** What `secure_view` answers: nothing (an older core), or whether the window is protected. */
+  screenGuard?: 'void' | 'protected' | 'unprotected';
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -32,6 +42,10 @@ export interface MockBackend {
   emit<E extends keyof Events>(name: E, payload: Events[E]): void;
   /** Value-free view for tests. */
   inspect(): MockInspect;
+  /** Make the next call of `name` fail with `error` (tests: a core that cannot answer). */
+  failNext(name: CommandName, error: AppError): void;
+  /** Log of the calls made, by name only (tests). */
+  calls(): CommandName[];
   dispose(): void;
 }
 
@@ -51,9 +65,13 @@ function randBytes(n: number): Uint8Array {
   return b;
 }
 const randFrom = (n: number, alphabet: string): string => [...randBytes(n)].map((x) => alphabet[x & (alphabet.length - 1)]).join('');
-const newRef = (): string => 'ref_' + [...randBytes(16)].map((x) => x.toString(16).padStart(2, '0')).join('');
+/** One-time references are 128 random bits as 32 lower-case hex digits (desktop/core/src/onetime.rs). */
+const newRef = (): string => [...randBytes(16)].map((x) => x.toString(16).padStart(2, '0')).join('');
+const isRef = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{32}$/.test(v);
 const iso = (ms = Date.now()): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const HOUR = 3_600_000;
+const SECRET_TTL_MS = 60_000;
+const DEFAULT_TTL_MS = 10 * 60_000;
 
 /** Recovery codes compare in their canonical form (six groups, upper case, dashes). */
 function canonicalRecovery(v: string): string {
@@ -87,12 +105,17 @@ interface MockTerminal {
   timers: Set<ReturnType<typeof setTimeout>>; principal: string; asUser: string | null; ring: string; suggestions: string[];
 }
 
-interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret'; text: string; preview?: InvitePreview; principal?: string }
+interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret'; text: string; preview?: InvitePreview; principal?: string; expires: number }
 interface MockVersion { version: number; status: 'staged' | 'active' | 'retired' | 'revoked'; created_at: string; value: string; public: { public_key: string; fingerprint: string; algorithm: string } | null }
 interface MockSecret { id: string; project: string; environment: string; kind: SecretKind; versions: MockVersion[] }
 interface MockInvite extends InviteListItem { secret: string }
 interface MockTeamEnv { env_id: string; project: string; environment: string; members: Member[]; invites: MockInvite[] }
 interface MockFile { purpose: 'secret' | 'ssh_key' | 'ca'; name: string; content: string }
+/** A grant as the CLI prints it: counts are JSON numbers, the status is the stored one. */
+interface MockGrant { id: string; principal: string; connection: string; expires_at: string; max_uses: number | null; uses: number; status: string }
+const grantOut = (g: MockGrant): Grant => ({ ...g }) as unknown as Grant;
+/** Versions go out as the JSON numbers the CLI prints (the contract still types them as text). */
+const versionOut = (n: number | null): string => n as unknown as string;
 
 function previewFor(text: string): InvitePreview {
   const body = text.slice(text.indexOf('#') + 1).toLowerCase();
@@ -109,9 +132,17 @@ function previewFor(text: string): InvitePreview {
 function secretView(s: MockSecret): SecretView {
   const active = s.versions.find((v) => v.status === 'active');
   return {
-    id: s.id, project: s.project, environment: s.environment, kind: s.kind, active_version: active ? String(active.version) : null,
-    versions: s.versions.map((v) => ({ version: String(v.version), status: v.status, created_at: v.created_at, public: v.public })),
+    id: s.id, project: s.project, environment: s.environment, kind: s.kind, active_version: active ? versionOut(active.version) : null,
+    // the CLI prints `public` as an object, empty when the version has no public half
+    versions: s.versions.map((v) => ({ version: versionOut(v.version), status: v.status, created_at: v.created_at, public: v.public ?? ({} as SecretView['versions'][number]['public']) })),
   };
+}
+
+/** A version argument as the core accepts it: a JSON number, or decimal digits as text. */
+function versionArg(v: unknown): number {
+  if (typeof v === 'number' && Number.isInteger(v) && v >= 0) return v;
+  if (typeof v === 'string' && /^\d{1,20}$/.test(v)) return Number(v);
+  throw fail('InvalidInput', 'invalid_argument', 'version');
 }
 
 export function createMockBackend(seed: MockSeed = {}): MockBackend {
@@ -119,6 +150,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const listeners = new Map<string, Set<(p: unknown) => void>>();
   const onetime = new Map<string, OneTime>();
   const terminals = new Map<string, MockTerminal>();
+  const failures = new Map<CommandName, AppError>();
+  const callLog: CommandName[] = [];
+  let relayFails = seed.relayFails ?? 0;
+  const ttl = seed.onetimeTtlMs ?? DEFAULT_TTL_MS;
   let adminPass: string | null = null;
   let recoveryCode: string | null = null;
   let initialized = false;
@@ -128,7 +163,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const principals: Principal[] = [];
   const secrets = new Map<string, MockSecret>();
   const connections = new Map<string, ConnectionView>();
-  const grants: Grant[] = [];
+  const grants: MockGrant[] = [];
   const approvals = new Map<string, Record<string, unknown>>();
   const approvalHistory: Record<string, unknown>[] = [];
   const incidents: Incident[] = [];
@@ -149,9 +184,29 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (p !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
   };
   const startServe = () => {
+    // a relay that cannot bind its port exits at once (desktop/core/src/serve.rs `serve_exited`)
+    if (relayFails > 0) { relayFails -= 1; throw fail('Unavailable', 'serve_exited'); }
     serve = { running: true, url: `http://127.0.0.1:${settings.gateway_port}`, pid: 40000 + (randBytes(1)[0] ?? 0), team_listen: settings.team_listen };
     emit('serve://status', serve);
   };
+  // ---- one-time store: kinds, lifetimes and the core's reason codes
+  const putOnce = (item: Omit<OneTime, 'expires'>): string => {
+    const ref = newRef();
+    onetime.set(ref, { ...item, expires: Date.now() + (item.kind === 'secret' ? SECRET_TTL_MS : ttl) });
+    return ref;
+  };
+  const prune = () => { const now = Date.now(); for (const [k, v] of onetime) if (v.expires <= now) onetime.delete(k); };
+  /** The entry behind `ref` if it is live and of an accepted kind (`peek_kind`); never removes it. */
+  const peekOnce = (ref: unknown, kinds: readonly OneTime['kind'][]): OneTime => {
+    if (!isRef(ref)) throw fail('InvalidInput', 'onetime_ref_invalid');
+    prune();
+    const item = onetime.get(ref);
+    if (!item || !kinds.includes(item.kind)) throw fail('NotFound', 'onetime_ref_unknown');
+    return item;
+  };
+  /** Kinds `onetime_show`/`onetime_copy` hand to the webview: all but a pasted invite. */
+  const SHOWABLE: readonly OneTime['kind'][] = ['recovery', 'token', 'link', 'secret'];
+  const grantLive = (g: MockGrant) => grantState(grantOut(g), Date.now()) === 'live';
   const record = (rec: AuditRecord) => { audit.push(rec); if (audit.length > 500) audit.shift(); emit('audit://records', { records: [rec] }); };
   const setControl = (c: Control) => { control = c; emit('control://changed', control); };
   const requireEnv = (project: unknown, environment: unknown) => {
@@ -160,7 +215,6 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (typeof environment !== 'string' || !p.environments.includes(environment)) throw fail('InvalidInput', 'environment_unknown');
   };
   const fingerprint = () => (deviceFp ??= randFrom(26, B32).toUpperCase());
-  const grantView = (g: Grant): Grant => (g.status === 'active' && Date.parse(g.expires_at) < Date.now() ? { ...g, status: 'expired' } : { ...g });
   const inviteView = (i: MockInvite): InviteListItem => {
     const v: InviteListItem = {
       invite_id: i.invite_id, role: i.role, name: i.name, link: i.link, created_at: i.created_at, expires_at: i.expires_at, status: i.status,
@@ -177,6 +231,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     return t;
   };
 
+  /** rust/src/admin_cli.rs `check_secret_connection`: same project/environment, a kind the
+   *  connection type takes, an active (or staged) version. */
+  function checkSecretFor(type: 'http' | 'ssh', id: string, project: string, environment: string) {
+    const s = secrets.get(id);
+    if (!s) throw fail('NotFound', 'secret_not_found');
+    if (s.project !== project || s.environment !== environment) throw fail('InvalidInput', 'secret_scope_mismatch');
+    if (!CONNECTION_KEY_KINDS[type].includes(s.kind)) throw fail('InvalidInput', 'secret_kind_mismatch');
+    if (!s.versions.some((v) => v.status === 'active')) throw fail('InvalidInput', 'secret_version_unusable');
+  }
+
   function addSecret(id: string, kind: SecretKind, project: string, environment: string, value: string, pub: MockVersion['public'] = null): MockVersion {
     let s = secrets.get(id);
     if (!s) { s = { id, project, environment, kind, versions: [] }; secrets.set(id, s); }
@@ -191,7 +255,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     initialized = true;
     adminPass = SEED_ADMIN;
     recoveryCode = SEED_RECOVERY;
-    startServe();
+    try { startServe(); } catch { /* seeded with a relay that does not start (review the start button) */ }
     const ago = (ms: number) => iso(Date.now() - ms);
     projects.push({ name: 'demo', environments: ['dev', 'staging', 'prod'], created_at: ago(24 * HOUR) });
     principals.push({ id: 'agent-1', status: 'active', created_at: ago(22 * HOUR), runtime: 'user-agent' });
@@ -206,9 +270,26 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       http_scope: { methods: ['GET', 'HEAD', 'POST'], path_prefixes: [], confirm_methods: ['POST'] }, ssh_target: null, cli: null,
       policy_version: 1, status: 'active', created_at: ago(20 * HOUR), updated_at: ago(20 * HOUR),
     });
-    grants.push({ id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'example-api', expires_at: iso(Date.now() + 6 * HOUR), max_uses: null, uses: '14', status: 'active' });
+    grants.push(
+      { id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'example-api', expires_at: iso(Date.now() + 6 * HOUR), max_uses: null, uses: 14, status: 'active' },
+      // the CLI keeps these `active`: one expired an hour ago, one used up its uses
+      { id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'example-api', expires_at: ago(HOUR), max_uses: null, uses: 3, status: 'active' },
+      { id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'example-api', expires_at: iso(Date.now() + 2 * HOUR), max_uses: 5, uses: 5, status: 'active' },
+    );
+    // pending approvals carry everything the gateway bound them to (rust/src/gateway.rs annotate_approval)
+    const body = '{"name":"synthetic item","tags":["review"],"note":"mock data only"}';
     approvals.set(randFrom(64, HEX), {
-      caller: 'agent-1', connection: 'example-api', method: 'POST', path: '/v1/items', status: 'pending', created_at: ago(90_000), expires_at: Math.floor((Date.now() + 600_000) / 1000),
+      caller: 'agent-1', connection: 'example-api', method: 'POST', path: '/v1/items', status: 'pending', created_at: ago(90_000),
+      expires_at: Math.floor((Date.now() + 600_000) / 1000), origin: 'https://api.example.com:443', query: null, content_type: 'application/json',
+      body_bytes: body.length, body_sha256: randFrom(64, HEX), body_preview: body, body_preview_truncated: false, policy_version: 1,
+    });
+    approvals.set(randFrom(64, HEX), {
+      // longer than the 160 characters a list line used to keep: the difference is at the end
+      caller: 'agent-1', connection: 'example-api', method: 'POST',
+      path: '/v1/projects/demo/environments/staging/deployments/synthetic-release-candidate-2026-10-15/rollbacks/latest/approvals/manual-review/steps/final/confirm-and-delete-previous',
+      status: 'pending', created_at: ago(30_000), expires_at: Math.floor((Date.now() + 600_000) / 1000), origin: 'https://api.example.com:443',
+      query: 'force=true&dry_run=false', content_type: 'text/plain', body_bytes: 300, body_sha256: randFrom(64, HEX),
+      body_preview: 'x'.repeat(256), body_preview_truncated: true, policy_version: 1,
     });
     incidents.push({
       id: 'inc_' + randFrom(12, HEX), status: 'closed', scope: 'principal', opened_at: ago(30 * HOUR), runtime: null, principals: ['agent-0'],
@@ -265,7 +346,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const sudo = /^sudo\b.*\s-u\s+([A-Za-z0-9._-]+)\s+-i$/.exec(c);
     if (sudo) { term.password = sudo[1] ?? 'agent'; termSend(term, 'Password:', 200); return; }
     if (/(^|\/)zeropw-agent\s+list-connections$/.test(c)) {
-      const visible = grants.filter((g) => g.principal === term.principal && grantView(g).status === 'active').map((g) => g.connection);
+      const visible = [...new Set(grants.filter((g) => g.principal === term.principal && grantLive(g)).map((g) => g.connection))];
       termSend(term, JSON.stringify({ connections: visible.map((id) => ({ id })) }) + '\r\n', 260);
       termSend(term, prompt(term.user), 300);
       return;
@@ -308,32 +389,38 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     password_strength: ({ value }) => mockStrength(typeof value === 'string' ? value : ''),
     recovery_generate: () => {
       const groups = Array.from({ length: 6 }, () => randFrom(4, B32).toUpperCase());
-      const ref = newRef();
-      onetime.set(ref, { kind: 'recovery', text: groups.join('-') });
+      const ref = putOnce({ kind: 'recovery', text: groups.join('-') });
       return { ref, groups };
     },
+    // desktop/core/src/commands.rs `vault_init`: check both passphrases, peek the generated code
+    // (it stays until `init` succeeds), run `init` (refused once the state exists), forget the
+    // code, then start the relay; a relay that does not start fails the call although the vault
+    // now exists
     vault_init: async ({ admin_passphrase, recovery }) => {
-      if (initialized) throw fail('StateError', 'vault_exists');
-      if (typeof admin_passphrase !== 'string' || [...admin_passphrase].length < MIN_PASSPHRASE_CHARS) throw fail('InvalidInput', 'passphrase_too_short');
+      if (typeof admin_passphrase !== 'string' || [...admin_passphrase].length < MIN_PASSPHRASE_CHARS) throw fail('InvalidInput', 'passphrase_too_short', 'admin');
+      if (mockStrength(admin_passphrase).score < 3) throw fail('InvalidInput', 'passphrase_weak', 'admin');
       let code: string;
+      let ref: string | null = null;
       if ('ref' in recovery) {
-        const item = onetime.get(recovery.ref);
-        if (!item || item.kind !== 'recovery') throw fail('NotFound', 'onetime_ref_unknown');
-        onetime.delete(recovery.ref);
-        code = item.text;
-      } else if (typeof recovery.typed !== 'string' || [...recovery.typed].length < MIN_PASSPHRASE_CHARS) {
-        throw fail('InvalidInput', 'recovery_too_short');
-      } else if (sameAsAdmin(recovery.typed, admin_passphrase)) {
-        throw fail('InvalidInput', 'recovery_same_as_admin');
+        code = peekOnce(recovery.ref, ['recovery']).text;
+        ref = recovery.ref;
       } else {
-        code = canonicalRecovery(recovery.typed);
+        const typed = canonicalRecovery(typeof recovery.typed === 'string' ? recovery.typed : '');
+        if (sameAsAdmin(typed, admin_passphrase)) throw fail('InvalidInput', 'passphrases_identical');
+        if ([...typed].length < MIN_PASSPHRASE_CHARS) throw fail('InvalidInput', 'passphrase_too_short', 'recovery');
+        // zxcvbn with the admin passphrase as a related input: a code that contains it is weak
+        if (mockStrength(typed).score < 4 || containsAdmin(typed, admin_passphrase)) throw fail('InvalidInput', 'passphrase_weak', 'recovery');
+        code = typed;
       }
+      if (sameAsAdmin(code, admin_passphrase)) throw fail('InvalidInput', 'passphrases_identical');
+      if (initialized) throw fail('StateError', 'state_exists');
       await wait(1100);
       initialized = true;
       adminPass = admin_passphrase;
       recoveryCode = code;
-      startServe();
       record({ ts: iso(), event: 'init' });
+      if (ref) onetime.delete(ref);
+      startServe();
       return { state_dir: '~/Library/Application Support/ZeroPW/state', kms_key_id: 'kms-dev-' + randFrom(8, HEX) };
     },
     serve_start: async () => { needInit(); await wait(300); startServe(); return serve; },
@@ -347,6 +434,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     resume: async ({ admin_passphrase }) => {
       needInit(); await wait(350);
       if (!adminPass || admin_passphrase !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
+      // rust/src/policy.rs `resume`: an open incident keeps everything stopped
+      if (control.incident_open) throw fail('InvalidInput', 'incident_open');
       setControl({ ...control, stopped: false }); record({ ts: iso(), event: 'resume' }); return control;
     },
 
@@ -404,34 +493,44 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (pub) { out.public_key = pub.public_key; out.fingerprint = pub.fingerprint; }
       return out;
     },
+    // versions arrive as the CLI printed them (a number) or as decimal text; both are accepted
     secret_reveal: async ({ id, version, admin_passphrase }) => {
       needInit(); await wait(350);
       checkAdmin(admin_passphrase);
       const s = secrets.get(id);
       if (!s) throw fail('NotFound', 'secret_not_found');
-      const v = version ? s.versions.find((x) => String(x.version) === version) : s.versions.find((x) => x.status === 'active');
+      const want = version === undefined || version === '' ? null : versionArg(version);
+      const v = want !== null ? s.versions.find((x) => x.version === want) : s.versions.find((x) => x.status === 'active');
       if (!v) throw fail('NotFound', 'version_not_found');
       if (v.status === 'revoked') throw fail('InvalidInput', 'version_revoked');
-      const ref = newRef();
-      onetime.set(ref, { kind: 'secret', text: v.value });
+      const ref = putOnce({ kind: 'secret', text: v.value });
       record({ ts: iso(), event: 'secret_reveal', secret: id, version: v.version });
       return { ref, id, version: String(v.version) };
     },
+    // rust/src/admin_cli.rs secret retire/revoke: output keyed `secret_id`, the version as a number,
+    // and the reminder that the provider still accepts the credential
     secret_retire: ({ id, version }) => {
       needInit();
-      const v = secrets.get(id)?.versions.find((x) => String(x.version) === version);
+      const want = versionArg(version);
+      const v = secrets.get(id)?.versions.find((x) => x.version === want);
       if (!v) throw fail('NotFound', 'version_not_found');
       if (v.status === 'revoked') throw fail('InvalidInput', 'version_revoked');
       if (v.status === 'active') throw fail('InvalidInput', 'version_is_active');
       v.status = 'retired'; record({ ts: iso(), event: 'secret_retire', secret: id, version: v.version });
-      return { id, version: v.version, status: v.status };
+      return { secret_id: id, version: v.version, status: v.status };
     },
     secret_revoke: ({ id, version }) => {
       needInit();
-      const v = secrets.get(id)?.versions.find((x) => String(x.version) === version);
+      const want = versionArg(version);
+      const v = secrets.get(id)?.versions.find((x) => x.version === want);
       if (!v) throw fail('NotFound', 'version_not_found');
+      const wasActive = v.status === 'active';
       v.status = 'revoked'; v.value = ''; record({ ts: iso(), event: 'secret_revoke', secret: id, version: v.version });
-      return { id, version: v.version, status: v.status };
+      const affected = wasActive ? [...connections.values()].filter((c) => c.secret_id === id && c.status === 'active').map((c) => c.id).sort() : [];
+      return {
+        secret_id: id, version: v.version, status: v.status, affected_connections: affected, provider_revocation_required: true,
+        reminder: 'Retiring a vault version does not revoke the credential at the provider. Revoke the old credential in the provider\'s console or API now.',
+      };
     },
 
     // ---- connections
@@ -442,8 +541,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnv(input.project, input.environment);
-      const s = secrets.get(input.secret_id);
-      if (!s || s.project !== input.project || s.environment !== input.environment) throw fail('InvalidInput', 'secret_not_found');
+      checkSecretFor('http', input.secret_id, input.project, input.environment);
       const target = parseTarget(input.target);
       if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'metadata_address_not_allowed' : 'invalid_scheme');
       if (target.private && !input.allow_private_network) throw fail('InvalidInput', 'target_address_not_allowed');
@@ -468,12 +566,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnv(input.project, input.environment);
-      const s = secrets.get(input.secret_id);
-      if (!s || s.kind !== 'ssh_private_key') throw fail('InvalidInput', 'secret_not_found');
+      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
       if (!isSshUser(input.username)) throw fail('InvalidInput', 'invalid_ssh_username');
-      if (!input.host_keys.length) throw fail('InvalidInput', 'ssh_host_keys_required');
       if (!input.host_keys.every(isHostKey)) throw fail('InvalidInput', 'unsupported_host_key');
       const now = iso();
       const c: ConnectionView = {
@@ -502,8 +599,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (principals.some((p) => p.id === id)) throw fail('InvalidInput', 'principal_exists');
       await wait(250);
       principals.push({ id, status: 'active', created_at: iso(), runtime });
-      const token_ref = newRef();
-      onetime.set(token_ref, { kind: 'token', text: 'zpwc_' + randFrom(43, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'), principal: id });
+      const token_ref = putOnce({ kind: 'token', text: 'zpwc_' + randFrom(43, 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'), principal: id });
       record({ ts: iso(), event: 'principal_create', principal: id });
       return { id, runtime, token_ref };
     },
@@ -514,9 +610,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       record({ ts: iso(), event: 'principal_disable', principal: id });
       return { id, status: 'disabled' };
     },
+    // the stored status, as the CLI prints it: `active` stays after expiry or the last use
     grant_list: ({ principal } = {}) => {
       needInit();
-      return { grants: grants.filter((g) => !principal || g.principal === principal).map(grantView) };
+      return { grants: grants.filter((g) => !principal || g.principal === principal).map(grantOut) };
     },
     grant_create: async ({ principal, connection, ttl, max_uses, admin_passphrase }) => {
       needInit(); await wait(300);
@@ -530,23 +627,25 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const secs = Number(m[1]) * ({ s: 1, m: 60, h: 3600, d: 86400 } as Record<string, number>)[m[2] || 's']!;
       if (secs <= 0 || secs > 30 * 86400) throw fail('InvalidInput', 'invalid_ttl');
       if (max_uses !== undefined && !/^[1-9]\d{0,8}$/.test(max_uses)) throw fail('InvalidInput', 'invalid_argument', 'max_uses');
-      const g: Grant = { id: 'grant_' + randFrom(12, HEX), principal, connection, expires_at: iso(Date.now() + secs * 1000), max_uses: max_uses ?? null, uses: '0', status: 'active' };
+      const g: MockGrant = {
+        id: 'grant_' + randFrom(12, HEX), principal, connection, expires_at: iso(Date.now() + secs * 1000),
+        max_uses: max_uses === undefined ? null : countOf(max_uses), uses: 0, status: 'active',
+      };
       grants.push(g); record({ ts: iso(), event: 'grant_create', principal, connection, grant: g.id });
-      return { ...g };
+      return grantOut(g);
     },
     grant_revoke: ({ id }) => {
       needInit();
       const g = grants.find((x) => x.id === id);
       if (!g) throw fail('NotFound', 'grant_not_found');
       g.status = 'revoked'; record({ ts: iso(), event: 'grant_revoke', grant: id, principal: g.principal });
-      return { ...g };
+      return grantOut(g);
     },
 
     // ---- terminal
     terminal_open: async ({ token_ref, as_user, on_data }) => {
       needInit();
-      const item = onetime.get(token_ref);
-      if (!item || item.kind !== 'token') throw fail('InvalidInput', 'token_ref_unknown');
+      const item = peekOnce(token_ref, ['token']);   // not consumed: it can still be copied once
       const out = channelOf(on_data);
       if (as_user !== undefined && !/^[a-z_][a-z0-9._-]{0,31}$/i.test(as_user)) throw fail('InvalidInput', 'invalid_user');
       if (!serve.running) throw fail('Unavailable', 'serve_not_running');
@@ -584,7 +683,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!term) return;
       term.closed = true; term.out = null; term.timers.forEach((id) => clearTimeout(id)); terminals.delete(terminal_id);
     },
-    secure_view: ({ on }) => { secureView = on === true; },
+    secure_view: ({ on }) => {
+      secureView = on === true;
+      // an older core answers nothing; a newer one says whether the window is protected
+      if (seed.screenGuard === undefined || seed.screenGuard === 'void') return;
+      return { protected: on === true && seed.screenGuard === 'protected' } as unknown as Commands['secure_view'][1];
+    },
 
     // ---- records
     audit_tail: ({ limit }) => ({ records: audit.slice(-Math.max(0, limit)), unparseable_lines: 0 }),
@@ -629,16 +733,18 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       } else {
         throw fail('UsageError', 'invalid_scope');
       }
+      // rust/src/incident.rs: a runtime that covers every active principal stops everything too
+      const stops = scope === 'all' || (scope === 'runtime' && principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime));
       for (const g of grants) if (affected.includes(g.principal) && g.status === 'active') g.status = 'revoked';
       for (const p of principals) if (affected.includes(p.id)) p.status = 'disabled';
       const inc: Incident = {
         id: 'inc_' + randFrom(12, HEX), status: 'open', scope, opened_at: iso(), runtime: scope === 'runtime' ? runtime ?? null : null,
-        principals: affected, trigger: 'manual', rule: null, detail: reason ?? null, actions: { grants_revoked: true }, assessment: {}, notification: {},
+        principals: affected, trigger: 'manual', rule: null, detail: reason ?? null, actions: { grants_revoked: true, stopped: stops }, assessment: {}, notification: {},
         closed_at: null, widened_from: [],
       };
       incidents.push(inc);
       record({ ts: iso(), event: 'incident_open', incident: inc.id, scope });
-      setControl({ ...control, incident_open: true, stopped: scope === 'all' ? true : control.stopped });
+      setControl({ ...control, incident_open: true, stopped: stops ? true : control.stopped });
       return { ...inc };
     },
     incident_close: async ({ id, admin_passphrase }) => {
@@ -672,14 +778,21 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!control.restore_pending) throw fail('InvalidInput', 'restore_not_pending');
       setControl({ ...control, restore_pending: false });
       record({ ts: iso(), event: 'restore_ack' });
-      return { restore_pending: false };
+      // the global stop is not lifted here (rust/src/admin_cli.rs restore-ack)
+      return {
+        ...control, active_grants: grants.filter((g) => g.status === 'active').length,
+        note: control.stopped ? 'restore_pending cleared; the global stop is still set (run resume to lift it)' : 'restore_pending cleared; execution is open under the restored grants',
+      };
     },
+    // `recover` replaces the device key, revokes every grant and rotates handles (rust/src/context.rs)
     recover: async ({ recovery_passphrase }) => {
       needInit(); await wait(700);
       if (typeof recovery_passphrase !== 'string' || !recovery_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!recoveryCode || canonicalRecovery(recovery_passphrase) !== recoveryCode) throw fail('AuthFailed', 'bad_recovery_passphrase');
+      let revoked = 0;
+      for (const g of grants) if (g.status === 'active') { g.status = 'revoked'; revoked += 1; }
       record({ ts: iso(), event: 'recover' });
-      return { recovered: true };
+      return { kms_key_id: 'kms-dev-' + randFrom(8, HEX), grants_revoked: revoked, handles_invalidated: true };
     },
 
     // ---- team
@@ -724,8 +837,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         used_at: null, used_by: null, revoked_at: null, secret,
       };
       t.invites.push(inv);
-      const link_ref = newRef();
-      onetime.set(link_ref, { kind: 'link', text: `zeropw://join#${secret}` });
+      const link_ref = putOnce({ kind: 'link', text: `zeropw://join#${secret}` });
       record({ ts: iso(), event: 'team_invite', invite_id: inv.invite_id, role });
       return { invite_id: inv.invite_id, link_ref, expires_at: inv.expires_at, inviter: fingerprint() };
     },
@@ -743,24 +855,29 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (inv.status !== 'revoked') { inv.status = 'revoked'; inv.revoked_at = iso(); inv.secret = ''; record({ ts: iso(), event: 'team_invite_revoke', invite_id }); }
       return { env_id: t.env_id, invite_id, status: 'revoked' };
     },
+    // desktop/core/src/commands.rs `team_invite_preview`: empty or overlong text is refused by the
+    // core, anything that is not an invite by the CLI (`invite_malformed`); the text stays in the
+    // core for 10 minutes for `team_join`
     team_invite_preview: async ({ text }) => {
       const v = typeof text === 'string' ? text.trim() : '';
-      if (!isInviteLink(v)) throw fail('InvalidInput', 'invite_invalid');
+      if (!v) throw fail('InvalidInput', 'invite_missing');
+      if ([...v].length > INVITE_LINK_MAX) throw fail('InvalidInput', 'invite_too_long');
+      if (!isInviteLink(v)) throw fail('InvalidInput', 'invite_malformed');
       await wait(250);
       const preview = previewFor(v);
-      const ref = newRef();
-      onetime.set(ref, { kind: 'invite', text: v, preview });
+      const ref = putOnce({ kind: 'invite', text: v, preview });
       return { ref, preview };
     },
+    // `team_join` peeks the previewed invite and forgets it only once the join succeeded
     team_join: async ({ ref, project, environment }) => {
       needInit();
-      const item = onetime.get(ref);
-      if (!item || item.kind !== 'invite' || !item.preview) throw fail('InvalidInput', 'invite_ref_unknown');
-      onetime.delete(ref);
+      const item = peekOnce(ref, ['invite']);
+      if (!item.preview) throw fail('NotFound', 'onetime_ref_unknown');
       if (item.preview.expired) throw fail('InvalidInput', 'invite_expired');
       if (project !== undefined && !isValidName(project)) throw fail('InvalidInput', 'invalid_name', 'project');
       if (environment !== undefined && !isValidName(environment)) throw fail('InvalidInput', 'invalid_name', 'environment');
       await wait(1600);
+      onetime.delete(ref);
       const p = project ?? `team-${item.preview.inviter.slice(0, 8).toLowerCase()}`, e = environment ?? 'shared';
       const existing = projects.find((x) => x.name === p);
       if (existing) { if (!existing.environments.includes(e)) existing.environments.push(e); }
@@ -778,18 +895,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
 
     // ---- one-time values
     onetime_show: ({ ref }) => {
-      const item = onetime.get(ref);
-      if (!item || item.kind === 'invite') throw fail('InvalidInput', 'onetime_unknown');
+      const item = peekOnce(ref, SHOWABLE);
       onetime.delete(ref);
       return { text: item.text };
     },
     onetime_copy: ({ ref }) => {
-      const item = onetime.get(ref);
-      if (!item || item.kind === 'invite') throw fail('InvalidInput', 'onetime_unknown');
+      peekOnce(ref, SHOWABLE);
       onetime.delete(ref);                                   // the core forgets a value once it is on the clipboard
       return { copied: true, clears_in_s: 60 };
     },
-    onetime_discard: ({ ref }) => { onetime.delete(ref); },
+    onetime_discard: ({ ref }) => { if (typeof ref === 'string') onetime.delete(ref); },
     file_pick: ({ purpose }) => {
       if (purpose !== 'secret' && purpose !== 'ssh_key' && purpose !== 'ca') throw fail('InvalidInput', 'invalid_purpose');
       const file_token = 'file_' + randFrom(16, HEX);
@@ -814,9 +929,14 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     async call<K extends CommandName>(name: K, input: Commands[K][0]): Promise<Commands[K][1]> {
       const h = handlers[name] as Handler<K> | undefined;
       if (!h) throw fail('UsageError', 'mock_unsupported');
+      callLog.push(name);
       await Promise.resolve();
+      const injected = failures.get(name);
+      if (injected) { failures.delete(name); throw injected; }
       return h(input);
     },
+    failNext(name, error) { failures.set(name, error); },
+    calls: () => callLog.slice(),
     on(name, handler) {
       let set = listeners.get(name);
       if (!set) { set = new Set(); listeners.set(name, set); }
@@ -826,7 +946,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     emit,
     inspect: () => ({
-      initialized, onetime: onetime.size, terminals: terminals.size, projects: projects.map((p) => p.name), principals: principals.map((p) => p.id),
+      initialized, onetime: (prune(), onetime.size), terminals: terminals.size, projects: projects.map((p) => p.name), principals: principals.map((p) => p.id),
       stopped: control.stopped, secureView, secrets: [...secrets.keys()], connections: [...connections.keys()],
     }),
     dispose() {

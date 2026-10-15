@@ -36,10 +36,24 @@ export const adminReady = (r: AdminRules): boolean => r.len && r.match && r.stro
 export const sameAsAdmin = (code: string, admin: string): boolean =>
   !!code && code.trim().toLowerCase() === admin.trim().toLowerCase();
 
-export interface RecoveryOwnRules { strong: boolean; match: boolean; same: boolean }
+/** The core scores a chosen recovery code with the admin passphrase as a related input (zxcvbn
+ *  user inputs), which `password_strength` does not: a code that contains the admin passphrase,
+ *  forwards or backwards and ignoring case, scores far lower there. The UI refuses such a code. */
+export function containsAdmin(code: string, admin: string): boolean {
+  const a = admin.trim().toLowerCase();
+  if (charCount(a) < 4) return false;
+  const c = code.toLowerCase();
+  return c.includes(a) || c.includes([...a].reverse().join(''));
+}
+
+export interface RecoveryOwnRules { strong: boolean; match: boolean; same: boolean; similar: boolean }
 export function recoveryOwnRules(code: string, confirm: string, admin: string, score: number): RecoveryOwnRules {
   const same = sameAsAdmin(code, admin);
-  return { strong: charCount(code) >= MIN_PASSPHRASE_CHARS && !same && score >= RECOVERY_MIN_SCORE, match: !!code && code === confirm, same };
+  const similar = !same && !!code && containsAdmin(code, admin);
+  return {
+    strong: charCount(code) >= MIN_PASSPHRASE_CHARS && !same && !similar && score >= RECOVERY_MIN_SCORE,
+    match: !!code && code === confirm, same, similar,
+  };
 }
 
 // ---------------------------------------------------------------- recovery code
@@ -60,6 +74,24 @@ export function verifyRecoveryGroups(groups: readonly string[], slots: readonly 
   if (a === undefined || b === undefined || slots[0] === slots[1]) return false;
   return normalizeGroup(typed[0]) === a && normalizeGroup(typed[1]) === b;
 }
+
+/** Per verify field: null when it matches, 'empty' when nothing is typed, 'wrong' otherwise. */
+export type VerifyState = null | 'empty' | 'wrong';
+export function verifyStates(groups: readonly string[], slots: readonly [number, number], typed: readonly [string, string]): [VerifyState, VerifyState] {
+  const one = (i: 0 | 1): VerifyState => {
+    const v = normalizeGroup(typed[i]);
+    if (!v) return 'empty';
+    return groups[slots[i]] !== undefined && v === groups[slots[i]] ? null : 'wrong';
+  };
+  return [one(0), one(1)];
+}
+
+/** The core keeps a generated recovery code for 10 minutes (desktop/core/src/onetime.rs
+ *  DEFAULT_TTL); a code older than this, less a margin for vault creation, is made again before
+ *  the user goes on, so the code on paper is always the one the vault uses. */
+export const RECOVERY_REF_TTL_MS = 10 * 60_000;
+export const RECOVERY_REF_MARGIN_MS = 45_000;
+export const recoveryRefStale = (generatedAt: number, now: number): boolean => now - generatedAt > RECOVERY_REF_TTL_MS - RECOVERY_REF_MARGIN_MS;
 
 export const canonicalRecovery = (groups: readonly string[]): string => groups.join('-');
 
