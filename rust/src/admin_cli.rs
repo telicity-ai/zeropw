@@ -159,6 +159,9 @@ fn build_parser() -> Parser {
     // arrive as one JSON object on stdin. Left out of the usage line and the
     // help listing (`help=SUPPRESS`) so the recorded help text is unchanged.
     parser.arg(Arg::opt("--input-envelope").flag().suppress_help());
+    // The desktop app's re-auth gate (`require_admin`), valid only with
+    // `--input-envelope`; hidden the same way.
+    parser.arg(Arg::opt("--require-admin").flag().suppress_help());
     parser.subparsers("command", Some("COMMAND"));
     let sub = &mut parser;
     add(
@@ -727,6 +730,16 @@ fn parse(argv: &[String]) -> Result<Args, ParseFail> {
         return Err(ParseFail::Usage {
             usage: parser.format_usage(),
             detail: unrecognized_detail(&parser, &extras),
+        });
+    }
+    // The gate reads the passphrase from the envelope only: never from the
+    // environment or a terminal prompt.
+    if namespace.get("require_admin") == Some(&Val::Bool(true))
+        && namespace.get("input_envelope") != Some(&Val::Bool(true))
+    {
+        return Err(ParseFail::Usage {
+            usage: parser.format_usage(),
+            detail: "--require-admin is valid only with --input-envelope".to_owned(),
         });
     }
     let text = |key: &str| {
@@ -1518,6 +1531,34 @@ fn verify_admin(ctx: &Context, state: &str) -> Result<(), Error> {
         return Err(error);
     }
     Ok(())
+}
+
+/// The `state` of the `auth_failed` record a `--require-admin` refusal writes.
+const REQUIRE_ADMIN_STATE: &str = "require_admin";
+
+/// `--require-admin` (docs/desktop-app.md §3.1): the desktop app's re-auth
+/// gate for commands the CLI itself does not gate. Before the command is
+/// dispatched, the envelope's `admin_passphrase` goes through
+/// [`verify_admin`], the CLI's own re-auth path; the command then runs
+/// unchanged (one that already re-authenticates checks again). Unlike that
+/// path, a missing field is recorded as `auth_failed` too, so every refusal
+/// of the gate is audited; the audit log must therefore be writable.
+fn require_admin(a: &Args) -> Result<(), Error> {
+    if !a.has("require-admin") {
+        return Ok(());
+    }
+    let ctx = open(a, true)?;
+    verify_admin(&ctx, REQUIRE_ADMIN_STATE).inspect_err(|error| {
+        // `verify_admin` records only what `AdminCredential::verify` refuses;
+        // `passphrase()` fails before that.
+        if error.reason == "passphrase_missing" {
+            record_auth_failure(
+                &ctx,
+                &error.reason,
+                vec![("state", json!(REQUIRE_ADMIN_STATE))],
+            );
+        }
+    })
 }
 
 fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(), Error> {
@@ -3249,9 +3290,6 @@ pub fn main(argv: &[String]) -> i32 {
         None
     };
     if args.command == "serve" {
-        // The server never reads the envelope; do not hold its values for the
-        // lifetime of the process.
-        drop(envelope_scope);
         let stop = Arc::new(AtomicBool::new(false));
         for signal in [
             signal_hook::consts::signal::SIGINT,
@@ -3261,6 +3299,17 @@ pub fn main(argv: &[String]) -> i32 {
                 output(&Error::state("signal_handler_unavailable").to_dict(), true);
                 return 1;
             }
+        }
+        // `--require-admin` re-authenticates before the server starts, after
+        // the handlers above are installed so a signal cannot end the process
+        // while the gate's Context still owns temporary directories.
+        let gate = require_admin(&args);
+        // The server never reads the envelope; do not hold its values for the
+        // lifetime of the process.
+        drop(envelope_scope);
+        if let Err(error) = gate {
+            output(&error.to_dict(), true);
+            return 1;
         }
         return match run_serve(
             &args.state_dir,
@@ -3284,13 +3333,15 @@ pub fn main(argv: &[String]) -> i32 {
         return 1;
     }
     let _owned_dir_cleanup = AdminOwnedDirCleanup;
-    let result = if args.command == "incident" {
-        incident_command(&args).map(Some)
-    } else if args.command == "team" {
-        team_command(&args)
-    } else {
-        local_command(&args).map(Some)
-    };
+    let result = require_admin(&args).and_then(|()| {
+        if args.command == "incident" {
+            incident_command(&args).map(Some)
+        } else if args.command == "team" {
+            team_command(&args)
+        } else {
+            local_command(&args).map(Some)
+        }
+    });
     match result {
         Ok(Some(value)) => {
             output(&value, false);
@@ -3443,6 +3494,38 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn require_admin_parses_only_with_the_input_envelope() {
+        let argv = |extra: &[&str]| {
+            ["--state-dir", "state"]
+                .iter()
+                .chain(extra)
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        };
+        match parse(&argv(&["--require-admin", "resume"])) {
+            Ok(_) => panic!("--require-admin parsed without --input-envelope"),
+            Err(ParseFail::Usage { usage, detail }) => {
+                assert_eq!(
+                    detail,
+                    "--require-admin is valid only with --input-envelope"
+                );
+                assert!(!usage.contains("require-admin"), "{usage}");
+            }
+            Err(other) => panic!("{other:?}"),
+        }
+        for order in [
+            ["--input-envelope", "--require-admin"],
+            ["--require-admin", "--input-envelope"],
+        ] {
+            let args = parse(&argv(&[order[0], order[1], "resume"])).unwrap();
+            assert!(args.has("require-admin") && args.has("input-envelope"));
+            assert_eq!(args.command, "resume");
+        }
+        let plain = parse(&argv(&["--input-envelope", "resume"])).unwrap();
+        assert!(!plain.has("require-admin"));
     }
 
     #[test]
