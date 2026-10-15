@@ -35,7 +35,8 @@ export interface MockSeed {
   onetimeTtlMs?: number;
   /** Lifetime of a previewed invite kept for `team_join` (the core keeps it 60 minutes). */
   inviteTtlMs?: number;
-  /** What `secure_view` answers: nothing (an older core), or whether the window is protected. */
+  /** What `secure_view` answers: nothing (an older core), or whether the capture-exclusion
+   *  request was applied (best effort, not a guarantee that the window cannot be captured). */
   screenGuard?: 'void' | 'protected' | 'unprotected';
   /** Other-device access saved before the app starts (`team_listen`). */
   teamListen?: string | null;
@@ -762,8 +763,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     secure_view: ({ on }) => {
       secureView = on === true;
-      // like the real core by default: {protected} says whether the window really is protected;
-      // 'void' imitates an older core that answered nothing, 'unprotected' a platform without it (Linux)
+      // like the real core by default: {protected} says whether the capture-exclusion request was
+      // applied (best effort; it does not mean the window cannot be captured); 'void' imitates an
+      // older core that answered nothing, 'unprotected' a platform without the request (Linux)
       if (seed.screenGuard === 'void') return undefined as unknown as Commands['secure_view'][1];
       return { protected: on === true && seed.screenGuard !== 'unprotected' };
     },

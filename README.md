@@ -56,16 +56,17 @@ ZeroPW does not import or export a complete `.env` file. Applications that requi
 
 ## Desktop app (preview)
 
-`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. No published release includes the app. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
+`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. No published release includes the app yet; the owner has decided to ship it as an ad hoc signed preview `.dmg` for Apple Silicon in the v0.2.0 release. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
 
 Known limits:
 
+- Korean only. The app's interface, including the macOS Local Network permission prompt it causes, is in Korean, with no English version (an owner decision).
 - No isolation within one macOS account. Any program running as the same user, agents included, can read the development device key file and the vault ([#21](https://github.com/telicity-ai/zeropw/issues/21)). The app suggests running agents as a different account.
 - Recovery limits ([#22](https://github.com/telicity-ai/zeropw/issues/22)). Recovery with the recovery code needs the existing device key file. It re-wraps the same data key, so it is not a response to a leaked key file, and backups made before it can no longer be restored.
-- Not notarized. Only an ad-hoc signed `.dmg` can be built, for testing. When a downloaded copy is first opened, Gatekeeper blocks it until you allow it in System Settings > Privacy & Security.
+- Ad hoc signed preview, not notarized. The `.dmg` has no Developer ID signature, so its signature does not identify who built it. Drag ZeroPW to Applications, eject the image, and open the app only from Applications. Gatekeeper blocks the first open; then click Open Anyway in System Settings > Privacy & Security within about an hour and confirm with your login password. Do not remove the quarantine attribute or turn Gatekeeper off. The [release guide](docs/releasing.md#what-users-see-on-macos-15-and-later) has the steps.
 - No auto-update. Replace the app yourself to get fixes.
 - Apple Silicon (arm64) only on macOS. There is no Intel or universal build.
-- Screen-capture protection is a best-effort request on macOS and may not stop every capture tool. Linux has none: recovery codes, tokens, invite links and revealed keys can be captured.
+- Do not count on screen-capture exclusion. On macOS the app only asks the window system to leave its window out of captures while a recovery code, token, invite link or revealed key is shown. Capture, recording and screen-sharing tools built on ScreenCaptureKit reportedly ignore that request from macOS 15 on, and it has not been tested on a release build. Linux has no such request. Do not show these values while you share or record your screen.
 
 ## Verify changes
 
