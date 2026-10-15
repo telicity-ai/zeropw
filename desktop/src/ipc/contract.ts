@@ -55,6 +55,10 @@ export interface Commands {
   password_strength: [{ value: string }, { score: number; reason: string | null }];
   recovery_generate: [void, { ref: string; groups: string[] }];
   vault_init: [{ admin_passphrase: string; recovery: { ref: string } | { typed: string } }, { state_dir: string; kms_key_id: string }];
+  /** A failed start carries the sidecar's own reason when it printed one (docs/desktop-app.md
+   *  §5). A failure to open an address has detail 'gateway_port' (listen_failed) or
+   *  'team_listen' (team_invalid_listen_address, team_listen_failed, invalid_listen). The
+   *  start at the end of vault_init fails the same way. */
   serve_start: [void, ServeStatus];
   serve_stop: [void, ServeStatus];
   serve_status: [void, ServeStatus];
@@ -120,6 +124,8 @@ export interface Commands {
   team_invite_create: [{ env: string; role: 'user' | 'admin'; name: string; address: string; admin_passphrase: string }, { invite_id: string; link_ref: string; expires_at: string; inviter: string }];
   team_invites: [{ env: string }, { env_id: string; invites: InviteListItem[] }];
   team_revoke_invite: [{ env: string; invite_id: string }, Record<string, unknown>];
+  /** The core keeps the invite behind `ref` for team_join for 60 minutes (at most 16, the
+   *  oldest dropped first) and forgets it once a join succeeds. */
   team_invite_preview: [{ text: string }, { ref: string; preview: InvitePreview }];
   team_join: [{ ref: string; project?: string; environment?: string }, { env_id: string; self_fingerprint: string; inviter_fingerprint: string; project: string; environment: string }];
 

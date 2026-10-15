@@ -147,6 +147,109 @@ fn a_serve_that_exits_reports_the_cli_error_from_its_log() {
     assert!(!fx.paths.serve_pid_file().exists());
 }
 
+/// The sidecar's own reason reaches the caller instead of a bare `serve_exited`, and a failure
+/// to open an address says which setting it came from, so the UI can tell a team listener
+/// failure from a gateway port failure. No detail carries either address.
+#[test]
+fn a_serve_that_cannot_listen_says_which_address_failed() {
+    let team = "192.168.1.20:47390";
+    let cases = [
+        // The team listener could not bind (address not on this machine, or in use).
+        (
+            r#"{"error": "InvalidInput", "reason": "team_invalid_listen_address"}"#,
+            Some(team),
+            (
+                "InvalidInput",
+                "team_invalid_listen_address",
+                Some("team_listen"),
+            ),
+        ),
+        (
+            r#"{"detail": "bind 192.168.1.20:47390", "error": "StateError", "reason": "team_listen_failed"}"#,
+            Some(team),
+            ("StateError", "team_listen_failed", Some("team_listen")),
+        ),
+        (
+            r#"{"detail": "use HOST:PORT", "error": "InvalidInput", "reason": "invalid_listen"}"#,
+            Some(team),
+            ("InvalidInput", "invalid_listen", Some("team_listen")),
+        ),
+        // The gateway port is taken, with or without team sync on.
+        (
+            r#"{"error": "StateError", "reason": "listen_failed"}"#,
+            Some(team),
+            ("StateError", "listen_failed", Some("gateway_port")),
+        ),
+        (
+            r#"{"error": "StateError", "reason": "listen_failed"}"#,
+            None,
+            ("StateError", "listen_failed", Some("gateway_port")),
+        ),
+        // Any other reason keeps its detail only while it names neither address.
+        (
+            r#"{"detail": "peer 192.168.1.20 refused", "error": "StateError", "reason": "state_corrupt"}"#,
+            Some(team),
+            ("StateError", "state_corrupt", None),
+        ),
+        (
+            r#"{"detail": "KeyError", "error": "StateError", "reason": "state_corrupt"}"#,
+            Some(team),
+            ("StateError", "state_corrupt", Some("KeyError")),
+        ),
+    ];
+    for (stderr, team_listen, (error, reason, detail)) in cases {
+        let fx = Fixture::new();
+        fx.respond_error("serve", &format!("startup notice\n{stderr}\n"), 1);
+        let sup = supervisor(&fx, Duration::from_secs(1));
+        let e = sup
+            .start(&ServeConfig {
+                port: free_port(),
+                team_listen: team_listen.map(str::to_owned),
+            })
+            .unwrap_err();
+        assert_eq!(
+            (e.error.as_str(), e.reason.as_str(), e.detail.as_deref()),
+            (error, reason, detail),
+            "{stderr}"
+        );
+        assert!(!sup.status().running);
+        assert!(!fx.paths.serve_pid_file().exists());
+    }
+
+    // A sidecar that printed its URL and then failed is read the same way.
+    let fx = Fixture::new();
+    fx.respond("serve", "{\"url\":\"http://127.0.0.1:9\"}\n");
+    fx.respond_error(
+        "serve",
+        r#"{"error": "InvalidInput", "reason": "team_invalid_listen_address"}"#,
+        1,
+    );
+    let e = supervisor(&fx, Duration::from_secs(1))
+        .start(&ServeConfig {
+            port: free_port(),
+            team_listen: Some(team.into()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.reason.as_str(), e.detail.as_deref()),
+        ("team_invalid_listen_address", Some("team_listen"))
+    );
+
+    // Without a reason from the sidecar the start fails as `serve_exited`, value-free.
+    let fx = Fixture::new();
+    fx.respond_error("serve", "panicked at 192.168.1.20:47390\n", 101);
+    let e = supervisor(&fx, Duration::from_secs(1))
+        .start(&ServeConfig {
+            port: free_port(),
+            team_listen: Some(team.into()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str(), e.detail),
+        ("Unavailable", "serve_exited", None)
+    );
+}
+
 #[test]
 fn a_serve_that_never_gets_healthy_times_out_and_is_stopped() {
     let fx = Fixture::new();

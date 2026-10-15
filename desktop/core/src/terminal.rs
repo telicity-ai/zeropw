@@ -17,28 +17,37 @@
 //!   pick a running agent shell back up. An exited shell stays listed (not alive) until it is
 //!   closed or its slot is needed.
 //! - Keyboard input goes through a bounded per-terminal queue ([`MAX_QUEUED_INPUT`]) drained
-//!   by that terminal's writer thread. A PTY write can block in the kernel for as long as the
-//!   foreground program does not read (a long paste into a running build), so no write ever
-//!   happens under the registry lock or on the caller's thread; a full queue answers
-//!   `terminal_busy` instead of waiting.
+//!   by that terminal's writer thread. A PTY write can wait for as long as the foreground
+//!   program does not read (a long paste into a running build), so no write ever happens
+//!   under the registry lock or on the caller's thread; a full queue answers `terminal_busy`
+//!   instead of waiting.
+//! - The reader and writer threads use their own non-blocking copies of the PTY master and
+//!   wait for it together with the terminal's stop pipe ([`Stop`]), never inside a blocking
+//!   read or write. Closing the terminal therefore ends both even in the middle of a stuck
+//!   paste: input not yet written is dropped and wiped, and the PTY is closed.
 //! - Closing a terminal (and quitting the app, which closes them all) stops the processes it
 //!   started, not only the shell: every process group of the shell, its descendants and every
 //!   process whose controlling terminal is this PTY gets SIGHUP (and SIGCONT), and whatever is
-//!   left after [`CLOSE_GRACE`] gets SIGKILL. `close` returns once that is done. Out of reach:
-//!   a process that left the terminal's session and process tree (`setsid` plus a double fork,
-//!   a daemon), and processes running as another account (`sudo -u`), which the app may not
-//!   signal; those only get the hang-up the kernel sends when the shell goes away.
+//!   left after [`CLOSE_GRACE`] gets SIGKILL. `close` returns once that is done and the
+//!   terminal's threads and descriptors are gone. Out of reach (docs/desktop-app.md §4.4): a
+//!   process that left the terminal's session and process tree, which a single
+//!   `setsid <cmd> &` does, as do tmux and screen servers and daemons; and processes running
+//!   as another account (`sudo -u`), which the app may not signal. Those keep running: at most
+//!   they get the hang-up the kernel or sudo sends when the shell and the PTY go away, which a
+//!   program may ignore.
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
+use std::io::{self, PipeReader, PipeWriter, Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use filedescriptor::{FileDescriptor, POLLIN, POLLOUT, pollfd};
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -67,6 +76,12 @@ pub const MAX_QUEUED_INPUT: usize = 256 * 1024;
 /// How long a closed terminal's processes get to exit on SIGHUP before they are killed.
 pub const CLOSE_GRACE: Duration = Duration::from_secs(2);
 const CLOSE_POLL: Duration = Duration::from_millis(25);
+/// How long `close` waits for the terminal's reader and writer threads after the processes
+/// are gone. They have been told to stop by then and end within moments.
+const THREAD_JOIN_LIMIT: Duration = Duration::from_secs(2);
+/// Pause before looking at the PTY again when a wait gave no answer (it failed, or reported
+/// only a hang-up), so a retry never spins.
+const WAIT_RETRY: Duration = Duration::from_millis(20);
 
 /// Variables copied from the app's own environment into the shell.
 const INHERITED: [&str; 10] = [
@@ -377,7 +392,7 @@ struct InputState {
     /// No more input: the terminal is closing or a write failed.
     closed: bool,
     /// Why a write failed (it closed the queue).
-    failed: Option<std::io::ErrorKind>,
+    failed: Option<io::ErrorKind>,
 }
 
 impl InputQueue {
@@ -428,7 +443,7 @@ impl InputQueue {
     }
 
     /// Stop taking input and drop (wipe) whatever is still queued.
-    fn close(&self, failed: Option<std::io::ErrorKind>) {
+    fn close(&self, failed: Option<io::ErrorKind>) {
         let mut state = self.lock();
         state.closed = true;
         if state.failed.is_none() {
@@ -440,14 +455,113 @@ impl InputQueue {
     }
 }
 
-/// A terminal's writer thread: PTY writes happen here and nowhere else, so one that blocks
-/// holds up only this thread. It ends when the queue closes or a write fails. (Dropping
-/// portable-pty's writer sends a final newline and EOF, which can block too; it happens here.)
-fn feed(mut writer: Box<dyn Write + Send>, input: Arc<InputQueue>) {
+/// Tells a terminal's reader and writer threads to stop, also while one of them is waiting
+/// for the PTY (a paste stuck behind a program that does not read its input). Both wait on
+/// the PTY and on this pipe together; [`Stop::signal`] sets the flag and makes the pipe
+/// readable for good.
+struct Stop {
+    set: AtomicBool,
+    wake: PipeReader,
+    signal: Mutex<Option<PipeWriter>>,
+}
+
+impl Stop {
+    fn new() -> io::Result<Self> {
+        let (wake, signal) = io::pipe()?;
+        Ok(Self {
+            set: AtomicBool::new(false),
+            wake,
+            signal: Mutex::new(Some(signal)),
+        })
+    }
+
+    fn signal(&self) {
+        self.set.store(true, Ordering::SeqCst);
+        let writer = self.signal.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(mut writer) = writer {
+            // One byte that nobody reads: the pipe stays readable for both threads.
+            let _ = writer.write(&[1]);
+        }
+    }
+
+    fn is_set(&self) -> bool {
+        self.set.load(Ordering::SeqCst)
+    }
+
+    /// Wait until `fd` is ready for `events`; `false` once the terminal is stopping. A wait
+    /// that fails (macOS `select` takes no descriptor past `FD_SETSIZE`) or reports only a
+    /// hang-up or an error pauses for [`WAIT_RETRY`] instead, and the caller's next read or
+    /// write tells what happened.
+    fn wait(&self, fd: &impl AsRawFd, events: i16) -> bool {
+        let mut fds = [
+            pollfd {
+                fd: fd.as_raw_fd(),
+                events,
+                revents: 0,
+            },
+            pollfd {
+                fd: self.wake.as_raw_fd(),
+                events: POLLIN,
+                revents: 0,
+            },
+        ];
+        let polled = filedescriptor::poll(&mut fds, None).is_ok();
+        if self.is_set() || (polled && fds[1].revents != 0) {
+            return false;
+        }
+        if !polled || (fds[0].revents & events) == 0 {
+            thread::sleep(WAIT_RETRY);
+        }
+        !self.is_set()
+    }
+}
+
+/// The reader's and the writer's own copies of the PTY master, in non-blocking mode, so that
+/// neither thread ever sleeps inside a read or write where closing the terminal cannot reach
+/// it (on Linux a master write stuck behind a program that does not read is not woken when
+/// that program is killed). The mode belongs to the open file all copies share, so the
+/// master itself becomes non-blocking too; it is only used for resizing and for finding the
+/// foreground process group.
+#[allow(unsafe_code)]
+fn master_io(master: &dyn MasterPty) -> Result<(FileDescriptor, FileDescriptor), AppError> {
+    let unavailable = || AppError::unavailable("pty_unavailable");
+    let raw = master.as_raw_fd().ok_or_else(unavailable)?;
+    // SAFETY: `raw` is the master's own open descriptor, and `master` is borrowed for this
+    // whole function, so the descriptor stays open while it is duplicated. Nothing here
+    // closes it.
+    let fd = unsafe { BorrowedFd::borrow_raw(raw) }
+        .try_clone_to_owned()
+        .map_err(|_| unavailable())?;
+    let mut reader = FileDescriptor::new(fd);
+    reader.set_non_blocking(true).map_err(|_| unavailable())?;
+    let writer = reader.try_clone().map_err(|_| unavailable())?;
+    Ok((reader, writer))
+}
+
+/// A terminal's writer thread: PTY writes happen here and nowhere else. It ends when the
+/// queue closes, a write fails or the terminal stops; a chunk cut short by the stop is
+/// dropped and wiped with the rest of the queue.
+fn feed(mut writer: FileDescriptor, input: Arc<InputQueue>, stop: Arc<Stop>) {
     while let Some(chunk) = input.next() {
-        if let Err(e) = writer.write_all(&chunk).and_then(|_| writer.flush()) {
-            input.close(Some(e.kind()));
-            break;
+        let mut rest: &[u8] = &chunk;
+        while !rest.is_empty() {
+            match writer.write(rest) {
+                Ok(0) => {
+                    input.close(Some(io::ErrorKind::WriteZero));
+                    return;
+                }
+                Ok(n) => rest = &rest[n..],
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if !stop.wait(&writer, POLLOUT) {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    input.close(Some(e.kind()));
+                    return;
+                }
+            }
         }
     }
 }
@@ -455,6 +569,9 @@ fn feed(mut writer: Box<dyn Write + Send>, input: Arc<InputQueue>) {
 struct Session {
     master: Box<dyn MasterPty + Send>,
     input: Arc<InputQueue>,
+    stop: Arc<Stop>,
+    /// The reader and writer threads, joined by [`stop_sessions`].
+    threads: Vec<JoinHandle<()>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
     /// The PTY's slave as `ps` names it (`ttys012`, `pts/3`): the controlling terminal of every
@@ -468,11 +585,20 @@ struct Session {
     seq: u64,
 }
 
+impl Session {
+    /// Wipe queued input and tell the reader and writer threads to stop, also mid-write.
+    fn stop_io(&self) {
+        self.input.close(None);
+        self.stop.signal();
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
-        // Ends the writer thread (unless a write is stuck in the kernel; it then ends when
-        // the PTY goes away or the app exits).
-        self.input.close(None);
+        // Sessions are dropped by stop_sessions, which has already stopped the threads and
+        // waited for them. Should one be dropped another way, the threads still end promptly
+        // (also a writer in the middle of a stuck paste) and close their PTY copies.
+        self.stop_io();
     }
 }
 
@@ -550,6 +676,9 @@ impl TerminalManager {
         let pair = native_pty_system()
             .openpty(size)
             .map_err(|_| AppError::unavailable("pty_unavailable"))?;
+        // Everything the threads need, before anything runs in the terminal.
+        let (reader, writer) = master_io(pair.master.as_ref())?;
+        let stop = Arc::new(Stop::new().map_err(|_| AppError::unavailable("pty_unavailable"))?);
 
         let mut cmd = match &self.program {
             TerminalProgram::LoginShell => CommandBuilder::new_default_prog(),
@@ -573,14 +702,6 @@ impl TerminalManager {
         // Only the child may hold the slave side, so the reader sees EOF when the shell exits.
         drop(pair.slave);
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|_| AppError::unavailable("pty_unavailable"))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|_| AppError::unavailable("pty_unavailable"))?;
         let killer = child.clone_killer();
         let pid = child.process_id();
         let tty = pair
@@ -594,9 +715,11 @@ impl TerminalManager {
             exit: None,
         }));
         let input = Arc::new(InputQueue::new());
-        let session = Session {
+        let mut session = Session {
             master: pair.master,
             input: input.clone(),
+            stop: stop.clone(),
+            threads: Vec::with_capacity(2),
             killer,
             pid,
             tty,
@@ -606,17 +729,28 @@ impl TerminalManager {
             as_user: req.as_user.map(str::to_owned),
             seq: self.next_seq.fetch_add(1, Ordering::SeqCst),
         };
-        thread::spawn(move || pump(reader, child, output, exited));
-        thread::spawn(move || feed(writer, input));
-        let id = match random_ref() {
-            Ok(id) => id,
+        let reader_stop = stop.clone();
+        let started = thread::Builder::new()
+            .name("zeropw-terminal-out".into())
+            .spawn(move || pump(reader, child, output, exited, reader_stop))
+            .and_then(|handle| {
+                session.threads.push(handle);
+                thread::Builder::new()
+                    .name("zeropw-terminal-in".into())
+                    .spawn(move || feed(writer, input, stop))
+            })
+            .map(|handle| session.threads.push(handle))
+            .map_err(|_| AppError::unavailable("pty_unavailable"));
+        match started.and_then(|()| random_ref()) {
+            Ok(id) => {
+                self.lock().insert(id.clone(), session);
+                Ok(id)
+            }
             Err(e) => {
                 stop_sessions(vec![session]);
-                return Err(e);
+                Err(e)
             }
-        };
-        self.lock().insert(id.clone(), session);
-        Ok(id)
+        }
     }
 
     /// Point a terminal's output at a new sink: the buffered output is replayed into it first
@@ -846,9 +980,10 @@ fn signal_group(group: i32, signal: Option<Signal>) -> bool {
     killpg(Pid::from_raw(group), signal).is_ok()
 }
 
-/// Stop every process the given terminals started, then let the sessions (and their PTYs) go.
-/// Blocks for at most [`CLOSE_GRACE`] plus two `ps` runs. The PTYs stay open until the end,
-/// so their names cannot be reused by another terminal meanwhile.
+/// Stop every process the given terminals started, end their reader and writer threads, then
+/// let the sessions (and their PTYs) go. Blocks for at most [`CLOSE_GRACE`] plus two `ps`
+/// runs plus [`THREAD_JOIN_LIMIT`]. The PTYs stay open until the end, so their names cannot
+/// be reused by another terminal meanwhile.
 fn stop_sessions(mut sessions: Vec<Session>) {
     if sessions.is_empty() {
         return;
@@ -857,7 +992,7 @@ fn stop_sessions(mut sessions: Vec<Session>) {
     let table = process_table();
     let mut groups = BTreeSet::new();
     for session in &mut sessions {
-        session.input.close(None);
+        session.stop_io();
         let running = !session.exited.load(Ordering::SeqCst);
         // A shell that has exited may have been reaped and its pid reused: only the terminal
         // itself identifies what is left of it then.
@@ -900,14 +1035,30 @@ fn stop_sessions(mut sessions: Vec<Session>) {
     for &group in &groups {
         signal_group(group, Some(Signal::SIGKILL));
     }
+    // The threads were told to stop at the start. The writer has returned; the reader has
+    // only the shell left to reap, which is gone now.
+    let deadline = Instant::now() + THREAD_JOIN_LIMIT;
+    for session in &mut sessions {
+        for handle in session.threads.drain(..) {
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+    }
     drop(sessions);
 }
 
+/// A terminal's reader thread: output into the ring and the sink until the shell's side of
+/// the PTY is gone or the terminal stops, then the shell's exit status.
 fn pump(
-    mut reader: Box<dyn Read + Send>,
+    mut reader: FileDescriptor,
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     output: Arc<Mutex<Output>>,
     exited: Arc<AtomicBool>,
+    stop: Arc<Stop>,
 ) {
     let deliver = |text: &str| {
         let mut output = lock_output(&output);
@@ -918,7 +1069,7 @@ fn pump(
     };
     let mut decoder = Utf8Chunker::default();
     let mut buf = [0u8; 8192];
-    loop {
+    while !stop.is_set() {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -927,11 +1078,17 @@ fn pump(
                     deliver(&text);
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                if !stop.wait(&reader, POLLIN) {
+                    break;
+                }
+            }
             // Linux reports EIO once the shell (the last slave holder) is gone.
             Err(_) => break,
         }
     }
+    drop(reader);
     buf.zeroize();
     let rest = decoder.finish();
     if !rest.is_empty() {

@@ -86,6 +86,65 @@ fn real_serve_starts_attaches_and_stops() {
     assert!(!paths.serve_pid_file().exists());
 }
 
+/// The real sidecar's own reason tells a taken gateway port from a team listener that cannot
+/// open its address, and neither error carries the address.
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with zeropw-admin"]
+fn real_serve_says_which_address_it_could_not_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), bin_dir());
+    zeropw_desktop_core::paths::ensure_private_dir(&paths.app_data_dir).unwrap();
+    let init = Command::new(paths.admin_bin())
+        .arg(format!("--state-dir={}", paths.state_dir().display()))
+        .arg("init")
+        .env("ZEROPW_ADMIN_PASSPHRASE", "velvet-ocean-27-quartz-lantern")
+        .env(
+            "ZEROPW_RECOVERY_PASSPHRASE",
+            "another-lantern-42-quartz-velvet",
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let sup = ServeSupervisor::new(&paths);
+
+    let gateway = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = gateway.local_addr().unwrap().port();
+    let e = sup
+        .start(&ServeConfig {
+            port,
+            team_listen: None,
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.reason.as_str(), e.detail.as_deref()),
+        ("listen_failed", Some("gateway_port")),
+        "{e}"
+    );
+
+    let team = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let team_listen = team.local_addr().unwrap().to_string();
+    let e = sup
+        .start(&ServeConfig {
+            port: free_port(),
+            team_listen: Some(team_listen.clone()),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.reason.as_str(), e.detail.as_deref()),
+        ("team_invalid_listen_address", Some("team_listen")),
+        "{e}"
+    );
+    assert!(!e.to_string().contains(&team_listen));
+    assert!(!sup.status().running);
+    assert!(!paths.serve_pid_file().exists());
+    drop((gateway, team));
+}
+
 #[test]
 #[ignore = "needs ZEROPW_BIN_DIR with a zeropw-admin that supports --input-envelope"]
 fn init_project_secret_put_and_list_without_values() {

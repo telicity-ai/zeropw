@@ -19,6 +19,8 @@ sha2 = "0.10"
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
 zxcvbn = "3"
 portable-pty = "0.9"
+# PTY readiness waits: poll(2) on Linux, select(2) on macOS (portable-pty's own descriptor crate).
+filedescriptor = "0.8"
 nix = { version = "0.30.1", features = ["signal", "process", "net", "user"] }
 
 [dev-dependencies]
