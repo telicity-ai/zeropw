@@ -50,6 +50,24 @@ describe('copy table', () => {
     }
   });
 
+  it('keeps the glossary and the polite informal style (DESIGN.md §6)', () => {
+    const banned = /(\uC2B5\uB2C8\uB2E4|\uC2ED\uC2DC\uC624|\uAC8C\uC774\uD2B8\uC6E8\uC774|\uBCFC\uD2B8|\uD504\uB9B0\uC2DC\uD384|\uC790\uACA9 ?\uC99D\uBA85|\bTTL\b|vault|gateway|principal|passphrase|\bgrant\b)/i;
+    expect(Object.entries(COPY).filter(([, v]) => banned.test(v.replace(/\{\w+\}/g, '')))).toEqual([]);
+  });
+
+  it('has the placeholders the dashboard fills in', () => {
+    const need: Record<string, string[]> = {
+      'keys.version': ['n'], 'keys.older': ['n'], 'keys.reveal.left': ['s'], 'keys.value.loaded': ['name'], 'keys.reveal.aria': ['id'],
+      'grant.until': ['time'], 'grant.uses': ['n'], 'grant.usesOf': ['n', 'max'], 'grant.revoke.aria': ['conn'], 'grant.for.aria': ['id'],
+      'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
+      'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
+    };
+    for (const [k, vars] of Object.entries(need)) {
+      expect(hasCopy(k), k).toBe(true);
+      for (const v of vars) expect(COPY[k as keyof typeof COPY], k).toContain(`{${v}}`);
+    }
+  });
+
   it('fills placeholders and leaves unknown ones visible', () => {
     expect(t('rec.verify.slot', { n: 3 })).toBe('3번째');
     expect(t('term.title')).toContain('{name}');
