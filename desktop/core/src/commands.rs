@@ -59,7 +59,7 @@ const CLIPBOARD_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Copies whose clear is still pending; beyond this the oldest is forgotten.
 const MAX_PENDING_CLEARS: usize = 64;
 const MAX_INVITE_CHARS: usize = 4096;
-/// A version the CLI printed: digits for a local secret, a hex `version_id` for a shared one.
+/// The longest version text the core passes on (the CLI prints integers).
 const MAX_VERSION_CHARS: usize = 64;
 
 /// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
@@ -214,7 +214,7 @@ pub struct SecretPutIn {
 }
 
 /// A secret version exactly as the CLI printed it in `secret_list`/`secret_versions`: a JSON
-/// number (a local secret's version) or a string. It goes to the CLI unchanged as
+/// number (what the CLI prints) or a string. It goes to the CLI unchanged as
 /// `--version=<text>`; the CLI decides what it accepts. A number must be an integer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Version(String);
@@ -1646,7 +1646,8 @@ fn digest(text: &str) -> [u8; 32] {
     Sha256::digest(text.as_bytes()).into()
 }
 
-/// A version as the CLI printed it (digits, or a hex `version_id`), passed on unchanged.
+/// A version as the webview got it from the CLI, passed on unchanged: letters, digits, `-`
+/// and `_` only, starting with a letter or digit.
 fn check_version(version: &Version) -> Result<&str, AppError> {
     let text = version.as_str();
     if text.len() <= MAX_VERSION_CHARS

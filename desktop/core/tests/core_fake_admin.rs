@@ -1070,7 +1070,7 @@ fn deep_links_cannot_fill_the_one_time_store() {
 }
 
 /// WEB-2: `secret_list`/`secret_versions` pass the CLI's output through, and the CLI prints a
-/// local secret's versions as JSON numbers (a shared one's `version_id` as a string). Feeding
+/// secret's versions as JSON numbers (strings are accepted too). Feeding
 /// those values straight back into the version commands must work, unchanged.
 #[test]
 fn versions_go_back_to_the_cli_as_it_printed_them() {

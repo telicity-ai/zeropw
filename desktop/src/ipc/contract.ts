@@ -15,8 +15,8 @@ export interface AppStatus { initialized: boolean; state_dir: string; serve: Ser
 
 export interface Project { name: string; environments: string[]; created_at: string }
 export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
-/** A secret version exactly as the CLI printed it: a number for a local secret, a string for a
- *  shared one. The version commands take it back unchanged; do not convert it. */
+/** A secret version exactly as the CLI printed it (the CLI prints JSON numbers; a string is
+ *  accepted too). The version commands take it back unchanged; do not convert it. */
 export type VersionId = string | number;
 export interface SecretVersion { version: string; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
 export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: string | null; versions: SecretVersion[] }
