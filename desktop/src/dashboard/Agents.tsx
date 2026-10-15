@@ -6,7 +6,7 @@ import { GRANT_TTLS, liveGrants, parseMaxUses, pendingApprovals, type ApprovalVi
 import { shortTime } from '../lib/format';
 import { isAccountName, isValidName, runtimeFor } from '../lib/validators';
 import { useApp } from '../ui/context';
-import { PassField, SelectField, TextField } from '../ui/fields';
+import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { AppTerminal, focusTerminalIn, type TerminalSource } from '../ui/Terminal';
 import { ConfirmSheet } from './Confirm';
@@ -366,6 +366,8 @@ function GrantSheet({ open, principal, principals, connections, onClose, onDone,
   const { toast, field } = useApp();
   const [who, setWho] = useState(principal ?? principals[0]?.id ?? '');
   const [conn, setConn] = useState(connections[0]?.id ?? '');
+  useSelectDefault(who, principals.map((p) => p.id), setWho);
+  useSelectDefault(conn, connections.map((c) => c.id), setConn);
   const [ttl, setTtl] = useState<GrantTtl>('1h');
   const [max, setMax] = useState('');
   const [pass, setPass] = useState('');

@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import type { CSSProperties, HTMLAttributes, ReactNode, Ref } from 'react';
 import { t } from '../copy';
 
@@ -50,6 +51,15 @@ export function TextField(props: Common & {
 }
 
 export interface Choice { value: string; label: string }
+
+/** Keep a select's state on one of its options: the lists usually arrive after the sheet's
+ *  state is created, and a <select> whose value matches no option still shows the first one,
+ *  so the screen and the state would disagree. */
+export function useSelectDefault(value: string, options: readonly string[], set: (v: string) => void): void {
+  const first = options[0];
+  const known = options.includes(value);
+  useEffect(() => { if (!known && first !== undefined) set(first); }, [known, first, set]);
+}
 
 export function SelectField(props: Common & { value: string; onChange(v: string): void; options: Choice[]; selectRef?: Ref<HTMLSelectElement> }) {
   const { id, value, onChange, options, selectRef, mono, error, disabled } = props;

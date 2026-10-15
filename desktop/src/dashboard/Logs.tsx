@@ -6,7 +6,7 @@ import { isPlainText, recordFields, runtimeStopsAll, valueText } from '../lib/da
 import { shortTime } from '../lib/format';
 import { isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
-import { PassField, SelectField, TextField } from '../ui/fields';
+import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useLoad, useSheets } from './context';
@@ -109,6 +109,8 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
   const [scope, setScope] = useState<Scope>('principal');
   const [who, setWho] = useState(principals[0]?.id ?? '');
   const [runtime, setRuntime] = useState(runtimes[0] ?? '');
+  useSelectDefault(who, principals.map((p) => p.id), setWho);
+  useSelectDefault(runtime, runtimes, setRuntime);
   const [reason, setReason] = useState('');
   const [pass, setPass] = useState('');
   const [errs, setErrs] = useState<{ who?: CopyKey; runtime?: CopyKey; reason?: CopyKey; pass?: CopyKey; form?: CopyKey }>({});

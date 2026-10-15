@@ -9,7 +9,7 @@ import {
 } from '../lib/dash';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
-import { PassField, SelectField, TextField } from '../ui/fields';
+import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
@@ -97,6 +97,7 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
   const [src, setSrc] = useState<KeySrc>('new');
   const [pickId, setPickId] = useState('');
   const [env, setEnv] = useState(pairs[0]?.key ?? '');
+  useSelectDefault(env, pairs.map((p) => p.key), setEnv);
   const [id, setId] = useState('');
   const [target, setTarget] = useState('');
   const [allowPriv, setAllowPriv] = useState(false);
