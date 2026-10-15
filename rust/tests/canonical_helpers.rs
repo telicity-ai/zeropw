@@ -52,10 +52,11 @@ struct Allow {
 const BASE64_DECODE_ALLOWLIST: &[Allow] = &[
     Allow {
         file: "input_envelope.rs",
-        marker: ".decode(text.as_bytes())",
+        marker: ".decode_vec(text.as_bytes()",
         reason: "the desktop app's input envelope (`value_b64`) is a new Rust-only interface, \
                  not a port of a Python call; it deliberately takes only strict standard \
-                 base64 and rejects anything else as envelope_invalid",
+                 base64 and rejects anything else as envelope_invalid (decoded into a \
+                 pre-sized zeroizing buffer, hence `decode_vec`)",
     },
     Allow {
         file: "crypto/ed25519.rs",
@@ -203,8 +204,10 @@ fn relative_slash(path: &Path, base: &Path) -> String {
 
 /// Any `base64::engine`/`STANDARD`/`URL_SAFE` DECODE outside `pybase64.rs`
 /// (PORTING.md §3b names `pybase64` the canonical home for lenient
-/// `b64decode`). Detected as a `.decode(` call within a two-line window of
-/// a `STANDARD`/`URL_SAFE` token -- narrow enough to leave every base64
+/// `b64decode`). Detected as a `.decode(` call (or the engine's
+/// `.decode_vec(`/`.decode_slice(`/`.decode_slice_unchecked(` variants)
+/// within a two-line window of a `STANDARD`/`URL_SAFE` token -- narrow
+/// enough to leave every base64
 /// *encode* call site alone (encoding has no leniency to reproduce, per
 /// `pybase64.rs`'s own module doc) while still catching a chained or
 /// `rustfmt`-broken-across-lines decode call, the exact shape of the
@@ -236,7 +239,15 @@ fn no_base64_engine_decode_outside_pybase64() {
         };
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            if !line.contains(".decode(") {
+            if ![
+                ".decode(",
+                ".decode_vec(",
+                ".decode_slice(",
+                ".decode_slice_unchecked(",
+            ]
+            .iter()
+            .any(|call| line.contains(call))
+            {
                 continue;
             }
             let window_start = i.saturating_sub(2);
