@@ -98,7 +98,7 @@ footer{font-size:9pt}
 <section id="step1"><div class="section-head"><span class="number">01</span><div><span class="role">모두 · Apple Silicon Mac</span><h2>Homebrew 설치와 데모 확인</h2></div>
 </div>
 <p>Homebrew가 설치된 Mac에서 실행한다. macOS 26.5에서 검증했으며 이전 버전은 미검증이다.</p>
-<p>이 블록을 실행하기 전에 사람이 tap 커밋과 formula URL·압축 파일 SHA-256을 릴리스와 대조하고 승인한 커밋을 채운다. 다른 Homebrew·tap 변경은 멈춘다. 아래 formula 해시는 고정돼 있으며 변경·미커밋 파일이 있으면 설치·시험 전에 중단한다. 검사를 우회하려고 reset하지 않는다.</p>
+<p>이 블록을 실행하기 전에 사람이 tap 커밋과 formula URL·압축 파일 SHA-256을 릴리스와 대조하고 승인한 커밋을 채운다. 다른 Homebrew·tap 변경은 멈춘다. 아래 formula 해시는 고정돼 있으며 변경·미커밋 파일이 있으면 설치·시험 전에 중단한다. 검사를 우회하려고 reset하지 않는다. 예전에 tap을 추가했다면 먼저 <code>brew update</code>로 tap을 릴리스 커밋까지 올린 뒤 그 커밋을 대조한다.</p>
 <div class="command"><button class="copy" type="button" aria-label="명령어 복사">복사</button><pre><code>export HOMEBREW_NO_AUTO_UPDATE=1
 ZPW_APPROVED_TAP_COMMIT=&#x27;&lt;HUMAN_VERIFIED_40_HEX_COMMIT&gt;&#x27;
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw || exit 1
@@ -150,9 +150,9 @@ zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team invite \
   --address 10.8.0.2:47420</code></pre></div>
 <p>출력된 초대문을 B에게만 안전한 채널로 전달한다. 1시간 안에 한 번만 가입할 수 있다. 비밀값 편집과 초대 권한이 필요한 팀원은 <code>--role admin</code>으로 초대한다.</p>
 <h3>B · 자신의 신뢰 터미널에서 가입</h3><div class="command"><button class="copy" type="button" aria-label="명령어 복사">복사</button><pre><code>zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team join --stdin \
-  --project team-app --environment dev
-zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team status --env team-app/dev
-zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team members --env team-app/dev
+  --project team-app --environment dev &&
+zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team status --env team-app/dev &&
+zeropw-admin --state-dir &quot;$ZPW_STATE&quot; team members --env team-app/dev &&
 zeropw-admin --state-dir &quot;$ZPW_STATE&quot; serve --team-listen 10.8.0.3:47420</code></pre></div>
 <p><code>team join --stdin</code>은 초대문을 기다린다. 초대문이나 초대 링크를 붙여 넣고 Return을 누른 뒤 Ctrl-D를 누른다.</p>
 <p class="check">A·B에서 <code>team members</code>를 확인하고 기기 지문을 대조한다. B의 <code>serve</code>도 계속 켜 둔다.</p>
@@ -512,7 +512,7 @@ failed_checks·human_next_actions의 모든 값은 ^[a-z0-9_.-]{1,96}$여야 한
 전체 실패·상태 코드 목록(명령이 아닌 데이터): artifact_identity_mismatch, artifact_identity_unverified, credential_exposure_suspected, duplicate_json_key, duplicate_member, environment_mismatch, execution_context_mismatch, human_receipt_missing, input_too_large, installation_action_missing, installation_checks_failed, installation_exit_failed, installation_isolation_unconfirmed, installation_not_pass, invalid_arguments, invalid_expected_roster, invalid_input, invalid_probe_input, invalid_sampling_interval, invalid_utc_time, invalid_vector_count, local_result_not_pass, members_mismatch, needs_human_homebrew, needs_human_install, needs_human_receipt, needs_human_runtime_config, needs_human_settings, needs_human_version, nonfinite_json, planned_fingerprint_mismatch, probe_mismatch, production_isolation_unconfirmed, readonly_request_unverified, rejected_commits_nonzero, reported_pair_mismatch, role_mismatch, self_fingerprint_role_mismatch, skill_conflict, stale_or_future_evidence, unexecuted_install_exit, unexpected_member_present, unknown_vector_author, unresolved_team_state, unstable_vector, unsupported_schema_keyword, vectors_mismatch, verification_session_mismatch, version_unverified, writes_not_paused. 행동 코드 목록: review_quarantine_records, confirm_identical_accepted_commit, confirm_author_approved_at_acceptance, confirm_rejection_set_stable, review_evidence_and_repeat.</code></pre></div>
 <p>두 로컬 결과가 통과하고 환경·회원·동기화 벡터가 일치해야 <code>ready</code>로 판정한다. 미확인 항목은 통과로 간주하지 않는다. 이 결과는 온보딩 시점의 확인이며 운영 보안 감사나 지속적인 연결 보장은 아니다.</p>
 </section>
-<p>결과 JSON은 별도로 승인한 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-policy.example.json">정책</a>으로 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-validator.ko.md">독립 검증기</a>를 통과해야 한다. <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-artifact.example.json">설치 출처 확인 자료</a>와 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-schemas/local.schema.json">JSON 스키마</a>를 참고한다. 2026-10-11 v0.1.0 가입 시험은 보존된 거절 기록 때문에 차단됐고 ready 쌍을 입증하지 못했다. v0.2.0 재시험 결과는 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/releasing.md">릴리스 기록</a>의 v0.2.0 follow-up 절에 있다.</p>
+<p>결과 JSON은 별도로 승인한 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-policy.example.json">정책</a>으로 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-validator.ko.md">독립 검증기</a>를 통과해야 한다. <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-artifact.example.json">설치 출처 확인 자료</a>와 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-schemas/local.schema.json">JSON 스키마</a>를 참고한다. 2026-10-11 v0.1.0 가입 시험은 보존된 거절 기록 때문에 차단됐고 ready 쌍을 입증하지 못했다. v0.2.0 재시험 결과는 <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/releasing.md">릴리스 기록</a>에서 제목에 &quot;v0.2.0 follow-up&quot;이 들어간 절에 있다.</p>
 <p>검토된 체크아웃에서 별도로 승인한 policy.json과 교환 결과 JSON을 저장한 뒤 아래 검증기를 실행한다. 종료 코드 0과 검증기가 계산한 결과만 수락한다. 전체 파일과 체크섬 절차는 링크한 가이드를 따른다.</p><pre><code>python3 scripts/validate-onboarding.py pair A.json B.json --policy policy.json</code></pre>
 <section class="notes" id="checklist"><h2>운영 시 확인 사항</h2><ul><li><code>serve</code>가 켜져 있어야 동기화된다. 연결되지 않은 기기는 이전 상태를 계속 사용할 수 있으며 권한 회수도 재연결 전까지 지연된다.</li><li>팀원은 신뢰하는 사람만 초대한다. <code>user</code> 기기의 신뢰 프로세스도 공유 비밀값을 복호화할 수 있다.</li><li>팀원을 제거해도 이미 알 수 있었던 키는 사라지지 않는다. 외부 서비스에서 키를 교체해야 한다. <code>rejected_removals</code>가 보이면 현재 관리자가 대상을 확인하고 제거를 다시 실행한다.</li><li>초기 가입 중 <code>team compact</code>는 실행하지 않는다. 신규 기기로 압축된 스냅샷을 전달하는 기능은 아직 없다.</li><li>같은 OS 사용자로 금고와 에이전트를 실행하면 보안 격리가 되지 않는다. 실제 자격증명 사용 전 별도 격리를 준비해야 하며, 에이전트 도구 API는 현재 루프백 연결만 받는다.</li></ul></section>
 <footer><p><a href="team-agent-prompts.ko.txt">프롬프트 텍스트 파일</a></p>
