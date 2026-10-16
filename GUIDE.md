@@ -64,7 +64,7 @@ zeropw-admin --state-dir "$ZPW_STATE" init &&
 zeropw-admin --state-dir "$ZPW_STATE" project create team-app
 ```
 
-When `init` prompts, choose administrator and recovery passphrases and store them separately. The commands in a block are joined with `&&`, so a pasted block cannot feed its later lines to a passphrase prompt and stops at the first failure. The file path and target below are examples: replace them with administrator-verified values. The value file contains one credential, not a complete `.env`.
+When `init` prompts, choose administrator and recovery passphrases and store them separately. The blocks that run `init` or `team share`, which ask for passphrases on the terminal, join their commands with `&&`, so pasting such a block cannot feed its later lines to a prompt and it stops at the first failure. The file path and target below are examples: replace them with administrator-verified values. The value file contains one credential, not a complete `.env`.
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" secret put \
