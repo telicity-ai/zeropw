@@ -1,0 +1,27 @@
+[package]
+name = "zeropw-desktop-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "ZeroPW desktop core: runs zeropw-admin, supervises serve, holds one-time values and the in-app terminal (no Tauri, no zeropw crate)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = { version = "1", features = ["serde"] }
+getrandom = "0.2"
+base64 = "0.22"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
+zxcvbn = "3"
+portable-pty = "0.9"
+# PTY readiness waits: poll(2) on Linux, select(2) on macOS (portable-pty's own descriptor crate).
+filedescriptor = "0.8"
+nix = { version = "0.30.1", features = ["signal", "process", "net", "user"] }
+
+[dev-dependencies]
+tempfile = "3"

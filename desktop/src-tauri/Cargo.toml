@@ -1,0 +1,29 @@
+[package]
+name = "zeropw-desktop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "ZeroPW desktop app: the Tauri v2 shell around zeropw-desktop-core"
+
+[[bin]]
+name = "zeropw-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.1", features = [] }
+
+[dependencies]
+zeropw-desktop-core = { path = "../core" }
+tauri = { version = "=2.12.1", features = [] }
+tauri-plugin-deep-link = "=2.6.1"
+tauri-plugin-dialog = "=2.8.1"
+# The clipboard, used directly so values can be marked to stay out of clipboard history.
+arboard = { version = "=3.6.1", features = ["wayland-data-control"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = { version = "1", features = ["serde"] }
+
+# Not on macOS: there it would rendezvous on a fixed socket in the shared /tmp (src/shell.rs).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = { version = "=2.5.2", features = ["deep-link"] }

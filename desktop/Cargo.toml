@@ -1,0 +1,10 @@
+# Desktop app workspace (docs/desktop-app.md §9). Separate from rust/: the desktop code never
+# links the zeropw crate and only runs the zeropw-admin / zeropw-agent binaries shipped beside it.
+[workspace]
+resolver = "3"
+members = ["core", "src-tauri"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
+publish = false

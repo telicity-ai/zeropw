@@ -50,6 +50,20 @@ rust/target/debug/zeropw-demo
 
 초기화부터 비밀과 연결 등록, 권한 설정, `serve` 실행, 에이전트 호출까지의 명령은 [구현 현황](docs/implementation.md) §10에도 있다.
 
+## 데스크톱 앱 (미리 보기)
+
+`desktop/`에는 관리 기능을 화면으로 옮긴 Tauri 데스크톱 앱의 미리 보기 버전이 있다. 금고 만들기, 키, 연결, 에이전트와 권한, 기록, 전체 정지, 사고 처리, 백업과 복구, 팀 초대 링크를 다룬다. 금고 코드를 링크하지 않고 함께 묶은 `zeropw-admin`을 명령마다 자식 프로세스로 실행한다. 이 앱을 담은 릴리스는 아직 없다. 소유자는 v0.2.0 릴리스에 이 앱을 Apple Silicon용 ad-hoc 서명 `.dmg` 미리 보기로 싣기로 정했다. 자세한 내용은 [데스크톱 앱 명세](docs/desktop-app.md)와 [디자인 규칙](DESIGN.md)에 있다.
+
+알려진 한계:
+
+- 화면은 한국어로만 나온다. 앱이 띄우는 macOS 로컬 네트워크 권한 창의 설명도 한국어이고, 영어판은 없다(소유자 결정).
+- 같은 macOS 계정 안에서는 격리하지 않는다. 같은 사용자로 도는 프로그램은 에이전트를 포함해 개발용 기기 키 파일과 금고를 읽을 수 있다([#21](https://github.com/telicity-ai/zeropw/issues/21)). 앱은 에이전트를 다른 계정에서 실행하라고 권한다.
+- 복구에 한계가 있다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 복구 코드로 복구하려면 기존 기기 키 파일이 있어야 한다. 같은 데이터 키를 다시 감쌀 뿐이라 키 파일 유출 대책이 아니고, 복구 전에 만든 백업은 더 이상 복원할 수 없다.
+- ad-hoc 서명한 미리 보기이고 공증하지 않았다. Developer ID 서명이 없어서 서명만으로는 누가 만들었는지 알 수 없다. 내려받은 이미지를 열어 ZeroPW를 응용 프로그램 폴더로 끌어다 놓고, 이미지를 꺼낸 뒤 응용 프로그램 폴더에서만 연다. 처음 열면 Gatekeeper가 막는다. 그다음 한 시간쯤 안에 시스템 설정의 개인정보 보호 및 보안에서 "그래도 열기"를 누르고 로그인 암호로 확인한다. 격리 속성을 지우거나 Gatekeeper를 끄지 않는다. 자세한 절차는 [릴리스 안내](docs/releasing.md#what-users-see-on-macos-15-and-later)에 있다.
+- 자동 업데이트가 없다. 수정을 받으려면 앱을 직접 바꿔 넣어야 한다.
+- macOS는 Apple Silicon(arm64)용만 있다. Intel이나 유니버설 빌드는 없다.
+- 화면 캡처에서 빠진다고 기대하지 않는다. macOS에서는 복구 코드, 토큰, 초대 링크, 다시 본 키를 띄우는 동안 창을 캡처에서 빼 달라고 창 시스템에 요청할 뿐이다. macOS 15부터 ScreenCaptureKit을 쓰는 캡처, 녹화, 화면 공유 도구는 이 요청을 따르지 않는다는 보고가 있고, 배포 빌드에서는 시험하지 않았다. Linux에는 이런 요청이 없다. 화면을 공유하거나 녹화하는 동안에는 이런 값을 띄우지 않는다.
+
 ## 검증
 
 ```sh
@@ -72,6 +86,7 @@ Python 프로토타입을 제거하기 전에 만든 고정 시험 자료(`rust/
 - [실행 환경 침해 대응](docs/compromise-response.md): 자동 봉쇄, 노출 판정, 교체 안내 이메일
 - [팀 공유](docs/team-sync.md): 서버 없는 환경 복제와 노드 간 P2P 동기화
 - [Rust 호환성 계약](rust/PORTING.md)
+- [데스크톱 앱 명세](docs/desktop-app.md)(미리 보기)와 [디자인 규칙](DESIGN.md)
 - [Rust 전환 인수 기록](docs/rust-completion.md): 최종 검증 결과
 - [개발 하네스](docs/harness.md), [하네스 안내](harness/README.md)
 - [개정 반영 현황](docs/reviews/review-summary.md)

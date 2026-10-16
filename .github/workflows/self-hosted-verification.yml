@@ -70,8 +70,9 @@ jobs:
 
       - name: Build and install the release package
         run: |
-          python3 scripts/build-release.py --target aarch64-apple-darwin --version v0.1.0 --out-dir dist
-          archive=dist/zeropw-v0.1.0-aarch64-apple-darwin.tar.gz
+          version=$(python3 scripts/build-release.py --print-version)
+          python3 scripts/build-release.py --target aarch64-apple-darwin --version "$version" --out-dir dist
+          archive="dist/zeropw-${version}-aarch64-apple-darwin.tar.gz"
           checksum=$(awk '{print $1}' "$archive.sha256")
           prefix=$(mktemp -d "$RUNNER_TEMP/zeropw-package.XXXXXXXX")
           trap 'rm -rf "$prefix"' EXIT

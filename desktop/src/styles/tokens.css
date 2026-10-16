@@ -1,0 +1,29 @@
+/* Design tokens (DESIGN.md §2). Black, grey and white with one azure to iris signal; no new colours. */
+:root {
+  color-scheme: dark;
+  --void: #040406;
+  --line: rgba(255, 255, 255, .07);
+  --line-strong: rgba(255, 255, 255, .13);
+  --fg: #f2f2f7;
+  --fg-2: #bfbfcc;
+  --fg-3: #8e8e9d;
+  --fg-4: #575768;    /* non-text marks only */
+  --azure: #5b8cff;
+  --azure-soft: #8fb0ff;
+  --iris: #9a6bff;
+  --iris-soft: #c4a8ff;
+  --grad: linear-gradient(120deg, #5b8cff 0%, #7a7cff 48%, #9a6bff 100%);
+  --grad-btn: linear-gradient(120deg, #2868ff 0%, #5b5eff 48%, #854cff 100%);
+  --glow-azure: rgba(91, 140, 255, .35);
+  --glow-iris: rgba(154, 107, 255, .35);
+  --warn: #f3c36f;
+  --danger: #ff7a93;
+  --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", "Pretendard Variable", Pretendard, ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-sm: 12px; --fs-md: 13.5px; --fs-base: 14px; --fs-lg: 15px; --fs-h2: 24px; --fs-h1: 38px;
+  --radius-xs: 6px; --radius-sm: 10px; --radius-md: 14px; --radius-lg: 20px;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --titlebar-h: 44px;
+  --sidebar-w: 220px;
+}

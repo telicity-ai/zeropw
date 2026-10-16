@@ -1,0 +1,23 @@
+/* in-app terminal (DESIGN.md §5.4): black box, light dots, title, "use in another terminal" menu */
+.term { margin-top: 4px; border-radius: var(--radius-md); background: #05050a; box-shadow: inset 0 0 0 1px var(--line-strong), 0 24px 40px -28px #000; overflow: hidden; scroll-margin-bottom: 30px; }
+.term:focus-within { box-shadow: inset 0 0 0 1px rgba(143,176,255,.45), 0 24px 40px -28px #000; }
+.term-bar { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.025); }
+.term-bar i { width: 8px; height: 8px; border-radius: 50%; background: #2b2b33; flex: none; }
+.term-bar .tt { flex: 1; text-align: center; font: 500 11px/1 var(--mono); color: var(--fg-3); }
+.term-bar .icon-btn { height: 22px; min-width: 22px; font-size: 11px; padding: 0 6px; }
+.term-body { height: 220px; padding: 6px 4px 6px 12px; user-select: text; }
+.term-body .xterm { height: 100%; }
+.term-body .xterm-viewport { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.12) transparent; background: transparent !important; }
+.term-body .xterm .xterm-helper-textarea { caret-color: transparent; }
+.term-cmt { padding: 8px 12px 0; font: 12px/1.6 var(--font); color: var(--fg-3); }
+.term-note { padding: 6px 12px 0; font-size: var(--fs-sm); color: var(--fg-3); }
+.term-note.warn { color: var(--warn); }
+.term-suggest { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+.term-suggest .lbl { font-size: var(--fs-sm); color: var(--fg-3); }
+.term-suggest .chip { width: 100%; height: 30px; justify-content: flex-start; }
+.term-suggest .chip .cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.term-suggest .chip .kbd { flex: none; font: 500 11px/1 var(--font); color: #fff; background: var(--grad-btn); padding: 4px 7px; border-radius: 5px; white-space: nowrap; }
+.term-suggest .chip.used:not(.pending) { color: var(--fg-3); opacity: .7; }
+.term-suggest .chip.pending { color: var(--fg); background: rgba(91,140,255,.08); box-shadow: inset 0 0 0 1px rgba(143,176,255,.28); }
+.term-ok { padding: 0 12px 8px; font-size: var(--fs-sm); color: var(--iris-soft); }
+.term-alt { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); }
