@@ -253,6 +253,21 @@ shasum -a 256 -c zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg.sha256
 
 It prints `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg: OK`. Then install and open it with the steps in "What users see on macOS 15 and later" above, which were not tried with this image on any Mac. Do not remove the quarantine attribute or turn Gatekeeper off. The app is a preview with a Korean-only interface; it is not notarized, and its ad hoc signature does not identify who built it.
 
+## v0.2.0 follow-up: Homebrew formula and team onboarding
+
+By owner decision 3, PR #25 moves `Formula/zeropw.rb` to the v0.2.0 archives (formula SHA-256 `1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6`) together with the team onboarding files, which now accept 0.2.0 only. The seven onboarding validation cases of 2026-10-11 were re-run against the published release on 2026-10-16: see the [re-run report](onboarding-validation-v0.2.0-2026-10-16.md). It is the current evidence for these files. The 2026-10-11 reports and `onboarding-validation-manifest-2026-10-11.json` remain the record for v0.1.0. The re-run again does not establish an actual ready pair: B keeps one `team_author_unknown` rejection record, which the validator keeps blocking.
+
+Gate 4, Homebrew, before merge. By decision 4 the test ran on the owner's Mac (macOS 26.5, build 25F71, Homebrew 7.0.9-110-g9bd5746), where 0.1.0 was installed from the tap `telicity-ai/zeropw` and no ZeroPW process was running. Every Homebrew command ran with `HOMEBREW_NO_AUTO_UPDATE=1` and `HOMEBREW_NO_INSTALL_CLEANUP=1`. The installed tap fetched the PR branch and was checked out detached at the candidate `b43c3ab43d559d0305c456e8b372783f89f2e3de`. Its formula had the pinned digest, it was the only Ruby file that differs from `9c92e5e`, and `brew info` parsed the macOS URL with checksum `68493ecb…`. `brew upgrade telicity-ai/zeropw/zeropw` upgraded 0.1.0 to 0.2.0. Because install cleanup was off, `brew cleanup telicity-ai/zeropw/zeropw` then removed the 0.1.0 keg. Afterwards:
+
+- `brew list --versions zeropw` printed `zeropw 0.2.0`. The keg's receipt names tap `telicity-ai/zeropw`, tap commit `b43c3ab…`, spec `stable` and version 0.2.0. The tap stayed clean at that commit with the pinned formula digest.
+- `scripts/observe-onboarding-brew.py --approved-tap b43c3ab…`, run with the system Python 3.9.6 from a clean clone, printed that commit, `stable` and `binaries_resolve_to_keg: true`, and exited 0.
+- `brew test` passed. `zeropw-agent --help` and `zeropw-admin --help` exited 0, and the installed demo under `env -i` passed all 47 checks. A first demo attempt stopped with `socket_path_too_long` because its `TMPDIR` path was too long for a Unix socket; with a short `TMPDIR` it passed.
+- The five binaries and three documents in the keg are byte-identical to the entries of Homebrew's cached download, of a separate download of the published archive and of the release's `VERIFICATION.json`.
+- `brew linkage` lists only `/usr/lib` libraries and system frameworks.
+- The English manual's step-1 block, run verbatim under zsh from a clean clone with that commit filled in, passed its tap checks, reinstalled 0.2.0 once, passed the observer, `brew test` and the demo, and exited 0.
+
+No vault or app data folder was created in the account's home. This is not a `/2` installation PASS, because the account holds coordinator authority, and not a first installation on a clean Mac. Linux Homebrew remains unverified. The tap stays at the candidate until the merge, after which it moves to the merge commit on main.
+
 ## v0.1.0 evidence and installation
 
 Product source is main commit `e157422353b5967cf5c7d61deccbbf30feba9b0e`, with the same complete tree as reviewed source `5f741334ac74ebb020fa27cb9ae75e925391f45b`. The release preparation changes formula and documentation only; binary hashes and product source remain bound to this baseline.
