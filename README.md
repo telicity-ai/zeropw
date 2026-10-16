@@ -10,7 +10,7 @@ ZeroPW is a Rust CLI project with a preview desktop app for Apple Silicon macOS.
 
 The [guide](GUIDE.md) covers the demo, administrator setup, team sharing, and agent use. The [agent skill](skills/zeropw-agent/SKILL.md) helps agents select and use existing connections without reading secrets.
 
-For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt). The manuals and prompts describe the Homebrew installation of version 0.1.0. They move to 0.2.0 together with the Homebrew formula in a follow-up after v0.2.0 is published. Version 0.1.0 cannot read invite links, the only kind of invitation the desktop app creates (see [Team sharing](#team-sharing)).
+For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt). The manuals and prompts describe the Homebrew installation of version 0.2.0. Version 0.1.0 cannot read invite links, the only kind of invitation the desktop app creates (see [Team sharing](#team-sharing)).
 
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml --bins
@@ -33,7 +33,7 @@ bash install.sh --version v0.2.0 --prefix "$HOME/.local"
 
 The installer downloads the archive for your platform and its `.sha256` file from the v0.2.0 release, checks the SHA-256 and the archive entries, and installs the binaries into `PREFIX/bin` and the documents into `PREFIX/share/doc/zeropw`. It does not use sudo, create a vault, start a service, edit shell profiles or run the downloaded binaries. It does not overwrite existing files: to replace an earlier installation, stop running ZeroPW processes and add `--force`. For an archive you downloaded yourself, use `--archive FILE --sha256 HEX` instead of `--version`. A checksum detects corruption but is not a signature; the release host and publisher remain trusted. The [release guide](docs/releasing.md#packaging-tools) has the details.
 
-On Apple Silicon macOS, the Homebrew formula in the v0.2.0 tag still installs version 0.1.0. It moves to 0.2.0, together with the teammate onboarding manuals, in a follow-up after v0.2.0 is published. Until then these commands install 0.1.0; `brew list --versions zeropw` shows the installed version:
+On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew; `brew list --versions zeropw` shows the installed version. If an earlier version is installed, run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -64,7 +64,7 @@ Caller identities and grants remain local to each device. Offline devices can ke
 
 Concurrent administrator removals can leave different accepted membership facts. Check `team status` → `rejected_removals`; an active admin must review and reissue the intended removals.
 
-Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. Until the Homebrew formula moves to 0.2.0 it installs 0.1.0, so a teammate who joins with the CLI should install 0.2.0 with the installer above. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
+Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. A teammate who joins with the CLI needs 0.2.0: install it with Homebrew or the installer above, and upgrade an earlier Homebrew installation with `brew upgrade telicity-ai/zeropw/zeropw`. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
 
 ZeroPW does not import or export a complete `.env` file. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 

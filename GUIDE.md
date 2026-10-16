@@ -27,7 +27,7 @@ zeropw-demo
 
 The installer downloads the release archive for your platform (`zeropw-v0.2.0-aarch64-apple-darwin.tar.gz` or `zeropw-v0.2.0-aarch64-unknown-linux-gnu.tar.gz`) and its `.sha256` file, checks them, and installs all five binaries. It does not overwrite existing files unless you add `--force`; stop running ZeroPW processes before replacing an installation. See the [README](README.md#install) and the [release guide](docs/releasing.md#packaging-tools) for details.
 
-On Apple Silicon macOS, the Homebrew formula in the v0.2.0 tag still installs version 0.1.0. It moves to 0.2.0, together with the teammate onboarding manuals, in a follow-up after v0.2.0 is published. Until then these commands install 0.1.0:
+On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew. If an earlier version is installed, run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -114,7 +114,7 @@ An invitation is a one-time enrollment capability. Send it only to the intended 
 
 ### Teammate B
 
-Install 0.2.0 on B with the installer from section 1, or build it from source. Until the Homebrew formula moves to 0.2.0 it installs 0.1.0, which cannot read invite links (`zeropw://join#…`): `team invite --link` prints them, and they are the only kind of invitation the desktop app creates. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
+Install 0.2.0 on B with Homebrew or the installer from section 1, or build it from source. Version 0.1.0 cannot read invite links (`zeropw://join#…`): `team invite --link` prints them, and they are the only kind of invitation the desktop app creates. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
 
 Initialize B's own vault and create its device keys. Do not share administrator passphrases.
 
