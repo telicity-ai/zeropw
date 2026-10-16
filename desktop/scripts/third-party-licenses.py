@@ -290,6 +290,7 @@ def main(argv=None):
     with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=args.output.parent, delete=False,
                                      prefix='.' + args.output.name + '.') as partial:
         partial.write('\n'.join(parts))
+    os.chmod(partial.name, 0o644)  # shipped in the app and archives: readable by every account
     os.replace(partial.name, args.output)
     print(f'third-party-licenses: wrote {args.output} ({npm_count} npm packages, {tool_count} build tools, '
           f'{len(mpl)} MPL-2.0 components)')

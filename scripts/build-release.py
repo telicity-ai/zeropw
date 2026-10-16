@@ -26,6 +26,7 @@ import pathlib
 import platform
 import shutil
 import subprocess
+import sys
 import tarfile
 import importlib.util
 
@@ -60,6 +61,11 @@ def controlled_environment(inherited):
     # openssl-sys gives target-prefixed settings precedence over OPENSSL_DIR, and Cargo/rustc
     # linker or flag overrides would bypass the SDK decision: none of them is allowlisted.
     environment = allowed_environment(inherited, ('MACOSX_DEPLOYMENT_TARGET',))
+    home = environment.get('HOME') or ''
+    if not os.path.isabs(home) or home.rstrip('/') == '':
+        # cargo and rustup fall back to the account's home directory without HOME, and that
+        # path would then be neither remapped nor caught by the local-path check.
+        raise SystemExit('build-release: HOME must be set to an absolute path')
     minimum = environment.get('MACOSX_DEPLOYMENT_TARGET')
     if minimum is not None and not re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', minimum):
         raise SystemExit('build-release: MACOSX_DEPLOYMENT_TARGET must be a macOS version such as 11.0')
@@ -113,6 +119,9 @@ def local_path_needles(environment, paths):
                     needles.append((label, form))
     needles = [(label, (path + '/').encode()) for label, path in needles]
     needles.append(('/Volumes/', b'/Volumes/'))
+    # Any account's home, whatever HOME said: /Users/ on macOS, /home/ on Linux.
+    needles.append(('an account home (/Users/ or /home/)', b'/Users/'))
+    needles.append(('an account home (/Users/ or /home/)', b'/home/'))
     return needles
 
 
@@ -181,6 +190,10 @@ def load_packager(root):
 
 def main(argv=None):
     root = pathlib.Path(__file__).resolve().parents[1]
+    if (sys.argv[1:] if argv is None else list(argv)) == ['--print-version']:
+        # The release version of this checkout, for workflows and scripts: v<rust/Cargo.toml>.
+        print('v' + toml_package_version(root / 'rust/Cargo.toml'))
+        return 0
     package = load_packager(root)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--target', required=True)

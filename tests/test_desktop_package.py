@@ -231,6 +231,7 @@ class PackageMacosTests(unittest.TestCase):
                         'TAURI_CONFIG': '{}', 'TAURI_BUNDLER_DMG_IGNORE_CI': 'true', 'CI': 'false'}
 
     def package(self, environ=None, extra=()):
+        extra = list(extra) if '--tag' in extra else [*extra, '--tag', 'v0.1.0']
         with contextlib.redirect_stdout(io.StringIO()):
             return self.module.main(['--work-dir', str(self.work), '--out-dir', str(self.out), *extra],
                                     environ=self.environ if environ is None else environ,
@@ -346,7 +347,7 @@ class PackageMacosTests(unittest.TestCase):
         log = (self.out / LOG).read_text()
         self.assertIn('source commit: ' + 'a' * 40, log)
         self.assertIn('product version: v0.1.0', log)
-        self.assertIn('release tag: not given', log)
+        self.assertIn('release tag: v0.1.0 (matches)', log)
         self.assertIn('ZeroPW.app: rejected', log)
         self.assertIn('spctl result: rejected (exit 3)', log)
         self.assertTrue(log.rstrip().endswith('RESULT: PASS'))
@@ -374,7 +375,7 @@ class PackageMacosTests(unittest.TestCase):
         log = (self.out / LOG).read_text()
         for name in EXECUTABLES:
             self.assertIn(f'{name}: local paths: none (checked: the home directory, the work directory, the checkout, '
-                          'CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/)', log)
+                          'CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/, an account home (/Users/ or /home/))', log)
 
     def test_bundled_executables_are_compared_with_the_built_ones(self):
         self.assertEqual(self.package(), 0)
@@ -499,10 +500,28 @@ class PackageMacosTests(unittest.TestCase):
         self.assertEqual((self.out / (DMG + '.sha256')).read_text(), 'from a concurrent run\n')
         self.assertTrue((self.work / 'artifacts' / DMG).is_file())
 
+    def test_a_tag_is_required(self):
+        with self.assertRaises(SystemExit) as raised:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.module.main(['--work-dir', str(self.work), '--out-dir', str(self.out)],
+                                 environ=self.environ, runner=self.runner, system=('Darwin', 'arm64'))
+        self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_home_must_be_an_absolute_path(self):
+        for home in (None, '', 'relative/home'):
+            with self.subTest(home=home):
+                environ = {k: v for k, v in self.environ.items() if k != 'HOME'}
+                if home is not None:
+                    environ['HOME'] = home
+                self.assertIn('HOME must be set to an absolute path', self.failure(environ))
+        self.assertEqual(self.runner.calls, [])
+
     def test_directories_inside_the_checkout_are_refused(self):
-        for argv, environ in ((['--work-dir', str(ROOT / 'desktop/target/package'), '--out-dir', str(self.out)], self.environ),
-                              (['--work-dir', str(self.work), '--out-dir', str(ROOT / 'dist')], self.environ),
-                              (['--work-dir', str(self.work), '--out-dir', str(self.out)],
+        tag = ['--tag', 'v0.1.0']
+        for argv, environ in ((['--work-dir', str(ROOT / 'desktop/target/package'), '--out-dir', str(self.out), *tag], self.environ),
+                              (['--work-dir', str(self.work), '--out-dir', str(ROOT / 'dist'), *tag], self.environ),
+                              (['--work-dir', str(self.work), '--out-dir', str(self.out), *tag],
                                dict(self.environ, CARGO_TARGET_DIR=str(ROOT / 'rust/target')))):
             with self.subTest(argv=argv, target=environ.get('CARGO_TARGET_DIR')):
                 with self.assertRaises(SystemExit) as raised:

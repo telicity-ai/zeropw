@@ -2,7 +2,7 @@
 """Package the desktop app as a distributable Apple Silicon .dmg, with no signing credentials.
 
     env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py \\
-        --work-dir DIR --out-dir DIR [--tag vX.Y.Z]
+        --work-dir DIR --out-dir DIR --tag vX.Y.Z
 
 Run it on an Apple Silicon Mac account that holds no vault, gateway, signer, coordinator,
 signing, notarization or release-publishing credentials, or on a host the owner authorized for
@@ -334,6 +334,11 @@ def verify_image(runner, staging, names, version, source, origins, needles):
             check.require((contents / 'MacOS' / name).is_file(), f'{APP}/Contents/MacOS/{name} is missing')
         for name in RESOURCES:
             check.require((contents / 'Resources' / name).is_file(), f'{APP}/Contents/Resources/{name} is missing')
+        for folder in ('MacOS', 'Resources'):
+            for path in sorted((contents / folder).rglob('*')):
+                if path.is_file():
+                    check.require(path.stat().st_mode & 0o444 == 0o444,
+                                  f'{APP}/Contents/{folder}/{path.relative_to(contents / folder)} is not readable by every account')
         expected = {'LICENSE': source / 'LICENSE', 'THIRD_PARTY_LICENSES.md': staging / names['notices']}
         for name, origin in expected.items():
             shipped = contents / 'Resources' / name
@@ -444,9 +449,10 @@ def main(argv=None, environ=None, runner=None, system=None):
                         help='scratch directory outside the checkout for the source copy and build')
     parser.add_argument('--out-dir', required=True, type=pathlib.Path,
                         help='directory outside the checkout that receives the verified artifacts')
-    parser.add_argument('--tag', help='the release tag; must be v<the product and desktop version>')
+    parser.add_argument('--tag', required=True,
+                        help='the release tag the image is for; must be v<the product and desktop version>')
     args = parser.parse_args(argv)
-    if args.tag is not None and not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.tag):
+    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.tag):
         parser.error('--tag must be vMAJOR.MINOR.PATCH')
     environ = dict(os.environ if environ is None else environ)
     runner = runner or Runner()
@@ -458,6 +464,10 @@ def main(argv=None, environ=None, runner=None, system=None):
                          '`env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py ...`; '
                          'Developer ID signing and notarization are a separate step on a trusted host '
                          '(docs/releasing.md).')
+    home = environ.get('HOME') or ''
+    if not os.path.isabs(home) or home.rstrip('/') == '':
+        raise SystemExit('package-macos: HOME must be set to an absolute path (cargo and rustup would '
+                         'otherwise use the account home without the local-path check knowing it)')
     if (system or (platform.system(), platform.machine())) != ('Darwin', 'arm64'):
         raise SystemExit('package-macos: run on Apple Silicon macOS (target ' + TARGET + ')')
     work, out = args.work_dir.resolve(), args.out_dir.resolve()
@@ -479,7 +489,7 @@ def main(argv=None, environ=None, runner=None, system=None):
     (work / 'source.tar').unlink()
 
     version = release_version(source)
-    if args.tag is not None and args.tag != version:
+    if args.tag != version:
         raise SystemExit(f'package-macos: --tag {args.tag} does not match the release version {version} '
                          '(rust/Cargo.toml and every desktop version field)')
     names = artifact_names(version)
@@ -531,7 +541,7 @@ def main(argv=None, environ=None, runner=None, system=None):
     log, problems = verify_image(runner, staging, names, version, source, origins, needles)
     header = (f'ZeroPW desktop {version} for {TARGET}\nsource commit: {commit}\n'
               f'product version: {version} (rust/Cargo.toml, rust/Cargo.lock and every desktop version field)\n'
-              f'release tag: {args.tag + " (matches)" if args.tag else "not given"}\n'
+              f'release tag: {args.tag} (matches)\n'
               f'{(staging / names["checksum"]).read_text()}{checksum_line(staging / names["notices"])}'
               'built executables, SHA-256 before signing:\n' + ''.join('  ' + line for line in built_digests) + '\n')
     (staging / names['log']).write_text(header + log + '\n' + ('RESULT: FAIL\n' if problems else 'RESULT: PASS\n'))

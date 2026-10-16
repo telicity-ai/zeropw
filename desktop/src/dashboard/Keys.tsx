@@ -358,8 +358,9 @@ function ConfirmVersionSheet({ open, data, onBack, onClose, onDone }: {
 // ---------------------------------------------------------------- reveal
 
 /** Admin passphrase → `secret_reveal` → `onetime_show`. The value is painted only after the core
- *  has turned screen-capture protection on, stays for 30 seconds, then is dropped from memory;
- *  the protection is lifted after the value has left the screen. */
+ *  has answered the screen-capture exclusion request (best effort, never a guarantee), stays for
+ *  30 seconds, then is dropped from memory; the request is withdrawn after the value has left the
+ *  screen. */
 function RevealSheet({ open, data, onClose }: { open: boolean; data: Extract<KeySheet, { kind: 'reveal' }> | undefined; onClose(): void }) {
   const { announce } = useApp();
   const [pass, setPass] = useState('');

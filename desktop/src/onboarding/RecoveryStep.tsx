@@ -15,8 +15,8 @@ import type { RecoveryChoice } from './vault';
 export type { RecoveryChoice } from './vault';
 
 /** Step 2: recovery code. The core generates it (120 bits, six groups) and keeps it behind a
- *  one-time reference for 10 minutes; the groups are painted only once screen-capture protection
- *  is on, then confirmed by typing two of them. `notice` explains why the user was sent back here
+ *  one-time reference for 10 minutes; the groups are painted only once the screen-capture exclusion
+ *  request (best effort) has been answered, then confirmed by typing two of them. `notice` explains why the user was sent back here
  *  (the code expired, or a chosen code is too close to the admin passphrase). */
 export function RecoveryStep({ frame, sectionRef, admin, notice, onBack, onNext }: {
   frame: FrameState; sectionRef: Ref<HTMLElement>; admin: string; notice: CopyKey | null; onBack(): void; onNext(choice: RecoveryChoice): void;
@@ -47,8 +47,8 @@ export function RecoveryStep({ frame, sectionRef, admin, notice, onBack, onNext 
   const { score } = useStrength(own ? code : '');
   const ownRules = recoveryOwnRules(code, code2, admin, score);
 
-  // the groups are a one-time value: they are painted only after the core has turned screen
-  // capture protection on, and leave the screen before it is turned off again
+  // the groups are a one-time value: they are painted only after the core has answered the
+  // screen-capture exclusion request (best effort), and leave the screen before it is withdrawn
   const showGroups = useSecureGate(frame.active && !own && groups.length > 0);
 
   const resetAck = useCallback(() => { setAck(false); setVerifying(false); setTried(false); }, []);

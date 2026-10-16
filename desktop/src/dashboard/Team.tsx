@@ -225,7 +225,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const now = useNow(!!made && open);
   const openRef = useRef(open);
   openRef.current = open;
-  // the link is painted only once screen-capture protection is on
+  // the link is painted only once the screen-capture exclusion request has been answered (best effort)
   const linkVisible = useSecureGate(open && link !== null);
 
   const handedRef = useRef(handed);

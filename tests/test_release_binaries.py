@@ -34,6 +34,17 @@ def product_version():
     return 'v' + re.search(r'^\[package\][^\[]*?^version = "([^"]+)"', text, re.M | re.S).group(1)
 
 
+class ReleaseVersionTests(unittest.TestCase):
+    def test_print_version_names_the_product_version_of_the_checkout(self):
+        import contextlib, io
+        module = load_builder()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(module.main(['--print-version']), 0)
+        product = module.toml_package_version(ROOT / 'rust/Cargo.toml')
+        self.assertEqual(out.getvalue().strip(), f'v{product}')
+
+
 class ReleaseBinariesTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

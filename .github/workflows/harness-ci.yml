@@ -69,8 +69,9 @@ jobs:
             Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu ;;
             *) exit 1 ;;
           esac
-          python3 scripts/build-release.py --target "$target" --version v0.1.0 --out-dir dist
-          archive="dist/zeropw-v0.1.0-${target}.tar.gz"
+          version=$(python3 scripts/build-release.py --print-version)
+          python3 scripts/build-release.py --target "$target" --version "$version" --out-dir dist
+          archive="dist/zeropw-${version}-${target}.tar.gz"
           checksum=$(awk '{print $1}' "$archive.sha256")
           bash scripts/install.sh --archive "$archive" --sha256 "$checksum" --prefix "$RUNNER_TEMP/zeropw-installed"
           "$RUNNER_TEMP/zeropw-installed/bin/zeropw-agent" --help

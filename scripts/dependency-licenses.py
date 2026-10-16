@@ -354,6 +354,7 @@ def main():
     with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=args.output.parent, delete=False,
                                      prefix='.' + args.output.name + '.') as partial:
         partial.write('\n'.join(sections))
+    os.chmod(partial.name, 0o644)  # shipped in the app and archives: readable by every account
     os.replace(partial.name, args.output)
     print(f'Collected dependency notices into {args.output}')
     return 0

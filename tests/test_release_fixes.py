@@ -155,11 +155,18 @@ class ReleaseFixTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('release_builder', ROOT / 'scripts/build-release.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        inherited = {'PATH':'/usr/bin', 'OPENSSL_LIB_DIR':'/untrusted',
+        inherited = {'PATH':'/usr/bin', 'HOME':'/home/synthetic', 'OPENSSL_LIB_DIR':'/untrusted',
                      'AARCH64_APPLE_DARWIN_OPENSSL_DIR':'/untrusted',
                      'AARCH64_APPLE_DARWIN_OPENSSL_STATIC':'0', 'OPENSSL_LIBS':'bad',
                      'PKG_CONFIG_PATH':'/untrusted', 'RUSTFLAGS':'-L/untrusted'}
-        self.assertEqual(module.controlled_environment(inherited), {'PATH':'/usr/bin'})
+        self.assertEqual(module.controlled_environment(inherited), {'PATH':'/usr/bin', 'HOME':'/home/synthetic'})
+        # Without HOME, cargo and rustup would use the account home unseen by the path check.
+        for home in (None, '', 'relative'):
+            missing = {k: v for k, v in inherited.items() if k != 'HOME'}
+            if home is not None:
+                missing['HOME'] = home
+            with self.assertRaises(SystemExit):
+                module.controlled_environment(missing)
         fixture = self.fixture()
         gate = fixture.root / 'gate'
         subprocess.run(['rustc', str(ROOT / 'rust/build.rs'), '-o', str(gate)], check=True)
