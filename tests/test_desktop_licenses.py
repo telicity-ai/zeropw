@@ -172,6 +172,14 @@ class DesktopLicenseTests(unittest.TestCase):
         for fragment in fragments:
             self.assertIn(fragment, result.stderr)
 
+    def test_notices_are_readable_by_every_account(self):
+        old = os.umask(0o077)  # the app ships this file; other accounts must be able to read it
+        try:
+            self.run_ok()
+        finally:
+            os.umask(old)
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o644)
+
     def test_all_groups_and_mpl_sources_are_collected(self):
         text = self.run_ok()
         for fragment in ('# 1. App executable: Rust crates', '### tauri 2.0.0', 'Synthetic upstream notice for tauri',

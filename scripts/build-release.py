@@ -16,7 +16,8 @@ the binaries: rustc remaps the checkout, OUT_DIR, CARGO_HOME and RUSTUP_HOME
 (--remap-path-prefix), C compilers do the same (-ffile-prefix-map), and OpenSSL is configured
 with the neutral prefix OPENSSL_PREFIX and installed under OUT_DIR with DESTDIR, so its
 ENGINESDIR and MODULESDIR name no host path. A binary that still contains the home directory,
-the checkout, OUT_DIR, CARGO_HOME, RUSTUP_HOME or /Volumes/ is refused.
+the checkout, OUT_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/ or any account home (/Users/, /home/)
+is refused. HOME must be an absolute path.
 """
 import argparse
 import hashlib

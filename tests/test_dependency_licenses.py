@@ -109,6 +109,14 @@ class DependencyLicenseTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         return result
 
+    def test_notices_are_readable_by_every_account(self):
+        old = os.umask(0o077)  # a strict umask must not make the shipped notices owner-only
+        try:
+            self.run_ok()
+        finally:
+            os.umask(old)
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o644)
+
     def test_runtime_and_build_notices_retained_without_cache_paths(self):
         notices = self.run_ok()
         self.assertIn('## runtime 1.0.0', notices)

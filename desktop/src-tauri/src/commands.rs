@@ -362,8 +362,9 @@ pub async fn terminal_attach(
     blocking(move || core.terminal_attach(input, Box::new(ChannelSink::new(on_data)))).await
 }
 
-/// Content protection for the window that asked (the main window). `{protected}` says
-/// whether the window is really kept out of screen capture (never on Linux).
+/// The screen-capture exclusion request for the window that asked (the main window).
+/// `{protected}` says whether the request was applied (never on Linux); it is best effort and
+/// capture tools may ignore it.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn secure_view(
     shell: State<'_, Shell>,

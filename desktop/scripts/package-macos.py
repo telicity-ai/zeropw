@@ -21,8 +21,8 @@ or logged-in tools. It:
    must be new, empty or marked by an earlier run (.zeropw-package-macos); --work-dir, --out-dir
    and CARGO_TARGET_DIR (honored when set) must be outside the checkout;
 3. requires every desktop version field, rust/Cargo.toml and the zeropw entry of
-   rust/Cargo.lock to agree on MAJOR.MINOR.PATCH, names the release vX.Y.Z after it, and with
-   --tag refuses any tag other than vX.Y.Z;
+   rust/Cargo.lock to agree on MAJOR.MINOR.PATCH, names the release vX.Y.Z after it, and refuses
+   a --tag (required) other than vX.Y.Z; refuses to start without an absolute HOME;
 4. runs `npm ci --ignore-scripts`, then scripts/prepare-sidecars.sh (static OpenSSL sidecars
    from scripts/build-release.py --bin, and THIRD_PARTY_LICENSES.md), then
    `tauri build --config src-tauri/tauri.bundle.conf.json --bundles app,dmg` with CI=true
@@ -40,7 +40,8 @@ or logged-in tools. It:
    `otool -L` lists only /usr/lib and /System/Library libraries and no libssl or libcrypto;
    each executable is arm64 with minimum macOS 11.0, ad hoc signed with the hardened runtime
    and no entitlements, and contains neither the home directory, the work directory, the
-   checkout, CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME nor /Volumes/; the bundle has no
+   checkout, CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/ nor any account home (/Users/,
+   /home/); every file in Contents/MacOS and Contents/Resources is readable by every account; the bundle has no
    entitlements, sealed resources and passes `codesign --verify --deep --strict`; Info.plist
    has the version, minimum macOS and Local Network description; the image detaches.
    `spctl -a -vv` is recorded: it rejects an ad-hoc signed app, which is expected;

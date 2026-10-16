@@ -97,6 +97,7 @@ class FakeRunner:
         self.entitlements = {}    # executable or bundle name -> codesign --entitlements output
         self.bundled_differs = False
         self.during_tauri = None  # called while "tauri build" runs
+        self.private = set()      # Resources file names the image ships with mode 0600
         self.target = None
 
     def result(self, command, code=0, stdout='', stderr=''):
@@ -199,6 +200,8 @@ class FakeRunner:
             if 'THIRD_PARTY_LICENSES.md' not in self.omit:
                 shutil.copyfile(work / 'source/desktop/src-tauri/notices/THIRD_PARTY_LICENSES.md',
                                 contents / 'Resources/THIRD_PARTY_LICENSES.md')
+            for name in self.private:
+                os.chmod(contents / 'Resources' / name, 0o600)
             (contents / 'Info.plist').write_text('synthetic plist')
             (mount / 'Applications').symlink_to('/Applications')
             self.mounted = mount
@@ -423,10 +426,18 @@ class PackageMacosTests(unittest.TestCase):
         self.assertTrue(self.module.no_entitlements(''))
         self.assertTrue(self.module.no_entitlements(plistlib.dumps({}).decode()))
 
+    def test_files_unreadable_by_other_accounts_fail(self):
+        self.runner.private = {'THIRD_PARTY_LICENSES.md'}
+        failure = self.failure()
+        self.assertIn('ZeroPW.app/Contents/Resources/THIRD_PARTY_LICENSES.md is not readable by every account', failure)
+        self.assertEqual(list(self.out.iterdir()) if self.out.exists() else [], [])
+
     def test_local_paths_in_an_executable_fail(self):
         for label, embedded in (('the work directory', str(self.work) + '/target/release/build/out.rs'),
                                 ('/Volumes/', '/Volumes/External/openssl/lib/ossl-modules'),
-                                ('the home directory', str(self.base / 'home') + '/.cargo/registry/src/x.rs')):
+                                ('the home directory', str(self.base / 'home') + '/.cargo/registry/src/x.rs'),
+                                ('an account home (/Users/ or /home/)', '/Users/someone-else/.cargo/registry/src/x.rs'),
+                                ('an account home (/Users/ or /home/)', '/home/builder/.cargo/registry/src/x.rs')):
             with self.subTest(label=label):
                 shutil.rmtree(self.work, ignore_errors=True)
                 self.runner = FakeRunner(self)
