@@ -3,7 +3,8 @@
 The schemas, validator, examples, guides, prompts and manuals each repeat the
 formula's version, its two archive SHA-256 values and the formula file's own
 SHA-256. These tests derive those values from the formula and require every
-copy to match, so moving only some of the files to a new release fails.
+copy to match, so moving only some of the files to a new release fails. The
+English and Korean manuals must also run the same commands.
 """
 from collections import Counter
 import hashlib
@@ -161,6 +162,16 @@ class OnboardingPinTests(unittest.TestCase):
                 self.assertIn(f"ZeroPW {self.pins['tag']} · ", text)
                 self.assertIn(f"releases/tag/{self.pins['tag']}\"", text)
         self.assertEqual(guards['en'], guards['ko'])
+
+    def test_manual_commands_match_across_languages(self):
+        en, ko = code_blocks(MANUALS['en']), code_blocks(MANUALS['ko'])
+        self.assertEqual(len(en), len(ko))
+        for i, (left, right) in enumerate(zip(en, ko)):
+            if 13 <= i <= 15:
+                continue  # prompt copies, checked against each language's prompt file
+            with self.subTest(block=i):
+                strip = lambda block: [line for line in block.split('\n') if not line.lstrip().startswith('#')]
+                self.assertEqual(strip(left), strip(right))
 
     def test_manual_prompt_copies_equal_prompt_files(self):
         for language in ['en', 'ko']:
