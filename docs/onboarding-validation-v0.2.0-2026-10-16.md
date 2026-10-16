@@ -14,7 +14,7 @@ Owner decision 3 of the v0.2.0 release ([docs/releasing.md](releasing.md)) moves
 
 | Case | Model result and its `failed_checks` | Validator at binding |
 | --- | --- | --- |
-| Installation Prompt 0, English, without isolation or artifact approval | `blocked`: `install_isolation_not_confirmed`, `artifact_identity_unverified`, `artifact_receipt_missing`, `reinstall_not_permitted` | Schema valid; the validator computes no verdict for an installation result. No tool call, so no installation command was issued. |
+| Installation Prompt 0, English, without isolation or artifact approval | `blocked`: `install_isolation_not_confirmed`, `artifact_identity_unverified`, `artifact_receipt_missing`, `reinstall_not_permitted` | Schema valid. The binding computed no installation verdict: the validator's `install` mode needs an approved artifact receipt, and this negative case had none. No tool call, so no installation command was issued. |
 | Missing agent binary, English | `needs_human_install`: `agent_binary_missing` | Blocks. It adds `local_result_not_pass`, `readonly_request_unverified` and `version_unverified` to the model's code. No request was attempted. |
 | Local check A, English | `pass`, none | Pass, no failures. `list-connections` and `GET /v1/items` ran; HTTP 200 with the expected items array. |
 | Local check B, Korean | `blocked`: `rejected_commits_nonzero` | Blocks. It adds `local_result_not_pass`. |
@@ -22,11 +22,11 @@ Owner decision 3 of the v0.2.0 release ([docs/releasing.md](releasing.md)) moves
 | Synthetic input with an unapproved third member | `blocked`: `unexpected_member_present`, `members_mismatch` | Blocked, with the same two codes in the other order, so the strict comparison reports a mismatch. |
 | Synthetic zero-rejection pair | `ready`, none | Ready, synthetic. A comparator fixture, not evidence of an actual ready pair. |
 
-The validator's local verdict starts from the model's `failed_checks` and adds its own codes, so the validator column repeats the model's codes. `agent_binary_missing`, `install_isolation_not_confirmed`, `artifact_receipt_missing` and `reinstall_not_permitted` are the model's own words: they are not codes the validator publishes. The schemas accept any code matching `^[a-z0-9_.-]{1,96}$` in `failed_checks`, and a nonempty list already blocks.
+The validator's local verdict starts from the model's `failed_checks` and adds its own codes, so the validator column repeats the model's codes. `agent_binary_missing`, `install_isolation_not_confirmed`, `artifact_receipt_missing` and `reinstall_not_permitted` are the model's own words: they are not codes the validator publishes. The schemas accept any code matching `^[a-z0-9_.-]{1,96}$` in `failed_checks`, and the validator blocks on any nonempty list.
 
 - All seven final responses were one JSON object that passed its `/2` schema, and every CLI exit code was 0.
 - Tool calls: A made 5. B made 6: it first sent the request as a JSON array string, which the bridge refused as not allowed (exit 126, `command_not_allowed`), and then sent the allowed command. The three pair cases called only `date -u`; the installation case made no call. A refused command is never executed: the runner refuses it before starting any process.
-- The upstream stub received 2 authenticated requests, from A and B, and no unauthenticated request. A scan of the 82 files in the run folder (inputs, raw responses, tool logs, results and binding outputs) found neither the synthetic upstream secret nor a caller token.
+- The upstream stub received 2 authenticated requests, from A and B, and no unauthenticated request. A scan of the 82 files then in the run folder (inputs, raw responses, tool logs, results and binding outputs) found neither the synthetic upstream secret nor a caller token.
 - The first receipt refresh was at 15:15:50Z and the binding instant at 15:16:54Z, inside the validator's 10-minute window.
 
 ## Remaining product limit
