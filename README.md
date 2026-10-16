@@ -4,13 +4,13 @@
 
 ZeroPW stores credentials in an encrypted vault and lets agents use supported HTTP APIs and SSH without receiving the original secrets. Configure a service connection once, then use different operations within its allowed scope. A trusted gateway adds HTTP authentication; a separate signer handles SSH authentication.
 
-ZeroPW is a Rust CLI project. Version 0.1.0 is an initial release, tested with synthetic credentials and controlled endpoints. It does not support every CLI, and its local development setup does not isolate agents from the vault when they run as the same OS user. Read the [security design](docs/security-design.md) and [implementation limits](docs/implementation.md) before using real credentials.
+ZeroPW is a Rust CLI project with a preview desktop app for Apple Silicon macOS. Version 0.2.0 is an early release, tested with synthetic credentials and controlled endpoints. It does not support every CLI, and its local development setup does not isolate agents from the vault when they run as the same OS user. Read the [security design](docs/security-design.md) and [implementation limits](docs/implementation.md) before using real credentials.
 
 ## Start here
 
 The [guide](GUIDE.md) covers the demo, administrator setup, team sharing, and agent use. The [agent skill](skills/zeropw-agent/SKILL.md) helps agents select and use existing connections without reading secrets.
 
-For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt).
+For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt). The manuals and prompts describe the Homebrew installation of version 0.1.0. They move to 0.2.0 together with the Homebrew formula in a follow-up after v0.2.0 is published.
 
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml --bins
@@ -19,9 +19,21 @@ rust/target/debug/zeropw-demo
 
 Build and run tests on a disposable CI runner or isolated VM without vault, gateway, signer, or coordinator credentials. Rust must support edition 2024. The demo uses an embedded test server and synthetic credentials; exit code 0 means its checks passed.
 
-Version 0.1.0 binary downloads support Apple Silicon macOS and ARM64 GNU/Linux (Ubuntu 24.04 build baseline). Intel macOS and x86-64 Linux binaries are not included.
+## Install
 
-On Apple Silicon macOS (tested on macOS 26.5; older versions are unverified):
+Version 0.2.0 binary downloads support Apple Silicon macOS and ARM64 GNU/Linux. Intel macOS and x86-64 Linux binaries are not included. The macOS binaries were tested on macOS 26.5; older versions are unverified. The Linux binaries need glibc 2.39 or later (Ubuntu 24.04 or later): `zeropw-admin` and `zeropw-demo` use GLIBC_2.39 symbols and do not start with an older glibc.
+
+The release assets are `zeropw-v0.2.0-aarch64-apple-darwin.tar.gz` and `zeropw-v0.2.0-aarch64-unknown-linux-gnu.tar.gz`, each with a `.tar.gz.sha256` file. Each archive holds the five binaries, `README.md`, `LICENSE` and `THIRD_PARTY_LICENSES.md`. To install 0.2.0 on either platform, download `scripts/install.sh` from the v0.2.0 tag, read it, and run it:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/telicity-ai/zeropw/v0.2.0/scripts/install.sh
+bash install.sh --version v0.2.0 --prefix "$HOME/.local"
+"$HOME/.local/bin/zeropw-demo"
+```
+
+The installer downloads the archive for your platform and its `.sha256` file from the v0.2.0 release, checks the SHA-256 and the archive entries, and installs the binaries into `PREFIX/bin` and the documents into `PREFIX/share/doc/zeropw`. It does not use sudo, create a vault, start a service, edit shell profiles or run the downloaded binaries. It does not overwrite existing files: to replace an earlier installation, stop running ZeroPW processes and add `--force`. For an archive you downloaded yourself, use `--archive FILE --sha256 HEX` instead of `--version`. A checksum detects corruption but is not a signature; the release host and publisher remain trusted. The [release guide](docs/releasing.md#packaging-tools) has the details.
+
+On Apple Silicon macOS, the Homebrew formula in the v0.2.0 tag still installs version 0.1.0. It moves to 0.2.0, together with the teammate onboarding manuals, in a follow-up after v0.2.0 is published. Until then these commands install 0.1.0; `brew list --versions zeropw` shows the installed version:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -30,7 +42,7 @@ brew test telicity-ai/zeropw/zeropw
 zeropw-demo
 ```
 
-On ARM64 Linux, use the archive installer described in the [release guide](docs/releasing.md). Linux Homebrew installation has not been verified. The macOS formula installs checksummed release binaries; Rust and Homebrew OpenSSL are not required for this version. The [release guide](docs/releasing.md) describes the archive installer and verification scope.
+The stable formula installs a checksummed release archive; Rust and Homebrew OpenSSL are not required. Linux Homebrew installation has not been verified; on ARM64 Linux, use the installer above. If both Homebrew and the installer have installed ZeroPW, the copy found first on `PATH` runs; check with `command -v zeropw-admin`.
 
 ## Binaries
 
@@ -56,16 +68,34 @@ ZeroPW does not import or export a complete `.env` file. Applications that requi
 
 ## Desktop app (preview)
 
-`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. No published release includes the app yet; the owner has decided to ship it as an ad hoc signed preview `.dmg` for Apple Silicon in the v0.2.0 release. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
+`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. The v0.2.0 release includes it as an ad hoc signed preview disk image for Apple Silicon Macs, `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`, with its `.dmg.sha256` file. It was tested only on macOS 26.5, on the Mac that built it; older versions are unverified. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
+
+To install it:
+
+1. Download the image and its `.dmg.sha256` file from the [v0.2.0 release](https://github.com/telicity-ai/zeropw/releases/tag/v0.2.0) into one folder, and verify the checksum before you open the image. It must print `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg: OK`.
+
+   ```sh
+   shasum -a 256 -c zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg.sha256
+   ```
+
+2. Open the image, drag ZeroPW onto the Applications link, and eject the image. Open the app only from Applications.
+3. Open ZeroPW from Applications. macOS says that Apple could not verify that ZeroPW is free of malware; close that dialog with Done.
+4. Within about an hour, open System Settings › Privacy & Security, scroll to Security, and click Open Anyway next to the message about ZeroPW. Confirm with your login password, then choose Open. If the button is gone, repeat step 3.
+
+These steps follow Apple's documentation for macOS 15 and later. The first launch through Gatekeeper on a clean Mac has not been tested (see the limits below). Do not remove the quarantine attribute or turn Gatekeeper off. The [release guide](docs/releasing.md#what-users-see-on-macos-15-and-later) explains why the app must be opened from Applications.
 
 Known limits:
 
 - Korean only. The app's interface, including the macOS Local Network permission prompt it causes, is in Korean, with no English version (an owner decision).
+- Apple Silicon (arm64) only on macOS. There is no Intel or universal build.
+- Ad hoc signed preview, not notarized. The `.dmg` has no Developer ID signature, so its signature does not identify who built it, and Gatekeeper blocks the first open until you allow it with the steps above.
+- First launch on a clean Mac not tested. Installing the image and opening it through Gatekeeper on a Mac that has never run ZeroPW was not tested for this preview.
+- No auto-update. Replace the app yourself to get fixes.
+- Closing the window does not quit the app. The app, its relay and the agent terminals keep running; reopen the window from the Dock and quit with Cmd+Q. If the app is killed instead of quit, for example with Force Quit, the relay keeps running.
+- Some agents outlive their terminal. Closing an agent's terminal or quitting the app stops the processes started in that terminal, but not agents started as another account (as the app suggests) or processes detached from the terminal (`setsid`, tmux, screen, daemons). They keep running with their caller token; only disabling the agent in the app stops that token.
 - No isolation within one macOS account. Any program running as the same user, agents included, can read the development device key file and the vault ([#21](https://github.com/telicity-ai/zeropw/issues/21)). The app suggests running agents as a different account.
 - Recovery limits ([#22](https://github.com/telicity-ai/zeropw/issues/22)). Recovery with the recovery code needs the existing device key file. It re-wraps the same data key, so it is not a response to a leaked key file, and backups made before it can no longer be restored.
-- Ad hoc signed preview, not notarized. The `.dmg` has no Developer ID signature, so its signature does not identify who built it. Drag ZeroPW to Applications, eject the image, and open the app only from Applications. Gatekeeper blocks the first open; then click Open Anyway in System Settings > Privacy & Security within about an hour and confirm with your login password. Do not remove the quarantine attribute or turn Gatekeeper off. The [release guide](docs/releasing.md#what-users-see-on-macos-15-and-later) has the steps.
-- No auto-update. Replace the app yourself to get fixes.
-- Apple Silicon (arm64) only on macOS. There is no Intel or universal build.
+- Copied values can persist. The app clears a copied token, invite link or revealed value from the clipboard after 60 seconds if it is still there, and marks it for clipboard history tools to skip. A tool that ignores the mark can keep it, and Universal Clipboard can pass it to your other Apple devices.
 - Do not count on screen-capture exclusion. On macOS the app only asks the window system to leave its window out of captures while a recovery code, token, invite link or revealed key is shown. Capture, recording and screen-sharing tools built on ScreenCaptureKit reportedly ignore that request from macOS 15 on, and it has not been tested on a release build. Linux has no such request. Do not show these values while you share or record your screen.
 
 ## Verify changes

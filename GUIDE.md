@@ -1,6 +1,6 @@
 # Getting started with ZeroPW
 
-ZeroPW synchronizes encrypted secrets between trusted devices. Agents use supported APIs and SSH without receiving the original keys. The product currently runs through Rust CLIs and has an initial v0.1.0 release.
+ZeroPW synchronizes encrypted secrets between trusted devices. Agents use supported APIs and SSH without receiving the original keys. The product runs through Rust CLIs. Release v0.2.0 also includes a preview desktop app for Apple Silicon macOS; see the [README](README.md#desktop-app-preview).
 
 ## Choose your starting point
 
@@ -16,7 +16,18 @@ There is no whole-file `.env` import or export. Store API keys in the vault and 
 
 ## 1. Install and demo
 
-On Apple Silicon macOS (tested on macOS 26.5; older versions are unverified):
+Release v0.2.0 has binaries for Apple Silicon macOS (tested on macOS 26.5; older versions are unverified) and ARM64 Linux with glibc 2.39 or later (Ubuntu 24.04 or later; `zeropw-admin` and `zeropw-demo` use GLIBC_2.39 symbols). Intel macOS and x86-64 Linux release binaries are not available. On either platform, download `scripts/install.sh` from the v0.2.0 tag, read it, and run:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/telicity-ai/zeropw/v0.2.0/scripts/install.sh
+bash install.sh --version v0.2.0 --prefix "$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+zeropw-demo
+```
+
+The installer downloads the release archive for your platform (`zeropw-v0.2.0-aarch64-apple-darwin.tar.gz` or `zeropw-v0.2.0-aarch64-unknown-linux-gnu.tar.gz`) and its `.sha256` file, checks them, and installs all five binaries. It does not overwrite existing files unless you add `--force`; stop running ZeroPW processes before replacing an installation. See the [README](README.md#install) and the [release guide](docs/releasing.md#packaging-tools) for details.
+
+On Apple Silicon macOS, the Homebrew formula in the v0.2.0 tag still installs version 0.1.0. It moves to 0.2.0, together with the teammate onboarding manuals, in a follow-up after v0.2.0 is published. Until then these commands install 0.1.0:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -25,7 +36,7 @@ brew test telicity-ai/zeropw/zeropw
 zeropw-demo
 ```
 
-On ARM64 Linux, use the archive installer in the [release guide](docs/releasing.md). Linux Homebrew installation has not been verified. The macOS formula installs all five checksummed release binaries. Linux uses an Ubuntu 24.04 glibc baseline. Intel macOS and x86-64 Linux release binaries are not available for v0.1.0. See [release installation](docs/releasing.md) for the archive installer.
+The formula installs all five checksummed release binaries. Linux Homebrew installation has not been verified. The preview desktop app is a separate download; see the [README](README.md#desktop-app-preview).
 
 ### Build from source
 
