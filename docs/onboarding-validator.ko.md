@@ -8,14 +8,14 @@
 
 `docs/onboarding-policy.example.json`을 `policy.json`으로 복사하고 env_id를 포함한 모든 예시 표식을 사람이 별도로 확인한 메타데이터로 바꾼다. 기존·제거된 멤버까지 승인 명단 전체를 포함한다. A는 유일한 active admin/owner, B는 초대한 역할의 active 멤버이며 `owner=false`여야 한다. 상대 결과를 보고 정책을 작성하지 않는다. 검사 경로, 성공 HTTP 상태, 응답 조건 문구, 시험용·실제 환경 구분도 미리 합의한다.
 
-실행 전에 각 플랫폼의 압축 파일 SHA-256을 v0.1.0 릴리스와 대조한다. Homebrew는 tap 커밋과 formula의 URL·SHA-256도 확인한다. `artifact_receipts.A/B`에 기록하며 플랫폼별 해시는 다를 수 있다. Homebrew의 `tap_commit`은 검증한 40자리 커밋, 압축 파일 설치는 `null`이다. 자료는 사람의 확인이며 서명된 증명이 아니다.
+실행 전에 각 플랫폼의 압축 파일 SHA-256을 v0.2.0 릴리스와 대조한다. Homebrew는 tap 커밋과 formula의 URL·SHA-256도 확인한다. `artifact_receipts.A/B`에 기록하며 플랫폼별 해시는 다를 수 있다. Homebrew의 `tap_commit`은 검증한 40자리 커밋, 압축 파일 설치는 `null`이다. 자료는 사람의 확인이며 서명된 증명이 아니다.
 
 | 릴리스 압축 파일 | SHA-256 |
 | --- | --- |
-| ARM64 macOS | `7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9` |
-| ARM64 Linux | `c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75` |
+| ARM64 macOS | `68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d` |
+| ARM64 Linux | `5f1dc52a5081e3386f71843c51a7f15f5e95d1b13153c446e08975b0eba70d86` |
 
-[v0.1.0 릴리스](https://github.com/telicity-ai/zeropw/releases/tag/v0.1.0)의 해시를 스키마에도 고정했다. 체크섬 일치는 해당 릴리스와 같은 파일이라는 근거이며 배포자 서명 검증은 아니다.
+[v0.2.0 릴리스](https://github.com/telicity-ai/zeropw/releases/tag/v0.2.0)의 해시를 스키마에도 고정했다. 체크섬 일치는 해당 릴리스와 같은 파일이라는 근거이며 배포자 서명 검증은 아니다.
 
 ## 검증기 실행
 
@@ -38,7 +38,7 @@ python3 scripts/validate-onboarding.py pair A.json B.json --policy policy.json
 
 `rejected_commits`가 0이 아니면 벡터가 같고 HTTP 요청이 성공해도 `/2`는 차단한다. 사람은 각 격리 기록의 ID·사유, 거절 주석만 제외한 내용과 수락된 커밋의 일치, 수락 당시 작성자의 승인 상태, 표본 수집 중 기록 집합·개수의 불변 여부를 확인한다. 근거는 비공개로 보존하고 원본 커밋·금고 파일을 에이전트에게 보내지 않는다.
 
-확인 후에도 0 조건은 면제되지 않는다. 기록 삭제·카운터 초기화·확인 자료의 값 변경은 하지 않는다. 검토된 이력의 처리는 별도 제품 결정과 버전이 구분된 판정이 필요하다. 현재 v0.1.0 온보딩 시험은 `ready` 쌍을 입증하지 못했다.
+확인 후에도 0 조건은 면제되지 않는다. 기록 삭제·카운터 초기화·확인 자료의 값 변경은 하지 않는다. 검토된 이력의 처리는 별도 제품 결정과 버전이 구분된 판정이 필요하다. 2026-10-11 v0.1.0 온보딩 시험은 `ready` 쌍을 입증하지 못했다. v0.2.0 재시험 결과는 [docs/releasing.md](releasing.md)의 v0.2.0 follow-up 절에 있다.
 
 ## 이유·행동 코드
 
@@ -50,6 +50,6 @@ python3 scripts/validate-onboarding.py pair A.json B.json --policy policy.json
 
 전체 실패·상태 코드 목록: `artifact_identity_mismatch`, `artifact_identity_unverified`, `credential_exposure_suspected`, `duplicate_json_key`, `duplicate_member`, `environment_mismatch`, `execution_context_mismatch`, `human_receipt_missing`, `input_too_large`, `installation_action_missing`, `installation_checks_failed`, `installation_exit_failed`, `installation_isolation_unconfirmed`, `installation_not_pass`, `invalid_arguments`, `invalid_expected_roster`, `invalid_input`, `invalid_probe_input`, `invalid_sampling_interval`, `invalid_utc_time`, `invalid_vector_count`, `local_result_not_pass`, `members_mismatch`, `needs_human_homebrew`, `needs_human_install`, `needs_human_receipt`, `needs_human_runtime_config`, `needs_human_settings`, `needs_human_version`, `nonfinite_json`, `planned_fingerprint_mismatch`, `probe_mismatch`, `production_isolation_unconfirmed`, `readonly_request_unverified`, `rejected_commits_nonzero`, `reported_pair_mismatch`, `role_mismatch`, `self_fingerprint_role_mismatch`, `skill_conflict`, `stale_or_future_evidence`, `unexecuted_install_exit`, `unexpected_member_present`, `unknown_vector_author`, `unresolved_team_state`, `unstable_vector`, `unsupported_schema_keyword`, `vectors_mismatch`, `verification_session_mismatch`, `version_unverified`, `writes_not_paused`.
 
-Homebrew는 승인한 formula_sha256과 실제 observed_tap_commit/observed_formula_sha256이 확인 자료와 같아야 한다. 자동 업데이트를 끄고 설치·시험 전후 깨끗한 tap을 확인한다. 압축 파일 설치는 해당 자료·관측값을 null로 쓴다. 입력을 관측값으로 복사하지 않는다. 검토한 v0.1.0 formula SHA-256은 `f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d`다.
+Homebrew는 승인한 formula_sha256과 실제 observed_tap_commit/observed_formula_sha256이 확인 자료와 같아야 한다. 자동 업데이트를 끄고 설치·시험 전후 깨끗한 tap을 확인한다. 압축 파일 설치는 해당 자료·관측값을 null로 쓴다. 입력을 관측값으로 복사하지 않는다. 검토한 v0.2.0 formula SHA-256은 `1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6`다.
 
 brew 근거는 ZeroPW 실행 전에 같은 검토된 체크아웃의 `python3 scripts/observe-onboarding-brew.py --approved-tap <APPROVED_40_HEX_TAP_COMMIT>`로 확인한다. 실제 installed_tap_commit이 승인한 tap과 같고 installed_spec=stable, 다섯 실제 경로의 binaries_resolve_to_keg=true여야 한다. 공개된 INSTALL_RECEIPT.json과 PATH 경로만 읽고 경로나 ZeroPW 실행 결과를 출력하지 않는다. 알 수 없으면 차단하며 압축 파일 설치는 해당 필드를 null로 쓴다. 프롬프트 0의 verify_existing은 설치 통과가 아니며 명시적으로 허용한 재설치가 필요하다.

@@ -143,7 +143,7 @@
               "minLength": 1,
               "maxLength": 256,
               "enum": [
-                "v0.1.0"
+                "v0.2.0"
               ]
             },
             "archive_sha256": {
@@ -151,8 +151,8 @@
               "minLength": 1,
               "maxLength": 256,
               "enum": [
-                "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
-                "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+                "68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d",
+                "5f1dc52a5081e3386f71843c51a7f15f5e95d1b13153c446e08975b0eba70d86"
               ]
             },
             "tap_commit": {
@@ -181,7 +181,7 @@
                 {
                   "type": "string",
                   "enum": [
-                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                    "1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6"
                   ]
                 },
                 {
@@ -207,7 +207,7 @@
               "minLength": 1,
               "maxLength": 256,
               "enum": [
-                "v0.1.0"
+                "v0.2.0"
               ]
             },
             "archive_sha256": {
@@ -215,8 +215,8 @@
               "minLength": 1,
               "maxLength": 256,
               "enum": [
-                "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
-                "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+                "68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d",
+                "5f1dc52a5081e3386f71843c51a7f15f5e95d1b13153c446e08975b0eba70d86"
               ]
             },
             "tap_commit": {
@@ -245,7 +245,7 @@
                 {
                   "type": "string",
                   "enum": [
-                    "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+                    "1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6"
                   ]
                 },
                 {

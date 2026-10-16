@@ -15,6 +15,8 @@ import sys
 
 REJECTION_ACTIONS = ['review_quarantine_records', 'confirm_identical_accepted_commit',
                      'confirm_author_approved_at_acceptance', 'confirm_rejection_set_stable']
+RELEASE_VERSION = '0.2.0'
+MACOS_ARCHIVE_SHA256 = '68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d'
 SCHEMAS = Path(__file__).resolve().parents[1] / 'docs/onboarding-schemas'
 KEYWORDS = {'$schema', 'type', 'properties', 'required', 'additionalProperties',
             'propertyNames', 'minProperties', 'maxProperties', 'items', 'minItems',
@@ -134,7 +136,7 @@ def local_failures(result, policy, now):
     failures = set(result['failed_checks'])
     if result['local_result'] != 'pass':
         failures.add('local_result_not_pass')
-    if result['version'] != '0.1.0' or result['version_evidence'] == 'unknown':
+    if result['version'] != RELEASE_VERSION or result['version_evidence'] == 'unknown':
         failures.add('version_unverified')
     artifact = result['artifact_receipt']
     if artifact is None or (result['version_evidence'] == 'brew' and (artifact['tap_commit'] is None or artifact['formula_sha256'] is None)) or (result['version_evidence'] == 'human_reported' and (artifact['tap_commit'] is not None or artifact['formula_sha256'] is not None)):
@@ -202,7 +204,7 @@ def installation_failures(result, now, expected_artifact):
         failures.add('installation_isolation_unconfirmed')
     if result['result'] != 'pass':
         failures.add('installation_not_pass')
-    if result['version'] != '0.1.0' or result['all_five_binaries_present'] is not True or result['brew_test_exit'] != 0 or result['demo_exit'] != 0 or result['demo_checks'] != 47:
+    if result['version'] != RELEASE_VERSION or result['all_five_binaries_present'] is not True or result['brew_test_exit'] != 0 or result['demo_exit'] != 0 or result['demo_checks'] != 47:
         failures.add('installation_checks_failed')
     if result['action'] in ['install', 'reinstall'] and result['install_exit'] != 0:
         failures.add('installation_exit_failed')
@@ -217,7 +219,7 @@ def installation_failures(result, now, expected_artifact):
         failures.add('artifact_identity_mismatch')
     if artifact is None or result['installed_tap_commit'] != artifact['tap_commit'] or result['installed_spec'] != 'stable' or result['binaries_resolve_to_keg'] is not True:
         failures.add('artifact_identity_unverified')
-    if artifact is None or artifact['tap_commit'] is None or artifact['formula_sha256'] is None or artifact['archive_sha256'] != '7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9':
+    if artifact is None or artifact['tap_commit'] is None or artifact['formula_sha256'] is None or artifact['archive_sha256'] != MACOS_ARCHIVE_SHA256:
         failures.add('artifact_identity_unverified')
     try:
         if not -30 <= (now - moment(result['checked_at'])).total_seconds() <= 600:
