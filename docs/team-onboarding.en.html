@@ -98,7 +98,7 @@ footer{font-size:9pt}
 <section id="step1"><div class="section-head"><span class="number">01</span><div><span class="role">Everyone · Apple Silicon Mac</span><h2>Install with Homebrew and check the demo</h2></div>
 </div>
 <p>Run on a Mac with Homebrew installed. Tested on macOS 26.5; older versions are unverified.</p>
-<p>Before running this block, a human verifies the tap commit and formula URL/archive SHA-256 against the release, fills the approved commit, and pauses other Homebrew/tap changes. The formula digest below is pinned; a changed or dirty tap stops before install/test. Do not reset it to bypass the check. If the tap was added before, run <code>brew update</code> first so it can reach the release commit, then verify that commit.</p>
+<p>Before running this block, a human verifies the tap commit and formula URL/archive SHA-256 against the release, fills the approved commit, and pauses other Homebrew/tap changes. The formula digest below is pinned; a changed or dirty tap stops before install/test. Do not reset it to bypass the check. If the tap was added before, run <code>brew update</code> first and verify the commit it moves to. If ZeroPW is already installed, stop its running processes; the block reinstalls it.</p>
 <div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export HOMEBREW_NO_AUTO_UPDATE=1
 ZPW_APPROVED_TAP_COMMIT=&#x27;&lt;HUMAN_VERIFIED_40_HEX_COMMIT&gt;&#x27;
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw || exit 1
@@ -128,17 +128,17 @@ zeropw-demo</code></pre></div>
 <section id="step2"><div class="section-head"><span class="number">02</span><div><span class="role">A and B · Each person's trusted terminal</span><h2>Create your vault and device keys</h2></div>
 </div>
 <p>Run once on each device. During <code>init</code>, choose administrator and recovery passphrases and store them separately. Devices do not need to share passphrases.</p>
-<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export ZPW_STATE="$HOME/.local/share/zeropw"
-zeropw-admin --state-dir "$ZPW_STATE" init
+<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export ZPW_STATE="$HOME/.local/share/zeropw" &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" init &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" team init</code></pre></div>
 <p class="minor">Do not initialize a device again if it is already set up. In each new terminal, first run <code>export ZPW_STATE=…</code>. Only a human handles this configuration and administrator commands.</p>
 </section>
 <section id="step3"><div class="section-head"><span class="number">03</span><div><span class="role">A · Initial administrator</span><h2>Create the shared environment and keep it running</h2></div>
 </div>
 <p>On A, share the <code>team-app/dev</code> environment. Both devices must be on the same LAN or team VPN. The addresses below are examples.</p>
-<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" project create team-app
+<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" project create team-app &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" team share \
-  --project team-app --environment dev --name owner
+  --project team-app --environment dev --name owner &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.2:47420</code></pre></div>
 <p class="check">Keep this terminal running. If <code>serve</code> is already running, stop it and restart with the team listener option.</p>
 </section>
@@ -150,9 +150,9 @@ zeropw-admin --state-dir "$ZPW_STATE" team invite \
   --address 10.8.0.2:47420</code></pre></div>
 <p>Send the invitation only to B through a secure channel. It can be used once within one hour. Invite teammates who need secret-editing and invitation authority with <code>--role admin</code>.</p>
 <h3>B · Join from your own trusted terminal</h3><div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" team join --stdin \
-  --project team-app --environment dev &&
-zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev &&
-zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev &&
+  --project team-app --environment dev &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420</code></pre></div>
 <p><code>team join --stdin</code> waits for the invitation or invite link: paste it, press Return, then press Ctrl-D.</p>
 <p class="check">On both A and B, run <code>team members</code> and compare device fingerprints. Keep B's <code>serve</code> running too.</p>
