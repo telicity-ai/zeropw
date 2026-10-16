@@ -1,19 +1,19 @@
 class Zeropw < Formula
   desc "Use HTTP APIs and SSH without giving agents original credentials"
   homepage "https://github.com/telicity-ai/zeropw"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/telicity-ai/zeropw/releases/download/v0.1.0/zeropw-v0.1.0-aarch64-apple-darwin.tar.gz"
-      sha256 "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9"
+      url "https://github.com/telicity-ai/zeropw/releases/download/v0.2.0/zeropw-v0.2.0-aarch64-apple-darwin.tar.gz"
+      sha256 "68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d"
     end
   end
   on_linux do
     on_arm do
-      url "https://github.com/telicity-ai/zeropw/releases/download/v0.1.0/zeropw-v0.1.0-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75"
+      url "https://github.com/telicity-ai/zeropw/releases/download/v0.2.0/zeropw-v0.2.0-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "5f1dc52a5081e3386f71843c51a7f15f5e95d1b13153c446e08975b0eba70d86"
     end
   end
   depends_on arch: :arm64

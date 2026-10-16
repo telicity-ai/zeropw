@@ -8,9 +8,9 @@ ZeroPW는 에이전트에게 원본 비밀값을 주지 않고 CLI와 API를 쓰
 
 [시작 안내](GUIDE.md)에 데모 실행부터 관리자 설정, 팀 가입, 에이전트 사용까지 필요한 절차를 적었다. 에이전트에는 [ZeroPW 스킬](skills/zeropw-agent/SKILL.md)을 설치할 수 있다.
 
-팀원에게는 [한국어 HTML 매뉴얼](docs/team-onboarding.ko.html)이나 [영어 HTML 매뉴얼](docs/team-onboarding.en.html)을 전달하면 된다. 파일을 내려받아 브라우저에서 연다. 에이전트 검증 프롬프트도 [한국어](docs/team-agent-prompts.ko.txt)와 [영어](docs/team-agent-prompts.en.txt)로 제공한다. 매뉴얼과 프롬프트는 0.1.0 버전의 Homebrew 설치를 설명한다. v0.2.0을 공개한 뒤 후속 변경에서 Homebrew formula와 함께 0.2.0으로 바뀐다.
+팀원에게는 [한국어 HTML 매뉴얼](docs/team-onboarding.ko.html)이나 [영어 HTML 매뉴얼](docs/team-onboarding.en.html)을 전달하면 된다. 파일을 내려받아 브라우저에서 연다. 에이전트 검증 프롬프트도 [한국어](docs/team-agent-prompts.ko.txt)와 [영어](docs/team-agent-prompts.en.txt)로 제공한다. 매뉴얼과 프롬프트는 0.2.0 버전의 Homebrew 설치를 설명한다.
 
-0.1.0은 초대 링크(`zeropw://join#…`)를 읽지 못한다. 초대 링크는 `team invite --link`가 출력하고, 데스크톱 앱은 초대를 링크로만 만든다. Homebrew는 formula가 0.2.0으로 바뀌기 전까지 0.1.0을 설치하므로, CLI로 합류하는 팀원은 아래 설치 스크립트로 0.2.0을 설치한다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.
+0.1.0은 초대 링크(`zeropw://join#…`)를 읽지 못한다. 초대 링크는 `team invite --link`가 출력하고, 데스크톱 앱은 초대를 링크로만 만든다. CLI로 합류하는 팀원도 0.2.0이 필요하다. Homebrew나 아래 설치 스크립트로 설치하고, Homebrew로 설치한 이전 버전은 `brew update`와 `brew upgrade telicity-ai/zeropw/zeropw`로 올린다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.
 
 팀원을 동시에 제거하면 기기마다 처리 결과가 달라질 수 있다. `team status`의 `rejected_removals`에 충돌이 표시되면 현재 관리자가 대상을 확인하고 의도한 제거를 다시 실행해야 한다. 팀원이 제거되기 전에 접근할 수 있었던 자격증명은 외부 서비스에서 교체해야 무효화된다.
 
@@ -40,7 +40,7 @@ bash install.sh --version v0.2.0 --prefix "$HOME/.local"
 
 설치 스크립트는 플랫폼에 맞는 압축 파일과 `.sha256` 파일을 v0.2.0 릴리스에서 받아 SHA-256과 압축 파일 항목을 확인한다. 그다음 바이너리는 `PREFIX/bin`에, 문서는 `PREFIX/share/doc/zeropw`에 설치한다. sudo를 쓰지 않고, 금고를 만들거나 서비스를 띄우거나 셸 설정 파일을 고치지 않으며, 받은 바이너리를 실행하지도 않는다. 이미 있는 파일은 덮어쓰지 않는다. 이전 설치를 바꾸려면 실행 중인 ZeroPW 프로세스를 멈추고 `--force`를 붙인다. 직접 내려받은 압축 파일은 `--version` 대신 `--archive FILE --sha256 HEX`로 설치한다. 체크섬은 파일 손상을 찾아낼 뿐 서명이 아니므로 릴리스 호스트와 게시자는 여전히 믿어야 한다. 자세한 내용은 [릴리스 안내](docs/releasing.md#packaging-tools)에 있다.
 
-Apple Silicon macOS의 Homebrew formula는 v0.2.0 태그에서도 0.1.0 버전을 설치한다. v0.2.0을 공개한 뒤 후속 변경에서 팀원 온보딩 매뉴얼과 함께 0.2.0으로 바뀐다. 그 전까지 아래 명령은 0.1.0을 설치한다. 설치된 버전은 `brew list --versions zeropw`로 확인한다.
+Apple Silicon macOS에서는 아래 명령으로 Homebrew에서 0.2.0을 설치한다. 설치된 버전은 `brew list --versions zeropw`로 확인한다. 이전 버전이 설치돼 있으면 실행 중인 ZeroPW 프로세스를 멈추고 `brew install` 대신 `brew update`와 `brew upgrade telicity-ai/zeropw/zeropw`를 실행한다.
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw

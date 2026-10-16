@@ -8,14 +8,14 @@ Use a reviewed checkout containing `scripts/validate-onboarding.py` and `docs/on
 
 Copy `docs/onboarding-policy.example.json` to `policy.json`. Replace every placeholder, including env_id, with metadata independently confirmed by humans. Include the **complete** approved member list, including existing and removed members. A must be the sole active admin/owner; B must be active, have the invited role and `owner=false`. Do not derive the policy from a peer result. Agree on the probe, expected successful HTTP status, response-rule wording and synthetic/real context.
 
-For each platform, verify the archive SHA-256 against the v0.1.0 release before running it. For Homebrew, also compare the tap commit and formula URL/SHA-256 with that release. Record this in `artifact_receipts.A/B`; platforms can have different archive hashes. `tap_commit` is a verified 40-character commit for Homebrew or `null` for an archive install. Receipts remain human-reported, not signed attestations.
+For each platform, verify the archive SHA-256 against the v0.2.0 release before running it. For Homebrew, also compare the tap commit and formula URL/SHA-256 with that release. Record this in `artifact_receipts.A/B`; platforms can have different archive hashes. `tap_commit` is a verified 40-character commit for Homebrew or `null` for an archive install. Receipts remain human-reported, not signed attestations.
 
 | Released archive | SHA-256 |
 | --- | --- |
-| ARM64 macOS | `7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9` |
-| ARM64 Linux | `c8c48db2dab796790248115cc74b366c5be7ecba3bb9c40db9b308697297ac75` |
+| ARM64 macOS | `68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d` |
+| ARM64 Linux | `5f1dc52a5081e3386f71843c51a7f15f5e95d1b13153c446e08975b0eba70d86` |
 
-Release: [v0.1.0](https://github.com/telicity-ai/zeropw/releases/tag/v0.1.0). These hashes are also pinned in the JSON Schemas. A matching checksum establishes consistency with this release; it does not add publisher signature verification.
+Release: [v0.2.0](https://github.com/telicity-ai/zeropw/releases/tag/v0.2.0). These hashes are also pinned in the JSON Schemas. A matching checksum establishes consistency with this release; it does not add publisher signature verification.
 
 ## Run the checker
 
@@ -38,7 +38,7 @@ A synthetic `ready` remains a labeled test result. Real credentials require huma
 
 Any nonzero `rejected_commits` blocks `/2`, even if A/B vectors match and HTTP calls succeed. A human checks every quarantine record ID and reason, compares it with the accepted content excluding only the rejection annotation, confirms the author was approved at acceptance, and confirms the record set/count stayed unchanged during sampling. Preserve the private evidence. Do not send raw commits or vault files to an agent.
 
-This review does **not** waive the zero-rejection gate. Do not delete records, reset counters or change receipt values. Handling reviewed history needs a separate product decision and versioned outcome. The current v0.1.0 onboarding test has not established a `ready` pair.
+This review does **not** waive the zero-rejection gate. Do not delete records, reset counters or change receipt values. Handling reviewed history needs a separate product decision and versioned outcome. The 2026-10-11 v0.1.0 onboarding test did not establish a `ready` pair. The v0.2.0 re-run is recorded in the v0.2.0 follow-up section of [docs/releasing.md](releasing.md).
 
 ## Reason and action codes
 
@@ -50,6 +50,6 @@ Rejection actions are `review_quarantine_records`, `confirm_identical_accepted_c
 
 Complete failure/outcome vocabulary: `artifact_identity_mismatch`, `artifact_identity_unverified`, `credential_exposure_suspected`, `duplicate_json_key`, `duplicate_member`, `environment_mismatch`, `execution_context_mismatch`, `human_receipt_missing`, `input_too_large`, `installation_action_missing`, `installation_checks_failed`, `installation_exit_failed`, `installation_isolation_unconfirmed`, `installation_not_pass`, `invalid_arguments`, `invalid_expected_roster`, `invalid_input`, `invalid_probe_input`, `invalid_sampling_interval`, `invalid_utc_time`, `invalid_vector_count`, `local_result_not_pass`, `members_mismatch`, `needs_human_homebrew`, `needs_human_install`, `needs_human_receipt`, `needs_human_runtime_config`, `needs_human_settings`, `needs_human_version`, `nonfinite_json`, `planned_fingerprint_mismatch`, `probe_mismatch`, `production_isolation_unconfirmed`, `readonly_request_unverified`, `rejected_commits_nonzero`, `reported_pair_mismatch`, `role_mismatch`, `self_fingerprint_role_mismatch`, `skill_conflict`, `stale_or_future_evidence`, `unexecuted_install_exit`, `unexpected_member_present`, `unknown_vector_author`, `unresolved_team_state`, `unstable_vector`, `unsupported_schema_keyword`, `vectors_mismatch`, `verification_session_mismatch`, `version_unverified`, `writes_not_paused`.
 
-Homebrew evidence requires approved formula_sha256 plus actual observed_tap_commit/observed_formula_sha256 matching the approved receipt. Disable automatic updates and check a clean tap before and after installation/test; archive evidence and observations use null. Never echo input as an observation. The reviewed v0.1.0 formula SHA-256 is `f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d`.
+Homebrew evidence requires approved formula_sha256 plus actual observed_tap_commit/observed_formula_sha256 matching the approved receipt. Disable automatic updates and check a clean tap before and after installation/test; archive evidence and observations use null. Never echo input as an observation. The reviewed v0.2.0 formula SHA-256 is `1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6`.
 
 For brew evidence, run `python3 scripts/observe-onboarding-brew.py --approved-tap <APPROVED_40_HEX_TAP_COMMIT>` from the same reviewed checkout before ZeroPW execution. Require its installed_tap_commit to match the approved tap, installed_spec=stable and binaries_resolve_to_keg=true for all five real paths. The script reads the actual public INSTALL_RECEIPT.json and PATH resolutions without printing paths or executing ZeroPW. Unknown data blocks. Archive installs use null for these fields. Prompt 0 does not accept verify_existing as an installation pass; an existing install needs an explicitly authorized guarded reinstall.

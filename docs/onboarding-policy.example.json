@@ -29,18 +29,18 @@
   "isolation_confirmed": false,
   "artifact_receipts": {
     "A": {
-      "release_tag": "v0.1.0",
-      "archive_sha256": "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+      "release_tag": "v0.2.0",
+      "archive_sha256": "68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d",
       "tap_commit": "<VERIFIED_40_HEX_TAP_COMMIT>",
       "source": "human_verified_release",
-      "formula_sha256": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+      "formula_sha256": "1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6"
     },
     "B": {
-      "release_tag": "v0.1.0",
-      "archive_sha256": "7f7218e467f2f913e73bbc20785caeb96bc9f63a916fdca4e217abcdd37deef9",
+      "release_tag": "v0.2.0",
+      "archive_sha256": "68493ecb7bf5e47c6924bcbaee8dde994b8dde17acfa4c836522baacec6f8d5d",
       "tap_commit": "<VERIFIED_40_HEX_TAP_COMMIT>",
       "source": "human_verified_release",
-      "formula_sha256": "f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d"
+      "formula_sha256": "1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6"
     }
   },
   "env_id": "<INDEPENDENTLY_VERIFIED_TEAM_ENV_ID>"

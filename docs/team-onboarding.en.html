@@ -81,7 +81,7 @@ footer{font-size:9pt}
 
 </style></head><body><a class="skip" href="#content">Skip to content</a><div class="layout"><aside><div class="brand">ZeroPW</div>
 <p class="minor"><a href="team-onboarding.en.html">English</a> · <a href="team-onboarding.ko.html">한국어</a></p>
-<div class="edition">User manual / v0.1.0</div>
+<div class="edition">User manual / v0.2.0</div>
 <nav aria-label="Manual sections"><a href="#step1"><span>01</span>Installation</a><a href="#step2"><span>02</span>Initialize your device</a><a href="#step3"><span>03</span>Create a shared environment</a><a href="#step4"><span>04</span>Invite and join</a><a href="#step5"><span>05</span>Share secrets</a><a href="#step6"><span>06</span>Local grants</a><a href="#step7"><span>07</span>Agent usage</a><a href="#agent-verification"><span>08</span>Verification prompts</a></nav>
 <div class="small">Humans perform administration in trusted terminals.<br>Agent operations begin at the final usage step.</div>
 </aside>
@@ -98,14 +98,14 @@ footer{font-size:9pt}
 <section id="step1"><div class="section-head"><span class="number">01</span><div><span class="role">Everyone · Apple Silicon Mac</span><h2>Install with Homebrew and check the demo</h2></div>
 </div>
 <p>Run on a Mac with Homebrew installed. Tested on macOS 26.5; older versions are unverified.</p>
-<p>Before running this block, a human verifies the tap commit and formula URL/archive SHA-256 against the release, fills the approved commit, and pauses other Homebrew/tap changes. The formula digest below is pinned; a changed or dirty tap stops before install/test. Do not reset it to bypass the check.</p>
+<p>Before running this block, a human verifies the tap commit and formula URL/archive SHA-256 against the release, fills the approved commit, and pauses other Homebrew/tap changes. The formula digest below is pinned; a changed or dirty tap stops before install/test. Do not reset it to bypass the check. If the tap was added before, run <code>brew update</code> first and verify the commit it moves to. If ZeroPW is already installed, stop its running processes; the block reinstalls it.</p>
 <div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export HOMEBREW_NO_AUTO_UPDATE=1
 ZPW_APPROVED_TAP_COMMIT=&#x27;&lt;HUMAN_VERIFIED_40_HEX_COMMIT&gt;&#x27;
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw || exit 1
 ZPW_TAP_DIR=&quot;$(brew --repository telicity-ai/zeropw)&quot;
 zpw_check_tap() {
   [ &quot;$(git -C &quot;$ZPW_TAP_DIR&quot; rev-parse HEAD)&quot; = &quot;$ZPW_APPROVED_TAP_COMMIT&quot; ] &amp;&amp;
-  [ &quot;$(shasum -a 256 &quot;$ZPW_TAP_DIR/Formula/zeropw.rb&quot; | cut -d &#x27; &#x27; -f 1)&quot; = &quot;f01165bea5b6dfadfcdb57b3ed7f82eaa91478f026e7354df2663c45dd79bf2d&quot; ] &amp;&amp;
+  [ &quot;$(shasum -a 256 &quot;$ZPW_TAP_DIR/Formula/zeropw.rb&quot; | cut -d &#x27; &#x27; -f 1)&quot; = &quot;1cc8493ac6964201eac9778ba591e285ddf8637926741aa475a43078c11830b6&quot; ] &amp;&amp;
   [ -z &quot;$(git -C &quot;$ZPW_TAP_DIR&quot; status --porcelain)&quot; ]
 }
 zpw_check_tap || exit 1
@@ -122,23 +122,23 @@ brew test telicity-ai/zeropw/zeropw || exit 1
 zpw_check_tap || exit 1
 zeropw-demo</code></pre></div>
 <p>Use the observer only from a reviewed checkout. Existing installations are reinstalled under the guard; do not accept a no-op install as fresh provenance. Compare its actual installed tap commit/spec and all-five path binding before test or demo.</p>
-<p class="check">Check: the installed version is 0.1.0. The demo ends with <code>All 47 checks passed</code>.</p>
-<p class="minor">If Homebrew is missing, follow the <a href="https://brew.sh/">Official installation instructions</a>. On ARM64 Linux, use the <a href="https://github.com/telicity-ai/zeropw/blob/v0.1.0/docs/releasing.md">Archive installer</a>. Linux Homebrew, Intel Mac and x86-64 Linux binaries are outside this verification scope.</p>
+<p class="check">Check: the installed version is 0.2.0. The demo ends with <code>All 47 checks passed</code>.</p>
+<p class="minor">If Homebrew is missing, follow the <a href="https://brew.sh/">Official installation instructions</a>. On ARM64 Linux, use the <a href="https://github.com/telicity-ai/zeropw/blob/v0.2.0/docs/releasing.md">Archive installer</a>. Linux Homebrew, Intel Mac and x86-64 Linux binaries are outside this verification scope.</p>
 </section>
 <section id="step2"><div class="section-head"><span class="number">02</span><div><span class="role">A and B · Each person's trusted terminal</span><h2>Create your vault and device keys</h2></div>
 </div>
 <p>Run once on each device. During <code>init</code>, choose administrator and recovery passphrases and store them separately. Devices do not need to share passphrases.</p>
-<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export ZPW_STATE="$HOME/.local/share/zeropw"
-zeropw-admin --state-dir "$ZPW_STATE" init
+<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>export ZPW_STATE="$HOME/.local/share/zeropw" &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" init &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" team init</code></pre></div>
 <p class="minor">Do not initialize a device again if it is already set up. In each new terminal, first run <code>export ZPW_STATE=…</code>. Only a human handles this configuration and administrator commands.</p>
 </section>
 <section id="step3"><div class="section-head"><span class="number">03</span><div><span class="role">A · Initial administrator</span><h2>Create the shared environment and keep it running</h2></div>
 </div>
 <p>On A, share the <code>team-app/dev</code> environment. Both devices must be on the same LAN or team VPN. The addresses below are examples.</p>
-<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" project create team-app
+<div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" project create team-app &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" team share \
-  --project team-app --environment dev --name owner
+  --project team-app --environment dev --name owner &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.2:47420</code></pre></div>
 <p class="check">Keep this terminal running. If <code>serve</code> is already running, stop it and restart with the team listener option.</p>
 </section>
@@ -149,13 +149,14 @@ zeropw-admin --state-dir "$ZPW_STATE" team invite \
   --env team-app/dev --role user --name teammate --ttl 1h \
   --address 10.8.0.2:47420</code></pre></div>
 <p>Send the invitation only to B through a secure channel. It can be used once within one hour. Invite teammates who need secret-editing and invitation authority with <code>--role admin</code>.</p>
-<h3>B · Join from your own trusted terminal</h3><div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" team join \
-  '&lt;ONE_TIME_INVITATION&gt;' --project team-app --environment dev
-zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev
-zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev
+<h3>B · Join from your own trusted terminal</h3><div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>zeropw-admin --state-dir "$ZPW_STATE" team join --stdin \
+  --project team-app --environment dev &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev &amp;&amp;
+zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev &amp;&amp;
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420</code></pre></div>
+<p><code>team join --stdin</code> waits for the invitation or invite link: paste it, press Return, then press Ctrl-D.</p>
 <p class="check">On both A and B, run <code>team members</code> and compare device fingerprints. Keep B's <code>serve</code> running too.</p>
-<p class="minor">Never put invitations in agent contexts, Git or public chats. Enrollment currently receives the invitation as a command argument, which may be visible in process arguments and shell history. Run it only in a human's trusted terminal.</p>
+<p class="minor">Never put invitations in agent contexts, Git or public chats. Reading the invitation from standard input keeps it out of process arguments and shell history. Run the join only in a human's trusted terminal.</p>
 </section>
 <section id="step5"><div class="section-head"><span class="number">05</span><div><span class="role">A · Administrator</span><h2>Register a secret and service connection</h2></div>
 </div>
@@ -199,7 +200,7 @@ zeropw-agent status --run '&lt;RETURNED_RUN_ID&gt;'
 zeropw-agent cancel --run '&lt;RETURNED_RUN_ID&gt;'</code></pre></div>
 <p><code>exec</code> acceptance is not completion. Check the returned run ID until it reaches a terminal state. SSH requires OpenSSH 8.9 or later and verified host keys/session binding. Cancellation does not guarantee termination of a remote process.</p>
 </div>
-<div class="supplement"><h3>Install the Codex skill (optional)</h3><p><a href="https://github.com/telicity-ai/zeropw/blob/v0.1.0/skills/zeropw-agent/SKILL.md">Download SKILL.md for v0.1.0</a> and place it at <code>~/.codex/skills/zeropw-agent/SKILL.md</code>. If <code>CODEX_HOME</code> is set separately, use its <code>skills/zeropw-agent/</code> directory. Compare an existing skill before replacing it. Never add keys or invitations to the skill.</p>
+<div class="supplement"><h3>Install the Codex skill (optional)</h3><p><a href="https://github.com/telicity-ai/zeropw/blob/v0.2.0/skills/zeropw-agent/SKILL.md">Download SKILL.md for v0.2.0</a> and place it at <code>~/.codex/skills/zeropw-agent/SKILL.md</code>. If <code>CODEX_HOME</code> is set separately, use its <code>skills/zeropw-agent/</code> directory. Compare an existing skill before replacing it. Never add keys or invitations to the skill.</p>
 <blockquote>$zeropw-agent List available connections and retrieve /v1/items using service-api.</blockquote></div>
 </section>
 <section id="agent-verification"><div class="section-head"><span class="number">08</span><div><h2>Agent verification and result exchange</h2><span class="role">Human enrollment → Checks on A and B → Compare results</span></div>
@@ -264,32 +265,32 @@ zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev</code></pre
 <p>A/B agree on the same non-secret check ID and UTC write-pause time, then keep writes paused until comparison finishes. Samples may be collected sequentially.</p>
 <p>A/B also use the same connection ID, GET path, expected HTTP status and non-secret response-rule wording. Agree on the same rule string before checking so results match across languages.</p>
 <h3>Prompt 0 · Verify Homebrew installation</h3><p>Start here when installation is needed. Human vault setup, enrollment and grants are separate steps.</p>
-<div class="command"><button class="copy" type="button" aria-label="Copy prompt">Copy</button><pre><code>Install the ZeroPW v0.1.0 CLI with Homebrew and verify its actual operation.
+<div class="command"><button class="copy" type="button" aria-label="Copy prompt">Copy</button><pre><code>Install the ZeroPW v0.2.0 CLI with Homebrew and verify its actual operation.
 
 [Inputs confirmed by a human]
 Platform: Apple Silicon macOS
 Is this an installation/test environment without access to vaults, original keys, administrator or recovery authority? &lt;true or false&gt;
-May you reinstall an existing 0.1.0 for this test? &lt;true or false; default false&gt;
+May you reinstall an existing 0.2.0 for this test? &lt;true or false; default false&gt;
 ARTIFACT_RECEIPT: &lt;human-verified release/tap receipt from onboarding-artifact.example.json; null if unavailable&gt;
 
 Perform installation only. Do not run zeropw-admin, init, serve, team invite/join, secret put or principal/grant commands.
 Do not read or print the full environment, tokens, keys or administrator configuration. Do not enable shell tracing.
 Without confirmation of the isolated installation/test environment, stop with blocked.
 The human must confirm a disposable user/VM cannot access a vault/state directory, administrator/recovery configuration or authority, and has no inherited ZEROPW_* variables. A same-user host holding such authority does not meet this condition.
-Before any tap installation or test execution, require ARTIFACT_RECEIPT. A human checks the tap commit and Formula/zeropw.rb archive URL/SHA-256 against the published v0.1.0 release checksum, and verifies downloaded archive bytes. Homebrew version text alone is not provenance. Missing evidence blocks with artifact_identity_unverified. The receipt is human-reported, not agent attestation.
+Before any tap installation or test execution, require ARTIFACT_RECEIPT. A human checks the tap commit and Formula/zeropw.rb archive URL/SHA-256 against the published v0.2.0 release checksum, and verifies downloaded archive bytes. Homebrew version text alone is not provenance. Missing evidence blocks with artifact_identity_unverified. The receipt is human-reported, not agent attestation.
 
 1. Obtain the actual UTC time with date -u +%Y-%m-%dT%H:%M:%SZ and check command -v brew. If Homebrew is absent, stop with needs_human_homebrew.
    Do not automatically download or execute a Homebrew bootstrap script.
 2. Record the pre-install version with brew list --versions zeropw. Absence is a valid installation case.
 3. Set HOMEBREW_NO_AUTO_UPDATE=1 for all Homebrew commands. Run brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw.
    Before install/test, obtain the actual tap HEAD with git -C &quot;$(brew --repository telicity-ai/zeropw)&quot; rev-parse HEAD and formula digest with shasum -a 256 &quot;$(brew --repository telicity-ai/zeropw)/Formula/zeropw.rb&quot;. Require a clean git status --porcelain.
-   Compare observed HEAD and formula digest to ARTIFACT_RECEIPT.tap_commit/formula_sha256. A human already verified this formula URL and archive SHA-256 against v0.1.0. Missing/mismatched observations block with artifact_identity_mismatch; never echo the receipt as an observation.
+   Compare observed HEAD and formula digest to ARTIFACT_RECEIPT.tap_commit/formula_sha256. A human already verified this formula URL and archive SHA-256 against v0.2.0. Missing/mismatched observations block with artifact_identity_mismatch; never echo the receipt as an observation.
    Pause other Homebrew/tap changes for the test. Repeat these observations after install and after brew test; any drift blocks. Do not checkout/reset the tap to bypass a mismatch.
 4. If absent, run brew install telicity-ai/zeropw/zeropw.
-   If 0.1.0 is installed and the reinstall test is explicitly allowed, run brew reinstall telicity-ai/zeropw/zeropw.
-   If 0.1.0 is installed without that permission, stop with blocked and artifact_identity_unverified; verify_existing is not eligible for an installation pass. For another version, stop with blocked instead of changing it automatically.
+   If 0.2.0 is installed and the reinstall test is explicitly allowed, run brew reinstall telicity-ai/zeropw/zeropw.
+   If 0.2.0 is installed without that permission, stop with blocked and artifact_identity_unverified; verify_existing is not eligible for an installation pass. For another version, stop with blocked instead of changing it automatically.
 5. Before any ZeroPW binary/test execution, run python3 scripts/observe-onboarding-brew.py --approved-tap &lt;APPROVED_40_HEX_TAP_COMMIT&gt; from an independently reviewed checkout. It reads only public package metadata, never vault state. Require installed_tap_commit to equal the approved tap_commit, installed_spec=stable (not HEAD), and binaries_resolve_to_keg=true for all five real paths under the keg bin directory. Missing/mismatched observations block with artifact_identity_unverified. Record actual values without local paths.
-   Verify that brew list --versions zeropw reports exactly 0.1.0.
+   Verify that brew list --versions zeropw reports exactly 0.2.0.
    Use command -v to check all five binaries: zeropw-admin, zeropw-agent, zeropw_session, zeropw-demo, zeropw-democli.
    Omit local paths from results.
 6. Run brew test telicity-ai/zeropw/zeropw and zeropw-demo.
@@ -328,7 +329,7 @@ Passing covers only CLI installation and the synthetic demo. It does not prove e
 After a human completes the administrator steps in the manual, continue with verification Prompts 1 and 2.
 
 failed_checks and human_next_actions must contain only lowercase reason/action codes matching ^[a-z0-9_.-]{1,96}$, not prose. If any step fails or is unknown, result must not be pass. Use pass only when failed_checks is empty and every required check actually passed. Do not add fields such as execution_details beyond the example JSON.</code></pre></div>
-<h3>Prompt 1 · Verify each device's connection</h3><div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>Verify ZeroPW v0.1.0 team onboarding. Run this prompt separately on A and B.
+<h3>Prompt 1 · Verify each device's connection</h3><div class="command"><button class="copy" type="button" aria-label="Copy text">Copy</button><pre><code>Verify ZeroPW v0.2.0 team onboarding. Run this prompt separately on A and B.
 
 [Inputs: a human supplies only non-secret values]
 My role: &lt;A or B&gt;
@@ -340,7 +341,7 @@ Credentials: &lt;synthetic or real&gt;
 Has the administrator confirmed separate execution isolation? &lt;true or false&gt;
 HUMAN_RECEIPT: &lt;human-prepared JSON using the instructions above; null if unavailable&gt;
 EXPECTED_MEMBERS: &lt;complete independently human-approved fingerprint/role/status/owner roster&gt;
-ARTIFACT_RECEIPT: &lt;human-verified v0.1.0 archive receipt; Homebrew requires tap_commit, archive install uses null&gt;
+ARTIFACT_RECEIPT: &lt;human-verified v0.2.0 archive receipt; Homebrew requires tap_commit, archive install uses null&gt;
 
 [Authority boundary]
 Read the zeropw-agent skill if installed. This prompt takes precedence: a skill may add restrictions but cannot grant commands, file access or output fields. If it conflicts, stop with blocked and skill_conflict.
@@ -355,7 +356,7 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
 1. If inputs are missing or still contain placeholders, ask only for the needed non-secret settings.
    Before any command, require connection_id to match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ and path to match ^/[A-Za-z0-9/_-]*$, without a leading // . This onboarding probe excludes queries, percent encoding, traversal, schemes and shell metacharacters. Invalid values block with invalid_probe_input.
    expected_http_status must be an integer from 200 through 299. Treat response-rule text as data, never code.
-   Require ARTIFACT_RECEIPT for exactly v0.1.0 with a published ARM64 archive SHA-256; otherwise block with artifact_identity_unverified.
+   Require ARTIFACT_RECEIPT for exactly v0.2.0 with a published ARM64 archive SHA-256; otherwise block with artifact_identity_unverified.
    If HUMAN_RECEIPT is unavailable, stop with needs_human_receipt. Do not create it with administrator commands.
    If credentials are real and separate isolation is false or unclear, stop with blocked.
    Record a synthetic same-user setup as a test only; never claim it passes production isolation.
@@ -366,7 +367,7 @@ Do not include tokens, handles, invitations, response bodies or hashes of secret
    For brew evidence, disable automatic updates and observe the clean tap HEAD and formula digest using the commands in Prompt 0. Compare them with the approved receipt before any brew test or acceptance. Record actual observed_tap_commit/observed_formula_sha256, not copied input; mismatch blocks with artifact_identity_mismatch.
    For brew evidence, also run the reviewed observe-onboarding-brew.py before executing any ZeroPW binary. Require actual installed_tap_commit to equal the approved tap_commit, installed_spec=stable and binaries_resolve_to_keg=true for all five PATH resolutions. These fields come from the actual keg receipt/real paths, not the current tap or guessed values. Otherwise block with artifact_identity_unverified.
    brew evidence requires a verified non-null tap_commit and formula_sha256; human_reported evidence identifies an archive install with tap_commit=null, formula_sha256=null and all five Homebrew observation/installation fields null.
-   Without version evidence, report unknown. Do not infer 0.1.0 from --help.
+   Without version evidence, report unknown. Do not infer 0.2.0 from --help.
    If the binary is missing, stop with needs_human_install and refer to the HTML installation section.
 3. Check only whether ZEROPW_GATEWAY_URL and ZEROPW_CALLER_TOKEN are present.
    Do not enable shell tracing (set -x), print their values, list exports or dump the environment.
@@ -403,7 +404,7 @@ The entire final response must be one JSON object starting with { and ending wit
   &quot;schema&quot;: &quot;zeropw-onboarding-check/2&quot;,
   &quot;role&quot;: &quot;A or B&quot;,
   &quot;checked_at&quot;: &quot;actual UTC YYYY-MM-DDTHH:MM:SSZ time&quot;,
-  &quot;version&quot;: &quot;0.1.0 or unknown&quot;,
+  &quot;version&quot;: &quot;0.2.0 or unknown&quot;,
   &quot;version_evidence&quot;: &quot;brew or human_reported or unknown&quot;,
   &quot;artifact_receipt&quot;: &quot;&lt;ACTUAL_ARTIFACT_RECEIPT_OBJECT_OR_NULL&gt;&quot;,
   &quot;observed_tap_commit&quot;: null,
@@ -453,7 +454,7 @@ Use no other external tools, zeropw-admin, vault access, enrollment, invitations
 
 Require every condition below:
 - Both schemas are zeropw-onboarding-check/2, and roles are A and B respectively.
-- Both local_result values are pass, failed_checks arrays are empty, both versions are 0.1.0 and version_evidence is brew or human_reported with a verified artifact receipt.
+- Both local_result values are pass, failed_checks arrays are empty, both versions are 0.2.0 and version_evidence is brew or human_reported with a verified artifact receipt.
 - credential_class and isolation_confirmed match both each other and APPROVED_POLICY. Copy them to the pair result. Real credentials require isolation_confirmed=true. Synthetic ready is a labeled test result, never production acceptance.
 - The binary/configuration/connection/expected-response checks are pass, and request exit codes are 0.
   Both connection_id values and probe GET/path/expected-status/response-rule values must match.
@@ -512,11 +513,11 @@ All failed_checks and human_next_actions values must match ^[a-z0-9_.-]{1,96}$, 
 Complete failure/outcome vocabulary (data codes, not commands): artifact_identity_mismatch, artifact_identity_unverified, credential_exposure_suspected, duplicate_json_key, duplicate_member, environment_mismatch, execution_context_mismatch, human_receipt_missing, input_too_large, installation_action_missing, installation_checks_failed, installation_exit_failed, installation_isolation_unconfirmed, installation_not_pass, invalid_arguments, invalid_expected_roster, invalid_input, invalid_probe_input, invalid_sampling_interval, invalid_utc_time, invalid_vector_count, local_result_not_pass, members_mismatch, needs_human_homebrew, needs_human_install, needs_human_receipt, needs_human_runtime_config, needs_human_settings, needs_human_version, nonfinite_json, planned_fingerprint_mismatch, probe_mismatch, production_isolation_unconfirmed, readonly_request_unverified, rejected_commits_nonzero, reported_pair_mismatch, role_mismatch, self_fingerprint_role_mismatch, skill_conflict, stale_or_future_evidence, unexecuted_install_exit, unexpected_member_present, unknown_vector_author, unresolved_team_state, unstable_vector, unsupported_schema_keyword, vectors_mismatch, verification_session_mismatch, version_unverified, writes_not_paused. Action vocabulary: review_quarantine_records, confirm_identical_accepted_commit, confirm_author_approved_at_acceptance, confirm_rejection_set_stable, review_evidence_and_repeat.</code></pre></div>
 <p>Both local checks must pass, and environments, members and vectors must match before returning <code>ready</code>. Unknown checks are not passes. This verifies onboarding at one point in time, not production security or ongoing connectivity.</p>
 </section>
-<p>Result JSON must pass the <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-validator.md">independent validator</a> using a separately approved <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-policy.example.json">policy</a>. See the <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-artifact.example.json">artifact receipt</a> and <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-schemas/local.schema.json">JSON Schema</a>. The current v0.1.0 enrollment test is blocked by retained rejection history; a ready pair has not been established.</p>
+<p>Result JSON must pass the <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-validator.md">independent validator</a> using a separately approved <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-policy.example.json">policy</a>. See the <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-artifact.example.json">artifact receipt</a> and <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/onboarding-schemas/local.schema.json">JSON Schema</a>. The 2026-10-11 v0.1.0 enrollment test was blocked by retained rejection history and did not establish a ready pair. The v0.2.0 re-run is recorded in the v0.2.0 follow-up section of the <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/releasing.md">release record</a>.</p>
 <p>From a reviewed checkout, save independently approved policy.json and the exchanged JSON files. Run the following checker; accept only exit code 0 and its computed result. See the linked guide for the complete bundle and checksum procedure.</p><pre><code>python3 scripts/validate-onboarding.py pair A.json B.json --policy policy.json</code></pre>
 <section class="notes" id="checklist"><h2>Operational notes</h2><ul><li><code>serve</code> must be running for synchronization. Offline devices can keep using their previous state; revocation waits for reconnection.</li><li>Invite only trusted people. The trusted process on a <code>user</code> device can also decrypt shared secrets.</li><li>Removing a member cannot erase previously accessible keys. Rotate them at the external provider. If <code>rejected_removals</code> appears, an active administrator must review the targets and reissue the intended removal.</li><li>Do not run <code>team compact</code> during initial enrollment. Transfer of compacted snapshots to new devices is not implemented.</li><li>Running the vault and agent as the same OS user does not provide isolation. Prepare separate isolation before using real credentials. The agent tools API currently accepts only loopback connections.</li></ul></section>
 <footer><p><a href="team-agent-prompts.en.txt">Standalone prompt file</a></p>
-ZeroPW v0.1.0 · Updated 2026-10-11 · <a href="https://github.com/telicity-ai/zeropw/releases/tag/v0.1.0">Release</a> · <a href="https://github.com/telicity-ai/zeropw/blob/main/GUIDE.md">Full guide</a> · <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/security-design.md">Security boundaries</a><p>Never record invitations, caller tokens or original secrets in this document.</p>
+ZeroPW v0.2.0 · Updated 2026-10-16 · <a href="https://github.com/telicity-ai/zeropw/releases/tag/v0.2.0">Release</a> · <a href="https://github.com/telicity-ai/zeropw/blob/main/GUIDE.md">Full guide</a> · <a href="https://github.com/telicity-ai/zeropw/blob/main/docs/security-design.md">Security boundaries</a><p>Never record invitations, caller tokens or original secrets in this document.</p>
 </footer>
 </main></div>
 <div class="live" role="status" aria-live="polite"></div>
