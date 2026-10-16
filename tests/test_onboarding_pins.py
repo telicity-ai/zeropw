@@ -170,8 +170,12 @@ class OnboardingPinTests(unittest.TestCase):
             if 13 <= i <= 15:
                 continue  # prompt copies, checked against each language's prompt file
             with self.subTest(block=i):
-                strip = lambda block: [line for line in block.split('\n') if not line.lstrip().startswith('#')]
-                self.assertEqual(strip(left), strip(right))
+                # Comments may be translated, but only where the other language has one too.
+                left_lines, right_lines = left.split('\n'), right.split('\n')
+                self.assertEqual(len(left_lines), len(right_lines))
+                for a, b in zip(left_lines, right_lines):
+                    if not (a.lstrip().startswith('#') and b.lstrip().startswith('#')):
+                        self.assertEqual(a, b)
 
     def test_manual_prompt_copies_equal_prompt_files(self):
         for language in ['en', 'ko']:
