@@ -5611,7 +5611,7 @@ dependencies = [
 
 [[package]]
 name = "zeropw-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "serde",
@@ -5627,7 +5627,7 @@ dependencies = [
 
 [[package]]
 name = "zeropw-desktop-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
