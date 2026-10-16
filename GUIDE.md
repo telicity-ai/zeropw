@@ -59,12 +59,12 @@ The demo uses synthetic credentials and an embedded test server. Exit code 0 mea
 A human administrator performs this section in a trusted terminal separated from the agent. Never give the agent administrator or recovery passphrases, original credentials, or `.env` contents. The agent must not run these administration commands on your behalf.
 
 ```sh
-export ZPW_STATE="$HOME/.local/share/zeropw"
-zeropw-admin --state-dir "$ZPW_STATE" init
+export ZPW_STATE="$HOME/.local/share/zeropw" &&
+zeropw-admin --state-dir "$ZPW_STATE" init &&
 zeropw-admin --state-dir "$ZPW_STATE" project create team-app
 ```
 
-When `init` prompts, choose administrator and recovery passphrases and store them separately. The file path and target below are examples: replace them with administrator-verified values. The value file contains one credential, not a complete `.env`.
+When `init` prompts, choose administrator and recovery passphrases and store them separately. The commands in a block are joined with `&&`, so a pasted block cannot feed its later lines to a passphrase prompt and stops at the first failure. The file path and target below are examples: replace them with administrator-verified values. The value file contains one credential, not a complete `.env`.
 
 ```sh
 zeropw-admin --state-dir "$ZPW_STATE" secret put \
@@ -98,8 +98,8 @@ Devices connect directly over the same LAN or team VPN. No central server is nee
 Share the `team-app/dev` environment created above. If a normal `serve` process is already running, stop it and restart with a team listener.
 
 ```sh
-zeropw-admin --state-dir "$ZPW_STATE" team init
-zeropw-admin --state-dir "$ZPW_STATE" team share --project team-app --environment dev --name owner
+zeropw-admin --state-dir "$ZPW_STATE" team init &&
+zeropw-admin --state-dir "$ZPW_STATE" team share --project team-app --environment dev --name owner &&
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.2:47420
 ```
 
@@ -119,12 +119,12 @@ Install 0.2.0 on B with Homebrew or the installer from section 1, or build it fr
 Initialize B's own vault and create its device keys. Do not share administrator passphrases.
 
 ```sh
-export ZPW_STATE="$HOME/.local/share/zeropw"
-zeropw-admin --state-dir "$ZPW_STATE" init
-zeropw-admin --state-dir "$ZPW_STATE" team init
-zeropw-admin --state-dir "$ZPW_STATE" team join '<ONE_TIME_INVITATION>' --project team-app --environment dev
-zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev
-zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev
+export ZPW_STATE="$HOME/.local/share/zeropw" &&
+zeropw-admin --state-dir "$ZPW_STATE" init &&
+zeropw-admin --state-dir "$ZPW_STATE" team init &&
+zeropw-admin --state-dir "$ZPW_STATE" team join '<ONE_TIME_INVITATION>' --project team-app --environment dev &&
+zeropw-admin --state-dir "$ZPW_STATE" team status --env team-app/dev &&
+zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev &&
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420
 ```
 
