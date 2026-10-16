@@ -27,7 +27,7 @@ zeropw-demo
 
 The installer downloads the release archive for your platform (`zeropw-v0.2.0-aarch64-apple-darwin.tar.gz` or `zeropw-v0.2.0-aarch64-unknown-linux-gnu.tar.gz`) and its `.sha256` file, checks them, and installs all five binaries. It does not overwrite existing files unless you add `--force`; stop running ZeroPW processes before replacing an installation. See the [README](README.md#install) and the [release guide](docs/releasing.md#packaging-tools) for details.
 
-On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew. If an earlier version is installed, run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
+On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew. If an earlier version is installed, stop running ZeroPW processes and run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw

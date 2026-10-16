@@ -33,7 +33,7 @@ bash install.sh --version v0.2.0 --prefix "$HOME/.local"
 
 The installer downloads the archive for your platform and its `.sha256` file from the v0.2.0 release, checks the SHA-256 and the archive entries, and installs the binaries into `PREFIX/bin` and the documents into `PREFIX/share/doc/zeropw`. It does not use sudo, create a vault, start a service, edit shell profiles or run the downloaded binaries. It does not overwrite existing files: to replace an earlier installation, stop running ZeroPW processes and add `--force`. For an archive you downloaded yourself, use `--archive FILE --sha256 HEX` instead of `--version`. A checksum detects corruption but is not a signature; the release host and publisher remain trusted. The [release guide](docs/releasing.md#packaging-tools) has the details.
 
-On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew; `brew list --versions zeropw` shows the installed version. If an earlier version is installed, run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
+On Apple Silicon macOS, these commands install version 0.2.0 with Homebrew; `brew list --versions zeropw` shows the installed version. If an earlier version is installed, stop running ZeroPW processes and run `brew update` and `brew upgrade telicity-ai/zeropw/zeropw` instead of `brew install`:
 
 ```sh
 brew tap telicity-ai/zeropw https://github.com/telicity-ai/zeropw
@@ -64,7 +64,7 @@ Caller identities and grants remain local to each device. Offline devices can ke
 
 Concurrent administrator removals can leave different accepted membership facts. Check `team status` → `rejected_removals`; an active admin must review and reissue the intended removals.
 
-Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. A teammate who joins with the CLI needs 0.2.0: install it with Homebrew or the installer above, and upgrade an earlier Homebrew installation with `brew upgrade telicity-ai/zeropw/zeropw`. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
+Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. A teammate who joins with the CLI needs 0.2.0: install it with Homebrew or the installer above, and upgrade an earlier Homebrew installation with `brew update` and `brew upgrade telicity-ai/zeropw/zeropw`. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
 
 ZeroPW does not import or export a complete `.env` file. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 
