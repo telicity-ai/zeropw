@@ -10,7 +10,7 @@ ZeroPW is a Rust CLI project with a preview desktop app for Apple Silicon macOS.
 
 The [guide](GUIDE.md) covers the demo, administrator setup, team sharing, and agent use. The [agent skill](skills/zeropw-agent/SKILL.md) helps agents select and use existing connections without reading secrets.
 
-For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt). The manuals and prompts describe the Homebrew installation of version 0.1.0. They move to 0.2.0 together with the Homebrew formula in a follow-up after v0.2.0 is published.
+For teammate onboarding, download the [English HTML manual](docs/team-onboarding.en.html) or [Korean HTML manual](docs/team-onboarding.ko.html) and open it in a browser. Copyable verification prompts are also available in [English](docs/team-agent-prompts.en.txt) and [Korean](docs/team-agent-prompts.ko.txt). The manuals and prompts describe the Homebrew installation of version 0.1.0. They move to 0.2.0 together with the Homebrew formula in a follow-up after v0.2.0 is published. Version 0.1.0 cannot read invite links, the only kind of invitation the desktop app creates (see [Team sharing](#team-sharing)).
 
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml --bins
@@ -64,11 +64,13 @@ Caller identities and grants remain local to each device. Offline devices can ke
 
 Concurrent administrator removals can leave different accepted membership facts. Check `team status` → `rejected_removals`; an active admin must review and reissue the intended removals.
 
+Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. Until the Homebrew formula moves to 0.2.0 it installs 0.1.0, so a teammate who joins with the CLI should install 0.2.0 with the installer above. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
+
 ZeroPW does not import or export a complete `.env` file. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 
 ## Desktop app (preview)
 
-`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. The v0.2.0 release includes it as an ad hoc signed preview disk image for Apple Silicon Macs, `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`, with its `.dmg.sha256` file. It was tested only on macOS 26.5, on the Mac that built it; older versions are unverified. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
+`desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. The v0.2.0 release includes it as an ad hoc signed preview disk image for Apple Silicon Macs, `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`, with its `.dmg.sha256` file. The image was built on one Mac with macOS 26.5 and launched only there, without the quarantine attribute that a downloaded file carries; other macOS versions are unverified, and the Gatekeeper steps below were not tested. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
 
 To install it:
 
@@ -82,19 +84,22 @@ To install it:
 3. Open ZeroPW from Applications. macOS says that Apple could not verify that ZeroPW is free of malware; close that dialog with Done.
 4. Within about an hour, open System Settings › Privacy & Security, scroll to Security, and click Open Anyway next to the message about ZeroPW. Confirm with your login password, then choose Open. If the button is gone, repeat step 3.
 
-These steps follow Apple's documentation for macOS 15 and later. The first launch through Gatekeeper on a clean Mac has not been tested (see the limits below). Do not remove the quarantine attribute or turn Gatekeeper off. The [release guide](docs/releasing.md#what-users-see-on-macos-15-and-later) explains why the app must be opened from Applications.
+These steps follow Apple's documentation for macOS 15 and later; they were not tried with this image on any Mac (see the limits below). Do not remove the quarantine attribute or turn Gatekeeper off. The [release guide](docs/releasing.md#what-users-see-on-macos-15-and-later) explains why the app must be opened from Applications.
 
 Known limits:
 
-- Korean only. The app's interface, including the macOS Local Network permission prompt it causes, is in Korean, with no English version (an owner decision).
+- Korean only. The app's interface is in Korean, with no English version (an owner decision). So is the explanation the app supplies for the macOS Local Network permission prompt; the prompt's title and buttons come from macOS.
 - Apple Silicon (arm64) only on macOS. There is no Intel or universal build.
 - Ad hoc signed preview, not notarized. The `.dmg` has no Developer ID signature, so its signature does not identify who built it, and Gatekeeper blocks the first open until you allow it with the steps above.
-- First launch on a clean Mac not tested. Installing the image and opening it through Gatekeeper on a Mac that has never run ZeroPW was not tested for this preview.
+- Not tested for this preview. The Gatekeeper steps above were not tried with this image on any Mac; the owner waived the check of installing a download on a clean Mac and opening it through Gatekeeper the first time. The owner also waived three more checks: running the suggested agent command as another macOS account, watching whether macOS blocks or asks about the app's ad hoc signed helper programs (`zeropw-admin`, `zeropw_session`, `zeropw-agent`) after Open Anyway, and quitting the app with its own Quit (Cmd+Q).
 - No auto-update. Replace the app yourself to get fixes.
 - Closing the window does not quit the app. The app, its relay and the agent terminals keep running; reopen the window from the Dock and quit with Cmd+Q. If the app is killed instead of quit, for example with Force Quit, the relay keeps running.
 - Some agents outlive their terminal. Closing an agent's terminal or quitting the app stops the processes started in that terminal, but not agents started as another account (as the app suggests) or processes detached from the terminal (`setsid`, tmux, screen, daemons). They keep running with their caller token; only disabling the agent in the app stops that token.
 - No isolation within one macOS account. Any program running as the same user, agents included, can read the development device key file and the vault ([#21](https://github.com/telicity-ai/zeropw/issues/21)). The app suggests running agents as a different account.
 - Recovery limits ([#22](https://github.com/telicity-ai/zeropw/issues/22)). Recovery with the recovery code needs the existing device key file. It re-wraps the same data key, so it is not a response to a leaked key file, and backups made before it can no longer be restored.
+- No password change. Neither the app nor the CLI can change the administrator password or the recovery code, although the [compromise response](docs/compromise-response.md) asks for both to be changed before a global incident is closed.
+- Typed passwords can leave copies in memory. Passwords sent from the app's window to its core can leave copies in Tauri's IPC buffers. The administrator password and a recovery code you choose yourself are sent at every keystroke for the strength check, so several copies can remain.
+- Teammates need 0.2.0. The app creates only invite links, which version 0.1.0 cannot read (see [Team sharing](#team-sharing)).
 - Copied values can persist. The app clears a copied token, invite link or revealed value from the clipboard after 60 seconds if it is still there, and marks it for clipboard history tools to skip. A tool that ignores the mark can keep it, and Universal Clipboard can pass it to your other Apple devices.
 - Do not count on screen-capture exclusion. On macOS the app only asks the window system to leave its window out of captures while a recovery code, token, invite link or revealed key is shown. Capture, recording and screen-sharing tools built on ScreenCaptureKit reportedly ignore that request from macOS 15 on, and it has not been tested on a release build. Linux has no such request. Do not show these values while you share or record your screen.
 

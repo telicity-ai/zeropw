@@ -114,7 +114,9 @@ An invitation is a one-time enrollment capability. Send it only to the intended 
 
 ### Teammate B
 
-Build the binaries on B, initialize B's own vault, and create its device keys. Do not share administrator passphrases.
+Install 0.2.0 on B with the installer from section 1, or build it from source. Until the Homebrew formula moves to 0.2.0 it installs 0.1.0, which cannot read invite links (`zeropw://join#…`): `team invite --link` prints them, and they are the only kind of invitation the desktop app creates. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
+
+Initialize B's own vault and create its device keys. Do not share administrator passphrases.
 
 ```sh
 export ZPW_STATE="$HOME/.local/share/zeropw"
@@ -126,7 +128,7 @@ zeropw-admin --state-dir "$ZPW_STATE" team members --env team-app/dev
 zeropw-admin --state-dir "$ZPW_STATE" serve --team-listen 10.8.0.3:47420
 ```
 
-`team join` currently receives the invitation as a command argument. Run it only in B's trusted terminal and account for shell history and process-argument visibility. Compare the device fingerprints and member lists on A and B. A's pre-sharing grants become `stale` and must be reissued. B must also run `principal create` and `grant create` locally. Caller identities, grants and tokens are not synchronized between devices.
+`team join` takes the invitation or invite link as a command argument, as above, or from standard input with `--stdin` (paste it, press Return, then Ctrl-D), which keeps it out of the shell history and the process arguments. Run it only in B's trusted terminal; with an argument, account for shell history and process-argument visibility. Compare the device fingerprints and member lists on A and B. A's pre-sharing grants become `stale` and must be reissued. B must also run `principal create` and `grant create` locally. Caller identities, grants and tokens are not synchronized between devices.
 
 When an admin changes a secret or connection, connected nodes receive the change. Use `team status` to inspect synchronization state. Offline devices catch up after reconnecting, but can continue using their previous state in the meantime, including grants revoked elsewhere. Do not run `team compact` during initial onboarding: transferring compacted snapshots to new devices is not implemented.
 

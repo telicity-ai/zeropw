@@ -10,8 +10,8 @@
 - 팀 초대는 24시간 동안 한 번만 쓸 수 있는 링크(`zeropw://join#…`)로 주고받는다. 링크를 열면 미리보기만 띄우고 자동으로 합류하지 않는다.
 - 에이전트 설정처럼 셸에서 하던 일은 앱 안 터미널에서 미리 채운 명령을 엔터로 실행해 끝낸다.
 - 첫 실행 온보딩에는 서비스 연결을 넣지 않는다. 연결은 대시보드에서 만든다(2026-10-15 사용자 결정).
-- macOS용으로는 Apple Silicon(arm64) .dmg를 ad-hoc 서명한 미리 보기로 만든다. 소유자는 2026-10-16에 이 이미지를 Developer ID 서명과 공증 없이 v0.2.0 제품 릴리스에 싣기로 정했다. 이 앱을 처음 싣는 릴리스가 v0.2.0이고, v0.1.0에는 앱이 없다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§9, §10). 깨끗한 Mac에서 Gatekeeper를 거쳐 설치하고 처음 여는 확인은 소유자가 같은 날 이 미리 보기에 한해 면제했으므로 v0.2.0에서는 하지 않았다.
-- 화면 문구는 한국어로만 쓴다. 관리 문서와 제품 출력은 영어가 기본이라는 릴리스 규칙([releasing.md](releasing.md)의 Gates 2번)의 예외로, 소유자가 2026-10-15 디자인 검토에서 화면 문구를 쉬운 한국어로 쓰라고 지시했다. macOS 로컬 네트워크 권한 창에 나오는 설명(`Info.release.plist`)도 한국어다. 이 명세와 [DESIGN.md](../DESIGN.md)도 한국어로만 있다.
+- macOS용으로는 Apple Silicon(arm64) .dmg를 ad-hoc 서명한 미리 보기로 만든다. 소유자는 2026-10-16에 이 이미지를 Developer ID 서명과 공증 없이 v0.2.0 제품 릴리스에 싣기로 정했다. 이 앱을 처음 싣는 릴리스가 v0.2.0이고, v0.1.0에는 앱이 없다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§9, §10). v0.2.0 이미지는 macOS 26.5인 Mac 한 대에서 빌드하고 그 Mac에서 격리 속성 없이 실행해 봤을 뿐이고, 내려받은 이미지를 Gatekeeper를 거쳐 여는 과정은 어느 Mac에서도 시험하지 않았다. 소유자는 같은 날 깨끗한 Mac에서 설치하고 처음 여는 확인과 다른 확인 몇 가지를 이 미리 보기에 한해 면제했다(§9).
+- 화면 문구는 한국어로만 쓴다. 관리 문서와 제품 출력은 영어가 기본이라는 릴리스 규칙([releasing.md](releasing.md)의 Gates 2번)의 예외로, 소유자가 2026-10-15 디자인 검토에서 화면 문구를 쉬운 한국어로 쓰라고 지시했다. 앱이 macOS 로컬 네트워크 권한 창에 넣는 설명(`Info.release.plist`)도 한국어다. 그 창의 제목과 버튼은 macOS가 정한다. 이 명세와 [DESIGN.md](../DESIGN.md)도 한국어로만 있다.
 
 하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, Developer ID 앱 서명·공증·자동 업데이트, Intel Mac용 빌드, 같은 macOS 계정의 에이전트로부터 보관함을 격리하는 일(§8.9).
 
@@ -233,7 +233,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 세 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다. Tauri가 알아서 합치는 파일도 `src-tauri/`에 둘 수 없다(대소문자 구분 없이 `tauri.<플랫폼>.conf.json`·`.json5`, `Tauri.<플랫폼>.toml`, `tauri.conf.json5`, `Tauri.toml`, `Info.plist`, `Info.release.plist`가 아닌 `.plist`·`.entitlements`). 딥 링크 설정은 정확히 `zeropw` 스킴 하나이고 도메인은 둘 수 없다.
 - macOS 배포 이미지: `env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py --work-dir <작업 폴더> --out-dir <출력 폴더> --tag vX.Y.Z`. 두 폴더와 `CARGO_TARGET_DIR`는 저장소 밖이어야 하고, 작업 폴더는 새 폴더, 빈 폴더, 이전 실행이 남긴 폴더만 받는다. Apple Silicon Mac에서 커밋된 HEAD를 복사해 빌드한다. 이름이 `ZEROPW_`로 시작하거나 `TOKEN`, `SECRET`, `PASSW`, `PASSPHRASE`, `_KEY`, `AUTH`, `CSC_`, `P12`, `APPLE_`가 들어간(대소문자 무시) 변수나 서명·공증·업데이터 변수가 있으면 변수 이름만 알리고 시작하지 않는다. 보통 로그인 세션에 있는 `SSH_AUTH_SOCK`도 여기에 걸리므로 `env -i`로 시작한다. 빌드 단계에는 허용한 환경변수만 넘긴다. 결과는 `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg`와 `.sha256`, 고지 파일, 검증 기록이다. 버전은 `rust/Cargo.toml`, `rust/Cargo.lock`의 `zeropw`, 데스크톱의 버전 필드가 모두 같을 때만 쓰고, `--tag`는 꼭 줘야 하고 그 값도 `vX.Y.Z`와 같아야 한다. 이미지를 확인하는 항목과 Developer ID 서명·공증 절차는 [releasing.md](releasing.md)의 "Desktop app"에 있다.
 - 임시 서명은 번들 전체를 봉인해 바뀐 파일을 찾아내지만 게시자를 증명하지 않는다. 공증하지 않았으므로 macOS 15 이후에는 이렇게 연다. 내려받은 이미지를 열어 ZeroPW를 응용 프로그램 폴더로 끌어다 놓고 이미지를 꺼낸다. 응용 프로그램 폴더에서 한 번 열면 Gatekeeper가 막는다. 그 뒤 한 시간쯤 안에 시스템 설정 › 개인정보 보호 및 보안에서 "그래도 열기"를 누르고 로그인 암호로 확인한다. 이미지에서 바로 열면 macOS가 앱을 임시 위치에서 실행할 수 있고(App Translocation), 제안 명령의 `<번들 경로>`(§4.4)가 그 위치를 가리켜 다른 계정은 실행하지 못할 수 있다.
-- 릴리스 전에는 브라우저로 내려받아 응용 프로그램 폴더에 설치한 앱에서 이 계정과 다른 계정의 에이전트 명령을 직접 실행해 본다([releasing.md](releasing.md) "Desktop app"의 Gates 3번).
+- 릴리스 전에는 브라우저로 내려받아 응용 프로그램 폴더에 설치한 앱에서 이 계정과 다른 계정의 에이전트 명령을 직접 실행해 보고, 앱을 Cmd+Q로 끝내 중계기가 멈추는지 본다([releasing.md](releasing.md) "Desktop app"의 Gates 3번). v0.2.0에서는 소유자 결정에 따라 같은 계정의 에이전트 확인만 코디네이터가 빌드한 Mac에서 한다. 깨끗한 Mac에서 설치하고 처음 여는 확인, 다른 계정의 에이전트 확인, "그래도 열기" 뒤에 macOS가 ad-hoc 서명한 사이드카를 어떻게 다루는지 보는 일, 앱을 Cmd+Q로 끝내는 확인은 면제했다(releasing.md의 "v0.2.0 owner decisions" 5, 6번).
 - `desktop/verify.sh`: `npm ci`, `tsc --noEmit`, lint, `vitest run`, `vite build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`(실제 `zeropw-admin`으로 임시 상태 디렉터리를 쓰는 통합 시험 포함), 정적 검사(CSP·capabilities·금지 플러그인·`innerHTML`).
 - CI: `.github/workflows/harness-ci.yml`에 `desktop-tests` 작업(ubuntu-latest, macos-15)을 더한다. 우분투에는 webkit2gtk 4.1 개발 패키지를 설치한다.
 - 파일 크기 제한(하네스, 파일당 300,000바이트) 때문에 `package-lock.json`은 의존성을 최소로 유지한다.
@@ -242,7 +242,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 - 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
 - 화면은 한국어로만 나온다. 영어판은 없다(§1, 소유자 결정).
-- Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 배포하는 것은 ad-hoc 서명한 .dmg 미리 보기뿐이다(v0.2.0에 싣기로 한 소유자 결정, §1). 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다(§9). 앱은 응용 프로그램 폴더로 옮긴 뒤에 열어야 한다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다. v0.2.0 미리 보기는 깨끗한 Mac에서 Gatekeeper를 거쳐 설치하고 처음 여는 과정을 시험하지 않았다(§1, 소유자 면제).
+- Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 배포하는 것은 ad-hoc 서명한 .dmg 미리 보기뿐이다(v0.2.0에 싣기로 한 소유자 결정, §1). 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다(§9). 앱은 응용 프로그램 폴더로 옮긴 뒤에 열어야 한다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다. v0.2.0 미리 보기는 내려받은 이미지를 Gatekeeper를 거쳐 여는 과정을 어느 Mac에서도 시험하지 않았다. 다른 계정의 에이전트 실행, "그래도 열기" 뒤 사이드카에 대한 macOS의 처리, Cmd+Q로 앱을 끝내는 과정도 확인하지 않았다(§1, §9, 소유자 면제).
 - 복구 코드로 기기 키를 바꾸려면 지금 기기 키 파일이 있어야 한다. 바꾼 뒤에도 같은 데이터 키를 새 기기 키 파일로 다시 감쌀 뿐이라, 기기 키 파일이 새었을 때의 대책이 아니다. 바꾸기 전에 만든 백업은 더 이상 복원할 수 없다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 설정 화면은 되돌릴 수 없다는 점을 주황 알림(`src/copy.ts`의 `set.recover.warn`)으로, 키 파일이 새었을 수 있을 때 할 일을 파랑 알림(`set.recover.leak`)으로 알리며, 기기 키를 바꾸는 일을 유출 대책으로 소개하지 않는다([DESIGN.md](../DESIGN.md) §5.3).
 - Apple Silicon(arm64)용만 만든다. Intel Mac용이나 유니버설 빌드는 없다.
 - 새 버전이 나와도 앱이 알려 주거나 바꿔 주지 않는다. 사용자가 직접 받아 바꿔 넣어야 하고, 보안 수정도 그때까지 들어오지 않는다.
@@ -255,3 +255,4 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - Linux에서 `zeropw://` 링크는 deb·AppImage로 설치해 `.desktop` 등록이 된 뒤에만 앱으로 온다. 실행 중에 스킴을 등록하지 않는다.
 - 웹뷰에서 보낸 비밀번호는 Tauri IPC 버퍼에 사본이 남을 수 있다. 관리 비밀번호와 직접 정한 복구 코드는 강도 확인 때문에 입력이 바뀔 때마다 그때까지의 값이 넘어가므로 사본이 여럿일 수 있다(§7). 코어로 넘어온 뒤에는 `Zeroizing`으로 지운다.
 - 관리 비밀번호를 바꾸는 기능은 아직 없다. 사고 종료 절차가 요구하는 비밀번호 교체 단계는 화면에서 수동 단계로 안내한다.
+- 앱은 초대를 링크(`zeropw://join#…`)로만 만든다. 0.1.0 CLI는 링크를 읽지 못하므로 CLI로 합류하는 팀원은 0.2.0을 써야 한다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.
