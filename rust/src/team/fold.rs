@@ -1359,6 +1359,7 @@ pub fn fold(
         audit,
         None,
         false,
+        None,
     )?
     .0)
 }
@@ -1381,6 +1382,7 @@ pub fn fold_with_history(
         audit,
         Some(history),
         false,
+        None,
     )?
     .0)
 }
@@ -1407,6 +1409,7 @@ pub fn snapshot_of_prefix(
         audit,
         Some(history),
         true,
+        None,
     )?;
     Ok(FoldResult {
         document: unflushed.ok_or_else(doc_corrupt)?,
@@ -1418,7 +1421,8 @@ pub fn snapshot_of_prefix(
 /// `commits` is only what a snapshot does not cover) instead of `commits`.
 /// With `keep_unflushed`, also the document as it stood after the last
 /// commit, before the removals placed past it and the facts overlay: what
-/// a snapshot stores.
+/// a snapshot stores. With `audited_up_to` (a snapshot vector), skips in
+/// the commits it covers are not audited again.
 #[allow(clippy::too_many_arguments)]
 fn fold_scheduled(
     env_id: &str,
@@ -1429,6 +1433,7 @@ fn fold_scheduled(
     audit: Option<&Audit>,
     history: Option<&[Commit]>,
     keep_unflushed: bool,
+    audited_up_to: Option<&Value>,
 ) -> Result<(FoldResult, Option<Value>)> {
     // `copy.deepcopy(base_document) if base_document is not None else
     // new_document(env_id)`, then `doc.setdefault` (a dict-only method).
@@ -1494,7 +1499,15 @@ fn fold_scheduled(
             if let Some(reason) = reason {
                 let hash = commit.hash()?;
                 skipped.push((hash, index, reason.clone()));
-                if let Some(audit) = audit {
+                if let Some(audit) = audit
+                    && audited_up_to.is_none_or(|floor| {
+                        author_seq_is_later(
+                            &commit.author_seq,
+                            floor.as_object().and_then(|m| m.get(&commit.author)),
+                        )
+                        .unwrap_or(true)
+                    })
+                {
                     // `str(op.get("op", ""))[:64]`.
                     let op_name: String = commit::python_str_coerce(
                         op_obj.get("op").unwrap_or(&Value::String(String::new())),
@@ -1707,7 +1720,8 @@ fn parse_snapshot_version_order(
 ///
 /// A snapshot is a base only while it matches a fold from scratch at its
 /// vector: no commit it does not cover sorts in front of one it does, and
-/// it was folded with the same facts ([`save_snapshot_facts`]). Otherwise
+/// it was folded with the same facts and removal schedule
+/// ([`save_snapshot_record`]). Otherwise
 /// the next older snapshot is tried, then a fold from scratch (issue #35).
 /// A snapshot whose covered commits are no longer all stored -- `team
 /// compact` deleted them -- cannot be checked and is used as it is. The
@@ -1746,6 +1760,8 @@ pub struct Refold {
     /// the fold continuing from it places those removals itself (issue
     /// #35).
     pub snapshot: FoldResult,
+    /// What to record with `snapshot` ([`save_snapshot_record`]).
+    pub record: Value,
     /// Snapshots, newest first, that no longer matched a fold from scratch
     /// and were passed over: store `snapshot` and drop them
     /// ([`remove_snapshot`]), so the next refold need not pass them over
@@ -1762,6 +1778,7 @@ pub fn fold_for_refold(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
 ) -> Result<Refold> {
+    let record = snapshot_record(facts, &all_commits);
     let fold = fold_from_snapshots(env_id, all_commits, state, facts, audit, true)?;
     let snapshot = FoldResult {
         document: fold.unflushed.ok_or_else(doc_corrupt)?,
@@ -1770,6 +1787,7 @@ pub fn fold_for_refold(
     Ok(Refold {
         result: fold.result,
         snapshot,
+        record,
         stale_snapshots: fold.passed_over,
     })
 }
@@ -1783,7 +1801,7 @@ pub fn remove_snapshot(state: &StateDir, env_id: &str, number: &PyInt) {
         snapshot_dir(env_id),
         number
     )));
-    let _ = std::fs::remove_file(state.path.join(snapshot_facts_path(env_id, number)));
+    let _ = std::fs::remove_file(state.path.join(snapshot_record_path(env_id, number)));
 }
 
 struct SnapshotFold {
@@ -1814,6 +1832,9 @@ fn fold_from_snapshots(
     };
     numbers.sort();
     let mut passed_over: Vec<PyInt> = Vec::new();
+    // What the newest passed-over snapshot covers was audited when it was
+    // folded.
+    let mut audited_up_to: Option<Value> = None;
     for number in numbers.iter().rev() {
         let attempt = fold_on_snapshot(
             env_id,
@@ -1823,6 +1844,7 @@ fn fold_from_snapshots(
             facts,
             audit,
             keep_unflushed || !passed_over.is_empty(),
+            audited_up_to.as_ref(),
         );
         match attempt {
             Ok(Some(fold)) => {
@@ -1834,12 +1856,21 @@ fn fold_from_snapshots(
             }
             // Null: fold every commit fresh, as without a snapshot.
             Ok(None) => break,
-            Err(SnapshotUnusable::Stale) => passed_over.push(number.clone()),
+            Err(SnapshotUnusable::Stale(vector)) => {
+                passed_over.push(number.clone());
+                audited_up_to.get_or_insert(vector);
+            }
             // Past a stale snapshot every covered commit is stored, so a fold
             // from scratch can stand in for one that does not load.
             Err(SnapshotUnusable::Failed(_)) if !passed_over.is_empty() => break,
             Err(SnapshotUnusable::Failed(error)) => return Err(error),
         }
+    }
+    // Past a stale snapshot a fold from scratch stands in for it only with
+    // every commit since the first: one that a compaction deleted would be
+    // lost silently.
+    if !passed_over.is_empty() && !stored_from_the_first(&all_commits) {
+        return Err(Error::state("state_corrupt").with_detail("team_snapshot"));
     }
     let (result, unflushed) = fold_scheduled(
         env_id,
@@ -1850,6 +1881,7 @@ fn fold_from_snapshots(
         audit,
         None,
         keep_unflushed || !passed_over.is_empty(),
+        audited_up_to.as_ref(),
     )?;
     Ok(SnapshotFold {
         result,
@@ -1859,8 +1891,8 @@ fn fold_from_snapshots(
 }
 
 enum SnapshotUnusable {
-    /// It no longer matches a fold from scratch.
-    Stale,
+    /// It no longer matches a fold from scratch; its vector.
+    Stale(Value),
     Failed(Error),
 }
 
@@ -1872,6 +1904,7 @@ impl From<Error> for SnapshotUnusable {
 
 /// The fold of `all_commits` on snapshot `number`: `None` for a null
 /// snapshot, `Stale` for one that no longer matches a fold from scratch.
+#[allow(clippy::too_many_arguments)]
 fn fold_on_snapshot(
     env_id: &str,
     all_commits: &[Commit],
@@ -1880,6 +1913,7 @@ fn fold_on_snapshot(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
     keep_unflushed: bool,
+    audited_up_to: Option<&Value>,
 ) -> std::result::Result<Option<(FoldResult, Option<Value>)>, SnapshotUnusable> {
     {
         let snapshot = state.read_json(
@@ -1916,10 +1950,15 @@ fn fold_on_snapshot(
         }
         let base_document = snapshot_obj.get("document").cloned();
         let base_version_order = parse_snapshot_version_order(snapshot_obj.get("version_order"))?;
-        if history_is_complete(vector_field, &covered)
-            && snapshot_is_stale(state, env_id, number, &covered, &later, facts)?
+        // Only a document a build stored is checked; a hand-written null one
+        // folds on a fresh document, as the prototype did.
+        if base_document.as_ref().is_some_and(Value::is_object)
+            && history_is_complete(vector_field, &covered)
+            && snapshot_is_stale(state, env_id, number, &covered, &later, facts, all_commits)?
         {
-            return Err(SnapshotUnusable::Stale);
+            return Err(SnapshotUnusable::Stale(
+                vector_field.cloned().unwrap_or(Value::Null),
+            ));
         }
         let (mut result, unflushed) = fold_scheduled(
             env_id,
@@ -1930,6 +1969,7 @@ fn fold_on_snapshot(
             audit,
             Some(all_commits),
             keep_unflushed,
+            audited_up_to,
         )?;
         // The snapshot's own vector stays covered: without it the next
         // snapshot would forget every author with nothing newer, and the
@@ -1982,8 +2022,11 @@ fn history_is_complete(vector: Option<&Value>, covered: &[Commit]) -> bool {
 }
 
 /// The snapshot no longer matches a fold from scratch at its vector: a
-/// commit it does not cover sorts in front of one it does, or it was folded
-/// with other facts than these (issue #35).
+/// commit it does not cover sorts in front of one it does, or its record
+/// differs from what these facts and commits give -- other facts, or a
+/// removal placed or bounded differently by a commit that arrived since
+/// (issue #35). A snapshot without a record (an earlier build's) matches
+/// nothing.
 fn snapshot_is_stale(
     state: &StateDir,
     env_id: &str,
@@ -1991,6 +2034,7 @@ fn snapshot_is_stale(
     covered: &[Commit],
     later: &[Commit],
     facts: Option<&Facts>,
+    all_commits: &[Commit],
 ) -> Result<bool> {
     let mut last = None;
     for commit in covered {
@@ -2007,18 +2051,30 @@ fn snapshot_is_stale(
             return Ok(true);
         }
     }
-    // A missing or unreadable record (a snapshot from an earlier build)
-    // knows no facts.
-    let known = state
-        .read_json(&snapshot_facts_path(env_id, number), Value::Null)
-        .ok()
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    Ok(fact_keys(facts) != known)
+    let recorded = state
+        .read_json(&snapshot_record_path(env_id, number), Value::Null)
+        .unwrap_or(Value::Null);
+    Ok(recorded != snapshot_record(facts, all_commits))
 }
 
-fn snapshot_facts_path(env_id: &str, number: &PyInt) -> String {
-    format!("team/{env_id}/snapshot_facts/{number}.json")
+/// Every author's commits are stored from its first one on.
+fn stored_from_the_first(commits: &[Commit]) -> bool {
+    let mut seqs: BTreeMap<&str, Vec<&PyInt>> = BTreeMap::new();
+    for commit in commits {
+        seqs.entry(commit.author.as_str())
+            .or_default()
+            .push(&commit.author_seq);
+    }
+    seqs.values_mut().all(|seqs| {
+        seqs.sort();
+        seqs.iter()
+            .enumerate()
+            .all(|(index, seq)| **seq == index + 1)
+    })
+}
+
+fn snapshot_record_path(env_id: &str, number: &PyInt) -> String {
+    format!("team/{env_id}/snapshot_records/{number}.json")
 }
 
 /// The facts a fold used, sorted: a removal by its fact hash (its author
@@ -2057,19 +2113,40 @@ fn fact_keys(facts: Option<&Facts>) -> Vec<Value> {
     keys
 }
 
-/// Record the facts snapshot `number` was folded with, so a fold that
-/// meets other facts does not build on it (issue #35). Kept outside
-/// `snapshots/`, whose files keep the prototype's layout.
-pub fn save_snapshot_facts(
+/// What a fold over `commits` with `facts` depends on beyond the commits it
+/// covers: the facts, and the removal schedule they and every stored
+/// commit give (cuts, attested bounds, self-placed removals).
+pub fn snapshot_record(facts: Option<&Facts>, commits: &[Commit]) -> Value {
+    let none = Facts::default();
+    let schedule = RemovalSchedule::new(facts.unwrap_or(&none), commits);
+    let pending: Vec<Value> = schedule
+        .pending
+        .iter()
+        .map(|((wall, counter), fp)| json!([wall.value(), counter.value(), fp]))
+        .collect();
+    let bounds: Map<String, Value> = schedule
+        .bounds
+        .iter()
+        .map(|(fp, seq)| (fp.clone(), seq.value()))
+        .collect();
+    json!({
+        "facts": fact_keys(facts),
+        "pending": pending,
+        "bounds": bounds,
+        "self_placed": schedule.self_placed.iter().collect::<Vec<_>>(),
+    })
+}
+
+/// Store the record of snapshot `number` ([`snapshot_record`]), so a fold
+/// that would depend on anything else does not build on it (issue #35).
+/// Kept outside `snapshots/`, whose files keep the prototype's layout.
+pub fn save_snapshot_record(
     state: &StateDir,
     env_id: &str,
     number: &PyInt,
-    facts: Option<&Facts>,
+    record: &Value,
 ) -> Result<()> {
-    state.write_json(
-        &snapshot_facts_path(env_id, number),
-        &Value::Array(fact_keys(facts)),
-    )
+    state.write_json(&snapshot_record_path(env_id, number), record)
 }
 
 // --------------------------------------------------------------------- derive
@@ -4560,25 +4637,15 @@ mod tests {
             connection_create_commit(&env_id, &admin, 3, "9500-0000", "planted"),
         ];
         let facts = self_removed(&admin, "4000-0000");
-        let tmp = TempDir::new().unwrap();
-        let state = StateDir::new(tmp.path().join("state"));
-        state.create().unwrap();
+        let full = fold(&env_id, commits.clone(), Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&full), ["owners"]);
         for covered in 2..commits.len() {
-            let prefix = fold(
-                &env_id,
-                commits[..covered].to_vec(),
-                Some(&facts),
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            save_snapshot(&state, &env_id, &PyInt::from(covered as i64), &prefix).unwrap();
-            let from_snapshot =
-                fold_with_snapshot(&env_id, commits.clone(), &state, Some(&facts), None).unwrap();
-            let full = fold(&env_id, commits.clone(), Some(&facts), None, None, None).unwrap();
-            assert_eq!(from_snapshot.document, full.document, "covered {covered}");
-            assert_eq!(connection_ids(&full), ["owners"]);
+            let (_tmp, state) = snapshot_state();
+            refold_saving(&state, &env_id, &commits[..covered], Some(&facts));
+            let refold =
+                fold_for_refold(&env_id, commits.clone(), &state, Some(&facts), None).unwrap();
+            assert!(refold.stale_snapshots.is_empty(), "covered {covered}");
+            assert_eq!(refold.result.document, full.document, "covered {covered}");
         }
     }
 
@@ -4760,7 +4827,7 @@ mod tests {
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         save_snapshot(state, env_id, &total, &refold.snapshot).unwrap();
-        save_snapshot_facts(state, env_id, &total, facts).unwrap();
+        save_snapshot_record(state, env_id, &total, &refold.record).unwrap();
     }
 
     fn snapshot_state() -> (TempDir, StateDir) {
@@ -4839,18 +4906,19 @@ mod tests {
 
     /// Issue #35: a snapshot taken while a removal is known but not yet
     /// reached keeps the member a member, so its work in front of the cut
-    /// that arrives later still counts. One stored by an earlier build
-    /// (the removal already applied, no facts record) is passed over.
+    /// that arrives later still counts. (The removal here has no
+    /// attestation, so nothing else that arrives changes its schedule.) One
+    /// stored by an earlier build (the removal already applied, no record)
+    /// is passed over.
     #[test]
     fn a_snapshot_does_not_remove_a_member_ahead_of_its_cut() {
-        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
         let admin = DeviceKey::generate();
         let commits = vec![
             c1,
             member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
             connection_create_commit(&env_id, &admin, 1, "3000-0000", "early"),
             connection_create_commit(&env_id, &admin, 2, "3500-0000", "late"),
-            removal_rotation(&env_id, &owner, 3, "4001-0000", &dek, &[(&admin, 2)]),
         ];
         let facts = removal(&owner, &admin, "4000-0000");
         let full = fold(&env_id, commits.clone(), Some(&facts), None, None, None).unwrap();
@@ -4973,6 +5041,247 @@ mod tests {
         assert_eq!(refold.result.document, full.document);
     }
 
+    /// What `TeamSync::refold` does: fold, then store a new snapshot when
+    /// one is due or one was passed over, and drop the passed-over ones.
+    fn refold_like_teamsync(
+        state: &StateDir,
+        env_id: &str,
+        commits: &[Commit],
+        facts: Option<&Facts>,
+        due: bool,
+    ) -> FoldResult {
+        let refold = fold_for_refold(env_id, commits.to_vec(), state, facts, None).unwrap();
+        let total = refold
+            .result
+            .vector
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        if due || !refold.stale_snapshots.is_empty() {
+            save_snapshot(state, env_id, &total, &refold.snapshot).unwrap();
+            save_snapshot_record(state, env_id, &total, &refold.record).unwrap();
+            for number in refold.stale_snapshots.iter().filter(|n| **n != total) {
+                remove_snapshot(state, env_id, number);
+            }
+        }
+        refold.result
+    }
+
+    /// A removal fact can arrive before its remover's attestation (deferred
+    /// for clock skew, or early on a gap). The snapshot the refold stores
+    /// then has no bound; when the attestation arrives, the work it excludes
+    /// -- here an admin device the removed admin planted -- must go.
+    #[test]
+    fn an_attestation_after_its_removal_fact_refolds_from_scratch() {
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let planted = DeviceKey::generate();
+        let mut commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            connection_create_commit(&env_id, &admin, 1, "3000-0000", "early"),
+        ];
+        let (_tmp, state) = snapshot_state();
+        refold_like_teamsync(&state, &env_id, &commits, None, true);
+        // The admin's last work, which the remover never sees.
+        commits.push(member_add_commit(
+            &env_id,
+            &admin,
+            2,
+            "3500-0000",
+            &planted,
+            "admin",
+        ));
+        refold_like_teamsync(&state, &env_id, &commits, None, false);
+        let facts = removal(&owner, &admin, "4000-0000");
+        refold_like_teamsync(&state, &env_id, &commits, Some(&facts), false);
+        commits.push(removal_rotation(
+            &env_id,
+            &owner,
+            3,
+            "4001-0000",
+            &dek,
+            &[(&admin, 1)],
+        ));
+        refold_like_teamsync(&state, &env_id, &commits, Some(&facts), false);
+        commits.push(connection_create_commit(
+            &env_id,
+            &planted,
+            1,
+            "5000-0000",
+            "planted",
+        ));
+        let node = refold_like_teamsync(&state, &env_id, &commits, Some(&facts), false);
+        let full = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&full), ["early"]);
+        assert_eq!(node.document, full.document);
+    }
+
+    /// An honest leave signs its `member.remove` before its fact, but a node
+    /// can get the fact first: the snapshot it stores then removes the
+    /// device from the start, and the leave commit, once it arrives, must
+    /// bring back what the device did while a member.
+    #[test]
+    fn a_leave_commit_after_its_fact_refolds_from_scratch() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let invited = DeviceKey::generate();
+        let mut commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            connection_create_commit(&env_id, &admin, 1, "3000-0000", "admins"),
+            member_add_commit(&env_id, &admin, 2, "3100-0000", &invited, "user"),
+        ];
+        let (_tmp, state) = snapshot_state();
+        refold_like_teamsync(&state, &env_id, &commits, None, true);
+        let facts = self_removed(&admin, "4000-0001");
+        refold_like_teamsync(&state, &env_id, &commits, Some(&facts), false);
+        commits.push(leave_commit(&admin, &env_id, 3, "4000-0000"));
+        let node = refold_like_teamsync(&state, &env_id, &commits, Some(&facts), false);
+        let full = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&full), ["admins"]);
+        assert_eq!(
+            full.document["members"][invited.fingerprint().unwrap()]["status"],
+            json!("active")
+        );
+        assert_eq!(node.document, full.document);
+    }
+
+    /// A snapshot stored by an earlier build has no record and may have been
+    /// folded out of order (a late commit applied on top of an older
+    /// snapshot): with every commit stored it is passed over.
+    #[test]
+    fn a_snapshot_without_a_record_refolds_from_scratch() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let first = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
+            connection_create_commit(&env_id, &owner, 3, "2000-0000", "gh"),
+            update_commit(&env_id, &owner, 4, "3000-0000", "owner-later"),
+        ];
+        let base = fold(&env_id, first.clone(), None, None, None, None).unwrap();
+        let late = update_commit(&env_id, &admin, 1, "2500-0000", "admin-earlier");
+        let owner5 = signed(
+            &owner,
+            &env_id,
+            5,
+            "5000-0000",
+            json!({"op": "settings.update", "sync_interval_seconds": 11}),
+        );
+        // What an earlier refold stored: the late commit folded over the base.
+        let earlier = fold(
+            &env_id,
+            vec![late.clone(), owner5.clone()],
+            None,
+            Some(base.document.clone()),
+            None,
+            None,
+        )
+        .unwrap();
+        let (_tmp, state) = snapshot_state();
+        save_snapshot(&state, &env_id, &PyInt::from(6), &earlier).unwrap();
+        let mut all = first;
+        all.push(late);
+        all.push(owner5);
+        let full = fold(&env_id, all.clone(), None, None, None, None).unwrap();
+        assert_eq!(
+            full.document["connections"]["gh"]["description"],
+            json!("owner-later")
+        );
+        let refold = fold_for_refold(&env_id, all, &state, None, None).unwrap();
+        assert_eq!(refold.stale_snapshots, [PyInt::from(6)]);
+        assert_eq!(refold.result.document, full.document);
+    }
+
+    /// A refold that passes a snapshot over does not audit again the skips
+    /// in the commits that snapshot covered.
+    #[test]
+    fn a_fallback_does_not_audit_covered_skips_again() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let user = DeviceKey::generate();
+        let mut commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "1500-0000", &user, "user"),
+        ];
+        for seq in 1..=5 {
+            commits.push(connection_create_commit(
+                &env_id,
+                &user,
+                seq,
+                &format!("2000-{seq:04}"),
+                &format!("u{seq}"),
+            ));
+        }
+        commits.push(signed(
+            &owner,
+            &env_id,
+            3,
+            "9000-0000",
+            json!({"op": "settings.update", "sync_interval_seconds": 11}),
+        ));
+        let (_tmp, state) = snapshot_state();
+        let audit = Audit::new(&state, crate::clock::fixed(1_700_000_000.0));
+        let skips = || {
+            state
+                .read_lines(crate::audit::AUDIT_FILE, None)
+                .unwrap()
+                .iter()
+                .filter(|line| line.contains("team_op_skipped"))
+                .count()
+        };
+        let refold = fold_for_refold(&env_id, commits.clone(), &state, None, Some(&audit)).unwrap();
+        let total = refold
+            .result
+            .vector
+            .values()
+            .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        save_snapshot(&state, &env_id, &total, &refold.snapshot).unwrap();
+        save_snapshot_record(&state, &env_id, &total, &refold.record).unwrap();
+        let before = skips();
+        assert_eq!(before, 5);
+        // A user commit dated in front of the snapshot's last commit.
+        commits.push(connection_create_commit(
+            &env_id,
+            &user,
+            6,
+            "2000-0006",
+            "u6",
+        ));
+        let refold = fold_for_refold(&env_id, commits, &state, None, Some(&audit)).unwrap();
+        assert!(!refold.stale_snapshots.is_empty());
+        assert_eq!(skips() - before, 1);
+    }
+
+    /// Past a stale snapshot a fold from scratch needs every commit since
+    /// each author's first; with one compacted away it fails closed rather
+    /// than drop it.
+    #[test]
+    fn a_fallback_needs_every_commit_since_the_first() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let first = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
+        ];
+        // An earlier build's snapshot whose vector names only the owner; the
+        // admin's first commit has since been compacted away.
+        let base = fold(&env_id, first.clone(), None, None, None, None).unwrap();
+        let (_tmp, state) = snapshot_state();
+        save_snapshot(&state, &env_id, &PyInt::from(2), &base).unwrap();
+        let mut stored = first;
+        stored.push(connection_create_commit(
+            &env_id,
+            &admin,
+            2,
+            "3000-0000",
+            "kept",
+        ));
+        let err = fold_for_refold(&env_id, stored, &state, None, None)
+            .err()
+            .expect("fails closed");
+        assert_eq!(err.reason, "state_corrupt");
+    }
+
     /// A compaction snapshot ending before a member's removal keeps the
     /// member a member, so what it did after the snapshot and before its
     /// removal still counts once the compacted commits are gone.
@@ -4995,7 +5304,13 @@ mod tests {
         let prefix = sort_total_order(commits.clone()).unwrap()[..3].to_vec();
         let snapshot = snapshot_of_prefix(&env_id, prefix, Some(&facts), &commits, None).unwrap();
         save_snapshot(&state, &env_id, &PyInt::from(3), &snapshot).unwrap();
-        save_snapshot_facts(&state, &env_id, &PyInt::from(3), Some(&facts)).unwrap();
+        save_snapshot_record(
+            &state,
+            &env_id,
+            &PyInt::from(3),
+            &snapshot_record(Some(&facts), &commits),
+        )
+        .unwrap();
         // Compaction deletes the prefix's connection commit.
         let kept: Vec<Commit> = commits.into_iter().filter(|c| *c != old).collect();
         let from_snapshot =

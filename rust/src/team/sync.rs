@@ -602,9 +602,11 @@ mod retry_tests {
         let commits = CommitStore::new(f.ctx.state, &f.env_id)
             .all_commits()
             .unwrap();
+        let stale_commits = commits.clone();
         let stale = fold::fold_for_refold(&f.env_id, commits, f.ctx.state, None, None).unwrap();
         fold::save_snapshot(f.ctx.state, &f.env_id, &PyInt::from(0), &stale.snapshot).unwrap();
-        fold::save_snapshot_facts(f.ctx.state, &f.env_id, &PyInt::from(0), None).unwrap();
+        let record = fold::snapshot_record(None, &stale_commits);
+        fold::save_snapshot_record(f.ctx.state, &f.env_id, &PyInt::from(0), &record).unwrap();
         f.team.refold(&f.env_id).unwrap();
         let names: Vec<String> = std::fs::read_dir(
             f.ctx
@@ -3676,6 +3678,7 @@ impl TeamSync {
         let fold::Refold {
             result,
             snapshot,
+            record,
             stale_snapshots,
         } = fold::fold_for_refold(
             env_id,
@@ -3719,7 +3722,7 @@ impl TeamSync {
         // pass them over again (issue #35).
         if due || !stale_snapshots.is_empty() {
             fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
-            fold::save_snapshot_facts(self.ctx.state, env_id, &total, Some(&env.facts))?;
+            fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
             for number in stale_snapshots.iter().filter(|number| **number != total) {
                 fold::remove_snapshot(self.ctx.state, env_id, number);
             }
@@ -5971,7 +5974,12 @@ impl TeamSync {
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
-        fold::save_snapshot_facts(self.ctx.state, env_id, &total, Some(&facts))?;
+        fold::save_snapshot_record(
+            self.ctx.state,
+            env_id,
+            &total,
+            &fold::snapshot_record(Some(&facts), &commits),
+        )?;
         let mut removed = 0;
         {
             let _lock = self.ctx.state.lock()?;
