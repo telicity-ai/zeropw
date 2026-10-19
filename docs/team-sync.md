@@ -223,6 +223,8 @@ Signed facts contain environment, kind, target, author, HLC and signature. Valid
 
 Facts are a monotonic overlay reapplied after folding, restore and synchronization; ordinary commits cannot undo them. Disabled connection IDs, removed fingerprints and revoked versions cannot be reused/reactivated. Use new IDs/keys/versions instead.
 
+A member removal takes effect at its fact's HLC in the total order, not from the start of history: the removed member's earlier commits keep the effect they had while it was a member (its secret versions, activations, connections and invitations stay), its later commits fail the membership checks, and the member stays listed with status `removed`. The remover's first `dek.rotate` commit carrying the fact's `removal_fact_hash`, written by the same `team remove`, signs the remover's vector; the removed member's commits past that sequence are skipped wherever they sort, so a removed device cannot backdate new work in front of its removal. Until that commit arrives, the fact's HLC alone is the cut. Facts written by `zeropw-admin` observe the HLCs of every stored commit, so a removal sorts after the work its author had accepted.
+
 Two admins concurrently removing each other can both produce valid reciprocal facts even after the peer-removal fact was received; both end removed and the owner can reenroll fresh keys. The protected owner remains available. Receive-only draining is necessary to avoid losing a reciprocal fact in flight: stop sends immediately, accept only the relevant removal exception during the bounded window, then close. Other traffic remains forbidden.
 
 ### Concurrent removal admission
