@@ -62,6 +62,19 @@ fn canon(value: &Value) -> Result<Vec<u8>> {
     Ok(pyjson::dumps(value, DumpOptions::compact_sorted())?.into_bytes())
 }
 
+/// Remove `fp`'s dial mark if it names `session` (issue #14).
+fn take_dial_mark(env: &mut EnvState, fp: &str, session: &Arc<dyn Session>) -> bool {
+    let ours = env
+        .dial_pending
+        .get(fp)
+        .and_then(Weak::upgrade)
+        .is_some_and(|marked| Arc::ptr_eq(&marked, session));
+    if ours {
+        env.dial_pending.remove(fp);
+    }
+    ours
+}
+
 /// Withhold `frame` from a joining device until its history has been sent
 /// (issue #28); past [`HELD_FRAMES_MAX`] it waits for a later VECTOR.
 fn hold_frame(
@@ -2415,9 +2428,57 @@ mod retry_tests {
         assert_eq!(SEEN_CAPACITY, 4096);
     }
 
-    #[test]
-    fn successful_retry_resets_backoff_before_next_disconnect() {
-        let root = TempDir::new().unwrap();
+    /// A peer session that speaks only when the test sends it a frame, and
+    /// hangs up when the test drops the sender.
+    struct ScriptedSession {
+        peer: DeviceRecord,
+        frames: Mutex<mpsc::Receiver<Value>>,
+        closed: AtomicBool,
+        created: Instant,
+    }
+    impl Session for ScriptedSession {
+        fn peer(&self) -> DeviceRecord {
+            self.peer.clone()
+        }
+        fn env_id(&self) -> &str {
+            "retry-env"
+        }
+        fn send(&self, _: &Value) -> Result<()> {
+            Ok(())
+        }
+        fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(SessionClosed("closed"));
+            }
+            match self
+                .frames
+                .lock()
+                .unwrap()
+                .recv_timeout(timeout.min(Duration::from_millis(20)))
+            {
+                Ok(frame) => Ok(Some(frame)),
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(SessionClosed("peer_closed")),
+            }
+        }
+        fn close(&self) {
+            self.closed.store(true, Ordering::SeqCst);
+        }
+        fn is_closed(&self) -> bool {
+            self.closed.load(Ordering::SeqCst)
+        }
+        fn created_at(&self) -> Instant {
+            self.created
+        }
+    }
+
+    /// A team on an empty `retry-env` whose transport dials `session`, with
+    /// `fp` an address and the given standing backoff.
+    fn dialing_team(
+        root: &TempDir,
+        session: Arc<dyn Session>,
+        backoff: Option<Duration>,
+    ) -> (Arc<TeamSync>, String) {
         let ctx = Arc::new(
             Context::initialize(
                 root.path().join("state"),
@@ -2429,28 +2490,131 @@ mod retry_tests {
             .unwrap(),
         );
         let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
-        let peer = DeviceKey::generate().record().unwrap();
-        let fp = peer.fingerprint();
-        let session: Arc<dyn Session> = Arc::new(StubSession {
-            peer,
-            closed: AtomicBool::new(false),
-            created: Instant::now(),
-        });
+        let fp = session.peer().fingerprint();
         let team = TeamSync::new(ctx, Arc::new(StubTransport { session }), mine);
         let mut state = EnvState::new(Facts::default(), HashSet::new(), HashMap::new());
         state
             .candidate_addresses
             .insert(fp.clone(), BTreeSet::from(["retry-address".to_owned()]));
-        state.backoff.insert(fp.clone(), Duration::from_secs(8));
-        state
-            .next_attempt
-            .insert(fp.clone(), Instant::now() + Duration::from_secs(8));
+        if let Some(backoff) = backoff {
+            state.backoff.insert(fp.clone(), backoff);
+            state
+                .next_attempt
+                .insert(fp.clone(), Instant::now() + backoff);
+        }
         team.envs.lock().unwrap().insert("retry-env".into(), state);
+        (team, fp)
+    }
+
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < deadline, "condition not reached");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn scripted(peer: DeviceRecord) -> (Arc<ScriptedSession>, mpsc::Sender<Value>) {
+        let (tx, rx) = mpsc::channel();
+        let session = Arc::new(ScriptedSession {
+            peer,
+            frames: Mutex::new(rx),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        (session, tx)
+    }
+
+    /// Issue #14: the initiator's handshake completes before the responder
+    /// accepts it, so a dial resets the backoff only once the peer's first
+    /// frame has been handled; a disconnect after that keeps the reset.
+    #[test]
+    fn successful_retry_resets_backoff_before_next_disconnect() {
+        let root = TempDir::new().unwrap();
+        let (session, tx) = scripted(DeviceKey::generate().record().unwrap());
+        let (team, fp) = dialing_team(&root, session.clone(), Some(Duration::from_secs(8)));
         team.dial_attempt("retry-env", &fp);
+        {
+            let guard = team.envs.lock().unwrap();
+            let state = guard.get("retry-env").unwrap();
+            assert_eq!(state.backoff.get(&fp), Some(&Duration::from_secs(8)));
+            assert!(state.dial_pending.contains_key(&fp));
+        }
+        tx.send(json!({"type":"PEERS","peers":{}})).unwrap();
+        wait_for(|| {
+            !team.envs.lock().unwrap()["retry-env"]
+                .backoff
+                .contains_key(&fp)
+        });
+        drop(tx);
+        wait_for(|| {
+            !team.envs.lock().unwrap()["retry-env"]
+                .sessions
+                .contains_key(&fp)
+        });
         let guard = team.envs.lock().unwrap();
         let state = guard.get("retry-env").unwrap();
         assert!(!state.backoff.contains_key(&fp));
         assert!(!state.next_attempt.contains_key(&fp));
+        assert!(state.dial_pending.is_empty());
+    }
+
+    /// Issue #14: a dial the peer refuses after the handshake -- it closes
+    /// before sending anything -- backs off, doubling on every refusal, so a
+    /// removed device no longer redials its remover on every poll tick.
+    #[test]
+    fn refused_dials_back_off() {
+        let root = TempDir::new().unwrap();
+        let (session, tx) = scripted(DeviceKey::generate().record().unwrap());
+        drop(tx);
+        let (team, fp) = dialing_team(&root, session, None);
+        let (min, _) = Config::default().team_dial_backoff;
+        for expected in [min, min * 2.0] {
+            team.dial_attempt("retry-env", &fp);
+            wait_for(|| {
+                team.envs.lock().unwrap()["retry-env"].backoff.get(&fp)
+                    == Some(&Duration::from_secs_f64(expected))
+            });
+            wait_for(|| {
+                !team.envs.lock().unwrap()["retry-env"]
+                    .sessions
+                    .contains_key(&fp)
+            });
+            let guard = team.envs.lock().unwrap();
+            let state = guard.get("retry-env").unwrap();
+            assert!(state.next_attempt[&fp] > Instant::now());
+            assert!(state.dial_pending.is_empty());
+        }
+    }
+
+    /// A dial that loses the tie-break to the peer's own session is neither
+    /// a success nor a refusal: its mark goes, the backoff stays as it was.
+    #[test]
+    fn a_dial_that_loses_the_tie_break_leaves_no_mark() {
+        // The outbound session loses when this node's fingerprint sorts
+        // after the peer's (`keep_new = mine < fp` for an outbound one).
+        let (_root, team, peer_key) = loop {
+            let root = TempDir::new().unwrap();
+            let key = DeviceKey::generate();
+            let (session, _tx) = scripted(key.record().unwrap());
+            let (team, fp) = dialing_team(&root, session, None);
+            if team.device.fingerprint().unwrap() > fp {
+                break (root, team, key);
+            }
+        };
+        let fp = peer_key.fingerprint().unwrap();
+        let inbound: Arc<dyn Session> = Arc::new(StubSession {
+            peer: peer_key.record().unwrap(),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        assert!(team.accept_session("retry-env", inbound.clone(), true));
+        team.dial_attempt("retry-env", &fp);
+        let guard = team.envs.lock().unwrap();
+        let state = guard.get("retry-env").unwrap();
+        assert!(Arc::ptr_eq(&state.sessions[&fp], &inbound));
+        assert!(state.dial_pending.is_empty());
+        assert!(!state.backoff.contains_key(&fp));
     }
 }
 fn valid_id(s: &str, limit: usize) -> bool {
@@ -3095,6 +3259,11 @@ struct EnvState {
     peer_vectors: HashMap<String, BTreeMap<String, PyInt>>,
     backoff: HashMap<String, Duration>,
     next_attempt: HashMap<String, Instant>,
+    /// A dialed session whose peer has not yet sent a frame we handled.
+    /// The initiator's handshake completes before the responder accepts it
+    /// (a remover refuses a removed device only at message 3), so the dial
+    /// counts as a success only then (issue #14).
+    dial_pending: HashMap<String, Weak<dyn Session>>,
     hlc: Hlc,
     last_known_vector: BTreeMap<String, PyInt>,
     known_fact_lines: usize,
@@ -3152,6 +3321,7 @@ impl EnvState {
             peer_vectors: HashMap::new(),
             backoff: HashMap::new(),
             next_attempt: HashMap::new(),
+            dial_pending: HashMap::new(),
             hlc: Hlc::new(0, 0),
             last_known_vector: BTreeMap::new(),
             known_fact_lines: 0,
@@ -3294,6 +3464,7 @@ impl TeamSync {
                 env.held.clear();
                 env.early_commits.clear();
                 env.vector_due.clear();
+                env.dial_pending.clear();
             }
             all
         };
@@ -3914,6 +4085,7 @@ impl TeamSync {
             env.candidate_addresses.remove(fp);
             env.backoff.remove(fp);
             env.next_attempt.remove(fp);
+            env.dial_pending.remove(fp);
             if env.sessions.contains_key(fp) {
                 env.draining.entry(fp.into()).or_insert_with(|| {
                     Instant::now()
@@ -3948,7 +4120,10 @@ impl TeamSync {
                 session.close();
                 return false;
             }
-            current.close();
+            // Replaced by a session that reached the peer: not a refused dial.
+            let replaced = current.clone();
+            take_dial_mark(env, &fp, &replaced);
+            replaced.close();
             // The new session starts with its own VECTOR exchange.
             env.catching_up.remove(&fp);
             env.held.remove(&fp);
@@ -4063,6 +4238,7 @@ impl TeamSync {
     fn start_receiver(&self, env_id: String, session: Arc<dyn Session>) {
         let weak: Weak<Self> = self.this.clone();
         let thread = BoundedThread::spawn(move || {
+            let mut heard = false;
             loop {
                 let Some(this) = weak.upgrade() else {
                     break;
@@ -4075,12 +4251,19 @@ impl TeamSync {
                         if this.handle_message(&env_id, &session, &message).is_err() {
                             break;
                         }
+                        if !heard {
+                            heard = true;
+                            this.confirm_dial(&env_id, &session);
+                        }
                     }
                     Ok(None) => {}
                     Err(_) => break,
                 }
             }
             if let Some(this) = weak.upgrade() {
+                // Before the session is dropped, so the poll loop cannot
+                // redial in between (issue #14).
+                this.fail_unconfirmed_dial(&env_id, &session);
                 this.drop_session(&env_id, &session.peer().fingerprint(), Some(&session));
             }
         });
@@ -5502,30 +5685,72 @@ impl TeamSync {
             self.record_dial_failure(env_id, fp);
             return;
         }
+        // The backoff resets only once the peer's first frame has been
+        // handled (`confirm_dial`); a refused dial backs off (issue #14).
         if let Some(env) = self
             .envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get_mut(env_id)
         {
-            env.backoff.remove(fp);
-            env.next_attempt.remove(fp);
+            env.dial_pending.insert(fp.into(), Arc::downgrade(&session));
         }
         // Python lets this escape `poll()` (the poll loop swallows it); the
         // failure is confined to this one dial here.
-        let _ = self.wire_dialed_session(env_id, fp, &address, session);
+        let wired = self.wire_dialed_session(env_id, fp, &address, session.clone());
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id) {
+            if wired.is_err() {
+                if take_dial_mark(env, fp, &session) {
+                    self.note_dial_failure(env, fp);
+                }
+            } else if env
+                .sessions
+                .get(fp)
+                .is_none_or(|current| !Arc::ptr_eq(current, &session))
+            {
+                // Lost the tie-break to the peer's own session, which stands;
+                // a refused session already took its mark on the way out.
+                take_dial_mark(env, fp, &session);
+            }
+        }
     }
     fn record_dial_failure(&self, env_id: &str, fp: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
-            let (min, max) = self.ctx.config.team_dial_backoff;
-            let next = env
-                .backoff
-                .get(fp)
-                .map_or(min, |d| (d.as_secs_f64() * 2.0).min(max));
-            let dur = Duration::from_secs_f64(next);
-            env.backoff.insert(fp.into(), dur);
-            env.next_attempt.insert(fp.into(), Instant::now() + dur);
+            self.note_dial_failure(env, fp);
+        }
+    }
+    fn note_dial_failure(&self, env: &mut EnvState, fp: &str) {
+        let (min, max) = self.ctx.config.team_dial_backoff;
+        let next = env
+            .backoff
+            .get(fp)
+            .map_or(min, |d| (d.as_secs_f64() * 2.0).min(max));
+        let dur = Duration::from_secs_f64(next);
+        env.backoff.insert(fp.into(), dur);
+        env.next_attempt.insert(fp.into(), Instant::now() + dur);
+    }
+    /// The dialed peer's first frame was handled: the dial succeeded.
+    fn confirm_dial(&self, env_id: &str, session: &Arc<dyn Session>) {
+        let fp = session.peer().fingerprint();
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id)
+            && take_dial_mark(env, &fp, session)
+        {
+            env.backoff.remove(&fp);
+            env.next_attempt.remove(&fp);
+        }
+    }
+    /// A dialed session ended before its peer sent a frame we handled -- a
+    /// refused handshake: back off before dialing again.
+    fn fail_unconfirmed_dial(&self, env_id: &str, session: &Arc<dyn Session>) {
+        let fp = session.peer().fingerprint();
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id)
+            && take_dial_mark(env, &fp, session)
+        {
+            self.note_dial_failure(env, &fp);
         }
     }
     /// `_wire_dialed_session`. Python persists the dialed address first and an
