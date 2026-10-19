@@ -113,7 +113,7 @@ fn b64e(raw: &[u8]) -> String {
 fn parse_record(value: Option<&Value>) -> std::result::Result<DeviceRecord, HandshakeFailed> {
     let record = DeviceRecord::from_dict(value.unwrap_or(&Value::Null))
         .map_err(|_| HandshakeFailed::new("device_record_malformed"))?;
-    if !record.verify() {
+    if !record.verify_uncached() {
         return Err(HandshakeFailed::new("device_record_invalid"));
     }
     Ok(record)

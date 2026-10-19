@@ -17,7 +17,6 @@ use super::identity::{DeviceKey, DeviceRecord};
 use super::transport::{InviteCheck, MembershipCheck, OnSession, Session, Transport};
 use crate::audit::RecordArgs;
 use crate::context::Context;
-use crate::crypto::ed25519;
 use crate::errors::{Error, Result};
 use crate::pybase64;
 use crate::pyint::{PyInt, PyNumber};
@@ -2896,7 +2895,7 @@ pub fn verify_fact(fact: &Fact, author: &DeviceRecord) -> bool {
         return false;
     };
     fact.canonical_json(false)
-        .is_ok_and(|bytes| ed25519::verify(&author.sign_pub, &bytes, &sig))
+        .is_ok_and(|bytes| super::verify_signature(&author.sign_pub, &bytes, &sig))
 }
 fn apply_fact(facts: &mut Facts, fact: &Fact) {
     match fact.kind.as_str() {
@@ -3020,7 +3019,7 @@ pub fn load_facts(
             !receipts[&hash]
                 .as_str()
                 .and_then(|sig| pybase64::b64decode_strict(sig).ok())
-                .is_some_and(|sig| ed25519::verify(&local.sign_pub, &message, &sig))
+                .is_some_and(|sig| super::verify_signature(&local.sign_pub, &message, &sig))
         });
     if needs_history {
         let mut ordered = commits.clone();
@@ -3067,7 +3066,7 @@ pub fn load_facts(
                 let admitted = receipts[&hash]
                     .as_str()
                     .and_then(|s| pybase64::b64decode_strict(s).ok())
-                    .is_some_and(|sig| ed25519::verify(&local.sign_pub, &message, &sig));
+                    .is_some_and(|sig| super::verify_signature(&local.sign_pub, &message, &sig));
                 let historical = match fact.kind.as_str() {
                     "connection_disabled" | "secret_version_revoked" => {
                         historical_admins.contains(&fact.author)
