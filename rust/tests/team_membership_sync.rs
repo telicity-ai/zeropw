@@ -414,4 +414,21 @@ fn user_device_cannot_author_editing_commits() {
         vec![json!({"op":"settings.update","sync_interval_seconds":7})],
     )
     .unwrap();
+    // Removed by the owner's fact, the device authors nothing more, wherever
+    // its next commit would sort.
+    membership::remove_member(&a, None, env_id, &b_fp).unwrap();
+    let facts = format!("team/{env_id}/facts.jsonl");
+    for line in a.state.read_lines(&facts, None).unwrap() {
+        b.state.append_line(&facts, &line).unwrap();
+    }
+    let b_before = store.vector().unwrap();
+    let error = membership::author_commit(
+        &b,
+        None,
+        env_id,
+        vec![json!({"op":"settings.update","sync_interval_seconds":9})],
+    )
+    .unwrap_err();
+    assert_eq!(error.reason, "member_removed");
+    assert_eq!(store.vector().unwrap(), b_before);
 }

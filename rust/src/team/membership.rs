@@ -229,29 +229,61 @@ const UNAUTHORIZED_SKIPS: [&str; 7] = [
     "member_removed",
 ];
 
-/// Users cannot author editing commits, and nobody can author a change the
-/// fold refuses its author (docs/team-sync.md section 5.3). Fold the signed
+/// How a refusal reads: decided on this node's replica, which may be behind.
+const REFUSAL_DETAIL: &str = "as this node's replica stands; sync and retry if it is behind";
+
+/// Users cannot author editing commits (docs/team-sync.md section 5.3): the
+/// author must be an administrator of the local document and not removed by
+/// an admitted fact, checked before anything is signed or any rekey repair
+/// runs. A member may still remove itself. Returns the facts
+/// [`refuse_unauthorized_ops`] folds with.
+fn require_editing_standing(
+    ctx: &Context,
+    env_id: &str,
+    author: &str,
+    ops: &[Value],
+) -> Result<fold::Facts> {
+    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
+    let commits = CommitStore::new(ctx.state, env_id).all_commits()?;
+    let self_removal = ops
+        .iter()
+        .all(|op| op["op"] == "member.remove" && op["fingerprint"] == author);
+    if !self_removal {
+        if facts.removed_members.contains(author) {
+            return Err(Error::policy_denied("member_removed").with_detail(REFUSAL_DETAIL));
+        }
+        let doc =
+            fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?.document;
+        if !sync::is_admin(&doc, author) {
+            return Err(Error::policy_denied("not_admin").with_detail(REFUSAL_DETAIL));
+        }
+    }
+    Ok(facts)
+}
+
+/// Nobody can author a change the fold refuses its author: fold the signed
 /// commit onto the stored history, without audit, and refuse it before it is
-/// stored or broadcast when the fold skips one of its ops for such a reason:
-/// otherwise every node skips the op while the command reports success
+/// stored or broadcast when the fold skips one of its ops for such a reason.
+/// Otherwise every node skips the op while the command reports success
 /// (issue #30). A member removing itself passes, as the fold allows it.
 fn refuse_unauthorized_ops(
     ctx: &Context,
     env_id: &str,
-    store: &CommitStore,
+    facts: &fold::Facts,
+    mut commits: Vec<Commit>,
     commit: &Commit,
 ) -> Result<()> {
-    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
-    let mut commits = store.all_commits()?;
     commits.push(commit.clone());
-    let folded = fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?;
+    let folded = fold::fold_with_snapshot(env_id, commits, ctx.state, Some(facts), None)?;
     let hash = commit.hash()?;
     let refused = folded.skipped.into_iter().find(|(skipped, _, reason)| {
         *skipped == hash && UNAUTHORIZED_SKIPS.contains(&reason.as_str())
     });
     match refused {
-        Some((_, _, reason)) if reason == "member_not_found" => Err(Error::not_found(reason)),
-        Some((_, _, reason)) => Err(Error::policy_denied(reason)),
+        Some((_, _, reason)) if reason == "member_not_found" => {
+            Err(Error::not_found(reason).with_detail(REFUSAL_DETAIL))
+        }
+        Some((_, _, reason)) => Err(Error::policy_denied(reason).with_detail(REFUSAL_DETAIL)),
         None => Ok(()),
     }
 }
@@ -264,6 +296,18 @@ pub fn author_commit(
 ) -> Result<Commit> {
     let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    // `env.init` precedes any membership.
+    let bootstrap = ops.iter().all(|op| op["op"] == "env.init");
+    let standing = if bootstrap {
+        None
+    } else {
+        Some(require_editing_standing(
+            ctx,
+            env_id,
+            &device.fingerprint()?,
+            &ops,
+        )?)
+    };
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
         ensure_removal_rotations(ctx, team, env_id)?;
         let doc = load_environment(ctx, env_id)?.document;
@@ -297,10 +341,10 @@ pub fn author_commit(
     {
         hlc.observe(&previous.hlc)?;
     }
-    let bootstrap = ops.iter().all(|op| op["op"] == "env.init");
     let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(None), &store.vector()?, ops)?;
-    if !bootstrap {
-        refuse_unauthorized_ops(ctx, env_id, &store, &commit)?;
+    if let Some(facts) = standing {
+        // Read again: a rekey repair above may have stored rotations.
+        refuse_unauthorized_ops(ctx, env_id, &facts, store.all_commits()?, &commit)?;
     }
     let outcome = if let Some(team) = team {
         team.submit_commit(env_id, &commit)?

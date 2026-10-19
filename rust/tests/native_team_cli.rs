@@ -360,8 +360,19 @@ fn join_member(case: &Case, env_id: &str, role: &str, address: &str) -> Member {
     }
 }
 
-/// Issue #30: a change the fold would refuse its author fails before
-/// anything is signed, instead of reporting a commit no node applies.
+fn member_entry(admin: &Admin, env: &str, fp: &str) -> Value {
+    let members = admin.ok(&["team", "members", "--env", env]);
+    members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["fingerprint"] == fp)
+        .cloned()
+        .unwrap_or_else(|| panic!("{fp} not in {members}"))
+}
+
+/// Issue #30: a change the fold would refuse its author fails before it is
+/// stored, instead of reporting a commit no node applies.
 #[test]
 fn team_set_role_and_transfer_owner_are_commits() {
     let case = Case::new();
@@ -407,6 +418,10 @@ fn team_set_role_and_transfer_owner_are_commits() {
         "team", "set-role", "--env", "demo/dev", "--device", &member.fp, "--role", "admin",
     ]);
     assert!(role_payload.get("commit").is_some(), "{role_payload}");
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &member.fp)["role"],
+        "admin"
+    );
     let transfer_payload = case.ok(&[
         "team",
         "transfer-owner",
@@ -418,6 +433,14 @@ fn team_set_role_and_transfer_owner_are_commits() {
     assert!(
         transfer_payload.get("commit").is_some(),
         "{transfer_payload}"
+    );
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &member.fp)["owner"],
+        true
+    );
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &owner_fp)["owner"],
+        false
     );
     // No longer the owner, this device cannot hand ownership on again.
     let refused = case.fail(&[
@@ -506,7 +529,8 @@ fn user_device_editing_commands_fail_before_any_commit() {
         assert_eq!(error["reason"], "not_admin", "{error}");
     }
     assert_eq!(store.vector().unwrap(), before);
-    let removed = user.ok(&[
+    // A member may still remove itself: one `member.remove` commit, then its fact.
+    user.ok(&[
         "team",
         "remove",
         "--env",
@@ -514,9 +538,20 @@ fn user_device_editing_commands_fail_before_any_commit() {
         "--device",
         &member.fp,
     ]);
-    assert!(
-        removed.get("fact").is_some() || removed.get("commit").is_some(),
-        "{removed}"
+    let own: Vec<_> = store
+        .all_commits()
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.author == member.fp)
+        .collect();
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(
+        own[0].ops,
+        vec![json!({"op":"member.remove","fingerprint":member.fp})]
+    );
+    assert_eq!(
+        member_entry(user, "shared/dev", &member.fp)["status"],
+        "removed"
     );
 }
 
