@@ -2709,6 +2709,12 @@ struct EnvState {
     incident_backoff: HashMap<String, Duration>,
     incident_next_attempt: HashMap<String, Instant>,
     pending_invites: HashMap<String, (String, String)>,
+    /// Sessions of devices that just joined through an invitation. They have
+    /// no history yet, so live COMMIT/FACT broadcasts skip them until their
+    /// first VECTOR has been answered with the whole history in order;
+    /// otherwise the joiner quarantines the inviter's `member.add` as
+    /// `team_author_unknown` (issue #28).
+    catching_up: HashSet<String>,
     alerted_overrides: HashSet<String>,
     /// `_EnvState.relaxed_cache`: (store vector, relaxed document).
     relaxed_cache: Option<(BTreeMap<String, PyInt>, Arc<Value>)>,
@@ -2747,6 +2753,7 @@ impl EnvState {
             incident_backoff: HashMap::new(),
             incident_next_attempt: HashMap::new(),
             pending_invites: HashMap::new(),
+            catching_up: HashSet::new(),
             alerted_overrides: HashSet::new(),
             relaxed_cache: None,
             relaxed_generation: 0,
@@ -3402,7 +3409,9 @@ impl TeamSync {
                     e.sessions
                         .iter()
                         .filter(|(fp, _)| {
-                            Some(fp.as_str()) != exclude && !e.draining.contains_key(*fp)
+                            Some(fp.as_str()) != exclude
+                                && !e.draining.contains_key(*fp)
+                                && !e.catching_up.contains(*fp)
                         })
                         .map(|(fp, s)| (fp.clone(), s.clone()))
                         .collect::<Vec<_>>()
@@ -3504,6 +3513,14 @@ impl TeamSync {
                 .and_then(|env| env.pending_invites.remove(&fp))
         };
         if let Some((role, name)) = pending {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(&env_id)
+            {
+                env.catching_up.insert(fp.clone());
+            }
             if self
                 .admit_member(&env_id, &session.peer(), &role, &name)
                 .is_err()
@@ -3633,6 +3650,7 @@ impl TeamSync {
             }
             env.draining.remove(fp);
             env.fact_replay_cursor.remove(fp);
+            env.catching_up.remove(fp);
             env.sessions.remove(fp)
         };
         if let Some(session) = removed {
@@ -3823,6 +3841,15 @@ impl TeamSync {
             .get_mut(env_id)
         {
             env.synced_at = Some((self.ctx.clock)());
+            // A joiner now holds the history in order; what was authored
+            // after `local` was read reaches it with the next VECTOR.
+            if env
+                .sessions
+                .get(&fp)
+                .is_some_and(|current| Arc::ptr_eq(current, session))
+            {
+                env.catching_up.remove(&fp);
+            }
         }
         Ok(())
     }

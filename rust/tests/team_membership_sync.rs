@@ -161,6 +161,71 @@ fn share_invite_join_and_secret_derivation() {
     a_sync.stop();
 }
 
+/// Issue #28: a device that joins through an invitation receives the
+/// inviter's history in order and quarantines nothing. The inviter used to
+/// broadcast its `member.add` on the new session before the joiner had
+/// `env.init`, so every join left a `team_author_unknown` rejection behind.
+#[test]
+fn join_leaves_no_rejected_commit_on_the_joiner() {
+    let root = TempDir::new().unwrap();
+    let a = new_context(&root, "a");
+    a.projects.create("demo", &["dev"]).unwrap();
+    a.vault
+        .put_secret("gh-token", "api_key", SECRET, "demo", "dev", true)
+        .unwrap();
+    let shared =
+        membership::share_environment(&a, None, "demo", "dev", "alice", "admin-passphrase")
+            .unwrap();
+    let env_id = shared["env_id"].as_str().unwrap();
+    let a_device = DeviceKey::load_or_create(a.state, a.kms).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let a_transport = Arc::new(InProcessTransport::new(a_device.clone(), empty));
+    let a_sync = sync::TeamSync::new(a.clone(), a_transport.clone(), a_device);
+    a_sync.start(Some("rust-team-join-a:47001")).unwrap();
+    let invite = membership::create_invite(
+        &a,
+        env_id,
+        "user",
+        "bob",
+        3600,
+        &["rust-team-join-a:47001".into()],
+    )
+    .unwrap();
+    let b = new_context(&root, "b");
+    let b_device = DeviceKey::load_or_create(b.state, b.kms).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let b_transport = Arc::new(InProcessTransport::new(b_device.clone(), empty));
+    let b_sync = sync::TeamSync::new(b.clone(), b_transport.clone(), b_device);
+    b_sync.start(None).unwrap();
+    membership::join(
+        &b,
+        &invite,
+        b_transport.as_ref() as &dyn Transport,
+        &b_sync,
+        Some("shared-demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap();
+    let a_store = commit::CommitStore::new(a.state, env_id);
+    let b_store = commit::CommitStore::new(b.state, env_id);
+    wait_until(|| b_store.vector().unwrap() == a_store.vector().unwrap());
+    let rejected = b.state.path.join(format!("team/{env_id}/rejected"));
+    let quarantined: Vec<_> = std::fs::read_dir(&rejected)
+        .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(quarantined.is_empty(), "{quarantined:?}");
+    assert!(
+        b.audit
+            .tail(500)
+            .unwrap()
+            .iter()
+            .all(|record| record["event"] != "team_commit_rejected")
+    );
+    b_sync.stop();
+    a_sync.stop();
+}
+
 #[test]
 fn fact_sign_verify_and_sanitize() {
     let key = DeviceKey::generate();
