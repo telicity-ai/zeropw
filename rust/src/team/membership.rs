@@ -216,6 +216,46 @@ fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
     Ok(result)
 }
 
+/// Fold skip reasons that `author_commit` refuses up front: the author may
+/// not make the change, so every node would skip the op while the command
+/// reported success (issue #30).
+const UNAUTHORIZED_SKIPS: [&str; 7] = [
+    "not_admin",
+    "not_owner",
+    "not_authorized",
+    "cannot_change_owner_role",
+    "cannot_remove_owner",
+    "member_not_found",
+    "member_removed",
+];
+
+/// Users cannot author editing commits, and nobody can author a change the
+/// fold refuses its author (docs/team-sync.md section 5.3). Fold the signed
+/// commit onto the stored history, without audit, and refuse it before it is
+/// stored or broadcast when the fold skips one of its ops for such a reason:
+/// otherwise every node skips the op while the command reports success
+/// (issue #30). A member removing itself passes, as the fold allows it.
+fn refuse_unauthorized_ops(
+    ctx: &Context,
+    env_id: &str,
+    store: &CommitStore,
+    commit: &Commit,
+) -> Result<()> {
+    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
+    let mut commits = store.all_commits()?;
+    commits.push(commit.clone());
+    let folded = fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?;
+    let hash = commit.hash()?;
+    let refused = folded.skipped.into_iter().find(|(skipped, _, reason)| {
+        *skipped == hash && UNAUTHORIZED_SKIPS.contains(&reason.as_str())
+    });
+    match refused {
+        Some((_, _, reason)) if reason == "member_not_found" => Err(Error::not_found(reason)),
+        Some((_, _, reason)) => Err(Error::policy_denied(reason)),
+        None => Ok(()),
+    }
+}
+
 pub fn author_commit(
     ctx: &Context,
     team: Option<&TeamSync>,
@@ -224,19 +264,6 @@ pub fn author_commit(
 ) -> Result<Commit> {
     let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    // Users cannot author editing commits (docs/team-sync.md section 5.3).
-    // Refuse before signing, as `team invite` and fact authors are, instead
-    // of broadcasting a commit that every node then skips (issue #30). A
-    // member may still remove itself; `env.init` precedes any membership.
-    if !ops.iter().all(|op| op["op"] == "env.init") {
-        let fp = device.fingerprint()?;
-        let self_removal = ops
-            .iter()
-            .all(|op| op["op"] == "member.remove" && op["fingerprint"] == fp.as_str());
-        if !self_removal && !sync::is_admin(&load_environment(ctx, env_id)?.document, &fp) {
-            return Err(Error::policy_denied("not_admin"));
-        }
-    }
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
         ensure_removal_rotations(ctx, team, env_id)?;
         let doc = load_environment(ctx, env_id)?.document;
@@ -270,7 +297,11 @@ pub fn author_commit(
     {
         hlc.observe(&previous.hlc)?;
     }
+    let bootstrap = ops.iter().all(|op| op["op"] == "env.init");
     let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(None), &store.vector()?, ops)?;
+    if !bootstrap {
+        refuse_unauthorized_ops(ctx, env_id, &store, &commit)?;
+    }
     let outcome = if let Some(team) = team {
         team.submit_commit(env_id, &commit)?
     } else {
