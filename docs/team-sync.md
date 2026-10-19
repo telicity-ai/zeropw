@@ -113,7 +113,7 @@ Per-author HLC must strictly increase or reject `team_hlc_not_monotone`. A devic
 | `connection.disable` | Irreversible fact; reuse requires a fresh ID. | Admin |
 | `secret.put_version` | Secret/kind/generation/version/ciphertext/public data; staged. Skip unknown generation. | Admin |
 | `secret.set_status` | Active/retired status; revoked uses a fact instead. | Admin |
-| `secret.activate` | Replace active version and rebind follow-active connections. | Admin |
+| `secret.activate` | Replace active version and rebind follow-active connections. The administrator CLI that activates a version (`secret put`, `rotation activate`) adds, in the same commit, a `connection.switch_credential` for each connection its replica shows pinned to the version the activation retires. | Admin |
 | `member.add` | Signed device/name/role/wraps for every available generation. Removed fingerprint cannot rejoin; use new keys. | Admin |
 | `member.set_role` | Change a non-owner member role. | Admin |
 | `member.remove` | Irreversible removal of non-owner member. | Admin or the target itself |
@@ -193,7 +193,7 @@ Derive effective state under one state lock and audit `team_commit_apply` with a
 | Widen/change target or auth | Increment policy version, stale grants, invalidate approvals/old handles; poll cancels live runs/sockets. Admin regrants. |
 | Narrow scope | Increment policy version, reevaluate grants in place; live work uses the new scope at the next authentication. |
 | Disable | Deny immediately, cancel runs and close sockets. |
-| Version/activation/status | Derive vault entries and rebind follow-active connections via `credential_versions_changed`. |
+| Version/activation/status | Derive vault entries and rebind follow-active connections, as `credential_versions_changed` does locally: when a shared secret's active version id changes, each following connection gets a policy-version bump, its grants re-evaluated in place and its approvals invalidated. |
 | Membership/roles | Reevaluate sessions; removed sessions stop outbound traffic immediately and follow the receive-only drain rule. |
 | DEK generation | Unwrap local share and rewrap with KMS; if no share exists, mark detached and disable that environment's connections. |
 

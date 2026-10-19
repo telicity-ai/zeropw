@@ -1033,6 +1033,134 @@ fn rotation_start_activate_finish() {
     }
 }
 
+/// Issue #29: `rotation activate` pins the connection it switches. A later
+/// `secret put` -- the update path the guide gives -- retires that version;
+/// the pinned connection moves to the new active version instead of failing
+/// with `credential_unavailable`, and the command reports it, while a
+/// follower is rebound as before. `rotation activate` moves other connections
+/// pinned to the version it retires the same way. `switch-credential
+/// --follow-active` unpins a connection, but only while the secret has an
+/// active version.
+#[test]
+fn rotation_then_secret_put_keeps_the_connection_working() {
+    let (_tmp, admin) = setup();
+    seed_project(&admin);
+    put_secret(&admin, SYNTHETIC, "gh-token", "dev");
+    create_http(&admin, "gh", &[]);
+    create_http(&admin, "follower", &[]);
+    create_http(&admin, "canary", &[]);
+    admin
+        .cmd(&words("rotation start --secret-id gh-token --stdin"))
+        .stdin(SYNTHETIC_V2.as_bytes())
+        .ok();
+    admin.ok(&words("rotation activate --connection gh --version 2"));
+    admin.ok(&words("rotation finish --secret-id gh-token --version 1"));
+    let pinned = admin.ok(&words("connection show --id gh"));
+    assert_eq!(
+        (&pinned["secret_version"], &pinned["policy_version"]),
+        (&json!(2), &json!(2))
+    );
+
+    const V3: &str = "synthetic-token-rotated-v3";
+    let put = put_secret(&admin, V3, "gh-token", "dev");
+    assert_eq!(put["moved_connections"], json!(["gh"]));
+    {
+        let ctx = ctx(&admin);
+        assert_eq!(statuses(&ctx, "gh-token"), ["retired", "retired", "active"]);
+        let connection = ctx.policy.get_connection("gh").unwrap();
+        assert_eq!(
+            connection.secret_version.as_ref().unwrap().value(),
+            &json!(3)
+        );
+        assert_eq!(connection.policy_version, PyInt::from(3));
+        let value = ctx
+            .vault
+            .secret_for_trusted_use(
+                &connection.secret_id,
+                connection.secret_version_for_trusted_use().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(value.expose(), V3.as_bytes());
+        let followed = ctx
+            .audit
+            .tail(10)
+            .unwrap()
+            .into_iter()
+            .rfind(|r| r["event"] == "connection_switch_credential")
+            .unwrap();
+        assert_eq!(
+            (
+                &followed["connection"],
+                &followed["version"],
+                &followed["state"]
+            ),
+            (&json!("gh"), &json!(3), &json!("followed_activation"))
+        );
+        let follower = ctx.policy.get_connection("follower").unwrap();
+        assert!(follower.secret_version.is_none());
+    }
+
+    // `rotation activate` on one connection moves the others pinned to the
+    // version it retires.
+    let staged = admin
+        .cmd(&words("rotation start --secret-id gh-token --stdin"))
+        .stdin(b"synthetic-token-rotated-v3b")
+        .ok();
+    assert_eq!(staged["version"], json!(4));
+    let activated = admin.ok(&words("rotation activate --connection canary --version 4"));
+    assert_eq!(activated["moved_connections"], json!(["gh"]));
+    let gh = admin.ok(&words("connection show --id gh"));
+    assert_eq!(gh["secret_version"], json!(4));
+    let reactivated = admin.ok(&words("rotation activate --connection canary --version 4"));
+    assert!(
+        reactivated.get("moved_connections").is_none(),
+        "{reactivated}"
+    );
+
+    let unpinned = admin.ok(&words(
+        "connection switch-credential --id gh --follow-active",
+    ));
+    assert_eq!(unpinned["secret_version"], Value::Null);
+    const V4: &str = "synthetic-token-rotated-v4";
+    let put = put_secret(&admin, V4, "gh-token", "dev");
+    assert_eq!(put["moved_connections"], json!(["canary"]));
+    {
+        let ctx = ctx(&admin);
+        let connection = ctx.policy.get_connection("gh").unwrap();
+        assert!(connection.secret_version.is_none());
+        let value = ctx
+            .vault
+            .secret_for_trusted_use(
+                &connection.secret_id,
+                connection.secret_version_for_trusted_use().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(value.expose(), V4.as_bytes());
+    }
+    // Exactly one of --version and --follow-active.
+    admin
+        .cmd(&words("connection switch-credential --id gh"))
+        .fail(2);
+    admin
+        .cmd(&words(
+            "connection switch-credential --id gh --version 5 --follow-active",
+        ))
+        .fail(2);
+    // With no active version there is nothing to follow.
+    admin.ok(&words("connection switch-credential --id gh --version 5"));
+    ctx(&admin)
+        .vault
+        .set_version_status("gh-token", &PyInt::from(5), "retired")
+        .unwrap();
+    assert_eq!(
+        fail_reason(
+            &admin,
+            "connection switch-credential --id gh --follow-active"
+        ),
+        "secret_version_unusable"
+    );
+}
+
 // ---------------------------------------------------------- backup / restore
 
 #[test]

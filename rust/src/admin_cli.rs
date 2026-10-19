@@ -336,10 +336,18 @@ fn build_parser() -> Parser {
     add(
         connection,
         "switch-credential",
-        "pin the connection to a secret version",
+        "pin the connection to a secret version, or follow the active one again",
     )
     .arg(Arg::opt("--id").required())
-    .arg(Arg::opt("--version").ty(EXACT_INT).required());
+    .exclusive(
+        true,
+        vec![
+            Arg::opt("--version").ty(EXACT_INT),
+            Arg::opt("--follow-active")
+                .flag()
+                .help("use whichever version is active, as a new connection does"),
+        ],
+    );
     add(connection, "disable", "disable a connection").arg(Arg::opt("--id").required());
 
     let principal = group(sub, "principal", "agent identities");
@@ -1637,23 +1645,18 @@ fn create_connection(
     Ok(stamped)
 }
 
-/// `_switch_credential`: pin a local connection to one usable version of its
-/// secret. The version is checked before the connection changes, so a
-/// missing, retired or revoked version leaves the connection untouched.
-fn switch_credential(
-    ctx: &Context,
-    connection_id: &str,
-    version: PyInt,
-) -> Result<Connection, Error> {
-    let before = ctx.policy.get_connection(connection_id)?;
-    let meta = ctx.vault.get_meta(&before.secret_id)?;
+/// The version exists and can authenticate (`active` or `staged`); checked
+/// before a connection is pinned to it, shared or not, so a missing, retired
+/// or revoked version leaves the connection untouched.
+fn require_usable_version(ctx: &Context, secret_id: &str, version: &PyInt) -> Result<(), Error> {
+    let meta = ctx.vault.get_meta(secret_id)?;
     // Python: `status = next(..., None)`; `if status is None` covers a stored JSON `null` status
     // too. The unusable detail is the raw status, suppressed when falsy (`ZeroPWError`); a
     // truthy non-string status renders as its `str()` text (`Error::detail` is a string).
     let status = meta
         .versions
         .iter()
-        .find(|v| v.version == version)
+        .find(|v| v.version == *version)
         .map(|v| v.status.clone())
         .filter(|status| !status.is_null())
         .ok_or_else(|| Error::not_found("secret_version_not_found"))?;
@@ -1665,9 +1668,34 @@ fn switch_credential(
         };
         return Err(Error::invalid_input("secret_version_unusable").with_detail(detail));
     }
+    Ok(())
+}
+
+/// A connection may follow the active version only while there is one.
+fn require_active_version(ctx: &Context, secret_id: &str) -> Result<(), Error> {
+    if ctx.vault.get_meta(secret_id)?.active_version.is_none() {
+        return Err(
+            Error::invalid_input("secret_version_unusable").with_detail("no active version")
+        );
+    }
+    Ok(())
+}
+
+/// `_switch_credential`: pin a local connection to one usable version of its
+/// secret, or (`None`) let it follow the active version again (issue #29).
+fn switch_credential(
+    ctx: &Context,
+    connection_id: &str,
+    version: Option<PyInt>,
+) -> Result<Connection, Error> {
+    let before = ctx.policy.get_connection(connection_id)?;
+    match &version {
+        Some(version) => require_usable_version(ctx, &before.secret_id, version)?,
+        None => require_active_version(ctx, &before.secret_id)?,
+    }
     let after = ctx
         .policy
-        .switch_credential(connection_id, Some(version.clone()))?;
+        .switch_credential(connection_id, version.clone())?;
     ctx.audit.record(
         "connection_switch_credential",
         RecordArgs {
@@ -1683,6 +1711,152 @@ fn switch_credential(
         },
     )?;
     Ok(after)
+}
+
+/// Active connections of this node pinned to `version` of `secret_id`.
+fn pinned_connections(
+    ctx: &Context,
+    secret_id: &str,
+    version: &PyInt,
+) -> Result<Vec<Connection>, Error> {
+    Ok(ctx
+        .policy
+        .list_connections()?
+        .into_iter()
+        .filter(|c| {
+            c.secret_id == secret_id
+                && c.status == "active"
+                && c.secret_version.as_ref().is_some_and(|v| v.eq_int(version))
+        })
+        .collect())
+}
+
+/// Issue #29: an activation retires the version it replaces, so a local
+/// connection pinned to that version -- as `rotation activate` pins the
+/// connection it switches -- would be left on a version that can no longer
+/// authenticate (`credential_unavailable`). The vault keeps the prototype's
+/// rule (an activation re-binds only the connections that follow the active
+/// version); `secret put` and `rotation activate` move these pinned ones to
+/// the new version themselves, audit each move and report it.
+fn follow_activation(
+    ctx: &Context,
+    pinned: &[Connection],
+    version: &PyInt,
+) -> Result<Vec<String>, Error> {
+    let mut moved = Vec::new();
+    for connection in pinned {
+        let after = ctx
+            .policy
+            .switch_credential(&connection.id, Some(version.clone()))?;
+        ctx.audit.record(
+            "connection_switch_credential",
+            RecordArgs {
+                caller: Some("admin"),
+                connection: Some(&after.id),
+                result: Some("ok"),
+                policy_version: Some(after.policy_version.clone()),
+                extra: vec![
+                    ("secret_id", json!(after.secret_id)),
+                    ("version", json!(version)),
+                    ("state", json!("followed_activation")),
+                ],
+                ..Default::default()
+            },
+        )?;
+        moved.push(after.id);
+    }
+    Ok(moved)
+}
+
+/// The local, unshared connections pinned to the active version of
+/// `secret_id`, which activating another version retires.
+fn pinned_to_active(ctx: &Context, secret_id: &str) -> Result<Vec<Connection>, Error> {
+    let active = match ctx.vault.get_meta(secret_id) {
+        Ok(meta) => meta.active_version,
+        Err(error) if error.is(crate::errors::ErrorClass::NotFound) => None,
+        Err(error) => return Err(error),
+    };
+    let Some(active) = active.as_ref().and_then(resolved_int) else {
+        return Ok(Vec::new());
+    };
+    let mut pinned = Vec::new();
+    for connection in pinned_connections(ctx, secret_id, &active)? {
+        if connection_shared_env(ctx, &connection.id)?.is_none() {
+            pinned.push(connection);
+        }
+    }
+    Ok(pinned)
+}
+
+fn resolved_int(version: &crate::vault::ResolvedVersion) -> Option<PyInt> {
+    match version {
+        crate::vault::ResolvedVersion::Integer(version) => Some(version.clone()),
+        crate::vault::ResolvedVersion::Raw(raw) => PyInt::from_python_int(raw),
+    }
+}
+
+/// A shared environment's folded document, without audit.
+fn shared_document(ctx: &Context, env_id: &str) -> Result<Value, Error> {
+    let (facts, _, _) = crate::team::sync::load_facts(ctx, env_id)?;
+    let commits = crate::team::commit::CommitStore::new(ctx.state, env_id).all_commits()?;
+    Ok(
+        crate::team::fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?
+            .document,
+    )
+}
+
+/// Issue #29, shared environment: switch ops that move every live
+/// connection of the folded `doc` pinned to the active version of
+/// `secret_id` -- which activating `version_id` retires -- to `version_id`,
+/// in the same commit as the activation, so every node (an earlier build
+/// too) applies the move with it. `except` is the connection the command
+/// pins itself. Returns the ops and the connection ids.
+fn follow_activation_ops(
+    doc: &Value,
+    secret_id: &str,
+    version_id: &str,
+    except: Option<&str>,
+) -> (Vec<Value>, Vec<String>) {
+    let previous = &doc["secrets"][secret_id]["active_version"];
+    if previous.is_null() || previous == version_id {
+        return (Vec::new(), Vec::new());
+    }
+    let mut ops = Vec::new();
+    let mut ids = Vec::new();
+    for (id, connection) in doc["connections"].as_object().into_iter().flatten() {
+        if Some(id.as_str()) != except
+            && connection["secret_id"] == secret_id
+            && connection["secret_version"] == *previous
+            && connection["status"] == "active"
+        {
+            ops.push(json!({"op":"connection.switch_credential","id":id,"secret_id":secret_id,"secret_version":version_id}));
+            ids.push(id.clone());
+        }
+    }
+    (ops, ids)
+}
+
+/// `secret retire` / `rotation finish` refuse to retire the active version
+/// or one a connection is pinned to, shared or not.
+fn require_retirable(
+    ctx: &Context,
+    secret_id: &str,
+    version: &PyInt,
+    active: Option<&crate::vault::ResolvedVersion>,
+) -> Result<(), Error> {
+    if active.is_some_and(|active| active.equals_integer(version)) {
+        return Err(Error::invalid_input("version_is_active")
+            .with_detail("activate another version first (rotation activate)"));
+    }
+    let pinned: Vec<String> = pinned_connections(ctx, secret_id, version)?
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    if !pinned.is_empty() {
+        return Err(Error::invalid_input("version_in_use")
+            .with_detail(format!("pinned by connections: {}", pinned.join(","))));
+    }
+    Ok(())
 }
 
 fn local_command(a: &Args) -> Result<Value, Error> {
@@ -1778,6 +1952,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     return refuse_cli_env(&ctx, &conn.id, Some(a.req("id")), "secret_put");
                 }
             }
+            let pinned = if a.has("staged") {
+                Vec::new()
+            } else {
+                pinned_to_active(&ctx, a.req("id"))?
+            };
             let version = ctx.vault.put_secret(
                 a.req("id"),
                 a.req("kind"),
@@ -1786,9 +1965,12 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 a.req("environment"),
                 !a.has("staged"),
             )?;
-            Ok(
-                json!({"id":a.req("id"),"version":version,"status":if a.has("staged") {"staged"} else {"active"},"kind":a.req("kind"),"project":a.req("project"),"environment":a.req("environment")}),
-            )
+            let moved = follow_activation(&ctx, &pinned, &version)?;
+            let mut out = json!({"id":a.req("id"),"version":version,"status":if a.has("staged") {"staged"} else {"active"},"kind":a.req("kind"),"project":a.req("project"),"environment":a.req("environment")});
+            if !moved.is_empty() {
+                out["moved_connections"] = json!(moved);
+            }
+            Ok(out)
         }
         ("secret", "list") => Ok(
             json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(secret_view).collect::<Vec<_>>()}),
@@ -1835,6 +2017,10 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             if let Some(env_id) = secret_shared_env(&ctx, id)? {
                 let version_id = shared_version_id(&ctx, id, version.clone())?;
                 let is_retire = a.action == "retire" || a.command == "rotation";
+                if is_retire {
+                    let active = ctx.vault.get_meta(id)?.active_version;
+                    require_retirable(&ctx, id, &version, active.as_ref())?;
+                }
                 let result = if is_retire {
                     team_commit(
                         &ctx,
@@ -2186,12 +2372,22 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )
         }
         ("connection", "switch-credential") => {
-            let ver = a
-                .version("version")?
-                .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
+            let ver = a.version("version")?;
+            if ver.is_none() != a.has("follow-active") {
+                return Err(Error::invalid_input("invalid_arguments"));
+            }
             let before = ctx.policy.get_connection(a.req("id"))?;
             if let Some(env_id) = connection_shared_env(&ctx, a.req("id"))? {
-                let version_id = shared_version_id(&ctx, &before.secret_id, ver.clone())?;
+                let version_id = match ver {
+                    Some(ver) => {
+                        require_usable_version(&ctx, &before.secret_id, &ver)?;
+                        Some(shared_version_id(&ctx, &before.secret_id, ver)?)
+                    }
+                    None => {
+                        require_active_version(&ctx, &before.secret_id)?;
+                        None
+                    }
+                };
                 let result = team_commit(
                     &ctx,
                     &env_id,
@@ -2440,24 +2636,24 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let version = a
                 .version("version")?
                 .ok_or_else(|| Error::invalid_input("invalid_arguments"))?;
+            // Read what this activation retires, and act on it, under one lock.
+            let _lock = ctx.state.lock()?;
             let before = ctx.policy.get_connection(a.req("connection"))?;
             let previous = ctx.vault.get_meta(&before.secret_id)?.active_version;
             if let Some(env_id) = connection_shared_env(&ctx, &before.id)? {
+                require_usable_version(&ctx, &before.secret_id, &version)?;
                 let version_id = shared_version_id(&ctx, &before.secret_id, version.clone())?;
-                team_commit(
-                    &ctx,
-                    &env_id,
-                    vec![
-                        json!({"op":"connection.switch_credential","id":before.id,"secret_id":before.secret_id,"secret_version":version_id}),
-                    ],
-                )?;
-                let result = team_commit(
-                    &ctx,
-                    &env_id,
-                    vec![
-                        json!({"op":"secret.activate","secret_id":before.secret_id,"version_id":version_id}),
-                    ],
-                )?;
+                // One commit: pin this connection, activate, and move the
+                // connections pinned to the version the activation retires.
+                let doc = shared_document(&ctx, &env_id)?;
+                let (follow, moved) =
+                    follow_activation_ops(&doc, &before.secret_id, &version_id, Some(&before.id));
+                let mut ops = vec![
+                    json!({"op":"connection.switch_credential","id":before.id,"secret_id":before.secret_id,"secret_version":version_id}),
+                    json!({"op":"secret.activate","secret_id":before.secret_id,"version_id":version_id}),
+                ];
+                ops.extend(follow);
+                let result = team_commit(&ctx, &env_id, ops)?;
                 let after = ctx.policy.get_connection(&before.id)?;
                 let others = ctx
                     .policy
@@ -2468,15 +2664,27 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                     })
                     .map(|c| c.id)
                     .collect::<Vec<_>>();
-                return Ok(
-                    json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|format!("{v}")).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0}),
-                );
+                let mut out = json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|v|format!("{v}")).unwrap_or("<old>".into())),"commit":result["commit"],"propagated_to":0});
+                if !moved.is_empty() {
+                    out["moved_connections"] = json!(moved);
+                }
+                return Ok(out);
             }
             // Pin first (one policy-version bump for this connection), then activate:
-            // activating re-binds only the other unpinned connections that follow the secret.
-            let after = switch_credential(&ctx, &before.id, version.clone())?;
+            // activating re-binds only the other unpinned connections that follow the secret,
+            // and the ones pinned to the version it retires move along (issue #29).
+            let after = switch_credential(&ctx, &before.id, Some(version.clone()))?;
+            let pinned = if previous
+                .as_ref()
+                .is_some_and(|active| active.equals_integer(&version))
+            {
+                Vec::new()
+            } else {
+                pinned_to_active(&ctx, &before.secret_id)?
+            };
             ctx.vault
                 .set_version_status(&before.secret_id, &version, "active")?;
+            let moved = follow_activation(&ctx, &pinned, &version)?;
             let after = ctx.policy.get_connection(&after.id)?;
             let others = ctx
                 .policy
@@ -2487,9 +2695,11 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 })
                 .map(|c| c.id)
                 .collect::<Vec<_>>();
-            Ok(
-                json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|n|format!("{n}")).unwrap_or("<old>".into()))}),
-            )
+            let mut out = json!({"connection":after.id,"secret_id":after.secret_id,"version":version,"previous_active":previous,"policy_version":after.policy_version,"other_connections":others,"next":format!("verify the new credential works, then: rotation finish --secret-id {} --version {}",after.secret_id,previous.map(|n|format!("{n}")).unwrap_or("<old>".into()))});
+            if !moved.is_empty() {
+                out["moved_connections"] = json!(moved);
+            }
+            Ok(out)
         }
         ("backup", "") => {
             let path = PathBuf::from(user_path(a.req("out"))?);
@@ -2724,8 +2934,11 @@ fn shared_version_id(ctx: &Context, secret_id: &str, version: PyInt) -> Result<S
         .map(str::to_owned)
         .ok_or_else(|| Error::not_found("secret_version_not_found"))
 }
-fn current_dek(ctx: &Context, env_id: &str) -> Result<(String, crate::secret::SecretBytes), Error> {
-    let doc = crate::team::membership::load_environment(ctx, env_id)?.document;
+fn current_dek(
+    ctx: &Context,
+    env_id: &str,
+    doc: &Value,
+) -> Result<(String, crate::secret::SecretBytes), Error> {
     let generation = doc["dek"]["current"]
         .as_str()
         .ok_or_else(|| Error::invalid_input("team_env_no_generation"))?
@@ -2756,7 +2969,10 @@ fn shared_put(
     location: (&Value, &Value),
     staged: bool,
 ) -> Result<Value, Error> {
-    let (generation, dek) = current_dek(ctx, env_id)?;
+    // The folded document is read and both commits written under one lock.
+    let _lock = ctx.state.lock()?;
+    let doc = shared_document(ctx, env_id)?;
+    let (generation, dek) = current_dek(ctx, env_id, &doc)?;
     let version_id = random_version_id();
     let ciphertext =
         crate::team::envelope::encrypt_secret(dek.expose(), env_id, id, &version_id, value)?;
@@ -2768,16 +2984,19 @@ fn shared_put(
             json!({"op":"secret.put_version","secret_id":id,"kind":kind,"generation_id":generation,"version_id":version_id,"ciphertext":ciphertext,"public":public}),
         ],
     )?;
+    let mut moved = Vec::new();
     if !staged {
-        result = team_commit(
-            ctx,
-            env_id,
-            vec![json!({"op":"secret.activate","secret_id":id,"version_id":version_id})],
-        )?;
+        let (follow, ids) = follow_activation_ops(&doc, id, &version_id, None);
+        moved = ids;
+        let mut ops = vec![json!({"op":"secret.activate","secret_id":id,"version_id":version_id})];
+        ops.extend(follow);
+        result = team_commit(ctx, env_id, ops)?;
     }
-    Ok(
-        json!({"id":id,"version_id":version_id,"status":if staged{"staged"}else{"active"},"kind":kind,"project":location.0,"environment":location.1,"commit":result["commit"],"propagated_to":0}),
-    )
+    let mut out = json!({"id":id,"version_id":version_id,"status":if staged{"staged"}else{"active"},"kind":kind,"project":location.0,"environment":location.1,"commit":result["commit"],"propagated_to":0});
+    if !moved.is_empty() {
+        out["moved_connections"] = json!(moved);
+    }
+    Ok(out)
 }
 fn shared_connection_op(connection: &Connection, secret_version_id: Option<String>) -> Value {
     let mut data = connection.to_value();
