@@ -126,15 +126,27 @@ impl RemovalSchedule {
         let mut pending = Vec::new();
         let mut bounds: BTreeMap<String, PyInt> = BTreeMap::new();
         for fp in &facts.removed_members {
-            let mut cutoff: Option<(PyInt, PyInt)> = None;
+            // Earliest removal by anyone, earliest removal by someone else,
+            // and the highest sequence a remover other than the member
+            // itself attested.
+            let mut any: Option<(PyInt, PyInt)> = None;
+            let mut by_other: Option<(PyInt, PyInt)> = None;
+            let mut bound: Option<PyInt> = None;
             let mut positioned = true;
             for (hash, fact) in facts.removal_facts.iter().filter(|(_, f)| &f.target == fp) {
                 let Ok(hlc) = Hlc::parse(&fact.hlc) else {
                     positioned = false;
                     break;
                 };
-                if cutoff.as_ref().is_none_or(|earliest| hlc < *earliest) {
-                    cutoff = Some(hlc);
+                if any.as_ref().is_none_or(|earliest| hlc < *earliest) {
+                    any = Some(hlc.clone());
+                }
+                // A device removing itself attests nothing about itself.
+                if &fact.author == fp {
+                    continue;
+                }
+                if by_other.as_ref().is_none_or(|earliest| hlc < *earliest) {
+                    by_other = Some(hlc);
                 }
                 let attestation = commits
                     .iter()
@@ -147,13 +159,23 @@ impl RemovalSchedule {
                     .min_by(|a, b| a.author_seq.cmp(&b.author_seq));
                 if let Some(commit) = attestation {
                     let seen = commit.seen.get(fp).cloned().unwrap_or_else(PyInt::zero);
-                    if bounds.get(fp).is_none_or(|bound| seen > *bound) {
-                        bounds.insert(fp.clone(), seen);
+                    if bound.as_ref().is_none_or(|highest| seen > *highest) {
+                        bound = Some(seen);
                     }
                 }
             }
-            if let (true, Some(cutoff)) = (positioned, cutoff) {
+            if !positioned {
+                continue;
+            }
+            // Once a remover's attestation is known, the removed device's
+            // own (possibly backdated) self-removal facts no longer move
+            // the cut.
+            let cutoff = if bound.is_some() { by_other } else { any };
+            if let Some(cutoff) = cutoff {
                 pending.push((cutoff, fp.clone()));
+            }
+            if let Some(bound) = bound {
+                bounds.insert(fp.clone(), bound);
             }
         }
         pending.sort();
@@ -3644,6 +3666,58 @@ mod tests {
         assert_eq!(member["status"], json!("removed"));
         assert_eq!(member["role"], json!("user"));
         assert_eq!(skip_reasons(&result, &readd), ["member_removed"]);
+    }
+
+    /// A removed admin cannot undo its own earlier work by publishing a
+    /// backdated self-removal: once the remover's rotation attests its
+    /// history, only removals by others place the cut.
+    #[test]
+    fn backdated_self_removal_does_not_move_an_attested_removal() {
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let add_admin = member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin");
+        let kept = connection_create_commit(&env_id, &admin, 1, "3000-0000", "kept");
+        let rotation = removal_rotation(&env_id, &owner, 3, "4001-0000", &dek, &[(&admin, 1)]);
+        let mut facts = removal(&owner, &admin, "4000-0000");
+        facts.removal_facts.insert(
+            "6".repeat(64),
+            RemovalFact {
+                author: admin.fingerprint().unwrap(),
+                target: admin.fingerprint().unwrap(),
+                hlc: "2500-0000".into(),
+            },
+        );
+        let attested = fold(
+            &env_id,
+            vec![c1.clone(), add_admin.clone(), kept.clone(), rotation],
+            Some(&facts),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            doc_obj(&attested)["connections"]
+                .as_object()
+                .unwrap()
+                .contains_key("kept")
+        );
+        // Without the attestation the earliest removal is the cut.
+        let unattested = fold(
+            &env_id,
+            vec![c1, add_admin, kept],
+            Some(&facts),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            !doc_obj(&unattested)["connections"]
+                .as_object()
+                .unwrap()
+                .contains_key("kept")
+        );
     }
 
     /// The same commits and facts fold to the same document in any order.
