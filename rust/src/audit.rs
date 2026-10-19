@@ -106,6 +106,7 @@ pub const EVENTS: &[&str] = &[
     "team_fact_apply",
     "team_fact_rejected",
     "team_sync_vector",
+    "team_sync_poll",
     "team_share",
     "team_invite_create",
     "team_invite_revoke",
