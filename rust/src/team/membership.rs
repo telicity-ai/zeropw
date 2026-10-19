@@ -312,7 +312,13 @@ pub fn author_fact(
     if !sync::fact_role_ok(&doc, kind, &device.fingerprint()?, &target) {
         return Err(Error::policy_denied("team_fact_not_authorized"));
     }
-    let fact = sync::sign_fact(&device, env_id, kind, target, &Hlc::new(0, 0).tick(None))?;
+    // Like `TeamSync::publish_fact`: the fact sorts after every commit this
+    // node has seen, so a removal never cuts off work it already accepted.
+    let mut hlc = Hlc::new(0, 0);
+    for observed in CommitStore::new(ctx.state, env_id).all_commits()? {
+        hlc.observe(&observed.hlc)?;
+    }
+    let fact = sync::sign_fact(&device, env_id, kind, target, &hlc.tick(None))?;
     let _lock = ctx.state.lock()?;
     sync::receipt_fact(ctx, &fact)?;
     ctx.state.append_line(

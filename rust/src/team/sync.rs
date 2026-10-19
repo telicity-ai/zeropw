@@ -2323,6 +2323,16 @@ fn apply_fact(facts: &mut Facts, fact: &Fact) {
         "member_removed" => {
             if let Some(fp) = fact.target["fingerprint"].as_str() {
                 facts.removed_members.insert(fp.into());
+                if let Ok(hash) = fact.hash() {
+                    facts.removal_facts.insert(
+                        hash,
+                        fold::RemovalFact {
+                            author: fact.author.clone(),
+                            target: fp.into(),
+                            hlc: fact.hlc.clone(),
+                        },
+                    );
+                }
             }
         }
         "incident" => facts.incidents.push(fact.target.clone()),
