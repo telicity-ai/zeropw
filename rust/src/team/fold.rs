@@ -120,10 +120,12 @@ pub struct RemovalFact {
 ///   seen; the member's commits past the lowest such sequence are skipped
 ///   wherever they sort, so backdating cannot put new work in front of the
 ///   cut. The member's own facts never move it.
-/// - Removed only by itself: its own `member.remove` commit places the
-///   removal in its own sequence, which it cannot backdate later work into
-///   -- provided that commit sorts no later than the device's earliest
-///   self-removal fact; a commit signed after a bare fact places nothing.
+/// - Removed only by itself: its own earliest `member.remove` commit
+///   places the removal in its own sequence, which it cannot backdate later
+///   work into. The removal takes effect there even if that op is skipped
+///   (signed before the device was admitted, say); an owner, who cannot
+///   leave, goes as soon as it no longer owns the environment. Its
+///   self-removal facts never move the placement, whatever their HLC.
 /// - Neither (a hand-built `Facts`, or a bare self-removal fact): removed
 ///   from the start of the fold, as before.
 struct RemovalSchedule {
@@ -131,34 +133,24 @@ struct RemovalSchedule {
     pending: Vec<((PyInt, PyInt), String)>,
     /// The lowest attested `author_seq` of each member removed by others.
     bounds: BTreeMap<String, PyInt>,
-    /// Members whose own `member.remove` commit places their removal.
-    self_placed: BTreeSet<String>,
+    /// Members whose own `member.remove` commit places their removal, with
+    /// that commit's `author_seq`.
+    self_placed: BTreeMap<String, PyInt>,
 }
 
 impl RemovalSchedule {
     fn new(facts: &Facts, commits: &[Commit]) -> RemovalSchedule {
         let mut pending = Vec::new();
         let mut bounds: BTreeMap<String, PyInt> = BTreeMap::new();
-        let mut self_placed = BTreeSet::new();
+        let mut self_placed = BTreeMap::new();
         for fp in &facts.removed_members {
             let mut cut: Option<(PyInt, PyInt)> = None;
             let mut bound: Option<PyInt> = None;
             let mut by_itself = false;
-            // The earliest of the member's own removal facts; `None` with
-            // `by_itself` when one of their HLCs does not parse.
-            let mut own_earliest: Option<(PyInt, PyInt)> = None;
-            let mut own_parsed = true;
             let mut positioned = true;
             for (hash, fact) in facts.removal_facts.iter().filter(|(_, f)| &f.target == fp) {
                 if &fact.author == fp {
                     by_itself = true;
-                    match Hlc::parse(&fact.hlc) {
-                        Ok(hlc) if own_earliest.as_ref().is_none_or(|e| hlc < *e) => {
-                            own_earliest = Some(hlc)
-                        }
-                        Ok(_) => {}
-                        Err(_) => own_parsed = false,
-                    }
                     continue;
                 }
                 let Ok(hlc) = Hlc::parse(&fact.hlc) else {
@@ -193,21 +185,18 @@ impl RemovalSchedule {
                     bounds.insert(fp.clone(), bound);
                 }
             } else if by_itself
-                && own_parsed
-                && let Some(own_earliest) = own_earliest
-                && commits.iter().any(|c| {
-                    &c.author == fp
-                        && c.ops.iter().any(|op| {
-                            op["op"] == "member.remove" && op["fingerprint"] == fp.as_str()
-                        })
-                        // Only a commit no later than the device's own facts
-                        // places the removal: one signed after a bare
-                        // self-removal fact would revive what the device
-                        // wrote in between (issue #34).
-                        && Hlc::parse(&c.hlc).is_ok_and(|hlc| hlc <= own_earliest)
-                })
+                && let Some(leave) = commits
+                    .iter()
+                    .filter(|c| {
+                        &c.author == fp
+                            && c.ops.iter().any(|op| {
+                                op["op"] == "member.remove" && op["fingerprint"] == fp.as_str()
+                            })
+                    })
+                    .map(|c| c.author_seq.clone())
+                    .min()
             {
-                self_placed.insert(fp.clone());
+                self_placed.insert(fp.clone(), leave);
             }
         }
         pending.sort();
@@ -223,7 +212,14 @@ impl RemovalSchedule {
         self.pending
             .iter()
             .map(|(_, fp)| fp)
-            .chain(self.self_placed.iter())
+            .chain(self.self_placed.keys())
+    }
+
+    /// `commit` is its author's own removal placing commit.
+    fn places_own_removal(&self, commit: &Commit) -> bool {
+        self.self_placed
+            .get(&commit.author)
+            .is_some_and(|seq| commit.author_seq == *seq)
     }
 
     /// The commit's author was removed by another device and the commit lies
@@ -1421,6 +1417,9 @@ fn fold_scheduled(
         working_facts.removed_members.remove(fp);
     }
     let mut pending_removals = schedule.pending.iter().peekable();
+    // Members past their own placing `member.remove` commit that are not
+    // removed yet: an owner must hand over ownership first.
+    let mut leaving: BTreeSet<String> = BTreeSet::new();
     let mut skipped: Vec<(String, usize, String)> = Vec::new();
     let mut last_target_author: Vec<(OverrideTarget, (String, PyInt, String))> = Vec::new();
     let mut overridden: Vec<Value> = Vec::new();
@@ -1523,6 +1522,24 @@ fn fold_scheduled(
                     target,
                     (commit.author.clone(), commit.author_seq.clone(), hash),
                 ));
+            }
+        }
+        // A self-removal takes effect at its own commit even when the op was
+        // skipped, so a commit that cannot apply (signed before the device's
+        // admission, say) does not leave the device a member for the rest
+        // of the fold.
+        if schedule.places_own_removal(commit) {
+            leaving.insert(commit.author.clone());
+        }
+        let ready: Vec<String> = leaving
+            .iter()
+            .filter(|fp| !py_eq(&doc["owner"], &json!(fp)))
+            .cloned()
+            .collect();
+        for fp in ready {
+            leaving.remove(&fp);
+            if !working_facts.removed_members.contains(&fp) {
+                remove_member_now(&mut doc, &mut working_facts, &fp)?;
             }
         }
     }
@@ -4003,9 +4020,9 @@ mod tests {
 
     /// Removed only by itself, a device is placed by its own `member.remove`
     /// commit: what it did before stands, nothing it signs later counts,
-    /// and later self-removal facts change nothing. A bare self-removal
-    /// fact without that commit -- or one older than the commit -- keeps the
-    /// old from-the-start removal (issue #34).
+    /// and further self-removal facts change nothing, whatever their HLC. A
+    /// bare self-removal fact without that commit keeps the old
+    /// from-the-start removal.
     #[test]
     fn self_removal_is_placed_by_its_own_commit() {
         let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
@@ -4025,7 +4042,7 @@ mod tests {
             removed_members: [fp.clone()].into_iter().collect(),
             ..Default::default()
         };
-        for (hash, hlc) in [("7".repeat(64), "4000-0001"), ("8".repeat(64), "4500-0000")] {
+        for (hash, hlc) in [("7".repeat(64), "4000-0001"), ("8".repeat(64), "1500-0000")] {
             let (hash, fact) = self_removal_fact(&admin, &hash, hlc);
             facts.removal_facts.insert(hash, fact);
         }
@@ -4034,13 +4051,6 @@ mod tests {
         assert_eq!(connection_ids(&result), ["before"]);
         assert_eq!(skip_reasons(&result, &after), ["not_admin"]);
         assert_eq!(doc_obj(&result)["members"][&fp]["status"], json!("removed"));
-        // A self-removal fact older than the commit: the commit came late,
-        // so it places nothing.
-        let mut backdated = facts.clone();
-        let (hash, fact) = self_removal_fact(&admin, &"9".repeat(64), "1500-0000");
-        backdated.removal_facts.insert(hash, fact);
-        let result = fold(&env_id, commits.clone(), Some(&backdated), None, None, None).unwrap();
-        assert!(connection_ids(&result).is_empty());
         // Without its own commit the self-removal applies from the start.
         let bare: Vec<Commit> = commits
             .into_iter()
@@ -4050,35 +4060,132 @@ mod tests {
         assert!(connection_ids(&result).is_empty());
     }
 
-    /// Issue #34: a device that left by a bare self-removal fact and later
-    /// signs `member.remove(self)` does not revive the work it wrote in
-    /// between: the late commit places nothing, so the device stays removed
-    /// from the start of the fold.
+    /// A key that left properly cannot erase what it did as a member with a
+    /// self-removal fact dated before its own commit: the device, the member
+    /// it admitted and that member's work all stay.
     #[test]
-    fn a_late_self_removal_commit_revives_nothing() {
+    fn a_backdated_self_removal_fact_erases_nothing() {
         let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
         let admin = DeviceKey::generate();
+        let admitted = DeviceKey::generate();
         let fp = admin.fingerprint().unwrap();
-        let add_admin = member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin");
-        let between = connection_create_commit(&env_id, &admin, 1, "5000-0000", "between");
-        let late_leave = signed(
-            &admin,
-            &env_id,
-            2,
-            "6000-0000",
-            json!({"op": "member.remove", "fingerprint": fp}),
-        );
+        let admitted_fp = admitted.fingerprint().unwrap();
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            member_add_commit(&env_id, &admin, 1, "2500-0000", &admitted, "admin"),
+            connection_create_commit(&env_id, &admitted, 1, "2600-0000", "kept"),
+            signed(
+                &admin,
+                &env_id,
+                2,
+                "3000-0000",
+                json!({"op": "member.remove", "fingerprint": fp}),
+            ),
+        ];
         let mut facts = Facts {
             removed_members: [fp.clone()].into_iter().collect(),
             ..Default::default()
         };
-        let (hash, fact) = self_removal_fact(&admin, &"9".repeat(64), "4000-0000");
-        facts.removal_facts.insert(hash, fact);
-        let commits = vec![c1, add_admin, between.clone(), late_leave];
+        for (hash, hlc) in [("7".repeat(64), "3000-0001"), ("8".repeat(64), "1500-0000")] {
+            let (hash, fact) = self_removal_fact(&admin, &hash, hlc);
+            facts.removal_facts.insert(hash, fact);
+        }
         let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        let members = &doc_obj(&result)["members"];
+        assert_eq!(members[&fp]["status"], json!("removed"));
+        assert_eq!(members[&admitted_fp]["status"], json!("active"));
+        assert_eq!(connection_ids(&result), ["kept"]);
+    }
+
+    /// A self-removal commit that cannot apply -- signed before the device
+    /// was admitted -- still removes the device where it sorts: the device
+    /// is never admitted and nothing it signs afterwards counts.
+    #[test]
+    fn a_self_removal_commit_that_cannot_apply_still_removes() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let planted = DeviceKey::generate();
+        let fp = admin.fingerprint().unwrap();
+        let early_leave = signed(
+            &admin,
+            &env_id,
+            1,
+            "1500-0000",
+            json!({"op": "member.remove", "fingerprint": fp}),
+        );
+        let add_admin = member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin");
+        let later_add = member_add_commit(&env_id, &admin, 2, "9000-0000", &planted, "admin");
+        let later_conn = connection_create_commit(&env_id, &admin, 3, "9500-0000", "planted");
+        let mut facts = Facts {
+            removed_members: [fp.clone()].into_iter().collect(),
+            ..Default::default()
+        };
+        let (hash, fact) = self_removal_fact(&admin, &"7".repeat(64), "4000-0000");
+        facts.removal_facts.insert(hash, fact);
+        let commits = vec![
+            c1,
+            early_leave.clone(),
+            add_admin.clone(),
+            later_add.clone(),
+            later_conn,
+        ];
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(skip_reasons(&result, &early_leave), ["member_not_found"]);
+        assert_eq!(skip_reasons(&result, &add_admin), ["member_removed"]);
+        assert_eq!(skip_reasons(&result, &later_add), ["not_admin"]);
+        let members = &doc_obj(&result)["members"];
+        assert!(members.get(planted.fingerprint().unwrap()).is_none());
+        assert_ne!(members[&fp]["status"], json!("active"));
         assert!(connection_ids(&result).is_empty());
-        assert_eq!(skip_reasons(&result, &between), ["not_admin"]);
-        assert_ne!(doc_obj(&result)["members"][&fp]["status"], json!("active"));
+    }
+
+    /// The owner cannot leave: its self-removal commit is skipped, and the
+    /// removal takes effect once it has handed over ownership, so the
+    /// handover stands and nothing it signs afterwards does.
+    #[test]
+    fn an_owner_leaves_once_it_hands_over_ownership() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let heir = DeviceKey::generate();
+        let fp = owner.fingerprint().unwrap();
+        let heir_fp = heir.fingerprint().unwrap();
+        let leave = signed(
+            &owner,
+            &env_id,
+            3,
+            "3000-0000",
+            json!({"op": "member.remove", "fingerprint": fp}),
+        );
+        let still_owner = connection_create_commit(&env_id, &owner, 4, "3500-0000", "kept");
+        let handover = signed(
+            &owner,
+            &env_id,
+            5,
+            "4000-0000",
+            json!({"op": "owner.transfer", "fingerprint": heir_fp}),
+        );
+        let after = connection_create_commit(&env_id, &owner, 6, "5000-0000", "after");
+        let mut facts = Facts {
+            removed_members: [fp.clone()].into_iter().collect(),
+            ..Default::default()
+        };
+        let (hash, fact) = self_removal_fact(&owner, &"7".repeat(64), "6000-0000");
+        facts.removal_facts.insert(hash, fact);
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &heir, "admin"),
+            leave.clone(),
+            still_owner,
+            handover,
+            after.clone(),
+        ];
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(skip_reasons(&result, &leave), ["cannot_remove_owner"]);
+        assert_eq!(skip_reasons(&result, &after), ["not_admin"]);
+        let doc = doc_obj(&result);
+        assert_eq!(doc["owner"], json!(heir_fp));
+        assert_eq!(doc["members"][&fp]["status"], json!("removed"));
+        assert_eq!(connection_ids(&result), ["kept"]);
     }
 
     /// Two removals by other devices: the earliest places the cut and the
