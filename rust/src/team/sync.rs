@@ -146,6 +146,45 @@ mod retry_tests {
         fn close(&self) {}
     }
 
+    /// Hands out the queued sessions in order, counting every dial.
+    struct QueueTransport {
+        queue: Mutex<Vec<Arc<dyn Session>>>,
+        dials: std::sync::atomic::AtomicUsize,
+    }
+    impl QueueTransport {
+        fn new(queue: Vec<Arc<dyn Session>>) -> Arc<Self> {
+            Arc::new(QueueTransport {
+                queue: Mutex::new(queue),
+                dials: Default::default(),
+            })
+        }
+        fn dials(&self) -> usize {
+            self.dials.load(Ordering::SeqCst)
+        }
+    }
+    impl Transport for QueueTransport {
+        fn set_membership(&self, _: MembershipCheck) {}
+        fn set_invite_check(&self, _: Option<InviteCheck>) {}
+        fn set_handshake_failed(&self, _: Option<HandshakeFailedHook>) {}
+        fn listen(&self, _: &str, _: OnSession) -> Result<()> {
+            Ok(())
+        }
+        fn dial(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<InviteProof>,
+        ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
+            self.dials.fetch_add(1, Ordering::SeqCst);
+            let mut queue = self.queue.lock().unwrap();
+            if queue.is_empty() {
+                return Err(SessionClosed("synthetic_no_session"));
+            }
+            Ok(queue.remove(0))
+        }
+        fn close(&self) {}
+    }
+
     struct RecordingSession {
         peer: DeviceRecord,
         env_id: String,
@@ -491,13 +530,16 @@ mod retry_tests {
         team: Arc<TeamSync>,
     }
     fn owner_with_admin_peer() -> OwnerWithAdminPeer {
+        owner_with_admin_peer_configured(Config::default())
+    }
+    fn owner_with_admin_peer_configured(config: Config) -> OwnerWithAdminPeer {
         let root = TempDir::new().unwrap();
         let ctx = Arc::new(
             Context::initialize(
                 root.path().join("a"),
                 "synthetic-admin",
                 "synthetic-recovery",
-                Config::default(),
+                config,
                 crate::clock::system(),
             )
             .unwrap(),
@@ -573,6 +615,37 @@ mod retry_tests {
             .filter(|m| m["type"] == kind)
             .cloned()
             .collect()
+    }
+    fn recording_session(peer: DeviceRecord, env_id: &str) -> Arc<RecordingSession> {
+        Arc::new(RecordingSession {
+            peer,
+            env_id: env_id.to_owned(),
+            sent: Mutex::new(Vec::new()),
+            on_first_send: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        })
+    }
+    /// A second shared environment on `f`'s node, `name/dev`, known to `f.team`
+    /// only when `register` is set.
+    fn another_environment(f: &OwnerWithAdminPeer, name: &str, register: bool) -> String {
+        f.ctx.projects.create(name, &["dev"]).unwrap();
+        let env_id = crate::team::membership::share_environment(
+            &f.ctx,
+            None,
+            name,
+            "dev",
+            "owner",
+            "synthetic-admin",
+        )
+        .unwrap()["env_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if register {
+            f.team.register_env(&env_id).unwrap();
+        }
+        env_id
     }
     fn quarantined(ctx: &Context, env_id: &str) -> Vec<String> {
         std::fs::read_dir(ctx.state.path.join(format!("team/{env_id}/rejected")))
@@ -780,6 +853,497 @@ mod retry_tests {
         assert!(env.catching_up.is_empty() && env.held.is_empty());
     }
 
+    /// A joiner removed while its catch-up is held gets its removal notice
+    /// at once and nothing else: neither the held frames nor the history a
+    /// VECTOR answer already under way would send (section 4.4).
+    #[test]
+    fn a_joiner_removed_while_held_gets_only_its_removal_notice() {
+        // Its VECTOR asks for the whole history, or for none of it.
+        for full in [false, true] {
+            let f = owner_with_admin_peer();
+            let peer = f.peer_key.fingerprint().unwrap();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.env_id)
+                .unwrap()
+                .pending_invites
+                .insert(peer.clone(), ("admin".into(), "bob".into()));
+            assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+            let live = settings_commit(&f.team.device, &f.env_id, 99, commit::now_ms() + 1);
+            f.team.broadcast(
+                &f.env_id,
+                &json!({"type":"COMMIT","commit":live.to_dict()}),
+                None,
+            );
+            assert!(f.recorder.sent.lock().unwrap().is_empty());
+            let removal = sign_fact(
+                &f.team.device,
+                &f.env_id,
+                "member_removed",
+                json!({"fingerprint": peer}),
+                "10002-0000",
+            )
+            .unwrap();
+            f.team.drain_removed(&f.env_id, &peer);
+            f.team.send_removal_notice(&f.env_id, &removal, None);
+            let vector = if full {
+                json!(CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap())
+            } else {
+                json!({})
+            };
+            f.team
+                .handle_vector(
+                    &f.env_id,
+                    &f.session,
+                    &json!({"type":"VECTOR","vector":vector}),
+                )
+                .unwrap();
+            let sent = f.recorder.sent.lock().unwrap().clone();
+            assert_eq!(sent, [json!({"type":"FACT","fact":removal.to_dict()})]);
+            let env = &f.team.envs.lock().unwrap()[&f.env_id];
+            assert!(env.catching_up.is_empty() && env.held.is_empty());
+        }
+    }
+
+    /// An unreadable `deferred/` entry -- one released or corrupted while it
+    /// is read -- keeps an early commit waiting; it does not end the session.
+    #[test]
+    fn an_unreadable_deferred_entry_keeps_an_early_commit_waiting() {
+        let f = owner_with_admin_peer();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let deferred = f.ctx.state.path.join(format!("team/{}/deferred", f.env_id));
+        std::fs::create_dir_all(&deferred).unwrap();
+        std::fs::write(deferred.join("synthetic.json"), b"{not json").unwrap();
+        let early = settings_commit(&f.peer_key, &f.env_id, 2, commit::now_ms() + 1);
+        f.team
+            .handle_commit(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"COMMIT","commit":early.to_dict()}),
+            )
+            .unwrap();
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        let peer = f.peer_key.fingerprint().unwrap();
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.sessions.contains_key(&peer));
+        assert!(
+            env.vector_due.contains(&peer),
+            "the sender is marked due for the range"
+        );
+    }
+
+    /// Section 6.4: an environment whose poll fails -- on an unreadable
+    /// `deferred/` entry here -- holds up no environment polled after it.
+    #[test]
+    fn a_failing_environment_holds_up_no_other_environment() {
+        let f = owner_with_admin_peer();
+        let second = another_environment(&f, "other", true);
+        let (broken, healthy) = if f.env_id < second {
+            (f.env_id.clone(), second)
+        } else {
+            (second, f.env_id.clone())
+        };
+        let deferred = f.ctx.state.path.join(format!("team/{broken}/deferred"));
+        std::fs::create_dir_all(&deferred).unwrap();
+        std::fs::write(deferred.join("synthetic.json"), b"{not json").unwrap();
+        let recorder = recording_session(f.peer_key.record().unwrap(), &healthy);
+        assert!(f.team.accept_session(&healthy, recorder.clone(), true));
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(sent_of_type(&recorder, "VECTOR").len(), 1);
+    }
+
+    /// Section 6.4: while its poll fails, an environment still closes its due
+    /// sessions, so a drained device's window stays bounded (section 4.4),
+    /// but asks no peer for anything. Once `deferred/` reads again, the peer
+    /// an early commit asked for meanwhile gets one VECTOR, not one more for
+    /// the periodic exchange that also fell due.
+    #[test]
+    fn a_failing_environment_closes_due_sessions_and_asks_nothing() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let drained_key = DeviceKey::generate();
+        let drained = recording_session(drained_key.record().unwrap(), &f.env_id);
+        assert!(f.team.accept_session(&f.env_id, drained.clone(), true));
+        let gone = drained_key.fingerprint().unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .draining
+            .insert(gone.clone(), Instant::now());
+        let ended_key = DeviceKey::generate();
+        let ended = recording_session(ended_key.record().unwrap(), &f.env_id);
+        assert!(f.team.accept_session(&f.env_id, ended.clone(), true));
+        ended.close();
+        let entry = f
+            .ctx
+            .state
+            .path
+            .join(format!("team/{}/deferred/synthetic.json", f.env_id));
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, b"[1]").unwrap();
+        let early = settings_commit(&f.peer_key, &f.env_id, 2, commit::now_ms() + 1);
+        f.team
+            .handle_commit(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"COMMIT","commit":early.to_dict()}),
+            )
+            .unwrap();
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .vector_due
+                .contains(&peer)
+        );
+        assert_eq!(f.team.poll().unwrap_err().reason, "commit_malformed");
+        assert!(drained.is_closed());
+        {
+            let envs = f.team.envs.lock().unwrap();
+            let sessions = &envs[&f.env_id].sessions;
+            assert!(!sessions.contains_key(&gone));
+            assert!(!sessions.contains_key(&ended_key.fingerprint().unwrap()));
+        }
+        assert!(sent_of_type(&f.recorder, "VECTOR").is_empty());
+        std::fs::remove_file(&entry).unwrap();
+        f.team.poll().unwrap();
+        assert_eq!(sent_of_type(&f.recorder, "VECTOR").len(), 1);
+    }
+
+    /// Section 6.4: an environment that cannot be loaded when it is
+    /// discovered holds up neither the discovery of another new environment
+    /// nor the poll of the known ones.
+    #[test]
+    fn an_environment_that_cannot_load_holds_up_no_other() {
+        let f = owner_with_admin_peer();
+        let first = another_environment(&f, "first", false);
+        let second = another_environment(&f, "second", false);
+        let (broken, healthy) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        std::fs::write(
+            f.ctx.state.path.join(format!("team/{broken}/peers.json")),
+            b"[1]",
+        )
+        .unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        let known = f.team.known_envs();
+        assert!(known.contains(&healthy) && !known.contains(&broken));
+        assert_eq!(sent_of_type(&f.recorder, "VECTOR").len(), 1);
+    }
+
+    /// Section 6.4: a failing environment's poll dials no one, and dials as
+    /// soon as it succeeds again.
+    #[test]
+    fn a_failing_environment_dials_no_one() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        let (session, _tx) = scripted(f.peer_key.record().unwrap());
+        let session: Arc<dyn Session> = session;
+        let transport = QueueTransport::new(vec![session]);
+        let team = TeamSync::new(f.ctx.clone(), transport.clone(), f.team.device.clone());
+        team.register_env(&f.env_id).unwrap();
+        team.set_peer_address(&f.env_id, &peer, "synthetic-address")
+            .unwrap();
+        let entry = f
+            .ctx
+            .state
+            .path
+            .join(format!("team/{}/deferred/synthetic.json", f.env_id));
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, b"{not json").unwrap();
+        for _ in 0..3 {
+            assert_eq!(team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert_eq!(transport.dials(), 0);
+        std::fs::remove_file(&entry).unwrap();
+        team.poll().unwrap();
+        assert_eq!(transport.dials(), 1);
+        team.stop();
+    }
+
+    /// Section 6.4: a failing environment still closes sessions past the
+    /// session age limit.
+    #[test]
+    fn a_failing_environment_closes_expired_sessions() {
+        let f = owner_with_admin_peer_configured(Config {
+            team_session_max_age_seconds: 0.0,
+            ..Config::default()
+        });
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let entry = f
+            .ctx
+            .state
+            .path
+            .join(format!("team/{}/deferred/synthetic.json", f.env_id));
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, b"{not json").unwrap();
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert!(f.recorder.is_closed());
+        assert!(
+            !f.team.envs.lock().unwrap()[&f.env_id]
+                .sessions
+                .contains_key(&peer)
+        );
+    }
+
+    /// Issue #14: a dialed session that reads closed before its receiver has
+    /// noticed is dropped by the poll but not redialed in the same tick, so
+    /// its receiver counts the refused dial and the next dial backs off.
+    #[test]
+    fn a_session_the_poll_closes_is_redialed_from_the_next_tick() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        let delay = Duration::from_millis(1500);
+        let (first, _first_tx) = scripted_with(f.peer_key.record().unwrap(), false, delay);
+        let (second, _second_tx) = scripted_with(f.peer_key.record().unwrap(), false, delay);
+        let queued: Vec<Arc<dyn Session>> = vec![first.clone(), second];
+        let transport = QueueTransport::new(queued);
+        let team = TeamSync::new(f.ctx.clone(), transport.clone(), f.team.device.clone());
+        team.register_env(&f.env_id).unwrap();
+        team.set_peer_address(&f.env_id, &peer, "synthetic-address")
+            .unwrap();
+        team.poll().unwrap();
+        assert_eq!(transport.dials(), 1);
+        first.close();
+        team.poll().unwrap();
+        assert_eq!(transport.dials(), 1);
+        let (min, _) = Config::default().team_dial_backoff;
+        wait_for(|| {
+            team.envs.lock().unwrap()[&f.env_id]
+                .backoff
+                .contains_key(&peer)
+        });
+        {
+            let envs = team.envs.lock().unwrap();
+            let env = &envs[&f.env_id];
+            assert_eq!(env.backoff[&peer], Duration::from_secs_f64(min));
+            assert!(env.next_attempt.contains_key(&peer));
+        }
+        team.stop();
+    }
+
+    /// Section 6.4: a persistent poll failure is audited once per reason,
+    /// not on every tick, and again when it starts anew.
+    #[test]
+    fn a_failing_environment_is_audited_once_per_failure() {
+        let f = owner_with_admin_peer();
+        let entry = f
+            .ctx
+            .state
+            .path
+            .join(format!("team/{}/deferred/synthetic.json", f.env_id));
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        // A commit whose HLC does not parse: `deferred/` reads, and only the
+        // release fails.
+        let mut malformed = settings_commit(&f.peer_key, &f.env_id, 1, 1000).to_dict();
+        malformed["hlc"] = json!("synthetic");
+        std::fs::write(&entry, malformed.to_string()).unwrap();
+        let audited = || {
+            f.ctx
+                .state
+                .read_lines(crate::audit::AUDIT_FILE, None)
+                .unwrap()
+                .iter()
+                .filter_map(|line| pyjson::loads(line).ok())
+                .filter(|record| record["event"] == "team_sync_poll")
+                .collect::<Vec<_>>()
+        };
+        for _ in 0..3 {
+            assert_eq!(f.team.poll().unwrap_err().reason, "hlc_malformed");
+        }
+        let records = audited();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["result"], "failed");
+        assert_eq!(records[0]["reason"], "hlc_malformed");
+        assert_eq!(records[0]["env_id"], json!(f.env_id));
+        std::fs::write(&entry, b"[1]").unwrap();
+        assert_eq!(f.team.poll().unwrap_err().reason, "commit_malformed");
+        assert_eq!(audited().len(), 2);
+        std::fs::remove_file(&entry).unwrap();
+        f.team.poll().unwrap();
+        std::fs::write(&entry, b"[1]").unwrap();
+        assert_eq!(f.team.poll().unwrap_err().reason, "commit_malformed");
+        assert_eq!(audited().len(), 3);
+    }
+
+    /// Both failing environments are polled and audited; the poll returns the
+    /// first one's error.
+    #[test]
+    fn a_poll_returns_the_first_failure() {
+        let f = owner_with_admin_peer();
+        let second = another_environment(&f, "other", true);
+        let (first, later) = if f.env_id < second {
+            (f.env_id.clone(), second)
+        } else {
+            (second, f.env_id.clone())
+        };
+        for (env_id, body) in [(&first, &b"[1]"[..]), (&later, &b"{not json"[..])] {
+            let deferred = f.ctx.state.path.join(format!("team/{env_id}/deferred"));
+            std::fs::create_dir_all(&deferred).unwrap();
+            std::fs::write(deferred.join("synthetic.json"), body).unwrap();
+        }
+        assert_eq!(f.team.poll().unwrap_err().reason, "commit_malformed");
+        let audited: Vec<Value> = f
+            .ctx
+            .state
+            .read_lines(crate::audit::AUDIT_FILE, None)
+            .unwrap()
+            .iter()
+            .filter_map(|line| pyjson::loads(line).ok())
+            .filter(|record| record["event"] == "team_sync_poll")
+            .collect();
+        assert_eq!(audited.len(), 2, "{audited:?}");
+    }
+
+    /// Discovery registers what it can, audits what it cannot load, and
+    /// returns the first such error; `start` still refuses to run then.
+    #[test]
+    fn discovery_returns_the_first_failure_and_start_refuses() {
+        let f = owner_with_admin_peer();
+        let one = another_environment(&f, "one", false);
+        let two = another_environment(&f, "two", false);
+        for env_id in [&one, &two] {
+            std::fs::write(
+                f.ctx.state.path.join(format!("team/{env_id}/peers.json")),
+                b"[1]",
+            )
+            .unwrap();
+        }
+        let first = std::cmp::min(&one, &two);
+        let error = f.team.discover().unwrap_err();
+        assert_eq!(error.reason, "state_corrupt");
+        assert!(error.detail.contains(first.as_str()), "{}", error.detail);
+        let audited = f
+            .ctx
+            .state
+            .read_lines(crate::audit::AUDIT_FILE, None)
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("team_sync_poll"))
+            .count();
+        assert_eq!(audited, 2);
+        let fresh = TeamSync::new(
+            f.ctx.clone(),
+            QueueTransport::new(Vec::new()),
+            f.team.device.clone(),
+        );
+        assert_eq!(fresh.start(None).unwrap_err().reason, "state_corrupt");
+        fresh.stop();
+    }
+
+    /// A VECTOR answer the peer's removal interrupts stops there and still
+    /// audits the commits it sent.
+    #[test]
+    fn an_interrupted_answer_audits_what_it_sent() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let stored = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap()
+            .len();
+        assert!(stored > 1, "the answer needs more than one commit");
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team
+            .handle_vector(&f.env_id, &f.session, &json!({"type":"VECTOR","vector":{}}))
+            .unwrap();
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), 1);
+        let audited: Vec<Value> = f
+            .ctx
+            .audit
+            .tail(50)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "team_sync_vector")
+            .collect();
+        assert_eq!(audited.len(), 1, "{audited:?}");
+        assert_eq!(audited[0]["commits"], json!(1));
+    }
+
+    /// Incidents queued for an admin stop as soon as it drains.
+    #[test]
+    fn incident_retry_stops_once_the_admin_drains() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        for n in 0..2 {
+            let incident = sign_fact(
+                &f.team.device,
+                &f.env_id,
+                "incident",
+                json!({"incident_id": format!("0123456789abcde{n}")}),
+                &format!("1000{n}-0000"),
+            )
+            .unwrap();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.env_id)
+                .unwrap()
+                .incident_outbox
+                .insert(incident.hash().unwrap(), incident);
+        }
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team.retry_pending_incidents_to(&f.env_id, &f.session);
+        assert_eq!(sent_of_type(&f.recorder, "INCIDENT").len(), 1);
+    }
+
+    /// A joiner removed while its held frames are being sent gets none of
+    /// the rest.
+    #[test]
+    fn a_joiner_removed_mid_batch_gets_none_of_the_rest() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .insert(peer.clone(), ("admin".into(), "bob".into()));
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        for seq in 0..3 {
+            let live = settings_commit(&f.team.device, &f.env_id, 90 + seq, commit::now_ms() + 1);
+            f.team.broadcast(
+                &f.env_id,
+                &json!({"type":"COMMIT","commit":live.to_dict()}),
+                None,
+            );
+        }
+        let vector = json!(CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap());
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team
+            .handle_vector(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"VECTOR","vector":vector}),
+            )
+            .unwrap();
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), 1);
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.catching_up.is_empty() && env.held.is_empty());
+    }
+
     /// Issue #28: a commit whose author's admission is deferred here (its
     /// HLC is too far ahead) waits for the deferral instead of being
     /// quarantined once its sender has been asked again.
@@ -817,6 +1381,12 @@ mod retry_tests {
         deliver();
         f.team
             .send_due_vectors(&f.env_id, Instant::now() + Duration::from_secs(2));
+        assert!(
+            sent_of_type(&f.recorder, "VECTOR").is_empty(),
+            "what waits on deferred/ is not asked for"
+        );
+        // A periodic VECTOR goes out meanwhile: the repeat still waits.
+        f.team.send_vector(&f.env_id, &f.session);
         deliver();
         assert!(quarantined(&f.ctx, &f.env_id).is_empty());
         assert!(
@@ -963,6 +1533,14 @@ mod retry_tests {
         let unknown = settings_commit(&stranger, &f.env_id, 1, wall + 3);
         deliver(&unknown);
         deliver(&unknown);
+        {
+            // Quiet, and asked just now: only the one-second limit holds the
+            // request back, however long the deliveries above took.
+            let mut envs = f.team.envs.lock().unwrap();
+            let env = envs.get_mut(&f.env_id).unwrap();
+            env.last_accepted = None;
+            env.last_vector_sent.insert(peer.clone(), Instant::now());
+        }
         tick(Duration::ZERO);
         assert_eq!(vectors(), 1);
         assert!(quarantined(&f.ctx, &f.env_id).is_empty());
@@ -2536,6 +3114,9 @@ mod retry_tests {
         frames: Mutex<mpsc::Receiver<Value>>,
         closed: AtomicBool,
         created: Instant,
+        sends_fail: bool,
+        /// How long `recv` takes to notice anything, closing included.
+        recv_delay: Duration,
     }
     impl Session for ScriptedSession {
         fn peer(&self) -> DeviceRecord {
@@ -2545,9 +3126,13 @@ mod retry_tests {
             "retry-env"
         }
         fn send(&self, _: &Value) -> Result<()> {
+            if self.sends_fail {
+                return Err(Error::state("synthetic_send_failure"));
+            }
             Ok(())
         }
         fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+            thread::sleep(self.recv_delay);
             if self.closed.load(Ordering::SeqCst) {
                 return Err(SessionClosed("closed"));
             }
@@ -2616,12 +3201,22 @@ mod retry_tests {
     }
 
     fn scripted(peer: DeviceRecord) -> (Arc<ScriptedSession>, mpsc::Sender<Value>) {
+        scripted_with(peer, false, Duration::ZERO)
+    }
+
+    fn scripted_with(
+        peer: DeviceRecord,
+        sends_fail: bool,
+        recv_delay: Duration,
+    ) -> (Arc<ScriptedSession>, mpsc::Sender<Value>) {
         let (tx, rx) = mpsc::channel();
         let session = Arc::new(ScriptedSession {
             peer,
             frames: Mutex::new(rx),
             closed: AtomicBool::new(false),
             created: Instant::now(),
+            sends_fail,
+            recv_delay,
         });
         (session, tx)
     }
@@ -2716,6 +3311,67 @@ mod retry_tests {
         assert!(Arc::ptr_eq(&state.sessions[&fp], &inbound));
         assert!(state.dial_pending.is_empty());
         assert!(!state.backoff.contains_key(&fp));
+    }
+
+    /// A session the peer opened resets the backoff once its first frame
+    /// is handled, like a dial of ours would: the tie-break loser and a
+    /// member its peers did not know yet stop backing off once they are
+    /// heard from.
+    #[test]
+    fn an_inbound_session_resets_the_backoff() {
+        let root = TempDir::new().unwrap();
+        let key = DeviceKey::generate();
+        let (unused, _) = scripted(key.record().unwrap());
+        let (team, fp) = dialing_team(&root, unused, Some(Duration::from_secs(160)));
+        let (inbound, tx) = scripted(key.record().unwrap());
+        let inbound: Arc<dyn Session> = inbound;
+        assert!(team.accept_session("retry-env", inbound.clone(), true));
+        team.start_receiver("retry-env".into(), inbound);
+        tx.send(json!({"type":"PEERS","peers":{}})).unwrap();
+        wait_for(|| {
+            let guard = team.envs.lock().unwrap();
+            let state = &guard["retry-env"];
+            !state.backoff.contains_key(&fp) && !state.next_attempt.contains_key(&fp)
+        });
+    }
+
+    /// A dial whose session is accepted but dropped by a failed send before
+    /// the peer is heard from is a refused dial, not a lost tie-break: it
+    /// backs off, even when the dialing thread looks before the session's
+    /// receiver has noticed.
+    #[test]
+    fn an_accepted_dial_dropped_by_a_failed_send_backs_off() {
+        let root = TempDir::new().unwrap();
+        let (session, _tx) = scripted_with(
+            DeviceKey::generate().record().unwrap(),
+            true,
+            Duration::from_millis(300),
+        );
+        let (team, fp) = dialing_team(&root, session, None);
+        let (min, _) = Config::default().team_dial_backoff;
+        team.dial_attempt("retry-env", &fp);
+        // Counted as the dial returns, before a poll tick could redial.
+        let backoff = || {
+            team.envs.lock().unwrap()["retry-env"]
+                .backoff
+                .get(&fp)
+                .copied()
+        };
+        assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
+        // The receiver, noticing later, does not count it again.
+        assert!(!team.receivers.lock().unwrap().is_empty());
+        wait_for(|| {
+            team.receivers
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|t| t.handle.is_finished())
+        });
+        assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
+        let guard = team.envs.lock().unwrap();
+        let state = guard.get("retry-env").unwrap();
+        assert!(!state.sessions.contains_key(&fp));
+        assert!(state.dial_pending.is_empty());
     }
 }
 fn valid_id(s: &str, limit: usize) -> bool {
@@ -3463,6 +4119,9 @@ pub struct TeamSync {
     /// `TeamSync._session_threads`.
     receivers: Mutex<Vec<BoundedThread>>,
     deferred_sends: Mutex<std::collections::VecDeque<(String, Value, Option<String>, bool)>>,
+    /// The reason each failing environment's poll or load last failed with,
+    /// so a failure the poll thread retries every tick is audited once.
+    poll_failures: Mutex<HashMap<String, String>>,
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
@@ -3487,6 +4146,7 @@ impl TeamSync {
             commit_seen: Mutex::new(LruSet::new(SEEN_CAPACITY)),
             receivers: Mutex::new(Vec::new()),
             deferred_sends: Mutex::new(std::collections::VecDeque::new()),
+            poll_failures: Mutex::new(HashMap::new()),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -3592,11 +4252,40 @@ impl TeamSync {
         ids.sort();
         ids
     }
+    /// Register every environment found on disk. One that cannot be loaded
+    /// holds up no other (section 6.4); the first such error is returned.
     pub fn discover(&self) -> Result<()> {
+        let mut failed = None;
         for id in discover_envs(self.ctx.state)? {
-            self.register_env(&id)?;
+            if let Err(error) = self.register_env(&id) {
+                self.note_poll_failure(&id, Some(&error));
+                failed.get_or_insert(error);
+            }
         }
-        Ok(())
+        failed.map_or(Ok(()), Err)
+    }
+    /// Audit `env_id`'s poll or load failing (section 6.4) when it starts
+    /// failing or fails for another reason; `None` once it succeeds.
+    fn note_poll_failure(&self, env_id: &str, error: Option<&Error>) {
+        let mut failures = self.poll_failures.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(error) = error else {
+            failures.remove(env_id);
+            return;
+        };
+        if failures.get(env_id).map(String::as_str) == Some(error.reason.as_ref()) {
+            return;
+        }
+        failures.insert(env_id.to_owned(), error.reason.to_string());
+        drop(failures);
+        let _ = self.ctx.audit.record(
+            "team_sync_poll",
+            RecordArgs {
+                result: Some("failed"),
+                reason: Some(&error.reason),
+                extra: vec![("env_id", json!(env_id))],
+                ..Default::default()
+            },
+        );
     }
     pub fn register_env(&self, env_id: &str) -> Result<()> {
         if self
@@ -4176,18 +4865,17 @@ impl TeamSync {
         if exclude == Some(target) {
             return;
         }
+        // Never withheld: the target is draining, and a held frame would
+        // only go out with an answer to a VECTOR a draining session no
+        // longer gets.
         let notice = json!({"type":"FACT","fact":fact.to_dict()});
-        let session = {
-            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(env) = envs.get_mut(env_id) else {
-                return;
-            };
-            if env.catching_up.contains(target) {
-                hold_frame(&mut env.held, target, &notice);
-                return;
-            }
-            env.sessions.get(target).cloned()
-        };
+        let session = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .and_then(|env| env.sessions.get(target))
+            .cloned();
         if let Some(session) = session
             && session.send(&notice).is_err()
         {
@@ -4612,6 +5300,11 @@ impl TeamSync {
         // admission before that member's own commits (issue #28).
         let mut sent = 0;
         for commit in commit::sort_total_order(missing)? {
+            // A device removed meanwhile gets nothing more (section 4.4).
+            if self.draining(env_id, &fp) {
+                self.end_hold(env_id, &fp);
+                break;
+            }
             if session
                 .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
                 .is_err()
@@ -4623,6 +5316,10 @@ impl TeamSync {
         }
         if sent > 0 {
             self.audit_event("team_sync_vector", env_id, Some(&fp), None, Some(sent));
+        }
+        if self.draining(env_id, &fp) {
+            self.end_hold(env_id, &fp);
+            return Ok(());
         }
         // Ordinary facts have no sequence in the commit vector. Replay a
         // bounded slice after missing commits on this authenticated session;
@@ -4653,6 +5350,12 @@ impl TeamSync {
                 {
                     return Ok(());
                 }
+                // Removed meanwhile: none of what was held goes out.
+                if env.draining.contains_key(&fp) {
+                    env.catching_up.remove(&fp);
+                    env.held.remove(&fp);
+                    return Ok(());
+                }
                 match env.held.remove(&fp) {
                     Some(frames) if !frames.is_empty() => frames,
                     _ => {
@@ -4662,6 +5365,10 @@ impl TeamSync {
                 }
             };
             for frame in frames {
+                if self.draining(env_id, &fp) {
+                    self.end_hold(env_id, &fp);
+                    return Ok(());
+                }
                 if session.send(&frame).is_err() {
                     self.drop_session(env_id, &fp, Some(session));
                     return Ok(());
@@ -4670,6 +5377,25 @@ impl TeamSync {
         }
         self.retry_pending_incidents_to(env_id, session);
         Ok(())
+    }
+    /// Forget what was held for `fp`: a removed device gets none of it.
+    fn end_hold(&self, env_id: &str, fp: &str) {
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.catching_up.remove(fp);
+            env.held.remove(fp);
+        }
+    }
+    fn draining(&self, env_id: &str, fp: &str) -> bool {
+        self.envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .is_some_and(|env| env.draining.contains_key(fp))
     }
     fn current_fact_session(&self, env_id: &str, fp: &str, session: &Arc<dyn Session>) -> bool {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -4833,8 +5559,15 @@ impl TeamSync {
     ) -> Result<bool> {
         let fp = session.peer().fingerprint();
         let hash = commit.hash()?;
-        let deferred =
-            commit::waits_on_deferred(&CommitStore::new(self.ctx.state, env_id), commit)?;
+        // A deferred/ entry released or corrupted while this reads it is no
+        // reason to drop the session: the commit keeps waiting, and the
+        // sender is marked due, to be asked for the range once deferred/
+        // reads again (section 5.4).
+        let (deferred, ask) =
+            match commit::waits_on_deferred(&CommitStore::new(self.ctx.state, env_id), commit) {
+                Ok(deferred) => (deferred, !deferred),
+                Err(_) => (true, true),
+            };
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let Some(env) = envs.get_mut(env_id) else {
             return Ok(false);
@@ -4852,7 +5585,7 @@ impl TeamSync {
                 waiting.insert(hash, Instant::now());
             }
         }
-        if !deferred {
+        if ask {
             env.vector_due.insert(fp);
         }
         Ok(false)
@@ -5424,6 +6157,9 @@ impl TeamSync {
                 .unwrap_or_default()
         };
         for fact in pending {
+            if self.draining(env_id, &fp) {
+                break;
+            }
             if session
                 .send(&json!({"type":"INCIDENT","fact":fact.to_dict()}))
                 .is_err()
@@ -5467,9 +6203,12 @@ impl TeamSync {
         }
     }
 
+    /// One poll tick. An environment that fails holds up no other (section
+    /// 6.4): each is polled, and the first error is returned.
     pub fn poll(&self) -> Result<()> {
         self.flush_deferred_sends();
         let now = Instant::now();
+        let mut failed = None;
         {
             let mut last = self
                 .last_discovery
@@ -5478,40 +6217,25 @@ impl TeamSync {
             if now.duration_since(*last) > Duration::from_secs(1) {
                 *last = now;
                 drop(last);
-                self.discover()?;
+                failed = self.discover().err();
             }
         }
         for id in self.known_envs() {
-            self.poll_env(&id, now)?;
-        }
-        self.flush_deferred_sends();
-        Ok(())
-    }
-    fn poll_env(&self, env_id: &str, now: Instant) -> Result<()> {
-        self.pick_up_local_commits(env_id)?;
-        self.pick_up_local_facts(env_id)?;
-        self.repair_member_removals(env_id)?;
-        self.poll_incident_outbox(env_id, now);
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let released = store.release_deferred(commit::now_ms())?;
-        if !released.is_empty() {
-            self.refold(env_id)?;
-            for commit in released {
-                // The next pickup tick sees these as new store commits too;
-                // the seen-set keeps that from broadcasting them again.
-                if self.commit_first_seen(&commit) {
-                    self.broadcast(
-                        env_id,
-                        &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                        None,
-                    );
-                }
+            let polled = self.poll_env(&id, now);
+            self.note_poll_failure(&id, polled.as_ref().err());
+            if let Err(error) = polled {
+                failed.get_or_insert(error);
             }
         }
-        let (close, dial, send) = {
+        self.flush_deferred_sends();
+        failed.map_or(Ok(()), Err)
+    }
+    fn poll_env(&self, env_id: &str, now: Instant) -> Result<()> {
+        let advanced = self.advance_env(env_id, now);
+        let (close, had_session) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get(env_id) else {
-                return Ok(());
+                return advanced;
             };
             let max_age = Duration::from_secs_f64(self.ctx.config.team_session_max_age_seconds);
             let close = env
@@ -5527,6 +6251,23 @@ impl TeamSync {
                 })
                 .map(|(fp, _)| fp.clone())
                 .collect::<Vec<_>>();
+            (close, env.sessions.keys().cloned().collect::<HashSet<_>>())
+        };
+        for fp in close {
+            self.drop_session(env_id, &fp, None);
+        }
+        // Until a failed step succeeds, this poll dials no one and sends no
+        // VECTOR (section 6.4), but its due sessions are closed above all the
+        // same, so a drained device's window stays bounded (section 4.4).
+        advanced?;
+        // Before the periodic VECTORs are picked, so a peer due both ways
+        // gets one.
+        self.send_due_vectors(env_id, now);
+        let (dial, send) = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get(env_id) else {
+                return Ok(());
+            };
             let mine = self.device.fingerprint()?;
             let dial = env.document["members"]
                 .as_object()
@@ -5535,6 +6276,10 @@ impl TeamSync {
                 .filter(|(fp, m)| {
                     *fp != &mine
                         && m["status"] == "active"
+                        // Nor one whose session closed above: it is redialed
+                        // from the next tick, once that session's receiver has
+                        // counted a refused dial (issue #14).
+                        && !had_session.contains(*fp)
                         && !env.sessions.contains_key(*fp)
                         && env
                             .candidate_addresses
@@ -5564,17 +6309,39 @@ impl TeamSync {
                 })
                 .map(|(_, s)| s.clone())
                 .collect::<Vec<_>>();
-            (close, dial, send)
+            (dial, send)
         };
-        for fp in close {
-            self.drop_session(env_id, &fp, None);
-        }
         for fp in dial {
             self.dial_attempt(env_id, &fp);
         }
-        self.send_due_vectors(env_id, now);
         for session in send {
             self.send_vector(env_id, &session);
+        }
+        Ok(())
+    }
+    /// The steps of a poll tick that read and change an environment's state:
+    /// local commits and facts, removal repair, the incident outbox, and the
+    /// deferred commits whose time has come.
+    fn advance_env(&self, env_id: &str, now: Instant) -> Result<()> {
+        self.pick_up_local_commits(env_id)?;
+        self.pick_up_local_facts(env_id)?;
+        self.repair_member_removals(env_id)?;
+        self.poll_incident_outbox(env_id, now);
+        let store = CommitStore::new(self.ctx.state, env_id);
+        let released = store.release_deferred(commit::now_ms())?;
+        if !released.is_empty() {
+            self.refold(env_id)?;
+            for commit in released {
+                // The next pickup tick sees these as new store commits too;
+                // the seen-set keeps that from broadcasting them again.
+                if self.commit_first_seen(&commit) {
+                    self.broadcast(
+                        env_id,
+                        &json!({"type":"COMMIT","commit":commit.to_dict()}),
+                        None,
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -5818,18 +6585,29 @@ impl TeamSync {
         let wired = self.wire_dialed_session(env_id, fp, &address, session.clone());
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
-            if wired.is_err() {
-                if take_dial_mark(env, fp, &session) {
-                    self.note_dial_failure(env, fp);
+            match wired {
+                Err(_) => {
+                    if take_dial_mark(env, fp, &session) {
+                        self.note_dial_failure(env, fp);
+                    }
                 }
-            } else if env
-                .sessions
-                .get(fp)
-                .is_none_or(|current| !Arc::ptr_eq(current, &session))
-            {
-                // Lost the tie-break to the peer's own session, which stands;
-                // a refused session already took its mark on the way out.
-                take_dial_mark(env, fp, &session);
+                // Lost the tie-break to the peer's own session, which stands.
+                Ok(false) => {
+                    take_dial_mark(env, fp, &session);
+                }
+                // Already dropped (a failed send) before its receiver ran: a
+                // refused dial, counted now so a poll tick cannot redial and
+                // overwrite the mark first.
+                Ok(true) => {
+                    if env
+                        .sessions
+                        .get(fp)
+                        .is_none_or(|current| !Arc::ptr_eq(current, &session))
+                        && take_dial_mark(env, fp, &session)
+                    {
+                        self.note_dial_failure(env, fp);
+                    }
+                }
             }
         }
     }
@@ -5849,13 +6627,15 @@ impl TeamSync {
         env.backoff.insert(fp.into(), dur);
         env.next_attempt.insert(fp.into(), Instant::now() + dur);
     }
-    /// The dialed peer's first frame was handled: the dial succeeded.
+    /// The peer's first frame on this session was handled: the peer
+    /// accepts us, so the next dial need not wait. This holds for a session
+    /// it opened too, or a tie-break loser and a member its peers did not
+    /// know yet would keep backing off towards five minutes.
     fn confirm_dial(&self, env_id: &str, session: &Arc<dyn Session>) {
         let fp = session.peer().fingerprint();
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(env) = envs.get_mut(env_id)
-            && take_dial_mark(env, &fp, session)
-        {
+        if let Some(env) = envs.get_mut(env_id) {
+            take_dial_mark(env, &fp, session);
             env.backoff.remove(&fp);
             env.next_attempt.remove(&fp);
         }
@@ -5876,13 +6656,15 @@ impl TeamSync {
     /// accepted, so it is never wired: here it is returned (`state_corrupt`)
     /// and the session is closed rather than leaked. A later `_send_peers`
     /// failure likewise stops before the incident retry.
+    ///
+    /// Returns whether `accept_session` kept the session.
     fn wire_dialed_session(
         &self,
         env_id: &str,
         fp: &str,
         address: &str,
         session: Arc<dyn Session>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         // A successful dial also becomes a redial candidate (as through
         // `set_peer_address`); only the persisted address is Python's step.
         if valid_fp(fp) && !address.is_empty() {
@@ -5899,14 +6681,14 @@ impl TeamSync {
             return Err(error);
         }
         if !self.accept_session(env_id, session.clone(), false) {
-            return Ok(());
+            return Ok(false);
         }
         self.audit_event("team_session_open", env_id, Some(fp), None, None);
         self.start_receiver(env_id.into(), session.clone());
         self.send_vector(env_id, &session);
         self.send_peers(env_id, &session)?;
         self.retry_pending_incidents_to(env_id, &session);
-        Ok(())
+        Ok(true)
     }
     /// `adopt_outbound_session`: hand a session the caller dialed itself
     /// (`membership::join`) to the gossip machinery.
@@ -5923,6 +6705,7 @@ impl TeamSync {
     ) -> Result<()> {
         let fp = session.peer().fingerprint();
         self.wire_dialed_session(env_id, &fp, address, session)
+            .map(|_| ())
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
