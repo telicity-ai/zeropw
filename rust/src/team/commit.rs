@@ -2218,6 +2218,27 @@ pub fn receive_live_commit(
     receive(store, commit, now_ms_value, audit, false)
 }
 
+/// Whether `commit` builds on a commit this store holds in `deferred/` (a
+/// future-dated HLC): its author's earlier sequence, or a `member.add` of its
+/// author. Such a commit waits for the deferral instead of being quarantined
+/// as early (issue #28).
+pub fn waits_on_deferred(store: &CommitStore, commit: &Commit) -> Result<bool> {
+    for deferred in store.deferred_commits()? {
+        if deferred.author == commit.author && deferred.author_seq < commit.author_seq {
+            return Ok(true);
+        }
+        let admits = deferred.ops.iter().any(|op| {
+            op["op"] == "member.add"
+                && DeviceRecord::from_dict(&op["device"])
+                    .is_ok_and(|device| device.fingerprint() == commit.author)
+        });
+        if admits {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn receive(
     store: &CommitStore,
     commit: &Commit,
