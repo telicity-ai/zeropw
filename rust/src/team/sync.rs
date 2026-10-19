@@ -759,6 +759,70 @@ mod retry_tests {
         );
     }
 
+    /// A VECTOR answer the peer's removal interrupts stops there and still
+    /// audits the commits it sent.
+    #[test]
+    fn an_interrupted_answer_audits_what_it_sent() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let stored = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap()
+            .len();
+        assert!(stored > 1, "the answer needs more than one commit");
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team
+            .handle_vector(&f.env_id, &f.session, &json!({"type":"VECTOR","vector":{}}))
+            .unwrap();
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), 1);
+        let audited: Vec<Value> = f
+            .ctx
+            .audit
+            .tail(50)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "team_sync_vector")
+            .collect();
+        assert_eq!(audited.len(), 1, "{audited:?}");
+        assert_eq!(audited[0]["commits"], json!(1));
+    }
+
+    /// Incidents queued for an admin stop as soon as it drains.
+    #[test]
+    fn incident_retry_stops_once_the_admin_drains() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        for n in 0..2 {
+            let incident = sign_fact(
+                &f.team.device,
+                &f.env_id,
+                "incident",
+                json!({"incident_id": format!("0123456789abcde{n}")}),
+                &format!("1000{n}-0000"),
+            )
+            .unwrap();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.env_id)
+                .unwrap()
+                .incident_outbox
+                .insert(incident.hash().unwrap(), incident);
+        }
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team.retry_pending_incidents_to(&f.env_id, &f.session);
+        assert_eq!(sent_of_type(&f.recorder, "INCIDENT").len(), 1);
+    }
+
     /// A joiner removed while its held frames are being sent gets none of
     /// the rest.
     #[test]
@@ -2814,7 +2878,13 @@ mod retry_tests {
         };
         assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
         // The receiver, noticing later, does not count it again.
-        thread::sleep(Duration::from_millis(500));
+        wait_for(|| {
+            team.receivers
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|t| t.handle.is_finished())
+        });
         assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
         let guard = team.envs.lock().unwrap();
         let state = guard.get("retry-env").unwrap();
@@ -5554,6 +5624,9 @@ impl TeamSync {
                 .unwrap_or_default()
         };
         for fact in pending {
+            if self.draining(env_id, &fp) {
+                break;
+            }
             if session
                 .send(&json!({"type":"INCIDENT","fact":fact.to_dict()}))
                 .is_err()
