@@ -21,7 +21,7 @@ use zeropw::team::commit::{self, CommitStore};
 use zeropw::team::identity::{DeviceKey, DeviceRecord};
 use zeropw::team::membership;
 use zeropw::team::sync::TeamSync;
-use zeropw::team::transport::{InProcessTransport, MembershipCheck};
+use zeropw::team::transport::{InProcessTransport, MembershipCheck, Transport};
 
 const SYNTHETIC: &str = "synthetic-token-0123456789";
 const SYNTHETIC_V2: &str = "synthetic-token-rotated-v2";
@@ -314,26 +314,244 @@ fn team_compact_no_op_when_too_young() {
     assert_eq!(payload["removed"], 0);
 }
 
+/// A second device that joined the shared `demo/dev` as `role`, with its own
+/// state directory and CLI; its local copy is `shared/dev`.
+struct Member {
+    admin: Admin,
+    fp: String,
+    _tmp: tempfile::TempDir,
+}
+
+fn join_member(case: &Case, env_id: &str, role: &str, address: &str) -> Member {
+    let owner_ctx = Arc::new(case.ctx());
+    let owner_device = DeviceKey::load_or_create(owner_ctx.state, owner_ctx.kms).unwrap();
+    let nobody: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(owner_device.clone(), nobody));
+    let owner_sync = StopOnDrop(TeamSync::new(owner_ctx.clone(), transport, owner_device));
+    owner_sync.0.start(Some(address)).unwrap();
+    let invite =
+        membership::create_invite(&owner_ctx, env_id, role, "dave", 3600, &[address.into()])
+            .unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let admin = Admin::new(tmp.path());
+    admin.ok(&["init"]);
+    let ctx =
+        Arc::new(Context::open(&admin.state, Config::default(), zeropw::clock::system()).unwrap());
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let fp = device.fingerprint().unwrap();
+    let nobody: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(device.clone(), nobody));
+    let sync = StopOnDrop(TeamSync::new(ctx.clone(), transport.clone(), device));
+    sync.0.start(None).unwrap();
+    membership::join(
+        &ctx,
+        &invite,
+        transport.as_ref() as &dyn Transport,
+        &sync.0,
+        Some("shared"),
+        Some("dev"),
+        10.0,
+    )
+    .unwrap();
+    Member {
+        admin,
+        fp,
+        _tmp: tmp,
+    }
+}
+
+fn member_entry(admin: &Admin, env: &str, fp: &str) -> Value {
+    let members = admin.ok(&["team", "members", "--env", env]);
+    members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["fingerprint"] == fp)
+        .cloned()
+        .unwrap_or_else(|| panic!("{fp} not in {members}"))
+}
+
+/// Issue #30: a change the fold would refuse its author fails before it is
+/// stored, instead of reporting a commit no node applies.
 #[test]
 fn team_set_role_and_transfer_owner_are_commits() {
     let case = Case::new();
-    case.share();
+    let env_id = case.share();
+    let member = join_member(&case, &env_id, "user", "native-cli-set-role:47301");
+    let owner_fp = DeviceKey::load_or_create(case.ctx().state, case.ctx().kms)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    let store = CommitStore::new(case.ctx().state, &env_id);
+    let before = store.vector().unwrap();
     let fake_fp = "c".repeat(26);
+    let refused = [
+        (
+            vec![
+                "team", "set-role", "--env", "demo/dev", "--device", &fake_fp, "--role", "admin",
+            ],
+            "member_not_found",
+        ),
+        (
+            vec![
+                "team",
+                "transfer-owner",
+                "--env",
+                "demo/dev",
+                "--device",
+                &fake_fp,
+            ],
+            "member_not_found",
+        ),
+        (
+            vec![
+                "team", "set-role", "--env", "demo/dev", "--device", &owner_fp, "--role", "user",
+            ],
+            "cannot_change_owner_role",
+        ),
+    ];
+    for (args, reason) in refused {
+        assert_eq!(case.fail(&args)["reason"], reason, "{args:?}");
+    }
+    assert_eq!(store.vector().unwrap(), before);
     let role_payload = case.ok(&[
-        "team", "set-role", "--env", "demo/dev", "--device", &fake_fp, "--role", "admin",
+        "team", "set-role", "--env", "demo/dev", "--device", &member.fp, "--role", "admin",
     ]);
     assert!(role_payload.get("commit").is_some(), "{role_payload}");
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &member.fp)["role"],
+        "admin"
+    );
     let transfer_payload = case.ok(&[
         "team",
         "transfer-owner",
         "--env",
         "demo/dev",
         "--device",
-        &fake_fp,
+        &member.fp,
     ]);
     assert!(
         transfer_payload.get("commit").is_some(),
         "{transfer_payload}"
+    );
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &member.fp)["owner"],
+        true
+    );
+    assert_eq!(
+        member_entry(&case.admin, "demo/dev", &owner_fp)["owner"],
+        false
+    );
+    // No longer the owner, this device cannot hand ownership on again.
+    let refused = case.fail(&[
+        "team",
+        "transfer-owner",
+        "--env",
+        "demo/dev",
+        "--device",
+        &member.fp,
+    ]);
+    assert_eq!(refused["reason"], "not_owner");
+}
+
+/// Issue #30: on a device that joined as `user`, every editing command fails
+/// with `not_admin` and stores no commit; before, each reported success (or
+/// failed only after storing its commit) while every node skipped it. The
+/// user can still remove itself.
+#[test]
+fn user_device_editing_commands_fail_before_any_commit() {
+    let case = Case::new();
+    let env_id = case.share();
+    let member = join_member(&case, &env_id, "user", "native-cli-user-role:47302");
+    let user = &member.admin;
+    let ctx = Context::open(&user.state, Config::default(), zeropw::clock::system()).unwrap();
+    let store = CommitStore::new(ctx.state, &env_id);
+    let before = store.vector().unwrap();
+    let with_stdin = |args: &[&str]| {
+        user.cmd(args)
+            .stdin(format!("{SYNTHETIC_V2}\n").as_bytes())
+            .fail(1)
+    };
+    let refusals = [
+        with_stdin(&[
+            "secret",
+            "put",
+            "--id",
+            "gh-token",
+            "--kind",
+            "api_key",
+            "--project",
+            "shared",
+            "--environment",
+            "dev",
+            "--stdin",
+        ]),
+        with_stdin(&["rotation", "start", "--secret-id", "gh-token", "--stdin"]),
+        user.fail(&["connection", "update", "--id", "gh", "--methods", "GET"]),
+        user.fail(&[
+            "connection",
+            "switch-credential",
+            "--id",
+            "gh",
+            "--version",
+            "1",
+        ]),
+        user.fail(&[
+            "team",
+            "set-role",
+            "--env",
+            "shared/dev",
+            "--device",
+            &member.fp,
+            "--role",
+            "admin",
+        ]),
+        user.fail(&[
+            "connection",
+            "create-http",
+            "--id",
+            "dave-conn",
+            "--project",
+            "shared",
+            "--environment",
+            "dev",
+            "--service",
+            "svc-dave",
+            "--secret-id",
+            "gh-token",
+            "--target",
+            "https://api.github.com",
+            "--auth",
+            "bearer",
+        ]),
+    ];
+    for error in refusals {
+        assert_eq!(error["reason"], "not_admin", "{error}");
+    }
+    assert_eq!(store.vector().unwrap(), before);
+    // A member may still remove itself: one `member.remove` commit, then its fact.
+    user.ok(&[
+        "team",
+        "remove",
+        "--env",
+        "shared/dev",
+        "--device",
+        &member.fp,
+    ]);
+    let own: Vec<_> = store
+        .all_commits()
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.author == member.fp)
+        .collect();
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(
+        own[0].ops,
+        vec![json!({"op":"member.remove","fingerprint":member.fp})]
+    );
+    assert_eq!(
+        member_entry(user, "shared/dev", &member.fp)["status"],
+        "removed"
     );
 }
 
