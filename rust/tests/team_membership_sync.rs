@@ -18,11 +18,18 @@ fn new_context(root: &TempDir, name: &str) -> Arc<Context> {
 }
 
 fn new_context_syncing_every(root: &TempDir, name: &str, seconds: f64) -> Arc<Context> {
-    let config = Config {
-        team_sync_interval_seconds: Some(seconds),
-        team_dial_backoff: (0.05, 0.3),
-        ..Config::default()
-    };
+    new_context_with(
+        root,
+        name,
+        Config {
+            team_sync_interval_seconds: Some(seconds),
+            team_dial_backoff: (0.05, 0.3),
+            ..Config::default()
+        },
+    )
+}
+
+fn new_context_with(root: &TempDir, name: &str, config: Config) -> Arc<Context> {
     Arc::new(
         Context::initialize(
             root.path().join(name),
@@ -337,6 +344,92 @@ fn join_through_a_second_admin_gets_history_in_total_order() {
     joiner_sync.stop();
     admin_sync.stop();
     owner_sync.stop();
+}
+
+/// Issue #14: a removed device keeps dialing its remover, which refuses it
+/// only after the handshake has completed on the dialing side (at message
+/// 3). Those refused dials back off instead of repeating on every 50 ms poll
+/// tick, so the remover's audit does not fill with `team_handshake_failed`
+/// and raises no `repeated_denials` alert.
+#[test]
+fn a_removed_device_backs_off_redialing_its_remover() {
+    let root = TempDir::new().unwrap();
+    let config = || Config {
+        team_sync_interval_seconds: Some(0.1),
+        team_dial_backoff: (1.0, 4.0),
+        team_removed_drain_seconds: 0.2,
+        ..Config::default()
+    };
+    let a = new_context_with(&root, "a", config());
+    a.projects.create("demo", &["dev"]).unwrap();
+    a.vault
+        .put_secret("gh-token", "api_key", SECRET, "demo", "dev", true)
+        .unwrap();
+    let shared =
+        membership::share_environment(&a, None, "demo", "dev", "alice", "admin-passphrase")
+            .unwrap();
+    let env_id = shared["env_id"].as_str().unwrap();
+    let a_device = DeviceKey::load_or_create(a.state, a.kms).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let a_transport = Arc::new(InProcessTransport::new(a_device.clone(), empty));
+    let a_sync = sync::TeamSync::new(a.clone(), a_transport, a_device);
+    a_sync.start(Some("rust-team-redial-a:47301")).unwrap();
+    let invite = membership::create_invite(
+        &a,
+        env_id,
+        "user",
+        "bob",
+        3600,
+        &["rust-team-redial-a:47301".into()],
+    )
+    .unwrap();
+    let b = new_context_with(&root, "b", config());
+    let b_device = DeviceKey::load_or_create(b.state, b.kms).unwrap();
+    let b_fp = b_device.fingerprint().unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let b_transport = Arc::new(InProcessTransport::new(b_device.clone(), empty));
+    let b_sync = sync::TeamSync::new(b.clone(), b_transport.clone(), b_device);
+    b_sync.start(None).unwrap();
+    membership::join(
+        &b,
+        &invite,
+        b_transport.as_ref() as &dyn Transport,
+        &b_sync,
+        Some("shared-demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap();
+    membership::remove_member(&a, Some(&a_sync), env_id, &b_fp).unwrap();
+    let refused = || {
+        a.audit
+            .tail(5000)
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "team_handshake_failed")
+            .count()
+    };
+    // Once the drained session is gone, b's dials to a are refused.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while refused() == 0 {
+        assert!(std::time::Instant::now() < deadline, "b never redialed a");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let start = refused();
+    std::thread::sleep(Duration::from_secs(4));
+    let during = refused() - start;
+    // Backoff 1 s, 2 s, 4 s: two or three more refused dials in four
+    // seconds, where every 50 ms poll tick redialed before (about 80).
+    assert!(during <= 6, "{during} refused dials in 4 s");
+    assert!(
+        a.audit
+            .alerts(200)
+            .unwrap()
+            .iter()
+            .all(|alert| alert["alert"] != "repeated_denials")
+    );
+    b_sync.stop();
+    a_sync.stop();
 }
 
 #[test]

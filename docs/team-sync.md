@@ -181,7 +181,7 @@ Store per-device successful addresses in `team/ENV_ID/peers.json`. Invitations b
 
 The original design includes signed UDP multicast discovery at `239.192.47.42:47420` every 30 seconds, containing environment hash/fingerprint/port, as an untrusted hint for a handshake rather than authentication. It is not implemented. Current discovery uses invitations, manual `team peers --add` and verified PEERS gossip; full mDNS is not provided.
 
-Try to maintain sessions to all known members with exponential retry from 5 seconds to 5 minutes. Intended scale is at most dozens of devices. Commit forwarding through a third node permits synchronization without direct connectivity between every pair.
+Try to maintain sessions to all known members with exponential retry from 5 seconds to 5 minutes. A dial counts as a success, resetting that delay, only once the peer's first message has been handled: the dialing side's handshake completes before the other side accepts it, and a remover refuses a removed device only then, so such refused dials keep backing off instead of repeating on every poll. Intended scale is at most dozens of devices. Commit forwarding through a third node permits synchronization without direct connectivity between every pair.
 
 ### 6.5 Applying folded changes
 
