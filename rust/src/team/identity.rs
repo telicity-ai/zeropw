@@ -106,7 +106,7 @@ impl DeviceRecord {
         let mut message = Vec::with_capacity(DEVICE_RECORD_CONTEXT.len() + self.agree_pub.len());
         message.extend_from_slice(DEVICE_RECORD_CONTEXT);
         message.extend_from_slice(&self.agree_pub);
-        ed25519::verify(&self.sign_pub, &message, &self.sig)
+        super::verify_signature(&self.sign_pub, &message, &self.sig)
     }
 
     /// `DeviceRecord.fingerprint`: lowercase, unpadded base32 of
