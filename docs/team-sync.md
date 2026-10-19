@@ -136,6 +136,8 @@ Every node validates independently, never trusting another node's checks:
 
 Failed identity/sequence/signature/format checks go to `rejected/` with `team_commit_rejected` reason/author/sequence audit and block subsequent author sequence. Code-version disagreement can cause rejection; inspect `team status`.
 
+A `COMMIT` frame that arrives ahead of its history -- its author's previous sequence is missing, or its author's admission has not arrived -- is not stored, quarantined or audited. The receiver asks that peer for the range with a `VECTOR`, at most once a second per peer and only after it has stopped accepting commits for a moment, so a catch-up still arriving is not requested again from every relaying peer; the answer resends the missing commits in total order. If the same peer sends the same commit early again after that request, the peer no longer holds the history (section 7.3) and the commit is quarantined as above, unless what it builds on waits in this node's `deferred/`; so is any early commit while 256 from that peer are already waiting. A peer running an earlier build can still cause such quarantines, since it answers in fingerprint order. An inviter withholds live COMMIT and FACT frames, and INCIDENTs, from a device admitted through an invitation until it has answered that device's first `VECTOR`, then sends the withheld frames in order (up to 256; later ones arrive with a later VECTOR) before live traffic resumes.
+
 ### 5.5 Human view
 
 `team show --format json|yaml` omits ciphertext/wraps/signatures. Log shows ordered commits, times, authors and operations; diff compares views at two commits. YAML is an output-only subset; inputs are CLI/JSON.
@@ -164,7 +166,7 @@ Maintain environment vectors mapping fingerprint to last accepted sequence.
 
 | Message | Purpose |
 | --- | --- |
-| `VECTOR` | At session start/periodically, exchange vector and send missing commits. |
+| `VECTOR` | At session start/periodically, exchange vector and send missing commits in total order. |
 | `COMMIT` | Broadcast new commits immediately; verify and forward received commits except to their sender, deduplicated by hash. |
 | `FACT` | Verify/apply/forward irreversible facts. |
 | `INCIDENT` | Direct node-to-admin sanitized incident, not relayed. |

@@ -37,6 +37,18 @@ pub const FACT_KINDS: [&str; 4] = [
 const FACT_REPLAY_LINES_PER_VECTOR: usize = 64;
 /// `sync._SEEN_CAPACITY`: bound of the rebroadcast-dedup set.
 const SEEN_CAPACITY: usize = 4096;
+/// Commits from one peer that may wait for their history at once; one past
+/// this bound is quarantined at once (issue #28).
+const EARLY_COMMITS_PER_PEER: usize = 256;
+/// An early commit asks its sender for the missing range at most this often
+/// per peer...
+const EARLY_VECTOR_INTERVAL: Duration = Duration::from_secs(1);
+/// ...and only once no commit has been accepted for this long, so a catch-up
+/// still streaming in is not requested again from every relaying peer.
+const EARLY_QUIET: Duration = Duration::from_millis(250);
+/// COMMIT/FACT frames withheld from one joining device until its history has
+/// been sent; past this, the rest reach it with a later VECTOR.
+const HELD_FRAMES_MAX: usize = 256;
 /// `thread.join(timeout=5)` in `TeamSync.stop`.
 const THREAD_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub const ENVS_MAP_PATH: &str = "team/envs.json";
@@ -48,6 +60,19 @@ pub const MAX_INCIDENT_UNIT: i64 = 2_147_483_647;
 
 fn canon(value: &Value) -> Result<Vec<u8>> {
     Ok(pyjson::dumps(value, DumpOptions::compact_sorted())?.into_bytes())
+}
+
+/// Withhold `frame` from a joining device until its history has been sent
+/// (issue #28); past [`HELD_FRAMES_MAX`] it waits for a later VECTOR.
+fn hold_frame(
+    held: &mut HashMap<String, std::collections::VecDeque<Value>>,
+    fp: &str,
+    frame: &Value,
+) {
+    let frames = held.entry(fp.to_owned()).or_default();
+    if frames.len() < HELD_FRAMES_MAX {
+        frames.push_back(frame.clone());
+    }
 }
 
 #[cfg(test)]
@@ -514,6 +539,369 @@ mod retry_tests {
             session,
             team,
         }
+    }
+
+    fn settings_commit(key: &DeviceKey, env_id: &str, seq: i64, wall: i64) -> Commit {
+        commit::sign_commit(
+            key,
+            env_id,
+            seq,
+            &format!("{wall}-0000"),
+            &BTreeMap::new(),
+            vec![json!({"op":"settings.update","sync_interval_seconds":30})],
+        )
+        .unwrap()
+    }
+    fn sent_of_type(recorder: &RecordingSession, kind: &str) -> Vec<Value> {
+        recorder
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m["type"] == kind)
+            .cloned()
+            .collect()
+    }
+    fn quarantined(ctx: &Context, env_id: &str) -> Vec<String> {
+        std::fs::read_dir(ctx.state.path.join(format!("team/{env_id}/rejected")))
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Issue #28: a joiner's session gets no live COMMIT, FACT or INCIDENT
+    /// until its first VECTOR is answered, and the answer is in total order
+    /// across authors, so an admitted author's commits never precede its
+    /// admission even when its fingerprint sorts first.
+    #[test]
+    fn joiner_gets_history_in_total_order_before_live_traffic() {
+        let f = owner_with_admin_peer();
+        let owner = f.team.device.fingerprint().unwrap();
+        let second_admin = loop {
+            let key = DeviceKey::generate();
+            if key.fingerprint().unwrap() < owner {
+                break key;
+            }
+        };
+        crate::team::membership::author_commit(
+            &f.ctx,
+            Some(&f.team),
+            &f.env_id,
+            vec![json!({"op":"member.add","device":second_admin.record().unwrap().to_dict(),"name":"carol","role":"admin"})],
+        )
+        .unwrap();
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let by_second = settings_commit(&second_admin, &f.env_id, 1, commit::now_ms() + 1);
+        assert_eq!(
+            commit::receive_commit(&store, &by_second, commit::now_ms(), None).unwrap(),
+            "accepted"
+        );
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .insert(peer.clone(), ("admin".into(), "bob".into()));
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let incident = sign_fact(
+            &f.team.device,
+            &f.env_id,
+            "incident",
+            json!({"incident_id":"0123456789abcdef"}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .incident_outbox
+            .insert(incident.hash().unwrap(), incident.clone());
+        let live = json!({"type":"COMMIT","commit":by_second.to_dict()});
+        let fact = sign_fact(
+            &f.team.device,
+            &f.env_id,
+            "connection_disabled",
+            json!({"connection_id":"gh"}),
+            "10001-0000",
+        )
+        .unwrap();
+        let live_fact = json!({"type":"FACT","fact":fact.to_dict()});
+        f.team.broadcast(&f.env_id, &live, None);
+        f.team.broadcast(&f.env_id, &live_fact, None);
+        assert_eq!(f.team.deliver_incident(&f.env_id, &incident), 0);
+        f.team.retry_pending_incidents_to(&f.env_id, &f.session);
+        assert!(f.recorder.sent.lock().unwrap().is_empty());
+
+        f.team
+            .handle_vector(&f.env_id, &f.session, &json!({"type":"VECTOR","vector":{}}))
+            .unwrap();
+        let hashes = |commits: Vec<Commit>| -> Vec<String> {
+            commits.iter().map(|c| c.hash().unwrap()).collect()
+        };
+        let sent = f.recorder.sent.lock().unwrap().clone();
+        let answered: Vec<Commit> = sent[..4]
+            .iter()
+            .map(|m| Commit::from_dict(&m["commit"]).unwrap())
+            .collect();
+        assert_eq!(hashes(answered), hashes(store.all_commits().unwrap()));
+        // Then what was held, in order, then the incident.
+        assert_eq!(sent[4], live);
+        assert_eq!(sent[5], live_fact);
+        assert_eq!(sent[6]["type"], "INCIDENT");
+        assert_eq!(sent.len(), 7);
+        // Released: live traffic flows again.
+        f.team.broadcast(&f.env_id, &live, None);
+        assert_eq!(f.recorder.sent.lock().unwrap()[7], live);
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.catching_up.is_empty() && env.held.is_empty());
+    }
+
+    /// Issue #28: a commit whose author's admission is deferred here (its
+    /// HLC is too far ahead) waits for the deferral instead of being
+    /// quarantined once its sender has been asked again.
+    #[test]
+    fn early_commits_wait_for_a_deferred_admission() {
+        let f = owner_with_admin_peer();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let owner = f.team.device.fingerprint().unwrap();
+        let newcomer = DeviceKey::generate();
+        let ahead = commit::now_ms() + 3_600_000;
+        let add = commit::sign_commit(
+            &f.team.device,
+            &f.env_id,
+            &store.last_seq(&owner).unwrap() + 1,
+            &format!("{ahead}-0000"),
+            &BTreeMap::new(),
+            vec![json!({"op":"member.add","device":newcomer.record().unwrap().to_dict(),"name":"dan","role":"admin"})],
+        )
+        .unwrap();
+        assert_eq!(
+            commit::receive_commit(&store, &add, commit::now_ms(), None).unwrap(),
+            "deferred"
+        );
+        let theirs = settings_commit(&newcomer, &f.env_id, 1, ahead + 1);
+        let deliver = || {
+            f.team
+                .handle_commit(
+                    &f.env_id,
+                    &f.session,
+                    &json!({"type":"COMMIT","commit":theirs.to_dict()}),
+                )
+                .unwrap()
+        };
+        deliver();
+        f.team
+            .send_due_vectors(&f.env_id, Instant::now() + Duration::from_secs(2));
+        deliver();
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id].early_commits
+                [&f.peer_key.fingerprint().unwrap()]
+                .contains_key(&theirs.hash().unwrap())
+        );
+    }
+
+    /// A joiner's hold ends with its session: a replacement session starts
+    /// from its own VECTOR exchange, and nothing held is sent on it.
+    #[test]
+    fn a_replaced_or_dropped_session_takes_its_hold_along() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        let hold = |team: &TeamSync| {
+            let mut envs = team.envs.lock().unwrap();
+            let env = envs.get_mut(&f.env_id).unwrap();
+            env.pending_invites
+                .insert(peer.clone(), ("admin".into(), "bob".into()));
+        };
+        hold(&f.team);
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        f.team
+            .broadcast(&f.env_id, &json!({"type":"COMMIT","commit":{}}), None);
+        assert_eq!(f.team.envs.lock().unwrap()[&f.env_id].held[&peer].len(), 1);
+        let replacement = Arc::new(RecordingSession {
+            peer: f.peer_key.record().unwrap(),
+            env_id: f.env_id.clone(),
+            sent: Mutex::new(Vec::new()),
+            on_first_send: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        let replacement_session: Arc<dyn Session> = replacement.clone();
+        let inbound = f.team.device.fingerprint().unwrap() > peer;
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .clear();
+        assert!(
+            f.team
+                .accept_session(&f.env_id, replacement_session.clone(), inbound)
+        );
+        {
+            let env = &f.team.envs.lock().unwrap()[&f.env_id];
+            assert!(env.catching_up.is_empty() && env.held.is_empty());
+        }
+        f.team
+            .handle_vector(
+                &f.env_id,
+                &replacement_session,
+                &json!({"type":"VECTOR","vector":{}}),
+            )
+            .unwrap();
+        assert!(
+            sent_of_type(&replacement, "COMMIT")
+                .iter()
+                .all(|m| m["commit"] != json!({}))
+        );
+
+        hold(&f.team);
+        f.team.drop_session(&f.env_id, &peer, None);
+        let third: Arc<dyn Session> = Arc::new(RecordingSession {
+            peer: f.peer_key.record().unwrap(),
+            env_id: f.env_id.clone(),
+            sent: Mutex::new(Vec::new()),
+            on_first_send: Mutex::new(None),
+            closed: AtomicBool::new(false),
+            created: Instant::now(),
+        });
+        assert!(f.team.accept_session(&f.env_id, third, true));
+        f.team
+            .broadcast(&f.env_id, &json!({"type":"COMMIT","commit":{}}), None);
+        f.team.drop_session(&f.env_id, &peer, None);
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.catching_up.is_empty() && env.held.is_empty());
+    }
+
+    /// Issue #28: a commit that arrives ahead of its history is not
+    /// quarantined; the poll loop asks the sender for the range (at most once
+    /// a second, and only once no commit is being accepted), and the commit is
+    /// accepted once it arrives in order. Sent early again after that request
+    /// -- the sender no longer has the history -- it is quarantined as before.
+    #[test]
+    fn early_live_commits_wait_for_their_history() {
+        let f = owner_with_admin_peer();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        let peer = f.peer_key.fingerprint().unwrap();
+        let wall = commit::now_ms();
+        let first = settings_commit(&f.peer_key, &f.env_id, 1, wall + 1);
+        let second = settings_commit(&f.peer_key, &f.env_id, 2, wall + 2);
+        let deliver = |c: &Commit| {
+            f.team
+                .handle_commit(
+                    &f.env_id,
+                    &f.session,
+                    &json!({"type":"COMMIT","commit":c.to_dict()}),
+                )
+                .unwrap()
+        };
+        let vectors = || sent_of_type(&f.recorder, "VECTOR").len();
+        // The due VECTOR goes out on a poll tick, unless one went to this
+        // peer less than a second ago or a commit was just accepted.
+        let tick = |after: Duration| f.team.send_due_vectors(&f.env_id, Instant::now() + after);
+        deliver(&second);
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        assert_eq!(vectors(), 0);
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .last_accepted = Some(Instant::now());
+        tick(Duration::ZERO);
+        assert_eq!(vectors(), 0);
+        tick(Duration::from_secs(2));
+        assert_eq!(vectors(), 1);
+        tick(Duration::from_secs(2));
+        assert_eq!(vectors(), 1);
+        deliver(&first);
+        deliver(&second);
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        assert_eq!(
+            store.last_seq(&f.peer_key.fingerprint().unwrap()).unwrap(),
+            PyInt::from(2)
+        );
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .early_commits
+                .is_empty()
+        );
+
+        // An author this store has never admitted: within a second of the
+        // last request nothing more is asked, and a repeat before any new
+        // request still waits.
+        let stranger = DeviceKey::generate();
+        let unknown = settings_commit(&stranger, &f.env_id, 1, wall + 3);
+        deliver(&unknown);
+        deliver(&unknown);
+        tick(Duration::ZERO);
+        assert_eq!(vectors(), 1);
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+
+        // Asked again, the peer still sends a commit whose predecessor it no
+        // longer has (compacted): quarantined as a sequence gap.
+        let fourth = settings_commit(&f.peer_key, &f.env_id, 4, wall + 4);
+        deliver(&fourth);
+        tick(Duration::from_secs(2));
+        assert_eq!(vectors(), 2);
+        assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        deliver(&fourth);
+        let rejected = quarantined(&f.ctx, &f.env_id);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert!(rejected[0].contains("-0000000004-"), "{rejected:?}");
+        assert!(
+            f.ctx
+                .audit
+                .tail(50)
+                .unwrap()
+                .iter()
+                .any(|r| { r["event"] == "team_commit_rejected" && r["reason"] == "team_seq_gap" })
+        );
+        // The stranger's commit was asked for too: now it is quarantined.
+        deliver(&unknown);
+        assert_eq!(quarantined(&f.ctx, &f.env_id).len(), 2);
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .early_commits
+                .is_empty()
+        );
+
+        // One peer may keep only so many commits waiting; past that, an early
+        // commit from it is quarantined at once.
+        {
+            let mut envs = f.team.envs.lock().unwrap();
+            let waiting = envs
+                .get_mut(&f.env_id)
+                .unwrap()
+                .early_commits
+                .entry(peer.clone())
+                .or_default();
+            for n in 0..EARLY_COMMITS_PER_PEER {
+                waiting.insert(format!("{n:064}"), Instant::now());
+            }
+        }
+        let sixth = settings_commit(&f.peer_key, &f.env_id, 6, wall + 6);
+        deliver(&sixth);
+        assert_eq!(quarantined(&f.ctx, &f.env_id).len(), 3);
+        // Dropping the session forgets what its peer left waiting.
+        f.team.drop_session(&f.env_id, &peer, None);
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.early_commits.is_empty() && env.vector_due.is_empty());
     }
 
     #[test]
@@ -2721,6 +3109,22 @@ struct EnvState {
     incident_backoff: HashMap<String, Duration>,
     incident_next_attempt: HashMap<String, Instant>,
     pending_invites: HashMap<String, (String, String)>,
+    /// Sessions of devices that just joined through an invitation. They have
+    /// no history yet, so live COMMIT/FACT frames for them are held (and
+    /// INCIDENTs not sent) until their first VECTOR has been answered with
+    /// the whole history in order; otherwise the joiner quarantines the
+    /// inviter's `member.add` as `team_author_unknown` (issue #28).
+    catching_up: HashSet<String>,
+    /// Frames withheld from `catching_up` sessions, in order.
+    held: HashMap<String, std::collections::VecDeque<Value>>,
+    /// Commits that arrived before the history they build on: by sending
+    /// peer, the commit hash and when that peer first sent it.
+    early_commits: HashMap<String, HashMap<String, Instant>>,
+    /// Peers an early commit asks for a VECTOR, sent by the poll loop as
+    /// [`EARLY_VECTOR_INTERVAL`] and [`EARLY_QUIET`] allow.
+    vector_due: HashSet<String>,
+    /// When this node last accepted a commit a peer sent.
+    last_accepted: Option<Instant>,
     alerted_overrides: HashSet<String>,
     /// `_EnvState.relaxed_cache`: (store vector, relaxed document).
     relaxed_cache: Option<(BTreeMap<String, PyInt>, Arc<Value>)>,
@@ -2759,6 +3163,11 @@ impl EnvState {
             incident_backoff: HashMap::new(),
             incident_next_attempt: HashMap::new(),
             pending_invites: HashMap::new(),
+            catching_up: HashSet::new(),
+            held: HashMap::new(),
+            early_commits: HashMap::new(),
+            vector_due: HashSet::new(),
+            last_accepted: None,
             alerted_overrides: HashSet::new(),
             relaxed_cache: None,
             relaxed_generation: 0,
@@ -2881,6 +3290,10 @@ impl TeamSync {
             for env in envs.values_mut() {
                 all.extend(env.sessions.drain().map(|(_, session)| session));
                 env.fact_replay_cursor.clear();
+                env.catching_up.clear();
+                env.held.clear();
+                env.early_commits.clear();
+                env.vector_due.clear();
             }
             all
         };
@@ -3438,18 +3851,22 @@ impl TeamSync {
             return;
         }
         let sessions = {
-            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            envs.get(env_id)
-                .map(|e| {
-                    e.sessions
-                        .iter()
-                        .filter(|(fp, _)| {
-                            Some(fp.as_str()) != exclude && !e.draining.contains_key(*fp)
-                        })
-                        .map(|(fp, s)| (fp.clone(), s.clone()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(e) = envs.get_mut(env_id) else {
+                return;
+            };
+            let mut targets = Vec::new();
+            for (fp, session) in &e.sessions {
+                if Some(fp.as_str()) == exclude || e.draining.contains_key(fp) {
+                    continue;
+                }
+                if e.catching_up.contains(fp) {
+                    hold_frame(&mut e.held, fp, message);
+                    continue;
+                }
+                targets.push((fp.clone(), session.clone()));
+            }
+            targets
         };
         // `_broadcast`: a failed send drops that session at once
         // (`_drop_session`: unregister, close, `team_session_close` audit).
@@ -3470,17 +3887,20 @@ impl TeamSync {
         if exclude == Some(target) {
             return;
         }
-        let session = self
-            .envs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(env_id)
-            .and_then(|env| env.sessions.get(target))
-            .cloned();
+        let notice = json!({"type":"FACT","fact":fact.to_dict()});
+        let session = {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get_mut(env_id) else {
+                return;
+            };
+            if env.catching_up.contains(target) {
+                hold_frame(&mut env.held, target, &notice);
+                return;
+            }
+            env.sessions.get(target).cloned()
+        };
         if let Some(session) = session
-            && session
-                .send(&json!({"type":"FACT","fact":fact.to_dict()}))
-                .is_err()
+            && session.send(&notice).is_err()
         {
             self.drop_session(env_id, target, Some(&session));
         }
@@ -3529,8 +3949,18 @@ impl TeamSync {
                 return false;
             }
             current.close();
+            // The new session starts with its own VECTOR exchange.
+            env.catching_up.remove(&fp);
+            env.held.remove(&fp);
+            env.early_commits.remove(&fp);
+            env.vector_due.remove(&fp);
         }
         env.fact_replay_cursor.insert(fp.clone(), 0);
+        // A device joining through an invitation has no history yet: hold
+        // live broadcasts from the moment its session is visible to them.
+        if inbound && env.pending_invites.contains_key(&fp) {
+            env.catching_up.insert(fp.clone());
+        }
         env.sessions.insert(fp, session);
         true
     }
@@ -3675,6 +4105,10 @@ impl TeamSync {
             }
             env.draining.remove(fp);
             env.fact_replay_cursor.remove(fp);
+            env.catching_up.remove(fp);
+            env.held.remove(fp);
+            env.early_commits.remove(fp);
+            env.vector_due.remove(fp);
             env.sessions.remove(fp)
         };
         if let Some(session) = removed {
@@ -3705,8 +4139,38 @@ impl TeamSync {
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
+            env.vector_due.remove(&fp);
             env.last_vector_sent.insert(fp, Instant::now());
             env.synced_at = Some((self.ctx.clock)());
+        }
+    }
+    /// The VECTORs early commits asked for (issue #28), once the peer was not
+    /// asked within [`EARLY_VECTOR_INTERVAL`] and no commit was accepted
+    /// within [`EARLY_QUIET`].
+    fn send_due_vectors(&self, env_id: &str, now: Instant) {
+        let due = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get(env_id) else {
+                return;
+            };
+            if env
+                .last_accepted
+                .is_some_and(|at| now.saturating_duration_since(at) < EARLY_QUIET)
+            {
+                return;
+            }
+            env.vector_due
+                .iter()
+                .filter(|fp| {
+                    env.last_vector_sent.get(*fp).is_none_or(|at| {
+                        now.saturating_duration_since(*at) >= EARLY_VECTOR_INTERVAL
+                    })
+                })
+                .filter_map(|fp| env.sessions.get(fp).cloned())
+                .collect::<Vec<_>>()
+        };
+        for session in due {
+            self.send_vector(env_id, &session);
         }
     }
     /// `_send_peers`: only list-valued entries, each reduced to its sorted
@@ -3823,7 +4287,7 @@ impl TeamSync {
         self.persist_peer_vectors(env_id)?;
         let store = CommitStore::new(self.ctx.state, env_id);
         let local = store.vector()?;
-        let mut sent = 0;
+        let mut missing = Vec::new();
         for (author, last) in local {
             // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
             // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
@@ -3837,19 +4301,24 @@ impl TeamSync {
                 Some(n) => &n + 1,
             };
             while seq <= last {
-                let found = store.get(&author, &seq)?;
-                seq = &seq + 1;
-                if let Some(commit) = found {
-                    if session
-                        .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
-                        .is_err()
-                    {
-                        self.drop_session(env_id, &fp, Some(session));
-                        return Ok(());
-                    }
-                    sent += 1;
+                if let Some(commit) = store.get(&author, &seq)? {
+                    missing.push(commit);
                 }
+                seq = &seq + 1;
             }
+        }
+        // In total order across authors, so the peer learns each member's
+        // admission before that member's own commits (issue #28).
+        let mut sent = 0;
+        for commit in commit::sort_total_order(missing)? {
+            if session
+                .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
+                .is_err()
+            {
+                self.drop_session(env_id, &fp, Some(session));
+                return Ok(());
+            }
+            sent += 1;
         }
         if sent > 0 {
             self.audit_event("team_sync_vector", env_id, Some(&fp), None, Some(sent));
@@ -3866,6 +4335,39 @@ impl TeamSync {
         {
             env.synced_at = Some((self.ctx.clock)());
         }
+        // A joiner now holds the history in order. Send what was held for it
+        // meanwhile, in order, and release it only once nothing is left, so
+        // no live frame overtakes a held one.
+        loop {
+            let frames = {
+                let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(env) = envs.get_mut(env_id) else {
+                    return Ok(());
+                };
+                if !env.catching_up.contains(&fp)
+                    || env
+                        .sessions
+                        .get(&fp)
+                        .is_none_or(|current| !Arc::ptr_eq(current, session))
+                {
+                    return Ok(());
+                }
+                match env.held.remove(&fp) {
+                    Some(frames) if !frames.is_empty() => frames,
+                    _ => {
+                        env.catching_up.remove(&fp);
+                        break;
+                    }
+                }
+            };
+            for frame in frames {
+                if session.send(&frame).is_err() {
+                    self.drop_session(env_id, &fp, Some(session));
+                    return Ok(());
+                }
+            }
+        }
+        self.retry_pending_incidents_to(env_id, session);
         Ok(())
     }
     fn current_fact_session(&self, env_id: &str, fp: &str, session: &Arc<dyn Session>) -> bool {
@@ -3983,15 +4485,23 @@ impl TeamSync {
         if commit.env_id != env_id {
             return Ok(());
         }
-        let outcome = {
+        let receive = |live: bool| -> Result<&'static str> {
             let _lock = self.ctx.state.lock()?;
-            commit::receive_commit(
-                &CommitStore::new(self.ctx.state, env_id),
-                &commit,
-                commit::now_ms(),
-                Some(self.ctx.audit),
-            )?
+            let store = CommitStore::new(self.ctx.state, env_id);
+            if live {
+                commit::receive_live_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
+            } else {
+                commit::receive_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
+            }
         };
+        let mut outcome = receive(true)?;
+        if outcome == "early" {
+            if !self.early_commit_quarantined(env_id, session, &commit)? {
+                return Ok(());
+            }
+            outcome = receive(false)?;
+        }
+        self.after_receipt(env_id, &commit, outcome)?;
         if outcome == "accepted" {
             // As in `submit_commit`: the pickup baseline is left alone and the
             // seen-set gates the (single) rebroadcast.
@@ -4003,6 +4513,65 @@ impl TeamSync {
                     Some(&session.peer().fingerprint()),
                 );
             }
+        }
+        Ok(())
+    }
+    /// Whether a commit that arrived before its history (issue #28) is
+    /// quarantined after all. The first time a peer sends it, the poll loop
+    /// asks that peer for the missing range ([`TeamSync::send_due_vectors`]),
+    /// which it sends again in total order. Sent early again after that
+    /// request, the history is gone from that peer -- compacted (section 7.3)
+    /// -- and the commit is quarantined as before, unless what it waits for
+    /// sits in `deferred/` here; so is one beyond [`EARLY_COMMITS_PER_PEER`]
+    /// commits waiting from that peer.
+    fn early_commit_quarantined(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        commit: &Commit,
+    ) -> Result<bool> {
+        let fp = session.peer().fingerprint();
+        let hash = commit.hash()?;
+        let deferred =
+            commit::waits_on_deferred(&CommitStore::new(self.ctx.state, env_id), commit)?;
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(env) = envs.get_mut(env_id) else {
+            return Ok(false);
+        };
+        let asked = env.last_vector_sent.get(&fp).copied();
+        let waiting = env.early_commits.entry(fp.clone()).or_default();
+        match waiting.get(&hash) {
+            Some(first) if !deferred && asked.is_some_and(|at| at > *first) => {
+                waiting.remove(&hash);
+                return Ok(true);
+            }
+            Some(_) => {}
+            None if waiting.len() >= EARLY_COMMITS_PER_PEER => return Ok(true),
+            None => {
+                waiting.insert(hash, Instant::now());
+            }
+        }
+        if !deferred {
+            env.vector_due.insert(fp);
+        }
+        Ok(false)
+    }
+    /// A received commit that is no longer early: forget it, and note an
+    /// acceptance for [`EARLY_QUIET`].
+    fn after_receipt(&self, env_id: &str, commit: &Commit, outcome: &str) -> Result<()> {
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(env) = envs.get_mut(env_id) else {
+            return Ok(());
+        };
+        if outcome == "accepted" {
+            env.last_accepted = Some(Instant::now());
+        }
+        if !env.early_commits.is_empty() {
+            let hash = commit.hash()?;
+            for waiting in env.early_commits.values_mut() {
+                waiting.remove(&hash);
+            }
+            env.early_commits.retain(|_, waiting| !waiting.is_empty());
         }
         Ok(())
     }
@@ -4470,6 +5039,7 @@ impl TeamSync {
                         .filter(|(fp, _)| {
                             *fp != &mine
                                 && !e.draining.contains_key(*fp)
+                                && !e.catching_up.contains(*fp)
                                 && is_admin(&e.document, fp)
                         })
                         .map(|(_, s)| s.clone())
@@ -4544,7 +5114,11 @@ impl TeamSync {
         let pending = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get(env_id)
-                .filter(|e| !e.draining.contains_key(&fp) && is_admin(&e.document, &fp))
+                .filter(|e| {
+                    !e.draining.contains_key(&fp)
+                        && !e.catching_up.contains(&fp)
+                        && is_admin(&e.document, &fp)
+                })
                 .map(|e| e.incident_outbox.values().cloned().collect::<Vec<_>>())
                 .unwrap_or_default()
         };
@@ -4697,6 +5271,7 @@ impl TeamSync {
         for fp in dial {
             self.dial_attempt(env_id, &fp);
         }
+        self.send_due_vectors(env_id, now);
         for session in send {
             self.send_vector(env_id, &session);
         }
