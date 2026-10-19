@@ -213,20 +213,6 @@ impl RemovalSchedule {
             .get(&commit.author)
             .is_some_and(|bound| commit.author_seq > *bound)
     }
-
-    /// A removal is still unplaced because no remover's attestation exists
-    /// yet: a snapshot taken now could keep work the attestation would skip.
-    fn attestation_pending(&self) -> bool {
-        self.pending
-            .iter()
-            .any(|(_, fp)| !self.bounds.contains_key(fp))
-    }
-}
-
-/// Whether the fold of these commits and facts still waits on a remover's
-/// attestation (see `RemovalSchedule`); refolds do not snapshot meanwhile.
-pub fn removal_attestation_pending(facts: &Facts, commits: &[Commit]) -> bool {
-    RemovalSchedule::new(facts, commits).attestation_pending()
 }
 
 /// Make `fp` a removed member from this point of the fold on.
@@ -4030,7 +4016,6 @@ mod tests {
         let full = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
         assert_eq!(from_snapshot.document, full.document);
         assert_eq!(connection_ids(&full), ["kept"]);
-        assert!(removal_attestation_pending(&facts, &[]));
     }
 
     #[test]

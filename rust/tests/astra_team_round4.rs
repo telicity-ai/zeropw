@@ -171,7 +171,8 @@ fn original_local_mutual_removal_rotates_only_before_author_is_removed() {
     let doc = membership::load_environment(&carol.ctx, &env)
         .unwrap()
         .document;
-    assert!(doc["members"].get(bob.fp()).is_none());
-    assert!(doc["members"].get(carol.fp()).is_none());
-    assert!(doc["members"].get(owner.fp()).is_some());
+    // Removed members stay listed as removed (issues #18 and #27).
+    assert_eq!(doc["members"][bob.fp()]["status"], "removed");
+    assert_eq!(doc["members"][carol.fp()]["status"], "removed");
+    assert_eq!(doc["members"][owner.fp()]["status"], "active");
 }

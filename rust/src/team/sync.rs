@@ -3049,9 +3049,6 @@ impl TeamSync {
         let _lock = self.ctx.state.lock()?;
         let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
-        // A snapshot must not freeze work a remover's attestation would
-        // still skip (issue #27).
-        let snapshot_allowed = !fold::removal_attestation_pending(&facts, &commits);
         let result = fold::fold_with_snapshot(
             env_id,
             commits,
@@ -3090,7 +3087,7 @@ impl TeamSync {
             .sub(&env.last_snapshot_total)
             .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
             .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
-        if due && snapshot_allowed {
+        if due {
             fold::save_snapshot(self.ctx.state, env_id, &total, &result)?;
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
@@ -3289,6 +3286,23 @@ impl TeamSync {
     }
     pub fn publish_fact(&self, env_id: &str, kind: &str, target: Value) -> Result<Value> {
         let _lock = self.ctx.state.lock()?;
+        let fact = self.sign_authorized_fact(env_id, kind, target)?;
+        let stored = self.store_and_apply_fact(env_id, &fact)?;
+        drop(_lock);
+        if stored {
+            self.announce_fact(env_id, &fact);
+        }
+        Ok(fact.to_dict())
+    }
+    /// Check that this device may author the fact, and sign it without
+    /// storing it yet.
+    pub(crate) fn sign_authorized_fact(
+        &self,
+        env_id: &str,
+        kind: &str,
+        target: Value,
+    ) -> Result<Fact> {
+        let _lock = self.ctx.state.lock()?;
         validate_fact_target(kind, &target)?;
         let fp = self.device.fingerprint()?;
         let doc = if kind == "member_removed" {
@@ -3314,24 +3328,37 @@ impl TeamSync {
             }
             env.hlc.tick(None)
         };
-        let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
-        if self.store_fact(env_id, &fact)? {
-            if fact.kind == "member_removed"
-                && let Some(fp) = fact.target["fingerprint"].as_str()
-            {
-                self.drain_removed(env_id, fp);
-            }
-            self.refold(env_id)?;
-            drop(_lock);
-            self.audit_fact_apply(env_id, &fact);
-            self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
-            if kind == "member_removed" {
-                if fact.target["fingerprint"].as_str().is_some() {
-                    self.send_removal_notice(env_id, &fact, None);
-                }
-            }
+        sign_fact(&self.device, env_id, kind, target, &hlc)
+    }
+    /// Store, apply and broadcast a fact [`Self::sign_authorized_fact`]
+    /// signed.
+    pub(crate) fn publish_signed_fact(&self, env_id: &str, fact: Fact) -> Result<Value> {
+        let _lock = self.ctx.state.lock()?;
+        let stored = self.store_and_apply_fact(env_id, &fact)?;
+        drop(_lock);
+        if stored {
+            self.announce_fact(env_id, &fact);
         }
         Ok(fact.to_dict())
+    }
+    fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        if !self.store_fact(env_id, fact)? {
+            return Ok(false);
+        }
+        if fact.kind == "member_removed"
+            && let Some(fp) = fact.target["fingerprint"].as_str()
+        {
+            self.drain_removed(env_id, fp);
+        }
+        self.refold(env_id)?;
+        Ok(true)
+    }
+    fn announce_fact(&self, env_id: &str, fact: &Fact) {
+        self.audit_fact_apply(env_id, fact);
+        self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
+        if fact.kind == "member_removed" && fact.target["fingerprint"].as_str().is_some() {
+            self.send_removal_notice(env_id, fact, None);
+        }
     }
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
         let hash = fact.hash()?;
@@ -5082,11 +5109,6 @@ impl TeamSync {
         blocked.sort();
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
-        }
-        if fold::removal_attestation_pending(&facts, &commits) {
-            return Ok(
-                json!({"env_id":env_id,"removed":0,"blocked_by":[],"reason":"removal_attestation_pending"}),
-            );
         }
         let snapshot = fold::fold_with_history(
             env_id,
