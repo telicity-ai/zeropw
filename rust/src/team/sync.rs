@@ -628,6 +628,31 @@ mod retry_tests {
         assert!(next.stale_snapshots.is_empty());
     }
 
+    /// A snapshot without a record that matches the fold of the commits it
+    /// covers is built on, and the refold records it (issue #35).
+    #[test]
+    fn a_refold_records_an_unrecorded_snapshot() {
+        let f = owner_with_admin_peer();
+        let commits = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap();
+        let (facts, _, _) = load_facts(&f.ctx, &f.env_id).unwrap();
+        let built =
+            fold::fold_for_refold(&f.env_id, commits.clone(), f.ctx.state, Some(&facts), None)
+                .unwrap();
+        fold::save_snapshot(f.ctx.state, &f.env_id, &PyInt::from(1), &built.snapshot).unwrap();
+        f.team.refold(&f.env_id).unwrap();
+        let recorded = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/snapshot_records/1.json", f.env_id),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(recorded, fold::snapshot_record(Some(&facts), &commits));
+    }
+
     /// Issue #28: a joiner's session gets no live COMMIT, FACT or INCIDENT
     /// until its first VECTOR is answered, and the answer is in total order
     /// across authors, so an admitted author's commits never precede its
@@ -3680,6 +3705,7 @@ impl TeamSync {
             snapshot,
             record,
             stale_snapshots,
+            unrecorded_snapshot,
         } = fold::fold_for_refold(
             env_id,
             commits,
@@ -3727,6 +3753,9 @@ impl TeamSync {
                 fold::remove_snapshot(self.ctx.state, env_id, number);
             }
             env.last_snapshot_total = PyNumber::Int(total.0);
+        }
+        if let Some(number) = unrecorded_snapshot {
+            fold::save_snapshot_record(self.ctx.state, env_id, &number, &record)?;
         }
         drop(envs);
         self.record_overrides(env_id, &result.overridden)?;
