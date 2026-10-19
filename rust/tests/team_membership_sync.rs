@@ -14,8 +14,12 @@ use zeropw::team::{membership, sync};
 const SECRET: &[u8] = b"synthetic-shared-secret-for-rust-test-0123456789";
 
 fn new_context(root: &TempDir, name: &str) -> Arc<Context> {
+    new_context_syncing_every(root, name, 0.1)
+}
+
+fn new_context_syncing_every(root: &TempDir, name: &str, seconds: f64) -> Arc<Context> {
     let config = Config {
-        team_sync_interval_seconds: Some(0.1),
+        team_sync_interval_seconds: Some(seconds),
         team_dial_backoff: (0.05, 0.3),
         ..Config::default()
     };
@@ -210,10 +214,7 @@ fn join_leaves_no_rejected_commit_on_the_joiner() {
     let a_store = commit::CommitStore::new(a.state, env_id);
     let b_store = commit::CommitStore::new(b.state, env_id);
     wait_until(|| b_store.vector().unwrap() == a_store.vector().unwrap());
-    let rejected = b.state.path.join(format!("team/{env_id}/rejected"));
-    let quarantined: Vec<_> = std::fs::read_dir(&rejected)
-        .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-        .unwrap_or_default();
+    let quarantined = quarantined_commits(&b, env_id);
     assert!(quarantined.is_empty(), "{quarantined:?}");
     assert!(
         b.audit
@@ -224,6 +225,118 @@ fn join_leaves_no_rejected_commit_on_the_joiner() {
     );
     b_sync.stop();
     a_sync.stop();
+}
+
+fn quarantined_commits(ctx: &Context, env_id: &str) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(ctx.state.path.join(format!("team/{env_id}/rejected")))
+        .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// Issue #28 with two authors: the inviter is an administrator other than
+/// the owner, and its fingerprint sorts before the owner's. The catch-up
+/// must arrive in total order -- the owner's admission of the inviter before
+/// the inviter's `member.add` of the joiner -- or the joiner drops the
+/// inviter's commits and stays inactive until a periodic VECTOR, which the
+/// 60-second interval puts far past the join timeout.
+#[test]
+fn join_through_a_second_admin_gets_history_in_total_order() {
+    let root = TempDir::new().unwrap();
+    let owner = new_context_syncing_every(&root, "owner", 60.0);
+    owner.projects.create("demo", &["dev"]).unwrap();
+    owner
+        .vault
+        .put_secret("gh-token", "api_key", SECRET, "demo", "dev", true)
+        .unwrap();
+    let shared =
+        membership::share_environment(&owner, None, "demo", "dev", "alice", "admin-passphrase")
+            .unwrap();
+    let env_id = shared["env_id"].as_str().unwrap();
+    let owner_device = DeviceKey::load_or_create(owner.state, owner.kms).unwrap();
+    let owner_fp = owner_device.fingerprint().unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let owner_transport = Arc::new(InProcessTransport::new(owner_device.clone(), empty));
+    let owner_sync = sync::TeamSync::new(owner.clone(), owner_transport, owner_device);
+    owner_sync.start(Some("rust-team-order-o:47101")).unwrap();
+
+    // An administrator device whose fingerprint sorts before the owner's.
+    let (admin, admin_device) = (0..64)
+        .find_map(|n| {
+            let ctx = new_context_syncing_every(&root, &format!("admin{n}"), 60.0);
+            let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            (device.fingerprint().unwrap() < owner_fp).then_some((ctx, device))
+        })
+        .unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let admin_transport = Arc::new(InProcessTransport::new(admin_device.clone(), empty));
+    let admin_sync = sync::TeamSync::new(admin.clone(), admin_transport.clone(), admin_device);
+    admin_sync.start(Some("rust-team-order-i:47102")).unwrap();
+    let invite = membership::create_invite(
+        &owner,
+        env_id,
+        "admin",
+        "ivan",
+        3600,
+        &["rust-team-order-o:47101".into()],
+    )
+    .unwrap();
+    membership::join(
+        &admin,
+        &invite,
+        admin_transport.as_ref() as &dyn Transport,
+        &admin_sync,
+        Some("shared-demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap();
+
+    let invite = membership::create_invite(
+        &admin,
+        env_id,
+        "user",
+        "bob",
+        3600,
+        &["rust-team-order-i:47102".into()],
+    )
+    .unwrap();
+    let joiner = new_context_syncing_every(&root, "joiner", 60.0);
+    let joiner_device = DeviceKey::load_or_create(joiner.state, joiner.kms).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let joiner_transport = Arc::new(InProcessTransport::new(joiner_device.clone(), empty));
+    let joiner_sync = sync::TeamSync::new(joiner.clone(), joiner_transport.clone(), joiner_device);
+    joiner_sync.start(None).unwrap();
+    membership::join(
+        &joiner,
+        &invite,
+        joiner_transport.as_ref() as &dyn Transport,
+        &joiner_sync,
+        Some("shared-demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap();
+    assert_eq!(
+        joiner
+            .vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
+        SECRET
+    );
+    let quarantined = quarantined_commits(&joiner, env_id);
+    assert!(quarantined.is_empty(), "{quarantined:?}");
+    assert!(
+        joiner
+            .audit
+            .tail(500)
+            .unwrap()
+            .iter()
+            .all(|record| record["event"] != "team_commit_rejected")
+    );
+    joiner_sync.stop();
+    admin_sync.stop();
+    owner_sync.stop();
 }
 
 #[test]

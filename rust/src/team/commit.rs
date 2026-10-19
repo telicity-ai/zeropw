@@ -2200,6 +2200,31 @@ pub fn receive_commit(
     now_ms_value: i64,
     audit: Option<&Audit>,
 ) -> Result<&'static str> {
+    receive(store, commit, now_ms_value, audit, true)
+}
+
+/// [`receive_commit`] for a commit a peer sends live: one that arrives
+/// before the history it builds on -- a sequence gap, or an author whose
+/// admission this store has not received yet -- is `"early"`: nothing is
+/// stored, rejected or audited. The caller asks the peer for the missing
+/// range, which delivers it again in total order, and quarantines it with
+/// [`receive_commit`] if that peer still cannot (issue #28).
+pub fn receive_live_commit(
+    store: &CommitStore,
+    commit: &Commit,
+    now_ms_value: i64,
+    audit: Option<&Audit>,
+) -> Result<&'static str> {
+    receive(store, commit, now_ms_value, audit, false)
+}
+
+fn receive(
+    store: &CommitStore,
+    commit: &Commit,
+    now_ms_value: i64,
+    audit: Option<&Audit>,
+    quarantine_early: bool,
+) -> Result<&'static str> {
     let reject = |reason: &str| -> Result<&'static str> {
         store.reject(commit, reason)?;
         if let Some(audit) = audit {
@@ -2270,6 +2295,7 @@ pub fn receive_commit(
 
     let record = match registry.get(&commit.author) {
         Some(r) => r,
+        None if !quarantine_early => return Ok("early"),
         None => return reject("team_author_unknown"),
     };
     if !verify_commit(commit, record) {
@@ -2303,6 +2329,9 @@ pub fn receive_commit(
     }
 
     if let Err(exc) = store.append(commit) {
+        if !quarantine_early && exc.reason == "team_seq_gap" {
+            return Ok("early");
+        }
         return reject(&exc.reason);
     }
     Ok("accepted")
