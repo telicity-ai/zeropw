@@ -19,48 +19,68 @@ pub mod sync;
 pub mod transport;
 
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value;
 
-/// Successful signature checks the memo below keeps before it starts over.
+/// Successful signature checks the team memo keeps before it starts over.
 const VERIFIED_SIGNATURES_MAX: usize = 65_536;
 
-/// Ed25519 verification for the team layer's device records, facts,
-/// commits and fact admissions. Every fold re-checks each admitted device
-/// record and every fact load each fact, so receiving n facts verified the
-/// same signatures O(n^2) times (issue #40). A success for the exact same
-/// (key, message, signature) is remembered for the life of the process;
-/// failures are not, and the memo is keyed by a domain-separated SHA-256 of
-/// all three inputs, so nothing that did not verify can ever read as
-/// verified.
+/// Successful Ed25519 checks, keyed by a domain-separated, length-prefixed
+/// SHA-256 of (key, message, signature). Failures are never stored, so
+/// nothing that did not verify can read as verified; once `capacity`
+/// successes are stored it starts over, which only costs a re-check.
+struct VerifiedSignatures {
+    capacity: usize,
+    keys: Mutex<HashSet<[u8; 32]>>,
+}
+
+impl VerifiedSignatures {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            keys: Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn verify(&self, public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        digest.update(b"zeropw-team-verified-signature-v1\0");
+        for part in [public_key, message, signature] {
+            digest.update((part.len() as u64).to_be_bytes());
+            digest.update(part);
+        }
+        let key: [u8; 32] = digest.finalize().into();
+        if self
+            .keys
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&key)
+        {
+            return true;
+        }
+        if !crate::crypto::ed25519::verify(public_key, message, signature) {
+            return false;
+        }
+        let mut keys = self.keys.lock().unwrap_or_else(|e| e.into_inner());
+        if keys.len() >= self.capacity {
+            keys.clear();
+        }
+        keys.insert(key);
+        true
+    }
+}
+
+/// Ed25519 verification for the device records and facts the team layer
+/// checks again on every fold and fact load: receiving n facts verified
+/// the same signatures O(n^2) times (issue #40). A success is remembered
+/// for the exact (key, message, signature), so the outcome never differs
+/// from [`crate::crypto::ed25519::verify`].
 pub(crate) fn verify_signature(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
-    use sha2::{Digest, Sha256};
-    static VERIFIED: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
-    let mut digest = Sha256::new();
-    digest.update(b"zeropw-team-verified-signature-v1\0");
-    for part in [public_key, message, signature] {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part);
-    }
-    let key: [u8; 32] = digest.finalize().into();
-    let verified = VERIFIED.get_or_init(|| Mutex::new(HashSet::new()));
-    if verified
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .contains(&key)
-    {
-        return true;
-    }
-    if !crate::crypto::ed25519::verify(public_key, message, signature) {
-        return false;
-    }
-    let mut verified = verified.lock().unwrap_or_else(|e| e.into_inner());
-    if verified.len() >= VERIFIED_SIGNATURES_MAX {
-        verified.clear();
-    }
-    verified.insert(key);
-    true
+    static VERIFIED: LazyLock<VerifiedSignatures> =
+        LazyLock::new(|| VerifiedSignatures::new(VERIFIED_SIGNATURES_MAX));
+    VERIFIED.verify(public_key, message, signature)
 }
 
 /// Python truthiness of a parsed JSON value (`if not doc:` /
@@ -83,29 +103,77 @@ pub(crate) fn json_falsy(v: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::verify_signature;
+    use super::VerifiedSignatures;
     use crate::team::identity::DeviceKey;
 
-    /// A remembered success never vouches for a different key, message or
-    /// signature (issue #40).
+    fn signing_key() -> (DeviceKey, Vec<u8>) {
+        let key = DeviceKey::generate();
+        let record = key.record().unwrap().to_dict();
+        let public = crate::pybase64::b64decode_strict(record["sign_pub"].as_str().unwrap());
+        (key, public.unwrap())
+    }
+
+    /// A remembered success never vouches for anything else, however often
+    /// the other input is checked: another message, signature or key, the
+    /// same bytes split differently between the inputs, or wrong lengths
+    /// (issue #40).
     #[test]
     fn verified_signature_memo_is_exact() {
-        let key = DeviceKey::generate();
-        let record = key.record().unwrap();
+        let memo = VerifiedSignatures::new(16);
+        let (key, public) = signing_key();
         let message = b"synthetic-team-message".to_vec();
-        let signature = key.sign(&message).unwrap();
-        let public = record.to_dict()["sign_pub"].as_str().unwrap().to_owned();
-        let public = crate::pybase64::b64decode_strict(&public).unwrap();
-        assert!(verify_signature(&public, &message, &signature));
-        assert!(verify_signature(&public, &message, &signature));
-        let mut other_message = message.clone();
-        other_message[0] ^= 1;
-        assert!(!verify_signature(&public, &other_message, &signature));
-        let mut other_signature = signature;
-        other_signature[0] ^= 1;
-        assert!(!verify_signature(&public, &message, &other_signature));
-        let other = DeviceKey::generate().record().unwrap().to_dict();
-        let other = crate::pybase64::b64decode_strict(other["sign_pub"].as_str().unwrap()).unwrap();
-        assert!(!verify_signature(&other, &message, &signature));
+        let signature = key.sign(&message).unwrap().to_vec();
+        assert!(memo.verify(&public, &message, &signature));
+        assert!(memo.verify(&public, &message, &signature));
+        let flip = |bytes: &[u8]| {
+            let mut out = bytes.to_vec();
+            out[0] ^= 1;
+            out
+        };
+        let joined = |a: &[u8], b: &[u8]| [a, b].concat();
+        let (_, other) = signing_key();
+        let (head, tail) = message.split_at(message.len() - 1);
+        let rejected: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = vec![
+            (public.clone(), flip(&message), signature.clone()),
+            (public.clone(), message.clone(), flip(&signature)),
+            (other, message.clone(), signature.clone()),
+            (
+                public.clone(),
+                joined(&message, &signature[..1]),
+                signature[1..].to_vec(),
+            ),
+            (public.clone(), head.to_vec(), joined(tail, &signature)),
+            (public[..31].to_vec(), message.clone(), signature.clone()),
+            (joined(&public, &[0]), message.clone(), signature.clone()),
+            (public.clone(), message.clone(), signature[..63].to_vec()),
+            (public.clone(), message.clone(), joined(&signature, &[0])),
+        ];
+        for (public, message, signature) in &rejected {
+            for _ in 0..2 {
+                assert!(!memo.verify(public, message, signature));
+            }
+        }
+        assert_eq!(memo.keys.lock().unwrap().len(), 1);
+    }
+
+    /// Full, the memo starts over: every success is still a success.
+    #[test]
+    fn verified_signature_memo_starts_over_when_full() {
+        let memo = VerifiedSignatures::new(2);
+        let (key, public) = signing_key();
+        let signed: Vec<(Vec<u8>, Vec<u8>)> = (0..3u8)
+            .map(|n| {
+                let message = vec![n; 8];
+                let signature = key.sign(&message).unwrap().to_vec();
+                (message, signature)
+            })
+            .collect();
+        for (message, signature) in &signed {
+            assert!(memo.verify(&public, message, signature));
+        }
+        assert_eq!(memo.keys.lock().unwrap().len(), 1);
+        for (message, signature) in &signed {
+            assert!(memo.verify(&public, message, signature));
+        }
     }
 }

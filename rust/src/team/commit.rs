@@ -75,6 +75,7 @@ use std::path::PathBuf;
 use serde_json::{Map, Value, json};
 
 use crate::audit::{Audit, RecordArgs};
+use crate::crypto::ed25519;
 use crate::errors::{Error, ErrorClass, Result};
 use crate::policy;
 use crate::projects;
@@ -798,7 +799,8 @@ pub fn verify_commit(commit: &Commit, author_record: &DeviceRecord) -> bool {
         Ok(b) => b,
         Err(_) => return false,
     };
-    super::verify_signature(&author_record.sign_pub, &to_verify, &sig)
+    // Not memoized: a commit is verified once, on receipt.
+    ed25519::verify(&author_record.sign_pub, &to_verify, &sig)
 }
 
 // -------------------------------------------------------------- env ids

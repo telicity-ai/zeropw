@@ -103,10 +103,21 @@ impl DeviceRecord {
     /// `DeviceRecord.verify`: true iff `sig` really binds `agree_pub` to
     /// `sign_pub`. Never raises (Ed25519 `verify` never raises either).
     pub fn verify(&self) -> bool {
+        super::verify_signature(&self.sign_pub, &self.signed_message(), &self.sig)
+    }
+
+    /// [`DeviceRecord::verify`] without the team layer's memo of successful
+    /// checks, for a record an unauthenticated handshake presents: anyone
+    /// can make those, so they must not fill the memo.
+    pub fn verify_uncached(&self) -> bool {
+        ed25519::verify(&self.sign_pub, &self.signed_message(), &self.sig)
+    }
+
+    fn signed_message(&self) -> Vec<u8> {
         let mut message = Vec::with_capacity(DEVICE_RECORD_CONTEXT.len() + self.agree_pub.len());
         message.extend_from_slice(DEVICE_RECORD_CONTEXT);
         message.extend_from_slice(&self.agree_pub);
-        super::verify_signature(&self.sign_pub, &message, &self.sig)
+        message
     }
 
     /// `DeviceRecord.fingerprint`: lowercase, unpadded base32 of
