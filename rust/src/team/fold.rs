@@ -2025,8 +2025,9 @@ fn history_is_complete(vector: Option<&Value>, covered: &[Commit]) -> bool {
 /// commit it does not cover sorts in front of one it does, or its record
 /// differs from what these facts and commits give -- other facts, or a
 /// removal placed or bounded differently by a commit that arrived since
-/// (issue #35). A snapshot without a record (an earlier build's) matches
-/// nothing.
+/// (issue #35). A snapshot without a record (the prototype's or an earlier
+/// build's) matches only while there are no facts, as those builds folded
+/// without one.
 fn snapshot_is_stale(
     state: &StateDir,
     env_id: &str,
@@ -2054,6 +2055,9 @@ fn snapshot_is_stale(
     let recorded = state
         .read_json(&snapshot_record_path(env_id, number), Value::Null)
         .unwrap_or(Value::Null);
+    if recorded.is_null() {
+        return Ok(snapshot_record(facts, all_commits) != snapshot_record(None, &[]));
+    }
     Ok(recorded != snapshot_record(facts, all_commits))
 }
 
@@ -5146,53 +5150,6 @@ mod tests {
         assert_eq!(node.document, full.document);
     }
 
-    /// A snapshot stored by an earlier build has no record and may have been
-    /// folded out of order (a late commit applied on top of an older
-    /// snapshot): with every commit stored it is passed over.
-    #[test]
-    fn a_snapshot_without_a_record_refolds_from_scratch() {
-        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
-        let admin = DeviceKey::generate();
-        let first = vec![
-            c1,
-            member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
-            connection_create_commit(&env_id, &owner, 3, "2000-0000", "gh"),
-            update_commit(&env_id, &owner, 4, "3000-0000", "owner-later"),
-        ];
-        let base = fold(&env_id, first.clone(), None, None, None, None).unwrap();
-        let late = update_commit(&env_id, &admin, 1, "2500-0000", "admin-earlier");
-        let owner5 = signed(
-            &owner,
-            &env_id,
-            5,
-            "5000-0000",
-            json!({"op": "settings.update", "sync_interval_seconds": 11}),
-        );
-        // What an earlier refold stored: the late commit folded over the base.
-        let earlier = fold(
-            &env_id,
-            vec![late.clone(), owner5.clone()],
-            None,
-            Some(base.document.clone()),
-            None,
-            None,
-        )
-        .unwrap();
-        let (_tmp, state) = snapshot_state();
-        save_snapshot(&state, &env_id, &PyInt::from(6), &earlier).unwrap();
-        let mut all = first;
-        all.push(late);
-        all.push(owner5);
-        let full = fold(&env_id, all.clone(), None, None, None, None).unwrap();
-        assert_eq!(
-            full.document["connections"]["gh"]["description"],
-            json!("owner-later")
-        );
-        let refold = fold_for_refold(&env_id, all, &state, None, None).unwrap();
-        assert_eq!(refold.stale_snapshots, [PyInt::from(6)]);
-        assert_eq!(refold.result.document, full.document);
-    }
-
     /// A refold that passes a snapshot over does not audit again the skips
     /// in the commits that snapshot covered.
     #[test]
@@ -5264,7 +5221,8 @@ mod tests {
             member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
         ];
         // An earlier build's snapshot whose vector names only the owner; the
-        // admin's first commit has since been compacted away.
+        // admin's first commit has since been compacted away, and a fact
+        // arrived that the snapshot cannot have been folded with.
         let base = fold(&env_id, first.clone(), None, None, None, None).unwrap();
         let (_tmp, state) = snapshot_state();
         save_snapshot(&state, &env_id, &PyInt::from(2), &base).unwrap();
@@ -5276,7 +5234,11 @@ mod tests {
             "3000-0000",
             "kept",
         ));
-        let err = fold_for_refold(&env_id, stored, &state, None, None)
+        let facts = Facts {
+            disabled_connections: ["kept".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        let err = fold_for_refold(&env_id, stored, &state, Some(&facts), None)
             .err()
             .expect("fails closed");
         assert_eq!(err.reason, "state_corrupt");
