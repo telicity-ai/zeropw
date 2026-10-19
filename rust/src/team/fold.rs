@@ -17,7 +17,10 @@
 //! revoked, member removed) are a second, order-independent input that is
 //! consulted throughout the fold and re-applied once more at the end, so
 //! they always win regardless of where in the total order the corresponding
-//! commit (if any) falls.
+//! commit (if any) falls. A member removal is the exception to "from the
+//! start": it takes effect at its own place in the total order
+//! (`RemovalSchedule`, issue #27), so the removed member's earlier work
+//! stands.
 //!
 //! [`derive_local`] then writes the parts of the document this node cares
 //! about into its own `policy/connections.json` and `vault/secrets.json`,
@@ -107,46 +110,50 @@ pub struct RemovalFact {
 }
 
 /// Where each fact-removed member stops being a member of the fold (issue
-/// #27). A removal takes effect at its fact's HLC: the member's earlier
-/// commits stand as the work of the member it then was, and its later
-/// commits fail the usual membership and role checks. Backdating cannot
-/// move work in front of the removal either: the remover's first
-/// `dek.rotate` commit for that fact (`removal_fact_hash`, written by the
-/// same `team remove`) signs the vector the remover had seen, and the
-/// member's commits past that sequence are skipped wherever they sort.
+/// #27). The member's commits before that point stand as the work of the
+/// member it then was; its later commits fail the usual membership and role
+/// checks.
+///
+/// - Removed by another device: the cut is the earliest such fact's HLC. The
+///   remover's first `dek.rotate` commit for its fact (`removal_fact_hash`,
+///   written by the same `team remove`) signs the vector the remover had
+///   seen; the member's commits past the lowest such sequence are skipped
+///   wherever they sort, so backdating cannot put new work in front of the
+///   cut. The member's own facts never move it.
+/// - Removed only by itself: its own `member.remove` commit places the
+///   removal in its own sequence, which it cannot backdate later work into.
+/// - Neither (a hand-built `Facts`, or a bare self-removal fact): removed
+///   from the start of the fold, as before.
 struct RemovalSchedule {
-    /// `(cutoff HLC, fingerprint)`, earliest first.
+    /// `(cut HLC, fingerprint)`, earliest first.
     pending: Vec<((PyInt, PyInt), String)>,
-    /// The highest attested `author_seq` of each removed member.
+    /// The lowest attested `author_seq` of each member removed by others.
     bounds: BTreeMap<String, PyInt>,
+    /// Members whose own `member.remove` commit places their removal.
+    self_placed: BTreeSet<String>,
 }
 
 impl RemovalSchedule {
     fn new(facts: &Facts, commits: &[Commit]) -> RemovalSchedule {
         let mut pending = Vec::new();
         let mut bounds: BTreeMap<String, PyInt> = BTreeMap::new();
+        let mut self_placed = BTreeSet::new();
         for fp in &facts.removed_members {
-            // Earliest removal by anyone, earliest removal by someone else,
-            // and the highest sequence a remover other than the member
-            // itself attested.
-            let mut any: Option<(PyInt, PyInt)> = None;
-            let mut by_other: Option<(PyInt, PyInt)> = None;
+            let mut cut: Option<(PyInt, PyInt)> = None;
             let mut bound: Option<PyInt> = None;
+            let mut by_itself = false;
             let mut positioned = true;
             for (hash, fact) in facts.removal_facts.iter().filter(|(_, f)| &f.target == fp) {
+                if &fact.author == fp {
+                    by_itself = true;
+                    continue;
+                }
                 let Ok(hlc) = Hlc::parse(&fact.hlc) else {
                     positioned = false;
                     break;
                 };
-                if any.as_ref().is_none_or(|earliest| hlc < *earliest) {
-                    any = Some(hlc.clone());
-                }
-                // A device removing itself attests nothing about itself.
-                if &fact.author == fp {
-                    continue;
-                }
-                if by_other.as_ref().is_none_or(|earliest| hlc < *earliest) {
-                    by_other = Some(hlc);
+                if cut.as_ref().is_none_or(|earliest| hlc < *earliest) {
+                    cut = Some(hlc);
                 }
                 let attestation = commits
                     .iter()
@@ -159,7 +166,7 @@ impl RemovalSchedule {
                     .min_by(|a, b| a.author_seq.cmp(&b.author_seq));
                 if let Some(commit) = attestation {
                     let seen = commit.seen.get(fp).cloned().unwrap_or_else(PyInt::zero);
-                    if bound.as_ref().is_none_or(|highest| seen > *highest) {
+                    if bound.as_ref().is_none_or(|lowest| seen < *lowest) {
                         bound = Some(seen);
                     }
                 }
@@ -167,28 +174,59 @@ impl RemovalSchedule {
             if !positioned {
                 continue;
             }
-            // Once a remover's attestation is known, the removed device's
-            // own (possibly backdated) self-removal facts no longer move
-            // the cut.
-            let cutoff = if bound.is_some() { by_other } else { any };
-            if let Some(cutoff) = cutoff {
-                pending.push((cutoff, fp.clone()));
-            }
-            if let Some(bound) = bound {
-                bounds.insert(fp.clone(), bound);
+            if let Some(cut) = cut {
+                pending.push((cut, fp.clone()));
+                if let Some(bound) = bound {
+                    bounds.insert(fp.clone(), bound);
+                }
+            } else if by_itself
+                && commits.iter().any(|c| {
+                    &c.author == fp
+                        && c.ops.iter().any(|op| {
+                            op["op"] == "member.remove" && op["fingerprint"] == fp.as_str()
+                        })
+                })
+            {
+                self_placed.insert(fp.clone());
             }
         }
         pending.sort();
-        RemovalSchedule { pending, bounds }
+        RemovalSchedule {
+            pending,
+            bounds,
+            self_placed,
+        }
     }
 
-    /// The commit's author is a removed member and the commit lies past
-    /// what its remover attested.
+    /// Members that are not removed when the fold starts.
+    fn placed(&self) -> impl Iterator<Item = &String> {
+        self.pending
+            .iter()
+            .map(|(_, fp)| fp)
+            .chain(self.self_placed.iter())
+    }
+
+    /// The commit's author was removed by another device and the commit lies
+    /// past what its remover attested.
     fn past_bound(&self, commit: &Commit) -> bool {
         self.bounds
             .get(&commit.author)
             .is_some_and(|bound| commit.author_seq > *bound)
     }
+
+    /// A removal is still unplaced because no remover's attestation exists
+    /// yet: a snapshot taken now could keep work the attestation would skip.
+    fn attestation_pending(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|(_, fp)| !self.bounds.contains_key(fp))
+    }
+}
+
+/// Whether the fold of these commits and facts still waits on a remover's
+/// attestation (see `RemovalSchedule`); refolds do not snapshot meanwhile.
+pub fn removal_attestation_pending(facts: &Facts, commits: &[Commit]) -> bool {
+    RemovalSchedule::new(facts, commits).attestation_pending()
 }
 
 /// Make `fp` a removed member from this point of the fold on.
@@ -1315,6 +1353,40 @@ pub fn fold(
     base_version_order: Option<BTreeMap<String, Vec<Value>>>,
     audit: Option<&Audit>,
 ) -> Result<FoldResult> {
+    fold_scheduled(
+        env_id,
+        commits,
+        facts,
+        base_document,
+        base_version_order,
+        audit,
+        None,
+    )
+}
+
+/// [`fold`] of `commits` (a prefix of history, for compaction), placing
+/// removals from every stored commit in `history`.
+pub fn fold_with_history(
+    env_id: &str,
+    commits: Vec<Commit>,
+    facts: Option<&Facts>,
+    history: &[Commit],
+    audit: Option<&Audit>,
+) -> Result<FoldResult> {
+    fold_scheduled(env_id, commits, facts, None, None, audit, Some(history))
+}
+
+/// [`fold`], placing removals from `history` (every stored commit, when
+/// `commits` is only what a snapshot does not cover) instead of `commits`.
+fn fold_scheduled(
+    env_id: &str,
+    commits: Vec<Commit>,
+    facts: Option<&Facts>,
+    base_document: Option<Value>,
+    base_version_order: Option<BTreeMap<String, Vec<Value>>>,
+    audit: Option<&Audit>,
+    history: Option<&[Commit]>,
+) -> Result<FoldResult> {
     // `copy.deepcopy(base_document) if base_document is not None else
     // new_document(env_id)`, then `doc.setdefault` (a dict-only method).
     let mut doc = match base_document {
@@ -1337,8 +1409,9 @@ pub fn fold(
     let mut working_facts = facts.cloned().unwrap_or_default();
     // A fact-removed member stays a member until its removal's place in the
     // total order (`RemovalSchedule`).
-    let schedule = RemovalSchedule::new(&working_facts, &ordered);
-    for (_, fp) in &schedule.pending {
+    let removed_by_fact = working_facts.removed_members.clone();
+    let schedule = RemovalSchedule::new(&working_facts, history.unwrap_or(&ordered));
+    for fp in schedule.placed() {
         working_facts.removed_members.remove(fp);
     }
     let mut pending_removals = schedule.pending.iter().peekable();
@@ -1357,7 +1430,14 @@ pub fn fold(
                 Some(o) => o,
                 None => continue,
             };
-            let reason = if past_bound {
+            // Facts win over commits: ownership never passes to a member an
+            // admitted fact removes, wherever the transfer sorts.
+            let to_removed = op_obj.get("op").and_then(Value::as_str) == Some("owner.transfer")
+                && op_obj
+                    .get("fingerprint")
+                    .and_then(Value::as_str)
+                    .is_some_and(|fp| removed_by_fact.contains(fp));
+            let reason = if past_bound || to_removed {
                 Some("member_removed".to_string())
             } else {
                 apply_op(
@@ -1443,6 +1523,7 @@ pub fn fold(
     for (_, fp) in pending_removals {
         remove_member_now(&mut doc, &mut working_facts, fp)?;
     }
+    working_facts.removed_members.extend(removed_by_fact);
     reapply_facts(&mut doc, &working_facts)?;
     let mut vector: BTreeMap<String, PyInt> = BTreeMap::new();
     for commit in &ordered {
@@ -1620,7 +1701,7 @@ pub fn fold_with_snapshot(
     // for an `all_commits` that happens to be empty.
     let vector_field = snapshot_obj.get("vector");
     let mut later: Vec<Commit> = Vec::with_capacity(all_commits.len());
-    for c in all_commits {
+    for c in all_commits.iter().cloned() {
         let floor = match vector_field {
             None => None,
             Some(v) if json_falsy(v) => None,
@@ -1633,13 +1714,14 @@ pub fn fold_with_snapshot(
     }
     let base_document = snapshot_obj.get("document").cloned();
     let base_version_order = parse_snapshot_version_order(snapshot_obj.get("version_order"))?;
-    fold(
+    fold_scheduled(
         env_id,
         later,
         facts,
         base_document,
         base_version_order,
         audit,
+        Some(&all_commits),
     )
 }
 
@@ -3565,6 +3647,32 @@ mod tests {
         commit::sign_commit(remover, env_id, seq, hlc, &seen, vec![op]).unwrap()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn removal_rotation_for(
+        env_id: &str,
+        remover: &DeviceKey,
+        seq: i128,
+        hlc: &str,
+        dek: &[u8],
+        seen: &[(&DeviceKey, i128)],
+        hash: &str,
+    ) -> Commit {
+        let generation = format!("{:016x}", seq + 0x2222);
+        let record = remover.record().unwrap();
+        let mut wraps = Map::new();
+        wraps.insert(
+            remover.fingerprint().unwrap(),
+            envelope::wrap_dek(dek, env_id, &generation, &record).unwrap(),
+        );
+        let seen: Map2<String, PyInt> = seen
+            .iter()
+            .map(|(device, n)| (device.fingerprint().unwrap(), PyInt::from(*n)))
+            .collect();
+        let op = json!({"op": "dek.rotate", "generation_id": generation, "wraps": wraps,
+                        "removal_fact_hash": hash});
+        commit::sign_commit(remover, env_id, seq, hlc, &seen, vec![op]).unwrap()
+    }
+
     fn skip_reasons(result: &FoldResult, commit: &Commit) -> Vec<String> {
         let hash = commit.hash().unwrap();
         result
@@ -3668,82 +3776,261 @@ mod tests {
         assert_eq!(skip_reasons(&result, &readd), ["member_removed"]);
     }
 
-    /// A removed admin cannot undo its own earlier work by publishing a
-    /// backdated self-removal: once the remover's rotation attests its
-    /// history, only removals by others place the cut.
+    fn self_removal_fact(target: &DeviceKey, hash: &str, hlc: &str) -> (String, RemovalFact) {
+        let fp = target.fingerprint().unwrap();
+        (
+            hash.into(),
+            RemovalFact {
+                author: fp.clone(),
+                target: fp,
+                hlc: hlc.into(),
+            },
+        )
+    }
+
+    fn signed(device: &DeviceKey, env_id: &str, seq: i128, hlc: &str, op: Value) -> Commit {
+        commit::sign_commit(device, env_id, seq, hlc, &Map2::new(), vec![op]).unwrap()
+    }
+
+    fn connection_ids(result: &FoldResult) -> Vec<String> {
+        doc_obj(result)["connections"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// A removed admin cannot undo its own earlier work with a backdated
+    /// self-removal fact: only removals by other devices place the cut,
+    /// with or without the remover's attestation.
     #[test]
-    fn backdated_self_removal_does_not_move_an_attested_removal() {
+    fn backdated_self_removal_fact_does_not_move_the_cut() {
         let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
         let admin = DeviceKey::generate();
         let add_admin = member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin");
         let kept = connection_create_commit(&env_id, &admin, 1, "3000-0000", "kept");
         let rotation = removal_rotation(&env_id, &owner, 3, "4001-0000", &dek, &[(&admin, 1)]);
         let mut facts = removal(&owner, &admin, "4000-0000");
+        let (hash, fact) = self_removal_fact(&admin, &"6".repeat(64), "2500-0000");
+        facts.removal_facts.insert(hash, fact);
+        for commits in [
+            vec![c1.clone(), add_admin.clone(), kept.clone(), rotation],
+            vec![c1, add_admin, kept],
+        ] {
+            let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+            assert_eq!(connection_ids(&result), ["kept"]);
+        }
+    }
+
+    /// Removed only by itself, a device is placed by its own `member.remove`
+    /// commit: what it did before stands, nothing it signs later counts,
+    /// and further self-removal facts change nothing. A bare self-removal
+    /// fact without that commit keeps the old from-the-start removal.
+    #[test]
+    fn self_removal_is_placed_by_its_own_commit() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let fp = admin.fingerprint().unwrap();
+        let add_admin = member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin");
+        let before = connection_create_commit(&env_id, &admin, 1, "3000-0000", "before");
+        let leave = signed(
+            &admin,
+            &env_id,
+            2,
+            "4000-0000",
+            json!({"op": "member.remove", "fingerprint": fp}),
+        );
+        let after = connection_create_commit(&env_id, &admin, 3, "5000-0000", "after");
+        let mut facts = Facts {
+            removed_members: [fp.clone()].into_iter().collect(),
+            ..Default::default()
+        };
+        for (hash, hlc) in [("7".repeat(64), "4000-0001"), ("8".repeat(64), "1500-0000")] {
+            let (hash, fact) = self_removal_fact(&admin, &hash, hlc);
+            facts.removal_facts.insert(hash, fact);
+        }
+        let commits = vec![c1, add_admin, before, leave, after.clone()];
+        let result = fold(&env_id, commits.clone(), Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&result), ["before"]);
+        assert_eq!(skip_reasons(&result, &after), ["not_admin"]);
+        assert_eq!(doc_obj(&result)["members"][&fp]["status"], json!("removed"));
+        // Without its own commit the self-removal applies from the start.
+        let bare: Vec<Commit> = commits
+            .into_iter()
+            .filter(|c| c.author_seq != 2 || c.author != fp)
+            .collect();
+        let result = fold(&env_id, bare, Some(&facts), None, None, None).unwrap();
+        assert!(connection_ids(&result).is_empty());
+    }
+
+    /// Two removals by other devices: the earliest places the cut and the
+    /// lowest attested sequence bounds the removed member, so a later
+    /// re-issued removal cannot admit work the first one excluded.
+    #[test]
+    fn lowest_attestation_bounds_a_member_removed_twice() {
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let other = DeviceKey::generate();
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            member_add_commit(&env_id, &owner, 3, "2100-0000", &other, "admin"),
+            connection_create_commit(&env_id, &admin, 1, "3000-0000", "kept"),
+            connection_create_commit(&env_id, &admin, 2, "3500-0000", "relayed"),
+            removal_rotation(&env_id, &owner, 4, "4001-0000", &dek, &[(&admin, 1)]),
+            removal_rotation_for(
+                &env_id,
+                &other,
+                1,
+                "6001-0000",
+                &dek,
+                &[(&admin, 2)],
+                &"9".repeat(64),
+            ),
+        ];
+        let mut facts = removal(&owner, &admin, "4000-0000");
         facts.removal_facts.insert(
-            "6".repeat(64),
+            "9".repeat(64),
             RemovalFact {
-                author: admin.fingerprint().unwrap(),
+                author: other.fingerprint().unwrap(),
                 target: admin.fingerprint().unwrap(),
-                hlc: "2500-0000".into(),
+                hlc: "6000-0000".into(),
             },
         );
-        let attested = fold(
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&result), ["kept"]);
+    }
+
+    /// Only the remover's own rotation attests: a repair rotation another
+    /// admin wrote for the fact bounds nothing, and the fact's HLC alone is
+    /// the cut.
+    #[test]
+    fn another_admins_rotation_does_not_attest_a_removal() {
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let other = DeviceKey::generate();
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            member_add_commit(&env_id, &owner, 3, "2100-0000", &other, "admin"),
+            connection_create_commit(&env_id, &admin, 1, "3000-0000", "kept"),
+            connection_create_commit(&env_id, &admin, 2, "3500-0000", "unbounded"),
+            removal_rotation_for(
+                &env_id,
+                &other,
+                1,
+                "4001-0000",
+                &dek,
+                &[(&admin, 1)],
+                REMOVAL_HASH,
+            ),
+        ];
+        let facts = removal(&owner, &admin, "4000-0000");
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(connection_ids(&result), ["kept", "unbounded"]);
+    }
+
+    /// Ownership never passes to a member an admitted fact removes, even
+    /// when the transfer sorts before the removal: the owner stays active.
+    #[test]
+    fn ownership_does_not_pass_to_a_removed_member() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let fp = admin.fingerprint().unwrap();
+        let transfer = signed(
+            &owner,
             &env_id,
-            vec![c1.clone(), add_admin.clone(), kept.clone(), rotation],
-            Some(&facts),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert!(
-            doc_obj(&attested)["connections"]
-                .as_object()
-                .unwrap()
-                .contains_key("kept")
+            3,
+            "3000-0000",
+            json!({"op": "owner.transfer", "fingerprint": fp}),
         );
-        // Without the attestation the earliest removal is the cut.
-        let unattested = fold(
-            &env_id,
-            vec![c1, add_admin, kept],
-            Some(&facts),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert!(
-            !doc_obj(&unattested)["connections"]
-                .as_object()
-                .unwrap()
-                .contains_key("kept")
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            transfer.clone(),
+        ];
+        let facts = removal(&owner, &admin, "4000-0000");
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        let doc = doc_obj(&result);
+        assert_eq!(doc["owner"], json!(owner.fingerprint().unwrap()));
+        assert_eq!(skip_reasons(&result, &transfer), ["member_removed"]);
+        assert_eq!(doc["members"][&fp]["status"], json!("removed"));
+    }
+
+    /// The issue #27 headline: the password a removed admin rotated stays
+    /// the active version after its removal.
+    #[test]
+    fn removed_admins_password_rotation_stays_active() {
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let version_id = "b".repeat(16);
+        let ct = envelope::encrypt_secret(&dek, &env_id, "gh-token", &version_id, SYNTHETIC_SECRET)
+            .unwrap();
+        let commits = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            signed(
+                &admin,
+                &env_id,
+                1,
+                "3000-0000",
+                json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+                       "generation_id": GEN0, "version_id": version_id, "ciphertext": ct,
+                       "public": {}}),
+            ),
+            signed(
+                &admin,
+                &env_id,
+                2,
+                "3001-0000",
+                json!({"op": "secret.activate", "secret_id": "gh-token", "version_id": version_id}),
+            ),
+            removal_rotation(&env_id, &owner, 3, "4001-0000", &dek, &[(&admin, 2)]),
+        ];
+        let facts = removal(&owner, &admin, "4000-0000");
+        let result = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert!(result.skipped.is_empty(), "{:?}", result.skipped);
+        assert_eq!(
+            doc_obj(&result)["secrets"]["gh-token"]["active_version"],
+            json!(version_id)
         );
     }
 
-    /// The same commits and facts fold to the same document in any order.
+    /// A snapshot fold places removals from all of history: the same
+    /// document as a fold from scratch, even when the remover's attestation
+    /// is older than the snapshot.
     #[test]
-    fn positioned_removal_is_order_independent() {
+    fn snapshot_fold_places_removals_like_a_full_fold() {
         let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
         let admin = DeviceKey::generate();
         let commits = vec![
             c1,
             member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
             connection_create_commit(&env_id, &admin, 1, "3000-0000", "kept"),
-            connection_create_commit(&env_id, &admin, 2, "3500-0000", "backdated"),
             removal_rotation(&env_id, &owner, 3, "4001-0000", &dek, &[(&admin, 1)]),
+            connection_create_commit(&env_id, &admin, 2, "3500-0000", "backdated"),
         ];
         let facts = removal(&owner, &admin, "4000-0000");
-        let mut documents = BTreeSet::new();
-        for shift in 0..commits.len() {
-            let mut shuffled = commits.clone();
-            shuffled.rotate_left(shift);
-            shuffled.reverse();
-            let result = fold(&env_id, shuffled, Some(&facts), None, None, None).unwrap();
-            documents.insert(
-                pyjson::dumps(&result.document, pyjson::DumpOptions::compact_sorted()).unwrap(),
-            );
-        }
-        assert_eq!(documents.len(), 1);
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let covered = fold(
+            &env_id,
+            commits[..4].to_vec(),
+            Some(&facts),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        save_snapshot(&state, &env_id, &PyInt::from(4), &covered).unwrap();
+        let from_snapshot =
+            fold_with_snapshot(&env_id, commits.clone(), &state, Some(&facts), None).unwrap();
+        let full = fold(&env_id, commits, Some(&facts), None, None, None).unwrap();
+        assert_eq!(from_snapshot.document, full.document);
+        assert_eq!(connection_ids(&full), ["kept"]);
+        assert!(removal_attestation_pending(&facts, &[]));
     }
 
     #[test]

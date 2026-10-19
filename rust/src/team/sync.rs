@@ -2349,7 +2349,9 @@ pub fn fact_role_ok(doc: &Value, kind: &str, author: &str, target: &Value) -> bo
         if doc["owner"] == target_fp {
             return false;
         }
-        return doc["owner"] == author || is_admin(doc, author) || author == target_fp;
+        // `is_admin` covers an active owner; a removed owner keeps no
+        // authority.
+        return is_admin(doc, author) || author == target_fp;
     }
     if kind == "incident" {
         return doc["members"][author]["status"] == "active";
@@ -3047,6 +3049,9 @@ impl TeamSync {
         let _lock = self.ctx.state.lock()?;
         let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
+        // A snapshot must not freeze work a remover's attestation would
+        // still skip (issue #27).
+        let snapshot_allowed = !fold::removal_attestation_pending(&facts, &commits);
         let result = fold::fold_with_snapshot(
             env_id,
             commits,
@@ -3085,7 +3090,7 @@ impl TeamSync {
             .sub(&env.last_snapshot_total)
             .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
             .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
-        if due {
+        if due && snapshot_allowed {
             fold::save_snapshot(self.ctx.state, env_id, &total, &result)?;
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
@@ -5078,12 +5083,16 @@ impl TeamSync {
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
         }
-        let snapshot = fold::fold(
+        if fold::removal_attestation_pending(&facts, &commits) {
+            return Ok(
+                json!({"env_id":env_id,"removed":0,"blocked_by":[],"reason":"removal_attestation_pending"}),
+            );
+        }
+        let snapshot = fold::fold_with_history(
             env_id,
             commits[..=cutoff].to_vec(),
             Some(&facts),
-            None,
-            None,
+            &commits,
             Some(self.ctx.audit),
         )?;
         let total = candidate

@@ -924,6 +924,19 @@ pub fn remove_member(
     }
     let caller = device.fingerprint()?;
     let is_admin = sync::is_admin(&doc, &caller);
+    if caller == fingerprint
+        && doc["owner"] != fingerprint
+        && doc["members"][&caller]["status"] == "active"
+    {
+        // A self-removal is placed in this device's own sequence, which no
+        // later commit of it can sort before (issue #27).
+        author_commit(
+            ctx,
+            team,
+            env_id,
+            vec![json!({"op":"member.remove","fingerprint":fingerprint})],
+        )?;
+    }
     let fact = author_fact(
         ctx,
         team,
