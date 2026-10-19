@@ -1844,6 +1844,11 @@ fn fold_from_snapshots(
     // What the newest passed-over snapshot covers was audited when it was
     // folded.
     let mut audited_up_to: Option<Value> = None;
+    // A snapshot without a record is checked by folding what it covers, at
+    // most once per fold: past one that fails, older ones are passed over
+    // unchecked, so a node upgraded from an earlier build does not fold its
+    // history once per snapshot.
+    let mut may_check_unrecorded = true;
     for number in numbers.iter().rev() {
         let attempt = fold_on_snapshot(
             env_id,
@@ -1854,6 +1859,7 @@ fn fold_from_snapshots(
             audit,
             keep_unflushed || !passed_over.is_empty(),
             audited_up_to.as_ref(),
+            &mut may_check_unrecorded,
         );
         match attempt {
             Ok(Some((result, unflushed, unrecorded))) => {
@@ -1926,6 +1932,7 @@ fn fold_on_snapshot(
     audit: Option<&Audit>,
     keep_unflushed: bool,
     audited_up_to: Option<&Value>,
+    may_check_unrecorded: &mut bool,
 ) -> std::result::Result<Option<(FoldResult, Option<Value>, bool)>, SnapshotUnusable> {
     {
         let snapshot = state.read_json(
@@ -1964,10 +1971,14 @@ fn fold_on_snapshot(
         let base_version_order = parse_snapshot_version_order(snapshot_obj.get("version_order"))?;
         // Only a document a build stored is checked; a hand-written null one
         // folds on a fresh document, as the prototype did.
+        let stored = base_document.as_ref().is_some_and(Value::is_object);
+        if stored && !later_is_contiguous(vector_field, &later) {
+            return Err(SnapshotUnusable::Stale(
+                vector_field.cloned().unwrap_or(Value::Null),
+            ));
+        }
         let mut unrecorded = false;
-        if base_document.as_ref().is_some_and(Value::is_object)
-            && history_is_complete(vector_field, &covered)
-        {
+        if stored && history_is_complete(vector_field, &covered) {
             match check_snapshot(
                 env_id,
                 state,
@@ -1977,6 +1988,7 @@ fn fold_on_snapshot(
                 &later,
                 facts,
                 all_commits,
+                may_check_unrecorded,
             )? {
                 Check::Matches => {}
                 Check::MatchesUnrecorded => unrecorded = true,
@@ -2018,6 +2030,37 @@ fn fold_on_snapshot(
         }
         Ok(Some((result, unflushed, unrecorded)))
     }
+}
+
+/// Every author's commits past the snapshot vector are stored from the one
+/// right after it. Not so when a compaction deleted commits the snapshot
+/// does not cover, which a fold on it would lose without a trace. An entry
+/// that is not a sequence number is not checked, as before.
+fn later_is_contiguous(vector: Option<&Value>, later: &[Commit]) -> bool {
+    let mut first: BTreeMap<&str, &PyInt> = BTreeMap::new();
+    for commit in later {
+        let seq = first
+            .entry(commit.author.as_str())
+            .or_insert(&commit.author_seq);
+        if commit.author_seq < **seq {
+            *seq = &commit.author_seq;
+        }
+    }
+    first.into_iter().all(|(author, seq)| {
+        let floor = match vector {
+            Some(Value::Object(map)) => match map.get(author) {
+                None => PyInt::zero(),
+                Some(value) => match PyInt::from_json_integer(value)
+                    .filter(|n| n.0.sign() != num_bigint::Sign::Minus)
+                {
+                    Some(n) => n,
+                    None => return true,
+                },
+            },
+            _ => PyInt::zero(),
+        };
+        *seq == &floor + 1
+    })
 }
 
 /// Every commit the snapshot vector covers is still stored, so a fold from
@@ -2065,7 +2108,8 @@ enum Check {
 /// an earlier build's, or one whose record was never stored) may have been
 /// folded out of order, or past removals and facts it applied early: it
 /// matches only if it equals the fold of the commits it covers that this
-/// build would store.
+/// build would store, which is folded only while `may_fold` is set (and
+/// clears it).
 #[allow(clippy::too_many_arguments)]
 fn check_snapshot(
     env_id: &str,
@@ -2076,6 +2120,7 @@ fn check_snapshot(
     later: &[Commit],
     facts: Option<&Facts>,
     all_commits: &[Commit],
+    may_fold: &mut bool,
 ) -> Result<Check> {
     let mut last = None;
     for commit in covered {
@@ -2101,6 +2146,9 @@ fn check_snapshot(
         } else {
             Check::Stale
         });
+    }
+    if !std::mem::replace(may_fold, false) {
+        return Ok(Check::Stale);
     }
     let (fresh, unflushed) = fold_scheduled(
         env_id,
@@ -5534,6 +5582,95 @@ mod tests {
             .err()
             .expect("fails closed");
         assert_eq!(err.reason, "state_corrupt");
+    }
+
+    /// A snapshot is passed over when an author's commits past its vector
+    /// are not stored from the one right after it: here the admin's first
+    /// was compacted away and the snapshot does not cover it. With nothing
+    /// older to stand in, the fold fails closed instead of losing that
+    /// commit, with or without facts.
+    #[test]
+    fn a_snapshot_missing_a_compacted_commit_it_does_not_cover_fails_closed() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let first = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
+        ];
+        let base = fold(&env_id, first.clone(), None, None, None, None).unwrap();
+        let (_tmp, state) = snapshot_state();
+        save_snapshot(&state, &env_id, &PyInt::from(2), &base).unwrap();
+        let mut stored = first;
+        stored.push(connection_create_commit(
+            &env_id,
+            &admin,
+            2,
+            "3000-0000",
+            "kept",
+        ));
+        let disabled = Facts {
+            disabled_connections: ["kept".to_string()].into_iter().collect(),
+            ..Default::default()
+        };
+        for facts in [None, Some(&disabled)] {
+            let err = fold_for_refold(&env_id, stored.clone(), &state, facts, None)
+                .err()
+                .expect("fails closed");
+            assert_eq!(err.reason, "state_corrupt");
+        }
+    }
+
+    /// A fold checks at most one snapshot without a record by folding what
+    /// it covers: past one that fails, an older one is passed over
+    /// unchecked, even one that would have matched.
+    #[test]
+    fn a_fold_checks_one_unrecorded_snapshot_at_most() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let first = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "1500-0000", &admin, "admin"),
+            connection_create_commit(&env_id, &owner, 3, "2000-0000", "gh"),
+        ];
+        let (_tmp, state) = snapshot_state();
+        // An older snapshot that matches, stored without its record.
+        let older = fold_for_refold(&env_id, first.clone(), &state, None, None).unwrap();
+        save_snapshot(&state, &env_id, &PyInt::from(3), &older.snapshot).unwrap();
+        // A newer one an earlier build folded out of order.
+        let mut all = first;
+        all.push(update_commit(
+            &env_id,
+            &owner,
+            4,
+            "3000-0000",
+            "owner-later",
+        ));
+        let base = fold(&env_id, all.clone(), None, None, None, None).unwrap();
+        let late = update_commit(&env_id, &admin, 1, "2500-0000", "admin-earlier");
+        let owner5 = signed(
+            &owner,
+            &env_id,
+            5,
+            "5000-0000",
+            json!({"op": "settings.update", "sync_interval_seconds": 11}),
+        );
+        let earlier = fold(
+            &env_id,
+            vec![late.clone(), owner5.clone()],
+            None,
+            Some(base.document.clone()),
+            None,
+            None,
+        )
+        .unwrap();
+        save_snapshot(&state, &env_id, &PyInt::from(6), &earlier).unwrap();
+        all.push(late);
+        all.push(owner5);
+        let refold = fold_for_refold(&env_id, all.clone(), &state, None, None).unwrap();
+        assert_eq!(refold.stale_snapshots, [PyInt::from(6), PyInt::from(3)]);
+        assert_eq!(refold.unrecorded_snapshot, None);
+        let full = fold(&env_id, all, None, None, None, None).unwrap();
+        assert_eq!(refold.result.document, full.document);
     }
 
     /// A compaction snapshot ending before a member's removal keeps the

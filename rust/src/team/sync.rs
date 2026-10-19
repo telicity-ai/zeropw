@@ -653,6 +653,40 @@ mod retry_tests {
         assert_eq!(recorded, fold::snapshot_record(Some(&facts), &commits));
     }
 
+    /// ...also when the same refold stores a new snapshot in place of a
+    /// newer one that went stale.
+    #[test]
+    fn a_refold_records_an_unrecorded_snapshot_while_replacing_a_stale_one() {
+        let f = owner_with_admin_peer();
+        let commits = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap();
+        let (facts, _, _) = load_facts(&f.ctx, &f.env_id).unwrap();
+        let built =
+            fold::fold_for_refold(&f.env_id, commits.clone(), f.ctx.state, Some(&facts), None)
+                .unwrap();
+        let (unrecorded, stale) = (PyInt::from(0), PyInt::from(1));
+        fold::save_snapshot(f.ctx.state, &f.env_id, &unrecorded, &built.snapshot).unwrap();
+        fold::save_snapshot(f.ctx.state, &f.env_id, &stale, &built.snapshot).unwrap();
+        fold::save_snapshot_record(
+            f.ctx.state,
+            &f.env_id,
+            &stale,
+            &json!({"facts": ["synthetic-stale"]}),
+        )
+        .unwrap();
+        f.team.refold(&f.env_id).unwrap();
+        let read = |path: String| f.ctx.state.read_json(&path, Value::Null).unwrap();
+        assert_eq!(
+            read(format!("team/{}/snapshot_records/0.json", f.env_id)),
+            fold::snapshot_record(Some(&facts), &commits)
+        );
+        assert!(
+            read(format!("team/{}/snapshots/1.json", f.env_id)).is_null(),
+            "the stale snapshot is dropped"
+        );
+    }
+
     /// Issue #28: a joiner's session gets no live COMMIT, FACT or INCIDENT
     /// until its first VECTOR is answered, and the answer is in total order
     /// across authors, so an admitted author's commits never precede its
@@ -3754,8 +3788,10 @@ impl TeamSync {
             }
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
+        // Only spares the next fold a check: a record not written is checked
+        // again.
         if let Some(number) = unrecorded_snapshot {
-            fold::save_snapshot_record(self.ctx.state, env_id, &number, &record)?;
+            let _ = fold::save_snapshot_record(self.ctx.state, env_id, &number, &record);
         }
         drop(envs);
         self.record_overrides(env_id, &result.overridden)?;
