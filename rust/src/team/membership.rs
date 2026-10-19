@@ -295,11 +295,23 @@ pub fn author_fact(
     kind: &str,
     target: Value,
 ) -> Result<Value> {
-    let _lock = ctx.state.lock()?;
+    let fact = sign_authorized_fact(ctx, team, env_id, kind, target)?;
+    publish_signed_fact(ctx, team, env_id, fact)
+}
+
+/// Check that this device may author the fact, and sign it without storing
+/// it yet.
+fn sign_authorized_fact(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    kind: &str,
+    target: Value,
+) -> Result<sync::Fact> {
     if let Some(team) = team {
-        drop(_lock);
-        return team.publish_fact(env_id, kind, target);
+        return team.sign_authorized_fact(env_id, kind, target);
     }
+    let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let mut doc = load_environment(ctx, env_id)?.document;
     if kind == "member_removed" {
@@ -325,14 +337,38 @@ pub fn author_fact(
     if !sync::fact_role_ok(&doc, kind, &device.fingerprint()?, &target) {
         return Err(Error::policy_denied("team_fact_not_authorized"));
     }
-    let fact = sync::sign_fact(&device, env_id, kind, target, &Hlc::new(0, 0).tick(None))?;
+    // Like `TeamSync::publish_fact`: the fact sorts after every commit this
+    // node has seen, so a removal never cuts off work it already accepted.
+    let mut hlc = Hlc::new(0, 0);
+    for observed in CommitStore::new(ctx.state, env_id).all_commits()? {
+        hlc.observe(&observed.hlc)?;
+    }
+    sync::sign_fact(&device, env_id, kind, target, &hlc.tick(None))
+}
+
+/// Store, apply and (through a running `serve`) send a fact that
+/// [`sign_authorized_fact`] signed.
+fn publish_signed_fact(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    fact: sync::Fact,
+) -> Result<Value> {
+    if let Some(team) = team {
+        return team.publish_signed_fact(env_id, fact);
+    }
     let _lock = ctx.state.lock()?;
     sync::receipt_fact(ctx, &fact)?;
     ctx.state.append_line(
         &format!("team/{env_id}/facts.jsonl"),
         &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?,
     )?;
-    audit(ctx, "team_fact_apply", env_id, vec![("kind", json!(kind))]);
+    audit(
+        ctx,
+        "team_fact_apply",
+        env_id,
+        vec![("kind", json!(fact.kind))],
+    );
     refold_and_derive(ctx, env_id)?;
     Ok(fact.to_dict())
 }
@@ -931,19 +967,39 @@ pub fn remove_member(
     }
     let caller = device.fingerprint()?;
     let is_admin = sync::is_admin(&doc, &caller);
-    let fact = author_fact(
-        ctx,
-        team,
-        env_id,
-        "member_removed",
-        json!({"fingerprint":fingerprint}),
-    )?;
-    let mut rotated = None;
-    if is_admin && caller != fingerprint {
-        let hash = sync::Fact::from_dict(&fact)?.hash()?;
-        rotated = Some(rotate_dek_bound(ctx, team, env_id, Some(&hash))?);
-        flag_rotation_recommended(ctx, team, env_id)?;
+    if caller == fingerprint
+        && doc["owner"] != fingerprint
+        && doc["members"][&caller]["status"] == "active"
+    {
+        // A self-removal is placed in this device's own sequence, which no
+        // later commit of it can sort before (issue #27).
+        author_commit(
+            ctx,
+            team,
+            env_id,
+            vec![json!({"op":"member.remove","fingerprint":fingerprint})],
+        )?;
     }
+    let target = json!({"fingerprint":fingerprint});
+    let mut rotated = None;
+    let fact = if is_admin && caller != fingerprint {
+        // The rotation that excludes the device also attests its history
+        // (`removal_fact_hash`, issue #27). It is written before the fact
+        // is published, so no node ever holds the fact without it.
+        let fact = sign_authorized_fact(ctx, team, env_id, "member_removed", target)?;
+        rotated = Some(rotate_dek_bound(
+            ctx,
+            team,
+            env_id,
+            Some(&fact.hash()?),
+            Some(fingerprint),
+        )?);
+        let fact = publish_signed_fact(ctx, team, env_id, fact)?;
+        flag_rotation_recommended(ctx, team, env_id)?;
+        fact
+    } else {
+        author_fact(ctx, team, env_id, "member_removed", target)?
+    };
     audit(
         ctx,
         "team_member_remove",
@@ -958,11 +1014,14 @@ pub fn remove_member(
         json!({"env_id":env_id,"fingerprint":fingerprint,"fact":fact,"dek_rotated":rotated.is_some(),"new_generation":rotated}),
     )
 }
+/// Rotate to a new DEK generation wrapped for every active member except
+/// `exclude` (a device whose removal fact is not stored yet).
 fn rotate_dek_bound(
     ctx: &Context,
     team: Option<&TeamSync>,
     env_id: &str,
     removal: Option<&str>,
+    exclude: Option<&str>,
 ) -> Result<String> {
     let _lock = ctx.state.lock()?;
     let doc = load_environment(ctx, env_id)?.document;
@@ -972,7 +1031,7 @@ fn rotate_dek_bound(
     let mut wraps = Map::new();
     if let Some(members) = doc["members"].as_object() {
         for (fp, member) in members {
-            if member["status"] != "active" {
+            if member["status"] != "active" || exclude == Some(fp.as_str()) {
                 continue;
             }
             let Ok(record) = DeviceRecord::from_dict(&member["device"]) else {
@@ -1093,7 +1152,7 @@ pub(crate) fn ensure_removal_rotations(
             return Err(Error::policy_denied("team_rekey_pending"));
         }
         flag_rotation_recommended(ctx, team, env_id)?;
-        rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?))?;
+        rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?), None)?;
         doc = load_environment(ctx, env_id)?.document;
     }
     let current = doc["dek"]["current"].as_str().unwrap_or("");
@@ -1111,7 +1170,7 @@ pub(crate) fn ensure_removal_rotations(
             return Err(Error::policy_denied("team_rekey_pending"));
         }
         flag_rotation_recommended(ctx, team, env_id)?;
-        rotate_dek_bound(ctx, team, env_id, None)?;
+        rotate_dek_bound(ctx, team, env_id, None, None)?;
     }
     drop(_lock);
     if let Some(team) = team {
