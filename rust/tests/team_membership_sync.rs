@@ -550,6 +550,45 @@ fn compact_preserves_membership_history_and_snapshot_document() {
     assert_eq!(sync.document(&env).unwrap(), before);
 }
 
+/// Issue #50: a second `team compact` builds on the first one's snapshot, so
+/// what the first compacted stays in the document, now and after a restart.
+#[test]
+fn a_second_compact_keeps_what_the_first_compacted() {
+    let root = TempDir::new().unwrap();
+    let ctx = new_context(&root, "compact-twice");
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let fp = device.fingerprint().unwrap();
+    let env = commit::new_env_id(&fp).unwrap();
+    let generation = "0123456789abcdef0123456789abcdef";
+    let dek = [7u8; 32];
+    let wrap = envelope::wrap_dek(&dek, &env, generation, &device.record().unwrap()).unwrap();
+    let old = commit::now_ms() - 40 * 24 * 3600 * 1000;
+    let init=commit::sign_commit(&device,&env,1,&format!("{old}-0000"),&BTreeMap::new(),vec![json!({"op":"env.init","owner_device":device.record().unwrap().to_dict(),"owner_name":"alice","generation_id":generation,"wraps":{fp.clone():wrap}})]).unwrap();
+    let put = |seq: i64, secret: &str, version: &str| {
+        let ct = envelope::encrypt_secret(&dek, &env, secret, version, SECRET).unwrap();
+        commit::sign_commit(&device,&env,seq,&format!("{}-0000",old+seq),&BTreeMap::from([(fp.clone(),zeropw::pyint::PyInt::from(seq - 1))]),vec![json!({"op":"secret.put_version","secret_id":secret,"kind":"api_key","generation_id":generation,"version_id":version,"ciphertext":ct,"public":{}})]).unwrap()
+    };
+    let store = commit::CommitStore::new(ctx.state, &env);
+    store.append(&init).unwrap();
+    store.append(&put(2, "first", "0011223344556677")).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(device.clone(), empty.clone()));
+    let sync = sync::TeamSync::new(ctx.clone(), transport, device.clone());
+    sync.register_env(&env).unwrap();
+    assert_eq!(sync.compact(&env).unwrap()["removed"], 1);
+    store.append(&put(3, "second", "8899aabbccddeeff")).unwrap();
+    sync.poll().unwrap();
+    let before = sync.document(&env).unwrap();
+    assert!(before["secrets"]["first"].is_object() && before["secrets"]["second"].is_object());
+    assert_eq!(sync.compact(&env).unwrap()["removed"], 1);
+    assert_eq!(sync.document(&env).unwrap(), before);
+    sync.stop();
+    let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+    let restarted = sync::TeamSync::new(ctx.clone(), transport, device);
+    restarted.register_env(&env).unwrap();
+    assert_eq!(restarted.document(&env).unwrap(), before);
+}
+
 /// Issue #30: a `user` device cannot author editing commits. `author_commit`
 /// (behind `secret put`, `rotation`, `connection update`, `switch-credential`
 /// and `team set-role`) refuses with `not_admin` before storing anything,

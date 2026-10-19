@@ -6814,11 +6814,15 @@ impl TeamSync {
         let snapshot = fold::snapshot_of_prefix(
             env_id,
             commits[..=cutoff].to_vec(),
+            self.ctx.state,
             Some(&facts),
             &commits,
             Some(self.ctx.audit),
         )?;
-        let total = candidate
+        // Numbered by what it covers, an earlier compaction's commits
+        // included (issue #50).
+        let total = snapshot
+            .vector
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
