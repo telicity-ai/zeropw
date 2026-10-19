@@ -751,12 +751,53 @@ mod retry_tests {
             )
             .unwrap();
         assert!(quarantined(&f.ctx, &f.env_id).is_empty());
+        let peer = f.peer_key.fingerprint().unwrap();
         let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.sessions.contains_key(&peer));
         assert!(
-            env.sessions
-                .contains_key(&f.peer_key.fingerprint().unwrap())
+            env.vector_due.contains(&peer),
+            "the range is still asked for"
         );
-        assert!(env.vector_due.is_empty());
+    }
+
+    /// A joiner removed while its held frames are being sent gets none of
+    /// the rest.
+    #[test]
+    fn a_joiner_removed_mid_batch_gets_none_of_the_rest() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .insert(peer.clone(), ("admin".into(), "bob".into()));
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        for seq in 0..3 {
+            let live = settings_commit(&f.team.device, &f.env_id, 90 + seq, commit::now_ms() + 1);
+            f.team.broadcast(
+                &f.env_id,
+                &json!({"type":"COMMIT","commit":live.to_dict()}),
+                None,
+            );
+        }
+        let vector = json!(CommitStore::new(f.ctx.state, &f.env_id).vector().unwrap());
+        let team = f.team.clone();
+        let (env_id, removed) = (f.env_id.clone(), peer.clone());
+        *f.recorder.on_first_send.lock().unwrap() =
+            Some(Box::new(move || team.drain_removed(&env_id, &removed)));
+        f.team
+            .handle_vector(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"VECTOR","vector":vector}),
+            )
+            .unwrap();
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), 1);
+        let env = &f.team.envs.lock().unwrap()[&f.env_id];
+        assert!(env.catching_up.is_empty() && env.held.is_empty());
     }
 
     /// Issue #28: a commit whose author's admission is deferred here (its
@@ -2765,10 +2806,17 @@ mod retry_tests {
         let (team, fp) = dialing_team(&root, session, None);
         let (min, _) = Config::default().team_dial_backoff;
         team.dial_attempt("retry-env", &fp);
-        wait_for(|| {
-            team.envs.lock().unwrap()["retry-env"].backoff.get(&fp)
-                == Some(&Duration::from_secs_f64(min))
-        });
+        // Counted as the dial returns, before a poll tick could redial.
+        let backoff = || {
+            team.envs.lock().unwrap()["retry-env"]
+                .backoff
+                .get(&fp)
+                .copied()
+        };
+        assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
+        // The receiver, noticing later, does not count it again.
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(backoff(), Some(Duration::from_secs_f64(min)));
         let guard = team.envs.lock().unwrap();
         let state = guard.get("retry-env").unwrap();
         assert!(!state.sessions.contains_key(&fp));
@@ -4654,7 +4702,7 @@ impl TeamSync {
             // A device removed meanwhile gets nothing more (section 4.4).
             if self.draining(env_id, &fp) {
                 self.end_hold(env_id, &fp);
-                return Ok(());
+                break;
             }
             if session
                 .send(&json!({"type":"COMMIT","commit":commit.to_dict()}))
@@ -4667,6 +4715,10 @@ impl TeamSync {
         }
         if sent > 0 {
             self.audit_event("team_sync_vector", env_id, Some(&fp), None, Some(sent));
+        }
+        if self.draining(env_id, &fp) {
+            self.end_hold(env_id, &fp);
+            return Ok(());
         }
         // Ordinary facts have no sequence in the commit vector. Replay a
         // bounded slice after missing commits on this authenticated session;
@@ -4712,6 +4764,10 @@ impl TeamSync {
                 }
             };
             for frame in frames {
+                if self.draining(env_id, &fp) {
+                    self.end_hold(env_id, &fp);
+                    return Ok(());
+                }
                 if session.send(&frame).is_err() {
                     self.drop_session(env_id, &fp, Some(session));
                     return Ok(());
@@ -4902,10 +4958,14 @@ impl TeamSync {
     ) -> Result<bool> {
         let fp = session.peer().fingerprint();
         let hash = commit.hash()?;
-        // A deferred file released while this reads it is not a reason to
-        // drop the session: keep waiting and look again next time.
-        let deferred = commit::waits_on_deferred(&CommitStore::new(self.ctx.state, env_id), commit)
-            .unwrap_or(true);
+        // A deferred/ entry released or corrupted while this reads it is no
+        // reason to drop the session: the commit keeps waiting, and the
+        // sender is still asked for the range.
+        let (deferred, ask) =
+            match commit::waits_on_deferred(&CommitStore::new(self.ctx.state, env_id), commit) {
+                Ok(deferred) => (deferred, !deferred),
+                Err(_) => (true, true),
+            };
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let Some(env) = envs.get_mut(env_id) else {
             return Ok(false);
@@ -4923,7 +4983,7 @@ impl TeamSync {
                 waiting.insert(hash, Instant::now());
             }
         }
-        if !deferred {
+        if ask {
             env.vector_due.insert(fp);
         }
         Ok(false)
@@ -5899,9 +5959,19 @@ impl TeamSync {
                 Ok(false) => {
                     take_dial_mark(env, fp, &session);
                 }
-                // Its receiver confirms or fails the mark, even if a send
-                // has already dropped the session.
-                Ok(true) => {}
+                // Already dropped (a failed send) before its receiver ran: a
+                // refused dial, counted now so a poll tick cannot redial and
+                // overwrite the mark first.
+                Ok(true) => {
+                    if env
+                        .sessions
+                        .get(fp)
+                        .is_none_or(|current| !Arc::ptr_eq(current, &session))
+                        && take_dial_mark(env, fp, &session)
+                    {
+                        self.note_dial_failure(env, fp);
+                    }
+                }
             }
         }
     }
@@ -5950,7 +6020,8 @@ impl TeamSync {
     /// accepted, so it is never wired: here it is returned (`state_corrupt`)
     /// and the session is closed rather than leaked. A later `_send_peers`
     /// failure likewise stops before the incident retry.
-    /// Whether `accept_session` kept the session.
+    ///
+    /// Returns whether `accept_session` kept the session.
     fn wire_dialed_session(
         &self,
         env_id: &str,
