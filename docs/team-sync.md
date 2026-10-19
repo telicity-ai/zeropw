@@ -123,6 +123,8 @@ Per-author HLC must strictly increase or reject `team_hlc_not_monotone`. A devic
 
 Users cannot author editing commits; local `grant create` is not a shared commit. Removal authority here follows implemented validation and the original detailed operation/mutual-removal rules. The original summary table incorrectly restricted admin removal to the owner and allowed owner self-removal; no product behavior is changed by this documentation correction.
 
+Before a commit is signed, its author must be an administrator of the local document and not removed by an admitted fact; a member removing itself is the exception. Before the signed commit is stored or broadcast, the author folds it onto the local history, without audit, and refuses it when an op would be skipped because the author may not make it (`not_admin`, `not_owner`, `not_authorized`, `cannot_change_owner_role`, `cannot_remove_owner`, `member_removed`) or its member is not active (`member_not_found`), instead of reporting a commit that no node with the same history applies. These checks use the local replica: a node that is behind may refuse a change a synchronized node would accept, so sync and retry. Peers still validate every commit on receipt, and concurrent changes can still make a node skip an op.
+
 ### 5.4 Validation
 
 Every node validates independently, never trusting another node's checks:

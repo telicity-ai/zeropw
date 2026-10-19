@@ -454,3 +454,159 @@ fn compact_preserves_membership_history_and_snapshot_document() {
     assert!(!ctx.state.exists(&format!("team/{env}/commits/{fp}/2.json")));
     assert_eq!(sync.document(&env).unwrap(), before);
 }
+
+/// Issue #30: a `user` device cannot author editing commits. `author_commit`
+/// (behind `secret put`, `rotation`, `connection update`, `switch-credential`
+/// and `team set-role`) refuses with `not_admin` before storing anything,
+/// instead of broadcasting a commit every node then skips; nor does it store
+/// any other change the fold refuses its author.
+#[test]
+fn user_device_cannot_author_editing_commits() {
+    let root = TempDir::new().unwrap();
+    let a = new_context(&root, "a");
+    a.projects.create("demo", &["dev"]).unwrap();
+    a.vault
+        .put_secret("gh-token", "api_key", SECRET, "demo", "dev", true)
+        .unwrap();
+    let shared =
+        membership::share_environment(&a, None, "demo", "dev", "alice", "admin-passphrase")
+            .unwrap();
+    let env_id = shared["env_id"].as_str().unwrap();
+    let a_device = DeviceKey::load_or_create(a.state, a.kms).unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let a_transport = Arc::new(InProcessTransport::new(a_device.clone(), empty));
+    let a_sync = sync::TeamSync::new(a.clone(), a_transport.clone(), a_device);
+    a_sync.start(Some("rust-team-role-a:47001")).unwrap();
+    let invite = membership::create_invite(
+        &a,
+        env_id,
+        "user",
+        "bob",
+        3600,
+        &["rust-team-role-a:47001".into()],
+    )
+    .unwrap();
+    let b = new_context(&root, "b");
+    let b_device = DeviceKey::load_or_create(b.state, b.kms).unwrap();
+    let b_fp = b_device.fingerprint().unwrap();
+    let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let b_transport = Arc::new(InProcessTransport::new(b_device.clone(), empty));
+    let b_sync = sync::TeamSync::new(b.clone(), b_transport.clone(), b_device);
+    b_sync.start(None).unwrap();
+    membership::join(
+        &b,
+        &invite,
+        b_transport.as_ref() as &dyn Transport,
+        &b_sync,
+        Some("shared-demo"),
+        Some("dev"),
+        5.0,
+    )
+    .unwrap();
+    b_sync.stop();
+    let store = commit::CommitStore::new(b.state, env_id);
+    let before = store.vector().unwrap();
+    let editing = [
+        json!({"op":"secret.activate","secret_id":"gh-token","version_id":"0011223344556677"}),
+        json!({"op":"member.set_role","fingerprint":b_fp,"role":"admin"}),
+        json!({"op":"settings.update","sync_interval_seconds":5}),
+    ];
+    for op in editing {
+        let error = membership::author_commit(&b, None, env_id, vec![op.clone()]).unwrap_err();
+        assert_eq!(error.reason, "not_admin", "{op}");
+    }
+    assert_eq!(store.vector().unwrap(), before);
+    // The owner still edits, but not with changes the fold would refuse it.
+    a_sync.stop();
+    membership::author_commit(
+        &a,
+        None,
+        env_id,
+        vec![json!({"op":"settings.update","sync_interval_seconds":5})],
+    )
+    .unwrap();
+    let a_fp = DeviceKey::load_or_create(a.state, a.kms)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    let a_store = commit::CommitStore::new(a.state, env_id);
+    let a_before = a_store.vector().unwrap();
+    let refused = [
+        (
+            json!({"op":"owner.transfer","fingerprint":"c".repeat(26)}),
+            "member_not_found",
+        ),
+        (
+            json!({"op":"member.set_role","fingerprint":"c".repeat(26),"role":"admin"}),
+            "member_not_found",
+        ),
+        (
+            json!({"op":"member.set_role","fingerprint":a_fp,"role":"user"}),
+            "cannot_change_owner_role",
+        ),
+        (
+            json!({"op":"member.remove","fingerprint":a_fp}),
+            "cannot_remove_owner",
+        ),
+    ];
+    for (op, reason) in refused {
+        let error = membership::author_commit(&a, None, env_id, vec![op.clone()]).unwrap_err();
+        assert_eq!(error.reason, reason, "{op}");
+    }
+    assert_eq!(a_store.vector().unwrap(), a_before);
+    // Promoted, the device edits; only the owner transfers ownership.
+    let promotion = membership::author_commit(
+        &a,
+        None,
+        env_id,
+        vec![json!({"op":"member.set_role","fingerprint":b_fp,"role":"admin"})],
+    )
+    .unwrap();
+    for missing in a_store.all_commits().unwrap() {
+        if store
+            .get(&missing.author, &missing.author_seq)
+            .unwrap()
+            .is_none()
+        {
+            commit::receive_commit(&store, &missing, commit::now_ms(), None).unwrap();
+        }
+    }
+    assert!(
+        store
+            .get(&promotion.author, &promotion.author_seq)
+            .unwrap()
+            .is_some()
+    );
+    let error = membership::author_commit(
+        &b,
+        None,
+        env_id,
+        vec![json!({"op":"owner.transfer","fingerprint":b_fp})],
+    )
+    .unwrap_err();
+    assert_eq!(error.reason, "not_owner");
+    membership::author_commit(
+        &b,
+        None,
+        env_id,
+        vec![json!({"op":"settings.update","sync_interval_seconds":7})],
+    )
+    .unwrap();
+    // Removed by the owner's fact, the device authors nothing more, wherever
+    // its next commit would sort.
+    membership::remove_member(&a, None, env_id, &b_fp).unwrap();
+    let facts = format!("team/{env_id}/facts.jsonl");
+    for line in a.state.read_lines(&facts, None).unwrap() {
+        b.state.append_line(&facts, &line).unwrap();
+    }
+    let b_before = store.vector().unwrap();
+    let error = membership::author_commit(
+        &b,
+        None,
+        env_id,
+        vec![json!({"op":"settings.update","sync_interval_seconds":9})],
+    )
+    .unwrap_err();
+    assert_eq!(error.reason, "member_removed");
+    assert_eq!(store.vector().unwrap(), b_before);
+}
