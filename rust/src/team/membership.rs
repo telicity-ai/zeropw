@@ -223,6 +223,20 @@ pub fn author_commit(
     ops: Vec<Value>,
 ) -> Result<Commit> {
     let _lock = ctx.state.lock()?;
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    // Users cannot author editing commits (docs/team-sync.md section 5.3).
+    // Refuse before signing, as `team invite` and fact authors are, instead
+    // of broadcasting a commit that every node then skips (issue #30). A
+    // member may still remove itself; `env.init` precedes any membership.
+    if !ops.iter().all(|op| op["op"] == "env.init") {
+        let fp = device.fingerprint()?;
+        let self_removal = ops
+            .iter()
+            .all(|op| op["op"] == "member.remove" && op["fingerprint"] == fp.as_str());
+        if !self_removal && !sync::is_admin(&load_environment(ctx, env_id)?.document, &fp) {
+            return Err(Error::policy_denied("not_admin"));
+        }
+    }
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
         ensure_removal_rotations(ctx, team, env_id)?;
         let doc = load_environment(ctx, env_id)?.document;
@@ -245,7 +259,6 @@ pub fn author_commit(
             return Err(Error::policy_denied("team_rekey_pending"));
         }
     }
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let store = CommitStore::new(ctx.state, env_id);
     let mut hlc = Hlc::new(0, 0);
     for observed in store.all_commits()? {
