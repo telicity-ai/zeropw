@@ -421,6 +421,8 @@ fn a_removed_device_backs_off_redialing_its_remover() {
     // Backoff 1 s, 2 s, 4 s: two or three more refused dials in four
     // seconds, where every 50 ms poll tick redialed before (about 80).
     assert!(during <= 6, "{during} refused dials in 4 s");
+    // And it still redials: at least the dial due one second in.
+    assert!(during >= 1, "no refused dial in 4 s");
     assert!(
         a.audit
             .alerts(200)
