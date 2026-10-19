@@ -363,6 +363,7 @@ fn fold_over_malformed_documents_fails_closed_without_panicking() {
         revoked_versions: [("s1".to_string(), V1.to_string())].into_iter().collect(),
         removed_members: [m2_fp.clone()].into_iter().collect(),
         incidents: Vec::new(),
+        ..Default::default()
     };
     let mut errors = 0;
     let mut successes = 0;

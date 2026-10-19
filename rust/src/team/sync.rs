@@ -2323,6 +2323,16 @@ fn apply_fact(facts: &mut Facts, fact: &Fact) {
         "member_removed" => {
             if let Some(fp) = fact.target["fingerprint"].as_str() {
                 facts.removed_members.insert(fp.into());
+                if let Ok(hash) = fact.hash() {
+                    facts.removal_facts.insert(
+                        hash,
+                        fold::RemovalFact {
+                            author: fact.author.clone(),
+                            target: fp.into(),
+                            hlc: fact.hlc.clone(),
+                        },
+                    );
+                }
             }
         }
         "incident" => facts.incidents.push(fact.target.clone()),
@@ -2339,7 +2349,9 @@ pub fn fact_role_ok(doc: &Value, kind: &str, author: &str, target: &Value) -> bo
         if doc["owner"] == target_fp {
             return false;
         }
-        return doc["owner"] == author || is_admin(doc, author) || author == target_fp;
+        // `is_admin` covers an active owner; a removed owner keeps no
+        // authority.
+        return is_admin(doc, author) || author == target_fp;
     }
     if kind == "incident" {
         return doc["members"][author]["status"] == "active";
@@ -3274,6 +3286,23 @@ impl TeamSync {
     }
     pub fn publish_fact(&self, env_id: &str, kind: &str, target: Value) -> Result<Value> {
         let _lock = self.ctx.state.lock()?;
+        let fact = self.sign_authorized_fact(env_id, kind, target)?;
+        let stored = self.store_and_apply_fact(env_id, &fact)?;
+        drop(_lock);
+        if stored {
+            self.announce_fact(env_id, &fact);
+        }
+        Ok(fact.to_dict())
+    }
+    /// Check that this device may author the fact, and sign it without
+    /// storing it yet.
+    pub(crate) fn sign_authorized_fact(
+        &self,
+        env_id: &str,
+        kind: &str,
+        target: Value,
+    ) -> Result<Fact> {
+        let _lock = self.ctx.state.lock()?;
         validate_fact_target(kind, &target)?;
         let fp = self.device.fingerprint()?;
         let doc = if kind == "member_removed" {
@@ -3299,24 +3328,37 @@ impl TeamSync {
             }
             env.hlc.tick(None)
         };
-        let fact = sign_fact(&self.device, env_id, kind, target, &hlc)?;
-        if self.store_fact(env_id, &fact)? {
-            if fact.kind == "member_removed"
-                && let Some(fp) = fact.target["fingerprint"].as_str()
-            {
-                self.drain_removed(env_id, fp);
-            }
-            self.refold(env_id)?;
-            drop(_lock);
-            self.audit_fact_apply(env_id, &fact);
-            self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
-            if kind == "member_removed" {
-                if fact.target["fingerprint"].as_str().is_some() {
-                    self.send_removal_notice(env_id, &fact, None);
-                }
-            }
+        sign_fact(&self.device, env_id, kind, target, &hlc)
+    }
+    /// Store, apply and broadcast a fact [`Self::sign_authorized_fact`]
+    /// signed.
+    pub(crate) fn publish_signed_fact(&self, env_id: &str, fact: Fact) -> Result<Value> {
+        let _lock = self.ctx.state.lock()?;
+        let stored = self.store_and_apply_fact(env_id, &fact)?;
+        drop(_lock);
+        if stored {
+            self.announce_fact(env_id, &fact);
         }
         Ok(fact.to_dict())
+    }
+    fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        if !self.store_fact(env_id, fact)? {
+            return Ok(false);
+        }
+        if fact.kind == "member_removed"
+            && let Some(fp) = fact.target["fingerprint"].as_str()
+        {
+            self.drain_removed(env_id, fp);
+        }
+        self.refold(env_id)?;
+        Ok(true)
+    }
+    fn announce_fact(&self, env_id: &str, fact: &Fact) {
+        self.audit_fact_apply(env_id, fact);
+        self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
+        if fact.kind == "member_removed" && fact.target["fingerprint"].as_str().is_some() {
+            self.send_removal_notice(env_id, fact, None);
+        }
     }
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
         let hash = fact.hash()?;
@@ -5068,12 +5110,11 @@ impl TeamSync {
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
         }
-        let snapshot = fold::fold(
+        let snapshot = fold::fold_with_history(
             env_id,
             commits[..=cutoff].to_vec(),
             Some(&facts),
-            None,
-            None,
+            &commits,
             Some(self.ctx.audit),
         )?;
         let total = candidate
