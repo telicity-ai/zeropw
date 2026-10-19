@@ -586,6 +586,47 @@ mod retry_tests {
             .unwrap_or_default()
     }
 
+    /// Issue #35: a refold that passes over a stale snapshot stores a new
+    /// one with the facts it was folded with and drops the stale one, so
+    /// the next refold builds on the new one.
+    #[test]
+    fn a_refold_replaces_a_stale_snapshot() {
+        let f = owner_with_admin_peer();
+        f.team
+            .publish_fact(
+                &f.env_id,
+                "connection_disabled",
+                json!({"connection_id": "synthetic-off"}),
+            )
+            .unwrap();
+        // Folded without that fact, as an earlier refold could have stored it.
+        let commits = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap();
+        let stale = fold::fold_for_refold(&f.env_id, commits, f.ctx.state, None, None).unwrap();
+        fold::save_snapshot(f.ctx.state, &f.env_id, &PyInt::from(0), &stale.snapshot).unwrap();
+        fold::save_snapshot_facts(f.ctx.state, &f.env_id, &PyInt::from(0), None).unwrap();
+        f.team.refold(&f.env_id).unwrap();
+        let names: Vec<String> = std::fs::read_dir(
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/snapshots", f.env_id)),
+        )
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert_ne!(names[0], "0.json");
+        let commits = CommitStore::new(f.ctx.state, &f.env_id)
+            .all_commits()
+            .unwrap();
+        let (facts, _, _) = load_facts(&f.ctx, &f.env_id).unwrap();
+        let next =
+            fold::fold_for_refold(&f.env_id, commits, f.ctx.state, Some(&facts), None).unwrap();
+        assert!(next.stale_snapshots.is_empty());
+    }
+
     /// Issue #28: a joiner's session gets no live COMMIT, FACT or INCIDENT
     /// until its first VECTOR is answered, and the answer is in total order
     /// across authors, so an admitted author's commits never precede its
@@ -3633,7 +3674,11 @@ impl TeamSync {
         let _lock = self.ctx.state.lock()?;
         let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
-        let result = fold::fold_with_snapshot(
+        let fold::Refold {
+            result,
+            snapshot,
+            stale_snapshots,
+        } = fold::fold_for_refold(
             env_id,
             commits,
             self.ctx.state,
@@ -3671,8 +3716,14 @@ impl TeamSync {
             .sub(&env.last_snapshot_total)
             .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
             .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
-        if due {
-            fold::save_snapshot(self.ctx.state, env_id, &total, &result)?;
+        // Stale snapshots are replaced at once, so the next refold does not
+        // pass them over again (issue #35).
+        if due || !stale_snapshots.is_empty() {
+            fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
+            fold::save_snapshot_facts(self.ctx.state, env_id, &total, Some(&env.facts))?;
+            for number in stale_snapshots.iter().filter(|number| **number != total) {
+                fold::remove_snapshot(self.ctx.state, env_id, number);
+            }
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
         drop(envs);
@@ -5910,7 +5961,7 @@ impl TeamSync {
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
         }
-        let snapshot = fold::fold_with_history(
+        let snapshot = fold::snapshot_of_prefix(
             env_id,
             commits[..=cutoff].to_vec(),
             Some(&facts),
@@ -5921,6 +5972,7 @@ impl TeamSync {
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
+        fold::save_snapshot_facts(self.ctx.state, env_id, &total, Some(&facts))?;
         let mut removed = 0;
         {
             let _lock = self.ctx.state.lock()?;
