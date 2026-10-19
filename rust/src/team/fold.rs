@@ -1756,6 +1756,7 @@ fn derive_connections(
     state: &StateDir,
     env_id: &str,
     version_index: &BTreeMap<String, BTreeMap<String, i64>>,
+    previous_ids: &BTreeMap<String, BTreeMap<String, String>>,
     policy: &policy::Policy,
     audit: Option<&Audit>,
 ) -> Result<()> {
@@ -1826,7 +1827,16 @@ fn derive_connections(
             document_connection_object(entry, local_version.map(crate::pyint::PyInt::from))?;
         if let Some(existing) = &existing_raw {
             let before = policy::Connection::from_value(&Value::Object(existing.clone()))?;
-            if connection_changed(&before, &after) {
+            // A pin to a different credential is a change even when local
+            // renumbering left its version number equal (issue #33).
+            let pin_moved = match (&before.secret_version, entry.get("secret_version")) {
+                (Some(old), Some(Value::String(new_id))) => previous_ids
+                    .get(&before.secret_id)
+                    .and_then(|ids| ids.get(&crate::vault::python_str_scalar(old.value())))
+                    .is_some_and(|old_id| old_id != new_id),
+                _ => false,
+            };
+            if pin_moved || connection_changed(&before, &after) {
                 let widened = policy::Policy::widens(&before, &after)
                     || (after.status == "disabled" && before.status == "active");
                 // `before.policy_version + 1`: an unbounded Python `int`.
@@ -2197,6 +2207,7 @@ pub fn derive_local(
         .ok_or_else(doc_corrupt)?
         .to_string();
     let version_index = version_index_from_order(&fold_result.version_order)?;
+    let mut rebound = Vec::new();
     {
         let _lock = state.lock()?;
         // F1: derive this node's local copies of every DEK generation it
@@ -2206,6 +2217,9 @@ pub fn derive_local(
         if let (Some(device), Some(kms)) = (device, kms) {
             derive_dek_generations(document, state, kms, device, &env_id)?;
         }
+        let before = shared_active_version_ids(state, &env_id)?;
+        let previous_ids = shared_version_ids(state, &env_id)?;
+        let existed = shared_connection_ids(state, &env_id)?;
         derive_vault(
             document,
             state,
@@ -2215,7 +2229,45 @@ pub fn derive_local(
             project,
             environment,
         )?;
-        derive_connections(document, state, &env_id, &version_index, policy, audit)?;
+        derive_connections(
+            document,
+            state,
+            &env_id,
+            &version_index,
+            &previous_ids,
+            policy,
+            audit,
+        )?;
+        // Issue #33: as a local activation does (`Vault::rebind_connections`),
+        // a new active credential re-binds the connections that follow it.
+        // Compared by version id: local version numbers can be renumbered by
+        // a late commit while naming a different credential.
+        let changed: Vec<String> = shared_active_version_ids(state, &env_id)?
+            .into_iter()
+            .filter(|(secret_id, version_id)| before.get(secret_id) != Some(version_id))
+            .map(|(secret_id, _)| secret_id)
+            .collect();
+        if !changed.is_empty() {
+            rebound = rebind_following(state, policy, &env_id, &changed, &existed)?;
+        }
+    }
+    if let Some(audit) = audit {
+        for (conn_id, secret_id, version) in &rebound {
+            audit.record(
+                "connection_update",
+                RecordArgs {
+                    connection: Some(conn_id),
+                    result: Some("ok"),
+                    policy_version: Some(version.clone()),
+                    extra: vec![
+                        ("detail", json!("credential_version")),
+                        ("secret_id", json!(secret_id)),
+                        ("state", json!("reevaluated")),
+                    ],
+                    ..Default::default()
+                },
+            )?;
+        }
     }
     if let Some(audit) = audit {
         // F6: `sum(fold_result.vector.values())`, an exact Python int sum
@@ -2234,6 +2286,126 @@ pub fn derive_local(
         )?;
     }
     Ok(version_index)
+}
+
+/// The version id of the active version of each local secret shared through
+/// `env_id`, as derived into the vault document.
+fn shared_active_version_ids(state: &StateDir, env_id: &str) -> Result<BTreeMap<String, String>> {
+    let doc = state.read_json(vault::VAULT_DOC, Value::Null)?;
+    let mut active = BTreeMap::new();
+    for (secret_id, entry) in doc["secrets"].as_object().into_iter().flatten() {
+        if entry["shared_env"].as_str() != Some(env_id) {
+            continue;
+        }
+        let version = match &entry["active_version"] {
+            Value::Null => continue,
+            other => vault::python_str_scalar(other),
+        };
+        if let Some(version_id) = entry["versions"][version.as_str()]["version_id"].as_str() {
+            active.insert(secret_id.clone(), version_id.to_owned());
+        }
+    }
+    Ok(active)
+}
+
+/// For each local secret shared through `env_id`, the version id behind
+/// each of its local version numbers, before a derive renumbers them.
+fn shared_version_ids(
+    state: &StateDir,
+    env_id: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
+    let doc = state.read_json(vault::VAULT_DOC, Value::Null)?;
+    let mut ids = BTreeMap::new();
+    for (secret_id, entry) in doc["secrets"].as_object().into_iter().flatten() {
+        if entry["shared_env"].as_str() != Some(env_id) {
+            continue;
+        }
+        let versions = entry["versions"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(number, record)| {
+                record["version_id"]
+                    .as_str()
+                    .map(|id| (number.clone(), id.to_owned()))
+            })
+            .collect();
+        ids.insert(secret_id.clone(), versions);
+    }
+    Ok(ids)
+}
+
+/// The local connections derived from `env_id` before this derive.
+fn shared_connection_ids(state: &StateDir, env_id: &str) -> Result<BTreeSet<String>> {
+    let doc = state.read_json(policy::CONNECTIONS, json!({}))?;
+    Ok(doc
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, entry)| entry["shared_env"].as_str() == Some(env_id))
+        .map(|(id, _)| id.clone())
+        .collect())
+}
+
+/// Issue #33: each active connection of `env_id` that follows the active
+/// version of one of `secrets` gets a policy-version bump that ends old
+/// handles, its grants re-evaluated in place to the new credential version,
+/// and its approvals invalidated -- whatever version number the grants
+/// recorded. The derived entries are edited in place, so `shared_env` and
+/// every other derived key stay as `derive_connections` wrote them.
+fn rebind_following(
+    state: &StateDir,
+    policy: &policy::Policy,
+    env_id: &str,
+    secrets: &[String],
+    existed: &BTreeSet<String>,
+) -> Result<Vec<(String, String, crate::pyint::PyInt)>> {
+    let corrupt = || Error::state("state_corrupt").with_detail("policy_connections");
+    let mut connections = state.read_json(policy::CONNECTIONS, json!({}))?;
+    let vault_doc = state.read_json(vault::VAULT_DOC, Value::Null)?;
+    let now_iso = crate::store::iso(None);
+    let mut rebound = Vec::new();
+    for (conn_id, entry) in connections.as_object_mut().ok_or_else(corrupt)?.iter_mut() {
+        let Some(entry) = entry.as_object_mut() else {
+            continue;
+        };
+        let secret_id = entry.get("secret_id").and_then(Value::as_str).unwrap_or("");
+        // A connection this derive created starts at its first policy
+        // version; nothing was bound to it yet.
+        if !existed.contains(conn_id)
+            || entry.get("shared_env").and_then(Value::as_str) != Some(env_id)
+            || entry.get("status").and_then(Value::as_str) != Some("active")
+            || !matches!(entry.get("secret_version"), None | Some(Value::Null))
+            || !secrets.iter().any(|s| s == secret_id)
+        {
+            continue;
+        }
+        let secret_id = secret_id.to_owned();
+        let current = match entry.get("policy_version") {
+            None => crate::pyint::PyInt::zero(),
+            Some(value) => crate::pyint::PyInt::coerce_from_json(value).ok_or_else(corrupt)?,
+        };
+        let next = crate::pyint::PyInt(&current.0 + 1);
+        entry.insert("policy_version".into(), next.value());
+        entry.insert("updated_at".into(), json!(now_iso));
+        rebound.push((conn_id.clone(), secret_id, next));
+    }
+    if rebound.is_empty() {
+        return Ok(rebound);
+    }
+    state.write_json(policy::CONNECTIONS, &connections)?;
+    for (conn_id, secret_id, version) in &rebound {
+        let resolved = crate::pyint::PyInt::coerce_from_json(
+            &vault_doc["secrets"][secret_id]["active_version"],
+        );
+        policy.reevaluate_grants(conn_id, version, false, resolved)?;
+        let cid = conn_id.clone();
+        policy.invalidate_approvals(
+            move |e| e.get("connection").and_then(Value::as_str) == Some(cid.as_str()),
+            "policy_changed",
+        )?;
+    }
+    Ok(rebound)
 }
 
 fn version_index_from_order(raw: &Value) -> Result<BTreeMap<String, BTreeMap<String, i64>>> {

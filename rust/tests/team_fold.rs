@@ -1291,3 +1291,103 @@ fn derive_connections_represents_container_value_prefix_for_every_mode_and_deriv
         "the container value_prefix connection must ALSO derive locally, byte-identical to the fold document"
     );
 }
+
+fn op_commit(author: &DeviceKey, env_id: &str, seq: i128, hlc: &str, ops: Vec<Value>) -> Commit {
+    C::sign_commit(author, env_id, seq, hlc, &BTreeMap::new(), ops).unwrap()
+}
+
+fn put_version_op(env_id: &str, dek: &[u8], version_id: &str, value: &[u8]) -> Value {
+    let ct = envelope::encrypt_secret(dek, env_id, "gh-token", version_id, value).unwrap();
+    json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+           "generation_id": GEN0, "version_id": version_id, "ciphertext": ct, "public": {}})
+}
+
+/// Issue #33: a late commit can renumber a shared secret's local versions,
+/// so the same local number can name another credential. When the active
+/// credential changes that way, a connection pinned to the new one and a
+/// connection that follows the active version are both re-bound (policy
+/// version raised, so handles bound to the old one end), although neither's
+/// local version number changed.
+#[test]
+fn renumbered_credentials_still_rebind_pinned_and_following_connections() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+    let admin = DeviceKey::generate();
+    let add_admin = op_commit(
+        &owner,
+        &env_id,
+        2,
+        "1500-0000",
+        vec![
+            json!({"op": "member.add", "device": admin.record().unwrap().to_dict(), "name": "bob", "role": "admin"}),
+        ],
+    );
+    let pinned = simple_connection_create(&env_id, &owner, 3, "2000-0000", "pinned");
+    let follower = simple_connection_create(&env_id, &owner, 4, "2001-0000", "follower");
+    let x2 = random_hex(8);
+    let put_x2 = op_commit(
+        &owner,
+        &env_id,
+        5,
+        "3000-0000",
+        vec![
+            put_version_op(&env_id, &dek, &x2, b"synthetic-shared-secret-x2"),
+            json!({"op": "secret.activate", "secret_id": "gh-token", "version_id": x2}),
+            json!({"op": "connection.switch_credential", "id": "pinned", "secret_id": "gh-token", "secret_version": x2}),
+        ],
+    );
+    let owners = vec![c1, add_admin, pinned, follower, put_x2];
+    derive(&ctx, &owner, owners.clone());
+    let local = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert_eq!(local["pinned"]["secret_version"], json!(2));
+    let (pinned_before, follower_before) = (
+        local["pinned"]["policy_version"].as_i64().unwrap(),
+        local["follower"]["policy_version"].as_i64().unwrap(),
+    );
+
+    // The administrator's version, staged before X2 and activated after it.
+    let xb = random_hex(8);
+    let stage_xb = op_commit(
+        &admin,
+        &env_id,
+        1,
+        "2500-0000",
+        vec![put_version_op(
+            &env_id,
+            &dek,
+            &xb,
+            b"synthetic-shared-secret-xb",
+        )],
+    );
+    let activate_xb = op_commit(
+        &admin,
+        &env_id,
+        2,
+        "4000-0000",
+        vec![
+            json!({"op": "secret.activate", "secret_id": "gh-token", "version_id": xb}),
+            json!({"op": "connection.switch_credential", "id": "pinned", "secret_id": "gh-token", "secret_version": xb}),
+        ],
+    );
+    let mut all = owners;
+    all.extend([stage_xb, activate_xb]);
+    derive(&ctx, &owner, all);
+    let local = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    // Xb sorts before X2 now: both the pin and the active version read 2.
+    assert_eq!(local["pinned"]["secret_version"], json!(2));
+    assert_eq!(vault["secrets"]["gh-token"]["active_version"], json!(2));
+    assert_eq!(
+        vault["secrets"]["gh-token"]["versions"]["2"]["version_id"],
+        json!(xb)
+    );
+    assert!(local["pinned"]["policy_version"].as_i64().unwrap() > pinned_before);
+    assert!(local["follower"]["policy_version"].as_i64().unwrap() > follower_before);
+    assert_eq!(
+        ctx.vault
+            .secret_for_trusted_use("gh-token", None)
+            .unwrap()
+            .expose(),
+        b"synthetic-shared-secret-xb"
+    );
+}

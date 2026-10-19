@@ -17,6 +17,7 @@ use std::sync::Arc;
 use native_e2e::{ADMIN_PASSPHRASE, Admin};
 use serde_json::{Value, json};
 use zeropw::context::{Config, Context};
+use zeropw::pyint::PyInt;
 use zeropw::team::commit::{self, CommitStore};
 use zeropw::team::identity::{DeviceKey, DeviceRecord};
 use zeropw::team::membership;
@@ -585,6 +586,217 @@ fn connection_create_secret_put_are_commits_with_propagated_to() {
     // A shared secret is keyed by its version id, not a local int.
     assert!(put_payload.get("version").is_none(), "{put_payload}");
     assert!(put_payload.get("version_id").is_some(), "{put_payload}");
+}
+
+/// Issue #29, shared environment: `rotation activate` pins the connection.
+/// A later shared `secret put` retires that version and pins the connection
+/// to the new one in the same commit, so it keeps working on every node.
+/// Retiring the active version or a pinned one is refused as it is locally,
+/// and `switch-credential --follow-active` commits a follow-active reference.
+#[test]
+fn shared_rotation_then_secret_put_keeps_the_connection_working() {
+    let case = Case::new();
+    let env_id = case.share();
+    // A second shared connection pinned to the active version.
+    case.ok(&[
+        "connection",
+        "create-http",
+        "--id",
+        "gh2",
+        "--project",
+        "demo",
+        "--environment",
+        "dev",
+        "--service",
+        "svc2",
+        "--secret-id",
+        "gh-token",
+        "--target",
+        "https://api.github.com",
+        "--auth",
+        "bearer",
+    ]);
+    case.ok(&[
+        "connection",
+        "switch-credential",
+        "--id",
+        "gh2",
+        "--version",
+        "1",
+    ]);
+    let staged = case
+        .admin
+        .cmd(&["rotation", "start", "--secret-id", "gh-token", "--stdin"])
+        .stdin(SYNTHETIC_V2.as_bytes())
+        .ok();
+    let version = staged["version"].to_string();
+    let activated = case.ok(&[
+        "rotation",
+        "activate",
+        "--connection",
+        "gh",
+        "--version",
+        &version,
+    ]);
+    assert_eq!(activated["moved_connections"], json!(["gh2"]));
+    assert_eq!(
+        case.ok(&["connection", "show", "--id", "gh"])["secret_version"].to_string(),
+        version
+    );
+    assert_eq!(
+        case.ok(&["connection", "show", "--id", "gh2"])["secret_version"].to_string(),
+        version
+    );
+    // One commit: pin the connection, activate, move the other pin.
+    let store = CommitStore::new(case.ctx().state, &env_id);
+    let last = commit::sort_total_order(store.all_commits().unwrap())
+        .unwrap()
+        .pop()
+        .unwrap();
+    let ops: Vec<(&str, &str)> = last
+        .ops
+        .iter()
+        .map(|op| {
+            (
+                op["op"].as_str().unwrap(),
+                op.get("id").and_then(Value::as_str).unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            ("connection.switch_credential", "gh"),
+            ("secret.activate", ""),
+            ("connection.switch_credential", "gh2"),
+        ]
+    );
+    // gh2 follows the active version from here on, as gh's later steps test.
+    case.ok(&[
+        "connection",
+        "switch-credential",
+        "--id",
+        "gh2",
+        "--follow-active",
+    ]);
+    let active = case.fail(&[
+        "rotation",
+        "finish",
+        "--secret-id",
+        "gh-token",
+        "--version",
+        &version,
+    ]);
+    assert_eq!(active["reason"], "version_is_active");
+
+    let put = case.put_secret("synthetic-token-rotated-v3", "gh-token");
+    assert_eq!(put["moved_connections"], json!(["gh"]));
+    let store = CommitStore::new(case.ctx().state, &env_id);
+    let last = commit::sort_total_order(store.all_commits().unwrap())
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        last.ops,
+        vec![
+            json!({"op":"secret.activate","secret_id":"gh-token","version_id":put["version_id"]}),
+            json!({"op":"connection.switch_credential","id":"gh","secret_id":"gh-token","secret_version":put["version_id"]}),
+        ]
+    );
+    let ctx = case.ctx();
+    let connection = ctx.policy.get_connection("gh").unwrap();
+    let value = ctx
+        .vault
+        .secret_for_trusted_use(
+            &connection.secret_id,
+            connection.secret_version_for_trusted_use().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(value.expose(), b"synthetic-token-rotated-v3");
+
+    // A version a connection is pinned to cannot be retired.
+    let next = case
+        .admin
+        .cmd(&["rotation", "start", "--secret-id", "gh-token", "--stdin"])
+        .stdin(b"synthetic-token-rotated-v4")
+        .ok();
+    let next = next["version"].to_string();
+    case.ok(&[
+        "connection",
+        "switch-credential",
+        "--id",
+        "gh",
+        "--version",
+        &next,
+    ]);
+    let in_use = case.fail(&["secret", "retire", "--id", "gh-token", "--version", &next]);
+    assert_eq!(in_use["reason"], "version_in_use");
+    let unpinned = case.ok(&[
+        "connection",
+        "switch-credential",
+        "--id",
+        "gh",
+        "--follow-active",
+    ]);
+    assert!(unpinned.get("commit").is_some(), "{unpinned}");
+    assert_eq!(unpinned["secret_version"], Value::Null);
+    let last = commit::sort_total_order(store.all_commits().unwrap())
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        last.ops,
+        vec![
+            json!({"op":"connection.switch_credential","id":"gh","secret_id":"gh-token","secret_version":null})
+        ]
+    );
+}
+
+/// Issue #33: in a shared environment a new active version re-binds the
+/// connections that follow it, as a local `secret put` does: the grant is
+/// re-evaluated in place to the new credential version and the policy
+/// version rises, which ends handles issued before.
+#[test]
+fn shared_secret_put_rebinds_following_connections() {
+    let case = Case::new();
+    let env_id = case.share();
+    case.ok(&["principal", "create", "--id", "agent-1"]);
+    let grant = case.ok(&[
+        "grant",
+        "create",
+        "--principal",
+        "agent-1",
+        "--connection",
+        "gh",
+    ]);
+    let grant_id = grant["id"].as_str().unwrap().to_owned();
+    let before = case.ctx().policy.get_connection("gh").unwrap();
+    assert!(before.secret_version.is_none());
+    let recorded = case.ctx().policy.get_grant(&grant_id).unwrap();
+    assert_eq!(recorded.credential_version, Some(PyInt::from(1)));
+    case.put_secret(SYNTHETIC_V2, "gh-token");
+    let ctx = case.ctx();
+    let after = ctx.policy.get_connection("gh").unwrap();
+    assert_eq!(after.policy_version, &before.policy_version + 1);
+    // Still the shared environment's connection: a later fact applies to it.
+    let raw = ctx
+        .state
+        .read_json(zeropw::policy::CONNECTIONS, json!({}))
+        .unwrap();
+    assert_eq!(raw["gh"]["shared_env"], env_id.as_str());
+    let grant = ctx.policy.get_grant(&grant_id).unwrap();
+    assert_eq!(grant.status, "active");
+    assert_eq!(grant.credential_version, Some(PyInt::from(2)));
+    assert_eq!(grant.policy_version, after.policy_version);
+    assert!(ctx.audit.tail(20).unwrap().iter().any(|r| {
+        r["event"] == "connection_update" && r["connection"] == "gh" && r["state"] == "reevaluated"
+    }));
+    let disabled = case.ok(&["connection", "disable", "--id", "gh"]);
+    assert!(disabled.get("fact").is_some(), "{disabled}");
+    assert_eq!(
+        case.ok(&["connection", "show", "--id", "gh"])["status"],
+        "disabled"
+    );
 }
 
 #[test]
