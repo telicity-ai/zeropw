@@ -890,13 +890,16 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
     assert_eq!(fx.count("serve"), 0);
     assert!(!core.serve_status().running);
 
-    // `recover` takes two seconds, so the sidecar can be seen stopped while it runs.
-    fx.respond_sleep("recover", 2);
     let mut pid = core.serve_start().unwrap().pid;
-    for failure in [
-        None,
-        Some(r#"{"error":"AuthFailed","reason":"recovery_failed"}"#),
-    ] {
+    let failed = r#"{"error":"AuthFailed","reason":"recovery_failed"}"#;
+    // The start asked for meanwhile gets a round of its own: it would also start the
+    // sidecar once the recovery ends, so in another round it could hide a recovery that does
+    // not.
+    for (failure, start_meanwhile) in [(None, false), (Some(failed), false), (None, true)] {
+        let round = format!("failure {failure:?}, start meanwhile {start_meanwhile}");
+        fx.clear_response("recover");
+        // `recover` takes two seconds, so the sidecar can be seen stopped while it runs.
+        fx.respond_sleep("recover", 2);
         if let Some(stderr) = failure {
             fx.respond_error("recover", stderr, 1);
         }
@@ -904,21 +907,24 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
         let result = std::thread::scope(|s| {
             let run = s.spawn(recover);
             assert!(wait_until(Duration::from_secs(5), || fx.count("recover") > recovers));
-            assert!(!core.serve_status().running, "{failure:?}");
+            assert!(!core.serve_status().running, "{round}");
+            if !start_meanwhile {
+                return run.join().unwrap();
+            }
             let start = s.spawn(|| core.serve_start());
             assert!(
                 !wait_until(Duration::from_millis(1200), || fx.count("serve") > serves),
-                "a sidecar started during the recovery: {failure:?}"
+                "a sidecar started during the recovery: {round}"
             );
             let result = run.join().unwrap();
-            assert!(start.join().unwrap().unwrap().running, "{failure:?}");
+            assert!(start.join().unwrap().unwrap().running, "{round}");
             result
         });
-        assert_eq!(result.is_err(), failure.is_some());
-        assert_eq!(fx.count("serve"), serves + 1, "{failure:?}");
+        assert_eq!(result.is_err(), failure.is_some(), "{round}");
+        assert_eq!(fx.count("serve"), serves + 1, "{round}");
         let status = core.serve_status();
-        assert!(status.running, "{failure:?}");
-        assert_ne!(status.pid, pid, "{failure:?}");
+        assert!(status.running, "{round}");
+        assert_ne!(status.pid, pid, "{round}");
         pid = status.pid;
     }
     assert!(!core.serve_stop().running);
