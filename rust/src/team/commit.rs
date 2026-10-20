@@ -2957,47 +2957,56 @@ mod tests {
     /// could not hold -- is refused on receipt, not stored.
     #[test]
     fn receive_commit_rejects_an_op_nested_too_deep() {
-        let f = fixture();
-        let store = CommitStore::new(&f.state, f.env_id.clone());
-        bootstrap(&f, &store);
-        let deepest = put_version_nested(MAX_OP_DEPTH);
-        assert_eq!(
-            pyjson::value_depth_within(&deepest, usize::MAX),
-            Some(MAX_OP_DEPTH)
-        );
-        validate_op(&deepest).unwrap();
-        let too_deep = put_version_nested(MAX_OP_DEPTH + 1);
-        assert_eq!(validate_op(&too_deep).unwrap_err().reason, "op_too_deep");
-        let commit = sign_unchecked(
-            &f.owner,
-            &f.env_id,
-            2,
-            &Hlc::default().tick(Some(2_000_000)),
-            vec![too_deep],
-        );
-        assert_eq!(
-            receive_commit(&store, &commit, 2_000_000, None).unwrap(),
-            "rejected"
-        );
-        let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
+        // Hashing the deepest op recurses once per level, with several
+        // times a release build's stack per level in a debug build.
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let f = fixture();
+                let store = CommitStore::new(&f.state, f.env_id.clone());
+                bootstrap(&f, &store);
+                let deepest = put_version_nested(MAX_OP_DEPTH);
+                assert_eq!(
+                    pyjson::value_depth_within(&deepest, usize::MAX),
+                    Some(MAX_OP_DEPTH)
+                );
+                validate_op(&deepest).unwrap();
+                let too_deep = put_version_nested(MAX_OP_DEPTH + 1);
+                assert_eq!(validate_op(&too_deep).unwrap_err().reason, "op_too_deep");
+                let commit = sign_unchecked(
+                    &f.owner,
+                    &f.env_id,
+                    2,
+                    &Hlc::default().tick(Some(2_000_000)),
+                    vec![too_deep],
+                );
+                assert_eq!(
+                    receive_commit(&store, &commit, 2_000_000, None).unwrap(),
+                    "rejected"
+                );
+                let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
+                    .unwrap()
+                    .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+                    .collect();
+                assert_eq!(rejected.len(), 1);
+                assert!(rejected[0].contains("team_op_format_op_too_deep"));
+                let accepted = sign_commit(
+                    &f.owner,
+                    &f.env_id,
+                    2,
+                    &Hlc::default().tick(Some(2_000_000)),
+                    &store.vector().unwrap(),
+                    vec![deepest],
+                )
+                .unwrap();
+                assert_eq!(
+                    receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
+                    "accepted"
+                );
+            })
             .unwrap()
-            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
-            .collect();
-        assert_eq!(rejected.len(), 1);
-        assert!(rejected[0].contains("team_op_format_op_too_deep"));
-        let accepted = sign_commit(
-            &f.owner,
-            &f.env_id,
-            2,
-            &Hlc::default().tick(Some(2_000_000)),
-            &store.vector().unwrap(),
-            vec![deepest],
-        )
-        .unwrap();
-        assert_eq!(
-            receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
-            "accepted"
-        );
+            .join()
+            .unwrap();
     }
 
     #[test]

@@ -523,40 +523,55 @@ fn a_document_holding_a_connection_id_derive_refuses_derives_the_rest() {
 /// One at the bound is folded, derived, snapshotted and backed up.
 #[test]
 fn an_op_nested_too_deep_is_skipped_and_one_at_the_bound_is_kept() {
-    let (tmp, ctx) = setup();
-    let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
-    // A COMMIT message holds its ops three levels down.
-    let delivered = pyjson::MAX_JSON_DEPTH - 3;
-    let placeholder = op_commit(
-        &owner,
-        &env_id,
-        2,
-        "2000-0000",
-        vec![put_version_nested(&env_id, &dek, "deep", 2)],
-    );
-    let deep = resigned(
-        &owner,
-        placeholder,
-        vec![put_version_nested(&env_id, &dek, "deep", delivered)],
-    );
-    let edge = op_commit(
-        &owner,
-        &env_id,
-        3,
-        "3000-0000",
-        vec![put_version_nested(&env_id, &dek, "edge", C::MAX_OP_DEPTH)],
-    );
-    let result = derive(&ctx, &owner, vec![c1, deep, edge]);
-    let skipped: Vec<&str> = result.skipped.iter().map(|(_, _, r)| r.as_str()).collect();
-    assert_eq!(skipped, ["op_too_deep"]);
-    let secrets = &result.document["secrets"];
-    assert!(secrets.get("deep").is_none());
-    assert!(secrets.get("edge").is_some() && secrets.get("gh-token").is_some());
-    let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
-    assert!(vault["secrets"].get("deep").is_none());
-    assert!(vault["secrets"].get("edge").is_some());
-    F::save_snapshot(ctx.state, &env_id, &PyInt::from(3), &result).unwrap();
-    ctx.vault.backup(&tmp.path().join("backup.json")).unwrap();
+    on_a_large_stack(|| {
+        let (tmp, ctx) = setup();
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        // A COMMIT message holds its ops three levels down.
+        let delivered = pyjson::MAX_JSON_DEPTH - 3;
+        let placeholder = op_commit(
+            &owner,
+            &env_id,
+            2,
+            "2000-0000",
+            vec![put_version_nested(&env_id, &dek, "deep", 2)],
+        );
+        let deep = resigned(
+            &owner,
+            placeholder,
+            vec![put_version_nested(&env_id, &dek, "deep", delivered)],
+        );
+        let edge = op_commit(
+            &owner,
+            &env_id,
+            3,
+            "3000-0000",
+            vec![put_version_nested(&env_id, &dek, "edge", C::MAX_OP_DEPTH)],
+        );
+        let result = derive(&ctx, &owner, vec![c1, deep, edge]);
+        let skipped: Vec<&str> = result.skipped.iter().map(|(_, _, r)| r.as_str()).collect();
+        assert_eq!(skipped, ["op_too_deep"]);
+        let secrets = &result.document["secrets"];
+        assert!(secrets.get("deep").is_none());
+        assert!(secrets.get("edge").is_some() && secrets.get("gh-token").is_some());
+        let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+        assert!(vault["secrets"].get("deep").is_none());
+        assert!(vault["secrets"].get("edge").is_some());
+        F::save_snapshot(ctx.state, &env_id, &PyInt::from(3), &result).unwrap();
+        ctx.vault.backup(&tmp.path().join("backup.json")).unwrap();
+    });
+}
+
+/// Runs `body` on a thread with a 16 MiB stack. Cloning and comparing a
+/// JSON object nested near `MAX_JSON_DEPTH` recurses once per level; a
+/// release build does that on a 2 MiB thread with about three times the
+/// depth to spare, a debug build takes several times the stack per level.
+fn on_a_large_stack(body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(body)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
