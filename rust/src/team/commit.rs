@@ -1877,11 +1877,28 @@ fn dispatch_validator(name: &str, op: &Map<String, Value>) -> Result<()> {
     }
 }
 
+/// The deepest an op may nest, the op itself being one level (issue #54).
+/// A backup archive holds a `secret.put_version` op's `public` metadata six
+/// levels below where the op does (the archive's documents, the vault
+/// document, its secrets, the secret, its versions, the version), the
+/// deepest any op content is written; a deeper op could be received but
+/// not derived, snapshotted or backed up.
+pub const MAX_OP_DEPTH: usize = pyjson::MAX_JSON_DEPTH - 6;
+
+/// `op` nests deeper than [`MAX_OP_DEPTH`].
+pub fn op_too_deep(op: &Map<String, Value>) -> bool {
+    op.values()
+        .any(|value| pyjson::value_depth_within(value, MAX_OP_DEPTH - 1).is_none())
+}
+
 /// `zeropw.team.commit.validate_op`.
 pub fn validate_op(op: &Value) -> Result<()> {
     let obj = op
         .as_object()
         .ok_or_else(|| Error::invalid_input("op_malformed"))?;
+    if op_too_deep(obj) {
+        return Err(Error::invalid_input("op_too_deep"));
+    }
     let name = obj.get("op").and_then(Value::as_str).unwrap_or("");
     dispatch_validator(name, obj)
 }
@@ -2916,6 +2933,65 @@ mod tests {
             &Hlc::default().tick(Some(2_000_000)),
             &store.vector().unwrap(),
             vec![connection_create_op("gh.x-1_y")],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
+            "accepted"
+        );
+    }
+
+    /// A `secret.put_version` op nesting `depth` levels, its `public`
+    /// metadata one fewer.
+    fn put_version_nested(depth: usize) -> Value {
+        let mut public = json!({});
+        for _ in 1..depth - 1 {
+            public = json!({"a": public});
+        }
+        json!({"op": "secret.put_version", "secret_id": "gh-token", "kind": "api_key",
+               "generation_id": "0".repeat(16), "version_id": "1".repeat(16),
+               "ciphertext": {"nonce": "AAAA", "ciphertext": "BBBB"}, "public": public})
+    }
+
+    /// Issue #54: an op nested deeper than [`MAX_OP_DEPTH`] -- one a backup
+    /// could not hold -- is refused on receipt, not stored.
+    #[test]
+    fn receive_commit_rejects_an_op_nested_too_deep() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let deepest = put_version_nested(MAX_OP_DEPTH);
+        assert_eq!(
+            pyjson::value_depth_within(&deepest, usize::MAX),
+            Some(MAX_OP_DEPTH)
+        );
+        validate_op(&deepest).unwrap();
+        let too_deep = put_version_nested(MAX_OP_DEPTH + 1);
+        assert_eq!(validate_op(&too_deep).unwrap_err().reason, "op_too_deep");
+        let commit = sign_unchecked(
+            &f.owner,
+            &f.env_id,
+            2,
+            &Hlc::default().tick(Some(2_000_000)),
+            vec![too_deep],
+        );
+        assert_eq!(
+            receive_commit(&store, &commit, 2_000_000, None).unwrap(),
+            "rejected"
+        );
+        let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(rejected.len(), 1);
+        assert!(rejected[0].contains("team_op_format_op_too_deep"));
+        let accepted = sign_commit(
+            &f.owner,
+            &f.env_id,
+            2,
+            &Hlc::default().tick(Some(2_000_000)),
+            &store.vector().unwrap(),
+            vec![deepest],
         )
         .unwrap();
         assert_eq!(

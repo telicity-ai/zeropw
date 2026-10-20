@@ -1234,6 +1234,11 @@ fn apply_op(
     vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
+    // Receipt now refuses such an op; one an earlier build stored is skipped
+    // here, since it would fail every refold or every backup (issue #54).
+    if commit::op_too_deep(op) {
+        return Ok(Some("op_too_deep".into()));
+    }
     let name = match op.get("op") {
         Some(value) => py_key(value)?,
         None => None,
