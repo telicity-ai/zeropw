@@ -581,6 +581,143 @@ fn on_a_large_stack(body: impl FnOnce() + Send + 'static) {
         .unwrap();
 }
 
+/// Issue #57: a shared version whose ciphertext does not decrypt under its
+/// generation -- here another version's, bound to another secret and
+/// version id -- is not derived, like one whose generation this node lacks,
+/// so the all-vault scan still runs.
+#[test]
+fn a_version_that_does_not_decrypt_is_not_derived() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+    let foreign =
+        envelope::encrypt_secret(&dek, &env_id, "gh-token", &random_hex(8), SYNTHETIC_SECRET)
+            .unwrap();
+    let op = json!({"op": "secret.put_version", "secret_id": "replayed", "kind": "api_key",
+                    "generation_id": GEN0, "version_id": random_hex(8), "ciphertext": foreign,
+                    "public": {}});
+    let c2 = op_commit(&owner, &env_id, 2, "2000-0000", vec![op]);
+    derive(&ctx, &owner, vec![c1, c2]);
+    let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(vault["secrets"]["replayed"]["versions"], json!({}));
+    assert_eq!(
+        vault["secrets"]["gh-token"]["versions"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    let values = ctx.vault.values_for_trusted_scan().unwrap();
+    assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
+    let skipped = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_op_skipped" && r["reason"] == "ciphertext_invalid")
+        .count();
+    assert_eq!(skipped, 1);
+}
+
+/// Issue #57: each version decrypts under its own generation's key file. A
+/// key file this node cannot use, whether its content holds no key this
+/// node unwraps or it cannot be read, leaves that generation's versions
+/// underived, like a missing one, and holds up no other, not even a later
+/// version of the same secret; the next refold that can use it derives them
+/// again.
+#[test]
+fn each_generation_decrypts_under_its_own_key_file() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let gen1 = "1".repeat(16);
+    let dek1: Vec<u8> = (0..32u8).rev().collect();
+    let mut wraps = Map::new();
+    wraps.insert(
+        owner.fingerprint().unwrap(),
+        envelope::wrap_dek(&dek1, &env_id, &gen1, &owner.record().unwrap()).unwrap(),
+    );
+    let put = |secret_id: &str, value: &[u8]| {
+        let version_id = random_hex(8);
+        let ct = envelope::encrypt_secret(&dek1, &env_id, secret_id, &version_id, value).unwrap();
+        json!({"op": "secret.put_version", "secret_id": secret_id, "kind": "api_key",
+               "generation_id": gen1, "version_id": version_id, "ciphertext": ct, "public": {}})
+    };
+    let rotated_value: &[u8] = b"synthetic-gh-token-under-generation-1";
+    let c2 = op_commit(
+        &owner,
+        &env_id,
+        2,
+        "2000-0000",
+        vec![
+            json!({"op": "dek.rotate", "generation_id": gen1, "wraps": wraps}),
+            put("rotated", SYNTHETIC_SECRET),
+            put("gh-token", rotated_value),
+        ],
+    );
+    let commits = vec![c1, c2];
+    let versions = |secret_id: &str| {
+        ctx.state.read_json(VAULT_DOC, Value::Null).unwrap()["secrets"][secret_id]["versions"]
+            .as_object()
+            .unwrap()
+            .len()
+    };
+    derive(&ctx, &owner, commits.clone());
+    assert_eq!((versions("gh-token"), versions("rotated")), (2, 1));
+    let values = ctx.vault.values_for_trusted_scan().unwrap();
+    assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
+    assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
+    assert!(values.iter().any(|v| v.expose() == rotated_value));
+
+    let gen0_file = format!("team/{env_id}/dek/{GEN0}.json");
+    let gen0_path = ctx.state.path.join(&gen0_file);
+    let usable = std::fs::read(&gen0_path).unwrap();
+    let wrapped = ctx.state.read_json(&gen0_file, Value::Null).unwrap();
+    let mut other_key_id = wrapped.clone();
+    other_key_id["key_id"] = json!("synthetic-other-kms-key");
+    let mut tampered = wrapped;
+    tampered["ciphertext"] = json!(zeropw::pybase64::b64encode(&[0u8; 48]));
+    let unusable: Vec<Vec<u8>> = vec![
+        b"{}".to_vec(),
+        b"\"synthetic\"".to_vec(),
+        b"{not json".to_vec(),
+        b"\xff\xfe synthetic".to_vec(),
+        other_key_id.to_string().into_bytes(),
+        tampered.to_string().into_bytes(),
+    ];
+    let skips_gen0 = || {
+        derive(&ctx, &owner, commits.clone());
+        assert_eq!((versions("gh-token"), versions("rotated")), (1, 1));
+        let values = ctx.vault.values_for_trusted_scan().unwrap();
+        assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
+        assert!(values.iter().any(|v| v.expose() == rotated_value));
+        assert!(!values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
+    };
+    for content in &unusable {
+        std::fs::write(&gen0_path, content).unwrap();
+        skips_gen0();
+    }
+    // A directory in the file's place cannot be read.
+    std::fs::remove_file(&gen0_path).unwrap();
+    std::fs::create_dir(&gen0_path).unwrap();
+    skips_gen0();
+
+    std::fs::remove_dir(&gen0_path).unwrap();
+    std::fs::write(&gen0_path, &usable).unwrap();
+    derive(&ctx, &owner, commits);
+    assert_eq!((versions("gh-token"), versions("rotated")), (2, 1));
+    let skipped: Vec<Value> = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_op_skipped")
+        .map(|r| json!([r["reason"], r["env_id"], r["secret_id"]]))
+        .collect();
+    assert_eq!(
+        skipped,
+        vec![json!(["generation_unavailable", env_id, "gh-token"]); unusable.len() + 1]
+    );
+}
+
 #[test]
 fn local_connection_survives_colliding_shared_id() {
     let (_tmp, ctx) = setup();

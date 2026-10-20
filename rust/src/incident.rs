@@ -239,27 +239,37 @@ fn rank(scope: &str) -> Option<usize> {
 pub fn save_incident(ctx: &Context, incident: &mut Incident) -> Result<()> {
     let payload = pyjson::dumps(&incident.to_dict(), DumpOptions::default_sorted())
         .map_err(|_| Error::state("state_write_failed"))?;
-    if value_leak(ctx, payload.as_bytes()) {
-        incident.assessment = json!({"redacted":true});
-        if let Some(steps) = failed_steps(incident)
-            && !steps.contains(&json!("assessment_redacted"))
-        {
-            steps.push(json!("assessment_redacted"));
+    let step = match value_leak(ctx, payload.as_bytes()) {
+        Ok(false) => None,
+        Ok(true) => {
+            incident.assessment = json!({"redacted":true});
+            Some("assessment_redacted")
         }
+        // A scan that cannot run (issue #57) keeps the assessment, which this
+        // record holds as the authoritative list of what to rotate, and notes
+        // it unchecked; the notification, a copy, is held until it can be
+        // checked.
+        Err(_) => Some("assessment_unchecked"),
+    };
+    if let Some(step) = step
+        && let Some(steps) = failed_steps(incident)
+        && !steps.contains(&json!(step))
+    {
+        steps.push(json!(step));
     }
     ctx.state
         .write_json(&path_for(&incident.id), &incident.to_dict())
 }
 
-pub fn value_leak(ctx: &Context, payload: &[u8]) -> bool {
-    let Ok(values) = ctx.vault.values_for_trusted_scan() else {
-        return false;
-    };
-    values.iter().any(|v| {
+/// `payload` holds a vault value. An error when the vault cannot be scanned:
+/// callers then do not take `payload` as clean (issue #57).
+pub fn value_leak(ctx: &Context, payload: &[u8]) -> Result<bool> {
+    let values = ctx.vault.values_for_trusted_scan()?;
+    Ok(values.iter().any(|v| {
         crate::runs::credential_patterns(v.expose())
             .iter()
             .any(|p| !p.is_empty() && payload.windows(p.len()).any(|w| w == p))
-    })
+    }))
 }
 
 pub fn get_incident(ctx: &Context, incident_id: &str) -> Result<Incident> {

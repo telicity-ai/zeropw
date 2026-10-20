@@ -996,6 +996,138 @@ fn notify_config_rejects_header_and_smtp_command_injection() {
     );
 }
 
+/// `agent-1` used connection `gh`, so an incident for it must rotate
+/// gh-token.
+fn used_connection(ctx: &Arc<Context>) {
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    setup_grant(ctx, "agent-1", "gh");
+    ctx.audit
+        .record(
+            "http_relay",
+            RecordArgs {
+                caller: Some("agent-1"),
+                connection: Some("gh"),
+                result: Some("ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// Breaks the local version's ciphertext so the vault cannot be scanned;
+/// returns the intact vault document.
+fn break_the_scan(ctx: &Arc<Context>) -> Value {
+    let intact = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    let mut vault = intact.clone();
+    let versions = vault["secrets"]["gh-token"]["versions"]
+        .as_object_mut()
+        .unwrap();
+    let record = versions.values_mut().next().unwrap();
+    record["ciphertext"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &vault)
+        .unwrap();
+    assert!(ctx.vault.values_for_trusted_scan().is_err());
+    intact
+}
+
+fn failed_steps(i: &incident::Incident) -> Vec<Value> {
+    i.actions["failed_steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Issue #57: when the vault cannot be scanned, a rendered message is not
+/// taken as clean: delivery waits without a socket, retried like a failed
+/// one, while the stored incident keeps its assessment, noted unchecked.
+/// Once the vault scans again, the due retry sends the message with the
+/// credential the principal used as a mandatory rotation target.
+#[test]
+fn a_leak_check_that_cannot_scan_holds_delivery() {
+    let (_tmp, ctx) = fixture();
+    used_connection(&ctx);
+    let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let assessment = i.assessment.clone();
+    assert_eq!(assessment["secrets"][0]["secret_id"], "gh-token");
+    assert_eq!(assessment["secrets"][0]["tier"], "mandatory");
+    let intact = break_the_scan(&ctx);
+    assert!(incident::value_leak(&ctx, b"nothing secret here").is_err());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"]})).unwrap();
+    notify::deliver(&ctx, &mut i).unwrap();
+    assert_eq!(i.notification["status"], "pending");
+    assert_eq!(i.notification["last_error"], "leak_check_unavailable");
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_err());
+    // Not before its backoff; a due retry scans again and still does not send.
+    assert_eq!(notify::retry_pending(&ctx, 1_700_000_000.0).unwrap(), 0);
+    assert_eq!(notify::retry_pending(&ctx, 1_700_000_400.0).unwrap(), 1);
+    assert!(listener.accept().is_err());
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.notification["status"], "pending");
+    assert_eq!(stored.notification["attempts"], 2);
+    assert_eq!(stored.assessment, assessment);
+    // Noted once, however many held attempts saved it.
+    let unchecked = json!("assessment_unchecked");
+    assert_eq!(
+        failed_steps(&stored)
+            .iter()
+            .filter(|s| **s == unchecked)
+            .count(),
+        1
+    );
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &intact)
+        .unwrap();
+    listener.set_nonblocking(false).unwrap();
+    let receiver = smtp_server(listener, false);
+    assert_eq!(notify::retry_pending(&ctx, 1_700_001_000.0).unwrap(), 1);
+    let (_, message) = receiver.join().unwrap();
+    let message = String::from_utf8_lossy(&message);
+    assert!(message.contains("Secret ID: gh-token"));
+    assert!(!message.contains("No mandatory rotation targets."));
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.notification["status"], "sent");
+    assert_eq!(stored.assessment, assessment);
+}
+
+/// Issue #57: an incident saved while the vault cannot be scanned keeps its
+/// assessment, the record of what to rotate, noted unchecked; only a value
+/// found in it redacts it.
+#[test]
+fn an_incident_opened_while_the_vault_cannot_be_scanned_keeps_its_assessment() {
+    let (_tmp, ctx) = fixture();
+    used_connection(&ctx);
+    break_the_scan(&ctx);
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.assessment["secrets"][0]["secret_id"], "gh-token");
+    assert_eq!(stored.assessment["secrets"][0]["tier"], "mandatory");
+    assert!(failed_steps(&stored).contains(&json!("assessment_unchecked")));
+    assert!(!failed_steps(&stored).contains(&json!("assessment_redacted")));
+}
+
+/// Issue #57: closing an incident while the vault cannot be scanned, as
+/// after `recover` on a team node, keeps the assessment it had stored.
+#[test]
+fn closing_while_the_vault_cannot_be_scanned_keeps_the_assessment() {
+    let (_tmp, ctx) = fixture();
+    used_connection(&ctx);
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert_eq!(i.assessment["secrets"][0]["tier"], "mandatory");
+    break_the_scan(&ctx);
+    incident::close_incident(&ctx, &i.id).unwrap();
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.status, "closed");
+    assert_eq!(stored.assessment, i.assessment);
+    assert!(failed_steps(&stored).contains(&json!("assessment_unchecked")));
+}
+
 #[test]
 fn rendered_value_leak_blocks_delivery_without_opening_socket() {
     let (_tmp, ctx) = fixture();
@@ -1012,4 +1144,7 @@ fn rendered_value_leak_blocks_delivery_without_opening_socket() {
     assert!(listener.accept().is_err());
     let stored = incident::get_incident(&ctx, &i.id).unwrap();
     assert_eq!(stored.assessment, json!({"redacted":true}));
+    // A reflected value is final: no retry sends it.
+    assert_eq!(notify::retry_pending(&ctx, 1_700_001_000.0).unwrap(), 0);
+    assert!(listener.accept().is_err());
 }

@@ -120,7 +120,7 @@ For example, a token created September 1 and contained September 15 makes every 
 | Not affected | Other connections. | None. |
 | Global | `--scope all` | All active secrets mandatory; include recovery and passphrase changes. |
 
-Record secret ID/kind, project/environment, service, connection IDs, destinations, first/last use, count and active version. SSH adds public-key fingerprint and username. Validate incident files with `values_for_trusted_scan` against all vault values/versions before writing. Kind names in the original design include `env`; the implemented storage kind is `env_var`.
+Record secret ID/kind, project/environment, service, connection IDs, destinations, first/last use, count and active version. SSH adds public-key fingerprint and username. Validate incident files with `values_for_trusted_scan` against all vault values/versions before writing. When the vault cannot be scanned, the file keeps its assessment and records `assessment_unchecked` in its failed steps, and the notification waits until it can be checked. Kind names in the original design include `env`; the implemented storage kind is `env_var`.
 
 ## 6. Rotation email
 
