@@ -2099,22 +2099,76 @@ impl<'a> CommitStore<'a> {
         Ok(commits)
     }
 
+    /// Whether `commit`'s HLC is not above its author's previous sequence,
+    /// when this store holds that one (section 5.4's
+    /// `team_hlc_not_monotone`).
+    fn hlc_not_above_previous(&self, commit: &Commit) -> Result<bool> {
+        if commit.author_seq <= 1 {
+            return Ok(false);
+        }
+        Ok(match self.get(&commit.author, &commit.author_seq - 1)? {
+            Some(previous) => Hlc::parse(&commit.hlc)? <= Hlc::parse(&previous.hlc)?,
+            None => false,
+        })
+    }
+
     /// Move every deferred commit whose wall clock is no longer too far
     /// ahead into the store. Port of `CommitStore.release_deferred`.
-    pub fn release_deferred(&self, now_ms_value: i64) -> Result<Vec<Commit>> {
-        let mut released = Vec::new();
+    ///
+    /// Receipt compares a commit with its author's previous sequence only
+    /// when that one is stored, which it is not for a commit deferred behind
+    /// another of its author's (issue #52). So a released commit is checked
+    /// again: one whose HLC is not above the previous sequence's is rejected
+    /// as `team_hlc_not_monotone`, and one whose sequence was stored since it
+    /// was deferred is dropped, unless another commit holds that sequence:
+    /// that is rejected as `team_author_equivocation`. Both are audited as
+    /// on receipt. Each is decided under the state lock, as on receipt; one
+    /// that still waits for the sequence before it is passed over without
+    /// taking the lock.
+    pub fn release_deferred(
+        &self,
+        now_ms_value: i64,
+        audit: Option<&Audit>,
+    ) -> Result<Vec<Commit>> {
+        let mut due = Vec::new();
         for commit in self.deferred_commits()? {
             let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
-            if wall_ms > &PyInt::from(now_ms_value) + MAX_CLOCK_SKEW_MS {
-                continue;
+            if wall_ms <= &PyInt::from(now_ms_value) + MAX_CLOCK_SKEW_MS {
+                due.push(commit);
             }
-            let path = self.deferred_path(&commit);
-            if self.append(&commit).is_err() {
+        }
+        if due.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Read without the lock, only to pass over what waits; whatever it
+        // lets through is checked again under the lock.
+        let mut vector = self.vector()?;
+        let mut released = Vec::new();
+        for commit in due {
+            let last = vector
+                .get(&commit.author)
+                .cloned()
+                .unwrap_or_else(PyInt::zero);
+            if commit.author_seq > &last + 1 {
+                continue; // waits for the sequence before it
+            }
+            let _lock = self.state.lock()?;
+            let target = self.state.path.join(self.deferred_path(&commit));
+            if commit.author_seq <= self.last_seq(&commit.author)? {
+                if let Some(stored) = self.get(&commit.author, &commit.author_seq)?
+                    && stored.hash()? != commit.hash()?
+                {
+                    reject_commit(self, &commit, "team_author_equivocation", audit)?;
+                }
+            } else if self.hlc_not_above_previous(&commit)? {
+                reject_commit(self, &commit, "team_hlc_not_monotone", audit)?;
+            } else if self.append(&commit).is_err() {
                 continue; // still out of sequence; leave it deferred
+            } else {
+                vector.insert(commit.author.clone(), commit.author_seq.clone());
+                released.push(commit);
             }
-            let target = self.state.path.join(&path);
             let _ = std::fs::remove_file(&target);
-            released.push(commit);
         }
         Ok(released)
     }
@@ -2240,6 +2294,33 @@ pub fn waits_on_deferred(store: &CommitStore, commit: &Commit) -> Result<bool> {
     Ok(false)
 }
 
+/// Store `commit` under `rejected/` and audit it as `team_commit_rejected`
+/// (section 5.4).
+fn reject_commit(
+    store: &CommitStore,
+    commit: &Commit,
+    reason: &str,
+    audit: Option<&Audit>,
+) -> Result<()> {
+    store.reject(commit, reason)?;
+    if let Some(audit) = audit {
+        audit.record(
+            "team_commit_rejected",
+            RecordArgs {
+                result: Some("denied"),
+                reason: Some(reason),
+                extra: vec![
+                    ("env_id", json!(commit.env_id)),
+                    ("fingerprint", json!(commit.author)),
+                    ("author_seq", json!(commit.author_seq)),
+                ],
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(())
+}
+
 fn receive(
     store: &CommitStore,
     commit: &Commit,
@@ -2248,22 +2329,7 @@ fn receive(
     quarantine_early: bool,
 ) -> Result<&'static str> {
     let reject = |reason: &str| -> Result<&'static str> {
-        store.reject(commit, reason)?;
-        if let Some(audit) = audit {
-            audit.record(
-                "team_commit_rejected",
-                RecordArgs {
-                    result: Some("denied"),
-                    reason: Some(reason),
-                    extra: vec![
-                        ("env_id", json!(commit.env_id)),
-                        ("fingerprint", json!(commit.author)),
-                        ("author_seq", json!(commit.author_seq)),
-                    ],
-                    ..Default::default()
-                },
-            )?;
-        }
+        reject_commit(store, commit, reason, audit)?;
         Ok("rejected")
     };
 
@@ -2335,13 +2401,8 @@ fn receive(
         return reject("team_author_equivocation");
     }
 
-    if commit.author_seq > 1 {
-        let previous = store.get(&commit.author, &commit.author_seq - 1)?;
-        if let Some(previous) = previous
-            && Hlc::parse(&commit.hlc)? <= Hlc::parse(&previous.hlc)?
-        {
-            return reject("team_hlc_not_monotone");
-        }
+    if store.hlc_not_above_previous(commit)? {
+        return reject("team_hlc_not_monotone");
     }
 
     let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
@@ -2860,8 +2921,8 @@ mod tests {
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
             Some(&PyInt::from(1))
         );
-        assert_eq!(store.release_deferred(1_000_000).unwrap(), vec![]);
-        let released = store.release_deferred(far_future_ms).unwrap();
+        assert_eq!(store.release_deferred(1_000_000, None).unwrap(), vec![]);
+        let released = store.release_deferred(far_future_ms, None).unwrap();
         assert_eq!(
             released
                 .iter()
@@ -2873,6 +2934,258 @@ mod tests {
             store.vector().unwrap().get(&f.owner.fingerprint().unwrap()),
             Some(&PyInt::from(2))
         );
+    }
+
+    fn rejections(audit: &Audit) -> Vec<Value> {
+        audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|record| record["event"] == "team_commit_rejected")
+            .collect()
+    }
+
+    /// Issue #52: a commit deferred behind its author's previous sequence,
+    /// whose HLC is not above that one's, is rejected when it is released
+    /// (`team_hlc_not_monotone`, audited as on receipt) rather than stored
+    /// out of HLC order.
+    #[test]
+    fn a_released_commit_keeps_its_authors_hlc_order() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let audit = Audit::new(&f.state, crate::clock::fixed(1_700_000_000.0));
+        let (now, minute) = (1_000_000, 60_000);
+        let signed = |seq: i64, wall: i64| {
+            sign_commit(
+                &f.owner,
+                &f.env_id,
+                seq,
+                &format!("{wall}-0000"),
+                &BTreeMap::new(),
+                vec![connection_create_op(&format!("c{seq}"))],
+            )
+            .unwrap()
+        };
+        let later = signed(2, now + 20 * minute);
+        let earlier = signed(3, now + 10 * minute);
+        for commit in [&later, &earlier] {
+            assert_eq!(
+                receive_commit(&store, commit, now, Some(&audit)).unwrap(),
+                "deferred"
+            );
+        }
+        // Due first, `earlier` waits for the sequence before it.
+        let none: Vec<Commit> = vec![];
+        assert_eq!(
+            store
+                .release_deferred(now + 10 * minute, Some(&audit))
+                .unwrap(),
+            none
+        );
+        let released = store
+            .release_deferred(now + 20 * minute, Some(&audit))
+            .unwrap();
+        assert_eq!(released, vec![later]);
+        assert_eq!(
+            store.last_seq(&f.owner.fingerprint().unwrap()).unwrap(),
+            PyInt::from(2)
+        );
+        assert!(store.deferred_commits().unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(store.dir("rejected")).unwrap().count(), 1);
+        let rejected = rejections(&audit);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0]["reason"], "team_hlc_not_monotone");
+        assert_eq!(rejected[0]["author_seq"], 3);
+    }
+
+    /// Section 5.4: a commit whose HLC is not above its author's previous
+    /// one is rejected on receipt and audited.
+    #[test]
+    fn receive_commit_rejects_an_hlc_not_above_the_previous_one() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        let c1 = bootstrap(&f, &store);
+        let audit = Audit::new(&f.state, crate::clock::fixed(1_700_000_000.0));
+        let behind = sign_commit(
+            &f.owner,
+            &f.env_id,
+            2,
+            &c1.hlc,
+            &store.vector().unwrap(),
+            vec![connection_create_op("gh")],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_commit(&store, &behind, 1_000_000, Some(&audit)).unwrap(),
+            "rejected"
+        );
+        assert_eq!(
+            store.last_seq(&f.owner.fingerprint().unwrap()).unwrap(),
+            PyInt::from(1)
+        );
+        let rejected = rejections(&audit);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0]["reason"], "team_hlc_not_monotone");
+    }
+
+    /// Issue #52: a deferred commit stored meanwhile -- received again once
+    /// its time came -- is dropped from `deferred/` when it is released.
+    #[test]
+    fn a_deferred_commit_stored_since_is_dropped() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let audit = Audit::new(&f.state, crate::clock::fixed(1_700_000_000.0));
+        let due = 1_000_000 + MAX_CLOCK_SKEW_MS + 60_000;
+        let skewed = sign_commit(
+            &f.owner,
+            &f.env_id,
+            2,
+            &Hlc::default().tick(Some(due)),
+            &store.vector().unwrap(),
+            vec![connection_create_op("gh")],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_commit(&store, &skewed, 1_000_000, Some(&audit)).unwrap(),
+            "deferred"
+        );
+        assert_eq!(
+            receive_commit(&store, &skewed, due, Some(&audit)).unwrap(),
+            "accepted"
+        );
+        let none: Vec<Commit> = vec![];
+        assert_eq!(store.release_deferred(due, Some(&audit)).unwrap(), none);
+        assert!(store.deferred_commits().unwrap().is_empty());
+        assert!(!store.dir("rejected").exists());
+        assert!(rejections(&audit).is_empty());
+    }
+
+    /// Issue #52: a deferred commit whose sequence another commit of its
+    /// author took meanwhile is rejected as `team_author_equivocation` when
+    /// it is released, audited as on receipt; the stored one stays.
+    #[test]
+    fn a_deferred_commit_another_took_the_sequence_of_is_rejected() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let audit = Audit::new(&f.state, crate::clock::fixed(1_700_000_000.0));
+        let due = 1_000_000 + MAX_CLOCK_SKEW_MS + 60_000;
+        let signed = |wall: i64, conn_id: &str| {
+            sign_commit(
+                &f.owner,
+                &f.env_id,
+                2,
+                &Hlc::default().tick(Some(wall)),
+                &store.vector().unwrap(),
+                vec![connection_create_op(conn_id)],
+            )
+            .unwrap()
+        };
+        let skewed = signed(due, "gh");
+        let other = signed(1_000_100, "gl");
+        assert_eq!(
+            receive_commit(&store, &skewed, 1_000_000, Some(&audit)).unwrap(),
+            "deferred"
+        );
+        assert_eq!(
+            receive_commit(&store, &other, 1_000_000, Some(&audit)).unwrap(),
+            "accepted"
+        );
+        let none: Vec<Commit> = vec![];
+        assert_eq!(store.release_deferred(due, Some(&audit)).unwrap(), none);
+        assert!(store.deferred_commits().unwrap().is_empty());
+        let owner = f.owner.fingerprint().unwrap();
+        assert_eq!(store.get(&owner, 2).unwrap(), Some(other));
+        let rejected = rejections(&audit);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0]["reason"], "team_author_equivocation");
+        assert_eq!(rejected[0]["author_seq"], 2);
+    }
+
+    /// Issue #52: a deferred commit that waits for the sequence before it is
+    /// passed over without taking the state lock, so commits that never
+    /// become storable do not hold the lock on every poll.
+    #[test]
+    fn a_deferred_commit_waiting_for_its_sequence_takes_no_lock() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let due = 1_000_000 + MAX_CLOCK_SKEW_MS + 60_000;
+        let waiting = sign_commit(
+            &f.owner,
+            &f.env_id,
+            3,
+            &Hlc::default().tick(Some(due)),
+            &BTreeMap::new(),
+            vec![connection_create_op("gh")],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_commit(&store, &waiting, 1_000_000, None).unwrap(),
+            "deferred"
+        );
+        let held = f.state.lock().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let released = store.release_deferred(due, None).unwrap();
+                sender.send(released).unwrap();
+            });
+            let released = receiver.recv_timeout(std::time::Duration::from_secs(20));
+            drop(held);
+            assert_eq!(released.expect("released without the lock"), vec![]);
+        });
+        assert_eq!(store.deferred_commits().unwrap(), vec![waiting]);
+    }
+
+    /// Issue #52: a deferred commit is decided under the state lock, as on
+    /// receipt. One released while receipt stores another commit at its
+    /// sequence waits for that, and is then rejected as an equivocation
+    /// instead of taking the sequence.
+    #[test]
+    fn a_released_commit_is_decided_under_the_state_lock() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        let audit = Audit::new(&f.state, crate::clock::fixed(1_700_000_000.0));
+        let due = 1_000_000 + MAX_CLOCK_SKEW_MS + 60_000;
+        let signed = |wall: i64, conn_id: &str| {
+            sign_commit(
+                &f.owner,
+                &f.env_id,
+                2,
+                &Hlc::default().tick(Some(wall)),
+                &store.vector().unwrap(),
+                vec![connection_create_op(conn_id)],
+            )
+            .unwrap()
+        };
+        let skewed = signed(due, "gh");
+        let other = signed(1_000_100, "gl");
+        assert_eq!(
+            receive_commit(&store, &skewed, 1_000_000, Some(&audit)).unwrap(),
+            "deferred"
+        );
+        let held = f.state.lock().unwrap();
+        std::thread::scope(|scope| {
+            let releasing = scope.spawn(|| store.release_deferred(due, Some(&audit)).unwrap());
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // Receipt, under the lock the release waits for.
+            assert_eq!(
+                receive_commit(&store, &other, 1_000_000, Some(&audit)).unwrap(),
+                "accepted"
+            );
+            drop(held);
+            let none: Vec<Commit> = vec![];
+            assert_eq!(releasing.join().unwrap(), none);
+        });
+        let owner = f.owner.fingerprint().unwrap();
+        assert_eq!(store.get(&owner, 2).unwrap(), Some(other));
+        let rejected = rejections(&audit);
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0]["reason"], "team_author_equivocation");
     }
 
     #[test]

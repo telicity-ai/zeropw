@@ -117,6 +117,10 @@ pub struct Config {
     /// queued incident to an admin peer is a different concern from
     /// reconnecting a dropped session.
     pub team_incident_retry_backoff: (f64, f64),
+    /// Section 6.4's retry of a failed refold (issue #51): same shape as
+    /// `team_dial_backoff`. The first retry is the next poll tick; later
+    /// ones wait from the minimum, doubling up to the maximum.
+    pub team_refold_retry_backoff: (f64, f64),
     /// Sections 4.4/7.4: once a node learns of a member's removal it stops
     /// sending to that member's session at once, but keeps the session open,
     /// receive-only, for this many seconds.
@@ -144,6 +148,7 @@ impl Default for Config {
             team_session_max_age_seconds: 600.0,
             team_dial_backoff: (5.0, 300.0),
             team_incident_retry_backoff: (5.0, 300.0),
+            team_refold_retry_backoff: (1.0, 60.0),
             team_removed_drain_seconds: 5.0,
             intrusion: None,
             extra: Map::new(),
