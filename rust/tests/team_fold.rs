@@ -718,38 +718,40 @@ fn each_generation_decrypts_under_its_own_key_file() {
     );
 }
 
-/// Issue #59: `recover` wraps the team device key and the generation keys
-/// again under its new KMS key, as it does the vault DEK, so the node keeps
-/// its team identity, its all-vault scan runs and it still derives the
-/// shared versions. A key file the old key could not unwrap is left as it
-/// was.
-#[test]
-fn recover_keeps_the_device_key_and_generation_keys() {
-    let (_tmp, mut ctx) = setup();
+/// This node's device key and two environments it created and derived, the
+/// `n`th bootstrapping `token-<n>`: their init commits.
+fn two_owned_envs(ctx: &Context) -> (DeviceKey, Vec<Commit>) {
     let owner = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
-    let env_id = C::new_env_id(&owner.fingerprint().unwrap()).unwrap();
-    let dek: Vec<u8> = (0..32u8).collect();
-    let c1 = env_init_commit(&env_id, &owner, &dek, "1000-0000", Some("gh-token"));
-    derive(&ctx, &owner, vec![c1.clone()]);
-    let unusable = format!("team/{env_id}/dek/{}.json", "f".repeat(16));
-    ctx.state.write_json(&unusable, &json!({})).unwrap();
-    let key_id = ctx.kms.key_id().to_owned();
+    let fingerprint = owner.fingerprint().unwrap();
+    let commits = (0..2u8)
+        .map(|n| {
+            let env_id = C::new_env_id(&fingerprint).unwrap();
+            let dek: Vec<u8> = (n..n + 32).collect();
+            let secret_id = format!("token-{n}");
+            let c1 = env_init_commit(&env_id, &owner, &dek, "1000-0000", Some(&secret_id));
+            derive(ctx, &owner, vec![c1.clone()]);
+            c1
+        })
+        .collect();
+    (owner, commits)
+}
 
-    ctx.recover(RECOVERY).unwrap();
-    assert_ne!(ctx.kms.key_id(), key_id);
+/// The device key loads under the current KMS key as `owner`'s, the
+/// all-vault scan runs, and each environment derives its shared version
+/// again with no op skipped.
+fn team_keys_load(ctx: &Context, owner: &DeviceKey, commits: &[Commit]) {
     let device = DeviceKey::load(ctx.state, ctx.kms).unwrap();
     assert_eq!(device.fingerprint().unwrap(), owner.fingerprint().unwrap());
     let values = ctx.vault.values_for_trusted_scan().unwrap();
     assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
-    derive(&ctx, &device, vec![c1]);
+    for c1 in commits {
+        derive(ctx, &device, vec![c1.clone()]);
+    }
     let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
-    assert_eq!(
-        vault["secrets"]["gh-token"]["versions"]
-            .as_object()
-            .unwrap()
-            .len(),
-        1
-    );
+    for n in 0..commits.len() {
+        let versions = &vault["secrets"][format!("token-{n}")]["versions"];
+        assert_eq!(versions.as_object().unwrap().len(), 1, "token-{n}");
+    }
     assert!(
         !ctx.audit
             .iter_records()
@@ -757,9 +759,131 @@ fn recover_keeps_the_device_key_and_generation_keys() {
             .iter()
             .any(|r| r["event"] == "team_op_skipped")
     );
+}
+
+/// Issue #59: `recover` wraps the team device key and the generation keys
+/// of every environment again under its new KMS key, as it does the vault
+/// DEK, so the node keeps its team identity, its all-vault scan runs and it
+/// still derives the shared versions. A key file no key unwraps is left as
+/// it was, and an environment directory without generation keys is passed
+/// over. The invitations this node issued still hold a secret wrapped under
+/// the retired key: those not used or revoked yet are revoked, each with
+/// one record, and no secret is kept; an invitation file that cannot be read
+/// is left as it is.
+#[test]
+fn recover_keeps_the_device_key_and_generation_keys() {
+    let (_tmp, mut ctx) = setup();
+    let (owner, commits) = two_owned_envs(&ctx);
+    let env_id = commits[0].env_id.clone();
+    let unusable = format!("team/{env_id}/dek/{}.json", "f".repeat(16));
+    ctx.state.write_json(&unusable, &json!({})).unwrap();
+    let bare = C::new_env_id(&owner.fingerprint().unwrap()).unwrap();
+    let unreadable = format!("team/{bare}/invites.json");
+    ctx.state.write_json(&unreadable, &json!({})).unwrap();
+    std::fs::write(ctx.state.path.join(&unreadable), b"{").unwrap();
+    let wrapped = ctx.kms.wrap(&[7; 32]).unwrap().to_dict();
+    let later = 4_000_000_000.0;
+    let invites = format!("team/{env_id}/invites.json");
+    ctx.state
+        .write_json(
+            &invites,
+            &json!({
+                "pending": {"wrapped_secret": wrapped, "role": "member", "name": "bob",
+                            "expires_at": later, "used": false, "created_at": 1.0},
+                "used": {"role": "member", "name": "carol", "expires_at": later,
+                         "used": true, "used_at": 2.0, "created_at": 1.0},
+                "revoked": {"role": "admin", "name": "dave", "expires_at": later,
+                            "used": false, "created_at": 1.0, "revoked_at": 3.0},
+            }),
+        )
+        .unwrap();
+    let key_id = ctx.kms.key_id().to_owned();
+
+    ctx.recover(RECOVERY).unwrap();
+    assert_ne!(ctx.kms.key_id(), key_id);
+    team_keys_load(&ctx, &owner, &commits);
     assert_eq!(
         ctx.state.read_json(&unusable, Value::Null).unwrap(),
         json!({})
+    );
+    let stored = ctx.state.read_json(&invites, Value::Null).unwrap();
+    assert!(!stored.to_string().contains("wrapped_secret"));
+    let statuses: Vec<(Value, Value)> = zeropw::team::membership::list_invites(&ctx, &env_id)
+        .unwrap()["invites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["invite_id"].clone(), i["status"].clone()))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            (json!("pending"), json!("revoked")),
+            (json!("revoked"), json!("revoked")),
+            (json!("used"), json!("used")),
+        ]
+    );
+    assert_eq!(stored["revoked"]["revoked_at"], json!(3.0));
+    let revokes: Vec<Value> = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_invite_revoke")
+        .map(|r| json!([r["env_id"], r["role"], r["detail"]]))
+        .collect();
+    assert_eq!(revokes, [json!([env_id, "member", "pending"])]);
+    assert_eq!(
+        std::fs::read(ctx.state.path.join(&unreadable)).unwrap(),
+        b"{"
+    );
+}
+
+/// A `recover` that stopped before the team keys, or that an earlier build
+/// ran, left them wrapped under the key it retired: running `recover` again
+/// wraps them under its new key from there. Two in the same second keep
+/// both retired keys.
+#[test]
+fn recover_again_rewraps_team_keys_an_earlier_one_left() {
+    let tmp = TempDir::new().unwrap();
+    let mut ctx = Context::initialize(
+        tmp.path().join("state"),
+        ADMIN,
+        RECOVERY,
+        Config::default(),
+        clock::fixed(1_000_000.0),
+    )
+    .unwrap();
+    ctx.projects
+        .create("demo", projects::DEFAULT_ENVIRONMENTS)
+        .unwrap();
+    let (owner, commits) = two_owned_envs(&ctx);
+    let generation = format!("team/{}/dek/{GEN0}.json", commits[1].env_id);
+    let left = [
+        zeropw::team::identity::DEVICE_KEY_FILE.to_owned(),
+        generation,
+    ]
+    .map(|path| {
+        let bytes = std::fs::read(ctx.state.path.join(&path)).unwrap();
+        (path, bytes)
+    });
+
+    ctx.recover(RECOVERY).unwrap();
+    for (path, bytes) in &left {
+        std::fs::write(ctx.state.path.join(path), bytes).unwrap();
+    }
+    assert!(DeviceKey::load(ctx.state, ctx.kms).is_err());
+    ctx.recover(RECOVERY).unwrap();
+    team_keys_load(&ctx, &owner, &commits);
+    let mut retired: Vec<String> = std::fs::read_dir(ctx.state.path.join("kms"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("master.key.retired-"))
+        .collect();
+    retired.sort();
+    assert_eq!(
+        retired,
+        ["master.key.retired-1000000", "master.key.retired-1000000-1"]
     );
 }
 

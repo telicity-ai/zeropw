@@ -410,15 +410,42 @@ pub fn request(
 fn denied_relay(reason: &str) -> Value {
     json!({"status":403,"headers":{},"body":null,"body_base64":null,"reason":reason})
 }
+/// `c`'s CLI profile carries `credential` -- its own -- in any form
+/// [`runs::credential_patterns`] lists, at any length.
 pub fn profile_env_carries_credential(c: &Connection, credential: &[u8]) -> bool {
     profile_env_matches(c, runs::credential_patterns(credential))
 }
-/// Against every vault value, so one shorter than
-/// `runs::MIN_PATTERN_LENGTH` is not matched itself (issue #60);
-/// [`profile_env_carries_credential`] checks one credential at any length.
-pub fn profile_env_carries_vault_value(ctx: &Context, c: &Connection) -> Result<bool, Error> {
+/// `c`'s CLI profile carries `value`, a vault value that is not its own
+/// credential. A value shorter than `runs::MIN_PATTERN_LENGTH` matches
+/// unrelated text, so one would refuse every profile (issue #60): it is
+/// refused as a whole variable name or value, or in its longer forms. An
+/// empty value carries nothing.
+pub fn profile_env_carries_other_value(c: &Connection, value: &[u8]) -> bool {
+    if value.len() >= runs::MIN_PATTERN_LENGTH {
+        return profile_env_carries_credential(c, value);
+    }
+    if value.is_empty() {
+        return false;
+    }
+    let stripped = runs::strip_space(value);
+    let whole = c.cli.as_ref().is_some_and(|cli| {
+        profile_settings(cli)
+            .any(|s| s.as_bytes() == value || (!stripped.is_empty() && s.as_bytes() == stripped))
+    });
+    whole || profile_env_matches(c, runs::vault_scan_patterns(value))
+}
+/// `c`'s CLI profile carries `credential`, its own, or any other vault
+/// value (any version of any secret).
+pub fn profile_env_carries_vault_value(
+    ctx: &Context,
+    c: &Connection,
+    credential: &[u8],
+) -> Result<bool, Error> {
     if c.cli.is_none() {
         return Ok(false);
+    }
+    if profile_env_carries_credential(c, credential) {
+        return Ok(true);
     }
     let values = ctx
         .vault
@@ -426,16 +453,19 @@ pub fn profile_env_carries_vault_value(ctx: &Context, c: &Connection) -> Result<
         .map_err(|_| Error::state("credential_unavailable"))?;
     Ok(values
         .iter()
-        .any(|v| profile_env_matches(c, runs::vault_scan_patterns(v.expose()))))
+        .any(|v| profile_env_carries_other_value(c, v.expose())))
+}
+/// The variable names and values a CLI profile hands its child.
+fn profile_settings(cli: &crate::policy::CliProfile) -> impl Iterator<Item = &String> {
+    std::iter::once(&cli.base_url_env)
+        .chain(cli.extra_env.keys())
+        .chain(cli.extra_env.values())
 }
 /// `c`'s CLI profile variable names or values hold one of `patterns`, which
 /// are wiped.
 fn profile_env_matches(c: &Connection, mut patterns: Vec<Vec<u8>>) -> bool {
     let found = c.cli.as_ref().is_some_and(|cli| {
-        std::iter::once(&cli.base_url_env)
-            .chain(cli.extra_env.keys())
-            .chain(cli.extra_env.values())
-            .any(|s| runs::contains_sensitive(s.as_bytes(), &patterns))
+        profile_settings(cli).any(|s| runs::contains_sensitive(s.as_bytes(), &patterns))
     });
     patterns.zeroize();
     found
@@ -726,7 +756,7 @@ pub fn exec(
             .vault
             .secret_for_trusted_use(&known.secret_id, known.secret_version_for_trusted_use()?)
             .map_err(|_| Error::state("credential_unavailable"))?;
-        if profile_env_carries_vault_value(ctx, &known)? {
+        if profile_env_carries_vault_value(ctx, &known, credential.expose())? {
             refuse_exec(
                 ctx,
                 caller,

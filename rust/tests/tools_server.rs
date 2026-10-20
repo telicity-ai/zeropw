@@ -506,19 +506,132 @@ fn corrupt_policy_during_setup_fails_the_registered_run_and_cleans_resources() {
     );
 }
 
-/// Issue #60: a vault value shorter than `runs::MIN_PATTERN_LENGTH` refuses
-/// no CLI profile -- every profile's `ZEROPW_API_BASE_URL` holds `_` --
-/// while a connection's own credential is still checked at any length.
+/// Give `service` a CLI profile with `extra_env` (and, with `secret_id`,
+/// another credential), then grant it to alice again.
+fn set_profile(f: &Fixture, secret_id: Option<&str>, extra_env: &[(&str, &str)]) {
+    let env = extra_env
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    let mut changes =
+        ConnectionChanges::new().cli(Some(CliProfile::new("/bin/sh", "http", None, env).unwrap()));
+    if let Some(id) = secret_id {
+        changes = changes.secret_id(id);
+    }
+    f.ctx.policy.update_connection("service", changes).unwrap();
+    f.ctx
+        .policy
+        .create_grant("alice", "service", Some(3600), None)
+        .unwrap();
+}
+
+/// No handle was issued, no run started and no run directory is left.
+fn assert_no_handle_or_child(f: &Fixture, label: &str) {
+    assert!(
+        !f.ctx
+            .audit
+            .tail(100)
+            .unwrap()
+            .iter()
+            .any(|r| r["event"] == "handle_issue" || r["event"] == "run_start"),
+        "{label}"
+    );
+    assert!(
+        zeropw::runs::registry(&f.ctx)
+            .unwrap()
+            .active_runs()
+            .is_empty(),
+        "{label}"
+    );
+    assert_eq!(
+        std::fs::read_dir(f.ctx.config.run_dir.as_ref().unwrap())
+            .unwrap()
+            .count(),
+        0,
+        "{label}"
+    );
+}
+
+/// The credential a run would carry is refused in its CLI profile at any
+/// length, inside other text too: issue #60 relaxed only the check of other
+/// vault values.
 #[test]
-fn a_short_vault_value_refuses_no_cli_profile() {
+fn a_short_own_credential_in_the_profile_is_refused_before_handle_or_child() {
     let f = Fixture::new();
-    let connection = f.ctx.policy.get_connection("service").unwrap();
     f.ctx
         .vault
-        .put_secret("short-code", "api_key", b"_", "demo", "dev", true)
+        .put_secret("short-key", "api_key", b"k3", "demo", "dev", true)
         .unwrap();
-    assert!(!tools::profile_env_carries_vault_value(&f.ctx, &connection).unwrap());
-    assert!(tools::profile_env_carries_credential(&connection, b"_"));
+    for value in ["token-k3-suffix", "k3"] {
+        set_profile(&f, Some("short-key"), &[("PUBLIC_LABEL", value)]);
+        let error = tools::exec(&f.ctx, "alice", "service", &[], None).unwrap_err();
+        assert_eq!(error.reason, "cli_env_contains_credential", "{value}");
+    }
+    assert_no_handle_or_child(&f, "own credential");
+}
+
+/// Issue #60: another vault value shorter than `runs::MIN_PATTERN_LENGTH`
+/// is not matched inside other text -- every profile's
+/// `ZEROPW_API_BASE_URL` holds `_` -- but is refused as a whole variable
+/// name or value, with or without its surrounding space, and in its forms of
+/// at least that length; a value of that length is refused inside other
+/// text.
+#[test]
+fn another_short_vault_value_is_refused_only_whole_or_in_longer_forms() {
+    let f = Fixture::new();
+    for (id, value) in [
+        ("underscore", "_"),
+        ("padded", " q7 "),
+        ("name", "LBL"),
+        ("seven", "s3v3n!!"),
+        ("eight", "8bytes!!"),
+    ] {
+        f.ctx
+            .vault
+            .put_secret(id, "api_key", value.as_bytes(), "demo", "dev", true)
+            .unwrap();
+    }
+    let seven_base64 = format!("x-{}", zeropw::pybase64::b64encode(b"s3v3n!!"));
+    for (name, value) in [
+        ("PUBLIC_LABEL", "_"),
+        ("PUBLIC_LABEL", "q7"),
+        ("PUBLIC_LABEL", " q7 "),
+        ("LBL", "label"),
+        ("PUBLIC_LABEL", seven_base64.as_str()),
+        ("PUBLIC_LABEL", "x8bytes!!x"),
+    ] {
+        set_profile(&f, None, &[(name, value)]);
+        let error = tools::exec(&f.ctx, "alice", "service", &[], None).unwrap_err();
+        assert_eq!(
+            error.reason, "cli_env_contains_credential",
+            "{name}={value}"
+        );
+    }
+    assert_no_handle_or_child(&f, "other short values");
+    set_profile(&f, None, &[("PUBLIC_LABEL", "")]);
+    let connection = f.ctx.policy.get_connection("service").unwrap();
+    assert!(!tools::profile_env_carries_other_value(&connection, b""));
+    let registry = zeropw::runs::registry(&f.ctx).unwrap();
+    for env in [
+        &[][..],
+        &[("PUBLIC_LABEL", "xq7x")],
+        &[("PUBLIC_LABEL", "s3v3n!!-suffix")],
+        &[("PUBLIC_LABEL", "8bytes!")],
+    ] {
+        set_profile(&f, None, env);
+        let result = tools::exec(
+            &f.ctx,
+            "alice",
+            "service",
+            &["-c".into(), "true".into()],
+            None,
+        )
+        .unwrap();
+        let run = registry
+            .get(result["run_id"].as_str().unwrap(), "alice")
+            .unwrap();
+        assert_eq!(registry.wait(&run, Some(5.0)).state, "completed", "{env:?}");
+    }
 }
 
 #[test]

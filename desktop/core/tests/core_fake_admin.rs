@@ -866,6 +866,48 @@ fn recover_tries_the_canonical_code_then_the_exact_text_and_no_more() {
     assert_argv_clean(&fx, &["ABCD", "abcd", "phrase"]);
 }
 
+/// Issue #59: a recovery restarts a running sidecar, which still holds the retired KMS key; a
+/// stopped one stays stopped, and a failed recovery leaves the running one alone.
+#[test]
+fn recover_restarts_a_running_serve() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let port = health_server();
+    core.settings_set(Settings {
+        gateway_port: port,
+        team_listen: None,
+    })
+    .unwrap();
+    let recover = || {
+        core.recover(RecoverIn {
+            recovery_passphrase: "my own Recovery phrase 9".into(),
+        })
+    };
+
+    recover().unwrap();
+    assert_eq!(fx.count("serve"), 0);
+    assert!(!core.serve_status().running);
+
+    let first = core.serve_start().unwrap();
+    assert!(first.running);
+    recover().unwrap();
+    let keys: Vec<String> = fx.calls().into_iter().map(|c| c.key).collect();
+    assert_eq!(keys[keys.len() - 3..], ["serve", "recover", "serve"]);
+    let restarted = core.serve_status();
+    assert!(restarted.running);
+    assert_ne!(restarted.pid, first.pid);
+
+    fx.respond_error(
+        "recover",
+        r#"{"error":"AuthFailed","reason":"recovery_failed"}"#,
+        1,
+    );
+    assert!(recover().is_err());
+    assert_eq!(fx.count("serve"), 2);
+    assert_eq!(core.serve_status().pid, restarted.pid);
+    assert!(!core.serve_stop().running);
+}
+
 #[test]
 fn incident_all_scope_needs_the_passphrase() {
     let fx = Fixture::new();

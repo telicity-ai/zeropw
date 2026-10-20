@@ -1945,6 +1945,97 @@ fn new_secret_matching_any_connection_cli_env_is_refused() {
     assert_eq!(denied, expected);
 }
 
+/// Issue #60 at save time: the connection's own credential is refused in its
+/// CLI environment at any length, inside other text too; another secret's
+/// value shorter than `runs::MIN_PATTERN_LENGTH` only as a whole value.
+#[test]
+fn short_values_in_a_new_cli_env() {
+    let t = Case::new();
+    t.seed_project();
+    t.put_secret_as("k3", "gh-token", "dev");
+    t.put_secret_as("_", "other", "dev");
+    for assignment in ["LABEL=token-k3-suffix", "LABEL=_"] {
+        let error = t.fail(&create_with_cli_env("leaky", assignment));
+        assert_eq!(
+            (&error["reason"], &error["detail"]),
+            (&json!("cli_env_contains_credential"), &json!("leaky")),
+            "{assignment}"
+        );
+    }
+    assert_eq!(t.ok(&["connection", "list"])["connections"], json!([]));
+    let created = t.ok(&create_with_cli_env("clean", "LABEL=a_b"));
+    assert_eq!(created["cli"]["extra_env"], json!({"LABEL": "a_b"}));
+}
+
+/// Issue #60 for a new value: `secret put` and `rotation start` refuse it at
+/// any length in the CLI environment of a connection it is the credential
+/// of, and, when it is shorter than `runs::MIN_PATTERN_LENGTH`, in another
+/// connection's only as a whole value.
+#[test]
+fn a_new_short_value_against_existing_cli_envs() {
+    let t = Case::new();
+    t.seed_project();
+    t.put_secret();
+    t.ok(&create_with_cli_env("gh", "LABEL=a-q7-b"));
+    t.put_secret_as("synthetic-other-token-0123456789", "other", "dev");
+    let mut args = create_with_cli_env("whole", "LABEL=yy");
+    let secret = args.iter().position(|a| *a == "gh-token").unwrap();
+    args[secret] = "other";
+    t.ok(&args);
+    let put = |id: &'static str| -> [&'static str; 11] {
+        [
+            "secret",
+            "put",
+            "--id",
+            id,
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ]
+    };
+    // In `gh`'s environment only inside other text, in `whole`'s not at all;
+    // every `ZEROPW_API_BASE_URL` holds `_`.
+    t.ok_stdin(&put("third"), b"q7\n");
+    t.ok_stdin(&put("third"), b"_\n");
+    // A whole value of another connection's environment.
+    let error = t.fail_stdin(&put("third"), b"yy\n", 1);
+    assert_eq!(
+        (&error["reason"], &error["detail"]),
+        (&json!("cli_env_contains_credential"), &json!("whole"))
+    );
+    t.ok_stdin(
+        &["rotation", "start", "--secret-id", "third", "--stdin"],
+        b"q7\n",
+    );
+    // `gh`'s own credential, inside other text.
+    let error = t.fail_stdin(&put("gh-token"), b"q7\n", 1);
+    assert_eq!(
+        (&error["reason"], &error["detail"]),
+        (&json!("cli_env_contains_credential"), &json!("gh"))
+    );
+    let error = t.fail_stdin(
+        &["rotation", "start", "--secret-id", "gh-token", "--stdin"],
+        b"q7\n",
+        1,
+    );
+    assert_eq!(
+        (&error["reason"], &error["detail"]),
+        (&json!("cli_env_contains_credential"), &json!("gh"))
+    );
+    assert_eq!(
+        array(&t.ok(&["secret", "versions", "--id", "gh-token"])["versions"]).len(),
+        1
+    );
+    assert_eq!(
+        array(&t.ok(&["secret", "versions", "--id", "third"])["versions"]).len(),
+        3
+    );
+}
+
 #[test]
 fn private_network_opt_in_flag() {
     let t = Case::new();

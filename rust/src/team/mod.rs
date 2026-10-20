@@ -101,6 +101,25 @@ pub(crate) fn json_falsy(v: &Value) -> bool {
     }
 }
 
+/// The environment ids that have a directory under `team/`, sorted.
+pub(crate) fn local_env_ids(state: &crate::store::StateDir) -> crate::errors::Result<Vec<String>> {
+    let listing_failed = |_| crate::errors::Error::state("state_corrupt");
+    let team = state.path.join("team");
+    if !team.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut ids = Vec::new();
+    for entry in std::fs::read_dir(&team).map_err(listing_failed)? {
+        let entry = entry.map_err(listing_failed)?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if commit::valid_env_id(&id) && entry.path().is_dir() {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::VerifiedSignatures;

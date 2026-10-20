@@ -102,6 +102,20 @@ pub fn credential_patterns(secret: &[u8]) -> Vec<Vec<u8>> {
     credential_patterns_with_minimum(secret, MIN_PATTERN_LENGTH)
 }
 
+/// `bytes.strip()`: CPython's `Py_ISSPACE` set, which includes `\x0b`.
+pub fn strip_space(secret: &[u8]) -> &[u8] {
+    let space = |b: &u8| crate::pystr::is_int_space(char::from(*b));
+    let start = secret
+        .iter()
+        .position(|b| !space(b))
+        .unwrap_or(secret.len());
+    let end = secret
+        .iter()
+        .rposition(|b| !space(b))
+        .map_or(start, |i| i + 1);
+    secret.get(start..end).unwrap_or_default()
+}
+
 /// The patterns a scan against every vault value, not one credential,
 /// looks for: those of [`credential_patterns`] at least
 /// `MIN_PATTERN_LENGTH` long, the value itself included. A shorter value
@@ -125,17 +139,7 @@ pub fn credential_patterns_with_minimum(secret: &[u8], minimum: usize) -> Vec<Ve
             patterns.push(value);
         }
     };
-    // `bytes.strip()`: CPython's `Py_ISSPACE` set, which includes `\x0b`.
-    let space = |b: &u8| crate::pystr::is_int_space(char::from(*b));
-    let start = secret
-        .iter()
-        .position(|b| !space(b))
-        .unwrap_or(secret.len());
-    let end = secret
-        .iter()
-        .rposition(|b| !space(b))
-        .map_or(start, |i| i + 1);
-    let stripped = secret.get(start..end).unwrap_or_default();
+    let stripped = strip_space(secret);
     if !stripped.is_empty() && stripped != secret {
         add(stripped.to_vec());
     }

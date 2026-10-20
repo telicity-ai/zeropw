@@ -56,7 +56,7 @@ An admin's `secret put` encrypts locally under the current generation. Messages 
 
 ### 4.3 Invitation and enrollment
 
-An admin creates `team invite --env PROJECT/ENV --role user|admin --name NAME`. The base32 invitation contains environment ID, inviter fingerprint, addresses, a 32-byte secret, expiry (default 24 hours), role and name. Store the secret KMS-wrapped with metadata/consumption state in 0600 `team/ENV_ID/invites.json`. It is bootstrap enrollment material, not a vault credential; HMAC verification needs the original invitation secret.
+An admin creates `team invite --env PROJECT/ENV --role user|admin --name NAME`. The base32 invitation contains environment ID, inviter fingerprint, addresses, a 32-byte secret, expiry (default 24 hours), role and name. Store the secret KMS-wrapped with metadata/consumption state in 0600 `team/ENV_ID/invites.json`; `recover` revokes the invitations not used yet and drops their secrets. It is bootstrap enrollment material, not a vault credential; HMAC verification needs the original invitation secret.
 
 `team join INVITATION` creates device keys if needed and dials the inviter. Handshake message three proves the invite with ID (first 16 bytes of secret SHA-256) and HMAC over the transcript. The inviter verifies it, marks it used under the state lock, then creates/applies/broadcasts `member.add` with the new device and wraps for all generations the inviter can unwrap. No second approval: possession of the valid unused invitation is authorization.
 

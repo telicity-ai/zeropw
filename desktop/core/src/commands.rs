@@ -1297,6 +1297,11 @@ impl Core {
     /// already canonical, the canonical form is tried first and, only if the CLI answers
     /// `AuthFailed`, the input exactly as typed. So one attempt at most writes two
     /// `auth_failed` audit records; anything else is a single call.
+    ///
+    /// A running sidecar is then restarted: it still holds the KMS key the recovery retired,
+    /// so it could not read the team keys wrapped again under the new one (issue #59). The
+    /// recovery has happened whether or not the sidecar starts again; one that does not shows
+    /// as stopped and can be started again.
     pub fn recover(&self, input: RecoverIn) -> Result<Value, AppError> {
         let typed = &input.recovery_passphrase;
         if typed.is_empty() {
@@ -1308,13 +1313,19 @@ impl Core {
                 Envelope::new().recovery_passphrase(passphrase),
             )
         };
-        match recovery::normalize(typed.expose()).filter(|c| c.expose() != typed.expose()) {
+        let out = match recovery::normalize(typed.expose()).filter(|c| c.expose() != typed.expose())
+        {
             None => attempt(typed),
             Some(canonical) => match attempt(&canonical) {
                 Err(e) if e.error == "AuthFailed" => attempt(typed),
                 other => other,
             },
+        }?;
+        if self.serve_status().running {
+            self.serve_stop();
+            let _ = self.serve_start();
         }
+        Ok(out)
     }
 
     // -- team ---------------------------------------------------------------------------------
