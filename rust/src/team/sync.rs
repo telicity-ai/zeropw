@@ -1453,14 +1453,24 @@ mod retry_tests {
                 &json!({"type":"FACT","fact":fact.to_dict()}),
             )
             .unwrap();
+        // As if it had also consumed a fresh invitation.
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .insert(peer.clone(), ("user".into(), "bob".into()));
         let late = recording_session(f.peer_key.record().unwrap(), &f.env_id);
         assert!(!f.team.accept_session(&f.env_id, late.clone(), true));
         assert!(late.is_closed());
-        assert!(
-            !f.team.envs.lock().unwrap()[&f.env_id]
-                .sessions
-                .contains_key(&peer)
-        );
+        {
+            let envs = f.team.envs.lock().unwrap();
+            let env = &envs[&f.env_id];
+            assert!(!env.sessions.contains_key(&peer));
+            assert!(!env.pending_invites.contains_key(&peer));
+        }
         let refused: Vec<Value> = f
             .ctx
             .audit
