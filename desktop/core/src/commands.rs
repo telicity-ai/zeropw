@@ -641,6 +641,8 @@ pub struct Core {
     clipboard_clear_after: Duration,
     pending_clears: Arc<Mutex<PendingClears>>,
     settings_lock: Mutex<()>,
+    /// Held by `recover` while the sidecar is down for it; `serve_start` waits on it.
+    recovery_lock: Mutex<()>,
 }
 
 impl Core {
@@ -662,6 +664,7 @@ impl Core {
             clipboard_clear_after: config.clipboard_clear_after,
             pending_clears: Arc::new(Mutex::new(PendingClears::default())),
             settings_lock: Mutex::new(()),
+            recovery_lock: Mutex::new(()),
             paths,
         }
     }
@@ -806,7 +809,14 @@ impl Core {
 
     // -- serve sidecar ------------------------------------------------------------------------
 
+    /// A start asked for while `recover` runs (the app's startup thread, the relay button)
+    /// waits for it to end, so no sidecar loads the KMS key the recovery retires.
     pub fn serve_start(&self) -> Result<ServeStatus, AppError> {
+        let _recovery = lock(&self.recovery_lock);
+        self.start_serve()
+    }
+
+    fn start_serve(&self) -> Result<ServeStatus, AppError> {
         let settings = self.settings_get()?;
         let status = self.serve.start(&ServeConfig {
             port: settings.gateway_port,
@@ -1301,9 +1311,9 @@ impl Core {
     /// A running sidecar is stopped for the recovery and started again after it, whatever the
     /// outcome: it holds the KMS key in memory, so one left running would keep the key the
     /// recovery retired, could not read the team keys wrapped again under the new one, and
-    /// could write new ones under the old key (issue #59). The recovery's result is returned
-    /// whether or not the sidecar starts again; one that does not shows as stopped and can be
-    /// started again.
+    /// could write new ones under the old key (issue #59). A start asked for meanwhile waits
+    /// for the recovery to end. The recovery's result is returned whether or not the sidecar
+    /// starts again; one that does not shows as stopped and can be started again.
     pub fn recover(&self, input: RecoverIn) -> Result<Value, AppError> {
         let typed = &input.recovery_passphrase;
         if typed.is_empty() {
@@ -1315,6 +1325,7 @@ impl Core {
                 Envelope::new().recovery_passphrase(passphrase),
             )
         };
+        let _recovery = lock(&self.recovery_lock);
         let running = self.serve_status().running;
         if running {
             self.serve_stop();
@@ -1328,7 +1339,7 @@ impl Core {
             },
         };
         if running {
-            let _ = self.serve_start();
+            let _ = self.start_serve();
         }
         out
     }

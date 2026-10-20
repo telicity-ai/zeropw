@@ -14,7 +14,8 @@ dir=$(cd "$(dirname "$0")" && pwd)
 calls="$dir/calls"
 mkdir -p "$calls"
 n=$(( $(cat "$calls/count" 2>/dev/null || echo 0) + 1 ))
-echo "$n" > "$calls/count"
+# Replaced, not rewritten in place: a test reading the count never sees it empty.
+echo "$n" > "$calls/count.$$" && mv "$calls/count.$$" "$calls/count"
 : > "$calls/$n.argv"
 for a in "$@"; do
   printf '%s\n' "$a" >> "$calls/$n.argv"

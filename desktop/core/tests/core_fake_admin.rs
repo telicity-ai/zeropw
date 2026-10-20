@@ -868,7 +868,8 @@ fn recover_tries_the_canonical_code_then_the_exact_text_and_no_more() {
 
 /// Issue #59: a running sidecar, which holds the KMS key in memory, is stopped while
 /// `recover` runs and started again after it, whether the recovery succeeds or fails; a
-/// stopped one stays stopped.
+/// start asked for meanwhile, as the app's startup thread or relay button can, waits for the
+/// recovery to end; a stopped sidecar stays stopped.
 #[test]
 fn recover_stops_a_running_serve_and_starts_it_again() {
     let fx = Fixture::new();
@@ -889,8 +890,8 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
     assert_eq!(fx.count("serve"), 0);
     assert!(!core.serve_status().running);
 
-    // `recover` takes a second, so the sidecar can be seen stopped while it runs.
-    fx.respond_sleep("recover", 1);
+    // `recover` takes two seconds, so the sidecar can be seen stopped while it runs.
+    fx.respond_sleep("recover", 2);
     let mut pid = core.serve_start().unwrap().pid;
     for failure in [
         None,
@@ -904,7 +905,14 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
             let run = s.spawn(recover);
             assert!(wait_until(Duration::from_secs(5), || fx.count("recover") > recovers));
             assert!(!core.serve_status().running, "{failure:?}");
-            run.join().unwrap()
+            let start = s.spawn(|| core.serve_start());
+            assert!(
+                !wait_until(Duration::from_millis(1200), || fx.count("serve") > serves),
+                "a sidecar started during the recovery: {failure:?}"
+            );
+            let result = run.join().unwrap();
+            assert!(start.join().unwrap().unwrap().running, "{failure:?}");
+            result
         });
         assert_eq!(result.is_err(), failure.is_some());
         assert_eq!(fx.count("serve"), serves + 1, "{failure:?}");
