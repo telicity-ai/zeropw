@@ -168,6 +168,7 @@ Before closing a global incident, use `recover` for a new KMS key, grant revocat
 - Normal agents can invent tool names or send truncated handles; thresholds permit two unknown-tool/handle-forgery events before containment.
 - Older principals imply more mandatory rotations. There is no narrowing assessment setting; replace identities periodically.
 - Provider-side automatic rotation remains future scope.
+- A team node cannot replace its device key in place. After a host compromise it is rebuilt from a new state directory and invited again to each of its environments (section 7), and its local secrets are put again there once rotated.
 - SMTP is additional bootstrap authority; use an alert-only account without other permissions.
 - Email can be lost. Incident state, alerts and stderr are authoritative; email is a copy.
 
