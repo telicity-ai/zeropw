@@ -768,7 +768,8 @@ fn team_keys_load(ctx: &Context, owner: &DeviceKey, commits: &[Commit]) {
 /// it was, and an environment directory without generation keys is passed
 /// over. The invitations this node issued still hold a secret wrapped under
 /// the retired key: those not used or revoked yet are revoked, each with
-/// one record, and no secret is kept; an invitation file that cannot be read
+/// one record, and no secret is kept, also where an earlier build left one
+/// in a used or revoked invitation; an invitation file that cannot be read
 /// is left as it is.
 #[test]
 fn recover_keeps_the_device_key_and_generation_keys() {
@@ -790,10 +791,11 @@ fn recover_keeps_the_device_key_and_generation_keys() {
             &json!({
                 "pending": {"wrapped_secret": wrapped, "role": "member", "name": "bob",
                             "expires_at": later, "used": false, "created_at": 1.0},
-                "used": {"role": "member", "name": "carol", "expires_at": later,
-                         "used": true, "used_at": 2.0, "created_at": 1.0},
-                "revoked": {"role": "admin", "name": "dave", "expires_at": later,
-                            "used": false, "created_at": 1.0, "revoked_at": 3.0},
+                "used": {"wrapped_secret": wrapped, "role": "member", "name": "carol",
+                         "expires_at": later, "used": true, "used_at": 2.0, "created_at": 1.0},
+                "revoked": {"wrapped_secret": wrapped, "role": "admin", "name": "dave",
+                            "expires_at": later, "used": false, "created_at": 1.0,
+                            "revoked_at": 3.0},
             }),
         )
         .unwrap();
