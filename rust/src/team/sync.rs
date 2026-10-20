@@ -1322,9 +1322,16 @@ mod retry_tests {
         let f = retrying_refolds_at_once();
         let peer = f.peer_key.fingerprint().unwrap();
         f.team.poll().unwrap();
-        let listed = || f.team.document(&f.env_id).unwrap()["members"][&peer]["status"] == "active";
-        assert!(listed());
-        let fact = removal_fact(&f);
+        let active = || f.team.is_active_member(&f.env_id, &peer);
+        assert!(active());
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
         let restore = fail_refolds(&f);
         let received = f.team.handle_fact(
             &f.env_id,
@@ -1336,24 +1343,11 @@ mod retry_tests {
         for _ in 0..3 {
             assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
         }
-        assert!(listed());
+        assert!(active());
         restore();
         f.team.poll().unwrap();
-        assert!(!listed());
+        assert!(!active());
         assert_eq!(fact_audits(&f, "team_fact_apply"), 1);
-    }
-
-    /// `f`'s admin peer removing itself.
-    fn removal_fact(f: &OwnerWithAdminPeer) -> Fact {
-        let peer = f.peer_key.fingerprint().unwrap();
-        sign_fact(
-            &f.peer_key,
-            &f.env_id,
-            "member_removed",
-            json!({"fingerprint":peer}),
-            "10000-0000",
-        )
-        .unwrap()
     }
 
     /// While the refold after a removal fails, the document still lists the
@@ -1367,7 +1361,14 @@ mod retry_tests {
         f.team.poll().unwrap();
         assert!(f.team.membership(&f.env_id, &peer).is_some());
         let restore = fail_refolds(&f);
-        let fact = removal_fact(&f);
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
         let received = f.team.handle_fact(
             &f.env_id,
             &f.session,
@@ -1379,7 +1380,8 @@ mod retry_tests {
             "active"
         );
         assert!(f.team.membership(&f.env_id, &peer).is_none());
-        assert!(!f.team.is_active_member(&f.env_id, &peer));
+        // What the document lists, as `team join` and callers expect.
+        assert!(f.team.is_active_member(&f.env_id, &peer));
         let address = "127.0.0.1:9";
         let mut peers = Map::new();
         peers.insert(peer.clone(), json!([address]));
@@ -5041,9 +5043,9 @@ impl TeamSync {
     }
     fn membership(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
         let envs = self.envs.lock().ok()?;
-        let member = envs.get(env_id)?.active_member(fp)?;
-        let record = DeviceRecord::from_dict(&member["device"]).ok()?;
-        (record.fingerprint() == fp).then_some(record)
+        let env = envs.get(env_id)?;
+        env.active_member(fp)?;
+        member_device_record(&env.document, fp)
     }
     fn audit_handshake_failed(&self, reason: &str, fp: Option<&str>) {
         let _ = self.ctx.audit.record(
@@ -5082,8 +5084,17 @@ impl TeamSync {
             .map(|e| e.document.clone())
             .ok_or_else(|| Error::not_found("team_env_unknown"))
     }
+    /// `fp` is an active member as the document lists it. Sessions also
+    /// refuse a device whose removal fact no refold has folded in yet
+    /// ([`EnvState::active_member`]).
     pub fn is_active_member(&self, env_id: &str, fp: &str) -> bool {
-        self.membership(env_id, fp).is_some()
+        let Ok(envs) = self.envs.lock() else {
+            return false;
+        };
+        envs.get(env_id).is_some_and(|env| {
+            env.document["members"][fp]["status"] == "active"
+                && member_device_record(&env.document, fp).is_some()
+        })
     }
     pub fn set_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
         if !valid_fp(fp) || address.is_empty() {
