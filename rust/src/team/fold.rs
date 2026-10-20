@@ -2655,28 +2655,28 @@ fn python_dict_object(value: Option<&Value>) -> Result<Map<String, Value>> {
 
 /// The generation key in the file at `dek_path`, unwrapped once per derive
 /// into `keys`, as `Vault` reads it to decrypt a shared version. `None` when
-/// the file holds no key this node unwraps (empty, malformed, or wrapped
+/// this node cannot use the file (unreadable, empty, malformed, or wrapped
 /// under another KMS key): its versions are left underived, like those of a
-/// missing file, so one unusable local file holds up no other version. A
-/// file that cannot be read fails the derive, as the vault document does,
-/// and the refold is retried (section 6.4).
+/// missing file, until a refold can use it, so one local file holds up
+/// neither the refold nor any other version.
 fn generation_key<'k>(
     state: &StateDir,
     kms: &(dyn Kms + Send + Sync),
     dek_path: &str,
     keys: &'k mut HashMap<String, Option<SecretBytes>>,
-) -> Result<Option<&'k SecretBytes>> {
+) -> Option<&'k SecretBytes> {
     if !keys.contains_key(dek_path) {
-        let bytes = state.read_bytes(dek_path)?;
-        let key = std::str::from_utf8(&bytes)
+        let key = state
+            .read_bytes(dek_path)
             .ok()
-            .and_then(|text| crate::pyjson::loads(text).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|text| crate::pyjson::loads(&text).ok())
             .filter(|doc| !json_falsy(doc))
             .and_then(|doc| crate::kms::WrappedKey::from_dict(&doc).ok())
             .and_then(|wrapped| kms.unwrap(&wrapped).ok());
         keys.insert(dek_path.to_owned(), key);
     }
-    Ok(keys.get(dek_path).and_then(Option::as_ref))
+    keys.get(dek_path).and_then(Option::as_ref)
 }
 
 /// Port of `_derive_vault`. Every subscript and `.get` reproduces Python's
@@ -2795,7 +2795,7 @@ fn derive_vault(
             // would fail on (issue #57). Checked after Python's subscripts,
             // so a malformed record still fails where Python raised.
             if let Some(kms) = kms {
-                let skipped = match generation_key(state, kms, &dek_path, &mut generation_keys)? {
+                let skipped = match generation_key(state, kms, &dek_path, &mut generation_keys) {
                     None => Some("generation_unavailable"),
                     Some(key) => {
                         let decrypts = record.as_object().is_some_and(|entry| {

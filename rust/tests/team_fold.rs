@@ -619,9 +619,10 @@ fn a_version_that_does_not_decrypt_is_not_derived() {
 }
 
 /// Issue #57: each version decrypts under its own generation's key file. A
-/// key file holding no key this node unwraps leaves that generation's
-/// versions underived, like a missing one, and holds up no other; one that
-/// cannot be read fails the derive, as the vault document does.
+/// key file this node cannot use, whether its content holds no key this
+/// node unwraps or it cannot be read, leaves that generation's versions
+/// underived, like a missing one, and holds up no other; the next refold
+/// that can use it derives them again.
 #[test]
 fn each_generation_decrypts_under_its_own_key_file() {
     let (_tmp, ctx) = setup();
@@ -661,6 +662,8 @@ fn each_generation_decrypts_under_its_own_key_file() {
     assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
 
     let gen0_file = format!("team/{env_id}/dek/{GEN0}.json");
+    let gen0_path = ctx.state.path.join(&gen0_file);
+    let usable = std::fs::read(&gen0_path).unwrap();
     let wrapped = ctx.state.read_json(&gen0_file, Value::Null).unwrap();
     let mut other_key_id = wrapped.clone();
     other_key_id["key_id"] = json!("synthetic-other-kms-key");
@@ -670,16 +673,29 @@ fn each_generation_decrypts_under_its_own_key_file() {
         b"{}".to_vec(),
         b"\"synthetic\"".to_vec(),
         b"{not json".to_vec(),
+        b"\xff\xfe synthetic".to_vec(),
         other_key_id.to_string().into_bytes(),
         tampered.to_string().into_bytes(),
     ];
-    for content in &unusable {
-        std::fs::write(ctx.state.path.join(&gen0_file), content).unwrap();
+    let skips_gen0 = || {
         derive(&ctx, &owner, commits.clone());
         assert_eq!((versions("gh-token"), versions("rotated")), (0, 1));
         let values = ctx.vault.values_for_trusted_scan().unwrap();
         assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
+    };
+    for content in &unusable {
+        std::fs::write(&gen0_path, content).unwrap();
+        skips_gen0();
     }
+    // A directory in the file's place cannot be read.
+    std::fs::remove_file(&gen0_path).unwrap();
+    std::fs::create_dir(&gen0_path).unwrap();
+    skips_gen0();
+
+    std::fs::remove_dir(&gen0_path).unwrap();
+    std::fs::write(&gen0_path, &usable).unwrap();
+    derive(&ctx, &owner, commits);
+    assert_eq!((versions("gh-token"), versions("rotated")), (1, 1));
     let skipped: Vec<Value> = ctx
         .audit
         .iter_records()
@@ -690,24 +706,8 @@ fn each_generation_decrypts_under_its_own_key_file() {
         .collect();
     assert_eq!(
         skipped,
-        vec![json!("generation_unavailable"); unusable.len()]
+        vec![json!("generation_unavailable"); unusable.len() + 1]
     );
-
-    std::fs::remove_file(ctx.state.path.join(&gen0_file)).unwrap();
-    std::fs::create_dir(ctx.state.path.join(&gen0_file)).unwrap();
-    let result = F::fold(&env_id, commits, None, None, None, None).unwrap();
-    let error = F::derive_local(
-        &result,
-        ctx.state,
-        &ctx.policy,
-        Some(ctx.audit),
-        Some(&owner),
-        Some(ctx.kms),
-        None,
-        None,
-    )
-    .unwrap_err();
-    assert_eq!(error.reason, "state_missing");
 }
 
 #[test]

@@ -999,12 +999,26 @@ fn notify_config_rejects_header_and_smtp_command_injection() {
 /// Issue #57: when the vault cannot be scanned, a rendered message is not
 /// taken as clean: delivery waits without a socket, retried like a failed
 /// one, and the stored assessment is redacted. Once the vault scans again,
-/// the due retry sends.
+/// the due retry assesses the incident again, so the message it sends names
+/// the credential the principal used as a mandatory rotation target.
 #[test]
 fn a_leak_check_that_cannot_scan_holds_delivery_and_redacts() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    setup_grant(&ctx, "agent-1", "gh");
+    ctx.audit
+        .record(
+            "http_relay",
+            RecordArgs {
+                caller: Some("agent-1"),
+                connection: Some("gh"),
+                result: Some("ok"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    assert_eq!(i.assessment["secrets"][0]["tier"], "mandatory");
     let intact = ctx
         .state
         .read_json(zeropw::vault::VAULT_DOC, Value::Null)
@@ -1028,7 +1042,8 @@ fn a_leak_check_that_cannot_scan_holds_delivery_and_redacts() {
     assert_eq!(i.notification["last_error"], "leak_check_unavailable");
     listener.set_nonblocking(true).unwrap();
     assert!(listener.accept().is_err());
-    // A due retry scans again and still does not send.
+    // Not before its backoff; a due retry scans again and still does not send.
+    assert_eq!(notify::retry_pending(&ctx, 1_700_000_000.0).unwrap(), 0);
     assert_eq!(notify::retry_pending(&ctx, 1_700_000_400.0).unwrap(), 1);
     assert!(listener.accept().is_err());
     let stored = incident::get_incident(&ctx, &i.id).unwrap();
@@ -1041,12 +1056,14 @@ fn a_leak_check_that_cannot_scan_holds_delivery_and_redacts() {
     listener.set_nonblocking(false).unwrap();
     let receiver = smtp_server(listener, false);
     assert_eq!(notify::retry_pending(&ctx, 1_700_001_000.0).unwrap(), 1);
-    assert_eq!(
-        incident::get_incident(&ctx, &i.id).unwrap().notification["status"],
-        "sent"
-    );
     let (_, message) = receiver.join().unwrap();
-    assert!(!message.is_empty());
+    let message = String::from_utf8_lossy(&message);
+    assert!(message.contains("Secret ID: gh-token"));
+    assert!(!message.contains("No mandatory rotation targets."));
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.notification["status"], "sent");
+    assert_eq!(stored.assessment["secrets"][0]["secret_id"], "gh-token");
+    assert_eq!(stored.assessment["secrets"][0]["tier"], "mandatory");
 }
 
 #[test]
@@ -1065,4 +1082,7 @@ fn rendered_value_leak_blocks_delivery_without_opening_socket() {
     assert!(listener.accept().is_err());
     let stored = incident::get_incident(&ctx, &i.id).unwrap();
     assert_eq!(stored.assessment, json!({"redacted":true}));
+    // A reflected value is final: no retry sends it.
+    assert_eq!(notify::retry_pending(&ctx, 1_700_001_000.0).unwrap(), 0);
+    assert!(listener.accept().is_err());
 }

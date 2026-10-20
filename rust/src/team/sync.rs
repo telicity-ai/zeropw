@@ -968,15 +968,18 @@ mod retry_tests {
             .count()
     }
 
-    /// Issue #49: once an environment that could not be loaded loads, its
-    /// next failure is audited, although for the same reason as the load.
+    /// Issue #49: a load failure is audited once while it lasts; once the
+    /// environment loads, its next failure is audited, although for the same
+    /// reason as the load.
     #[test]
     fn a_failure_after_a_load_failure_is_audited() {
         let f = owner_with_admin_peer();
         let late = another_environment(&f, "late", false);
         let peers = f.ctx.state.path.join(format!("team/{late}/peers.json"));
         std::fs::write(&peers, b"[1]").unwrap();
-        assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        for _ in 0..3 {
+            assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        }
         assert!(!f.team.known_envs().contains(&late));
         assert_eq!(sync_poll_audits(&f, &late), 1);
         std::fs::remove_file(&peers).unwrap();

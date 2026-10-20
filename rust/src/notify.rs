@@ -501,6 +501,14 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         incident::save_incident(ctx, i)?;
         return Ok(());
     };
+    // A message held while the vault could not be scanned was saved with its
+    // assessment redacted: it is assessed again rather than sent without its
+    // rotation targets (issue #57). The rendered message is scanned below.
+    if i.assessment == json!({"redacted": true})
+        && let Ok(assessment) = incident::assess(ctx, &i.principals, &i.scope, &i.opened_at)
+    {
+        i.assessment = assessment;
+    }
     let (subject, body) = render_incident_email(i, &iso(Some((ctx.clock)())));
     match incident::value_leak(ctx, format!("{subject}\n{body}").as_bytes()) {
         Ok(false) => {}
