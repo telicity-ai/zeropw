@@ -411,15 +411,11 @@ fn denied_relay(reason: &str) -> Value {
     json!({"status":403,"headers":{},"body":null,"body_base64":null,"reason":reason})
 }
 pub fn profile_env_carries_credential(c: &Connection, credential: &[u8]) -> bool {
-    let Some(cli) = &c.cli else { return false };
-    let mut patterns = runs::credential_patterns(credential);
-    let found = std::iter::once(&cli.base_url_env)
-        .chain(cli.extra_env.keys())
-        .chain(cli.extra_env.values())
-        .any(|s| runs::contains_sensitive(s.as_bytes(), &patterns));
-    patterns.zeroize();
-    found
+    profile_env_matches(c, runs::credential_patterns(credential))
 }
+/// Against every vault value, so one shorter than
+/// `runs::MIN_PATTERN_LENGTH` is not matched itself (issue #60);
+/// [`profile_env_carries_credential`] checks one credential at any length.
 pub fn profile_env_carries_vault_value(ctx: &Context, c: &Connection) -> Result<bool, Error> {
     if c.cli.is_none() {
         return Ok(false);
@@ -430,7 +426,19 @@ pub fn profile_env_carries_vault_value(ctx: &Context, c: &Connection) -> Result<
         .map_err(|_| Error::state("credential_unavailable"))?;
     Ok(values
         .iter()
-        .any(|v| profile_env_carries_credential(c, v.expose())))
+        .any(|v| profile_env_matches(c, runs::vault_scan_patterns(v.expose()))))
+}
+/// `c`'s CLI profile variable names or values hold one of `patterns`, which
+/// are wiped.
+fn profile_env_matches(c: &Connection, mut patterns: Vec<Vec<u8>>) -> bool {
+    let found = c.cli.as_ref().is_some_and(|cli| {
+        std::iter::once(&cli.base_url_env)
+            .chain(cli.extra_env.keys())
+            .chain(cli.extra_env.values())
+            .any(|s| runs::contains_sensitive(s.as_bytes(), &patterns))
+    });
+    patterns.zeroize();
+    found
 }
 /// `tools._resolve_program`: the program itself when it contains `/`,
 /// otherwise `shutil.which(program, path=os.environ.get("PATH", DEFAULT_PATH))`;

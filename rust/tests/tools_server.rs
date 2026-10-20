@@ -506,6 +506,21 @@ fn corrupt_policy_during_setup_fails_the_registered_run_and_cleans_resources() {
     );
 }
 
+/// Issue #60: a vault value shorter than `runs::MIN_PATTERN_LENGTH` refuses
+/// no CLI profile -- every profile's `ZEROPW_API_BASE_URL` holds `_` --
+/// while a connection's own credential is still checked at any length.
+#[test]
+fn a_short_vault_value_refuses_no_cli_profile() {
+    let f = Fixture::new();
+    let connection = f.ctx.policy.get_connection("service").unwrap();
+    f.ctx
+        .vault
+        .put_secret("short-code", "api_key", b"_", "demo", "dev", true)
+        .unwrap();
+    assert!(!tools::profile_env_carries_vault_value(&f.ctx, &connection).unwrap());
+    assert!(tools::profile_env_carries_credential(&connection, b"_"));
+}
+
 #[test]
 fn any_vault_value_in_profile_is_refused_before_handle_or_child() {
     let f = Fixture::new();
