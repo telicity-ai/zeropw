@@ -508,9 +508,10 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
             failed(ctx, i, "rendered_value_detected")?;
             return Ok(());
         }
-        // Not sent unchecked (issue #57).
+        // Not sent unchecked, but retried: the vault can be repaired (issue
+        // #57). Each retry scans again.
         Err(_) => {
-            failed(ctx, i, "leak_check_unavailable")?;
+            pending(ctx, i, "leak_check_unavailable")?;
             return Ok(());
         }
     }

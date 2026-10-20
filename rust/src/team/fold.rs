@@ -2653,33 +2653,30 @@ fn python_dict_object(value: Option<&Value>) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
-/// The version `record` of a shared secret decrypts under the generation
-/// key stored at `dek_path`, as `Vault` decrypts it for use and for the
-/// all-vault scan; `keys` holds each generation key once unwrapped.
-fn version_decrypts(
+/// The generation key in the file at `dek_path`, unwrapped once per derive
+/// into `keys`, as `Vault` reads it to decrypt a shared version. `None` when
+/// the file holds no key this node unwraps (empty, malformed, or wrapped
+/// under another KMS key): its versions are left underived, like those of a
+/// missing file, so one unusable local file holds up no other version. A
+/// file that cannot be read fails the derive, as the vault document does,
+/// and the refold is retried (section 6.4).
+fn generation_key<'k>(
     state: &StateDir,
     kms: &(dyn Kms + Send + Sync),
     dek_path: &str,
-    keys: &mut HashMap<String, SecretBytes>,
-    (env_id, secret_id, version_id): (&str, &str, &str),
-    record: &Value,
-) -> Result<bool> {
+    keys: &'k mut HashMap<String, Option<SecretBytes>>,
+) -> Result<Option<&'k SecretBytes>> {
     if !keys.contains_key(dek_path) {
-        let wrapped = crate::kms::WrappedKey::from_dict(&state.read_json(dek_path, Value::Null)?)?;
-        keys.insert(dek_path.to_owned(), kms.unwrap(&wrapped)?);
+        let bytes = state.read_bytes(dek_path)?;
+        let key = std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| crate::pyjson::loads(text).ok())
+            .filter(|doc| !json_falsy(doc))
+            .and_then(|doc| crate::kms::WrappedKey::from_dict(&doc).ok())
+            .and_then(|wrapped| kms.unwrap(&wrapped).ok());
+        keys.insert(dek_path.to_owned(), key);
     }
-    let Some(entry) = record.as_object() else {
-        return Ok(false);
-    };
-    Ok(envelope::decrypt_secret(
-        keys[dek_path].expose(),
-        env_id,
-        secret_id,
-        version_id,
-        entry,
-    )
-    .map(SecretBytes::new)
-    .is_ok())
+    Ok(keys.get(dek_path).and_then(Option::as_ref))
 }
 
 /// Port of `_derive_vault`. Every subscript and `.get` reproduces Python's
@@ -2727,7 +2724,7 @@ fn derive_vault(
         .or_insert_with(|| json!({}))
         .clone();
     // Each generation's key, unwrapped once; zeroized when dropped.
-    let mut generation_keys: HashMap<String, SecretBytes> = HashMap::new();
+    let mut generation_keys: HashMap<String, Option<SecretBytes>> = HashMap::new();
     // `for secret_id, entry in document["secrets"].items()`.
     let secrets = py_getitem_map(document, "secrets")?
         .as_object()
@@ -2788,37 +2785,51 @@ fn derive_vault(
                 }
                 continue;
             }
-            // Nor one that does not decrypt under its generation: every
-            // all-vault scan would fail on it (issue #57).
-            if let Some(kms) = kms
-                && !version_decrypts(
-                    state,
-                    kms,
-                    &dek_path,
-                    &mut generation_keys,
-                    (env_id, secret_id, version_id),
-                    record,
-                )?
-            {
-                if let Some(audit) = audit {
-                    audit.record(
-                        "team_op_skipped",
-                        RecordArgs {
-                            result: Some("skipped"),
-                            reason: Some("ciphertext_invalid"),
-                            extra: vec![("env_id", json!(env_id)), ("secret_id", json!(secret_id))],
-                            ..Default::default()
-                        },
-                    )?;
-                }
-                continue;
-            }
             let number = local_number.to_string();
             let nonce = py_getitem(record, "nonce")?.clone();
             let ciphertext = py_getitem(record, "ciphertext")?.clone();
             let created_at = local_created_at(&secrets_doc, secret_id, Some(&number))?;
             let status = py_getitem(record, "status")?.clone();
             let public = python_dict_object(record.as_object().and_then(|r| r.get("public")))?;
+            // Nor one this node cannot decrypt, which every all-vault scan
+            // would fail on (issue #57). Checked after Python's subscripts,
+            // so a malformed record still fails where Python raised.
+            if let Some(kms) = kms {
+                let skipped = match generation_key(state, kms, &dek_path, &mut generation_keys)? {
+                    None => Some("generation_unavailable"),
+                    Some(key) => {
+                        let decrypts = record.as_object().is_some_and(|entry| {
+                            envelope::decrypt_secret(
+                                key.expose(),
+                                env_id,
+                                secret_id,
+                                version_id,
+                                entry,
+                            )
+                            .map(SecretBytes::new)
+                            .is_ok()
+                        });
+                        (!decrypts).then_some("ciphertext_invalid")
+                    }
+                };
+                if let Some(reason) = skipped {
+                    if let Some(audit) = audit {
+                        audit.record(
+                            "team_op_skipped",
+                            RecordArgs {
+                                result: Some("skipped"),
+                                reason: Some(reason),
+                                extra: vec![
+                                    ("env_id", json!(env_id)),
+                                    ("secret_id", json!(secret_id)),
+                                ],
+                                ..Default::default()
+                            },
+                        )?;
+                    }
+                    continue;
+                }
+            }
             local_versions.insert(
                 number,
                 json!({

@@ -989,6 +989,30 @@ mod retry_tests {
         assert_eq!(sync_poll_audits(&f, &late), 2);
     }
 
+    /// Issue #49: an environment whose first refold fails is loaded as well,
+    /// so that failure is audited although for the same reason as its load
+    /// failure, and the polls retrying the refold are not.
+    #[test]
+    fn a_refold_failing_at_registration_after_a_load_failure_is_audited() {
+        let f = owner_with_admin_peer();
+        let late = another_environment(&f, "late", false);
+        let peers = f.ctx.state.path.join(format!("team/{late}/peers.json"));
+        std::fs::write(&peers, b"[1]").unwrap();
+        assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        assert_eq!(sync_poll_audits(&f, &late), 1);
+        std::fs::remove_file(&peers).unwrap();
+        let restore = fail_refolds(&f);
+        assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        assert!(f.team.known_envs().contains(&late));
+        assert_eq!(sync_poll_audits(&f, &late), 2);
+        for _ in 0..3 {
+            *f.team.last_discovery.lock().unwrap() = Instant::now() - Duration::from_secs(2);
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert_eq!(sync_poll_audits(&f, &late), 2);
+        restore();
+    }
+
     /// Section 6.4: while its poll fails, an environment still closes its due
     /// sessions, so a drained device's window stays bounded (section 4.4),
     /// but asks no peer for anything. Once `deferred/` reads again, the peer
@@ -4802,16 +4826,22 @@ impl TeamSync {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .contains_key(&id);
-            match self.register_env(&id) {
-                Err(error) => {
-                    self.note_poll_failure(&id, Some(&error));
-                    failed.get_or_insert(error);
-                }
-                // Loaded now: a load failure noted before cannot hide the
-                // next failure, whatever its reason (issue #49). One already
-                // loaded keeps what its polls noted.
-                Ok(()) if !known => self.note_poll_failure(&id, None),
-                Ok(()) => {}
+            let registered = self.register_env(&id);
+            // Loaded now, even if its first refold failed: a load failure
+            // noted before cannot hide the next failure, whatever its reason
+            // (issue #49). One already loaded keeps what its polls noted.
+            if !known
+                && self
+                    .envs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&id)
+            {
+                self.note_poll_failure(&id, None);
+            }
+            if let Err(error) = registered {
+                self.note_poll_failure(&id, Some(&error));
+                failed.get_or_insert(error);
             }
         }
         failed.map_or(Ok(()), Err)

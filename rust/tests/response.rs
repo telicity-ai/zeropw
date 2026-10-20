@@ -997,17 +997,19 @@ fn notify_config_rejects_header_and_smtp_command_injection() {
 }
 
 /// Issue #57: when the vault cannot be scanned, a rendered message is not
-/// taken as clean: delivery fails without a socket and the stored
-/// assessment is redacted.
+/// taken as clean: delivery waits without a socket, retried like a failed
+/// one, and the stored assessment is redacted. Once the vault scans again,
+/// the due retry sends.
 #[test]
-fn a_leak_check_that_cannot_scan_blocks_delivery_and_redacts() {
+fn a_leak_check_that_cannot_scan_holds_delivery_and_redacts() {
     let (_tmp, ctx) = fixture();
     ctx.policy.create_principal("agent-1", "box-1").unwrap();
     let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
-    let mut vault = ctx
+    let intact = ctx
         .state
         .read_json(zeropw::vault::VAULT_DOC, Value::Null)
         .unwrap();
+    let mut vault = intact.clone();
     let versions = vault["secrets"]["gh-token"]["versions"]
         .as_object_mut()
         .unwrap();
@@ -1022,12 +1024,29 @@ fn a_leak_check_that_cannot_scan_blocks_delivery_and_redacts() {
     let port = listener.local_addr().unwrap().port();
     ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"]})).unwrap();
     notify::deliver(&ctx, &mut i).unwrap();
-    assert_eq!(i.notification["status"], "failed");
-    assert_eq!(i.notification["reason"], "leak_check_unavailable");
+    assert_eq!(i.notification["status"], "pending");
+    assert_eq!(i.notification["last_error"], "leak_check_unavailable");
     listener.set_nonblocking(true).unwrap();
     assert!(listener.accept().is_err());
+    // A due retry scans again and still does not send.
+    assert_eq!(notify::retry_pending(&ctx, 1_700_000_400.0).unwrap(), 1);
+    assert!(listener.accept().is_err());
     let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.notification["status"], "pending");
+    assert_eq!(stored.notification["attempts"], 2);
     assert_eq!(stored.assessment, json!({"redacted":true}));
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &intact)
+        .unwrap();
+    listener.set_nonblocking(false).unwrap();
+    let receiver = smtp_server(listener, false);
+    assert_eq!(notify::retry_pending(&ctx, 1_700_001_000.0).unwrap(), 1);
+    assert_eq!(
+        incident::get_incident(&ctx, &i.id).unwrap().notification["status"],
+        "sent"
+    );
+    let (_, message) = receiver.join().unwrap();
+    assert!(!message.is_empty());
 }
 
 #[test]

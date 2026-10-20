@@ -6,14 +6,19 @@
 //! at the same points. The per-case outcome (error or success) and the
 //! well-formed case's resulting state (vault and connections documents with
 //! wall-clock timestamps normalized, DEK files, audit records) were measured
-//! against CPython 3.12 and are pinned here.
+//! against CPython 3.12 and are pinned here. The port derives only a version
+//! that decrypts under its generation (issue #57), which Python did not
+//! check, so the version is sealed under the key the template wraps for its
+//! generation; Python copied `nonce` and `ciphertext` as given.
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zeropw::clock;
 use zeropw::context::{Config, Context};
+use zeropw::team::envelope;
 use zeropw::team::fold::{self as F, FoldResult};
 use zeropw::team::identity::DeviceKey;
 
@@ -21,6 +26,13 @@ const ENV: &str = "envaaaaaaaaaaaaaaaaaaaaaaaaa-0123456789abcdef0123456789abcdef
 const GEN: &str = "00000000000000aa";
 const V1: &str = "aaaaaaaaaaaaaaaa";
 const FIXED_TS: &str = "2026-01-01T00:00:00Z";
+/// `GEN`'s key, which the template wraps under its KMS.
+const GENERATION_KEY: [u8; 32] = [7; 32];
+
+/// `V1`'s `nonce` and `ciphertext`: a synthetic value sealed under `GEN`.
+static SEALED_V1: LazyLock<serde_json::Map<String, Value>> = LazyLock::new(|| {
+    envelope::encrypt_secret(&GENERATION_KEY, ENV, "s1", V1, b"synthetic-parity-value").unwrap()
+});
 
 fn connection(id: &str) -> Value {
     json!({"id": id, "project": "demo", "environment": "dev", "service": "github",
@@ -48,8 +60,8 @@ fn base_document() -> Value {
         "dek": {"current": GEN, "generations": {GEN: {"wraps": {"zzzzzzzzzzzzzzzzzzzzzzzzzz": {"eph_pub": "AAAA"}}}}},
         "connections": {"gh": connection("gh")},
         "secrets": {"s1": {"kind": "api_key", "active_version": V1, "versions": {
-            V1: {"status": "active", "generation": GEN, "nonce": "AAAA", "ciphertext": "AAAA",
-                "public": {"label": "x"}}}}},
+            V1: {"status": "active", "generation": GEN, "nonce": SEALED_V1["nonce"],
+                "ciphertext": SEALED_V1["ciphertext"], "public": {"label": "x"}}}}},
     })
 }
 
@@ -371,7 +383,10 @@ fn derive_local_fails_closed_exactly_where_python_raised() {
         .unwrap();
         DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
         ctx.state
-            .write_json(&format!("team/{ENV}/dek/{GEN}.json"), &json!({}))
+            .write_json(
+                &format!("team/{ENV}/dek/{GEN}.json"),
+                &ctx.kms.wrap(&GENERATION_KEY).unwrap().to_dict(),
+            )
             .unwrap();
     }
     for (i, (name, document, order, vault_doc, connections_doc)) in cases.iter().enumerate() {
@@ -525,10 +540,10 @@ fn base_expected() -> Value {
        "shared_env": ENV,
        "versions": {
         "1": {
-         "ciphertext": "AAAA",
+         "ciphertext": SEALED_V1["ciphertext"],
          "created_at": "<now>",
          "generation": GEN,
-         "nonce": "AAAA",
+         "nonce": SEALED_V1["nonce"],
          "public": {
           "label": "x"
          },
