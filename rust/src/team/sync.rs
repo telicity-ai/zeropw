@@ -1322,16 +1322,9 @@ mod retry_tests {
         let f = retrying_refolds_at_once();
         let peer = f.peer_key.fingerprint().unwrap();
         f.team.poll().unwrap();
-        let active = || f.team.is_active_member(&f.env_id, &peer);
-        assert!(active());
-        let fact = sign_fact(
-            &f.peer_key,
-            &f.env_id,
-            "member_removed",
-            json!({"fingerprint":peer}),
-            "10000-0000",
-        )
-        .unwrap();
+        let listed = || f.team.document(&f.env_id).unwrap()["members"][&peer]["status"] == "active";
+        assert!(listed());
+        let fact = removal_fact(&f);
         let restore = fail_refolds(&f);
         let received = f.team.handle_fact(
             &f.env_id,
@@ -1343,11 +1336,87 @@ mod retry_tests {
         for _ in 0..3 {
             assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
         }
-        assert!(active());
+        assert!(listed());
         restore();
         f.team.poll().unwrap();
-        assert!(!active());
+        assert!(!listed());
         assert_eq!(fact_audits(&f, "team_fact_apply"), 1);
+    }
+
+    /// `f`'s admin peer removing itself.
+    fn removal_fact(f: &OwnerWithAdminPeer) -> Fact {
+        let peer = f.peer_key.fingerprint().unwrap();
+        sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap()
+    }
+
+    /// While the refold after a removal fails, the document still lists the
+    /// removed device as active, but its stored removal fact refuses it all
+    /// the same: no handshake with it is accepted, a PEERS message does not
+    /// make it a dial candidate again, and the poll does not dial it.
+    #[test]
+    fn a_removal_fact_refuses_the_device_while_its_refold_fails() {
+        let f = retrying_refolds_at_once();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_some());
+        let restore = fail_refolds(&f);
+        let fact = removal_fact(&f);
+        let received = f.team.handle_fact(
+            &f.env_id,
+            &f.session,
+            &json!({"type":"FACT","fact":fact.to_dict()}),
+        );
+        assert_eq!(received.unwrap_err().reason, "state_corrupt");
+        assert_eq!(
+            f.team.document(&f.env_id).unwrap()["members"][&peer]["status"],
+            "active"
+        );
+        assert!(f.team.membership(&f.env_id, &peer).is_none());
+        assert!(!f.team.is_active_member(&f.env_id, &peer));
+        let address = "127.0.0.1:9";
+        let mut peers = Map::new();
+        peers.insert(peer.clone(), json!([address]));
+        f.team
+            .handle_peers(&f.env_id, &json!({"type":"PEERS","peers":peers}));
+        let candidates = |f: &OwnerWithAdminPeer| {
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .candidate_addresses
+                .get(&peer)
+                .cloned()
+        };
+        assert_eq!(candidates(&f), None);
+        // As if it had been learned before the removal.
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .candidate_addresses
+            .entry(peer.clone())
+            .or_default()
+            .insert(address.into());
+        let sent = f.recorder.sent.lock().unwrap().len();
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), sent);
+        {
+            // Neither wired nor refused: not dialed at all.
+            let envs = f.team.envs.lock().unwrap();
+            let env = &envs[&f.env_id];
+            assert!(!env.sessions.contains_key(&peer));
+            assert!(!env.dial_pending.contains_key(&peer));
+            assert!(!env.next_attempt.contains_key(&peer));
+        }
+        restore();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_none());
     }
 
     /// Issue #51: an environment whose first refold fails as it is
@@ -4457,6 +4526,14 @@ impl EnvState {
             refold_failure: None,
         }
     }
+    /// `fp`'s member entry while the device is a member to talk to: active
+    /// in the document, with no stored removal fact. A refold that failed
+    /// leaves the document behind the facts, so the fact alone refuses the
+    /// device until a refold marks it removed.
+    fn active_member(&self, fp: &str) -> Option<&Value> {
+        let member = &self.document["members"][fp];
+        (member["status"] == "active" && !self.facts.removed_members.contains(fp)).then_some(member)
+    }
 }
 
 pub struct TeamSync {
@@ -4964,10 +5041,7 @@ impl TeamSync {
     }
     fn membership(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
         let envs = self.envs.lock().ok()?;
-        let member = &envs.get(env_id)?.document["members"][fp];
-        if member["status"] != "active" {
-            return None;
-        }
+        let member = envs.get(env_id)?.active_member(fp)?;
         let record = DeviceRecord::from_dict(&member["device"]).ok()?;
         (record.fingerprint() == fp).then_some(record)
     }
@@ -6231,7 +6305,7 @@ impl TeamSync {
             return;
         };
         for (fp, addrs) in peers {
-            if fp == &mine || env.document["members"][fp]["status"] != "active" {
+            if fp == &mine || env.active_member(fp).is_none() {
                 continue;
             }
             if let Some(addrs) = addrs.as_array() {
@@ -6698,9 +6772,9 @@ impl TeamSync {
                 .as_object()
                 .into_iter()
                 .flat_map(|m| m.iter())
-                .filter(|(fp, m)| {
+                .filter(|(fp, _)| {
                     *fp != &mine
-                        && m["status"] == "active"
+                        && env.active_member(fp).is_some()
                         // Nor one whose session closed above: it is redialed
                         // from the next tick, once that session's receiver has
                         // counted a refused dial (issue #14).
