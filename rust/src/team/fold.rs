@@ -4224,7 +4224,7 @@ mod tests {
             "deferred"
         );
         assert_eq!(store.all_commits().unwrap(), vec![c1.clone()]);
-        let released = store.release_deferred(far_future).unwrap();
+        let released = store.release_deferred(far_future, None).unwrap();
         assert_eq!(
             released
                 .iter()
