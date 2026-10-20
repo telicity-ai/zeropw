@@ -101,6 +101,52 @@ fn connection_create_commit(
     C::sign_commit(author, env_id, seq, hlc, &BTreeMap::new(), vec![op]).unwrap()
 }
 
+/// `checked` carrying `ops` instead, signed without checking them, as a
+/// client other than this build can.
+fn resigned(author: &DeviceKey, checked: Commit, ops: Vec<Value>) -> Commit {
+    let unsigned = Commit {
+        ops,
+        sig: String::new(),
+        ..checked
+    };
+    let sig = author
+        .sign(&unsigned.canonical_json(false).unwrap())
+        .unwrap();
+    Commit {
+        sig: zeropw::pybase64::b64encode(&sig),
+        ..unsigned
+    }
+}
+
+/// A `connection.create` signed without checking it, as a client other than
+/// this build can: this build does not sign its id (issue #54).
+fn unchecked_connection_create(
+    env_id: &str,
+    author: &DeviceKey,
+    seq: i128,
+    hlc: &str,
+    conn_id: &str,
+) -> Commit {
+    let checked = simple_connection_create(env_id, author, seq, hlc, "placeholder");
+    let mut ops = checked.ops.clone();
+    ops[0]["id"] = json!(conn_id);
+    resigned(author, checked, ops)
+}
+
+/// A `secret.put_version` of `secret_id` nesting `depth` levels, its
+/// `public` metadata one fewer.
+fn put_version_nested(env_id: &str, dek: &[u8], secret_id: &str, depth: usize) -> Value {
+    let version_id = random_hex(8);
+    let ct =
+        envelope::encrypt_secret(dek, env_id, secret_id, &version_id, SYNTHETIC_SECRET).unwrap();
+    let mut public = json!({});
+    for _ in 1..depth - 1 {
+        public = json!({"a": public});
+    }
+    json!({"op": "secret.put_version", "secret_id": secret_id, "kind": "api_key",
+           "generation_id": GEN0, "version_id": version_id, "ciphertext": ct, "public": public})
+}
+
 fn simple_connection_create(
     env_id: &str,
     author: &DeviceKey,
@@ -412,6 +458,127 @@ fn connection_create_referencing_undeclared_secret_skipped() {
             .iter()
             .any(|(_, _, r)| r == "secret_not_found")
     );
+}
+
+/// Issue #54: an admin's `connection.create` with an id no derived connection
+/// can carry -- this build does not sign one, but receipt stores one -- is
+/// skipped by the fold, so the derive of the rest goes on.
+#[test]
+fn a_connection_id_derive_refuses_is_skipped() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let bad = unchecked_connection_create(&env_id, &owner, 2, "2000-0000", "GH");
+    let good = simple_connection_create(&env_id, &owner, 3, "3000-0000", "gh");
+    let result = derive(&ctx, &owner, vec![c1, bad, good]);
+    let connections = result.document["connections"].as_object().unwrap();
+    assert!(connections.contains_key("gh") && !connections.contains_key("GH"));
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|(_, _, r)| r == "invalid_connection_id")
+    );
+    let derived = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert!(derived.get("gh").is_some() && derived.get("GH").is_none());
+}
+
+/// Issue #54: a document an earlier build folded with such a connection --
+/// a compaction snapshot can hold one -- derives the others and skips that
+/// one, audited, instead of failing the whole derive.
+#[test]
+fn a_document_holding_a_connection_id_derive_refuses_derives_the_rest() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let good = simple_connection_create(&env_id, &owner, 2, "2000-0000", "gh");
+    let mut result = F::fold(&env_id, vec![c1, good], None, None, None, None).unwrap();
+    let mut bad = result.document["connections"]["gh"].clone();
+    bad["id"] = json!("GH");
+    result.document["connections"]["GH"] = bad;
+    F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .unwrap();
+    let derived = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert!(derived.get("gh").is_some() && derived.get("GH").is_none());
+    let skipped = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_op_skipped" && r["reason"] == "invalid_connection_id")
+        .count();
+    assert_eq!(skipped, 1);
+}
+
+/// Issue #54: an op nested deeper than a backup can hold -- this build does
+/// not sign one, but receipt stores one -- is skipped by the fold, so the
+/// rest, its author's later commit included, derives; the deepest a peer
+/// can deliver used to fail every derive. One at the bound (984 levels) is
+/// folded, derived, snapshotted and backed up.
+#[test]
+fn an_op_nested_too_deep_is_skipped_and_one_at_the_bound_is_kept() {
+    on_a_large_stack(|| {
+        let (tmp, ctx) = setup();
+        let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+        // A COMMIT message holds its ops three levels down.
+        let delivered = pyjson::MAX_JSON_DEPTH - 3;
+        let placeholder = op_commit(
+            &owner,
+            &env_id,
+            2,
+            "2000-0000",
+            vec![put_version_nested(&env_id, &dek, "deep", 2)],
+        );
+        let deep = resigned(
+            &owner,
+            placeholder,
+            vec![put_version_nested(&env_id, &dek, "deep", delivered)],
+        );
+        let edge = op_commit(
+            &owner,
+            &env_id,
+            3,
+            "3000-0000",
+            // The most a backup holds: six levels above the op's metadata.
+            vec![put_version_nested(
+                &env_id,
+                &dek,
+                "edge",
+                pyjson::MAX_JSON_DEPTH - 6,
+            )],
+        );
+        let result = derive(&ctx, &owner, vec![c1, deep, edge]);
+        let skipped: Vec<&str> = result.skipped.iter().map(|(_, _, r)| r.as_str()).collect();
+        assert_eq!(skipped, ["op_too_deep"]);
+        let secrets = &result.document["secrets"];
+        assert!(secrets.get("deep").is_none());
+        assert!(secrets.get("edge").is_some() && secrets.get("gh-token").is_some());
+        let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+        assert!(vault["secrets"].get("deep").is_none());
+        assert!(vault["secrets"].get("edge").is_some());
+        F::save_snapshot(ctx.state, &env_id, &PyInt::from(3), &result).unwrap();
+        ctx.vault.backup(&tmp.path().join("backup.json")).unwrap();
+    });
+}
+
+/// Runs `body` on a thread with a 16 MiB stack. Cloning and comparing a
+/// JSON object nested near `MAX_JSON_DEPTH` recurses once per level; a
+/// release build does that on a 2 MiB thread with about three times the
+/// depth to spare, a debug build takes several times the stack per level.
+fn on_a_large_stack(body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(body)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

@@ -1350,6 +1350,140 @@ mod retry_tests {
         assert_eq!(fact_audits(&f, "team_fact_apply"), 1);
     }
 
+    /// While the refold after a removal fails, the document still lists the
+    /// removed device as active, but its stored removal fact refuses it all
+    /// the same: no handshake with it is accepted, a PEERS message does not
+    /// make it a dial candidate again, and the poll does not dial it.
+    #[test]
+    fn a_removal_fact_refuses_the_device_while_its_refold_fails() {
+        let f = retrying_refolds_at_once();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_some());
+        let restore = fail_refolds(&f);
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
+        let received = f.team.handle_fact(
+            &f.env_id,
+            &f.session,
+            &json!({"type":"FACT","fact":fact.to_dict()}),
+        );
+        assert_eq!(received.unwrap_err().reason, "state_corrupt");
+        assert_eq!(
+            f.team.document(&f.env_id).unwrap()["members"][&peer]["status"],
+            "active"
+        );
+        assert!(f.team.membership(&f.env_id, &peer).is_none());
+        // What the document lists, as `team join` and callers expect.
+        assert!(f.team.is_active_member(&f.env_id, &peer));
+        let address = "127.0.0.1:9";
+        let mut peers = Map::new();
+        peers.insert(peer.clone(), json!([address]));
+        f.team
+            .handle_peers(&f.env_id, &json!({"type":"PEERS","peers":peers}));
+        let candidates = |f: &OwnerWithAdminPeer| {
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .candidate_addresses
+                .get(&peer)
+                .cloned()
+        };
+        assert_eq!(candidates(&f), None);
+        // As if it had been learned before the removal.
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .candidate_addresses
+            .entry(peer.clone())
+            .or_default()
+            .insert(address.into());
+        let sent = f.recorder.sent.lock().unwrap().len();
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(f.recorder.sent.lock().unwrap().len(), sent);
+        {
+            // Not dialed at all: a dial would get the peer's session from
+            // the stub transport, store the address and close the session
+            // it may not accept.
+            let envs = f.team.envs.lock().unwrap();
+            let env = &envs[&f.env_id];
+            assert!(!env.sessions.contains_key(&peer));
+            assert!(!env.dial_pending.contains_key(&peer));
+            assert!(!env.next_attempt.contains_key(&peer));
+        }
+        assert!(!f.session.is_closed());
+        let persisted = f
+            .ctx
+            .state
+            .read_json(&format!("team/{}/peers.json", f.env_id), json!({}))
+            .unwrap();
+        assert!(persisted.get(&peer).is_none(), "{persisted}");
+        restore();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_none());
+    }
+
+    /// A handshake that passed the membership check before the device's
+    /// removal fact was stored is not accepted as a session afterwards.
+    #[test]
+    fn a_session_whose_handshake_preceded_a_removal_fact_is_refused() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_some());
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":fact.to_dict()}),
+            )
+            .unwrap();
+        // As if it had also consumed a fresh invitation.
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .pending_invites
+            .insert(peer.clone(), ("user".into(), "bob".into()));
+        let late = recording_session(f.peer_key.record().unwrap(), &f.env_id);
+        assert!(!f.team.accept_session(&f.env_id, late.clone(), true));
+        assert!(late.is_closed());
+        {
+            let envs = f.team.envs.lock().unwrap();
+            let env = &envs[&f.env_id];
+            assert!(!env.sessions.contains_key(&peer));
+            assert!(!env.pending_invites.contains_key(&peer));
+        }
+        let refused: Vec<Value> = f
+            .ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "team_handshake_failed")
+            .collect();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0]["reason"], "not_member");
+        assert_eq!(refused[0]["fingerprint"], json!(peer));
+    }
+
     /// Issue #51: an environment whose first refold fails as it is
     /// registered is retried by the poll, which fails until a refold
     /// succeeds instead of reporting success with an empty document.
@@ -4457,6 +4591,14 @@ impl EnvState {
             refold_failure: None,
         }
     }
+    /// `fp`'s member entry while the device is a member to talk to: active
+    /// in the document, with no stored removal fact. A refold that failed
+    /// leaves the document behind the facts, so the fact alone refuses the
+    /// device until a refold marks it removed.
+    fn active_member(&self, fp: &str) -> Option<&Value> {
+        let member = &self.document["members"][fp];
+        (member["status"] == "active" && !self.facts.removed_members.contains(fp)).then_some(member)
+    }
 }
 
 pub struct TeamSync {
@@ -4964,12 +5106,9 @@ impl TeamSync {
     }
     fn membership(&self, env_id: &str, fp: &str) -> Option<DeviceRecord> {
         let envs = self.envs.lock().ok()?;
-        let member = &envs.get(env_id)?.document["members"][fp];
-        if member["status"] != "active" {
-            return None;
-        }
-        let record = DeviceRecord::from_dict(&member["device"]).ok()?;
-        (record.fingerprint() == fp).then_some(record)
+        let env = envs.get(env_id)?;
+        env.active_member(fp)?;
+        member_device_record(&env.document, fp)
     }
     fn audit_handshake_failed(&self, reason: &str, fp: Option<&str>) {
         let _ = self.ctx.audit.record(
@@ -5008,8 +5147,17 @@ impl TeamSync {
             .map(|e| e.document.clone())
             .ok_or_else(|| Error::not_found("team_env_unknown"))
     }
+    /// `fp` is an active member as the document lists it. Sessions also
+    /// refuse a device whose removal fact no refold has folded in yet
+    /// ([`EnvState::active_member`]).
     pub fn is_active_member(&self, env_id: &str, fp: &str) -> bool {
-        self.membership(env_id, fp).is_some()
+        let Ok(envs) = self.envs.lock() else {
+            return false;
+        };
+        envs.get(env_id).is_some_and(|env| {
+            env.document["members"][fp]["status"] == "active"
+                && member_device_record(&env.document, fp).is_some()
+        })
     }
     pub fn set_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
         if !valid_fp(fp) || address.is_empty() {
@@ -5339,6 +5487,18 @@ impl TeamSync {
             session.close();
             return false;
         };
+        // A handshake that passed the membership check before the device's
+        // removal fact was stored ends here: `drain_removed` drains only the
+        // sessions already accepted.
+        if env.facts.removed_members.contains(&fp) {
+            env.pending_invites.remove(&fp);
+            drop(envs);
+            session.close();
+            // As that membership check now would; audited once the envs lock
+            // is released, as audit writes take the state lock.
+            self.audit_handshake_failed("not_member", Some(&fp));
+            return false;
+        }
         if let Some(current) = env.sessions.get(&fp) {
             if Arc::ptr_eq(current, &session) {
                 return true;
@@ -6231,7 +6391,7 @@ impl TeamSync {
             return;
         };
         for (fp, addrs) in peers {
-            if fp == &mine || env.document["members"][fp]["status"] != "active" {
+            if fp == &mine || env.active_member(fp).is_none() {
                 continue;
             }
             if let Some(addrs) = addrs.as_array() {
@@ -6698,9 +6858,9 @@ impl TeamSync {
                 .as_object()
                 .into_iter()
                 .flat_map(|m| m.iter())
-                .filter(|(fp, m)| {
+                .filter(|(fp, _)| {
                     *fp != &mine
-                        && m["status"] == "active"
+                        && env.active_member(fp).is_some()
                         // Nor one whose session closed above: it is redialed
                         // from the next tick, once that session's receiver has
                         // counted a refused dial (issue #14).
