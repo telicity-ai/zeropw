@@ -889,6 +889,46 @@ fn recover_again_rewraps_team_keys_an_earlier_one_left() {
     );
 }
 
+/// A `recover` that fails after its new KMS key is in place, here writing
+/// the device key, says so in its record, and running it again completes it.
+#[test]
+fn a_recover_that_stops_at_the_team_keys_is_recorded_and_completed_again() {
+    let (_tmp, mut ctx) = setup();
+    let (owner, commits) = two_owned_envs(&ctx);
+    // The temporary file `StateDir::write_json` writes the device key to.
+    let thread: String = format!("{:?}", std::thread::current().id())
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect();
+    let blocked = ctx.state.path.join(format!(
+        "team/.device.key.{}.{thread}.tmp",
+        std::process::id()
+    ));
+    std::fs::create_dir(&blocked).unwrap();
+    let key_id = ctx.kms.key_id().to_owned();
+    assert!(ctx.recover(RECOVERY).is_err());
+    assert_ne!(ctx.kms.key_id(), key_id);
+    assert!(DeviceKey::load(ctx.state, ctx.kms).is_err());
+    let recover = |ctx: &Context| -> Vec<(Value, Value)> {
+        ctx.audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "recover")
+            .map(|r| (r["result"].clone(), r["state"].clone()))
+            .collect()
+    };
+    assert_eq!(recover(&ctx), [(json!("failed"), json!("incomplete"))]);
+
+    std::fs::remove_dir(&blocked).unwrap();
+    ctx.recover(RECOVERY).unwrap();
+    team_keys_load(&ctx, &owner, &commits);
+    assert_eq!(
+        recover(&ctx)[1],
+        (json!("ok"), json!("grants_revoked_handles_rotated"))
+    );
+}
+
 #[test]
 fn local_connection_survives_colliding_shared_id() {
     let (_tmp, ctx) = setup();

@@ -560,17 +560,23 @@ impl Context {
         let old_kms = self.kms;
         self.kms = new_kms;
         self.vault = vault;
-        let revoked = self.policy.revoke_all()?;
-        self.rotate_handle_key()?;
-        // The team key material the old key wrapped, like the vault DEK, so
-        // the node stays in its teams (issue #59); keys retired earlier too,
-        // so running `recover` again completes one that stopped here or that
-        // an earlier build ran. Invitations go, as grants do.
-        let retired = retired_kms_keys(self.state);
-        let mut from: Vec<&(dyn Kms + Send + Sync)> = vec![old_kms];
-        from.extend(retired.iter().map(|kms| kms as &(dyn Kms + Send + Sync)));
-        crate::team::identity::rewrap_local_keys(self.state, &from, new_kms)?;
-        crate::team::membership::revoke_pending_invites(self)?;
+        let revoked = match self.finish_recover(old_kms, new_kms) {
+            Ok(revoked) => revoked,
+            Err(error) => {
+                // The new key is in place: running `recover` again completes
+                // this one.
+                let _ = self.audit.record(
+                    "recover",
+                    RecordArgs {
+                        result: Some("failed"),
+                        reason: Some(&error.reason),
+                        extra: vec![("state", json!("incomplete"))],
+                        ..Default::default()
+                    },
+                );
+                return Err(error);
+            }
+        };
         self.audit.record(
             "recover",
             RecordArgs {
@@ -582,6 +588,27 @@ impl Context {
                 ..Default::default()
             },
         )?;
+        Ok(revoked)
+    }
+
+    /// What `recover` does once the new KMS key is in place: grants revoked,
+    /// handle key rotated, then the team key material the old key wrapped,
+    /// like the vault DEK, so the node stays in its teams (issue #59). Keys
+    /// retired earlier unwrap too, so running `recover` again completes one
+    /// that stopped here or that an earlier build ran. Invitations go, as
+    /// grants do.
+    fn finish_recover(
+        &self,
+        old_kms: &(dyn Kms + Send + Sync),
+        new_kms: &(dyn Kms + Send + Sync),
+    ) -> Result<usize, Error> {
+        let revoked = self.policy.revoke_all()?;
+        self.rotate_handle_key()?;
+        let retired = retired_kms_keys(self.state);
+        let mut from: Vec<&(dyn Kms + Send + Sync)> = vec![old_kms];
+        from.extend(retired.iter().map(|kms| kms as &(dyn Kms + Send + Sync)));
+        crate::team::identity::rewrap_local_keys(self.state, &from, new_kms)?;
+        crate::team::membership::revoke_pending_invites(self)?;
         Ok(revoked)
     }
 }
