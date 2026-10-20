@@ -502,9 +502,17 @@ pub fn deliver(ctx: &Arc<Context>, i: &mut Incident) -> Result<()> {
         return Ok(());
     };
     let (subject, body) = render_incident_email(i, &iso(Some((ctx.clock)())));
-    if incident::value_leak(ctx, format!("{subject}\n{body}").as_bytes()) {
-        failed(ctx, i, "rendered_value_detected")?;
-        return Ok(());
+    match incident::value_leak(ctx, format!("{subject}\n{body}").as_bytes()) {
+        Ok(false) => {}
+        Ok(true) => {
+            failed(ctx, i, "rendered_value_detected")?;
+            return Ok(());
+        }
+        // Not sent unchecked (issue #57).
+        Err(_) => {
+            failed(ctx, i, "leak_check_unavailable")?;
+            return Ok(());
+        }
     }
     match crate::smtp::send(&config, &subject, &body) {
         Ok(()) => {}

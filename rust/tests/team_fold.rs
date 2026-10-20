@@ -581,6 +581,43 @@ fn on_a_large_stack(body: impl FnOnce() + Send + 'static) {
         .unwrap();
 }
 
+/// Issue #57: a shared version whose ciphertext does not decrypt under its
+/// generation -- here another version's, bound to another secret and
+/// version id -- is not derived, like one whose generation this node lacks,
+/// so the all-vault scan still runs.
+#[test]
+fn a_version_that_does_not_decrypt_is_not_derived() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, dek, c1) = new_env(Some("gh-token"));
+    let foreign =
+        envelope::encrypt_secret(&dek, &env_id, "gh-token", &random_hex(8), SYNTHETIC_SECRET)
+            .unwrap();
+    let op = json!({"op": "secret.put_version", "secret_id": "replayed", "kind": "api_key",
+                    "generation_id": GEN0, "version_id": random_hex(8), "ciphertext": foreign,
+                    "public": {}});
+    let c2 = op_commit(&owner, &env_id, 2, "2000-0000", vec![op]);
+    derive(&ctx, &owner, vec![c1, c2]);
+    let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(vault["secrets"]["replayed"]["versions"], json!({}));
+    assert_eq!(
+        vault["secrets"]["gh-token"]["versions"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    let values = ctx.vault.values_for_trusted_scan().unwrap();
+    assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
+    let skipped = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_op_skipped" && r["reason"] == "ciphertext_invalid")
+        .count();
+    assert_eq!(skipped, 1);
+}
+
 #[test]
 fn local_connection_survives_colliding_shared_id() {
     let (_tmp, ctx) = setup();

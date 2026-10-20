@@ -996,6 +996,40 @@ fn notify_config_rejects_header_and_smtp_command_injection() {
     );
 }
 
+/// Issue #57: when the vault cannot be scanned, a rendered message is not
+/// taken as clean: delivery fails without a socket and the stored
+/// assessment is redacted.
+#[test]
+fn a_leak_check_that_cannot_scan_blocks_delivery_and_redacts() {
+    let (_tmp, ctx) = fixture();
+    ctx.policy.create_principal("agent-1", "box-1").unwrap();
+    let mut i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    let mut vault = ctx
+        .state
+        .read_json(zeropw::vault::VAULT_DOC, Value::Null)
+        .unwrap();
+    let versions = vault["secrets"]["gh-token"]["versions"]
+        .as_object_mut()
+        .unwrap();
+    let record = versions.values_mut().next().unwrap();
+    record["ciphertext"] = json!("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    ctx.state
+        .write_json(zeropw::vault::VAULT_DOC, &vault)
+        .unwrap();
+    assert!(ctx.vault.values_for_trusted_scan().is_err());
+    assert!(incident::value_leak(&ctx, b"nothing secret here").is_err());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"]})).unwrap();
+    notify::deliver(&ctx, &mut i).unwrap();
+    assert_eq!(i.notification["status"], "failed");
+    assert_eq!(i.notification["reason"], "leak_check_unavailable");
+    listener.set_nonblocking(true).unwrap();
+    assert!(listener.accept().is_err());
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.assessment, json!({"redacted":true}));
+}
+
 #[test]
 fn rendered_value_leak_blocks_delivery_without_opening_socket() {
     let (_tmp, ctx) = fixture();

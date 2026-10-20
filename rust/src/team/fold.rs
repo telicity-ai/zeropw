@@ -58,7 +58,7 @@
 //! make goes straight through `state.read_json`/`write_json`, never through
 //! any other `Vault` method.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -67,6 +67,7 @@ use crate::errors::{Error, ErrorClass, Result};
 use crate::kms::Kms;
 use crate::policy;
 use crate::pyint::PyInt;
+use crate::secret::SecretBytes;
 use crate::store::StateDir;
 use crate::vault;
 
@@ -2652,16 +2653,47 @@ fn python_dict_object(value: Option<&Value>) -> Result<Map<String, Value>> {
     Ok(out)
 }
 
+/// The version `record` of a shared secret decrypts under the generation
+/// key stored at `dek_path`, as `Vault` decrypts it for use and for the
+/// all-vault scan; `keys` holds each generation key once unwrapped.
+fn version_decrypts(
+    state: &StateDir,
+    kms: &(dyn Kms + Send + Sync),
+    dek_path: &str,
+    keys: &mut HashMap<String, SecretBytes>,
+    (env_id, secret_id, version_id): (&str, &str, &str),
+    record: &Value,
+) -> Result<bool> {
+    if !keys.contains_key(dek_path) {
+        let wrapped = crate::kms::WrappedKey::from_dict(&state.read_json(dek_path, Value::Null)?)?;
+        keys.insert(dek_path.to_owned(), kms.unwrap(&wrapped)?);
+    }
+    let Some(entry) = record.as_object() else {
+        return Ok(false);
+    };
+    Ok(envelope::decrypt_secret(
+        keys[dek_path].expose(),
+        env_id,
+        secret_id,
+        version_id,
+        entry,
+    )
+    .map(SecretBytes::new)
+    .is_ok())
+}
+
 /// Port of `_derive_vault`. Every subscript and `.get` reproduces Python's
 /// (an uncaught built-in exception aborts `derive_local` before this
 /// function's own `write_json`, after the DEK files `derive_dek_generations`
 /// already wrote).
+#[allow(clippy::too_many_arguments)]
 fn derive_vault(
     document: &Map<String, Value>,
     state: &StateDir,
     env_id: &str,
     version_index: &BTreeMap<String, BTreeMap<String, i64>>,
     audit: Option<&Audit>,
+    kms: Option<&(dyn Kms + Send + Sync)>,
     project: Option<&str>,
     environment: Option<&str>,
 ) -> Result<()> {
@@ -2694,6 +2726,8 @@ fn derive_vault(
         .entry("secrets".to_string())
         .or_insert_with(|| json!({}))
         .clone();
+    // Each generation's key, unwrapped once; zeroized when dropped.
+    let mut generation_keys: HashMap<String, SecretBytes> = HashMap::new();
     // `for secret_id, entry in document["secrets"].items()`.
     let secrets = py_getitem_map(document, "secrets")?
         .as_object()
@@ -2747,6 +2781,31 @@ fn derive_vault(
                         RecordArgs {
                             result: Some("skipped"),
                             reason: Some("generation_unavailable"),
+                            extra: vec![("env_id", json!(env_id)), ("secret_id", json!(secret_id))],
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                continue;
+            }
+            // Nor one that does not decrypt under its generation: every
+            // all-vault scan would fail on it (issue #57).
+            if let Some(kms) = kms
+                && !version_decrypts(
+                    state,
+                    kms,
+                    &dek_path,
+                    &mut generation_keys,
+                    (env_id, secret_id, version_id),
+                    record,
+                )?
+            {
+                if let Some(audit) = audit {
+                    audit.record(
+                        "team_op_skipped",
+                        RecordArgs {
+                            result: Some("skipped"),
+                            reason: Some("ciphertext_invalid"),
                             extra: vec![("env_id", json!(env_id)), ("secret_id", json!(secret_id))],
                             ..Default::default()
                         },
@@ -2894,6 +2953,7 @@ pub fn derive_local(
             &env_id,
             &version_index,
             audit,
+            kms,
             project,
             environment,
         )?;
@@ -3760,7 +3820,16 @@ mod tests {
         let document: Map<String, Value> = json!({"secrets": {}}).as_object().unwrap().clone();
         let version_index: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
         let audit: Option<&Audit> = None;
-        let result = derive_vault(&document, &state, "env", &version_index, audit, None, None);
+        let result = derive_vault(
+            &document,
+            &state,
+            "env",
+            &version_index,
+            audit,
+            None,
+            None,
+            None,
+        );
         assert!(
             result.is_ok(),
             "derive_vault must succeed when document[\"secrets\"] is empty, matching python: {result:?}"
@@ -3803,7 +3872,16 @@ mod tests {
         .clone();
         let version_index: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
         let audit: Option<&Audit> = None;
-        let result = derive_vault(&document, &state, "env", &version_index, audit, None, None);
+        let result = derive_vault(
+            &document,
+            &state,
+            "env",
+            &version_index,
+            audit,
+            None,
+            None,
+            None,
+        );
         assert!(
             result.is_err(),
             "a secrets entry with no \"kind\" must abort the whole derive, not substitute null"
