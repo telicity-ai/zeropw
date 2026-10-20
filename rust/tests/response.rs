@@ -1072,7 +1072,15 @@ fn a_leak_check_that_cannot_scan_holds_delivery() {
     assert_eq!(stored.notification["status"], "pending");
     assert_eq!(stored.notification["attempts"], 2);
     assert_eq!(stored.assessment, assessment);
-    assert!(failed_steps(&stored).contains(&json!("assessment_unchecked")));
+    // Noted once, however many held attempts saved it.
+    let unchecked = json!("assessment_unchecked");
+    assert_eq!(
+        failed_steps(&stored)
+            .iter()
+            .filter(|s| **s == unchecked)
+            .count(),
+        1
+    );
     ctx.state
         .write_json(zeropw::vault::VAULT_DOC, &intact)
         .unwrap();
