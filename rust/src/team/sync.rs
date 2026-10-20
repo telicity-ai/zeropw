@@ -1240,6 +1240,350 @@ mod retry_tests {
         fresh.stop();
     }
 
+    /// Every refold of `f`'s node fails, as with an unreadable local vault,
+    /// until the returned closure restores the vault.
+    fn fail_refolds(f: &OwnerWithAdminPeer) -> impl FnOnce() {
+        let path = f.ctx.state.path.join(crate::vault::VAULT_DOC);
+        let saved = std::fs::read(&path).unwrap();
+        std::fs::write(&path, b"[1]").unwrap();
+        move || std::fs::write(&path, saved).unwrap()
+    }
+    fn retrying_refolds_at_once() -> OwnerWithAdminPeer {
+        owner_with_admin_peer_configured(Config {
+            team_refold_retry_backoff: (0.0, 0.0),
+            ..Config::default()
+        })
+    }
+    fn sync_interval(f: &OwnerWithAdminPeer) -> Value {
+        f.team.document(&f.env_id).unwrap()["settings"]["sync_interval_seconds"].clone()
+    }
+    fn fact_audits(f: &OwnerWithAdminPeer, event: &str) -> usize {
+        f.ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .iter()
+            .filter(|record| record["event"] == event)
+            .count()
+    }
+
+    /// Issue #51: a refold that fails while picking up a local commit is
+    /// retried by every poll until it succeeds. Meanwhile each poll reports
+    /// the failure, audited once, and the commit waits: it is not broadcast.
+    /// Then it is folded and broadcast, once.
+    #[test]
+    fn a_failed_pickup_refold_is_retried_until_it_succeeds() {
+        let f = retrying_refolds_at_once();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        f.team.poll().unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            None,
+            &f.env_id,
+            vec![json!({"op":"settings.update","sync_interval_seconds":31})],
+        )
+        .unwrap();
+        let restore = fail_refolds(&f);
+        let commits = || sent_of_type(&f.recorder, "COMMIT");
+        let before = commits().len();
+        for _ in 0..3 {
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert_ne!(sync_interval(&f), 31);
+        assert_eq!(commits().len(), before);
+        let audited = f
+            .ctx
+            .state
+            .read_lines(crate::audit::AUDIT_FILE, None)
+            .unwrap()
+            .iter()
+            .filter(|line| line.contains("team_sync_poll"))
+            .count();
+        assert_eq!(audited, 1);
+        restore();
+        f.team.poll().unwrap();
+        assert_eq!(sync_interval(&f), 31);
+        let sent = commits();
+        assert_eq!(sent.len(), before + 1);
+        assert_eq!(
+            sent[before]["commit"]["ops"][0]["sync_interval_seconds"],
+            31
+        );
+        f.team.poll().unwrap();
+        assert_eq!(commits().len(), before + 1);
+    }
+
+    /// Issue #51: a refold that fails after a fact arrives -- here a member's
+    /// removal -- is retried by the poll as well, so the removal reaches the
+    /// document once a refold succeeds instead of waiting for the next commit.
+    /// The fact is audited as applied when it arrives all the same.
+    #[test]
+    fn a_failed_refold_after_a_removal_fact_is_retried() {
+        let f = retrying_refolds_at_once();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        let active = || f.team.is_active_member(&f.env_id, &peer);
+        assert!(active());
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
+        let restore = fail_refolds(&f);
+        let received = f.team.handle_fact(
+            &f.env_id,
+            &f.session,
+            &json!({"type":"FACT","fact":fact.to_dict()}),
+        );
+        assert_eq!(received.unwrap_err().reason, "state_corrupt");
+        assert_eq!(fact_audits(&f, "team_fact_apply"), 1);
+        for _ in 0..3 {
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert!(active());
+        restore();
+        f.team.poll().unwrap();
+        assert!(!active());
+        assert_eq!(fact_audits(&f, "team_fact_apply"), 1);
+    }
+
+    /// Issue #51: an environment whose first refold fails as it is
+    /// registered is retried by the poll, which fails until a refold
+    /// succeeds instead of reporting success with an empty document.
+    #[test]
+    fn an_environment_whose_first_refold_fails_is_retried() {
+        let f = retrying_refolds_at_once();
+        let late = another_environment(&f, "late", false);
+        let restore = fail_refolds(&f);
+        assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        assert!(f.team.known_envs().contains(&late));
+        assert!(f.team.document(&late).unwrap().is_null());
+        for _ in 0..3 {
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        restore();
+        f.team.poll().unwrap();
+        assert!(f.team.document(&late).unwrap()["members"].is_object());
+    }
+
+    /// Issue #51: after its first retry a refold that keeps failing is
+    /// retried only as `team_refold_retry_backoff` allows, the wait doubling
+    /// up to the maximum; until then the poll reports the failure, and its
+    /// pickups and releases do not refold.
+    #[test]
+    fn a_failing_refold_is_retried_with_backoff() {
+        let f = owner_with_admin_peer_configured(Config {
+            team_refold_retry_backoff: (1000.0, 4000.0),
+            ..Config::default()
+        });
+        f.team.poll().unwrap();
+        crate::team::membership::author_commit(
+            &f.ctx,
+            None,
+            &f.env_id,
+            vec![json!({"op":"settings.update","sync_interval_seconds":31})],
+        )
+        .unwrap();
+        let restore = fail_refolds(&f);
+        let backoff = || {
+            let mut envs = f.team.envs.lock().unwrap();
+            let failure = envs
+                .get_mut(&f.env_id)
+                .unwrap()
+                .refold_failure
+                .as_mut()
+                .unwrap();
+            let backoff = failure.backoff;
+            // As if the wait were over.
+            failure.retry_at = failure.retry_at.map(|_| Instant::now());
+            backoff
+        };
+        // The pickup's refold fails; the first retry is the next tick.
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        let mut waits = Vec::new();
+        for _ in 0..3 {
+            waits.push(backoff().as_secs());
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert_eq!(waits, [1000, 2000, 4000]);
+        assert_eq!(backoff().as_secs(), 4000);
+        // Due again, but the retry now waits 4000 seconds.
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        restore();
+        // Not yet due: nothing refolds, not even for a released commit.
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        store
+            .defer(&settings_commit(
+                &f.peer_key,
+                &f.env_id,
+                1,
+                commit::now_ms() - 2000,
+            ))
+            .unwrap();
+        let refolds = f.team.refolds_run.load(Ordering::SeqCst);
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(f.team.refolds_run.load(Ordering::SeqCst), refolds);
+        assert!(store.deferred_commits().unwrap().is_empty());
+        assert_ne!(sync_interval(&f), 31);
+        backoff();
+        f.team.poll().unwrap();
+        assert_eq!(sync_interval(&f), 31);
+        assert!(
+            f.team.envs.lock().unwrap()[&f.env_id]
+                .refold_failure
+                .is_none()
+        );
+    }
+
+    /// Issue #52: the poll releases deferred commits with receipt's checks,
+    /// audited in this node's log.
+    #[test]
+    fn the_poll_rejects_a_released_commit_out_of_its_authors_hlc_order() {
+        let f = owner_with_admin_peer();
+        f.team.poll().unwrap();
+        let peer = f.peer_key.fingerprint().unwrap();
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        let now = commit::now_ms();
+        store
+            .defer(&settings_commit(&f.peer_key, &f.env_id, 1, now - 2000))
+            .unwrap();
+        store
+            .defer(&settings_commit(&f.peer_key, &f.env_id, 2, now - 3000))
+            .unwrap();
+        f.team.poll().unwrap();
+        assert_eq!(store.last_seq(&peer).unwrap(), PyInt::from(1));
+        assert!(store.deferred_commits().unwrap().is_empty());
+        let rejected: Vec<Value> = f
+            .ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|record| record["event"] == "team_commit_rejected")
+            .collect();
+        assert_eq!(rejected.len(), 1, "{rejected:?}");
+        assert_eq!(rejected[0]["reason"], "team_hlc_not_monotone");
+        assert_eq!(rejected[0]["fingerprint"], peer);
+    }
+
+    /// Issue #51: a refold that keeps failing -- as a stored commit that no
+    /// refold can derive makes it -- holds up no other step of the poll, nor
+    /// its sync. Each poll reports the failure, and still sends its VECTOR,
+    /// delivers the queued incident and releases the deferred commit that is
+    /// due; only the local commit picked up meanwhile waits for a refold that
+    /// succeeds.
+    #[test]
+    fn a_failing_refold_holds_up_no_other_step_or_the_sync() {
+        let f = owner_with_admin_peer_configured(Config {
+            team_refold_retry_backoff: (0.0, 0.0),
+            team_sync_interval_seconds: Some(0.0),
+            ..Config::default()
+        });
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        f.team.poll().unwrap();
+        let incident = sign_fact(
+            &f.team.device,
+            &f.env_id,
+            "incident",
+            json!({"incident_id":"0123456789abcdef"}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env_id)
+            .unwrap()
+            .incident_outbox
+            .insert(incident.hash().unwrap(), incident);
+        crate::team::membership::author_commit(
+            &f.ctx,
+            None,
+            &f.env_id,
+            vec![json!({"op":"settings.update","sync_interval_seconds":31})],
+        )
+        .unwrap();
+        let store = CommitStore::new(f.ctx.state, &f.env_id);
+        store
+            .defer(&settings_commit(
+                &f.peer_key,
+                &f.env_id,
+                1,
+                commit::now_ms() - 2000,
+            ))
+            .unwrap();
+        let restore = fail_refolds(&f);
+        let sent = |kind: &str| sent_of_type(&f.recorder, kind).len();
+        let (vectors, commits) = (sent("VECTOR"), sent("COMMIT"));
+        for _ in 0..3 {
+            assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        }
+        assert_eq!(sent("VECTOR"), vectors + 3);
+        assert_eq!(sent("INCIDENT"), 1);
+        assert!(store.deferred_commits().unwrap().is_empty());
+        let peer = f.peer_key.fingerprint().unwrap();
+        assert_eq!(store.last_seq(&peer).unwrap(), PyInt::from(1));
+        assert_eq!(sent("COMMIT"), commits);
+        restore();
+        f.team.poll().unwrap();
+        assert_eq!(sync_interval(&f), 31);
+        // The local commit and the released one.
+        assert_eq!(sent("COMMIT"), commits + 2);
+    }
+
+    /// Issue #51: a fact is announced -- audited as applied, relayed and, for
+    /// a removal, sent to the removed device -- as it is stored, also when
+    /// that refold fails; the poll's retry folds it in. Here both local
+    /// paths: a fact this node publishes, and one another process wrote.
+    #[test]
+    fn a_fact_is_announced_although_its_refold_failed() {
+        let f = retrying_refolds_at_once();
+        assert!(f.team.accept_session(&f.env_id, f.session.clone(), true));
+        f.team.poll().unwrap();
+        let announced = || {
+            (
+                fact_audits(&f, "team_fact_apply"),
+                sent_of_type(&f.recorder, "FACT").len(),
+            )
+        };
+        let restore = fail_refolds(&f);
+        let published = f.team.publish_fact(
+            &f.env_id,
+            "connection_disabled",
+            json!({"connection_id":"synthetic-one"}),
+        );
+        assert_eq!(published.unwrap_err().reason, "state_corrupt");
+        assert_eq!(announced(), (1, 1));
+        restore();
+        f.team.poll().unwrap();
+        let restore = fail_refolds(&f);
+        let written = f
+            .team
+            .sign_authorized_fact(
+                &f.env_id,
+                "connection_disabled",
+                json!({"connection_id":"synthetic-two"}),
+            )
+            .unwrap();
+        f.ctx
+            .state
+            .append_line(
+                &format!("team/{}/facts.jsonl", f.env_id),
+                &pyjson::dumps(&written.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert_eq!(announced(), (2, 2));
+        restore();
+        f.team.poll().unwrap();
+        assert_eq!(announced(), (2, 2));
+    }
+
     /// A VECTOR answer the peer's removal interrupts stops there and still
     /// audits the commits it sent.
     #[test]
@@ -1647,7 +1991,7 @@ mod retry_tests {
                     .unwrap(),
             )
             .unwrap();
-        f.team.pick_up_local_facts(&f.env_id).unwrap();
+        f.team.pick_up_local_facts(&f.env_id, false).unwrap();
         assert_eq!(
             f.team.document(&f.env_id).unwrap()["members"][third.fingerprint()]["status"],
             "active"
@@ -1706,10 +2050,10 @@ mod retry_tests {
             }
         });
         for _ in 0..12 {
-            f.team.pick_up_local_facts(&f.env_id).unwrap();
+            f.team.pick_up_local_facts(&f.env_id, false).unwrap();
         }
         writer.join().unwrap();
-        f.team.pick_up_local_facts(&f.env_id).unwrap();
+        f.team.pick_up_local_facts(&f.env_id, false).unwrap();
         assert_eq!(load_facts(&f.ctx, &f.env_id).unwrap().1.len(), 12);
         assert_eq!(
             f.team.envs.lock().unwrap()[&f.env_id]
@@ -1720,7 +2064,7 @@ mod retry_tests {
         );
         let loads = f.team.fact_pickup_loads.load(Ordering::SeqCst);
         for _ in 0..12 {
-            f.team.pick_up_local_facts(&f.env_id).unwrap();
+            f.team.pick_up_local_facts(&f.env_id, false).unwrap();
         }
         assert_eq!(f.team.fact_pickup_loads.load(Ordering::SeqCst), loads);
     }
@@ -1818,7 +2162,7 @@ mod retry_tests {
                 .disabled_connections
                 .contains("gh")
         );
-        f.team.pick_up_local_facts(&f.env_id).unwrap();
+        f.team.pick_up_local_facts(&f.env_id, false).unwrap();
         assert!(
             f.team.envs.lock().unwrap()[&f.env_id]
                 .facts
@@ -2324,7 +2668,7 @@ mod retry_tests {
                     vec![old_write.clone()],
                 );
                 assert_eq!(pending.unwrap_err().reason, "team_rekey_pending");
-                f.team.pick_up_local_commits(&f.env_id).unwrap();
+                f.team.pick_up_local_commits(&f.env_id, false).unwrap();
             }
             let doc = f.team.document(&f.env_id).unwrap();
             let generation = doc["dek"]["current"].clone();
@@ -4059,6 +4403,16 @@ struct EnvState {
     relaxed_generation: u64,
     pending_removal_repairs: HashSet<String>,
     next_removal_repair: Instant,
+    /// The last refold failed, wherever it ran: the poll retries it until
+    /// one succeeds (section 6.4, issue #51).
+    refold_failure: Option<RefoldFailure>,
+}
+/// A failed refold the poll retries: its error, and when after the first
+/// retry ([`crate::context::Config::team_refold_retry_backoff`]).
+struct RefoldFailure {
+    error: Error,
+    backoff: Duration,
+    retry_at: Option<Instant>,
 }
 impl EnvState {
     fn new(
@@ -4100,6 +4454,7 @@ impl EnvState {
             relaxed_generation: 0,
             pending_removal_repairs: HashSet::new(),
             next_removal_repair: Instant::now(),
+            refold_failure: None,
         }
     }
 }
@@ -4127,6 +4482,9 @@ pub struct TeamSync {
     relaxed_folds: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     fact_pickup_loads: std::sync::atomic::AtomicUsize,
+    /// Test observability: how many refolds ran.
+    #[cfg(test)]
+    refolds_run: std::sync::atomic::AtomicUsize,
 }
 pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
     let guard = ctx.team.lock().ok()?;
@@ -4151,6 +4509,8 @@ impl TeamSync {
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             fact_pickup_loads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            refolds_run: std::sync::atomic::AtomicUsize::new(0),
         });
         let weak = Arc::downgrade(&this);
         let membership: MembershipCheck =
@@ -4419,7 +4779,65 @@ impl TeamSync {
         }
         Ok(())
     }
+    /// Refold `env_id`, noting whether it failed: the poll retries a failed
+    /// refold until one succeeds (section 6.4, issue #51). Noted under the
+    /// state lock, so in the order concurrent refolds ran.
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
+        let lock = self.ctx.state.lock();
+        let folded = match &lock {
+            Ok(_) => self.fold_env(env_id),
+            Err(error) => Err(error.clone()),
+        };
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(env) = envs.get_mut(env_id) {
+            match (&folded, &mut env.refold_failure) {
+                (Ok(_), failure) => *failure = None,
+                (Err(error), Some(failure)) => failure.error = error.clone(),
+                (Err(error), failure) => {
+                    *failure = Some(RefoldFailure {
+                        error: error.clone(),
+                        backoff: Duration::ZERO,
+                        retry_at: None,
+                    })
+                }
+            }
+        }
+        folded
+    }
+    /// Retry `env_id`'s failed refold when it is due: on the tick after it
+    /// failed, then backing off as
+    /// [`crate::context::Config::team_refold_retry_backoff`] says. Until one
+    /// succeeds this fails with the refold's error (section 6.4, issue #51).
+    fn retry_failed_refold(&self, env_id: &str, now: Instant) -> Result<()> {
+        {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            match envs.get(env_id).and_then(|e| e.refold_failure.as_ref()) {
+                None => return Ok(()),
+                Some(failure) if failure.retry_at.is_some_and(|at| now < at) => {
+                    return Err(failure.error.clone());
+                }
+                Some(_) => {}
+            }
+        }
+        let Err(error) = self.refold(env_id) else {
+            return Ok(());
+        };
+        let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(failure) = envs.get_mut(env_id).and_then(|e| e.refold_failure.as_mut()) {
+            let (min, max) = self.ctx.config.team_refold_retry_backoff;
+            let next = if failure.backoff.is_zero() {
+                min
+            } else {
+                (failure.backoff.as_secs_f64() * 2.0).min(max)
+            };
+            failure.backoff = Duration::from_secs_f64(next);
+            failure.retry_at = Some(now + failure.backoff);
+        }
+        Err(error)
+    }
+    fn fold_env(&self, env_id: &str) -> Result<FoldResult> {
+        #[cfg(test)]
+        self.refolds_run.fetch_add(1, Ordering::SeqCst);
         let _lock = self.ctx.state.lock()?;
         let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
@@ -4680,8 +5098,9 @@ impl TeamSync {
         let fact = self.sign_authorized_fact(env_id, kind, target)?;
         let stored = self.store_and_apply_fact(env_id, &fact)?;
         drop(_lock);
-        if stored {
+        if let Some(folded) = stored {
             self.announce_fact(env_id, &fact);
+            folded?;
         }
         Ok(fact.to_dict())
     }
@@ -4727,22 +5146,25 @@ impl TeamSync {
         let _lock = self.ctx.state.lock()?;
         let stored = self.store_and_apply_fact(env_id, &fact)?;
         drop(_lock);
-        if stored {
+        if let Some(folded) = stored {
             self.announce_fact(env_id, &fact);
+            folded?;
         }
         Ok(fact.to_dict())
     }
-    fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+    /// Store and apply `fact`: `None` if it was stored already, else the
+    /// refold's outcome. A fact is announced even when that refold failed:
+    /// it is stored, and the poll's retry folds it in (issue #51).
+    fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<Option<Result<()>>> {
         if !self.store_fact(env_id, fact)? {
-            return Ok(false);
+            return Ok(None);
         }
         if fact.kind == "member_removed"
             && let Some(fp) = fact.target["fingerprint"].as_str()
         {
             self.drain_removed(env_id, fp);
         }
-        self.refold(env_id)?;
-        Ok(true)
+        Ok(Some(self.refold(env_id).map(|_| ())))
     }
     fn announce_fact(&self, env_id: &str, fact: &Fact) {
         self.audit_fact_apply(env_id, fact);
@@ -5780,8 +6202,10 @@ impl TeamSync {
             {
                 self.drain_removed(env_id, fp);
             }
-            self.refold(env_id)?;
+            let folded = self.refold(env_id);
             drop(_lock);
+            // Even when that refold failed: the fact is stored, and the
+            // poll's retry folds it in (issue #51).
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(
                 env_id,
@@ -5793,6 +6217,7 @@ impl TeamSync {
                     self.send_removal_notice(env_id, &fact, Some(&session.peer().fingerprint()));
                 }
             }
+            folded?;
         }
         Ok(())
     }
@@ -6235,7 +6660,7 @@ impl TeamSync {
         let (close, had_session) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get(env_id) else {
-                return advanced;
+                return advanced.and_then(|owed| owed.map_or(Ok(()), Err));
             };
             let max_age = Duration::from_secs_f64(self.ctx.config.team_session_max_age_seconds);
             let close = env
@@ -6259,14 +6684,14 @@ impl TeamSync {
         // Until a failed step succeeds, this poll dials no one and sends no
         // VECTOR (section 6.4), but its due sessions are closed above all the
         // same, so a drained device's window stays bounded (section 4.4).
-        advanced?;
+        let owed = advanced?;
         // Before the periodic VECTORs are picked, so a peer due both ways
         // gets one.
         self.send_due_vectors(env_id, now);
         let (dial, send) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get(env_id) else {
-                return Ok(());
+                return owed.map_or(Ok(()), Err);
             };
             let mine = self.device.fingerprint()?;
             let dial = env.document["members"]
@@ -6317,20 +6742,27 @@ impl TeamSync {
         for session in send {
             self.send_vector(env_id, &session);
         }
-        Ok(())
+        // A refold still owed held up none of the above; the poll reports it
+        // until one succeeds (section 6.4, issue #51).
+        owed.map_or(Ok(()), Err)
     }
     /// The steps of a poll tick that read and change an environment's state:
-    /// local commits and facts, removal repair, the incident outbox, and the
-    /// deferred commits whose time has come.
-    fn advance_env(&self, env_id: &str, now: Instant) -> Result<()> {
-        self.pick_up_local_commits(env_id)?;
-        self.pick_up_local_facts(env_id)?;
+    /// a failed refold's retry, local commits and facts, removal repair, the
+    /// incident outbox, and the deferred commits whose time has come. A
+    /// failed refold is no failed step: the steps run on the last document a
+    /// refold produced, and a refold still owed after them is returned
+    /// (section 6.4, issue #51).
+    fn advance_env(&self, env_id: &str, now: Instant) -> Result<Option<Error>> {
+        let owed = self.retry_failed_refold(env_id, now).is_err();
+        self.pick_up_local_commits(env_id, owed)?;
+        self.pick_up_local_facts(env_id, owed)?;
         self.repair_member_removals(env_id)?;
         self.poll_incident_outbox(env_id, now);
         let store = CommitStore::new(self.ctx.state, env_id);
-        let released = store.release_deferred(commit::now_ms())?;
-        if !released.is_empty() {
-            self.refold(env_id)?;
+        let released = store.release_deferred(commit::now_ms(), Some(self.ctx.audit))?;
+        // While a refold is owed, or when this one fails, these are left to
+        // the pickup, which broadcasts them once a refold succeeds.
+        if !released.is_empty() && !owed && self.refold(env_id).is_ok() {
             for commit in released {
                 // The next pickup tick sees these as new store commits too;
                 // the seen-set keeps that from broadcasting them again.
@@ -6343,9 +6775,17 @@ impl TeamSync {
                 }
             }
         }
-        Ok(())
+        Ok(self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .and_then(|e| e.refold_failure.as_ref())
+            .map(|failure| failure.error.clone()))
     }
-    fn pick_up_local_commits(&self, env_id: &str) -> Result<()> {
+    /// `owed`: a failed refold is still owed, so new commits are left for
+    /// the pickup after a refold succeeds.
+    fn pick_up_local_commits(&self, env_id: &str, owed: bool) -> Result<()> {
         let store = CommitStore::new(self.ctx.state, env_id);
         let current = store.vector()?;
         let baseline = {
@@ -6370,6 +6810,12 @@ impl TeamSync {
                 seq = &seq + 1;
             }
         }
+        // The baseline moves only once a refold succeeds: while one is owed,
+        // or when this one fails (noted and retried by the poll), the pickup
+        // after a refold succeeds folds and broadcasts these (issue #51).
+        if !added.is_empty() && (owed || self.refold(env_id).is_err()) {
+            return Ok(());
+        }
         if let Some(env) = self
             .envs
             .lock()
@@ -6379,7 +6825,6 @@ impl TeamSync {
             env.last_known_vector = current;
         }
         if !added.is_empty() {
-            self.refold(env_id)?;
             for commit in added {
                 if self.commit_first_seen(&commit) {
                     self.broadcast(
@@ -6446,7 +6891,9 @@ impl TeamSync {
             Err(_) => Err(Error::state("team_fact_stat_failed")),
         }
     }
-    fn pick_up_local_facts(&self, env_id: &str) -> Result<()> {
+    /// `owed`: a failed refold is still owed, so the poll's retry rather than
+    /// a refold here folds the facts picked up.
+    fn pick_up_local_facts(&self, env_id: &str, owed: bool) -> Result<()> {
         let _lock = self.ctx.state.lock()?;
         let stamp = self.fact_file_stamp(env_id)?;
         if self
@@ -6466,6 +6913,7 @@ impl TeamSync {
             .ctx
             .state
             .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let mut refolding = !owed;
         // Scan by accepted fact hash, not a prefix count: another process may
         // append an unvalidated line before an already accepted remote fact.
         for line in &lines {
@@ -6531,7 +6979,11 @@ impl TeamSync {
             {
                 self.drain_removed(env_id, fp);
             }
-            self.refold(env_id)?;
+            // A refold that fails is noted, and the poll's retry folds in this
+            // fact and the rest; they are announced all the same (issue #51).
+            if refolding && self.refold(env_id).is_err() {
+                refolding = false;
+            }
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if fact.kind == "member_removed" {
