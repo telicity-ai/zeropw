@@ -621,8 +621,9 @@ fn a_version_that_does_not_decrypt_is_not_derived() {
 /// Issue #57: each version decrypts under its own generation's key file. A
 /// key file this node cannot use, whether its content holds no key this
 /// node unwraps or it cannot be read, leaves that generation's versions
-/// underived, like a missing one, and holds up no other; the next refold
-/// that can use it derives them again.
+/// underived, like a missing one, and holds up no other, not even a later
+/// version of the same secret; the next refold that can use it derives them
+/// again.
 #[test]
 fn each_generation_decrypts_under_its_own_key_file() {
     let (_tmp, ctx) = setup();
@@ -634,9 +635,13 @@ fn each_generation_decrypts_under_its_own_key_file() {
         owner.fingerprint().unwrap(),
         envelope::wrap_dek(&dek1, &env_id, &gen1, &owner.record().unwrap()).unwrap(),
     );
-    let version_id = random_hex(8);
-    let ct =
-        envelope::encrypt_secret(&dek1, &env_id, "rotated", &version_id, SYNTHETIC_SECRET).unwrap();
+    let put = |secret_id: &str, value: &[u8]| {
+        let version_id = random_hex(8);
+        let ct = envelope::encrypt_secret(&dek1, &env_id, secret_id, &version_id, value).unwrap();
+        json!({"op": "secret.put_version", "secret_id": secret_id, "kind": "api_key",
+               "generation_id": gen1, "version_id": version_id, "ciphertext": ct, "public": {}})
+    };
+    let rotated_value: &[u8] = b"synthetic-gh-token-under-generation-1";
     let c2 = op_commit(
         &owner,
         &env_id,
@@ -644,8 +649,8 @@ fn each_generation_decrypts_under_its_own_key_file() {
         "2000-0000",
         vec![
             json!({"op": "dek.rotate", "generation_id": gen1, "wraps": wraps}),
-            json!({"op": "secret.put_version", "secret_id": "rotated", "kind": "api_key",
-                   "generation_id": gen1, "version_id": version_id, "ciphertext": ct, "public": {}}),
+            put("rotated", SYNTHETIC_SECRET),
+            put("gh-token", rotated_value),
         ],
     );
     let commits = vec![c1, c2];
@@ -656,10 +661,11 @@ fn each_generation_decrypts_under_its_own_key_file() {
             .len()
     };
     derive(&ctx, &owner, commits.clone());
-    assert_eq!((versions("gh-token"), versions("rotated")), (1, 1));
+    assert_eq!((versions("gh-token"), versions("rotated")), (2, 1));
     let values = ctx.vault.values_for_trusted_scan().unwrap();
     assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
     assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
+    assert!(values.iter().any(|v| v.expose() == rotated_value));
 
     let gen0_file = format!("team/{env_id}/dek/{GEN0}.json");
     let gen0_path = ctx.state.path.join(&gen0_file);
@@ -679,9 +685,11 @@ fn each_generation_decrypts_under_its_own_key_file() {
     ];
     let skips_gen0 = || {
         derive(&ctx, &owner, commits.clone());
-        assert_eq!((versions("gh-token"), versions("rotated")), (0, 1));
+        assert_eq!((versions("gh-token"), versions("rotated")), (1, 1));
         let values = ctx.vault.values_for_trusted_scan().unwrap();
         assert!(values.iter().any(|v| v.expose() == SYNTHETIC_SECRET));
+        assert!(values.iter().any(|v| v.expose() == rotated_value));
+        assert!(!values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
     };
     for content in &unusable {
         std::fs::write(&gen0_path, content).unwrap();
@@ -695,18 +703,18 @@ fn each_generation_decrypts_under_its_own_key_file() {
     std::fs::remove_dir(&gen0_path).unwrap();
     std::fs::write(&gen0_path, &usable).unwrap();
     derive(&ctx, &owner, commits);
-    assert_eq!((versions("gh-token"), versions("rotated")), (1, 1));
+    assert_eq!((versions("gh-token"), versions("rotated")), (2, 1));
     let skipped: Vec<Value> = ctx
         .audit
         .iter_records()
         .unwrap()
         .into_iter()
         .filter(|r| r["event"] == "team_op_skipped")
-        .map(|r| r["reason"].clone())
+        .map(|r| json!([r["reason"], r["env_id"], r["secret_id"]]))
         .collect();
     assert_eq!(
         skipped,
-        vec![json!("generation_unavailable"); unusable.len() + 1]
+        vec![json!(["generation_unavailable", env_id, "gh-token"]); unusable.len() + 1]
     );
 }
 
