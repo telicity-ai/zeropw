@@ -119,7 +119,7 @@ fn resigned(author: &DeviceKey, checked: Commit, ops: Vec<Value>) -> Commit {
 }
 
 /// A `connection.create` signed without checking it, as a client other than
-/// this build can: receipt now refuses its id (issue #54).
+/// this build can: this build does not sign its id (issue #54).
 fn unchecked_connection_create(
     env_id: &str,
     author: &DeviceKey,
@@ -461,7 +461,7 @@ fn connection_create_referencing_undeclared_secret_skipped() {
 }
 
 /// Issue #54: an admin's `connection.create` with an id no derived connection
-/// can carry -- receipt refuses one now, but an earlier build stored it -- is
+/// can carry -- this build does not sign one, but receipt stores one -- is
 /// skipped by the fold, so the derive of the rest goes on.
 #[test]
 fn a_connection_id_derive_refuses_is_skipped() {
@@ -517,10 +517,11 @@ fn a_document_holding_a_connection_id_derive_refuses_derives_the_rest() {
     assert_eq!(skipped, 1);
 }
 
-/// Issue #54: an op nested deeper than `MAX_OP_DEPTH` -- receipt refuses
-/// one now, but an earlier build stored it -- is skipped by the fold, so the
-/// rest derives; the deepest a peer can deliver used to fail every derive.
-/// One at the bound is folded, derived, snapshotted and backed up.
+/// Issue #54: an op nested deeper than a backup can hold -- this build does
+/// not sign one, but receipt stores one -- is skipped by the fold, so the
+/// rest, its author's later commit included, derives; the deepest a peer
+/// can deliver used to fail every derive. One at the bound (984 levels) is
+/// folded, derived, snapshotted and backed up.
 #[test]
 fn an_op_nested_too_deep_is_skipped_and_one_at_the_bound_is_kept() {
     on_a_large_stack(|| {
@@ -545,7 +546,13 @@ fn an_op_nested_too_deep_is_skipped_and_one_at_the_bound_is_kept() {
             &env_id,
             3,
             "3000-0000",
-            vec![put_version_nested(&env_id, &dek, "edge", C::MAX_OP_DEPTH)],
+            // The most a backup holds: six levels above the op's metadata.
+            vec![put_version_nested(
+                &env_id,
+                &dek,
+                "edge",
+                pyjson::MAX_JSON_DEPTH - 6,
+            )],
         );
         let result = derive(&ctx, &owner, vec![c1, deep, edge]);
         let skipped: Vec<&str> = result.skipped.iter().map(|(_, _, r)| r.as_str()).collect();

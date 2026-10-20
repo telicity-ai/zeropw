@@ -798,8 +798,8 @@ pub(crate) fn is_float_literal(raw: &str) -> bool {
 /// exactly the case `loads`'s own pre-scan cannot cover. Returns `None` as
 /// soon as any branch would exceed `max_depth` (bailing out before walking
 /// the rest of that branch, and without needing to visit sibling branches
-/// first), `Some(deepest)` otherwise. Team receipt bounds ops with it too
-/// (`team::commit::MAX_OP_DEPTH`).
+/// first), `Some(deepest)` otherwise. Team folding and signing bound ops
+/// with it too (`team::commit::MAX_OP_DEPTH`).
 pub fn value_depth_within(value: &Value, max_depth: usize) -> Option<usize> {
     let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
     let mut deepest = 0usize;

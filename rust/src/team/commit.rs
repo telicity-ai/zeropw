@@ -746,7 +746,8 @@ fn float_exact_integer(value: f64) -> Option<num_bigint::BigInt> {
 }
 
 /// `zeropw.team.commit.sign_commit`: build, format-validate and sign a new
-/// commit (docs/team-sync.md section 5.2).
+/// commit (docs/team-sync.md section 5.2). An op that folding would skip
+/// for its depth or connection id is refused (issue #54).
 pub fn sign_commit(
     device: &DeviceKey,
     env_id: &str,
@@ -755,6 +756,9 @@ pub fn sign_commit(
     seen: &BTreeMap<String, PyInt>,
     ops: Vec<Value>,
 ) -> Result<Commit> {
+    for op in &ops {
+        check_authored_op(op)?;
+    }
     validate_ops(&ops)?;
     let author_seq = author_seq.into();
     let author = device.fingerprint()?;
@@ -1594,15 +1598,7 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
 
 // ------------------------------------------------------------- op validators
 fn validate_connection_create(op: &Map<String, Value>) -> Result<()> {
-    // Also the name rule every derived connection is built with: once stored,
-    // an id it refuses would fail every refold on every node (issue #54).
-    if !valid_name_field(op.get("id"), 64)
-        || projects::validate_name(
-            op.get("id").and_then(Value::as_str).unwrap_or(""),
-            "connection_id",
-        )
-        .is_err()
-    {
+    if !valid_name_field(op.get("id"), 64) {
         return Err(Error::invalid_input("invalid_connection_id"));
     }
     build_connection_fields(op)?;
@@ -1881,8 +1877,7 @@ fn dispatch_validator(name: &str, op: &Map<String, Value>) -> Result<()> {
 /// A backup archive holds a `secret.put_version` op's `public` metadata six
 /// levels below where the op does (the archive's documents, the vault
 /// document, its secrets, the secret, its versions, the version), the
-/// deepest any op content is written; a deeper op could be received but
-/// not derived, snapshotted or backed up.
+/// deepest any op content is written.
 pub const MAX_OP_DEPTH: usize = pyjson::MAX_JSON_DEPTH - 6;
 
 /// `op` nests deeper than [`MAX_OP_DEPTH`].
@@ -1891,14 +1886,38 @@ pub fn op_too_deep(op: &Map<String, Value>) -> bool {
         .any(|value| pyjson::value_depth_within(value, MAX_OP_DEPTH - 1).is_none())
 }
 
+/// `op` creates a connection whose id is outside the name rule every
+/// derived connection is built with.
+pub fn creates_misnamed_connection(op: &Map<String, Value>) -> bool {
+    op.get("op").and_then(Value::as_str) == Some("connection.create")
+        && op
+            .get("id")
+            .and_then(Value::as_str)
+            .is_none_or(|id| projects::validate_name(id, "connection_id").is_err())
+}
+
+/// The two rules folding enforces by skipping an op (issue #54): no derived
+/// file could hold it. Receipt does not check them, since earlier builds
+/// stored such ops and refusing them now would split the nodes that did
+/// from the nodes that did not; this build only refuses to author one.
+fn check_authored_op(op: &Value) -> Result<()> {
+    let Some(obj) = op.as_object() else {
+        return Ok(());
+    };
+    if op_too_deep(obj) {
+        return Err(Error::invalid_input("op_too_deep"));
+    }
+    if creates_misnamed_connection(obj) {
+        return Err(Error::invalid_input("invalid_connection_id"));
+    }
+    Ok(())
+}
+
 /// `zeropw.team.commit.validate_op`.
 pub fn validate_op(op: &Value) -> Result<()> {
     let obj = op
         .as_object()
         .ok_or_else(|| Error::invalid_input("op_malformed"))?;
-    if op_too_deep(obj) {
-        return Err(Error::invalid_input("op_too_deep"));
-    }
     let name = obj.get("op").and_then(Value::as_str).unwrap_or("");
     dispatch_validator(name, obj)
 }
@@ -2891,54 +2910,60 @@ mod tests {
     }
 
     /// Issue #54: a `connection.create` whose id fails the name rule derived
-    /// connections are built with is refused on receipt, not stored.
+    /// connections are built with is not signed by this build, but one
+    /// received is stored, as earlier builds stored it, and so are its
+    /// author's later commits: refusing it would cut the author off on this
+    /// node only.
     #[test]
-    fn receive_commit_rejects_a_connection_id_derive_refuses() {
+    fn a_connection_id_derive_refuses_is_stored_but_not_signed() {
         let f = fixture();
         let store = CommitStore::new(&f.state, f.env_id.clone());
         bootstrap(&f, &store);
-        for id in ["GH", "gh/x", ".gh"] {
+        let hlc = |wall| Hlc::default().tick(Some(wall));
+        for (seq, id) in (2i64..).zip(["GH", "gh/x", ".gh"]) {
+            validate_op(&connection_create_op(id)).unwrap();
             assert_eq!(
-                validate_op(&connection_create_op(id)).unwrap_err().reason,
-                "invalid_connection_id"
+                sign_commit(
+                    &f.owner,
+                    &f.env_id,
+                    seq,
+                    &hlc(1_000_000 * seq),
+                    &store.vector().unwrap(),
+                    vec![connection_create_op(id)]
+                )
+                .unwrap_err()
+                .reason,
+                "invalid_connection_id",
+                "{id}"
             );
             let commit = sign_unchecked(
                 &f.owner,
                 &f.env_id,
-                2,
-                &Hlc::default().tick(Some(2_000_000)),
+                seq,
+                &hlc(1_000_000 * seq),
                 vec![connection_create_op(id)],
             );
             assert_eq!(
-                receive_commit(&store, &commit, 2_000_000, None).unwrap(),
-                "rejected",
+                receive_commit(&store, &commit, 1_000_000 * seq, None).unwrap(),
+                "accepted",
                 "{id}"
             );
         }
-        let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
-            .unwrap()
-            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
-            .collect();
-        assert_eq!(rejected.len(), 3);
-        assert!(
-            rejected
-                .iter()
-                .all(|r| r.contains("team_op_format_invalid_connection_id")),
-            "{rejected:?}"
-        );
-        let accepted = sign_commit(
+        let later = sign_commit(
             &f.owner,
             &f.env_id,
-            2,
-            &Hlc::default().tick(Some(2_000_000)),
+            5,
+            &hlc(5_000_000),
             &store.vector().unwrap(),
             vec![connection_create_op("gh.x-1_y")],
         )
         .unwrap();
         assert_eq!(
-            receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
+            receive_commit(&store, &later, 5_000_000, None).unwrap(),
             "accepted"
         );
+        assert_eq!(store.all_commits().unwrap().len(), 5);
+        assert!(!store.dir("rejected").exists());
     }
 
     /// A `secret.put_version` op nesting `depth` levels, its `public`
@@ -2953,10 +2978,12 @@ mod tests {
                "ciphertext": {"nonce": "AAAA", "ciphertext": "BBBB"}, "public": public})
     }
 
-    /// Issue #54: an op nested deeper than [`MAX_OP_DEPTH`] -- one a backup
-    /// could not hold -- is refused on receipt, not stored.
+    /// Issue #54: this build signs an op nesting 984 levels, the most a
+    /// backup can hold, and no deeper one; but it stores one received as
+    /// deep as a COMMIT frame can carry, as earlier builds did, and its
+    /// author's later commits.
     #[test]
-    fn receive_commit_rejects_an_op_nested_too_deep() {
+    fn an_op_nested_too_deep_is_stored_but_not_signed() {
         // Hashing the deepest op recurses once per level, with several
         // times a release build's stack per level in a debug build.
         std::thread::Builder::new()
@@ -2965,44 +2992,59 @@ mod tests {
                 let f = fixture();
                 let store = CommitStore::new(&f.state, f.env_id.clone());
                 bootstrap(&f, &store);
-                let deepest = put_version_nested(MAX_OP_DEPTH);
-                assert_eq!(
-                    pyjson::value_depth_within(&deepest, usize::MAX),
-                    Some(MAX_OP_DEPTH)
-                );
-                validate_op(&deepest).unwrap();
-                let too_deep = put_version_nested(MAX_OP_DEPTH + 1);
-                assert_eq!(validate_op(&too_deep).unwrap_err().reason, "op_too_deep");
-                let commit = sign_unchecked(
+                let hlc = |wall| Hlc::default().tick(Some(wall));
+                let deepest = put_version_nested(pyjson::MAX_JSON_DEPTH - 6);
+                assert_eq!(pyjson::value_depth_within(&deepest, usize::MAX), Some(984));
+                let signed = sign_commit(
                     &f.owner,
                     &f.env_id,
                     2,
-                    &Hlc::default().tick(Some(2_000_000)),
-                    vec![too_deep],
-                );
-                assert_eq!(
-                    receive_commit(&store, &commit, 2_000_000, None).unwrap(),
-                    "rejected"
-                );
-                let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
-                    .unwrap()
-                    .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
-                    .collect();
-                assert_eq!(rejected.len(), 1);
-                assert!(rejected[0].contains("team_op_format_op_too_deep"));
-                let accepted = sign_commit(
-                    &f.owner,
-                    &f.env_id,
-                    2,
-                    &Hlc::default().tick(Some(2_000_000)),
+                    &hlc(2_000_000),
                     &store.vector().unwrap(),
                     vec![deepest],
                 )
                 .unwrap();
                 assert_eq!(
-                    receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
+                    receive_commit(&store, &signed, 2_000_000, None).unwrap(),
                     "accepted"
                 );
+                let too_deep = put_version_nested(pyjson::MAX_JSON_DEPTH - 5);
+                validate_op(&too_deep).unwrap();
+                assert_eq!(
+                    sign_commit(
+                        &f.owner,
+                        &f.env_id,
+                        3,
+                        &hlc(3_000_000),
+                        &store.vector().unwrap(),
+                        vec![too_deep]
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "op_too_deep"
+                );
+                // A COMMIT frame holds its ops three levels down.
+                let delivered = put_version_nested(pyjson::MAX_JSON_DEPTH - 3);
+                let received =
+                    sign_unchecked(&f.owner, &f.env_id, 3, &hlc(3_000_000), vec![delivered]);
+                assert_eq!(
+                    receive_commit(&store, &received, 3_000_000, None).unwrap(),
+                    "accepted"
+                );
+                let later = sign_commit(
+                    &f.owner,
+                    &f.env_id,
+                    4,
+                    &hlc(4_000_000),
+                    &store.vector().unwrap(),
+                    vec![connection_create_op("gh")],
+                )
+                .unwrap();
+                assert_eq!(
+                    receive_commit(&store, &later, 4_000_000, None).unwrap(),
+                    "accepted"
+                );
+                assert_eq!(store.all_commits().unwrap().len(), 4);
             })
             .unwrap()
             .join()
