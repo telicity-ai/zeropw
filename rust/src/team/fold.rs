@@ -5900,6 +5900,37 @@ mod tests {
         assert_eq!(refold.result.document, full.document);
     }
 
+    /// The usual first compaction: the only snapshot, a refold's, covers
+    /// commits past the cutoff, so the prefix folds from scratch -- which
+    /// every stored commit allows, counting those past the cutoff that the
+    /// snapshot names -- and the document stays as it was.
+    #[test]
+    fn a_first_compaction_past_a_refold_snapshot_folds_its_prefix() {
+        let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+        let admin = DeviceKey::generate();
+        let history = vec![
+            c1,
+            member_add_commit(&env_id, &owner, 2, "2000-0000", &admin, "admin"),
+            connection_create_commit(&env_id, &admin, 1, "2500-0000", "x"),
+            signed(
+                &owner,
+                &env_id,
+                3,
+                "3000-0000",
+                json!({"op": "settings.update", "sync_interval_seconds": 11}),
+            ),
+            connection_create_commit(&env_id, &admin, 2, "4000-0000", "y"),
+        ];
+        let (_tmp, state) = snapshot_state();
+        refold_saving(&state, &env_id, &history, None);
+        let mut stored = history.clone();
+        let snapshot = compact_like_teamsync(&state, &env_id, &mut stored, 3, None);
+        assert_eq!(connection_ids(&snapshot), ["x"]);
+        let refold = fold_for_refold(&env_id, stored, &state, None, None).unwrap();
+        let full = fold(&env_id, history, None, None, None, None).unwrap();
+        assert_eq!(refold.result.document, full.document);
+    }
+
     /// A second compaction on the first one's snapshot places removals from
     /// every stored commit too: a removed admin's commit inside its prefix,
     /// past the sequence the remover attested after its cutoff, stays
