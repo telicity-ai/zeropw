@@ -498,8 +498,8 @@ impl Context {
             .replace_key(&self.state.read_bytes(HANDLE_KEY)?)
     }
 
-    /// Disaster recovery: new KMS master key, re-wrapped DEK, all grants
-    /// revoked, handles invalidated.
+    /// Disaster recovery: new KMS master key, re-wrapped DEK and team keys,
+    /// all grants revoked, handles invalidated.
     pub fn recover(&mut self, recovery_passphrase: &str) -> Result<usize, Error> {
         let old = self.state.path.join(KMS_FILE);
         let rotated = self.state.path.join("kms").join(format!(
@@ -541,10 +541,14 @@ impl Context {
                 return Err(e);
             }
         };
+        let old_kms = self.kms;
         self.kms = new_kms;
         self.vault = vault;
         let revoked = self.policy.revoke_all()?;
         self.rotate_handle_key()?;
+        // The team key material the old key wrapped, like the vault DEK, so
+        // the node stays in its teams (issue #59).
+        crate::team::identity::rewrap_local_keys(self.state, old_kms, new_kms)?;
         self.audit.record(
             "recover",
             RecordArgs {

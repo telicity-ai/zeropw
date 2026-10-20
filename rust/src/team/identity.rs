@@ -238,13 +238,18 @@ impl DeviceKey {
         if state.exists(DEVICE_KEY_FILE) {
             return Err(Error::state("device_key_exists"));
         }
-        let sign_wrapped = kms.wrap(device.sign_seed.expose())?;
-        let agree_wrapped = kms.wrap(device.agree_private.expose())?;
+        device.store(state, kms)?;
+        Ok(device)
+    }
+
+    /// Write this key to `team/device.key`, wrapped by `kms`.
+    fn store(&self, state: &StateDir, kms: &(dyn Kms + Send + Sync)) -> Result<()> {
+        let sign_wrapped = kms.wrap(self.sign_seed.expose())?;
+        let agree_wrapped = kms.wrap(self.agree_private.expose())?;
         let mut doc = Map::new();
         doc.insert("sign_seed".into(), sign_wrapped.to_dict());
         doc.insert("agree_private".into(), agree_wrapped.to_dict());
-        state.write_json(DEVICE_KEY_FILE, &Value::Object(doc))?;
-        Ok(device)
+        state.write_json(DEVICE_KEY_FILE, &Value::Object(doc))
     }
 
     /// `DeviceKey.load`.
@@ -278,6 +283,49 @@ impl DeviceKey {
             DeviceKey::create(state, kms)
         }
     }
+}
+
+/// Wrap this node's team key material -- the device key and each shared
+/// environment's generation keys -- again, from `from` to `to`, as
+/// `Context::recover` does the vault DEK, so the node stays in its teams
+/// (issue #59). A file `from` cannot unwrap was unusable already and is left
+/// as it is.
+pub fn rewrap_local_keys(
+    state: &StateDir,
+    from: &(dyn Kms + Send + Sync),
+    to: &(dyn Kms + Send + Sync),
+) -> Result<()> {
+    let _lock = state.lock()?;
+    if let Ok(device) = DeviceKey::load(state, from) {
+        device.store(state, to)?;
+    }
+    let listing_failed = |_| Error::state("state_corrupt");
+    let team = state.path.join("team");
+    if !team.is_dir() {
+        return Ok(());
+    }
+    for env in std::fs::read_dir(&team).map_err(listing_failed)? {
+        let env_id = env.map_err(listing_failed)?.file_name();
+        let env_id = env_id.to_string_lossy();
+        let dek_dir = team.join(&*env_id).join("dek");
+        if !super::commit::valid_env_id(&env_id) || !dek_dir.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(&dek_dir).map_err(listing_failed)? {
+            let name = file.map_err(listing_failed)?.file_name();
+            let path = format!("team/{env_id}/dek/{}", name.to_string_lossy());
+            let Some(key) = state
+                .read_json(&path, Value::Null)
+                .ok()
+                .and_then(|doc| WrappedKey::from_dict(&doc).ok())
+                .and_then(|wrapped| from.unwrap(&wrapped).ok())
+            else {
+                continue;
+            };
+            state.write_json(&path, &to.wrap(key.expose())?.to_dict())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

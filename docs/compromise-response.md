@@ -157,7 +157,7 @@ Do not include links or agent-selected paths, headers, request IDs or arguments.
 5. Create new principals and grants; leave disabled old principals disabled.
 6. Resume if stopped. An open incident rejects resume.
 
-Before closing a global incident, use `recover` for a new KMS key, grant revocation and handle-key rotation, and change both administrator and recovery passphrases.
+Before closing a global incident, use `recover` for a new KMS key, grant revocation and handle-key rotation, and change both administrator and recovery passphrases. On a team node, `recover` keeps the device in its teams by wrapping its device key and generation keys again under the new key; restart `serve` afterwards, and issue new invitations, since earlier ones can no longer be accepted. When the host itself was compromised, treat those keys as exposed: another administrator removes the device with `team remove`, which rotates the environment key, and invites it again.
 
 ## 8. Limits
 

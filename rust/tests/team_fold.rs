@@ -718,6 +718,51 @@ fn each_generation_decrypts_under_its_own_key_file() {
     );
 }
 
+/// Issue #59: `recover` wraps the team device key and the generation keys
+/// again under its new KMS key, as it does the vault DEK, so the node keeps
+/// its team identity, its all-vault scan runs and it still derives the
+/// shared versions. A key file the old key could not unwrap is left as it
+/// was.
+#[test]
+fn recover_keeps_the_device_key_and_generation_keys() {
+    let (_tmp, mut ctx) = setup();
+    let owner = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let env_id = C::new_env_id(&owner.fingerprint().unwrap()).unwrap();
+    let dek: Vec<u8> = (0..32u8).collect();
+    let c1 = env_init_commit(&env_id, &owner, &dek, "1000-0000", Some("gh-token"));
+    derive(&ctx, &owner, vec![c1.clone()]);
+    let unusable = format!("team/{env_id}/dek/{}.json", "f".repeat(16));
+    ctx.state.write_json(&unusable, &json!({})).unwrap();
+    let key_id = ctx.kms.key_id().to_owned();
+
+    ctx.recover(RECOVERY).unwrap();
+    assert_ne!(ctx.kms.key_id(), key_id);
+    let device = DeviceKey::load(ctx.state, ctx.kms).unwrap();
+    assert_eq!(device.fingerprint().unwrap(), owner.fingerprint().unwrap());
+    let values = ctx.vault.values_for_trusted_scan().unwrap();
+    assert!(values.iter().any(|v| v.expose() == BOOTSTRAP_SECRET_VALUE));
+    derive(&ctx, &device, vec![c1]);
+    let vault = ctx.state.read_json(VAULT_DOC, Value::Null).unwrap();
+    assert_eq!(
+        vault["secrets"]["gh-token"]["versions"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !ctx.audit
+            .iter_records()
+            .unwrap()
+            .iter()
+            .any(|r| r["event"] == "team_op_skipped")
+    );
+    assert_eq!(
+        ctx.state.read_json(&unusable, Value::Null).unwrap(),
+        json!({})
+    );
+}
+
 #[test]
 fn local_connection_survives_colliding_shared_id() {
     let (_tmp, ctx) = setup();

@@ -42,7 +42,7 @@ Local callers represent that device's runtime. Users must be able to grant their
 
 ### 4.1 Device keys
 
-`team init` creates keys with the Rust Ed25519/X25519 modules. Wrap private keys under local KMS in 0600 `team/device.key`. A signed device record binds the agreement key to the signing identity. Private keys never leave the device and have no export command. Device identity does not replace passphrase reauthentication for local secret reveal, recovery or incident closure.
+`team init` creates keys with the Rust Ed25519/X25519 modules. Wrap private keys under local KMS in 0600 `team/device.key`; `recover` wraps them, and the local generation keys, again under its new KMS key. A signed device record binds the agreement key to the signing identity. Private keys never leave the device and have no export command. Device identity does not replace passphrase reauthentication for local secret reveal, recovery or incident closure.
 
 ### 4.2 Environment DEK generations
 
