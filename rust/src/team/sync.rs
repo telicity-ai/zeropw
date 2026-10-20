@@ -1409,16 +1409,58 @@ mod retry_tests {
         assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
         assert_eq!(f.recorder.sent.lock().unwrap().len(), sent);
         {
-            // Neither wired nor refused: not dialed at all.
+            // Not dialed at all: a dial would get the peer's session from
+            // the stub transport, store the address and close the session
+            // it may not accept.
             let envs = f.team.envs.lock().unwrap();
             let env = &envs[&f.env_id];
             assert!(!env.sessions.contains_key(&peer));
             assert!(!env.dial_pending.contains_key(&peer));
             assert!(!env.next_attempt.contains_key(&peer));
         }
+        assert!(!f.session.is_closed());
+        let persisted = f
+            .ctx
+            .state
+            .read_json(&format!("team/{}/peers.json", f.env_id), json!({}))
+            .unwrap();
+        assert!(persisted.get(&peer).is_none(), "{persisted}");
         restore();
         f.team.poll().unwrap();
         assert!(f.team.membership(&f.env_id, &peer).is_none());
+    }
+
+    /// A handshake that passed the membership check before the device's
+    /// removal fact was stored is not accepted as a session afterwards.
+    #[test]
+    fn a_session_whose_handshake_preceded_a_removal_fact_is_refused() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.membership(&f.env_id, &peer).is_some());
+        let fact = sign_fact(
+            &f.peer_key,
+            &f.env_id,
+            "member_removed",
+            json!({"fingerprint":peer}),
+            "10000-0000",
+        )
+        .unwrap();
+        f.team
+            .handle_fact(
+                &f.env_id,
+                &f.session,
+                &json!({"type":"FACT","fact":fact.to_dict()}),
+            )
+            .unwrap();
+        let late = recording_session(f.peer_key.record().unwrap(), &f.env_id);
+        assert!(!f.team.accept_session(&f.env_id, late.clone(), true));
+        assert!(late.is_closed());
+        assert!(
+            !f.team.envs.lock().unwrap()[&f.env_id]
+                .sessions
+                .contains_key(&peer)
+        );
     }
 
     /// Issue #51: an environment whose first refold fails as it is
@@ -5424,6 +5466,13 @@ impl TeamSync {
             session.close();
             return false;
         };
+        // A handshake that passed the membership check before the device's
+        // removal fact was stored ends here: `drain_removed` drains only the
+        // sessions already accepted.
+        if env.facts.removed_members.contains(&fp) {
+            session.close();
+            return false;
+        }
         if let Some(current) = env.sessions.get(&fp) {
             if Arc::ptr_eq(current, &session) {
                 return true;
