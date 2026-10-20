@@ -952,6 +952,41 @@ mod retry_tests {
         assert!(f.team.accept_session(&healthy, recorder.clone(), true));
         assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
         assert_eq!(sent_of_type(&recorder, "VECTOR").len(), 1);
+        // Audited for the failing environment only (issue #49).
+        assert_eq!(sync_poll_audits(&f, &broken), 1);
+        assert_eq!(sync_poll_audits(&f, &healthy), 0);
+    }
+
+    /// `team_sync_poll` records for `env_id`.
+    fn sync_poll_audits(f: &OwnerWithAdminPeer, env_id: &str) -> usize {
+        f.ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .iter()
+            .filter(|record| record["event"] == "team_sync_poll" && record["env_id"] == env_id)
+            .count()
+    }
+
+    /// Issue #49: once an environment that could not be loaded loads, its
+    /// next failure is audited, although for the same reason as the load.
+    #[test]
+    fn a_failure_after_a_load_failure_is_audited() {
+        let f = owner_with_admin_peer();
+        let late = another_environment(&f, "late", false);
+        let peers = f.ctx.state.path.join(format!("team/{late}/peers.json"));
+        std::fs::write(&peers, b"[1]").unwrap();
+        assert_eq!(f.team.discover().unwrap_err().reason, "state_corrupt");
+        assert!(!f.team.known_envs().contains(&late));
+        assert_eq!(sync_poll_audits(&f, &late), 1);
+        std::fs::remove_file(&peers).unwrap();
+        let deferred = f.ctx.state.path.join(format!("team/{late}/deferred"));
+        std::fs::create_dir_all(&deferred).unwrap();
+        std::fs::write(deferred.join("synthetic.json"), b"{not json").unwrap();
+        *f.team.last_discovery.lock().unwrap() = Instant::now() - Duration::from_secs(2);
+        assert_eq!(f.team.poll().unwrap_err().reason, "state_corrupt");
+        assert!(f.team.known_envs().contains(&late));
+        assert_eq!(sync_poll_audits(&f, &late), 2);
     }
 
     /// Section 6.4: while its poll fails, an environment still closes its due
@@ -1158,6 +1193,9 @@ mod retry_tests {
                 .collect::<Vec<_>>()
         };
         for _ in 0..3 {
+            // Each poll also runs discovery, which leaves a known
+            // environment's record alone (issue #49).
+            *f.team.last_discovery.lock().unwrap() = Instant::now() - Duration::from_secs(2);
             assert_eq!(f.team.poll().unwrap_err().reason, "hlc_malformed");
         }
         let records = audited();
@@ -4759,9 +4797,21 @@ impl TeamSync {
     pub fn discover(&self) -> Result<()> {
         let mut failed = None;
         for id in discover_envs(self.ctx.state)? {
-            if let Err(error) = self.register_env(&id) {
-                self.note_poll_failure(&id, Some(&error));
-                failed.get_or_insert(error);
+            let known = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&id);
+            match self.register_env(&id) {
+                Err(error) => {
+                    self.note_poll_failure(&id, Some(&error));
+                    failed.get_or_insert(error);
+                }
+                // Loaded now: a load failure noted before cannot hide the
+                // next failure, whatever its reason (issue #49). One already
+                // loaded keeps what its polls noted.
+                Ok(()) if !known => self.note_poll_failure(&id, None),
+                Ok(()) => {}
             }
         }
         failed.map_or(Ok(()), Err)
