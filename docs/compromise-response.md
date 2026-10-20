@@ -120,7 +120,7 @@ For example, a token created September 1 and contained September 15 makes every 
 | Not affected | Other connections. | None. |
 | Global | `--scope all` | All active secrets mandatory; include recovery and passphrase changes. |
 
-Record secret ID/kind, project/environment, service, connection IDs, destinations, first/last use, count and active version. SSH adds public-key fingerprint and username. Validate incident files with `values_for_trusted_scan` against all vault values/versions before writing. When the vault cannot be scanned, the file keeps its assessment and records `assessment_unchecked` in its failed steps, and the notification waits until it can be checked. Kind names in the original design include `env`; the implemented storage kind is `env_var`.
+Record secret ID/kind, project/environment, service, connection IDs, destinations, first/last use, count and active version. SSH adds public-key fingerprint and username. Validate incident files with `values_for_trusted_scan` against all vault values/versions before writing. That scan, like the one of the rendered email, looks for a value's forms of at least 8 bytes: a shorter value matches unrelated text, so one would redact every assessment (issue #60). When the vault cannot be scanned, the file keeps its assessment and records `assessment_unchecked` in its failed steps, and the notification waits until it can be checked. Kind names in the original design include `env`; the implemented storage kind is `env_var`.
 
 ## 6. Rotation email
 
@@ -157,7 +157,7 @@ Do not include links or agent-selected paths, headers, request IDs or arguments.
 5. Create new principals and grants; leave disabled old principals disabled.
 6. Resume if stopped. An open incident rejects resume.
 
-Before closing a global incident, use `recover` for a new KMS key, grant revocation and handle-key rotation, and change both administrator and recovery passphrases.
+Before closing a global incident, use `recover` for a new KMS key, grant revocation and handle-key rotation, and change both administrator and recovery passphrases. On a team node, `recover` keeps the device in its teams by wrapping its device key and generation keys again under the new key, and revokes the invitations the node issued that were not used yet; stop `serve` before `recover`, start it afterwards and issue new invitations. When the host itself was compromised, treat those keys as exposed: `recover` keeps them, and a removed device can never rejoin with them. The owner cannot be removed, so on a node that owns an environment first transfer ownership to another member with `team transfer-owner`. Another administrator then removes the device with `team remove`, which rotates the environment key. The rebuilt host starts from a new state directory, where `team join` creates a new device key, and joins each of its environments with a new invitation. A recovery that stops with an error after its new key is in place is completed by running `recover` again, which needs the retired key files under `kms/`: keep them until it completes.
 
 ## 8. Limits
 
@@ -168,6 +168,8 @@ Before closing a global incident, use `recover` for a new KMS key, grant revocat
 - Normal agents can invent tool names or send truncated handles; thresholds permit two unknown-tool/handle-forgery events before containment.
 - Older principals imply more mandatory rotations. There is no narrowing assessment setting; replace identities periodically.
 - Provider-side automatic rotation remains future scope.
+- A team node cannot replace its device key in place. After a host compromise it is rebuilt from a new state directory and invited again to each of its environments (section 7), and its local secrets are put again there once rotated.
+- Only the owner device can transfer ownership, and the owner cannot be removed. An environment whose owner host is lost or rebuilt before it transfers ownership, or that has no other member, keeps that owner: its other members stop using it and set up a new shared environment, with the secrets rotated.
 - SMTP is additional bootstrap authority; use an alert-only account without other permissions.
 - Email can be lost. Incident state, alerts and stderr are authoritative; email is a copy.
 

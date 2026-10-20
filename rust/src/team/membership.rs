@@ -889,6 +889,55 @@ pub fn revoke_invite(ctx: &Context, env_id: &str, id: &str) -> Result<Value> {
     }))
 }
 
+/// Revoke every invitation this node issued that still holds its secret, as
+/// `Context::recover` revokes grants: the secret is wrapped under the key
+/// that recovery retires (issue #59). An invitation file that cannot be read
+/// is left as it is: no invitation in it can be accepted either.
+pub fn revoke_pending_invites(ctx: &Context) -> Result<()> {
+    let mut revoked = Vec::new();
+    {
+        let _lock = ctx.state.lock()?;
+        for env_id in super::local_env_ids(ctx.state)? {
+            let path = format!("team/{env_id}/invites.json");
+            let Ok(mut invites) = ctx.state.read_json(&path, json!({})) else {
+                continue;
+            };
+            let Some(entries) = invites.as_object_mut() else {
+                continue;
+            };
+            let mut changed = false;
+            for (id, entry) in entries.iter_mut() {
+                let Some(entry) = entry.as_object_mut() else {
+                    continue;
+                };
+                if entry.remove("wrapped_secret").is_none() {
+                    continue;
+                }
+                changed = true;
+                if entry.get("used") != Some(&Value::Bool(true))
+                    && entry.get("revoked_at").is_none_or(Value::is_null)
+                {
+                    entry.insert("revoked_at".into(), json!((ctx.clock)()));
+                    let role = entry.get("role").cloned().unwrap_or(Value::Null);
+                    revoked.push((env_id.clone(), id.clone(), role));
+                }
+            }
+            if changed {
+                ctx.state.write_json(&path, &invites)?;
+            }
+        }
+    }
+    for (env_id, id, role) in revoked {
+        audit(
+            ctx,
+            "team_invite_revoke",
+            &env_id,
+            vec![("role", role), ("detail", json!(id))],
+        );
+    }
+    Ok(())
+}
+
 pub fn consume_invite(
     ctx: &Context,
     env_id: &str,

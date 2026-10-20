@@ -866,6 +866,70 @@ fn recover_tries_the_canonical_code_then_the_exact_text_and_no_more() {
     assert_argv_clean(&fx, &["ABCD", "abcd", "phrase"]);
 }
 
+/// Issue #59: a running sidecar, which holds the KMS key in memory, is stopped while
+/// `recover` runs and started again after it, whether the recovery succeeds or fails; a
+/// start asked for meanwhile, as the app's startup thread or relay button can, waits for the
+/// recovery to end; a stopped sidecar stays stopped.
+#[test]
+fn recover_stops_a_running_serve_and_starts_it_again() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let port = health_server();
+    core.settings_set(Settings {
+        gateway_port: port,
+        team_listen: None,
+    })
+    .unwrap();
+    let recover = || {
+        core.recover(RecoverIn {
+            recovery_passphrase: "my own Recovery phrase 9".into(),
+        })
+    };
+
+    recover().unwrap();
+    assert_eq!(fx.count("serve"), 0);
+    assert!(!core.serve_status().running);
+
+    let mut pid = core.serve_start().unwrap().pid;
+    let failed = r#"{"error":"AuthFailed","reason":"recovery_failed"}"#;
+    // The start asked for meanwhile gets a round of its own: it would also start the
+    // sidecar once the recovery ends, so in another round it could hide a recovery that does
+    // not.
+    for (failure, start_meanwhile) in [(None, false), (Some(failed), false), (None, true)] {
+        let round = format!("failure {failure:?}, start meanwhile {start_meanwhile}");
+        fx.clear_response("recover");
+        // `recover` takes two seconds, so the sidecar can be seen stopped while it runs.
+        fx.respond_sleep("recover", 2);
+        if let Some(stderr) = failure {
+            fx.respond_error("recover", stderr, 1);
+        }
+        let (serves, recovers) = (fx.count("serve"), fx.count("recover"));
+        let result = std::thread::scope(|s| {
+            let run = s.spawn(recover);
+            assert!(wait_until(Duration::from_secs(5), || fx.count("recover") > recovers));
+            assert!(!core.serve_status().running, "{round}");
+            if !start_meanwhile {
+                return run.join().unwrap();
+            }
+            let start = s.spawn(|| core.serve_start());
+            assert!(
+                !wait_until(Duration::from_millis(1200), || fx.count("serve") > serves),
+                "a sidecar started during the recovery: {round}"
+            );
+            let result = run.join().unwrap();
+            assert!(start.join().unwrap().unwrap().running, "{round}");
+            result
+        });
+        assert_eq!(result.is_err(), failure.is_some(), "{round}");
+        assert_eq!(fx.count("serve"), serves + 1, "{round}");
+        let status = core.serve_status();
+        assert!(status.running, "{round}");
+        assert_ne!(status.pid, pid, "{round}");
+        pid = status.pid;
+    }
+    assert!(!core.serve_stop().running);
+}
+
 #[test]
 fn incident_all_scope_needs_the_passphrase() {
     let fx = Fixture::new();

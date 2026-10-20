@@ -5,6 +5,7 @@ use std::sync::{Arc, Weak};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use zeroize::Zeroize;
 
 use crate::audit::RecordArgs;
 use crate::context::Context;
@@ -261,14 +262,17 @@ pub fn save_incident(ctx: &Context, incident: &mut Incident) -> Result<()> {
         .write_json(&path_for(&incident.id), &incident.to_dict())
 }
 
-/// `payload` holds a vault value. An error when the vault cannot be scanned:
-/// callers then do not take `payload` as clean (issue #57).
+/// `payload` holds a vault value, in any form
+/// [`crate::runs::vault_scan_patterns`] looks for. An error when the vault
+/// cannot be scanned: callers then do not take `payload` as clean (issue
+/// #57).
 pub fn value_leak(ctx: &Context, payload: &[u8]) -> Result<bool> {
     let values = ctx.vault.values_for_trusted_scan()?;
     Ok(values.iter().any(|v| {
-        crate::runs::credential_patterns(v.expose())
-            .iter()
-            .any(|p| !p.is_empty() && payload.windows(p.len()).any(|w| w == p))
+        let mut patterns = crate::runs::vault_scan_patterns(v.expose());
+        let found = crate::runs::contains_sensitive(payload, &patterns);
+        patterns.zeroize();
+        found
     }))
 }
 

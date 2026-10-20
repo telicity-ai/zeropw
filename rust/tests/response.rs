@@ -1128,6 +1128,45 @@ fn closing_while_the_vault_cannot_be_scanned_keeps_the_assessment() {
     assert!(failed_steps(&stored).contains(&json!("assessment_unchecked")));
 }
 
+/// Issue #60: a vault value shorter than `runs::MIN_PATTERN_LENGTH` is not
+/// looked for itself by the scan against every vault value, which it would
+/// match in every incident and message; its longer encodings are, and so is
+/// a value at the minimum.
+#[test]
+fn a_short_vault_value_redacts_no_incident_and_blocks_no_message() {
+    let (_tmp, ctx) = fixture();
+    used_connection(&ctx);
+    ctx.vault
+        .put_secret("short-code", "api_key", b"e", "demo", "dev", true)
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    ctx.state.write_json("notify.json",&json!({"host":"127.0.0.1","port":port,"mode":"plain","sender":"zeropw@example.com","recipients":["admin@example.com"]})).unwrap();
+    let receiver = smtp_server(listener, false);
+    let i = open(&ctx, "principal", Some(&["agent-1".into()]), None);
+    // Checked before waiting on the server, which a message never sent
+    // would leave waiting.
+    assert_eq!(i.notification["status"], "sent");
+    let (_, message) = receiver.join().unwrap();
+    assert!(String::from_utf8_lossy(&message).contains("Secret ID: gh-token"));
+    let stored = incident::get_incident(&ctx, &i.id).unwrap();
+    assert_eq!(stored.assessment["secrets"][0]["secret_id"], "gh-token");
+    assert_eq!(stored.assessment["secrets"][0]["tier"], "mandatory");
+    assert!(!failed_steps(&stored).contains(&json!("assessment_redacted")));
+
+    let seven: &[u8] = b"7bytes!";
+    ctx.vault
+        .put_secret("seven", "api_key", seven, "demo", "dev", true)
+        .unwrap();
+    assert!(!incident::value_leak(&ctx, b"a text holding 7bytes! as is").unwrap());
+    let encoded = zeropw::pybase64::b64encode(seven);
+    assert!(incident::value_leak(&ctx, encoded.as_bytes()).unwrap());
+    ctx.vault
+        .put_secret("eight", "api_key", b"8bytes!!", "demo", "dev", true)
+        .unwrap();
+    assert!(incident::value_leak(&ctx, b"a text holding 8bytes!! as is").unwrap());
+}
+
 #[test]
 fn rendered_value_leak_blocks_delivery_without_opening_socket() {
     let (_tmp, ctx) = fixture();

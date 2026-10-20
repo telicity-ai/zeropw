@@ -498,14 +498,30 @@ impl Context {
             .replace_key(&self.state.read_bytes(HANDLE_KEY)?)
     }
 
-    /// Disaster recovery: new KMS master key, re-wrapped DEK, all grants
-    /// revoked, handles invalidated.
+    /// Disaster recovery: new KMS master key, re-wrapped DEK and team keys,
+    /// all grants revoked, handles invalidated, invitations revoked.
     pub fn recover(&mut self, recovery_passphrase: &str) -> Result<usize, Error> {
         let old = self.state.path.join(KMS_FILE);
-        let rotated = self.state.path.join("kms").join(format!(
-            "master.key.retired-{}",
-            clock_now_int(&self.clock)?
-        ));
+        let stamp = clock_now_int(&self.clock)?;
+        let retired = |n: u64| {
+            let suffix = if n == 0 {
+                String::new()
+            } else {
+                format!("-{n}")
+            };
+            self.state
+                .path
+                .join("kms")
+                .join(format!("master.key.retired-{stamp}{suffix}"))
+        };
+        // A key a `recover` in the same second retired keeps its name: it
+        // may be all that still unwraps team keys that one did not reach.
+        let mut rotated = retired(0);
+        let mut n = 0;
+        while rotated.symlink_metadata().is_ok() {
+            n += 1;
+            rotated = retired(n);
+        }
         // `os.replace(old, rotated)` is not guarded in `context.py`: its
         // `OSError` reaches the administrator CLI unchanged.
         fs::rename(&old, &rotated).map_err(|e| crate::store::uncaught_os_error(&e))?;
@@ -541,10 +557,26 @@ impl Context {
                 return Err(e);
             }
         };
+        let old_kms = self.kms;
         self.kms = new_kms;
         self.vault = vault;
-        let revoked = self.policy.revoke_all()?;
-        self.rotate_handle_key()?;
+        let revoked = match self.finish_recover(old_kms, new_kms) {
+            Ok(revoked) => revoked,
+            Err(error) => {
+                // The new key is in place: running `recover` again completes
+                // this one.
+                let _ = self.audit.record(
+                    "recover",
+                    RecordArgs {
+                        result: Some("failed"),
+                        reason: Some(&error.reason),
+                        extra: vec![("state", json!("incomplete"))],
+                        ..Default::default()
+                    },
+                );
+                return Err(error);
+            }
+        };
         self.audit.record(
             "recover",
             RecordArgs {
@@ -558,6 +590,49 @@ impl Context {
         )?;
         Ok(revoked)
     }
+
+    /// What `recover` does once the new KMS key is in place: grants revoked,
+    /// handle key rotated, then the team key material the old key wrapped,
+    /// like the vault DEK, so the node stays in its teams (issue #59). Keys
+    /// retired earlier unwrap too, so running `recover` again completes one
+    /// that stopped here or that an earlier build ran. Invitations go, as
+    /// grants do.
+    fn finish_recover(
+        &self,
+        old_kms: &(dyn Kms + Send + Sync),
+        new_kms: &(dyn Kms + Send + Sync),
+    ) -> Result<usize, Error> {
+        let revoked = self.policy.revoke_all()?;
+        self.rotate_handle_key()?;
+        let retired = retired_kms_keys(self.state);
+        let mut from: Vec<&(dyn Kms + Send + Sync)> = vec![old_kms];
+        from.extend(retired.iter().map(|kms| kms as &(dyn Kms + Send + Sync)));
+        crate::team::identity::rewrap_local_keys(self.state, &from, new_kms)?;
+        crate::team::membership::revoke_pending_invites(self)?;
+        Ok(revoked)
+    }
+}
+
+/// The master keys recoveries retired (`kms/master.key.retired-*`) that
+/// still load.
+fn retired_kms_keys(state: &StateDir) -> Vec<LocalFileKms> {
+    let Ok(entries) = fs::read_dir(state.path.join("kms")) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<_> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("master.key.retired-"))
+        })
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .filter_map(|path| LocalFileKms::load(path).ok())
+        .collect()
 }
 
 /// `Context::recover` names its retired-master-key and new-KMS-key-id files with

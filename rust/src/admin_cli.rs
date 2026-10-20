@@ -862,6 +862,17 @@ fn record_auth_failure(ctx: &Context, reason: &str, extra: Vec<(&str, Value)>) {
     );
 }
 
+/// `conn`'s CLI profile carries `value`, about to become a version of
+/// `secret_id`: at any length when that secret is `conn`'s own credential,
+/// under the rule for other vault values otherwise (issue #60).
+fn profile_env_carries_new_value(conn: &Connection, secret_id: &str, value: &[u8]) -> bool {
+    if conn.secret_id == secret_id {
+        crate::tools::profile_env_carries_credential(conn, value)
+    } else {
+        crate::tools::profile_env_carries_other_value(conn, value)
+    }
+}
+
 fn refuse_cli_env<T>(
     ctx: &Context,
     connection: &str,
@@ -1601,8 +1612,17 @@ fn check_secret_connection(ctx: &Context, connection: &Connection) -> Result<(),
         return Err(Error::invalid_input("secret_version_unusable")
             .with_detail(crate::vault::python_str_scalar(&status)));
     }
-    if crate::tools::profile_env_carries_vault_value(ctx, connection)? {
-        return refuse_cli_env(ctx, &connection.id, None, "connection_create");
+    if connection.cli.is_some() {
+        let credential = ctx
+            .vault
+            .secret_for_trusted_use(
+                &connection.secret_id,
+                connection.secret_version_for_trusted_use()?,
+            )
+            .map_err(|_| Error::state("credential_unavailable"))?;
+        if crate::tools::profile_env_carries_vault_value(ctx, connection, credential.expose())? {
+            return refuse_cli_env(ctx, &connection.id, None, "connection_create");
+        }
     }
     Ok(())
 }
@@ -1948,7 +1968,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let _lock = ctx.state.lock()?;
             // Reject credentials embedded in any saved CLI environment before committing the new version.
             for conn in ctx.policy.list_connections()? {
-                if crate::tools::profile_env_carries_credential(&conn, &value) {
+                if profile_env_carries_new_value(&conn, a.req("id"), &value) {
                     return refuse_cli_env(&ctx, &conn.id, Some(a.req("id")), "secret_put");
                 }
             }
@@ -2607,7 +2627,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             let _lock = ctx.state.lock()?;
             for conn in ctx.policy.list_connections()? {
-                if crate::tools::profile_env_carries_credential(&conn, &value) {
+                if profile_env_carries_new_value(&conn, &meta.id, &value) {
                     return refuse_cli_env(&ctx, &conn.id, Some(&meta.id), "rotation");
                 }
             }
@@ -2782,7 +2802,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
                 }
             };
             Ok(
-                json!({"kms_key_id":ctx.kms.key_id(),"grants_revoked":count,"handles_invalidated":true}),
+                json!({"kms_key_id":ctx.kms.key_id(),"grants_revoked":count,"handles_invalidated":true,"note":"restart any running serve: it still holds the retired key"}),
             )
         }
         ("audit", "tail") | ("alerts", "") => {
