@@ -1298,10 +1298,12 @@ impl Core {
     /// `AuthFailed`, the input exactly as typed. So one attempt at most writes two
     /// `auth_failed` audit records; anything else is a single call.
     ///
-    /// A running sidecar is then restarted: it still holds the KMS key the recovery retired,
-    /// so it could not read the team keys wrapped again under the new one (issue #59). The
-    /// recovery has happened whether or not the sidecar starts again; one that does not shows
-    /// as stopped and can be started again.
+    /// A running sidecar is stopped for the recovery and started again after it, whatever the
+    /// outcome: it holds the KMS key in memory, so one left running would keep the key the
+    /// recovery retired, could not read the team keys wrapped again under the new one, and
+    /// could write new ones under the old key (issue #59). The recovery's result is returned
+    /// whether or not the sidecar starts again; one that does not shows as stopped and can be
+    /// started again.
     pub fn recover(&self, input: RecoverIn) -> Result<Value, AppError> {
         let typed = &input.recovery_passphrase;
         if typed.is_empty() {
@@ -1313,6 +1315,10 @@ impl Core {
                 Envelope::new().recovery_passphrase(passphrase),
             )
         };
+        let running = self.serve_status().running;
+        if running {
+            self.serve_stop();
+        }
         let out = match recovery::normalize(typed.expose()).filter(|c| c.expose() != typed.expose())
         {
             None => attempt(typed),
@@ -1320,12 +1326,11 @@ impl Core {
                 Err(e) if e.error == "AuthFailed" => attempt(typed),
                 other => other,
             },
-        }?;
-        if self.serve_status().running {
-            self.serve_stop();
+        };
+        if running {
             let _ = self.serve_start();
         }
-        Ok(out)
+        out
     }
 
     // -- team ---------------------------------------------------------------------------------

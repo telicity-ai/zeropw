@@ -866,10 +866,11 @@ fn recover_tries_the_canonical_code_then_the_exact_text_and_no_more() {
     assert_argv_clean(&fx, &["ABCD", "abcd", "phrase"]);
 }
 
-/// Issue #59: a recovery restarts a running sidecar, which still holds the retired KMS key; a
-/// stopped one stays stopped, and a failed recovery leaves the running one alone.
+/// Issue #59: a running sidecar, which holds the KMS key in memory, is stopped while
+/// `recover` runs and started again after it, whether the recovery succeeds or fails; a
+/// stopped one stays stopped.
 #[test]
-fn recover_restarts_a_running_serve() {
+fn recover_stops_a_running_serve_and_starts_it_again() {
     let fx = Fixture::new();
     let core = core(&fx);
     let port = health_server();
@@ -888,23 +889,30 @@ fn recover_restarts_a_running_serve() {
     assert_eq!(fx.count("serve"), 0);
     assert!(!core.serve_status().running);
 
-    let first = core.serve_start().unwrap();
-    assert!(first.running);
-    recover().unwrap();
-    let keys: Vec<String> = fx.calls().into_iter().map(|c| c.key).collect();
-    assert_eq!(keys[keys.len() - 3..], ["serve", "recover", "serve"]);
-    let restarted = core.serve_status();
-    assert!(restarted.running);
-    assert_ne!(restarted.pid, first.pid);
-
-    fx.respond_error(
-        "recover",
-        r#"{"error":"AuthFailed","reason":"recovery_failed"}"#,
-        1,
-    );
-    assert!(recover().is_err());
-    assert_eq!(fx.count("serve"), 2);
-    assert_eq!(core.serve_status().pid, restarted.pid);
+    // `recover` takes a second, so the sidecar can be seen stopped while it runs.
+    fx.respond_sleep("recover", 1);
+    let mut pid = core.serve_start().unwrap().pid;
+    for failure in [
+        None,
+        Some(r#"{"error":"AuthFailed","reason":"recovery_failed"}"#),
+    ] {
+        if let Some(stderr) = failure {
+            fx.respond_error("recover", stderr, 1);
+        }
+        let (serves, recovers) = (fx.count("serve"), fx.count("recover"));
+        let result = std::thread::scope(|s| {
+            let run = s.spawn(recover);
+            assert!(wait_until(Duration::from_secs(5), || fx.count("recover") > recovers));
+            assert!(!core.serve_status().running, "{failure:?}");
+            run.join().unwrap()
+        });
+        assert_eq!(result.is_err(), failure.is_some());
+        assert_eq!(fx.count("serve"), serves + 1, "{failure:?}");
+        let status = core.serve_status();
+        assert!(status.running, "{failure:?}");
+        assert_ne!(status.pid, pid, "{failure:?}");
+        pid = status.pid;
+    }
     assert!(!core.serve_stop().running);
 }
 
