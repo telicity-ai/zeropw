@@ -1896,10 +1896,10 @@ pub fn creates_misnamed_connection(op: &Map<String, Value>) -> bool {
             .is_none_or(|id| projects::validate_name(id, "connection_id").is_err())
 }
 
-/// The two rules folding enforces by skipping an op (issue #54): no derived
-/// file could hold it. Receipt does not check them, since earlier builds
-/// stored such ops and refusing them now would split the nodes that did
-/// from the nodes that did not; this build only refuses to author one.
+/// The two rules folding enforces by skipping an op (issue #54). Receipt
+/// does not check them, since earlier builds stored such ops and refusing
+/// them now would split the nodes that did from the nodes that did not;
+/// this build only refuses to author one.
 fn check_authored_op(op: &Value) -> Result<()> {
     let Some(obj) = op.as_object() else {
         return Ok(());

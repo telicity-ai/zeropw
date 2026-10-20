@@ -1231,8 +1231,10 @@ fn apply_op(
     vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
-    // Such an op would fail every refold or every backup (issue #54). This
-    // build does not author one, but receipt stores one as earlier builds did.
+    // An op nested this deep can fail every refold, snapshot or backup
+    // (issue #54). It is skipped whatever part of it is deep, so every node
+    // on this build folds it alike. This build does not author one, but
+    // receipt stores one as earlier builds did.
     if commit::op_too_deep(op) {
         return Ok(Some("op_too_deep".into()));
     }

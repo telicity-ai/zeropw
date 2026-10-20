@@ -1461,6 +1461,17 @@ mod retry_tests {
                 .sessions
                 .contains_key(&peer)
         );
+        let refused: Vec<Value> = f
+            .ctx
+            .audit
+            .iter_records()
+            .unwrap()
+            .into_iter()
+            .filter(|r| r["event"] == "team_handshake_failed")
+            .collect();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0]["reason"], "not_member");
+        assert_eq!(refused[0]["fingerprint"], json!(peer));
     }
 
     /// Issue #51: an environment whose first refold fails as it is
@@ -5470,7 +5481,12 @@ impl TeamSync {
         // removal fact was stored ends here: `drain_removed` drains only the
         // sessions already accepted.
         if env.facts.removed_members.contains(&fp) {
+            env.pending_invites.remove(&fp);
+            drop(envs);
             session.close();
+            // As that membership check now would; audited once the envs lock
+            // is released, as audit writes take the state lock.
+            self.audit_handshake_failed("not_member", Some(&fp));
             return false;
         }
         if let Some(current) = env.sessions.get(&fp) {
