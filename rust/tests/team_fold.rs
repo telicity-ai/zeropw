@@ -101,6 +101,32 @@ fn connection_create_commit(
     C::sign_commit(author, env_id, seq, hlc, &BTreeMap::new(), vec![op]).unwrap()
 }
 
+/// A `connection.create` signed without checking it, as a client other than
+/// this build can: receipt now refuses its id (issue #54).
+fn unchecked_connection_create(
+    env_id: &str,
+    author: &DeviceKey,
+    seq: i128,
+    hlc: &str,
+    conn_id: &str,
+) -> Commit {
+    let checked = simple_connection_create(env_id, author, seq, hlc, "placeholder");
+    let mut ops = checked.ops.clone();
+    ops[0]["id"] = json!(conn_id);
+    let unsigned = Commit {
+        ops,
+        sig: String::new(),
+        ..checked
+    };
+    let sig = author
+        .sign(&unsigned.canonical_json(false).unwrap())
+        .unwrap();
+    Commit {
+        sig: zeropw::pybase64::b64encode(&sig),
+        ..unsigned
+    }
+}
+
 fn simple_connection_create(
     env_id: &str,
     author: &DeviceKey,
@@ -412,6 +438,63 @@ fn connection_create_referencing_undeclared_secret_skipped() {
             .iter()
             .any(|(_, _, r)| r == "secret_not_found")
     );
+}
+
+/// Issue #54: an admin's `connection.create` with an id no derived connection
+/// can carry -- receipt refuses one now, but an earlier build stored it -- is
+/// skipped by the fold, so the derive of the rest goes on.
+#[test]
+fn a_connection_id_derive_refuses_is_skipped() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let bad = unchecked_connection_create(&env_id, &owner, 2, "2000-0000", "GH");
+    let good = simple_connection_create(&env_id, &owner, 3, "3000-0000", "gh");
+    let result = derive(&ctx, &owner, vec![c1, bad, good]);
+    let connections = result.document["connections"].as_object().unwrap();
+    assert!(connections.contains_key("gh") && !connections.contains_key("GH"));
+    assert!(
+        result
+            .skipped
+            .iter()
+            .any(|(_, _, r)| r == "invalid_connection_id")
+    );
+    let derived = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert!(derived.get("gh").is_some() && derived.get("GH").is_none());
+}
+
+/// Issue #54: a document an earlier build folded with such a connection --
+/// a compaction snapshot can hold one -- derives the others and skips that
+/// one, audited, instead of failing the whole derive.
+#[test]
+fn a_document_holding_a_connection_id_derive_refuses_derives_the_rest() {
+    let (_tmp, ctx) = setup();
+    let (owner, env_id, _dek, c1) = new_env(Some("gh-token"));
+    let good = simple_connection_create(&env_id, &owner, 2, "2000-0000", "gh");
+    let mut result = F::fold(&env_id, vec![c1, good], None, None, None, None).unwrap();
+    let mut bad = result.document["connections"]["gh"].clone();
+    bad["id"] = json!("GH");
+    result.document["connections"]["GH"] = bad;
+    F::derive_local(
+        &result,
+        ctx.state,
+        &ctx.policy,
+        Some(ctx.audit),
+        Some(&owner),
+        Some(ctx.kms),
+        None,
+        None,
+    )
+    .unwrap();
+    let derived = ctx.state.read_json(CONNECTIONS, Value::Null).unwrap();
+    assert!(derived.get("gh").is_some() && derived.get("GH").is_none());
+    let skipped = ctx
+        .audit
+        .iter_records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["event"] == "team_op_skipped" && r["reason"] == "invalid_connection_id")
+        .count();
+    assert_eq!(skipped, 1);
 }
 
 #[test]

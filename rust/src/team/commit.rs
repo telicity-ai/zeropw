@@ -1594,7 +1594,15 @@ pub fn build_connection_fields(args: &Map<String, Value>) -> Result<Map<String, 
 
 // ------------------------------------------------------------- op validators
 fn validate_connection_create(op: &Map<String, Value>) -> Result<()> {
-    if !valid_name_field(op.get("id"), 64) {
+    // Also the name rule every derived connection is built with: once stored,
+    // an id it refuses would fail every refold on every node (issue #54).
+    if !valid_name_field(op.get("id"), 64)
+        || projects::validate_name(
+            op.get("id").and_then(Value::as_str).unwrap_or(""),
+            "connection_id",
+        )
+        .is_err()
+    {
         return Err(Error::invalid_input("invalid_connection_id"));
     }
     build_connection_fields(op)?;
@@ -2773,6 +2781,85 @@ mod tests {
         assert_eq!(
             receive_commit(&store, &other_env, 2_000_000, None).unwrap(),
             "rejected"
+        );
+    }
+
+    /// Signs `ops` as [`sign_commit`] does but without checking them, as a
+    /// client other than this build can.
+    fn sign_unchecked(
+        device: &DeviceKey,
+        env_id: &str,
+        seq: i64,
+        hlc: &str,
+        ops: Vec<Value>,
+    ) -> Commit {
+        let unsigned = Commit {
+            format: COMMIT_FORMAT.to_string(),
+            env_id: env_id.to_string(),
+            author: device.fingerprint().unwrap(),
+            author_seq: PyInt::from(seq),
+            hlc: hlc.to_string(),
+            seen: BTreeMap::new(),
+            ops,
+            sig: String::new(),
+        };
+        let sig = device
+            .sign(&unsigned.canonical_json(false).unwrap())
+            .unwrap();
+        Commit {
+            sig: pybase64::b64encode(&sig),
+            ..unsigned
+        }
+    }
+
+    /// Issue #54: a `connection.create` whose id fails the name rule derived
+    /// connections are built with is refused on receipt, not stored.
+    #[test]
+    fn receive_commit_rejects_a_connection_id_derive_refuses() {
+        let f = fixture();
+        let store = CommitStore::new(&f.state, f.env_id.clone());
+        bootstrap(&f, &store);
+        for id in ["GH", "gh/x", ".gh"] {
+            assert_eq!(
+                validate_op(&connection_create_op(id)).unwrap_err().reason,
+                "invalid_connection_id"
+            );
+            let commit = sign_unchecked(
+                &f.owner,
+                &f.env_id,
+                2,
+                &Hlc::default().tick(Some(2_000_000)),
+                vec![connection_create_op(id)],
+            );
+            assert_eq!(
+                receive_commit(&store, &commit, 2_000_000, None).unwrap(),
+                "rejected",
+                "{id}"
+            );
+        }
+        let rejected: Vec<String> = std::fs::read_dir(store.dir("rejected"))
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(rejected.len(), 3);
+        assert!(
+            rejected
+                .iter()
+                .all(|r| r.contains("team_op_format_invalid_connection_id")),
+            "{rejected:?}"
+        );
+        let accepted = sign_commit(
+            &f.owner,
+            &f.env_id,
+            2,
+            &Hlc::default().tick(Some(2_000_000)),
+            &store.vector().unwrap(),
+            vec![connection_create_op("gh.x-1_y")],
+        )
+        .unwrap();
+        assert_eq!(
+            receive_commit(&store, &accepted, 2_000_000, None).unwrap(),
+            "accepted"
         );
     }
 

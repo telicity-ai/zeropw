@@ -673,6 +673,14 @@ fn op_connection_create(
         return Ok(Some("not_admin".into()));
     }
     let conn_id = op_item(op, "id")?;
+    // Receipt now refuses such an id; one an earlier build stored is skipped
+    // here, since deriving it would fail every refold (issue #54).
+    if conn_id
+        .as_str()
+        .is_none_or(|id| crate::projects::validate_name(id, "connection_id").is_err())
+    {
+        return Ok(Some("invalid_connection_id".into()));
+    }
     if py_contains(py_getitem(doc, "connections")?, conn_id)?
         || py_set_contains(&facts.disabled_connections, conn_id)?
     {
@@ -2414,6 +2422,23 @@ fn derive_connections(
         .ok_or_else(doc_corrupt)?
         .clone();
     for (conn_id, entry_val) in &connections {
+        // An id no derived connection can carry -- only in a document an
+        // earlier build folded, such as a compaction snapshot -- is skipped
+        // rather than failing the whole derive (issue #54).
+        if crate::projects::validate_name(conn_id, "connection_id").is_err() {
+            if let Some(audit) = audit {
+                audit.record(
+                    "team_op_skipped",
+                    RecordArgs {
+                        result: Some("skipped"),
+                        reason: Some("invalid_connection_id"),
+                        extra: vec![("env_id", json!(env_id)), ("detail", json!("connection"))],
+                        ..Default::default()
+                    },
+                )?;
+            }
+            continue;
+        }
         seen_ids.insert(conn_id.clone());
         // `existing_raw = local.get(conn_id)`; `if existing_raw and
         // existing_raw.get("shared_env") != env_id` (a truthy non-dict has

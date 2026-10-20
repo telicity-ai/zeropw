@@ -78,7 +78,7 @@ Store canonical JSON (sorted keys, compact separators) in `team/ENV_ID/document.
 
 Members contain name, admin/user role, active/removed status and signed device record (`sign_pub`, `agree_pub`, `sig`). DEK state has `current` and `generations`, each with recipient `wraps` (`eph_pub`, `nonce`, `ciphertext`). Connections carry the existing serialized definition without local policy_version. Secrets contain kind, active_version and per-version staged/active/retired/revoked status, generation, nonce/ciphertext and public metadata. Default `sync_interval_seconds` is 10. Caller/grant/approval/handle/policy-version state is absent.
 
-Recompute `shared_env: ENV_ID` entries in local policy/vault files after folding. Manual edits of derived shared entries are overwritten; unmarked local entries are never overwritten. Skip a colliding local ID and record `local_id_conflict`. Do not derive versions whose generation cannot be unwrapped: only dependent connections become `credential_unavailable`, without breaking other connections or all-vault scanning.
+Recompute `shared_env: ENV_ID` entries in local policy/vault files after folding. Manual edits of derived shared entries are overwritten; unmarked local entries are never overwritten. Skip a colliding local ID and record `local_id_conflict`. A connection id outside the name rule, which an earlier build could store, is skipped while folding (`invalid_connection_id`) and while deriving a document an earlier build folded, such as a compaction snapshot (`team_op_skipped`, reason `invalid_connection_id`), so it cannot fail every refold. Do not derive versions whose generation cannot be unwrapped: only dependent connections become `credential_unavailable`, without breaking other connections or all-vault scanning.
 
 Version IDs are random 128-bit hex tokens in `secret.put_version`, not commit hashes: AAD needs the version ID before ciphertext exists, while commit hashes depend on that ciphertext. Signatures protect IDs; duplicate IDs within a secret are skipped. Local integer version numbers are assigned from fold order starting at 1 and may change after an earlier concurrent commit arrives. Commits and connection definitions reference stable version IDs; integer numbers are local display/API compatibility only.
 
@@ -132,7 +132,7 @@ Every node validates independently, never trusting another node's checks:
 1. Correct environment and exactly next author sequence.
 2. Signature against the author's device key; membership admission must precede it in folding. Role checks occur at application time.
 3. Future wall-clock HLC more than 5 minutes ahead is deferred under `team/ENV_ID/deferred/` until the time catches up.
-4. State-independent operation format via existing Connection/HttpTarget/SshTarget/CliProfile/HttpScope validators. State/role/target/profile-secret checks occur while folding.
+4. State-independent operation format via existing Connection/HttpTarget/SshTarget/CliProfile/HttpScope validators, including the name rule (`[a-z0-9][a-z0-9._-]{0,63}`) every derived connection's id must pass. State/role/target/profile-secret checks occur while folding.
 
 Failed identity/sequence/signature/format checks go to `rejected/` with `team_commit_rejected` reason/author/sequence audit and block subsequent author sequence. Code-version disagreement can cause rejection; inspect `team status`.
 
