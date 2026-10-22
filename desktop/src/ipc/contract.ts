@@ -14,6 +14,9 @@ export interface ServeStatus { running: boolean; url: string | null; pid: number
 export interface AppStatus { initialized: boolean; state_dir: string; serve: ServeStatus; control: Control | null }
 
 export interface Project { name: string; environments: string[]; created_at: string }
+/** A team environment under its local name: one this device shared, or one it joined (which is
+ *  in no project). `project list` adds the list only when there is one. */
+export interface TeamEnvironment { project: string; environment: string; env_id: string }
 export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
 /** A secret version exactly as the CLI printed it (the CLI prints JSON numbers; a string is
  *  accepted too). The version commands take it back unchanged; do not convert it. */
@@ -66,7 +69,7 @@ export interface Commands {
   stop_all: [void, Control];
   resume: [{ admin_passphrase: string }, Control];
 
-  project_list: [void, { projects: Project[] }];
+  project_list: [void, { projects: Project[]; team_environments?: TeamEnvironment[] }];
   project_create: [{ name: string; environments: string[] }, Project];
 
   secret_list: [{ project?: string; environment?: string }, { secrets: SecretView[] }];

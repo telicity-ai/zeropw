@@ -4,7 +4,9 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListe
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
+import { grantState, liveGrants, pendingApprovals, runtimeStopsAll, teamEnvPairs } from '../src/lib/dash';
+import { watchRecords } from '../src/dashboard/watch';
+import type { Control } from '../src/ipc/contract';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
@@ -272,9 +274,29 @@ describe('team', () => {
     const link = 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(4);
     const { ref, preview } = await call('team_invite_preview', { text: link });
     expect((await rejection(call('onetime_show', { ref }))).reason).toBe('onetime_ref_unknown');   // a pasted invite stays in the core
+    const before = await call('project_list');
+    expect(before.team_environments).toBeUndefined();   // no team environment: the list as before
     const joined = await call('team_join', { ref, project: 'team-x', environment: 'shared' });
     expect(joined.inviter_fingerprint).toBe(preview.inviter);
     expect((await call('team_members', { env: 'team-x/shared' })).members.map((m) => m.owner)).toEqual([true, false]);
+    // as `team join` does, the environment is mapped, not made a project; `project list` names it
+    // so the Team page lists it
+    const listed = await call('project_list');
+    expect(listed.projects).toEqual(before.projects);
+    expect(listed.team_environments).toEqual([{ project: 'team-x', environment: 'shared', env_id: preview.env_id }]);
+    expect(teamEnvPairs(listed).map((p) => p.key)).toContain('team-x/shared');
+    // keys go into it through the team, as the CLI's shared-environment branch does
+    await call('secret_put', { id: 'team-key', kind: 'api_key', project: 'team-x', environment: 'shared', source: { typed: 'synthetic-team-value' } });
+    expect((await rejection(call('secret_put', { id: 'k2', kind: 'api_key', project: 'team-y', environment: 'shared', source: { typed: 'v' } }))).reason).toBe('project_unknown');
+  });
+
+  it('lists an environment shared from here once, among the projects and as a team environment', async () => {
+    ready();
+    await call('team_share', { project: 'demo', environment: 'dev', admin_passphrase: PASS });
+    const listed = await call('project_list');
+    expect(listed.team_environments).toHaveLength(1);
+    expect(listed.team_environments?.[0]).toMatchObject({ project: 'demo', environment: 'dev' });
+    expect(teamEnvPairs(listed).filter((p) => p.key === 'demo/dev')).toHaveLength(1);
   });
 });
 
@@ -584,5 +606,50 @@ describe('relay start', () => {
     expect([e.error, e.reason, e.detail]).toEqual(['Unavailable', 'serve_exited', undefined]);
     expect(relayError(e.reason, e.detail).key).toBe('relay.err.exited');
     expect((await call('serve_start')).running).toBe(true);
+  });
+});
+
+describe('state changes the window did not make', () => {
+  // The relay opens an incident and stops everything on its own (docs/compromise-response.md),
+  // and commands run in the app's terminal; both leave records, which the dashboard reads.
+  it('reads the stop, incident and restore state again when records come, and reports a change', async () => {
+    const b = ready();
+    let current = await call('control_get');
+    const records: number[] = [], changes: Control[] = [];
+    const w = watchRecords({ records: (n) => records.push(n), control: (c) => { changes.push(c); current = c; } }, () => current);
+    const reads = () => b.calls().filter((n) => n === 'control_get').length;
+    await w.poll();                                                   // marks where the log ends
+    expect([records, changes]).toEqual([[], []]);
+
+    await call('incident_declare', { scope: 'all', admin_passphrase: PASS });
+    await w.poll();
+    expect(records).toHaveLength(1);
+    expect(changes).toEqual([{ stopped: true, restore_pending: false, incident_open: true }]);
+
+    // no new records: the state is not read again
+    const n = reads();
+    await w.poll();
+    expect(reads()).toBe(n);
+    // new records that change nothing are not a change
+    await call('project_create', { name: 'other', environments: ['dev'] });
+    await w.poll();
+    expect(records).toHaveLength(2);
+    expect(changes).toHaveLength(1);
+
+    // a state read that fails is tried again on the next poll, without new records
+    await call('backup_create');
+    await call('backup_restore', { admin_passphrase: PASS });
+    b.failNext('control_get', { error: 'Unavailable', reason: 'admin_unavailable' });
+    await w.poll();
+    expect(records).toHaveLength(3);
+    expect(changes).toHaveLength(1);
+    await w.poll();
+    expect(changes[1]).toMatchObject({ restore_pending: true });
+
+    // stopped: nothing more is reported
+    w.stop();
+    await call('project_create', { name: 'third', environments: ['dev'] });
+    await w.poll();
+    expect(records).toHaveLength(3);
   });
 });

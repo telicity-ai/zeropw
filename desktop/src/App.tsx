@@ -3,7 +3,7 @@ import { t, type CopyKey } from './copy';
 import { Field } from './field/field';
 import { FieldLayer } from './field/FieldLayer';
 import { call, inDesktop, on, toIpcError } from './ipc/client';
-import { hostPort } from './lib/format';
+import { relayPill } from './lib/dash';
 import type { AppStatus, InvitePreview } from './ipc/contract';
 import { Onboarding } from './onboarding/Onboarding';
 import { Dashboard, type PageId } from './dashboard/Dashboard';
@@ -66,7 +66,7 @@ export function App() {
       (s) => {
         setStatus(s);
         if (s.initialized) {
-          setPill(s.control?.stopped ? { kind: 'stopped' } : s.serve.running ? { kind: 'live', addr: hostPort(s.serve.url) } : { kind: 'off' });
+          setPill(relayPill(s.serve, s.control));
           setPhase('dashboard');
         } else {
           setPhase('onboarding');

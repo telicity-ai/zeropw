@@ -2,7 +2,8 @@
 // value-free text for records. The core re-checks every input; these only decide what the UI
 // marks as ready and which inline error it shows. Nothing here ever handles a secret value.
 
-import type { AuditRecord, ConnectionView, Grant, Project, SecretView } from '../ipc/contract';
+import type { AuditRecord, ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../ipc/contract';
+import { hostPort } from './format';
 import { isValidName } from './validators';
 
 // ---------------------------------------------------------------- projects and environments
@@ -18,6 +19,22 @@ export function envPairs(projects: readonly Project[]): EnvPair[] {
     for (const e of p.environments) {
       if (typeof e === 'string') out.push({ project: p.name, environment: e, key: envKey(p.name, e) });
     }
+  }
+  return out;
+}
+
+/** The Team page's environments: every local pair, then each team environment the projects do
+ *  not list. An environment this device joined lives only in the team mapping, never among its
+ *  projects (`project list` names it under `team_environments`). */
+export function teamEnvPairs(listing: { projects: readonly Project[]; team_environments?: readonly TeamEnvironment[] }): EnvPair[] {
+  const out = envPairs(listing.projects);
+  const seen = new Set(out.map((p) => p.key));
+  for (const e of listing.team_environments ?? []) {
+    if (typeof e.project !== 'string' || typeof e.environment !== 'string') continue;
+    const key = envKey(e.project, e.environment);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ project: e.project, environment: e.environment, key });
   }
   return out;
 }
@@ -359,3 +376,30 @@ export const inviteFraction = (expiresAt: string, now: number): number => Math.m
 
 /** Seconds left of a revealed value's 30-second window. */
 export const REVEAL_SECONDS = 30;
+
+// ---------------------------------------------------------------- relay state
+
+/** What the relay status (title bar, sidebar) says: `held` while a restore waits to be
+ *  acknowledged and `stopped` under a global stop, since either refuses every request whether or
+ *  not the relay runs (rust/src/policy.rs `decide`); otherwise whether the relay runs. A restore
+ *  hold comes first, as on Home: acknowledging it does not lift a global stop. */
+export type RelayState = 'held' | 'stopped' | 'live' | 'off';
+
+export function relayState(serve: Pick<ServeStatus, 'running'>, control: Control | null | undefined): RelayState {
+  if (control?.restore_pending) return 'held';
+  if (control?.stopped) return 'stopped';
+  return serve.running ? 'live' : 'off';
+}
+
+/** Every request is refused (the sphere stops turning, DESIGN.md §3.2). */
+export const relayBlocked = (control: Control | null | undefined): boolean => !!(control?.stopped || control?.restore_pending);
+
+/** The title bar's status pill for a relay state. */
+export function relayPill(serve: ServeStatus, control: Control | null | undefined):
+  { kind: 'held' } | { kind: 'stopped' } | { kind: 'live'; addr: string | null } | { kind: 'off' } {
+  const state = relayState(serve, control);
+  return state === 'live' ? { kind: 'live', addr: hostPort(serve.url) } : { kind: state };
+}
+
+export const sameControl = (a: Control, b: Control): boolean =>
+  a.stopped === b.stopped && a.restore_pending === b.restore_pending && a.incident_open === b.incident_open;
