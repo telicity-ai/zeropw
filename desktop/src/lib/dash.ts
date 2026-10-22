@@ -191,6 +191,36 @@ export function runtimeStopsAll(principals: readonly { runtime: string; status: 
   return principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime);
 }
 
+/** Incident scopes, narrowest first (rust/src/incident.rs `SCOPES`). */
+export const INCIDENT_SCOPES = ['principal', 'runtime', 'all'] as const;
+export type IncidentScope = typeof INCIDENT_SCOPES[number];
+const scopeRank = (s: string): number => INCIDENT_SCOPES.indexOf(s as IncidentScope);
+
+/** The open incident a new declaration meets: the widest when the list holds more than one. */
+export function openIncident<T extends { status: string; scope: string }>(incidents: readonly T[]): T | null {
+  let found: T | null = null;
+  for (const x of incidents) if (x.status === 'open' && (!found || scopeRank(x.scope) > scopeRank(found.scope))) found = x;
+  return found;
+}
+
+/** Scopes a declaration still contains while an incident of scope `open` is open: the core widens
+ *  an open incident to a wider scope and returns it unchanged for any other, even one naming
+ *  another agent or runtime (rust/src/incident.rs `open_incident`). An unknown scope ranks below
+ *  every scope there, so every scope widens it. */
+export function declarableScopes(open: string | null): IncidentScope[] {
+  if (open === null) return [...INCIDENT_SCOPES];
+  return INCIDENT_SCOPES.filter((s) => scopeRank(s) > scopeRank(open));
+}
+
+export type DeclareOutcome = 'opened' | 'widened' | 'unchanged';
+
+/** What `incident declare` did. Output that met an open incident carries `existing` (and
+ *  `widened` only when it widened it); anything else from such output contained no one. */
+export function declareOutcome(out: { existing?: unknown; widened?: unknown }): DeclareOutcome {
+  if (out.existing === undefined || out.existing === false) return 'opened';
+  return out.widened === true ? 'widened' : 'unchanged';
+}
+
 // ---------------------------------------------------------------- connections (CLI output, untyped)
 
 export interface ConnectionSummary { kind: 'http' | 'ssh' | 'other'; host: string; env: string; auth: string | null; active: boolean }

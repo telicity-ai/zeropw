@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionView, Grant, Project, SecretView } from '../src/ipc/contract';
 import {
-  blockText, countOf, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
+  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
   recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, summarizeConnection, valueText, writeConsequences,
 } from '../src/lib/dash';
 
@@ -161,6 +161,33 @@ describe('incident scope', () => {
     expect(runtimeStopsAll([p('user-a'), p('default', 'disabled')], 'user-a')).toBe(true);
     expect(runtimeStopsAll([p('user-a'), p('default')], 'user-a')).toBe(false);
     expect(runtimeStopsAll([], 'user-a')).toBe(true);
+  });
+
+  // rust/src/incident.rs `open_incident` widens an open incident only to a wider scope and returns
+  // it unchanged for any other, even one naming another agent or runtime
+  it('offers only scopes wider than the open incident', () => {
+    expect(declarableScopes(null)).toEqual(['principal', 'runtime', 'all']);
+    expect(declarableScopes('principal')).toEqual(['runtime', 'all']);
+    expect(declarableScopes('runtime')).toEqual(['all']);
+    expect(declarableScopes('all')).toEqual([]);
+    // an unknown stored scope ranks below every scope in the core, so each one widens it
+    expect(declarableScopes('weird')).toEqual(['principal', 'runtime', 'all']);
+  });
+
+  it('finds the open incident, the widest when several are open', () => {
+    const i = (id: string, status: string, scope: string) => ({ id, status, scope });
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'closed', 'principal')])).toBeNull();
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'open', 'principal')])?.id).toBe('b');
+    expect(openIncident([i('a', 'open', 'principal'), i('b', 'open', 'runtime'), i('c', 'open', 'principal')])?.id).toBe('b');
+  });
+
+  it('reads a declaration that met an open incident as no lockdown unless it widened it', () => {
+    expect(declareOutcome({})).toBe('opened');
+    expect(declareOutcome({ existing: false })).toBe('opened');
+    expect(declareOutcome({ existing: true, widened: true })).toBe('widened');
+    expect(declareOutcome({ existing: true, widened: false })).toBe('unchanged');
+    expect(declareOutcome({ existing: true })).toBe('unchanged');
+    expect(declareOutcome({ existing: 'yes', widened: 'yes' })).toBe('unchanged');
   });
 });
 
