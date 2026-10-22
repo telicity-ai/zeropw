@@ -1948,9 +1948,20 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             )?;
             Ok(json!({"name":p.name,"environments":p.environments,"created_at":p.created_at}))
         }
-        ("project", "list") => Ok(
-            json!({"projects":ctx.projects.list()?.into_iter().map(|p| json!({"name":p.name,"environments":p.environments,"created_at":p.created_at})).collect::<Vec<_>>()}),
-        ),
+        ("project", "list") => {
+            let mut out = json!({"projects":ctx.projects.list()?.into_iter().map(|p| json!({"name":p.name,"environments":p.environments,"created_at":p.created_at})).collect::<Vec<_>>()});
+            // A joined environment lives only in the team mapping, never in
+            // `projects.json`; list every mapping so it can be found by its
+            // local name. Without one the output is unchanged.
+            let team = crate::team::sync::env_mappings(ctx.state)?;
+            if !team.is_empty() {
+                out["team_environments"] = team
+                    .into_iter()
+                    .map(|(env_id, project, environment)| json!({"project":project,"environment":environment,"env_id":env_id}))
+                    .collect();
+            }
+            Ok(out)
+        }
         ("secret", "put") => {
             let value = read_secret(a, a.req("kind"))?;
             if let Some(env_id) = project_shared_env(&ctx, a.req("project"), a.req("environment"))?
