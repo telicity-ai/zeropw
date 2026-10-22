@@ -343,6 +343,16 @@ pub struct SshConnectionIn {
     pub admin_passphrase: SecretString,
 }
 
+/// Gives an SSH connection made without an ssh (before the app sent one) the ssh its agents run.
+/// Which connections can take one is the CLI's rule (`connection update --cli-program`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliProgramIn {
+    pub id: String,
+    pub cli_program: String,
+    pub admin_passphrase: SecretString,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrincipalCreateIn {
@@ -1057,6 +1067,24 @@ impl Core {
         args = args
             .opt("cli-program", &input.cli_program)?
             .opt_nonempty("description", input.description.as_deref())?;
+        self.run(
+            args,
+            Envelope::new().admin_passphrase(&input.admin_passphrase),
+        )
+    }
+
+    /// `connection update --cli-program`: the CLI refuses a connection that is not SSH
+    /// (`cli_requires_ssh`), is disabled (`connection_disabled`) or already has one
+    /// (`cli_already_set`). A new program widens the connection, so its grants go stale.
+    pub fn connection_set_cli_program(&self, input: CliProgramIn) -> Result<Value, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        if input.cli_program.is_empty() {
+            return Err(AppError::invalid_input("cli_program_required"));
+        }
+        let args = AdminArgs::command(&["connection", "update"])
+            .require_admin()
+            .opt("id", &input.id)?
+            .opt("cli-program", &input.cli_program)?;
         self.run(
             args,
             Envelope::new().admin_passphrase(&input.admin_passphrase),

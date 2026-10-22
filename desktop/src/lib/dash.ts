@@ -196,7 +196,9 @@ export function runtimeStopsAll(principals: readonly { runtime: string; status: 
 
 // ---------------------------------------------------------------- connections (CLI output, untyped)
 
-export interface ConnectionSummary { kind: 'http' | 'ssh' | 'other'; host: string; env: string; auth: string | null; active: boolean }
+/** `noCli`: an SSH connection without the ssh its agents run (made by the app before it sent
+ *  one); `exec` refuses it with `cli_not_supported` until it gets one. */
+export interface ConnectionSummary { kind: 'http' | 'ssh' | 'other'; host: string; env: string; auth: string | null; active: boolean; noCli: boolean }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const str = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
@@ -216,7 +218,8 @@ export function summarizeConnection(c: ConnectionView): ConnectionSummary {
     host = (user ? `${user}@` : '') + str(t.host) + (port && port !== '22' ? `:${port}` : '');
   }
   const auth = kind === 'http' ? str(obj(c.http_auth).mode) || null : null;
-  return { kind, host, env: envKey(str(c.project), str(c.environment)), auth, active: c.status === 'active' };
+  const noCli = kind === 'ssh' && (c.cli === null || c.cli === undefined);
+  return { kind, host, env: envKey(str(c.project), str(c.environment)), auth, active: c.status === 'active', noCli };
 }
 
 // ---------------------------------------------------------------- audit records

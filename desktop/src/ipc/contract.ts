@@ -81,6 +81,11 @@ export interface Commands {
   connection_list: [void, { connections: ConnectionView[] }];
   connection_create_http: [HttpConnectionInput & { admin_passphrase: string }, ConnectionView];
   connection_create_ssh: [SshConnectionInput & { admin_passphrase: string }, ConnectionView];
+  /** Gives an SSH connection made without an ssh (before the app sent one) the ssh its agents
+   *  run. Refused for a connection that is not SSH (`cli_requires_ssh`), is disabled
+   *  (`connection_disabled`) or has one already (`cli_already_set`). The connection's grants go
+   *  stale and must be given again. */
+  connection_set_cli_program: [{ id: string; cli_program: string; admin_passphrase: string }, Record<string, unknown>];
   connection_disable: [{ id: string }, Record<string, unknown>];
 
   principal_list: [void, { principals: Principal[] }];

@@ -145,6 +145,38 @@ describe('connections', () => {
     expect(listed?.cli).not.toBeNull();
     expect((listed?.cli as { program?: string } | null)?.program).toBe(SSH_PROGRAM);
   });
+
+  // F8 repair: an SSH connection made before the fix gets its ssh in place (rust/src/admin_cli.rs
+  // update_connection_cli); only a missing one is filled, and the connection's grants go stale
+  it('gives an SSH connection without its ssh one, once, and its grants must be given again', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, sshWithoutCli: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const fill = { id: 'deploy-ssh', cli_program: SSH_PROGRAM, admin_passphrase: PASS };
+    const before = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(before?.cli).toBeNull();
+    const grant = (await call('grant_list', {})).grants.find((g) => g.connection === 'deploy-ssh');
+    expect(grant?.status).toBe('active');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
+    expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
+    expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);
+
+    const out = await call('connection_set_cli_program', fill);
+    expect(out).toMatchObject({ id: 'deploy-ssh', widened: true, policy_version: 2 });
+    const after = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(after?.cli).toEqual({ program: SSH_PROGRAM, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
+    expect(after?.ssh_target).toEqual(before?.ssh_target);
+    const stale = (await call('grant_list', {})).grants.find((g) => g.id === grant?.id);
+    expect(stale?.status).toBe('stale');
+    expect(grantState(stale!, Date.now())).not.toBe('live');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/false' }))).reason).toBe('cli_already_set');
+    await call('connection_disable', { id: 'deploy-ssh' });
+    expect((await rejection(call('connection_set_cli_program', fill))).reason).toBe('connection_disabled');
+  });
 });
 
 describe('agents, grants, terminals and approvals', () => {

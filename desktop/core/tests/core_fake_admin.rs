@@ -836,6 +836,72 @@ fn ssh_connection_without_its_ssh_is_refused_before_the_cli() {
     assert_eq!(fx.count("connection_create-ssh"), 0);
 }
 
+/// F8 repair: `connection_set_cli_program` is `connection update --cli-program` behind the
+/// admin password. An empty path or a missing password never reaches the CLI; which connection
+/// can take one is the CLI's rule, and its refusal comes back as it is.
+#[test]
+fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let input = |program: &str| CliProgramIn {
+        id: "prod".into(),
+        cli_program: program.into(),
+        admin_passphrase: pass(),
+    };
+    core.connection_set_cli_program(input("/usr/bin/ssh"))
+        .unwrap();
+    let call = fx.last("connection_update");
+    assert!(call.requires_admin());
+    assert_eq!(
+        call.args(),
+        [
+            "connection",
+            "update",
+            "--id=prod",
+            "--cli-program=/usr/bin/ssh"
+        ]
+    );
+    assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
+
+    let e = core.connection_set_cli_program(input("")).unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("InvalidInput", "cli_program_required")
+    );
+    let e = core
+        .connection_set_cli_program(CliProgramIn {
+            admin_passphrase: SecretString::from(""),
+            ..input("/usr/bin/ssh")
+        })
+        .unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("AuthFailed", "passphrase_missing")
+    );
+    assert_eq!(fx.count("connection_update"), 1);
+    for payload in [
+        json!({"id": "prod", "admin_passphrase": ADMIN_PASS}),
+        json!({"id": "prod", "cli_program": "/usr/bin/ssh", "admin_passphrase": ADMIN_PASS,
+               "methods": "GET"}),
+    ] {
+        assert!(serde_json::from_value::<CliProgramIn>(payload).is_err());
+    }
+
+    fx.respond_error(
+        "connection_update",
+        r#"{"error":"InvalidInput","reason":"cli_already_set","detail":"disable the connection and create a new one to change its ssh program"}"#,
+        1,
+    );
+    let e = core
+        .connection_set_cli_program(input("/bin/false"))
+        .unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("InvalidInput", "cli_already_set")
+    );
+    assert_argv_clean(&fx, &[ADMIN_PASS]);
+}
+
 /// The envelopes of the `recover` calls after the first `skip`.
 fn recover_envelopes(fx: &Fixture, skip: usize) -> Vec<serde_json::Value> {
     fx.calls()

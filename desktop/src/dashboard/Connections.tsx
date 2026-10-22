@@ -17,7 +17,7 @@ import { kindLabel, PublicKey } from './Keys';
 import { ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
-type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string };
+type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string } | { kind: 'ssh-cli'; id: string };
 const CONSQ: Record<'POST' | 'PUT' | 'PATCH' | 'DELETE', CopyKey> = {
   POST: 'conn.consq.POST', PUT: 'conn.consq.PUT', PATCH: 'conn.consq.PATCH', DELETE: 'conn.consq.DELETE',
 };
@@ -43,10 +43,16 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
       <ListCard items={list} failed={load.failed} empty="page.connections.empty" emptyAction={addBtn} label={t('conns.list')}>
         {(items) => items.map((c) => {
           const s = summarizeConnection(c);
+          // an SSH connection the app made before it sent an ssh: exec refuses it until it gets one
+          const noCli = s.active && s.noCli;
           return (
-            <Row key={c.id} dot={s.active ? 'on' : 'idle'} mono name={c.id}
+            <Row key={c.id} dot={s.active && !noCli ? 'on' : 'idle'} mono name={c.id}
               tag={<Tag>{s.kind === 'http' ? 'API' : s.kind === 'ssh' ? 'SSH' : String(c.kind)}</Tag>}
-              meta={metaLine(s.host, s.env, s.active ? null : t('st.disabled'))}>
+              meta={metaLine(s.host, s.env, s.active ? null : t('st.disabled'), noCli ? t('conns.nocli') : null)}>
+              {noCli && (
+                <button className="btn btn-ghost btn-sm" type="button" aria-label={t('conns.sshcli.aria', { id: c.id })}
+                  onClick={() => sheets.open({ kind: 'ssh-cli', id: c.id })}>{t('conns.sshcli')}</button>
+              )}
               {s.active && (
                 <button className="btn btn-text btn-sm" type="button" aria-label={t('conns.disable.aria', { id: c.id })}
                   onClick={() => sheets.open({ kind: 'disable', id: c.id })}>{t('conns.disable')}</button>
@@ -60,7 +66,45 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
         connections={list ?? []} secrets={load.data?.secrets ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
       <DisableSheet key={sheets.key('disable')} open={sheets.isOpen('disable')} id={sheets.data('disable')?.id ?? ''}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
+      <SshCliSheet key={sheets.key('ssh-cli')} open={sheets.isOpen('ssh-cli')} id={sheets.data('ssh-cli')?.id ?? ''}
+        onClose={sheets.close} onStale={reload} onDone={() => { sheets.close(); reload(); bump(); }} />
     </>
+  );
+}
+
+/** Gives an SSH connection made without an ssh the one its agents run (`connection_set_cli_program`).
+ *  The CLI fills a missing ssh only, and the connection's grants go stale, so the sheet says the
+ *  path cannot be changed later and that the agents' permissions must be given again. */
+function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id: string; onClose(): void; onStale(): void; onDone(): void }) {
+  const { toast } = useApp();
+  const [path, setPath] = useState(SSH_PROGRAM);
+  const [pathErr, setPathErr] = useState<CopyKey | null>(null);
+  const pathRef = useRef<HTMLInputElement>(null);
+  return (
+    <ConfirmSheet id="sheet-conn-ssh-cli" open={open} title={t('conns.sshcli.title')} lead={t('conns.sshcli.sub')}
+      confirmLabel={t('conns.sshcli.confirm')} chips={[id]} info={t('conns.sshcli.regrant')} warn={t('conns.sshcli.warn')} needPass
+      check={() => {
+        if (isCliPath(path.trim())) return true;
+        setPathErr('conn.cli.err'); pathRef.current?.focus();
+        return false;
+      }}
+      run={async (pass) => {
+        await call('connection_set_cli_program', { id, cli_program: path.trim(), admin_passphrase: pass });
+        toast(t('toast.conn.sshcli'));
+        onDone();
+      }}
+      errorFor={(e) => {
+        const r = toIpcError(e).reason;
+        if (r === 'cli_program_required' || r === 'invalid_cli_program') return 'conn.cli.err';
+        // the list was out of date: show the connection as it is now
+        if (r === 'cli_already_set') { onStale(); return 'conns.sshcli.err.set'; }
+        if (r === 'connection_disabled' || r === 'connection_not_found') { onStale(); return 'conns.sshcli.err.off'; }
+        return null;
+      }}
+      onClose={onClose}>
+      <TextField id="conn-sshcli-path" label={t('conn.ssh.cli')} mono value={path} inputRef={pathRef} placeholder={SSH_PROGRAM}
+        error={pathErr ? t(pathErr) : null} onChange={(v) => { setPath(v); setPathErr(null); }} />
+    </ConfirmSheet>
   );
 }
 

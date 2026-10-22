@@ -173,13 +173,22 @@ describe('connection summaries (CLI output read defensively)', () => {
   const base = { id: 'x', project: 'demo', environment: 'dev', status: 'active' };
   it('shows the HTTP host, hiding the default port', () => {
     const c = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, http_auth: { mode: 'bearer' } } as ConnectionView;
-    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true });
+    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true, noCli: false });
     const odd = { ...c, http_target: { scheme: 'https', host: 'api.example.com', port: 8443 } } as ConnectionView;
     expect(summarizeConnection(odd).host).toBe('api.example.com:8443');
   });
   it('shows user@host for SSH', () => {
     const c = { ...base, kind: 'ssh', status: 'disabled', ssh_target: { host: 'git.example.com', port: 2222, username: 'git' } } as ConnectionView;
     expect(summarizeConnection(c)).toMatchObject({ kind: 'ssh', host: 'git@git.example.com:2222', active: false });
+  });
+  // an SSH connection the app made before it sent an ssh: exec refuses it (cli_not_supported)
+  it('marks an SSH connection without its ssh, and only that', () => {
+    const ssh = { ...base, kind: 'ssh', ssh_target: { host: 'git.example.com', port: 22, username: 'git' } };
+    expect(summarizeConnection({ ...ssh, cli: null } as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection(ssh as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection({ ...ssh, cli: { program: SSH_PROGRAM, kind: 'ssh' } } as ConnectionView).noCli).toBe(false);
+    const http = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, cli: null } as ConnectionView;
+    expect(summarizeConnection(http).noCli).toBe(false);
   });
   it('does not throw on unexpected shapes', () => {
     const c = { ...base, kind: 'weird', http_target: 'nope', ssh_target: [1, 2] } as unknown as ConnectionView;
