@@ -14,6 +14,9 @@
 //! - Stop: SIGTERM, then SIGKILL only after up to 25 s. A stop that arrives while a start is
 //!   still waiting for the sidecar cancels that start (the half-started sidecar is stopped)
 //!   instead of waiting out the 60 s start budget, so quitting the app is never held up.
+//! - Watch: [`ServeSupervisor::watch`] looks without waiting for a start or stop in progress,
+//!   so the core can check every [`WATCH_INTERVAL`] whether the sidecar is still there and tell
+//!   the window when it is gone (docs/desktop-app.md §4.2).
 //! - Closing the window does not stop it; the app calls [`ServeSupervisor::stop`] on quit.
 
 use std::ffi::OsString;
@@ -25,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -39,6 +42,8 @@ use crate::paths::{self, AppPaths};
 
 pub const START_TIMEOUT: Duration = Duration::from_secs(60);
 pub const STOP_GRACE: Duration = Duration::from_secs(25);
+/// How often the core checks that a running sidecar is still there.
+pub const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 /// `server.SERVER_HEADER` in the product crate.
 pub const SERVER_HEADER: &str = "zeropw-prototype";
 
@@ -141,6 +146,21 @@ impl ServeSupervisor {
         let mut running = self.lock();
         self.refresh(&mut running);
         status_of(&mut running)
+    }
+
+    /// Like [`status`](Self::status), for the core's watcher: never waits for a start or stop
+    /// in progress (`None` then; that start or stop reports its own result). A sidecar that
+    /// died is noticed here: an owned one by its exit status, an attached one by its pid.
+    /// `report` runs before the state is unlocked, so no start or stop comes between this look
+    /// and what the caller does with it.
+    pub fn watch<R>(&self, report: impl FnOnce(ServeStatus) -> R) -> Option<R> {
+        let mut running = match self.running.try_lock() {
+            Ok(running) => running,
+            Err(TryLockError::Poisoned(e)) => e.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        self.refresh(&mut running);
+        Some(report(status_of(&mut running)))
     }
 
     /// The gateway URL while running.

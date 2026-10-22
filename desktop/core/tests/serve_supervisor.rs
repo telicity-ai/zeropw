@@ -1,6 +1,7 @@
 //! `ServeSupervisor` with the fake serve (prints its URL, then idles) and an in-test loopback
 //! `/healthz` responder: start, pid file, attach from a second supervisor, SIGTERM stop,
-//! SIGKILL escalation, start failures.
+//! SIGKILL escalation, start failures, and the core's watch telling the window when a running
+//! sidecar is gone.
 
 mod common;
 
@@ -8,10 +9,12 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
-use common::{Fixture, free_port, health_server, wait_until};
-use nix::sys::signal::kill;
+use common::{Events, Fixture, arc_events, free_port, health_server, wait_until};
+use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
+use serde_json::Value;
 use zeropw_desktop_core::serve::{ServeConfig, ServeStatus, ServeSupervisor};
+use zeropw_desktop_core::{Core, CoreConfig, Settings};
 
 fn supervisor(fx: &Fixture, grace: Duration) -> ServeSupervisor {
     ServeSupervisor::new(&fx.paths).with_timeouts(Duration::from_secs(10), grace)
@@ -324,4 +327,94 @@ fn a_serve_printing_a_non_loopback_url_is_refused() {
         })
         .unwrap_err();
     assert_eq!(e.reason, "serve_output_invalid");
+}
+
+/// A core that looks at its sidecar every 100 ms and sends events to `events`.
+fn watched_core(fx: &Fixture, events: std::sync::Arc<Events>, port: u16) -> Core {
+    let mut config = CoreConfig::new(fx.paths.clone());
+    config.serve_start_timeout = Duration::from_secs(10);
+    config.serve_stop_grace = Duration::from_secs(2);
+    config.serve_watch_interval = Duration::from_millis(100);
+    let core = Core::new(config, events);
+    core.settings_set(Settings {
+        gateway_port: port,
+        team_listen: None,
+    })
+    .unwrap();
+    core
+}
+
+fn running(status: &Value) -> bool {
+    status["running"] == true
+}
+
+/// The sidecar and its idle loop, without the supervisor's SIGTERM.
+fn kill_sidecar(pid: u32) {
+    let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGKILL);
+}
+
+/// docs/desktop-app.md §4.2: a sidecar this app run started that dies on its own is reported
+/// as stopped (`serve://status`) without the window asking first; one report, not one per
+/// look. A sidecar that keeps running is not reported again.
+#[test]
+fn the_core_reports_a_sidecar_it_started_that_died() {
+    let fx = Fixture::new();
+    let events = arc_events();
+    let core = watched_core(&fx, events.clone(), health_server());
+    let pid = core.serve_start().unwrap().pid.unwrap();
+    let statuses = || events.named("serve://status");
+    assert_eq!(statuses().len(), 1);
+    assert!(running(&statuses()[0]));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(statuses().len(), 1, "a running sidecar was reported again");
+
+    kill_sidecar(pid);
+    assert!(wait_until(Duration::from_secs(5), || statuses().len() == 2));
+    assert!(!running(&statuses()[1]));
+    assert_eq!(statuses()[1]["pid"], Value::Null);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(statuses().len(), 2, "a stopped sidecar was reported again");
+    assert!(!core.serve_status().running);
+    assert!(!fx.paths.serve_pid_file().exists());
+
+    // A new start is reported as before, and a stop by the app is not reported twice.
+    assert!(core.serve_start().unwrap().running);
+    assert_eq!(statuses().len(), 3);
+    core.serve_stop();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(statuses().len(), 4);
+    assert!(!running(&statuses()[3]));
+}
+
+/// The same for a sidecar adopted from an earlier app run: it is watched by its pid.
+#[test]
+fn the_core_reports_an_adopted_sidecar_that_died() {
+    let fx = Fixture::new();
+    let port = health_server();
+    let first = supervisor(&fx, Duration::from_secs(2));
+    let pid = first
+        .start(&ServeConfig {
+            port,
+            team_listen: None,
+        })
+        .unwrap()
+        .pid
+        .unwrap();
+
+    let events = arc_events();
+    let core = watched_core(&fx, events.clone(), port);
+    let adopted = core.startup();
+    assert!(adopted.running);
+    assert_eq!(adopted.pid, Some(pid));
+    let statuses = || events.named("serve://status");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(statuses().len(), 1);
+
+    // Unreaped, the sidecar stays a zombie of this test process (the earlier run's
+    // supervisor is its parent); the adopting core counts that as gone too.
+    kill_sidecar(pid);
+    assert!(wait_until(Duration::from_secs(5), || statuses().len() == 2));
+    assert!(!running(&statuses()[1]));
+    assert!(!core.serve_status().running);
+    assert!(!first.status().running);
 }
