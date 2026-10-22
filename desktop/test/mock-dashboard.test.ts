@@ -160,6 +160,9 @@ describe('connections', () => {
     expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
     expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
     expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
+    // the core's order: no passphrase, then an empty path, and only then the CLI's passphrase check
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }))).reason).toBe('passphrase_missing');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_required');
     expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
     expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
     expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);

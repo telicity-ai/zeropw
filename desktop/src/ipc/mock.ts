@@ -679,8 +679,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     connection_set_cli_program: async (input) => {
       needInit(); await wait(300);
       if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
-      checkAdmin(input.admin_passphrase);
+      // the core's order: a missing passphrase, an empty path, then the CLI checks the passphrase
+      if (typeof input.admin_passphrase !== 'string' || !input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      checkAdmin(input.admin_passphrase);
       const c = connections.get(input.id);
       if (!c) throw fail('NotFound', 'connection_not_found');
       if (c.kind !== 'ssh') throw fail('InvalidInput', 'cli_requires_ssh');
