@@ -602,6 +602,97 @@ fn test_resume_reports_the_open_incident_id() {
     );
 }
 
+/// Restoring a backup taken before an incident, while it is open, keeps the
+/// incident blocking `resume`: the archive's control document has no
+/// `incident_open`, but `incidents/` (not archived) still holds the open
+/// incident, so the lock comes from current state like the stop does.
+#[test]
+fn test_restore_from_before_an_open_incident_keeps_resume_refused() {
+    let (tmp, admin) = admin_case();
+    seed_project(&admin);
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    let archive = tmp.path().join("before-incident.json");
+    let archive = archive.to_str().unwrap();
+    admin.ok(&["backup", "--out", archive]);
+    // The runtime holds every active principal, so the incident also stops all.
+    let declared = admin.ok(&[
+        "incident",
+        "declare",
+        "--scope",
+        "runtime",
+        "--runtime",
+        "default",
+    ]);
+    let incident_id = id_of(&declared);
+
+    let restored = admin.ok(&["restore", "--in", archive]);
+    assert_eq!(
+        restored["incident_open"],
+        incident_id.as_str(),
+        "{restored}"
+    );
+    assert_eq!(restored["stopped"], true, "{restored}");
+    admin.ok(&["restore-ack"]);
+    assert_eq!(
+        admin.ok(&["status"]),
+        serde_json::json!({"stopped": true, "restore_pending": false, "incident_open": incident_id})
+    );
+    let error = admin.fail(&["resume"]);
+    assert_eq!(
+        (reason(&error), error["detail"].as_str()),
+        ("incident_open", Some(incident_id.as_str())),
+        "{error}"
+    );
+    // The archive's active agent-1 does not come back either.
+    assert_eq!(
+        ctx(&admin.state)
+            .policy
+            .get_principal("agent-1")
+            .unwrap()
+            .status,
+        "disabled"
+    );
+    // Closing the incident is still what lifts the lock.
+    admin.ok(&["incident", "close", "--id", &incident_id]);
+    assert_eq!(admin.ok(&["resume"])["stopped"], false);
+}
+
+/// A backup taken while an incident was open does not bring its pointer back
+/// once that incident is closed: `incident close` refuses a closed incident,
+/// so a restored pointer would refuse `resume` for good.
+#[test]
+fn test_restore_from_during_a_closed_incident_does_not_restore_its_lock() {
+    let (tmp, admin) = admin_case();
+    seed_project(&admin);
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    let declared = admin.ok(&[
+        "incident",
+        "declare",
+        "--scope",
+        "runtime",
+        "--runtime",
+        "default",
+    ]);
+    let incident_id = id_of(&declared);
+    let archive = tmp.path().join("during-incident.json");
+    let archive = archive.to_str().unwrap();
+    admin.ok(&["backup", "--out", archive]);
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(archive).unwrap()).unwrap();
+    assert_eq!(
+        doc["documents"]["policy/control.json"]["incident_open"],
+        incident_id.as_str()
+    );
+    admin.ok(&["incident", "close", "--id", &incident_id]);
+
+    let restored = admin.ok(&["restore", "--in", archive]);
+    assert_eq!(restored["incident_open"], Value::Null, "{restored}");
+    admin.ok(&["restore-ack"]);
+    assert_eq!(
+        admin.ok(&["resume"]),
+        serde_json::json!({"stopped": false, "restore_pending": false, "incident_open": null})
+    );
+}
+
 /// M1 branch 1: a second declare that is not wider than the open incident
 /// changes nothing.
 #[test]
