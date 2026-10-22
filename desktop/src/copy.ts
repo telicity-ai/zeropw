@@ -404,6 +404,7 @@ export const COPY = {
   'conn.paths.err': '/로 시작하는 경로를 쉼표로 나눠 넣어 주세요',
   'conn.cli.path': 'CLI 경로',
   'conn.cli.err': '/로 시작하는 전체 경로를 넣어 주세요',
+  'conn.ssh.cli': 'ssh 경로',
   'conn.ca': 'CA 인증서',
   'conn.ca.hint': '사설 인증서일 때만',
   'conn.key.need': '키를 넣어 주세요',

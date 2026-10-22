@@ -31,7 +31,9 @@ export interface HttpConnectionInput {
 }
 export interface SshConnectionInput {
   id: string; project: string; environment: string; service: string; secret_id: string;
-  host: string; port: number; username: string; host_keys: string[]; description?: string;
+  host: string; port: number; username: string; host_keys: string[];
+  /** The ssh the agent's exec runs; without one exec is refused with `cli_not_supported`. */
+  cli_program: string; description?: string;
 }
 /** Connection::to_value as printed by the CLI; kept loose on purpose. */
 export type ConnectionView = Record<string, unknown> & { id: string; project: string; environment: string; kind: string; status: string };

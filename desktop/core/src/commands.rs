@@ -335,6 +335,9 @@ pub struct SshConnectionIn {
     pub port: u16,
     pub username: String,
     pub host_keys: Vec<String>,
+    /// The ssh the agent's `exec` runs. Required: a connection without one is refused with
+    /// `cli_not_supported` and never reaches the server.
+    pub cli_program: String,
     #[serde(default)]
     pub description: Option<String>,
     pub admin_passphrase: SecretString,
@@ -1035,6 +1038,9 @@ impl Core {
         if input.host_keys.is_empty() {
             return Err(AppError::invalid_input("host_key_required"));
         }
+        if input.cli_program.is_empty() {
+            return Err(AppError::invalid_input("cli_program_required"));
+        }
         let mut args = AdminArgs::command(&["connection", "create-ssh"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1048,7 +1054,9 @@ impl Core {
         for key in &input.host_keys {
             args = args.opt("host-key", key)?;
         }
-        args = args.opt_nonempty("description", input.description.as_deref())?;
+        args = args
+            .opt("cli-program", &input.cli_program)?
+            .opt_nonempty("description", input.description.as_deref())?;
         self.run(
             args,
             Envelope::new().admin_passphrase(&input.admin_passphrase),

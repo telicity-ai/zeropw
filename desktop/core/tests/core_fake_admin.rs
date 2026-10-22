@@ -768,11 +768,8 @@ fn http_connection_argv_and_ca_file_token() {
     assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
 }
 
-#[test]
-fn ssh_connection_repeats_host_keys() {
-    let fx = Fixture::new();
-    let core = core(&fx);
-    core.connection_create_ssh(SshConnectionIn {
+fn ssh_input(cli_program: &str) -> SshConnectionIn {
+    SshConnectionIn {
         id: "prod".into(),
         project: "demo".into(),
         environment: "prod".into(),
@@ -782,10 +779,18 @@ fn ssh_connection_repeats_host_keys() {
         port: 2222,
         username: "deploy".into(),
         host_keys: vec!["ssh-ed25519 AAAAone".into(), "ssh-ed25519 AAAAtwo".into()],
+        cli_program: cli_program.into(),
         description: None,
         admin_passphrase: pass(),
-    })
-    .unwrap();
+    }
+}
+
+#[test]
+fn ssh_connection_repeats_host_keys_and_names_its_ssh() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    core.connection_create_ssh(ssh_input("/usr/bin/ssh"))
+        .unwrap();
     assert_eq!(
         fx.last("connection_create-ssh").args(),
         [
@@ -801,8 +806,34 @@ fn ssh_connection_repeats_host_keys() {
             "--username=deploy",
             "--host-key=ssh-ed25519 AAAAone",
             "--host-key=ssh-ed25519 AAAAtwo",
+            "--cli-program=/usr/bin/ssh",
         ]
     );
+}
+
+/// An SSH connection without its ssh is one the agent's `exec` refuses (`cli_not_supported`,
+/// desktop E2E finding F8), so the core never creates one: a payload without `cli_program` is
+/// not accepted and an empty one is refused before the CLI runs.
+#[test]
+fn ssh_connection_without_its_ssh_is_refused_before_the_cli() {
+    let payload = json!({
+        "id": "prod", "project": "demo", "environment": "prod", "service": "ssh",
+        "secret_id": "deploy", "host": "10.0.0.5", "port": 22, "username": "deploy",
+        "host_keys": ["ssh-ed25519 AAAAone"], "admin_passphrase": ADMIN_PASS,
+    });
+    assert!(serde_json::from_value::<SshConnectionIn>(payload.clone()).is_err());
+    let mut with_cli = payload;
+    with_cli["cli_program"] = json!("/usr/bin/ssh");
+    assert!(serde_json::from_value::<SshConnectionIn>(with_cli).is_ok());
+
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let e = core.connection_create_ssh(ssh_input("")).unwrap_err();
+    assert_eq!(
+        (e.error.as_str(), e.reason.as_str()),
+        ("InvalidInput", "cli_program_required")
+    );
+    assert_eq!(fx.count("connection_create-ssh"), 0);
 }
 
 /// The envelopes of the `recover` calls after the first `skip`.

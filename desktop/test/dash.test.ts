@@ -4,7 +4,7 @@ import {
   blockText, countOf, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
   newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
-  recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, summarizeConnection, valueText, writeConsequences,
+  recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -87,6 +87,11 @@ describe('SSH connection form', () => {
     expect(isHostKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl')).toBe(true);
     expect(isHostKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl host comment')).toBe(true);
     for (const bad of ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ', 'ssh-ed25519 short', 'AAAAC3NzaC1lZDI1NTE5', '']) expect(isHostKey(bad)).toBe(false);
+  });
+  it('starts with the system ssh, a path the form itself accepts', () => {
+    // left as it is, the field must not stop the form (desktop E2E finding F8)
+    expect(SSH_PROGRAM).toBe('/usr/bin/ssh');
+    expect(isCliPath(SSH_PROGRAM)).toBe(true);
   });
   it('parses ports within range', () => {
     expect(parsePort('22')).toBe(22);

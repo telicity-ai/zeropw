@@ -643,6 +643,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnv(input.project, input.environment);
       if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
+      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
+      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
       checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
@@ -652,7 +655,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const c: ConnectionView = {
         id: input.id, project: input.project, environment: input.environment, service: input.service, kind: 'ssh', secret_id: input.secret_id,
         secret_version: null, description: input.description ?? null, http_target: null, http_auth: null, http_scope: null,
-        ssh_target: { host: input.host, port: input.port, username: input.username, host_keys: input.host_keys.slice() }, cli: null,
+        ssh_target: { host: input.host, port: input.port, username: input.username, host_keys: input.host_keys.slice() },
+        cli: { program: input.cli_program, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} },
         policy_version: 1, status: 'active', created_at: now, updated_at: now,
       };
       connections.set(c.id, c); record({ ts: now, event: 'connection_create', connection: c.id, kind: 'ssh' });

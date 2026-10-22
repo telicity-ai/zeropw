@@ -128,6 +128,9 @@ const HOST_RE = new RegExp(`^(${HOST_LABEL}\\.)*${HOST_LABEL}$`);
 /** Lower-case DNS name or IPv4 literal, as the core's connection rules accept. */
 export const isSshHost = (v: string): boolean => v.length <= 253 && (HOST_RE.test(v) || /^\d{1,3}(\.\d{1,3}){3}$/.test(v));
 export const isSshUser = (v: string): boolean => /^[a-z_][a-z0-9_.-]{0,31}$/.test(v);
+/** The ssh a new SSH connection names by default. The agent can only use a connection that names
+ *  one (rust/src/tools.rs `exec`: `cli_not_supported`), so the form starts with the system's. */
+export const SSH_PROGRAM = '/usr/bin/ssh';
 /** The core accepts Ed25519 host keys only (`unsupported_host_key` otherwise). */
 export const isHostKey = (v: string): boolean => /^ssh-ed25519 [A-Za-z0-9+/]{16,}={0,3}( [^\x00-\x1f\x7f]*)?$/.test(v.trim());
 
