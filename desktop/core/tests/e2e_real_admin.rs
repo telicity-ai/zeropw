@@ -365,6 +365,15 @@ impl Drop for Sshd {
     }
 }
 
+/// Stops the core's `serve` even when an assertion fails, so a failed run leaves no sidecar.
+struct ShutdownOnDrop<'a>(&'a Core);
+
+impl Drop for ShutdownOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
 /// `zeropw-agent` with only the caller token, the gateway URL, PATH and an empty HOME.
 fn agent(home: &std::path::Path, url: &str, token: &str, args: &[&str]) -> serde_json::Value {
     let out = Command::new(bin_dir().join("zeropw-agent"))
@@ -400,6 +409,7 @@ fn app_made_ssh_connection_runs_agent_exec_on_a_real_sshd() {
     let mut config = CoreConfig::new(AppPaths::new(dir.path().join("app"), bin_dir()));
     config.serve_stop_grace = Duration::from_secs(10);
     let core = Core::new(config, Arc::new(NoEvents));
+    let _serve = ShutdownOnDrop(&core);
     core.settings_set(Settings {
         gateway_port: free_port(),
         team_listen: None,
@@ -507,7 +517,4 @@ fn app_made_ssh_connection_runs_agent_exec_on_a_real_sshd() {
         (Some("completed"), Some(0), Some(user.as_str())),
         "{done}"
     );
-
-    core.shutdown();
-    drop(sshd);
 }
