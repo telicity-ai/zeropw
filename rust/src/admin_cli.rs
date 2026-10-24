@@ -3147,8 +3147,33 @@ impl ImportPlan<'_> {
 
 /// `secret import` (docs/env-import.md): the keys of one `.env` file, all
 /// written or none. Values never reach the output, an error or the audit log.
-/// `--dry-run` reports what a run would do without stopping on conflicts.
+/// `--dry-run` reports what a run would do without stopping on conflicts. A
+/// refused run is recorded as `secret_import` `denied` with its reason.
 fn secret_import(ctx: &Context, a: &Args) -> Result<Value, Error> {
+    let result = secret_import_run(ctx, a);
+    if let Err(error) = &result
+        && !a.has("dry-run")
+        // recorded where it is refused, with the connection
+        && error.reason != "cli_env_contains_credential"
+    {
+        let _ = ctx.audit.record(
+            "secret_import",
+            RecordArgs {
+                caller: Some("admin"),
+                result: Some("denied"),
+                reason: Some(error.reason.as_ref()),
+                extra: vec![
+                    ("project", json!(a.req("project"))),
+                    ("environment", json!(a.req("environment"))),
+                ],
+                ..Default::default()
+            },
+        );
+    }
+    result
+}
+
+fn secret_import_run(ctx: &Context, a: &Args) -> Result<Value, Error> {
     use crate::envfile;
     let project = a.req("project");
     let environment = a.req("environment");

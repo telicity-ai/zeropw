@@ -2043,7 +2043,14 @@ fn name_lists(names: &[String]) -> Vec<String> {
 }
 
 fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, AppError> {
-    let file = fs::File::open(path).map_err(|e| AppError::io("file_unreadable", &e))?;
+    use std::os::unix::fs::OpenOptionsExt;
+    // Non-blocking, so a FIFO or a device dropped on the window cannot hold the open; it is
+    // then refused as not a regular file before anything is read.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits())
+        .open(path)
+        .map_err(|e| AppError::io("file_unreadable", &e))?;
     let meta = file
         .metadata()
         .map_err(|e| AppError::io("file_unreadable", &e))?;

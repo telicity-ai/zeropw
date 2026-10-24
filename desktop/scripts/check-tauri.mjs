@@ -30,6 +30,7 @@
 // - No file under desktop/ (build outputs aside) contains a NUL byte or exceeds the review
 //   harness's 300,000-byte limit.
 
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +109,7 @@ for (const [k, v] of Object.entries(want)) if (main[k] !== v) fail(`tauri.conf.j
 if (main.dragDropEnabled !== true) fail('tauri.conf.json: dragDropEnabled must be true (a dropped .env file is read by the core)');
 const tauriDep = read(join(tauriDir, 'Cargo.toml')).match(/^tauri\s*=\s*\{([^}]*)\}/m);
 if (!tauriDep || !/features\s*=\s*\[\s*\]/.test(tauriDep[1])) fail('src-tauri/Cargo.toml: the tauri dependency must have no features (protocol-asset would serve dropped files to the page)');
+checkResolvedTauriFeatures();
 
 const plugins = conf.plugins ?? {};
 if (Object.keys(plugins).join() !== 'deep-link') fail('tauri.conf.json: only the deep-link plugin is configured');
@@ -242,6 +244,19 @@ function checkFreezePrototype() {
 // tauri.conf.json stays minimal (it is also what `tauri dev`, Clippy and the tests build with);
 // what only the distributed app needs lives in tauri.bundle.conf.json, merged by `tauri build
 // --config` in npm run bundle and desktop/scripts/package-macos.py.
+// A plugin can switch tauri features on too: read the resolved set from Cargo (no build).
+function checkResolvedTauriFeatures() {
+  const out = spawnSync('cargo', ['metadata', '--format-version', '1', '--locked', '--manifest-path', join(root, 'Cargo.toml')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (out.status !== 0) { fail('cargo metadata failed: cannot read the resolved tauri features'); return; }
+  const meta = JSON.parse(out.stdout);
+  const names = new Map(meta.packages.map((p) => [p.id, p.name]));
+  const nodes = meta.resolve.nodes.filter((n) => names.get(n.id) === 'tauri');
+  if (nodes.length !== 1) fail(`cargo metadata: expected one tauri package, found ${nodes.length}`);
+  for (const n of nodes) {
+    if (n.features.includes('protocol-asset')) fail('tauri resolves with protocol-asset: a dropped path would widen the asset protocol scope');
+  }
+}
+
 function checkReleaseConfig() {
   const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
   const extraTop = Object.keys(conf).filter((k) => !BASE_KEYS.includes(k));

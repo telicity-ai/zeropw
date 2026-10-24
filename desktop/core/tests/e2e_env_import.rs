@@ -258,6 +258,15 @@ fn a_dropped_or_picked_env_file_is_previewed_and_imported_without_values_leaving
     let empty = write(&files, "empty.env", "");
     core.env_file_drop(&[empty]);
     assert_eq!(dropped(&events)["error"], "env_file_empty");
+    // a FIFO is refused without waiting for a writer
+    let fifo = files.join("pipe.env");
+    nix::unistd::mkfifo(
+        &fifo,
+        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+    )
+    .unwrap();
+    core.env_file_drop(std::slice::from_ref(&fifo));
+    assert_eq!(dropped(&events)["error"], "file_not_regular");
     let latin = files.join("latin.env");
     std::fs::write(&latin, b"A=\xff\xfe\n").unwrap();
     core.env_file_drop(&[latin]);

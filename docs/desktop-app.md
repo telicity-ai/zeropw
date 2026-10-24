@@ -226,7 +226,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
    - Linux: 창 시스템에 이런 장치가 없어서 아무것도 하지 않고, `secure_view`는 늘 `{protected: false}`를 돌려준다.
    - 화면은 어느 플랫폼에서도 캡처를 막는다고 말하지 않는다.
 9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
-10. 창은 파일을 끌어다 놓을 수 있다(`dragDropEnabled`). 놓인 경로는 셸이 코어로 넘기고, 코어는 일반 파일 하나만 읽는다. 웹뷰는 파일 내용도 경로도 받지 않는다. Tauri는 자체 끌기 이벤트(`tauri://drag-*`)에 경로를 담아 그 이벤트를 듣는 페이지 리스너에만 보내는데, 앱 페이지는 이 이벤트를 듣지 않는다(`scripts/check-static.mjs`가 막는다). Tauri가 놓인 경로에 넓히는 범위는 `protocol-asset` 기능이 꺼져 있어 아무것도 허락하지 않는다(`scripts/check-tauri.mjs`가 tauri 의존성에 기능이 없는지 본다).
+10. 창은 파일을 끌어다 놓을 수 있다(`dragDropEnabled`). 놓인 경로는 셸이 코어로 넘기고, 코어는 일반 파일 하나만 막히지 않게 열어 읽는다(FIFO·장치 파일은 거절). 파일 내용은 웹뷰로 가지 않고, 앱 코드는 경로도 받지 않는다. 다만 Tauri가 자체 끌기 이벤트(`tauri://drag-*`)에 경로를 담아 그 이벤트를 듣는 페이지 리스너에 보내므로, 페이지에서 도는 스크립트가 리스너를 달면 경로를 알 수 있다(`core:default`가 이벤트 듣기를 허락한다). 앱 소스에는 그런 리스너가 없다(`scripts/check-static.mjs`가 막는다). Tauri가 놓인 경로에 넓히는 범위는 `protocol-asset` 기능이 꺼져 있어 아무것도 허락하지 않는다(`scripts/check-tauri.mjs`가 `cargo metadata`로 tauri에 실제로 켜진 기능을 본다).
 
 ## 9. 빌드·시험·CI
 

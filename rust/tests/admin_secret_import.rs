@@ -218,12 +218,29 @@ fn a_changed_value_stops_the_import_until_update() {
         "new_version"
     );
 
+    let imports = case.count("secret_import");
     let error = case.import_fails(&changed, &[]);
     assert_eq!(error["reason"], "import_conflict");
     assert_eq!(error["detail"], "openai_api_key");
     // all or nothing: the new key was not written either
     assert_eq!(case.vault_doc(), doc);
     assert_eq!(case.count("secret_put"), puts);
+    // the refusal is on record
+    assert_eq!(case.count("secret_import"), imports + 1);
+    let audit = std::fs::read_to_string(case.admin.state.join("audit/audit.jsonl")).unwrap();
+    let last: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+    assert_eq!(
+        (
+            last["event"].clone(),
+            last["result"].clone(),
+            last["reason"].clone()
+        ),
+        (
+            json!("secret_import"),
+            json!("denied"),
+            json!("import_conflict")
+        )
+    );
 
     let out = case.import(&changed, &["--update"]);
     assert_eq!(entry(&out, "OPENAI_API_KEY")["action"], "new_version");
@@ -459,4 +476,50 @@ fn the_input_envelope_and_parse_errors_carry_no_value() {
     let needles = [OPENAI.as_bytes().to_vec(), DB_PASSWORD.as_bytes().to_vec()];
     assert_eq!(find_secret(&audit, &needles), None);
     assert_state_clean(&case.admin.state);
+}
+
+#[test]
+fn a_batch_that_fails_on_a_later_item_writes_nothing() {
+    use zeropw::vault::NewSecret;
+    let case = Case::new();
+    let file = case.write_env(".env", &format!("OPENAI_API_KEY={OPENAI}\n"));
+    // `openai_api_key` now lives in demo/dev
+    case.import(&file, &[]);
+    let doc = case.vault_doc();
+    let puts = case.count("secret_put");
+    let ctx = zeropw::context::Context::open(
+        &case.admin.state,
+        zeropw::context::Config::default(),
+        zeropw::clock::system(),
+    )
+    .unwrap();
+    let items = [
+        NewSecret {
+            id: "fresh_token",
+            kind: "env_var",
+            value: DB_PASSWORD.as_bytes(),
+        },
+        // the second item belongs to another environment
+        NewSecret {
+            id: "openai_api_key",
+            kind: "env_var",
+            value: OPENAI_V2.as_bytes(),
+        },
+    ];
+    let error = ctx
+        .vault
+        .put_secrets("demo", "staging", &items)
+        .unwrap_err();
+    assert_eq!(error.reason, "secret_identity_mismatch");
+    let duplicate = [items[0], items[0]];
+    assert_eq!(
+        ctx.vault
+            .put_secrets("demo", "staging", &duplicate)
+            .unwrap_err()
+            .reason,
+        "duplicate_secret_id"
+    );
+    drop(ctx);
+    assert_eq!(case.vault_doc(), doc);
+    assert_eq!(case.count("secret_put"), puts);
 }

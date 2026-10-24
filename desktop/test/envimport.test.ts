@@ -99,7 +99,7 @@ describe('import sheet rules', () => {
 });
 
 describe('mock .env import', () => {
-  it('classifies as rust/src/envfile.rs does', () => {
+  it('the mock classifies by the rules of rust/src/envfile.rs (a copy, for UI review)', () => {
     expect(mockClassify('OPENAI_API_KEY', OPENAI)).toEqual([true, 'secret_name']);
     expect(mockClassify('AUTH_ENABLED', 'true')).toEqual([false, 'plain_value']);
     expect(mockClassify('DB_PASSWORD', 'short')).toEqual([false, 'short_value']);

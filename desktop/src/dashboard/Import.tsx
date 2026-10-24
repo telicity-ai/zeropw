@@ -33,7 +33,8 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
   const [shared, setShared] = useState<Set<string> | null>(null);
   const [env, setEnv] = useState('');
   const [prefix, setPrefix] = useState('');
-  const [preview, setPreview] = useState<ImportReport | null>(null);
+  // the last preview and the environment and prefix it was made for
+  const [loaded, setLoaded] = useState<{ place: string; report: ImportReport } | null>(null);
   const [bad, setBad] = useState<Bad | null>(null);
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const [update, setUpdate] = useState(false);
@@ -64,23 +65,29 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
     return () => { live = false; };
   }, [open, shared, pairs]);
 
-  // the preview follows the environment and the prefix
+  // the preview follows the environment and the prefix; until the one for the current choice
+  // arrives the list stays as it was but nothing can be imported, so a run never goes to an
+  // environment or under IDs the screen did not show
   const prefixOk = isIdPrefix(prefix);
+  const place = `${env}\n${prefix}`;
+  const preview = loaded?.place === place ? loaded.report : null;
+  const shown = loaded?.report ?? null;
   useEffect(() => {
     const pair = splitEnv(env);
     if (!open || !ref || !pair || !prefixOk || result) return;
     let live = true;
+    setBad(null);
     const tm = setTimeout(() => {
       call('secret_import_preview', { import_ref: ref, project: pair.project, environment: pair.environment, ...(prefix ? { id_prefix: prefix } : {}) }).then(
         (p) => {
           if (!live) return;
-          setPreview(p); setBad(null); setErr(null);
+          setLoaded({ place: `${env}\n${prefix}`, report: p }); setErr(null);
           setSelected((cur) => cur ?? new Set(p.entries.filter((e) => e.selected).map((e) => e.name)));
         },
         (e) => {
           if (!live) return;
           const x = toIpcError(e);
-          setPreview(null);
+          setLoaded(null);
           if (x.reason === 'env_file_invalid') setBad({ lines: badLines(x.detail), key: 'imp.bad' });
           else if (x.reason === 'invalid_id_prefix') setErr({ key: 'proj.err.name' });
           else setBad({ lines: [], ...importErrorCopy(x.reason, x.detail) });
@@ -93,10 +100,10 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
   const sel = selected ?? new Set<string>();
   const isShared = preview?.shared ?? (shared?.has(env) ?? false);
   // what a run writes once allowed: a changed key counts even before "update" is chosen
-  const n = preview ? writeCount(preview, sel, true) : 0;
+  const n = shown ? writeCount(shown, sel, true) : 0;
   const blocker: CopyKey | null = !preview ? 'boot.loading' : importBlocker(preview, sel, update) ?? (n === 0 ? 'imp.done.none' : null);
-  const hasTaken = !!preview?.entries.some((e) => e.state === 'elsewhere');
-  const hasDifferent = !!preview?.entries.some((e) => e.state === 'different');
+  const hasTaken = !!shown?.entries.some((e) => e.state === 'elsewhere');
+  const hasDifferent = !!shown?.entries.some((e) => e.state === 'different');
 
   const toggle = (name: string) => {
     setSelected((cur) => {
@@ -152,8 +159,8 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
     );
   }
 
-  const forced = preview?.entries.some((e) => isForced(e, sel.has(e.name))) ?? false;
-  const blockedBy = preview?.entries.find((e) => sel.has(e.name) && e.blocked_by && plannedAction(e, true, update) !== 'unchanged');
+  const forced = shown?.entries.some((e) => isForced(e, sel.has(e.name))) ?? false;
+  const blockedBy = shown?.entries.find((e) => sel.has(e.name) && e.blocked_by && plannedAction(e, true, update) !== 'unchanged');
   const ready = !busy && blocker === null;
   return (
     <Sheet id="sheet-import" open={open} title={t('imp.title')} lead={t('imp.sub')}
@@ -176,11 +183,11 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
             </ul>
           )}
         </>
-      ) : !preview ? <Empty text={t('boot.loading')} /> : preview.entries.length === 0 ? <Empty text={t('imp.none')} /> : (
+      ) : !shown ? <Empty text={t('boot.loading')} /> : shown.entries.length === 0 ? <Empty text={t('imp.none')} /> : (
         <div className="field">
           <div className="label"><span id="imp-items-lbl">{t('imp.items')}</span></div>
           <ul className="sub-list imp-list" aria-labelledby="imp-items-lbl">
-            {preview.entries.map((e) => {
+            {shown.entries.map((e) => {
               const on = sel.has(e.name);
               const tag = plannedKey(plannedAction(e, on, update));
               const warn = on && (e.state === 'different' && !update || e.state === 'elsewhere' || !!e.blocked_by);
@@ -195,12 +202,12 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
               );
             })}
           </ul>
-          {preview.empty_lines.length > 0 && <div className="help">{t('imp.empty', { n: preview.empty_lines.length })}</div>}
+          {shown.empty_lines.length > 0 && <div className="help">{t('imp.empty', { n: shown.empty_lines.length })}</div>}
           {blockedBy?.blocked_by && <div className="help warn">{t('imp.blocked', { conn: blockedBy.blocked_by })}</div>}
           {forced && <div className="help warn">{t('imp.forced')}</div>}
         </div>
       )}
-      {preview && hasDifferent && (
+      {shown && hasDifferent && (
         <label className="check tight">
           <input type="checkbox" checked={update} onChange={(e) => { setUpdate(e.target.checked); setErr(null); }} /> <span>{t('imp.update')}</span>
         </label>

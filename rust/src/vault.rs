@@ -786,6 +786,7 @@ pub struct SecretMeta {
 }
 
 /// One item of [`Vault::put_secrets`].
+#[derive(Clone, Copy)]
 pub struct NewSecret<'v> {
     pub id: &'v str,
     pub kind: &'v str,

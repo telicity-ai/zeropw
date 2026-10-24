@@ -166,8 +166,11 @@ fn is_blank(b: u8) -> bool {
     b == b' ' || b == b'\t'
 }
 
-fn line_of(text: &[u8], at: usize) -> usize {
-    1 + text[..at].iter().filter(|&&b| b == b'\n').count()
+/// Characters Node, python-dotenv and Compose trim differently at the edge of
+/// an unquoted value (`trim`, `str.strip` and `strings.TrimSpace` disagree on
+/// U+FEFF, and the parsers here trim spaces and tabs only).
+fn unusual_edge(c: char) -> bool {
+    c != ' ' && c != '\t' && (c.is_whitespace() || c.is_control() || c == '\u{feff}')
 }
 
 fn invalid(errors: &[(usize, &'static str)]) -> Error {
@@ -195,13 +198,17 @@ pub fn parse(input: &[u8], id_prefix: &str) -> Result<Parsed, Error> {
     // A NUL or a carriage return outside `\r\n` is read differently by each
     // tool (or not at all): stop before anything else.
     let mut file_errors: Vec<(usize, &'static str)> = Vec::new();
+    let mut line = 1;
     for (at, &b) in input.iter().enumerate() {
         let reason = match b {
+            b'\n' => {
+                line += 1;
+                continue;
+            }
             0 => "nul_byte",
             b'\r' if input.get(at + 1) != Some(&b'\n') => "lone_carriage_return",
             _ => continue,
         };
-        let line = line_of(input, at);
         if file_errors.last() != Some(&(line, reason)) {
             file_errors.push((line, reason));
         }
@@ -209,25 +216,35 @@ pub fn parse(input: &[u8], id_prefix: &str) -> Result<Parsed, Error> {
     if !file_errors.is_empty() {
         return Err(invalid(&file_errors));
     }
-    // `\r\n` becomes `\n`, as all three tools read it. Sized up front so the
-    // copy never reallocates (and leaves) a part of the file.
+    // `\r\n` becomes `\n` between values, as all three tools read it. Inside a
+    // quoted value Compose keeps the `\r`, so the lines that ended in `\r\n` are
+    // remembered. Sized up front so the copy never reallocates (and leaves) a
+    // part of the file.
     let mut text = Zeroizing::new(Vec::with_capacity(input.len()));
-    let mut at = 0;
-    while at < input.len() {
-        if input[at] == b'\r' {
-            at += 1;
-            continue;
+    let mut crlf_lines = BTreeSet::new();
+    let mut line = 1;
+    for &b in input {
+        match b {
+            b'\r' => {
+                crlf_lines.insert(line);
+                continue;
+            }
+            b'\n' => line += 1,
+            _ => {}
         }
-        text.push(input[at]);
-        at += 1;
+        text.push(b);
     }
-    Parser::new(&text).run(id_prefix)
+    Parser::new(&text, crlf_lines).run(id_prefix)
 }
 
 struct Parser<'a> {
     text: &'a [u8],
     at: usize,
     errors: Vec<(usize, &'static str)>,
+    /// Where each `\n` is, so a line number is a binary search.
+    newlines: Vec<usize>,
+    /// Lines that ended in `\r\n` in the file.
+    crlf_lines: BTreeSet<usize>,
 }
 
 enum Value {
@@ -238,16 +255,31 @@ enum Value {
 }
 
 impl<'a> Parser<'a> {
-    fn new(text: &'a [u8]) -> Self {
+    fn new(text: &'a [u8], crlf_lines: BTreeSet<usize>) -> Self {
+        let newlines = text
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .map(|(at, _)| at)
+            .collect();
         Self {
             text,
             at: 0,
             errors: Vec::new(),
+            newlines,
+            crlf_lines,
         }
     }
 
     fn line(&self, at: usize) -> usize {
-        line_of(self.text, at)
+        1 + self.newlines.partition_point(|&n| n < at)
+    }
+
+    /// A quoted value from `open` to `close` that spans a line ending in
+    /// `\r\n`: Node and python-dotenv read `\n` there, Compose `\r\n`.
+    fn crlf_inside(&self, open: usize, close: usize) -> bool {
+        let (first, last) = (self.line(open), self.line(close));
+        self.crlf_lines.range(first..last).next().is_some()
     }
 
     fn end_of_line(&self, from: usize) -> usize {
@@ -311,6 +343,13 @@ impl<'a> Parser<'a> {
                 value_at += 1;
             }
             let value = match self.text.get(value_at) {
+                // `NAME==`: a padded base64 token on a line of its own would
+                // otherwise come out as a variable name
+                Some(b'=') => {
+                    self.report(start, "not_assignment");
+                    self.skip_line(start);
+                    Value::Bad
+                }
                 None | Some(b'\n') => {
                     self.skip_line(start);
                     Value::Empty
@@ -411,7 +450,11 @@ impl<'a> Parser<'a> {
         if backslash {
             self.report(start, "backslash_in_single_quotes");
         }
-        if !self.after_quote(start, close) || backslash {
+        let crlf = self.crlf_inside(open, close);
+        if crlf {
+            self.report(start, "crlf_in_quotes");
+        }
+        if !self.after_quote(start, close) || backslash || crlf {
             return Value::Bad;
         }
         let mut value = Zeroizing::new(Vec::with_capacity(content.len()));
@@ -459,7 +502,11 @@ impl<'a> Parser<'a> {
                 }
             }
         };
-        if !self.after_quote(start, close) || bad {
+        let crlf = self.crlf_inside(open, close);
+        if crlf {
+            self.report(start, "crlf_in_quotes");
+        }
+        if !self.after_quote(start, close) || bad || crlf {
             return Value::Bad;
         }
         Value::Bytes(value)
@@ -468,12 +515,12 @@ impl<'a> Parser<'a> {
     fn unquoted(&mut self, start: usize, value_at: usize, eol: usize) -> Value {
         self.skip_line(start);
         let rest = &self.text[value_at..eol];
-        // `NAME=#x` and `NAME= #x`: Node reads an empty value, python-dotenv
-        // `#x`.
+        // A comment starts at ` #` only. `NAME=#x` and `NAME= #x`: Node reads an
+        // empty value, python-dotenv `#x`; `abc\t#x`: Compose keeps the `#x`.
         let mut end = rest.len();
         for (n, &b) in rest.iter().enumerate() {
             if b == b'#' {
-                if n > 0 && is_blank(rest[n - 1]) {
+                if n > 0 && rest[n - 1] == b' ' {
                     end = n;
                     break;
                 }
@@ -484,6 +531,12 @@ impl<'a> Parser<'a> {
         let content = trim(&rest[..end]);
         if content.contains(&b'$') {
             self.report(start, "dollar_needs_single_quotes");
+            return Value::Bad;
+        }
+        let text = std::str::from_utf8(content).unwrap_or("");
+        let edges = [text.chars().next(), text.chars().next_back()];
+        if edges.into_iter().flatten().any(unusual_edge) {
+            self.report(start, "unusual_whitespace");
             return Value::Bad;
         }
         let mut value = Zeroizing::new(Vec::with_capacity(content.len()));
@@ -581,6 +634,42 @@ mod tests {
         assert_eq!(error("A=`x\ny`\nB=c\n").1, "1:backtick_quote");
         // a later error is still reported after a multi-line value
         assert_eq!(error("A='x\ny'\nB=a#b\n").1, "3:unquoted_hash");
+    }
+
+    #[test]
+    fn edges_and_line_ends_the_tools_read_differently_are_refused() {
+        // Node, python-dotenv and Compose trim these differently, or not at all
+        assert_eq!(
+            error("B=\u{a0}abcdefghij\u{a0}\n").1,
+            "1:unusual_whitespace"
+        );
+        for c in ['\u{0b}', '\u{0c}', '\u{feff}', '\u{3000}', '\u{1b}'] {
+            assert_eq!(
+                error(&format!("B=abcdefghij{c}\n")).1,
+                "1:unusual_whitespace",
+                "{c:?}"
+            );
+        }
+        // inside a value they stay, as every tool keeps them
+        assert_eq!(values("B=abc\u{a0}def\n"), vec![pair("B", "abc\u{a0}def")]);
+        // a comment starts at ` #` only: Compose keeps `\t#x`
+        assert_eq!(error("A=abc\t#x\n").1, "1:unquoted_hash");
+        assert_eq!(values("A=abc\t #x\n"), vec![pair("A", "abc")]);
+        // CRLF inside a quoted value: Compose keeps the `\r`
+        assert_eq!(
+            error("L='one\r\ntwo'\r\nM=\"a\r\nb\"\r\n").1,
+            "1:crlf_in_quotes,3:crlf_in_quotes"
+        );
+        assert_eq!(
+            values("A='x'\r\nB=\"y\"\r\nC='p\nq'\r\n"),
+            vec![pair("A", "x"), pair("B", "y"), pair("C", "p\nq")]
+        );
+        // a padded base64 token on its own line is not a name
+        let (reason, detail) = error("QUJDREVGR0hJSktMTU5PUFFSU1RV==\nOK=value-1234\n");
+        assert_eq!(
+            (reason.as_str(), detail.as_str()),
+            ("env_file_invalid", "1:not_assignment")
+        );
     }
 
     #[test]
