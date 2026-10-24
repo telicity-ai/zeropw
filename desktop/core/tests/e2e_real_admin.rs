@@ -261,3 +261,469 @@ fn recover_reaches_a_vault_whose_code_was_typed_into_the_cli() {
     assert!(out["kms_key_id"].is_string(), "{out}");
     assert_eq!(failures(&core), 3);
 }
+
+/// `sshd`, `ssh-keygen`: the SSH test below must fail, not silently pass, without them.
+fn openssh_tools() -> (PathBuf, PathBuf) {
+    let find = |name: &str, fallback: &str| {
+        Command::new("sh")
+            .args(["-c", &format!("command -v {name}")])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+            .or_else(|| Some(PathBuf::from(fallback)).filter(|p| p.is_file()))
+            .unwrap_or_else(|| panic!("{name} not available: this test needs OpenSSH"))
+    };
+    (
+        find("sshd", "/usr/sbin/sshd"),
+        find("ssh-keygen", "/usr/bin/ssh-keygen"),
+    )
+}
+
+/// A throwaway `sshd` on loopback, run as the current user, that accepts one public key.
+struct Sshd {
+    port: u16,
+    host_key_line: String,
+    child: std::process::Child,
+}
+
+impl Sshd {
+    fn start(dir: &std::path::Path, authorized_key: &str) -> Sshd {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::fs::PermissionsExt;
+        let (sshd, keygen) = openssh_tools();
+        let dir = dir.join("sshd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let host_key = dir.join("host_ed25519");
+        let made = Command::new(keygen)
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&host_key)
+            .status()
+            .unwrap();
+        assert!(made.success(), "ssh-keygen failed");
+        let host_key_line = std::fs::read_to_string(dir.join("host_ed25519.pub"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        let authorized = dir.join("authorized_keys");
+        std::fs::write(&authorized, format!("{authorized_key}\n")).unwrap();
+        std::fs::set_permissions(&authorized, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = dir.join("sshd_config");
+        let port = free_port();
+        std::fs::write(
+            &config,
+            format!(
+                "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile none\n\
+                 AuthorizedKeysFile {}\nPubkeyAuthentication yes\nPasswordAuthentication no\n\
+                 KbdInteractiveAuthentication no\nUsePAM no\nStrictModes no\nLogLevel ERROR\n\
+                 AllowAgentForwarding no\nAllowTcpForwarding no\nX11Forwarding no\n",
+                host_key.display(),
+                authorized.display()
+            ),
+        )
+        .unwrap();
+        let mut child = Command::new(sshd)
+            .args(["-D", "-e", "-f"])
+            .arg(&config)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let banner = std::net::TcpStream::connect(("127.0.0.1", port))
+                .ok()
+                .and_then(|s| {
+                    s.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+                    let mut line = String::new();
+                    BufReader::new(s).read_line(&mut line).ok()?;
+                    Some(line)
+                })
+                .unwrap_or_default();
+            if banner.starts_with("SSH-2.0-OpenSSH") {
+                break;
+            }
+            if child.try_wait().unwrap().is_some() || Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("sshd did not start as the current user on 127.0.0.1:{port}");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Sshd {
+            port,
+            host_key_line,
+            child,
+        }
+    }
+}
+
+impl Drop for Sshd {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Stops the core's `serve` even when an assertion fails, so a failed run leaves no sidecar.
+struct ShutdownOnDrop<'a>(&'a Core);
+
+impl Drop for ShutdownOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.shutdown();
+    }
+}
+
+/// `zeropw-agent` with only the caller token, the gateway URL, PATH and an empty HOME.
+fn agent(home: &std::path::Path, url: &str, token: &str, args: &[&str]) -> serde_json::Value {
+    let out = Command::new(bin_dir().join("zeropw-agent"))
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", home)
+        .env("ZEROPW_GATEWAY_URL", url)
+        .env("ZEROPW_CALLER_TOKEN", token)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "agent {args:?}: {text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("agent JSON ({e}): {text:?}"))
+}
+
+/// `zeropw-agent` as [`agent`], for a call the gateway refuses: its error JSON.
+fn agent_refused(
+    home: &std::path::Path,
+    url: &str,
+    token: &str,
+    args: &[&str],
+) -> serde_json::Value {
+    let out = Command::new(bin_dir().join("zeropw-agent"))
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", home)
+        .env("ZEROPW_GATEWAY_URL", url)
+        .env("ZEROPW_CALLER_TOKEN", token)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "agent {args:?} was not refused");
+    let text = if out.stdout.is_empty() {
+        out.stderr
+    } else {
+        out.stdout
+    };
+    let text = String::from_utf8_lossy(&text);
+    serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("agent JSON ({e}): {text:?}"))
+}
+
+/// Runs `zeropw-agent exec` until the run ends; returns its final status.
+fn exec_to_end(home: &std::path::Path, url: &str, token: &str, args: &[&str]) -> serde_json::Value {
+    let run = agent(home, url, token, args);
+    let run_id = run["run_id"].as_str().unwrap_or_else(|| panic!("{run}"));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let status = agent(home, url, token, &["status", "--run", run_id]);
+        if !matches!(status["state"].as_str(), Some("queued" | "running")) {
+            return status;
+        }
+        assert!(Instant::now() < deadline, "run did not finish: {status}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// F8 repair: an SSH connection made without an ssh, as v0.2.0 and the app builds before the
+/// fix made them, gets one through the core (`connection_set_cli_program`) while the core's own
+/// `serve` runs. Exec is refused before (`cli_not_supported`), the grant given before is stale
+/// after, and a new grant runs a command on a throwaway sshd under the same connection id.
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with zeropw-admin and zeropw-agent, and OpenSSH sshd"]
+fn ssh_connection_made_without_its_ssh_is_repaired_and_runs_on_a_real_sshd() {
+    const PASS: &str = "velvet-ocean-27-quartz-lantern";
+    const FORM_SSH: &str = "/usr/bin/ssh";
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), bin_dir());
+    let state_dir = paths.state_dir();
+    let mut config = CoreConfig::new(paths);
+    config.serve_stop_grace = Duration::from_secs(10);
+    let core = Core::new(config, Arc::new(NoEvents));
+    let _serve = ShutdownOnDrop(&core);
+    core.settings_set(Settings {
+        gateway_port: free_port(),
+        team_listen: None,
+    })
+    .unwrap();
+    let code = core.recovery_generate().unwrap();
+    core.vault_init(VaultInitIn {
+        admin_passphrase: PASS.into(),
+        recovery: RecoveryInput::Ref(code.reference),
+    })
+    .unwrap();
+    core.project_create(ProjectCreateIn {
+        name: "demo".into(),
+        environments: vec!["dev".into()],
+    })
+    .unwrap();
+    let key = core
+        .secret_put(SecretPutIn {
+            id: "box".into(),
+            kind: SecretKind::SshPrivateKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::GenerateEd25519(true),
+        })
+        .unwrap();
+    let sshd = Sshd::start(dir.path(), key["public_key"].as_str().unwrap());
+    let user = Command::new("id").arg("-un").output().unwrap();
+    let user = String::from_utf8_lossy(&user.stdout).trim().to_owned();
+
+    // What the app sent before the fix: `create-ssh` without `--cli-program`.
+    let port = sshd.port.to_string();
+    let created = Command::new(bin_dir().join("zeropw-admin"))
+        .arg(format!("--state-dir={}", state_dir.display()))
+        .args([
+            "connection",
+            "create-ssh",
+            "--id=box",
+            "--project=demo",
+            "--environment=dev",
+            "--service=box",
+            "--secret-id=box",
+            "--host=127.0.0.1",
+        ])
+        .arg(format!("--port={port}"))
+        .arg(format!("--username={user}"))
+        .arg(format!("--host-key={}", sshd.host_key_line))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("ZEROPW_ADMIN_PASSPHRASE", PASS)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let stored = |core: &Core| {
+        core.connection_list().unwrap()["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == "box")
+            .cloned()
+            .unwrap()
+    };
+    assert!(stored(&core)["cli"].is_null());
+
+    let principal = core
+        .principal_create(PrincipalCreateIn {
+            id: "agent-1".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    let token = core
+        .onetime_show(RefIn {
+            reference: principal.token_ref,
+        })
+        .unwrap();
+    let grant = |core: &Core| {
+        core.grant_create(GrantCreateIn {
+            principal: "agent-1".into(),
+            connection: "box".into(),
+            ttl: "1h".into(),
+            max_uses: None,
+            admin_passphrase: PASS.into(),
+        })
+        .unwrap()
+    };
+    let first = grant(&core);
+    let url = core.serve_status().url.expect("serve is running");
+    let home = dir.path().join("agent-home");
+    std::fs::create_dir(&home).unwrap();
+    let exec = ["exec", "--connection", "box", "--", "whoami"];
+    let refused = agent_refused(&home, &url, token.expose(), &exec);
+    assert_eq!(refused["reason"], "cli_not_supported", "{refused}");
+
+    let wrong = core
+        .connection_set_cli_program(CliProgramIn {
+            id: "box".into(),
+            cli_program: FORM_SSH.into(),
+            admin_passphrase: "not-the-admin-password".into(),
+        })
+        .unwrap_err();
+    assert_eq!(wrong.error, "AuthFailed");
+    assert!(stored(&core)["cli"].is_null());
+    let filled = core
+        .connection_set_cli_program(CliProgramIn {
+            id: "box".into(),
+            cli_program: FORM_SSH.into(),
+            admin_passphrase: PASS.into(),
+        })
+        .unwrap();
+    assert_eq!(filled["widened"], true, "{filled}");
+    assert_eq!(stored(&core)["cli"]["program"], FORM_SSH);
+    let refused = agent_refused(&home, &url, token.expose(), &exec);
+    assert_eq!(refused["reason"], "grant_stale", "{refused}");
+    let grants = core.grant_list(GrantListIn { principal: None }).unwrap();
+    let old = grants["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == first["id"])
+        .cloned()
+        .unwrap();
+    assert_eq!(old["status"], "stale", "{old}");
+
+    grant(&core);
+    let done = exec_to_end(&home, &url, token.expose(), &exec);
+    assert_eq!(
+        (
+            done["state"].as_str(),
+            done["exit_code"].as_i64(),
+            done["stdout"].as_str().map(str::trim)
+        ),
+        (Some("completed"), Some(0), Some(user.as_str())),
+        "{done}"
+    );
+    let again = core
+        .connection_set_cli_program(CliProgramIn {
+            id: "box".into(),
+            cli_program: "/bin/false".into(),
+            admin_passphrase: PASS.into(),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (again.error.as_str(), again.reason.as_str()),
+        ("InvalidInput", "cli_already_set")
+    );
+}
+
+/// Desktop E2E finding F8: an SSH connection made the way the app's form makes it (generated
+/// key, the form's default ssh) is one the agent can use. The core creates it, the core's own
+/// `serve` signs, and `zeropw-agent exec` runs a command on a throwaway sshd. Before the fix
+/// the connection had no ssh and exec answered `cli_not_supported` without reaching sshd.
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with zeropw-admin and zeropw-agent, and OpenSSH sshd"]
+fn app_made_ssh_connection_runs_agent_exec_on_a_real_sshd() {
+    const PASS: &str = "velvet-ocean-27-quartz-lantern";
+    // desktop/src/lib/dash.ts SSH_PROGRAM, what the connection form sends unless changed
+    const FORM_SSH: &str = "/usr/bin/ssh";
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = CoreConfig::new(AppPaths::new(dir.path().join("app"), bin_dir()));
+    config.serve_stop_grace = Duration::from_secs(10);
+    let core = Core::new(config, Arc::new(NoEvents));
+    let _serve = ShutdownOnDrop(&core);
+    core.settings_set(Settings {
+        gateway_port: free_port(),
+        team_listen: None,
+    })
+    .unwrap();
+    let code = core.recovery_generate().unwrap();
+    core.vault_init(VaultInitIn {
+        admin_passphrase: PASS.into(),
+        recovery: RecoveryInput::Ref(code.reference),
+    })
+    .unwrap();
+    core.project_create(ProjectCreateIn {
+        name: "demo".into(),
+        environments: vec!["dev".into()],
+    })
+    .unwrap();
+    let key = core
+        .secret_put(SecretPutIn {
+            id: "box".into(),
+            kind: SecretKind::SshPrivateKey,
+            project: "demo".into(),
+            environment: "dev".into(),
+            source: SecretSource::GenerateEd25519(true),
+        })
+        .unwrap();
+    let sshd = Sshd::start(dir.path(), key["public_key"].as_str().unwrap());
+    let user = Command::new("id").arg("-un").output().unwrap();
+    let user = String::from_utf8_lossy(&user.stdout).trim().to_owned();
+
+    let created = core
+        .connection_create_ssh(SshConnectionIn {
+            id: "box".into(),
+            project: "demo".into(),
+            environment: "dev".into(),
+            service: "box".into(),
+            secret_id: "box".into(),
+            host: "127.0.0.1".into(),
+            port: sshd.port,
+            username: user.clone(),
+            host_keys: vec![sshd.host_key_line.clone()],
+            cli_program: FORM_SSH.into(),
+            description: None,
+            admin_passphrase: PASS.into(),
+        })
+        .unwrap();
+    assert_eq!(
+        (&created["cli"]["program"], &created["cli"]["kind"]),
+        (&serde_json::json!(FORM_SSH), &serde_json::json!("ssh")),
+        "{created}"
+    );
+    let listed = core.connection_list().unwrap();
+    let stored = listed["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "box")
+        .unwrap();
+    assert_eq!(stored["cli"]["program"], FORM_SSH, "{stored}");
+
+    let principal = core
+        .principal_create(PrincipalCreateIn {
+            id: "agent-1".into(),
+            runtime: "default".into(),
+        })
+        .unwrap();
+    let token = core
+        .onetime_show(RefIn {
+            reference: principal.token_ref,
+        })
+        .unwrap();
+    core.grant_create(GrantCreateIn {
+        principal: "agent-1".into(),
+        connection: "box".into(),
+        ttl: "1h".into(),
+        max_uses: None,
+        admin_passphrase: PASS.into(),
+    })
+    .unwrap();
+
+    let url = core.serve_status().url.expect("serve is running");
+    let home = dir.path().join("agent-home");
+    std::fs::create_dir(&home).unwrap();
+    let run = agent(
+        &home,
+        &url,
+        token.expose(),
+        &["exec", "--connection", "box", "--", "whoami"],
+    );
+    let run_id = run["run_id"].as_str().unwrap_or_else(|| panic!("{run}"));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let done = loop {
+        let status = agent(&home, &url, token.expose(), &["status", "--run", run_id]);
+        if !matches!(status["state"].as_str(), Some("queued" | "running")) {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "run did not finish: {status}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(
+        (
+            done["state"].as_str(),
+            done["exit_code"].as_i64(),
+            done["stdout"].as_str().map(str::trim)
+        ),
+        (Some("completed"), Some(0), Some(user.as_str())),
+        "{done}"
+    );
+}

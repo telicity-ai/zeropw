@@ -31,7 +31,9 @@ export interface HttpConnectionInput {
 }
 export interface SshConnectionInput {
   id: string; project: string; environment: string; service: string; secret_id: string;
-  host: string; port: number; username: string; host_keys: string[]; description?: string;
+  host: string; port: number; username: string; host_keys: string[];
+  /** The ssh the agent's exec runs; without one exec is refused with `cli_not_supported`. */
+  cli_program: string; description?: string;
 }
 /** Connection::to_value as printed by the CLI; kept loose on purpose. */
 export type ConnectionView = Record<string, unknown> & { id: string; project: string; environment: string; kind: string; status: string };
@@ -79,6 +81,11 @@ export interface Commands {
   connection_list: [void, { connections: ConnectionView[] }];
   connection_create_http: [HttpConnectionInput & { admin_passphrase: string }, ConnectionView];
   connection_create_ssh: [SshConnectionInput & { admin_passphrase: string }, ConnectionView];
+  /** Gives an SSH connection made without an ssh (before the app sent one) the ssh its agents
+   *  run. Refused for a connection that is not SSH (`cli_requires_ssh`), is disabled
+   *  (`connection_disabled`) or has one already (`cli_already_set`). The connection's grants go
+   *  stale and must be given again. */
+  connection_set_cli_program: [{ id: string; cli_program: string; admin_passphrase: string }, Record<string, unknown>];
   connection_disable: [{ id: string }, Record<string, unknown>];
 
   principal_list: [void, { principals: Principal[] }];

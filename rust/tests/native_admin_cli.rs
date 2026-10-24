@@ -723,6 +723,124 @@ fn connection_create_ssh() {
     assert!(has(&events(&admin.state), "connection_create"));
 }
 
+/// F8 repair: an SSH connection created without an ssh (`cli: null`, which
+/// `exec` refuses with `cli_not_supported`) gets one in place through
+/// `connection update --cli-program`. Only a missing program on an active SSH
+/// connection is filled; every refusal leaves the connection as it was. The
+/// new program widens the connection, so its grants go stale.
+#[test]
+fn connection_update_gives_an_ssh_connection_without_one_its_ssh() {
+    let (_tmp, admin) = setup();
+    let (_key, pem) = ssh_key(&admin, "demo");
+    let host = host_key("host");
+    seed_project(&admin);
+    put_ssh_key(&admin, &pem);
+    put_secret(&admin, SYNTHETIC, "gh-token", "dev");
+    create_http(&admin, "gh", &[]);
+    let ssh = "connection create-ssh --project demo --environment dev --service ssh-box \
+               --secret-id box-key --host 127.0.0.1 --username deploy";
+    for id in ["box", "off"] {
+        let created = admin.ok(&with(&format!("{ssh} --id {id}"), &["--host-key", &host]));
+        assert!(created["cli"].is_null(), "{created}");
+    }
+    admin.ok(&with(
+        &format!("{ssh} --id named --cli-program ssh"),
+        &["--host-key", &host],
+    ));
+    admin.ok(&words("connection disable --id off"));
+    admin.ok(&words("principal create --id agent-1"));
+    let grant = admin.ok(&words("grant create --principal agent-1 --connection box"));
+    let grant_id = grant["id"].as_str().unwrap();
+
+    let program = "/usr/bin/ssh";
+    let refused: [(Vec<&str>, &str); 7] = [
+        (
+            words("connection update --id gh --cli-program /usr/bin/ssh"),
+            "cli_requires_ssh",
+        ),
+        (
+            words("connection update-scope --id gh --cli-program /usr/bin/ssh"),
+            "cli_requires_ssh",
+        ),
+        (
+            words("connection update --id box --cli-program /usr/bin/ssh --methods GET"),
+            "scope_requires_http",
+        ),
+        (
+            words("connection update --id box --cli-program")
+                .into_iter()
+                .chain([""])
+                .collect(),
+            "invalid_cli_program",
+        ),
+        (
+            words("connection update --id named --cli-program /usr/bin/ssh"),
+            "cli_already_set",
+        ),
+        (
+            words("connection update --id off --cli-program /usr/bin/ssh"),
+            "connection_disabled",
+        ),
+        (
+            words("connection update --id ghost --cli-program /usr/bin/ssh"),
+            "connection_not_found",
+        ),
+    ];
+    let before: Vec<Value> = ["gh", "box", "named", "off"]
+        .iter()
+        .map(|id| admin.ok(&["connection", "show", "--id", id]))
+        .collect();
+    for (argv, why) in &refused {
+        assert_eq!(reason(&admin.fail(argv)), *why, "{argv:?}");
+    }
+    let unchanged: Vec<Value> = ["gh", "box", "named", "off"]
+        .iter()
+        .map(|id| admin.ok(&["connection", "show", "--id", id]))
+        .collect();
+    assert_eq!(unchanged, before);
+    assert_eq!(
+        ctx(&admin).policy.get_grant(grant_id).unwrap().status,
+        "active"
+    );
+    assert!(!has(&events(&admin.state), "connection_update"));
+
+    let filled = admin.ok(&words(
+        "connection update --id box --cli-program /usr/bin/ssh",
+    ));
+    let cli = json!({"program": program, "kind": "ssh", "base_url_env": "ZEROPW_API_BASE_URL",
+                     "extra_env": {}});
+    assert_eq!(
+        filled,
+        json!({"id": "box", "widened": true, "policy_version": 2, "cli": cli,
+               "note": "existing grants are stale and need regrant"})
+    );
+    let shown = admin.ok(&words("connection show --id box"));
+    assert_eq!((&shown["cli"], &shown["policy_version"]), (&cli, &json!(2)));
+    assert_eq!(shown["ssh_target"], before[1]["ssh_target"]);
+    let ctx = ctx(&admin);
+    assert_eq!(ctx.policy.get_grant(grant_id).unwrap().status, "stale");
+    assert!(ctx.audit.tail(20).unwrap().iter().any(|r| {
+        r["event"] == "connection_update"
+            && r["connection"] == "box"
+            && r["detail"] == "cli"
+            && r["state"] == "widened"
+            && r["policy_version"] == 2
+    }));
+
+    // Filled once: changing it stays disable and recreate.
+    assert_eq!(
+        fail_reason(
+            &admin,
+            "connection update --id box --cli-program /bin/false"
+        ),
+        "cli_already_set"
+    );
+    assert_eq!(admin.ok(&words("connection show --id box")), shown);
+    // A new grant is usable against the new policy version.
+    let regrant = admin.ok(&words("grant create --principal agent-1 --connection box"));
+    assert_eq!(regrant["policy_version"], 2);
+}
+
 #[test]
 fn switch_credential_validates_version_state() {
     let (_tmp, admin) = setup();

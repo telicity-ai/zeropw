@@ -4,7 +4,7 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListe
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
+import { grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM } from '../src/lib/dash';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
@@ -122,11 +122,63 @@ describe('connections', () => {
   it('creates an SSH connection only with an Ed25519 host key and an SSH key', async () => {
     ready();
     await call('secret_put', { id: 'git', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
-    const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', admin_passphrase: PASS };
+    const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', cli_program: SSH_PROGRAM, admin_passphrase: PASS };
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB'] }))).reason).toBe('unsupported_host_key');
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('host_key_required');
     const c = await call('connection_create_ssh', { ...ssh, host_keys: [HOST_KEY] });
     expect(c.kind).toBe('ssh');
+  });
+
+  // desktop E2E finding F8: the agent's exec refuses a connection without its ssh (cli_not_supported)
+  it('creates an SSH connection the agent can run, with the ssh the form sends', async () => {
+    ready();
+    await call('secret_put', { id: 'box', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
+    const ssh = { id: 'box', project: 'demo', environment: 'dev', service: 'box', secret_id: 'box', host: '10.0.0.5', port: 22, username: 'deploy', host_keys: [HOST_KEY], admin_passphrase: PASS };
+    // the contract requires the field; the core does not even read a payload without it
+    expect((await rejection(call('connection_create_ssh', ssh as typeof ssh & { cli_program: string }))).reason).toBe('invalid_payload');
+    expect((await rejection(call('connection_create_ssh', { ...ssh, cli_program: '' }))).reason).toBe('cli_program_required');
+    expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
+
+    const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
+    expect(c.cli).toEqual({ program: '/usr/bin/ssh', kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
+    const listed = (await call('connection_list')).connections.find((x) => x.id === 'box');
+    expect(listed?.cli).not.toBeNull();
+    expect((listed?.cli as { program?: string } | null)?.program).toBe(SSH_PROGRAM);
+  });
+
+  // F8 repair: an SSH connection made before the fix gets its ssh in place (rust/src/admin_cli.rs
+  // update_connection_cli); only a missing one is filled, and the connection's grants go stale
+  it('gives an SSH connection without its ssh one, once, and its grants must be given again', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, sshWithoutCli: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const fill = { id: 'deploy-ssh', cli_program: SSH_PROGRAM, admin_passphrase: PASS };
+    const before = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(before?.cli).toBeNull();
+    const grant = (await call('grant_list', {})).grants.find((g) => g.connection === 'deploy-ssh');
+    expect(grant?.status).toBe('active');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
+    expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
+    // the core's order: no passphrase, then an empty path, and only then the CLI's passphrase check
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }))).reason).toBe('passphrase_missing');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_required');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
+    expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);
+
+    const out = await call('connection_set_cli_program', fill);
+    expect(out).toMatchObject({ id: 'deploy-ssh', widened: true, policy_version: 2 });
+    const after = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(after?.cli).toEqual({ program: SSH_PROGRAM, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
+    expect(after?.ssh_target).toEqual(before?.ssh_target);
+    const stale = (await call('grant_list', {})).grants.find((g) => g.id === grant?.id);
+    expect(stale?.status).toBe('stale');
+    expect(grantState(stale!, Date.now())).not.toBe('live');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/false' }))).reason).toBe('cli_already_set');
+    await call('connection_disable', { id: 'deploy-ssh' });
+    expect((await rejection(call('connection_set_cli_program', fill))).reason).toBe('connection_disabled');
   });
 });
 
@@ -361,7 +413,10 @@ describe('versions as the CLI prints them', () => {
     };
     expect((await call('connection_create_http', http)).secret_id).toBe('database-url');
     expect((await rejection(call('connection_create_http', { ...http, id: 'x2', environment: 'dev' }))).reason).toBe('secret_scope_mismatch');
-    const ssh = { id: 'git2', project: 'demo', environment: 'staging', service: 'git2', secret_id: 'database-url', host: 'git.example.com', port: 22, username: 'git', host_keys: [HOST_KEY], admin_passphrase: PASS };
+    const ssh = {
+      id: 'git2', project: 'demo', environment: 'staging', service: 'git2', secret_id: 'database-url', host: 'git.example.com', port: 22, username: 'git',
+      host_keys: [HOST_KEY], cli_program: SSH_PROGRAM, admin_passphrase: PASS,
+    };
     expect((await rejection(call('connection_create_ssh', ssh))).reason).toBe('secret_kind_mismatch');
   });
 });
