@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Commands, EnvFileRef, SecretKind, SecretSource, SecretView } from '../ipc/contract';
-import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId } from '../lib/dash';
+import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
 import { dropErrorKey } from '../lib/envimport';
 import { shortTime } from '../lib/format';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
@@ -19,6 +19,7 @@ import { Sheet } from './Sheet';
 /** The version goes back to the core exactly as the CLI printed it (a JSON number today). */
 type VersionArg = Commands['secret_revoke'][0]['version'];
 const versionArg = (v: VersionId): VersionArg => v as VersionArg;
+const NO_PAIRS: EnvPair[] = [];
 
 export const KIND_LABEL: Record<SecretKind, CopyKey> = {
   api_key: 'keys.kind.api_key', password: 'keys.kind.password', env_var: 'keys.kind.env_var', ssh_private_key: 'keys.kind.ssh_private_key',
@@ -47,7 +48,8 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [p, s] = await Promise.all([call('project_list'), call('secret_list', {})]);
-    return { projects: p.projects, secrets: s.secrets };
+    // a team environment this device joined is listed apart from its projects: a .env can go there too
+    return { projects: p.projects, envs: teamEnvPairs(p), secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<KeySheet>();
@@ -115,7 +117,7 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
         onDone={(id) => { reload(); sheets.open({ kind: 'versions', id }); }} />
       <ProjectSheet key={sheets.key('project')} open={sheets.isOpen('project')} onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
       <RevealSheet key={sheets.key('reveal')} open={sheets.isOpen('reveal')} data={sheets.data('reveal')} onClose={sheets.close} />
-      <ImportSheet key={sheets.key('import')} open={sheets.isOpen('import')} file={sheets.data('import')?.file} projects={load.data?.projects ?? []}
+      <ImportSheet key={sheets.key('import')} open={sheets.isOpen('import')} file={sheets.data('import')?.file} pairs={load.data?.envs ?? NO_PAIRS}
         onClose={sheets.close} onDone={reload} />
     </>
   );

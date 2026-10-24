@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { EnvFileRef, ImportReport, Project } from '../ipc/contract';
-import { envPairs, splitEnv } from '../lib/dash';
+import type { EnvFileRef, ImportReport } from '../ipc/contract';
+import { splitEnv, type EnvPair } from '../lib/dash';
 import {
   badLineKey, badLines, importBlocker, importErrorCopy, isForced, isIdPrefix, plannedAction, plannedKey, resultKey, whyKey, writeCount,
 } from '../lib/envimport';
@@ -25,11 +25,10 @@ async function sharedEnvs(keys: string[]): Promise<Set<string>> {
  *  window) and keeps it; this sheet shows the preview (names, key IDs, why each is chosen), lets
  *  the user change the selection and imports in one step. A shared environment is chosen first,
  *  since an import there reaches the team in one commit. No value ever comes here. */
-export function ImportSheet({ open, file, projects, onClose, onDone }: {
-  open: boolean; file: EnvFileRef | undefined; projects: Project[]; onClose(): void; onDone(): void;
+export function ImportSheet({ open, file, pairs, onClose, onDone }: {
+  open: boolean; file: EnvFileRef | undefined; pairs: readonly EnvPair[]; onClose(): void; onDone(): void;
 }) {
   const { toast, field, announce } = useApp();
-  const pairs = useMemo(() => envPairs(projects), [projects]);
   const [shared, setShared] = useState<Set<string> | null>(null);
   const [env, setEnv] = useState('');
   const [prefix, setPrefix] = useState('');
