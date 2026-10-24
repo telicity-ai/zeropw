@@ -58,6 +58,7 @@ pub const EVENTS: &[&str] = &[
     "principal_disable",
     "project_create",
     "secret_put",
+    "secret_import",
     "secret_retire",
     "secret_revoke",
     "secret_reveal",

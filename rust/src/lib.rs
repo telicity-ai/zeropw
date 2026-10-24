@@ -48,6 +48,7 @@ mod smtp;
 pub mod admin_cli;
 pub mod agent_cli;
 pub mod argparse;
+pub mod envfile;
 pub mod input_envelope;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_proxies;
