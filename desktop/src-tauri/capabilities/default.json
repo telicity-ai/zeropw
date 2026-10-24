@@ -67,6 +67,9 @@
     "allow-onetime-copy",
     "allow-onetime-discard",
     "allow-file-pick",
+    "allow-env-file-load",
+    "allow-secret-import-preview",
+    "allow-secret-import",
     "allow-settings-get",
     "allow-settings-set",
     "allow-net-interfaces"

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, on, toIpcError } from '../ipc/client';
-import type { AppStatus, Control, InvitePreview, ServeStatus } from '../ipc/contract';
+import type { AppStatus, Control, EnvFileRef, InvitePreview, ServeStatus } from '../ipc/contract';
 import { newRecordCount, recordSig } from '../lib/dash';
+import { dropErrorKey } from '../lib/envimport';
 import { hostPort } from '../lib/format';
 import { offersListenOff, relayError } from '../lib/reasons';
 import { useApp } from '../ui/context';
@@ -47,6 +48,10 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   const [tick, setTick] = useState(0);
   const [activity, setActivity] = useState(0);
   const [invite, setInvite] = useState<Incoming | null>(null);
+  const [envFile, setEnvFile] = useState<EnvFileRef | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const [holds, setHolds] = useState(0);
   const slot = useRef<HTMLDivElement>(null);
@@ -95,6 +100,18 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     const keep = (p: Promise<() => void>) => p.then((un) => { if (dead) un(); else offs.push(un); }, () => undefined);
     keep(on('serve://status', (s) => setServe(s)));
     keep(on('control://changed', (c) => setControl(c)));
+    // a .env file dropped anywhere on the window opens the import on the keys page
+    keep(on('envfile://hover', (h) => setDragOver(h.over)));
+    keep(on('envfile://dropped', (d) => {
+      setDragOver(false);
+      if (d.import_ref && d.name !== undefined) {
+        setEnvFile({ import_ref: d.import_ref, name: d.name });
+        setPage('keys');
+        setIntent('import');
+      } else {
+        toastRef.current(t(dropErrorKey(d.error ?? '')), 'warn');
+      }
+    }));
     window.addEventListener('focus', refresh);
     return () => { dead = true; offs.forEach((f) => f()); window.removeEventListener('focus', refresh); };
   }, [refresh]);
@@ -281,7 +298,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
                 <p>{t(meta.sub)}</p>
               </header>
               {page === 'home' && <Home />}
-              {page === 'keys' && <KeysPage intent={pageIntent} onIntent={clearIntent} />}
+              {page === 'keys' && <KeysPage intent={pageIntent} onIntent={clearIntent} incomingFile={envFile} onFileTaken={() => setEnvFile(null)} />}
               {page === 'connections' && <ConnectionsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'logs' && <LogsPage />}
@@ -291,6 +308,11 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
           </div>
         </div>
         <div className="sheet-host" ref={setHostEl} />
+        {dragOver && (
+          <div className="drop-zone" aria-hidden="true">
+            <div className="drop-card"><span className="px" /><strong>{t('drop.title')}</strong><span>{t('drop.sub')}</span></div>
+          </div>
+        )}
 
         <Sheet id="sheet-stop" open={sheet === 'stop'} title={t('stop.title')} lead={t('stop.sub')}
           primaryLabel={t('stop.confirm')} busy={busy} onPrimary={() => void stopAll()} onClose={closeSheet}>

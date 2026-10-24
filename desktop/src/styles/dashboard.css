@@ -151,3 +151,17 @@
 .listen-setup > .callout:first-child { margin-top: 0; }
 .sheet .step-body > .listen-setup:first-child { margin-top: 0; }
 .listen-setup .inline { margin-top: 10px; }
+
+/* .env import: a file dragged over the window, and the entries of the import sheet */
+.drop-zone { position: absolute; inset: var(--titlebar-h) 0 0 0; z-index: 9; display: grid; place-items: center; background: rgba(4, 4, 6, .55); pointer-events: none; animation: fade-in .25s var(--ease-out); }
+.drop-card { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 48px; border-radius: var(--radius-lg); background: rgba(14, 14, 22, .72); -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); box-shadow: inset 0 0 0 1px rgba(143, 176, 255, .45), 0 0 0 6px rgba(91, 140, 255, .08); }
+.drop-card .px { width: 8px; height: 8px; background: var(--azure); box-shadow: 0 0 8px var(--azure); }
+.drop-card strong { font-size: var(--fs-lg); color: var(--fg); }
+.drop-card span:last-child { font: 500 12px/1 var(--mono); color: var(--fg-3); }
+.imp-list { margin: 0; }
+.imp-list li { padding-left: 4px; }
+.imp-chip { flex: none; max-width: 230px; height: 26px; }
+.imp-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-list .tag { margin-left: 0; flex: none; }
+.sub-meta.wrap { white-space: normal; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

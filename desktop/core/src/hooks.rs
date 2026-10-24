@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::commands::{Control, InvitePreviewOut};
+use crate::commands::{Control, EnvFileDrop, InvitePreviewOut};
 use crate::error::AppError;
 use crate::onetime::random_ref;
 use crate::secret::SecretString;
@@ -23,6 +23,10 @@ pub enum CoreEvent {
     AuditRecords(Vec<Value>),
     ControlChanged(Control),
     ServeStatus(ServeStatus),
+    /// A file is being dragged over the window (`true`) or no longer is.
+    EnvFileHover(bool),
+    /// A file dropped on the window was read for an import, or why it was not.
+    EnvFileDropped(EnvFileDrop),
 }
 
 impl CoreEvent {
@@ -32,6 +36,8 @@ impl CoreEvent {
             CoreEvent::AuditRecords(_) => "audit://records",
             CoreEvent::ControlChanged(_) => "control://changed",
             CoreEvent::ServeStatus(_) => "serve://status",
+            CoreEvent::EnvFileHover(_) => "envfile://hover",
+            CoreEvent::EnvFileDropped(_) => "envfile://dropped",
         }
     }
 
@@ -41,6 +47,8 @@ impl CoreEvent {
             CoreEvent::AuditRecords(records) => Ok(serde_json::json!({ "records": records })),
             CoreEvent::ControlChanged(control) => serde_json::to_value(control),
             CoreEvent::ServeStatus(status) => serde_json::to_value(status),
+            CoreEvent::EnvFileHover(over) => Ok(serde_json::json!({ "over": over })),
+            CoreEvent::EnvFileDropped(drop) => serde_json::to_value(drop),
         }
         .unwrap_or(Value::Null)
     }
@@ -84,6 +92,8 @@ pub enum FilePurpose {
     Secret,
     SshKey,
     Ca,
+    /// A `.env` file for `env_file_load` (docs/env-import.md §8).
+    EnvFile,
 }
 
 /// `file_pick` output: an opaque token and the file's display name; the path stays in Rust.

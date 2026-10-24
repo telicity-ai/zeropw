@@ -24,7 +24,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -60,6 +60,11 @@ const CLIPBOARD_SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// be on the clipboard if every later copy failed). Its own 60 s timer still runs.
 const MAX_PENDING_CLEARS: usize = 64;
 const MAX_INVITE_CHARS: usize = 4096;
+/// The most entries `secret import` takes from one file (rust/src/envfile.rs).
+const MAX_IMPORT_ENTRIES: usize = 200;
+/// `--include`/`--exclude` lists are split so that each argument stays well under the
+/// runner's argument limit.
+const MAX_NAME_LIST_CHARS: usize = 2000;
 /// The longest version text the core passes on (the CLI prints integers).
 const MAX_VERSION_CHARS: usize = 64;
 
@@ -577,6 +582,100 @@ pub struct TeamJoinIn {
 pub struct RefIn {
     #[serde(rename = "ref")]
     pub reference: String,
+}
+
+/// `env_file_load` input: the token `file_pick {purpose: "env_file"}` returned.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileTokenIn {
+    pub file_token: String,
+}
+
+/// A `.env` file read for an import (`env_file_load`, or a file dropped on the window). The
+/// content waits in the one-time store behind `import_ref` (kind `EnvImport`, 10 minutes);
+/// only the file's base name reaches the webview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EnvFileOut {
+    pub import_ref: String,
+    pub name: String,
+}
+
+/// `envfile://dropped`: the dropped file was read (`import_ref`, `name`), or why not (`error`,
+/// a reason code such as `drop_one_file`, `file_not_regular`, `env_file_too_large`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EnvFileDrop {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl EnvFileDrop {
+    fn error(reason: &str) -> Self {
+        Self {
+            import_ref: None,
+            name: None,
+            error: Some(reason.to_owned()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretImportPreviewIn {
+    pub import_ref: String,
+    pub project: String,
+    pub environment: String,
+    #[serde(default)]
+    pub id_prefix: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretImportIn {
+    pub import_ref: String,
+    pub project: String,
+    pub environment: String,
+    #[serde(default)]
+    pub id_prefix: Option<String>,
+    /// The variable names to import. The core turns the difference from the default selection
+    /// into `--include`/`--exclude`.
+    pub selected: Vec<String>,
+    #[serde(default)]
+    pub update: bool,
+}
+
+/// One entry of `secret import`'s output. Only these value-free fields reach the webview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportEntry {
+    pub line: u32,
+    pub name: String,
+    pub id: String,
+    pub kind: String,
+    pub selected: bool,
+    pub why: String,
+    pub action: String,
+    /// `new`, `same`, `different` or `elsewhere`: what importing the entry would meet.
+    pub state: String,
+    #[serde(default)]
+    pub forced: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_connections: Vec<String>,
+}
+
+/// `secret import` output as the webview sees it (preview or result).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportReport {
+    pub project: String,
+    pub environment: String,
+    pub shared: bool,
+    pub dry_run: bool,
+    pub entries: Vec<ImportEntry>,
+    pub empty_lines: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1549,6 +1648,123 @@ impl Core {
         Ok(out)
     }
 
+    // -- .env import (docs/env-import.md §8) ------------------------------------------------
+
+    /// `env_file_load`: read the file picked with `file_pick {purpose: "env_file"}`.
+    pub fn env_file_load(&self, input: FileTokenIn) -> Result<EnvFileOut, AppError> {
+        let path = self
+            .files
+            .take(&input.file_token, &[FilePurpose::EnvFile])?;
+        self.env_file_read(&path)
+    }
+
+    /// Files dropped on the main window. Exactly one regular file is read as by
+    /// `env_file_load`, and the outcome goes out as `envfile://dropped`; the path never
+    /// leaves Rust. Nothing is read while no vault exists.
+    pub fn env_file_drop(&self, paths: &[PathBuf]) {
+        let drop = match paths {
+            _ if !self.initialized() => EnvFileDrop::error("vault_missing"),
+            [path] => match self.env_file_read(path) {
+                Ok(out) => EnvFileDrop {
+                    import_ref: Some(out.import_ref),
+                    name: Some(out.name),
+                    error: None,
+                },
+                Err(e) => EnvFileDrop::error(&e.reason),
+            },
+            _ => EnvFileDrop::error("drop_one_file"),
+        };
+        self.events.emit(CoreEvent::EnvFileDropped(drop));
+    }
+
+    /// A drag over the main window started (`true`) or ended; the page shows where to drop.
+    pub fn env_file_hover(&self, over: bool) {
+        self.events.emit(CoreEvent::EnvFileHover(over));
+    }
+
+    fn env_file_read(&self, path: &Path) -> Result<EnvFileOut, AppError> {
+        let bytes = read_secret_file(path).map_err(|e| match e.reason.as_str() {
+            "secret_too_large" => AppError::invalid_input("env_file_too_large"),
+            "empty_secret_value" => AppError::invalid_input("env_file_empty"),
+            _ => e,
+        })?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| AppError::invalid_input("env_file_not_utf8"))?;
+        let import_ref = self
+            .store
+            .put(OneTimeKind::EnvImport, SecretString::from(text))?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(EnvFileOut { import_ref, name })
+    }
+
+    /// `secret import --stdin --dry-run` on a loaded file: names, key IDs, the default
+    /// selection and what an import would do. Never a value.
+    pub fn secret_import_preview(
+        &self,
+        input: SecretImportPreviewIn,
+    ) -> Result<ImportReport, AppError> {
+        let prefix = check_id_prefix(input.id_prefix.as_deref())?;
+        let file = self
+            .store
+            .peek_kind(&input.import_ref, OneTimeKind::EnvImport)?;
+        self.import_cli(
+            &file,
+            (&input.project, &input.environment, prefix),
+            (&[], &[]),
+            false,
+            true,
+        )
+    }
+
+    /// `secret import --stdin` with the user's selection. The core previews the file again
+    /// (the CLI's default selection is the only one), passes the difference as
+    /// `--include`/`--exclude` and forgets the file once the import succeeded.
+    pub fn secret_import(&self, input: SecretImportIn) -> Result<ImportReport, AppError> {
+        let prefix = check_id_prefix(input.id_prefix.as_deref())?;
+        if input.selected.len() > MAX_IMPORT_ENTRIES
+            || !input.selected.iter().all(|name| is_env_name(name))
+        {
+            return Err(AppError::invalid_input("invalid_selection"));
+        }
+        let file = self
+            .store
+            .peek_kind(&input.import_ref, OneTimeKind::EnvImport)?;
+        let place = (input.project.as_str(), input.environment.as_str(), prefix);
+        let preview = self.import_cli(&file, place, (&[], &[]), false, true)?;
+        let (include, exclude) = selection_delta(&preview.entries, &input.selected)?;
+        let report = self.import_cli(&file, place, (&include, &exclude), input.update, false)?;
+        self.store.discard(&input.import_ref);
+        Ok(report)
+    }
+
+    fn import_cli(
+        &self,
+        file: &SecretString,
+        (project, environment, prefix): (&str, &str, Option<&str>),
+        (include, exclude): (&[String], &[String]),
+        update: bool,
+        dry_run: bool,
+    ) -> Result<ImportReport, AppError> {
+        let mut args = AdminArgs::command(&["secret", "import"])
+            .opt("project", project)?
+            .opt("environment", environment)?
+            .opt_if("id-prefix", prefix)?
+            .flag("stdin")
+            .flag_if("dry-run", dry_run)
+            .flag_if("update", update);
+        for chunk in name_lists(include) {
+            args = args.opt("include", &chunk)?;
+        }
+        for chunk in name_lists(exclude) {
+            args = args.opt("exclude", &chunk)?;
+        }
+        self.runner
+            .run_parsed(&args, &Envelope::new().value(file.expose().as_bytes())?)
+    }
+
     // -- one-time values ----------------------------------------------------------------------
 
     /// `onetime_show`: the value, once. The caller sends `{text}` to the webview.
@@ -1754,6 +1970,78 @@ fn scalar_text(value: &Value) -> String {
 }
 
 /// Read a natively picked secret file into a wiped buffer (at most the vault's 64 KiB).
+/// `--id-prefix`: absent when empty; otherwise the key ID rule's head and tail characters,
+/// with room left for a name.
+fn check_id_prefix(prefix: Option<&str>) -> Result<Option<&str>, AppError> {
+    let Some(prefix) = prefix.filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = prefix.as_bytes();
+    let head = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    if bytes.len() < 64
+        && head(bytes[0])
+        && bytes[1..]
+            .iter()
+            .all(|&b| head(b) || matches!(b, b'.' | b'_' | b'-'))
+    {
+        Ok(Some(prefix))
+    } else {
+        Err(AppError::invalid_input("invalid_id_prefix"))
+    }
+}
+
+/// A `.env` variable name: `[A-Za-z_][A-Za-z0-9_]*`, bounded.
+fn is_env_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && (bytes[0].is_ascii_alphabetic() || bytes[0] == b'_')
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'_')
+}
+
+/// What `--include`/`--exclude` must say for `selected` to replace the default selection of
+/// `entries`. A name that is not an entry with a value is refused.
+fn selection_delta(
+    entries: &[ImportEntry],
+    selected: &[String],
+) -> Result<(Vec<String>, Vec<String>), AppError> {
+    if selected
+        .iter()
+        .any(|name| !entries.iter().any(|e| &e.name == name))
+    {
+        return Err(AppError::invalid_input("invalid_selection"));
+    }
+    let wanted = |e: &&ImportEntry| selected.contains(&e.name);
+    let include = entries
+        .iter()
+        .filter(|e| !e.selected && wanted(e))
+        .map(|e| e.name.clone())
+        .collect();
+    let exclude = entries
+        .iter()
+        .filter(|e| e.selected && !wanted(e))
+        .map(|e| e.name.clone())
+        .collect();
+    Ok((include, exclude))
+}
+
+/// Comma-separated lists of `names`, each at most [`MAX_NAME_LIST_CHARS`] long.
+fn name_lists(names: &[String]) -> Vec<String> {
+    let mut lists: Vec<String> = Vec::new();
+    for name in names {
+        match lists.last_mut() {
+            Some(list) if list.len() + 1 + name.len() <= MAX_NAME_LIST_CHARS => {
+                list.push(',');
+                list.push_str(name);
+            }
+            _ => lists.push(name.clone()),
+        }
+    }
+    lists
+}
+
 fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, AppError> {
     let file = fs::File::open(path).map_err(|e| AppError::io("file_unreadable", &e))?;
     let meta = file
@@ -1778,6 +2066,105 @@ fn read_secret_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn import_entry(name: &str, selected: bool) -> ImportEntry {
+        ImportEntry {
+            line: 1,
+            name: name.into(),
+            id: name.to_ascii_lowercase(),
+            kind: "env_var".into(),
+            selected,
+            why: "secret_name".into(),
+            action: "create".into(),
+            state: "new".into(),
+            forced: false,
+            blocked_by: None,
+            moved_connections: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_selection_becomes_the_difference_from_the_default() {
+        let entries = [
+            import_entry("KEY_A", true),
+            import_entry("KEY_B", true),
+            import_entry("PORT", false),
+            import_entry("NODE_ENV", false),
+        ];
+        let names = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let (include, exclude) = selection_delta(&entries, &names(&["KEY_A", "PORT"])).unwrap();
+        assert_eq!((include, exclude), (names(&["PORT"]), names(&["KEY_B"])));
+        let (include, exclude) = selection_delta(&entries, &names(&["KEY_A", "KEY_B"])).unwrap();
+        assert!(include.is_empty() && exclude.is_empty());
+        assert_eq!(
+            selection_delta(&entries, &names(&["MISSING"]))
+                .err()
+                .unwrap()
+                .reason,
+            "invalid_selection"
+        );
+        // long lists are split so each argument stays under the runner's limit
+        let many: Vec<String> = (0..200)
+            .map(|n| format!("VARIABLE_NAME_{n:03}_SUFFIX"))
+            .collect();
+        let lists = name_lists(&many);
+        assert!(lists.len() > 1);
+        assert!(lists.iter().all(|l| l.len() <= MAX_NAME_LIST_CHARS));
+        assert_eq!(lists.join(","), many.join(","));
+        assert!(name_lists(&[]).is_empty());
+    }
+
+    #[test]
+    fn import_inputs_are_checked_before_the_cli_runs() {
+        assert_eq!(check_id_prefix(None).unwrap(), None);
+        assert_eq!(check_id_prefix(Some("")).unwrap(), None);
+        assert_eq!(check_id_prefix(Some("prod.")).unwrap(), Some("prod."));
+        for bad in ["Prod", "-x", ".x", "a b", &"a".repeat(64)] {
+            assert_eq!(
+                check_id_prefix(Some(bad)).err().unwrap().reason,
+                "invalid_id_prefix"
+            );
+        }
+        assert!(is_env_name("OPENAI_API_KEY") && is_env_name("_x1"));
+        for bad in ["", "1A", "A-B", "A B", "--include=X", &"A".repeat(129)] {
+            assert!(!is_env_name(bad), "{bad}");
+        }
+        let preview: SecretImportPreviewIn = serde_json::from_value(serde_json::json!({
+            "import_ref": "0".repeat(32), "project": "demo", "environment": "dev"
+        }))
+        .unwrap();
+        assert_eq!(preview.id_prefix, None);
+        assert!(
+            serde_json::from_value::<SecretImportIn>(serde_json::json!({
+                "import_ref": "0".repeat(32), "project": "demo", "environment": "dev",
+                "selected": [], "update": false, "path": "/etc/passwd"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn drop_events_carry_a_reference_and_a_name_or_a_reason() {
+        let ok = EnvFileDrop {
+            import_ref: Some("0".repeat(32)),
+            name: Some(".env".into()),
+            error: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap(),
+            serde_json::json!({"import_ref": "0".repeat(32), "name": ".env"})
+        );
+        assert_eq!(
+            serde_json::to_value(EnvFileDrop::error("drop_one_file")).unwrap(),
+            serde_json::json!({"error": "drop_one_file"})
+        );
+        let e = CoreEvent::EnvFileHover(true);
+        assert_eq!(
+            (e.name(), e.payload()),
+            ("envfile://hover", serde_json::json!({"over": true}))
+        );
+        assert_eq!(CoreEvent::EnvFileDropped(ok).name(), "envfile://dropped");
+    }
 
     #[test]
     fn control_reduces_incident_id_to_bool() {

@@ -11,8 +11,8 @@
 // the synthetic recovery code is `ABCD-EFGH-IJKL-MNOP-QRST-UVWX`.
 
 import type {
-  Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, Events, Grant, Incident, InviteListItem, InvitePreview,
-  Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings,
+  Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, Events, Grant, ImportEntry, ImportReport, ImportState, ImportWhy,
+  Incident, InviteListItem, InvitePreview, Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings,
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
@@ -55,6 +55,8 @@ export interface MockBackend {
   inspect(): MockInspect;
   /** Make the next call of `name` fail with `error` (tests: a core that cannot answer). */
   failNext(name: CommandName, error: AppError): void;
+  /** A file dropped on the window: kept as the core keeps it, announced as `envfile://dropped`. */
+  dropFile(name: string, text: string): void;
   /** Log of the calls made, by name only (tests). */
   calls(): CommandName[];
   dispose(): void;
@@ -124,12 +126,12 @@ const MAX_WRITE_BYTES = 64 * 1024;
 const MAX_QUEUED_INPUT = 256 * 1024;
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
-interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret'; text: string; preview?: InvitePreview; principal?: string; expires: number }
+interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret' | 'env'; text: string; preview?: InvitePreview; principal?: string; expires: number }
 interface MockVersion { version: number; status: 'staged' | 'active' | 'retired' | 'revoked'; created_at: string; value: string; public: { public_key: string; fingerprint: string; algorithm: string } | null }
 interface MockSecret { id: string; project: string; environment: string; kind: SecretKind; versions: MockVersion[] }
 interface MockInvite extends InviteListItem { secret: string }
 interface MockTeamEnv { env_id: string; project: string; environment: string; members: Member[]; invites: MockInvite[] }
-interface MockFile { purpose: 'secret' | 'ssh_key' | 'ca'; name: string; content: string }
+interface MockFile { purpose: 'secret' | 'ssh_key' | 'ca' | 'env_file'; name: string; content: string }
 /** A grant as the CLI prints it: counts are JSON numbers, the status is the stored one. */
 interface MockGrant { id: string; principal: string; connection: string; expires_at: string; max_uses: number | null; uses: number; status: string }
 const grantOut = (g: MockGrant): Grant => ({ ...g }) as unknown as Grant;
@@ -155,6 +157,44 @@ function secretView(s: MockSecret): SecretView {
     // the CLI prints `public` as an object, empty when the version has no public half
     versions: s.versions.map((v) => ({ version: versionOut(v.version), status: v.status, created_at: v.created_at, public: v.public ?? ({} as SecretView['versions'][number]['public']) })),
   };
+}
+
+// ---- .env import: rust/src/envfile.rs for one-line values (the mock reads no multi-line quotes)
+const SECRET_PARTS = new Set(['KEY', 'APIKEY', 'SECRET', 'TOKEN', 'PASSWORD', 'PASSWD', 'PWD', 'PASS', 'PASSPHRASE', 'CREDENTIAL', 'CREDENTIALS',
+  'AUTH', 'PRIVATE', 'DSN', 'SIGNING', 'SALT', 'COOKIE', 'SESSION', 'WEBHOOK']);
+interface EnvEntry { line: number; name: string; id: string; value: string }
+export function mockClassify(name: string, value: string): [boolean, ImportWhy] {
+  if (/^[0-9.-]+$/.test(value) || /^(true|false|yes|no|on|off)$/i.test(value)) return [false, 'plain_value'];
+  if (new TextEncoder().encode(value).length < 8) return [false, 'short_value'];
+  if (name.split('_').some((p) => SECRET_PARTS.has(p.toUpperCase()))) return [true, 'secret_name'];
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#@]*:[^/?#@]+@[^/?#@]+/.test(value)) return [true, 'url_password'];
+  return [false, 'no_hint'];
+}
+export function mockParseEnv(text: string, prefix: string): { entries: EnvEntry[]; empty: number[] } {
+  const errors: string[] = [];
+  const entries: EnvEntry[] = [], empty: number[] = [], seen = new Set<string>();
+  text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').split('\n').forEach((raw, i) => {
+    const line = i + 1, body = raw.trim();
+    if (!body || body.startsWith('#')) return;
+    const eq = raw.indexOf('=');
+    if (eq < 0) { errors.push(`${line}:not_assignment`); return; }
+    const name = raw.slice(0, eq).trim().replace(/^export[ \t]+/, '');
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) { errors.push(`${line}:invalid_name`); return; }
+    if (seen.has(name)) { errors.push(`${line}:duplicate_name`); return; }
+    seen.add(name);
+    let v = raw.slice(eq + 1).trim();
+    const q = /^'([^'\\]*)'\s*(#.*)?$/.exec(v) ?? /^"([^"\\$]*)"\s*(#.*)?$/.exec(v);
+    if (q) v = q[1] ?? '';
+    else if (/^#|[^ \t]#/.test(v)) { errors.push(`${line}:unquoted_hash`); return; }
+    else if (v.includes('$')) { errors.push(`${line}:dollar_needs_single_quotes`); return; }
+    else v = v.replace(/[ \t]+#.*$/, '').trim();
+    if (!v) { empty.push(line); return; }
+    const id = prefix + name.toLowerCase();
+    if (!isValidName(id)) { errors.push(`${line}:invalid_name`); return; }
+    entries.push({ line, name, id, value: v });
+  });
+  if (errors.length) throw fail('InvalidInput', 'env_file_invalid', errors.slice(0, 50).join(',').slice(0, 300));
+  return { entries, empty };
 }
 
 /** A version argument as the core accepts it: a JSON number, or decimal digits as text. */
@@ -289,6 +329,53 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const v: MockVersion = { version: s.versions.reduce((m, x) => Math.max(m, x.version), 0) + 1, status: 'active', created_at: iso(), value, public: pub };
     s.versions.push(v);
     return v;
+  }
+
+  /** `secret import`: rust/src/admin_cli.rs `secret_import`, preview (`run` null) or import. */
+  async function importRun(
+    input: { import_ref: string; project: string; environment: string; id_prefix?: string },
+    run: { selected: string[]; update: boolean } | null,
+  ): Promise<ImportReport> {
+    needInit();
+    const item = peekOnce(input.import_ref, ['env']);
+    const { project, environment } = input;
+    const prefix = input.id_prefix ?? '';
+    if (prefix && !/^[a-z0-9][a-z0-9._-]{0,62}$/.test(prefix)) throw fail('InvalidInput', 'invalid_id_prefix');
+    const shared = teams.has(`${project}/${environment}`);
+    if (!shared) requireEnv(project, environment);
+    const parsed = mockParseEnv(item.text, prefix);
+    await wait(200);
+    const rows = parsed.entries.map((e) => {
+      const [def, why] = mockClassify(e.name, e.value);
+      const s = secrets.get(e.id);
+      let state: ImportState = 'new', kind: SecretKind = 'env_var';
+      if (s && (s.project !== project || s.environment !== environment)) state = 'elsewhere';
+      else if (s) { kind = s.kind; state = s.versions.find((v) => v.status === 'active')?.value === e.value ? 'same' : 'different'; }
+      return { e, def, why, state, kind, on: run ? run.selected.includes(e.name) : def };
+    });
+    if (run) {
+      if (run.selected.some((n) => !rows.some((r) => r.e.name === n))) throw fail('InvalidInput', 'invalid_selection');
+      const chosen = rows.filter((r) => r.on);
+      const ids = (st: ImportState) => chosen.filter((r) => r.state === st).map((r) => r.e.id).join(',');
+      if (!chosen.length) throw fail('InvalidInput', 'import_nothing_selected');
+      if (ids('elsewhere')) throw fail('InvalidInput', 'secret_identity_mismatch', ids('elsewhere'));
+      if (ids('different') && !run.update) throw fail('InvalidInput', 'import_conflict', ids('different'));
+      const writes = chosen.filter((r) => r.state === 'new' || r.state === 'different');
+      for (const r of writes) addSecret(r.e.id, r.kind, project, environment, r.e.value);
+      record({ ts: iso(), event: 'secret_import', count: writes.length, project, environment });
+      onetime.delete(input.import_ref);
+    }
+    const action = (r: (typeof rows)[number]): ImportEntry['action'] => {
+      if (!r.on) return run ? 'skipped' : 'skip';
+      if (r.state === 'new') return run ? 'created' : 'create';
+      if (r.state === 'same') return 'unchanged';
+      if (r.state === 'different') return run ? 'new_version' : 'conflict';
+      return 'id_taken';
+    };
+    return {
+      project, environment, shared, dry_run: !run, empty_lines: parsed.empty,
+      entries: rows.map((r) => ({ line: r.e.line, name: r.e.name, id: r.e.id, kind: r.kind, selected: r.def, why: r.why, action: action(r), state: r.state, forced: r.on && !r.def })),
+    };
   }
 
   function seedReady() {
@@ -992,12 +1079,23 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     onetime_discard: ({ ref }) => { if (typeof ref === 'string') onetime.delete(ref); },
     file_pick: ({ purpose }) => {
-      if (purpose !== 'secret' && purpose !== 'ssh_key' && purpose !== 'ca') throw fail('InvalidInput', 'invalid_purpose');
+      if (purpose !== 'secret' && purpose !== 'ssh_key' && purpose !== 'ca' && purpose !== 'env_file') throw fail('InvalidInput', 'invalid_purpose');
       const file_token = 'file_' + randFrom(16, HEX);
-      const name = purpose === 'ssh_key' ? 'id_ed25519' : purpose === 'ca' ? 'ca.pem' : 'example.key';
-      files.set(file_token, { purpose, name, content: `mock-${purpose}-` + randFrom(32, B32) });
+      const name = purpose === 'ssh_key' ? 'id_ed25519' : purpose === 'ca' ? 'ca.pem' : purpose === 'env_file' ? '.env' : 'example.key';
+      const content = purpose === 'env_file'
+        ? `OPENAI_API_KEY=mock-openai-${randFrom(24, B32)}\nDATABASE_URL=postgres://app:mock-${randFrom(12, B32)}@db.example/app\nPORT=3000\nNODE_ENV=development\n`
+        : `mock-${purpose}-` + randFrom(32, B32);
+      files.set(file_token, { purpose, name, content });
       return { file_token, name };
     },
+    env_file_load: ({ file_token }) => {
+      const f = files.get(file_token);
+      if (!f || f.purpose !== 'env_file') throw fail('NotFound', 'file_token_unknown');
+      files.delete(file_token);
+      return { import_ref: putOnce({ kind: 'env', text: f.content }), name: f.name };
+    },
+    secret_import_preview: (input) => importRun(input, null),
+    secret_import: (input) => importRun(input, { selected: input.selected, update: input.update }),
     settings_get: () => ({ ...settings }),
     settings_set: (next) => {
       if (!Number.isInteger(next.gateway_port) || next.gateway_port < 1024 || next.gateway_port > 65535) throw fail('InvalidInput', 'invalid_port', 'gateway_port');
@@ -1022,6 +1120,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return h(input);
     },
     failNext(name, error) { failures.set(name, error); },
+    dropFile(name, text) {
+      if (!initialized) { emit('envfile://dropped', { error: 'vault_missing' }); return; }
+      if (!text) { emit('envfile://dropped', { error: 'env_file_empty' }); return; }
+      emit('envfile://dropped', { import_ref: putOnce({ kind: 'env', text }), name });
+    },
     calls: () => callLog.slice(),
     on(name, handler) {
       let set = listeners.get(name);

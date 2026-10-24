@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Static checks for the webview sources (docs/desktop-app.md §8.5, §8.3). No dependencies.
-// Fails when src/ uses HTML string injection, browser storage or dynamic code, or when
-// index.html loads anything remote. Untrusted text must be rendered as text only.
+// Fails when src/ uses HTML string injection, browser storage or dynamic code, listens for
+// Tauri's own drag-and-drop events (their payload holds the dropped paths; the core reports a
+// drop as envfile://dropped instead), or when index.html loads anything remote. Untrusted text
+// must be rendered as text only.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -23,6 +25,7 @@ const RULES = [
   { re: /\bnew\s+Function\s*\(/, why: 'dynamic code (new Function)' },
   { re: /\bcreateContextualFragment\b/, why: 'HTML string injection (createContextualFragment)' },
   { re: /\bsrcdoc\b/, why: 'HTML string injection (srcdoc)' },
+  { re: /tauri:\/\/drag|\bonDragDropEvent\b|TauriEvent\s*\.\s*DRAG/, why: "Tauri's drag events (they carry file paths)" },
 ];
 
 function walk(dir, out = []) {

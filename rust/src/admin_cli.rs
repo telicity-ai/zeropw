@@ -241,13 +241,15 @@ fn build_parser() -> Parser {
         )
         .arg(
             Arg::opt("--include")
+                .append()
                 .metavar("A,B")
-                .help("also import these variable names"),
+                .help("also import these variable names (repeatable)"),
         )
         .arg(
             Arg::opt("--exclude")
+                .append()
                 .metavar("A,B")
-                .help("leave out these variable names"),
+                .help("leave out these variable names (repeatable)"),
         )
         .arg(
             Arg::opt("--id-prefix")
@@ -3126,6 +3128,17 @@ struct ImportPlan<'e> {
     blocked_by: Option<String>,
 }
 
+impl ImportState {
+    fn name(self) -> &'static str {
+        match self {
+            ImportState::New => "new",
+            ImportState::Same => "same",
+            ImportState::Different => "different",
+            ImportState::Elsewhere => "elsewhere",
+        }
+    }
+}
+
 impl ImportPlan<'_> {
     fn writes(&self) -> bool {
         self.selected && matches!(self.state, ImportState::New | ImportState::Different)
@@ -3144,8 +3157,10 @@ fn secret_import(ctx: &Context, a: &Args) -> Result<Value, Error> {
     let new_kind = a.get("kind").unwrap_or("env_var");
     let dry_run = a.has("dry-run");
     let update = a.has("update");
-    let include = csv(a.get("include"));
-    let exclude = csv(a.get("exclude"));
+    let names =
+        |key: &str| -> Vec<String> { a.list(key).iter().flat_map(|v| csv(Some(v))).collect() };
+    let include = names("include");
+    let exclude = names("exclude");
     if include.iter().any(|name| exclude.contains(name)) {
         return Err(Error::invalid_input("import_selection_conflict"));
     }
@@ -3248,6 +3263,7 @@ fn secret_import(ctx: &Context, a: &Args) -> Result<Value, Error> {
         let mut v = json!({
             "line": plan.entry.line, "name": plan.entry.name, "id": plan.entry.id,
             "kind": plan.kind, "selected": plan.selected, "why": plan.why, "action": action,
+            "state": plan.state.name(),
         });
         if plan.forced {
             v["forced"] = json!(true);

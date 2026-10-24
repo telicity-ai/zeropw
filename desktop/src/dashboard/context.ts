@@ -5,7 +5,7 @@ import type { Control, ServeStatus } from '../ipc/contract';
 import type { PageId } from './pages';
 
 /** What a page should open when another page sends the user there (home quick actions). */
-export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 'invite' | 'join';
+export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 'invite' | 'join' | 'import';
 
 /** Why the relay did not start: a copy key and the core's reason code it may show. */
 export interface RelayProblem { key: CopyKey; reason: string }

@@ -142,6 +142,8 @@ fn preview_then_import_creates_only_the_keys() {
     assert_eq!(openai["kind"], "env_var");
     assert_eq!(entry(&preview, "PORT")["why"], "plain_value");
     assert_eq!(entry(&preview, "PORT")["action"], "skip");
+    // what turning it on would do
+    assert_eq!(entry(&preview, "PORT")["state"], "new");
     assert_eq!(entry(&preview, "NODE_ENV")["why"], "no_hint");
     assert_eq!(entry(&preview, "DATABASE_URL")["why"], "url_password");
     // a preview writes nothing, not even an audit record
@@ -207,6 +209,9 @@ fn a_changed_value_stops_the_import_until_update() {
 
     let preview = case.import(&changed, &["--dry-run"]);
     assert_eq!(entry(&preview, "OPENAI_API_KEY")["action"], "conflict");
+    assert_eq!(entry(&preview, "OPENAI_API_KEY")["state"], "different");
+    let original = case.import(&file, &["--dry-run"]);
+    assert_eq!(entry(&original, "OPENAI_API_KEY")["state"], "same");
     assert_eq!(entry(&preview, "NEW_TOKEN")["action"], "create");
     assert_eq!(
         case.import(&changed, &["--dry-run", "--update"])["entries"][0]["action"],
@@ -257,6 +262,7 @@ fn ids_elsewhere_collisions_and_prefixes() {
 
     let preview = case.admin.ok(&strs(&staging(&["--dry-run"])));
     assert_eq!(preview["entries"][0]["action"], "id_taken");
+    assert_eq!(preview["entries"][0]["state"], "elsewhere");
     let doc = case.vault_doc();
     let error = case.admin.fail(&strs(&staging(&[])));
     assert_eq!(error["reason"], "secret_identity_mismatch");

@@ -2,8 +2,9 @@
 // Static checks for the Tauri shell (docs/desktop-app.md §8.2–§8.4, §9). No dependencies.
 //
 // - tauri.conf.json: the exact CSP of §8.3 (also verbatim in the doc), withGlobalTauri false,
-//   no CSP or IPC loosening, the main window as specified, deep links for `zeropw` only, and a
-//   minimal bundle section: sidecars, resources and macOS settings are release-only.
+//   no CSP or IPC loosening, the main window as specified (drag and drop on, for .env import),
+//   deep links for `zeropw` only, and a minimal bundle section: sidecars, resources and macOS
+//   settings are release-only. The tauri dependency has no features (no protocol-asset).
 // - tauri.bundle.conf.json (the release config, §9): exactly the three sidecars, LICENSE and
 //   THIRD_PARTY_LICENSES.md as resources, and bundle.macOS with minimum macOS 11.0, the
 //   Info.release.plist that holds only the Local Network usage description, and an ad-hoc
@@ -100,7 +101,13 @@ const main = windows[0] ?? {};
 const want = { label: 'main', width: 1180, height: 780, minWidth: 1100, minHeight: 740, titleBarStyle: 'Overlay', hiddenTitle: true };
 if (windows.length !== 1) fail('tauri.conf.json: exactly one window (main)');
 for (const [k, v] of Object.entries(want)) if (main[k] !== v) fail(`tauri.conf.json: window ${k} must be ${JSON.stringify(v)}`);
-if (main.dragDropEnabled !== false) fail('tauri.conf.json: dragDropEnabled must be false (drop events would hand file paths to the webview)');
+// Drops reach the core (src-tauri/src/shell.rs), which reads a dropped .env file and tells the
+// page only an import reference. Tauri still emits drag events with the paths to page
+// listeners: check-static.mjs keeps the page from listening, and without protocol-asset the
+// scope a drop widens grants nothing.
+if (main.dragDropEnabled !== true) fail('tauri.conf.json: dragDropEnabled must be true (a dropped .env file is read by the core)');
+const tauriDep = read(join(tauriDir, 'Cargo.toml')).match(/^tauri\s*=\s*\{([^}]*)\}/m);
+if (!tauriDep || !/features\s*=\s*\[\s*\]/.test(tauriDep[1])) fail('src-tauri/Cargo.toml: the tauri dependency must have no features (protocol-asset would serve dropped files to the page)');
 
 const plugins = conf.plugins ?? {};
 if (Object.keys(plugins).join() !== 'deep-link') fail('tauri.conf.json: only the deep-link plugin is configured');

@@ -1,6 +1,6 @@
 # .env import
 
-Written 2026-10-25 as a design specification. Not implemented yet. Decisions are recorded in §9.
+Written 2026-10-25 as a design specification; implemented the same day (§10). Decisions are recorded in §9.
 
 Read one `.env` file and put the keys in it into the vault at once. Imported into a shared environment, they reach other devices in one commit. The requirements of the [product](product-intent.md), [security boundary](security-design.md), [team sharing](team-sync.md) and [desktop app](desktop-app.md) do not change.
 
@@ -12,7 +12,7 @@ Importing does not conflict with the security boundary. Values enter only throug
 
 ## 2. Flow
 
-1. A human picks a `.env` file in the admin screens or with `zeropw-admin`.
+1. A human picks a `.env` file in the admin screens, drops it on the desktop app's window, or names it to `zeropw-admin`.
 2. Preview: parse the file and show, per line, the variable name, the key ID it would create, and whether it would be imported and why. Values are not shown.
 3. The human chooses the entries to import. The default selection follows the rules in §4.
 4. Write the chosen entries at once. If any one fails, nothing is written.
@@ -25,10 +25,10 @@ Tools (Node `dotenv`, `python-dotenv`, Docker Compose) read `.env` slightly diff
 | Item | Rule |
 | --- | --- |
 | Size | File up to 64 KiB (`MAX_SECRET_BYTES`), at most 200 entries. UTF-8 only; a leading BOM is removed. A NUL byte is an error. |
-| Lines | Accept `\n` and `\r\n`. Skip blank lines and lines starting with `#` (leading whitespace allowed). |
+| Lines | Accept `\n` and `\r\n`. A carriage return outside `\r\n` is an error (tools differ on whether it ends a line). Skip blank lines and lines starting with `#` (leading whitespace allowed). |
 | Form | `[export ]NAME=VALUE`. Whitespace around `=` is removed. A line without `=` is an error. |
 | Name | `[A-Za-z_][A-Za-z0-9_]*`. A name appearing twice is an error (tools differ on whether the first or the last wins). |
-| Unquoted value | Trim surrounding whitespace. A `#` after whitespace starts a comment. A `#` with no whitespace before it (`abc#def`) differs between tools and is an error. |
+| Unquoted value | Trim surrounding whitespace. A `#` after whitespace starts a comment. A `#` with no whitespace before it (`abc#def`) differs between tools and is an error, and so does a value that starts with `#` (`NAME=#x`, `NAME= #x`: Node reads an empty value, python-dotenv `#x`). |
 | Single-quoted value | Content is taken literally. Multiple lines are accepted. A `\` inside is an error (tools unescape it differently). |
 | Double-quoted value | Multiple lines are accepted. Only `\n` and `\r` are unescaped; any other `\` sequence is an error. |
 | `$` | A `$` in an unquoted or double-quoted value is an error, because tools differ on variable expansion. Wrapped in single quotes it is taken literally. |
@@ -37,7 +37,7 @@ Tools (Node `dotenv`, `python-dotenv`, Docker Compose) read `.env` slightly diff
 
 Collect all errors and report them together. Report **only the line number and a reason code**, never the line's text. Output a variable name only for an entry that parsed correctly and has a non-empty value. This keeps something like a token pasted without `=` out of the output.
 
-Reason codes: `not_assignment`, `invalid_name`, `name_too_long`, `duplicate_name`, `unquoted_hash`, `dollar_needs_single_quotes`, `unsupported_escape`, `backslash_in_single_quotes`, `backtick_quote`, `unterminated_quote`, `trailing_text`, `nul_byte`.
+Reason codes: `not_assignment`, `invalid_name`, `name_too_long`, `duplicate_name`, `unquoted_hash`, `dollar_needs_single_quotes`, `unsupported_escape`, `backslash_in_single_quotes`, `backtick_quote`, `unterminated_quote`, `trailing_text`, `nul_byte`, `lone_carriage_return`. A NUL or a lone carriage return stops the file before its lines are read, so only those are reported then. The parser is `rust/src/envfile.rs`.
 
 ## 4. What to import
 
@@ -85,6 +85,8 @@ zeropw-admin secret import --project P --environment E (--file PATH | --stdin)
     [--dry-run] [--include A,B] [--exclude A,B] [--id-prefix X] [--kind K] [--update]
 ```
 
+`secret import` is hidden from `secret`'s listing like `status`, because the recorded command-line contract pins that help text; `secret import -h` prints its own help. `--include` and `--exclude` may be repeated. A name in both is `import_selection_conflict`; a name that is not an entry with a value is `import_name_unknown` (the detail counts them and names none). An `--id-prefix` that cannot start a key ID is `invalid_id_prefix`.
+
 - `--stdin` and the input envelope work as for `secret put`. With an envelope, `value_b64` carries the whole file. The envelope gains no new field. 64 KiB encoded as base64 still fits the envelope's 256 KiB limit.
 - `--dry-run` writes nothing and only produces the preview. The app's preview uses it too, so parsing and classification live only in the CLI.
 - Output (no values):
@@ -93,35 +95,38 @@ zeropw-admin secret import --project P --environment E (--file PATH | --stdin)
 {
   "project": "team-keys", "environment": "shared", "dry_run": false,
   "entries": [
-    {"line": 3, "name": "OPENAI_API_KEY", "id": "openai_api_key",
-     "selected": true, "why": "secret_name", "action": "created", "version": 1},
-    {"line": 5, "name": "PORT", "id": "port",
-     "selected": false, "why": "plain_value", "action": "skipped"}
+    {"line": 3, "name": "OPENAI_API_KEY", "id": "openai_api_key", "kind": "env_var",
+     "selected": true, "why": "secret_name", "action": "created", "state": "new", "version": 1},
+    {"line": 5, "name": "PORT", "id": "port", "kind": "env_var",
+     "selected": false, "why": "plain_value", "action": "skipped", "state": "new"}
   ],
-  "empty_lines": [9],
+  "shared": false, "empty_lines": [9],
   "commit": null, "propagated_to": 0,
   "source_left_in_place": true
 }
 ```
 
-  `action` is `create|new_version|unchanged|conflict|skip` in the preview and `created|new_version|unchanged|skipped` in a real run. In a shared environment, `commit` holds `{author_seq, hlc}` and versions appear as `version_id`.
+  `selected` is the default selection and `why` its reason. `action` is `create|new_version|unchanged|conflict|id_taken|skip` in the preview (`id_taken`: the ID is used in another project or environment) and `created|new_version|unchanged|skipped` in a real run. `state` says what importing the entry meets whether or not it is selected: `new`, `same` (the active value is equal), `different` or `elsewhere`, so a screen can show what turning an entry on would do. `forced: true` marks an entry selected against the default, and `blocked_by` names a saved CLI connection whose profile carries the value (§7); the preview reports both and never stops on them, nor on `conflict` or `id_taken`. In a shared environment, `shared` is true, `commit` holds `{author_seq, hlc}` and versions appear as `version_id`; `moved_connections` lists connections moved to a new version. `source_left_in_place` appears with `--file` only.
 - Parse errors stop with `env_file_invalid`; the detail holds only a `line:reason` list (at most 50). Other errors: `env_file_too_large`, `env_file_not_utf8`, `env_file_too_many_entries`, `import_nothing_selected`, `id_collision`, `secret_identity_mismatch`, `import_conflict`, `cli_env_contains_credential`.
 
 ## 7. Writing
 
 **All or nothing.** Write only after parsing, ID computation, comparison with existing keys and the CLI profile check have all finished.
 
-- Personal environment: add a batch write (`Vault::put_secrets`) that writes the vault document once while holding the state lock. Validation is the same as `put_secret_values`. After writing, rebind connections for each changed key. Audit each key with the same `secret_put` record as today, then add one summary `secret_import` record (count, ID list, source `file|stdin`; no path and no names).
+- Personal environment: add a batch write (`Vault::put_secrets`) that writes the vault document once while holding the state lock. Validation is the same as `put_secret_values`. After writing, rebind connections for each changed key. Audit each key with the same `secret_put` record as today, then add one summary `secret_import` record: project, environment, `count` and the source `file|stdin` in `detail`. No path and no names. An audit field holds no list, so the IDs are in the `secret_put` records (personal) or the commit (shared). A refused import records `secret_import` as `denied` with the reason.
 - CLI profile check: check every chosen value against saved CLI connections with the same rule as `secret put` (`profile_env_carries_new_value`): connections that use that key at any length, the rest under the length rule in §4. A match stops the whole import and reports the connection ID and the entry name. Shared environments get the same check. Today `secret put` in a shared environment (`shared_put`) does not run this check; import blocks it from the start.
-- Shared environment: put the chosen entries' `secret.put_version` and `secret.activate` (including the operations that move connections to the new version, as `shared_put` does) in **one commit**. Stopping with `team_rekey_pending` while a rekey is pending is the same as `secret put`. A non-admin device is checked with `sync::is_admin` before writing and stops with `not_admin`. Today `secret put` authors a commit even on a non-admin device and fold skips its operations as `not_admin`; for an import, the user would then believe it succeeded. A running `serve` sends the commit to other devices on its next poll. The ciphertext of 200 entries fits the 4 MiB frame limit.
+- Shared environment: put the chosen entries' `secret.put_version` and `secret.activate` (including the operations that move connections to the new version, as `shared_put` does) in **one commit**. Stopping with `team_rekey_pending` while a rekey is pending is the same as `secret put`. A non-admin device stops with `not_admin` before anything is authored, as every command does (`membership::author_commit` checks the author's standing first, issue #30). A running `serve` sends the commit to other devices on its next poll. The ciphertext of 200 entries fits the 4 MiB frame limit. An environment this device joined is mapped in the team state rather than `projects.json`, so the import resolves the shared environment before it checks the project.
 - Values stay in `Zeroizing` buffers from start to finish, intermediate parse results included.
 
 ## 8. Desktop app
 
-- Add ".env 가져오기" (".env import") to the keys screen.
-- `file_pick {purpose: "env_file"}`: new purpose `FilePurpose::EnvFile`. A token picked for another purpose cannot be used for an import.
-- `secret_import_preview {file_token, project, environment, id_prefix?}` → `{import_ref, preview}`: the core reads the file (up to 64 KiB) and passes it in an envelope to `secret import --stdin --dry-run`. It keeps what it read in the one-time store for 10 minutes under a new kind, `env_import`. That kind cannot be taken out with `onetime_show` or `onetime_copy`; only `secret_import` reads it. The webview receives only the preview (names, IDs, selection, reasons, actions).
-- `secret_import {import_ref, selected: [name…], update}`: the core compares the selection with the defaults, turns the difference into `--include`/`--exclude`, runs the import and deletes the kept content on success. Like `secret_put`, it asks for no reauthentication.
+- The keys screen has ".env 가져오기" (".env import"). A `.env` file dropped anywhere on the window opens the same sheet at once, on the keys screen, with a shared environment chosen first: dropping a file is the quickest way to share its keys with the team.
+- `file_pick {purpose: "env_file"}`: new purpose `FilePurpose::EnvFile`. A token picked for another purpose cannot be used for an import. The macOS open panel hides dot files; the button's tooltip says that Command+Shift+period shows them.
+- `env_file_load {file_token}` → `{import_ref, name}`: the core reads the picked file (up to 64 KiB, UTF-8, not empty) into the one-time store for 10 minutes under a new kind, `EnvImport`, with a pool of its own (4 files, the oldest dropped first). That kind cannot be taken out with `onetime_show` or `onetime_copy`; only the two import commands read it. Only the file's base name reaches the webview.
+- A drop: the window takes file drops (`dragDropEnabled`). The shell hands the dropped paths to the core, which reads exactly one regular file as `env_file_load` does and emits `envfile://dropped` with `{import_ref, name}`, or `{error}` (`drop_one_file`, `file_not_regular`, `env_file_too_large`, `env_file_empty`, `env_file_not_utf8`, `vault_missing`). `envfile://hover {over}` tells the page to show where to drop. The paths stay in Rust. Tauri also emits its own drag events with the paths, but only to page listeners for them, and the page registers none (`desktop/scripts/check-static.mjs` refuses them); with the `protocol-asset` feature off (`check-tauri.mjs`), the scope Tauri widens for a dropped path grants nothing.
+- `secret_import_preview {import_ref, project, environment, id_prefix?}` → the report of `secret import --stdin --dry-run` (the file goes in the envelope's `value_b64`). The webview receives only names, IDs, kinds, selection, reasons, actions, states, `forced`, `blocked_by` and the empty lines; the core keeps no other field of the CLI output.
+- `secret_import {import_ref, project, environment, id_prefix?, selected: [name…], update}`: the core previews again, turns the difference between `selected` and the default selection into `--include`/`--exclude` (split into arguments of at most 2,000 characters), runs the import and deletes the kept content on success. A selected name that is not an entry with a value is `invalid_selection` before the CLI runs. Like `secret_put`, it asks for no reauthentication.
+- The sheet: each entry is a chip with its name, key ID (when a prefix changes it) and reason, and a tag for what importing it would do. Selecting an entry that is skipped by default shows the side effect of storing a setting; an entry whose value a CLI connection carries, another value without "새 값으로 바꾸기" (update), or an ID used elsewhere keeps the import button from running and says why. The prefix field appears when an ID is used elsewhere. A file the parser refuses shows its line numbers and reasons. The import button reads "N개 넣고 공유하기" in a shared environment.
 - Screen copy (examples; the app's interface is Korean only): above the list, "키로 보이는 항목만 골라 뒀어요. 설정값은 넣지 않는 게 좋아요." ("Only the entries that look like keys are selected. Better not to store configuration values."). After the import, "원래 .env 파일은 그대로 있어요. 에이전트가 읽을 수 있는 곳이면 지워 주세요." ("The original .env file is still there. If an agent can read it where it is, delete it.").
 
 Not provided:
@@ -147,10 +152,10 @@ The options not chosen are kept for later reference. Changing a decision require
 
 ## 10. Implementation stages and tests
 
-1. **Parsing and classification module** (`rust/src/envfile.rs`): each rule and error code in §3, the classification table in §4, BOM, CRLF, multi-line values and limits. Confirm with synthetic values that error output contains no line content. Confirm that a file containing `$(touch FILE)` or backticks does not create that file.
-2. **CLI, personal environment**: `secret import`, `Vault::put_secrets`. Tests cover creation, unchanged, conflict, `--update`, the same ID in another environment, case collisions, `--id-prefix`, CLI profile refusal, `--include`/`--exclude` and the envelope path. On failure, confirm the vault document is byte-for-byte unchanged and that no `secret_put` audit record exists. Search output, errors, audit records and state files for the synthetic values to confirm no plaintext.
-3. **Shared environment**: one commit, refusal on a non-admin device, `team_rekey_pending`. A three-device test (as in `native_team_e2e`) confirms propagation to other devices and no plaintext in the wire capture.
-4. **Desktop**: file token purpose binding, no values in the preview, `env_import` not retrievable through `onetime_*`, 10-minute expiry, and turning the selection into include/exclude.
-5. **Documentation**: [implementation.md](implementation.md), the command table in [desktop-app.md](desktop-app.md), and user documentation.
+1. **Parsing and classification module** (`rust/src/envfile.rs`, unit tests): each rule and error code in §3, the classification table in §4, BOM, CRLF, multi-line values and limits. Error output carries no line content (synthetic values). A file containing `$(touch FILE)` or backticks does not create that file.
+2. **CLI, personal environment** (`rust/tests/admin_secret_import.rs`): `secret import`, `Vault::put_secrets`. Creation, unchanged, conflict, `--update`, the same ID in another environment, case collisions, `--id-prefix`, CLI profile refusal, `--include`/`--exclude`, `forced`, the envelope path and parse errors. On failure the vault document is byte-for-byte unchanged and no `secret_put` record was added. Output, errors, the audit log and state files hold no synthetic value.
+3. **Shared environment** (`rust/tests/team_secret_import.rs`): three devices with their own `serve --team-listen`. The owner's import is one commit that an admin and a user device both derive; the user device's import stops with `not_admin` before authoring anything; the admin device's `--update` reaches the owner. No synthetic value in any output, state directory or the wire capture. `team_rekey_pending` is the existing `author_commit` check, not exercised by these tests.
+4. **Desktop**: `desktop/core/tests/e2e_env_import.rs` against the real binaries (a drop and a picked file, purpose-bound single-use tokens, `onetime_*` refused, no value in any event or report, the selection turned into include/exclude, conflict then update, refused drops, parse errors); unit tests for the one-time store pool and 10-minute expiry, the selection arithmetic and the inputs; `desktop/test/envimport.test.ts` for the sheet's rules and the mock.
+5. **Documentation**: [implementation.md](implementation.md), the command table in [desktop-app.md](desktop-app.md), [GUIDE.md](../GUIDE.md) and the README. The team onboarding manuals describe the 0.2.0 release, which has no import; they change with the next release (their files are bound to validated cases).
 
 Product changes run `rust/verify.sh` on Linux and macOS; app changes run `desktop/verify.sh`.
