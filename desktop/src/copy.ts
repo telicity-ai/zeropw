@@ -667,6 +667,8 @@ export const COPY = {
   'imp.toggle.aria': '{name} 가져오기',
   'imp.go': '{n}개 넣기',
   'imp.go.shared': '{n}개 넣고 공유하기',
+  'imp.go.none': '넣기',
+  'imp.go.shared.none': '넣고 공유하기',
   'imp.err.none': '넣을 항목을 골라 주세요',
   'imp.err.conflict': '값이 다른 키가 있어요. 새 값으로 바꿀지 골라 주세요',
   'imp.err.taken': '다른 환경에 같은 이름이 있어요. 앞에 붙일 이름을 넣거나 그 항목을 빼 주세요',

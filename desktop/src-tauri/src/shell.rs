@@ -179,12 +179,15 @@ pub fn run() {
 fn on_drag_drop(shell: &Shell, event: &DragDropEvent) {
     let core = shell.core();
     match event {
-        DragDropEvent::Enter { .. } => core.env_file_hover(true),
+        // a drag of text or of anything else without a file path is not a file drop
+        DragDropEvent::Enter { paths, .. } => core.env_file_hover(!paths.is_empty()),
         DragDropEvent::Leave => core.env_file_hover(false),
         DragDropEvent::Drop { paths, .. } => {
             core.env_file_hover(false);
-            let paths = paths.clone();
-            std::thread::spawn(move || core.env_file_drop(&paths));
+            if !paths.is_empty() {
+                let paths = paths.clone();
+                std::thread::spawn(move || core.env_file_drop(&paths));
+            }
         }
         _ => {}
     }

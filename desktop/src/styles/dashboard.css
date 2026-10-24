@@ -164,4 +164,8 @@
 .imp-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .imp-list .tag { margin-left: 0; flex: none; }
 .sub-meta.wrap { white-space: normal; }
+.imp-meta { font-family: var(--font); }
+.imp-id { font-family: var(--mono); margin-right: 8px; }
+.imp-line { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--fg); }
+.sheet .step-body > .callout + .field, .sheet .step-body > .callout + .imp-list { margin-top: 14px; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }

@@ -9,8 +9,7 @@ import {
 import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
-import { useClearOnClose } from './context';
-import { Empty, metaLine, Tag } from './parts';
+import { Empty, Tag } from './parts';
 import { Sheet } from './Sheet';
 
 const PREVIEW_DELAY_MS = 250;
@@ -46,10 +45,12 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
   const prefixRef = useRef<HTMLInputElement>(null);
   const ref = file?.import_ref ?? '';
 
-  // a file that was not imported is forgotten as soon as the sheet closes
-  useClearOnClose(open, () => {
-    if (ref && !done.current) call('onetime_discard', { ref }).catch(() => undefined);
-  });
+  // a file that was not imported is forgotten as soon as the sheet closes, or gives way to a
+  // file dropped after it
+  useEffect(() => {
+    if (!open || !ref) return;
+    return () => { if (!done.current) call('onetime_discard', { ref }).catch(() => undefined); };
+  }, [open, ref]);
 
   // a shared environment first
   useEffect(() => {
@@ -91,7 +92,8 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
 
   const sel = selected ?? new Set<string>();
   const isShared = preview?.shared ?? (shared?.has(env) ?? false);
-  const n = preview ? writeCount(preview, sel, update) : 0;
+  // what a run writes once allowed: a changed key counts even before "update" is chosen
+  const n = preview ? writeCount(preview, sel, true) : 0;
   const blocker: CopyKey | null = !preview ? 'boot.loading' : importBlocker(preview, sel, update) ?? (n === 0 ? 'imp.done.none' : null);
   const hasTaken = !!preview?.entries.some((e) => e.state === 'elsewhere');
   const hasDifferent = !!preview?.entries.some((e) => e.state === 'different');
@@ -155,8 +157,8 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
   const ready = !busy && blocker === null;
   return (
     <Sheet id="sheet-import" open={open} title={t('imp.title')} lead={t('imp.sub')}
-      primaryLabel={t(isShared ? 'imp.go.shared' : 'imp.go', { n })} busy={busy} ready={ready && !bad}
-      onPrimary={() => void run()} onBlocked={blocked} onClose={onClose}>
+      primaryLabel={bad ? undefined : n > 0 ? t(isShared ? 'imp.go.shared' : 'imp.go', { n }) : t(isShared ? 'imp.go.shared.none' : 'imp.go.none')}
+      busy={busy} ready={ready} onPrimary={() => void run()} onBlocked={blocked} onClose={onClose}>
       {file && <dl className="kv sheet-kv"><dt>{t('imp.file')}</dt><dd>{file.name}</dd></dl>}
       {pairs.length === 0 ? <Callout kind="info">{t('keys.err.noEnv')}</Callout> : (
         <SelectField id="imp-env" label={t('keys.field.env')} mono value={env} selectRef={envRef}
@@ -169,7 +171,7 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
           {bad.lines.length > 0 && (
             <ul className="sub-list imp-list" aria-label={t('imp.items')}>
               {bad.lines.map((b) => (
-                <li key={`${b.line}-${b.reason}`}><span className="mono">{t('imp.bad.line', { line: b.line })}</span><span className="sub-meta wrap">{t(badLineKey(b.reason))}</span></li>
+                <li key={`${b.line}-${b.reason}`}><span className="imp-line">{t('imp.bad.line', { line: b.line })}</span><span className="sub-meta imp-meta wrap">{t(badLineKey(b.reason))}</span></li>
               ))}
             </ul>
           )}
@@ -187,7 +189,7 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
                   <button className="chip imp-chip" type="button" aria-pressed={on} aria-label={t('imp.toggle.aria', { name: e.name })} onClick={() => toggle(e.name)}>
                     <i aria-hidden="true" /><span>{e.name}</span>
                   </button>
-                  <span className="sub-meta">{metaLine(e.id !== e.name.toLowerCase() ? e.id : null, t(whyKey(e.why)))}</span>
+                  <span className="sub-meta imp-meta">{e.id !== e.name.toLowerCase() && <span className="imp-id">{e.id}</span>}{t(whyKey(e.why))}</span>
                   {tag && <Tag warn={warn}>{t(tag)}</Tag>}
                 </li>
               );
@@ -199,15 +201,13 @@ export function ImportSheet({ open, file, projects, onClose, onDone }: {
         </div>
       )}
       {preview && hasDifferent && (
-        <div className="field">
-          <div className="chips">
-            <button className="chip" type="button" aria-pressed={update} onClick={() => { setUpdate(!update); setErr(null); }}><i aria-hidden="true" />{t('imp.update')}</button>
-          </div>
-        </div>
+        <label className="check tight">
+          <input type="checkbox" checked={update} onChange={(e) => { setUpdate(e.target.checked); setErr(null); }} /> <span>{t('imp.update')}</span>
+        </label>
       )}
       {(hasTaken || prefix) && (
         <TextField id="imp-prefix" label={t('imp.prefix')} hint={t('imp.prefix.hint')} mono value={prefix} inputRef={prefixRef} maxLength={63}
-          placeholder="staging." error={!prefixOk ? t('proj.err.name') : null} onChange={(v) => { setPrefix(v); setErr(null); }} />
+          placeholder={`${splitEnv(env)?.environment ?? 'dev'}.`} error={!prefixOk ? t('proj.err.name') : null} onChange={(v) => { setPrefix(v); setErr(null); }} />
       )}
       {err && <div className="help err" role="alert">{t(err.key, err.vars)}</div>}
     </Sheet>
