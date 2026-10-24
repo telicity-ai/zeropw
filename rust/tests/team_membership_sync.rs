@@ -249,7 +249,21 @@ fn quarantined_commits(ctx: &Context, env_id: &str) -> Vec<std::path::PathBuf> {
 #[test]
 fn join_through_a_second_admin_gets_history_in_total_order() {
     let root = TempDir::new().unwrap();
-    let owner = new_context_syncing_every(&root, "owner", 60.0);
+    // Two devices with random keys: the one whose fingerprint sorts first
+    // becomes the administrator, the other the owner.
+    let node = |name: &str| {
+        let ctx = new_context_syncing_every(&root, name, 60.0);
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        (ctx, device)
+    };
+    let (first, second) = (node("node-a"), node("node-b"));
+    let ((admin, admin_device), (owner, owner_device)) =
+        if first.1.fingerprint().unwrap() < second.1.fingerprint().unwrap() {
+            (first, second)
+        } else {
+            (second, first)
+        };
+    assert!(admin_device.fingerprint().unwrap() < owner_device.fingerprint().unwrap());
     owner.projects.create("demo", &["dev"]).unwrap();
     owner
         .vault
@@ -259,21 +273,11 @@ fn join_through_a_second_admin_gets_history_in_total_order() {
         membership::share_environment(&owner, None, "demo", "dev", "alice", "admin-passphrase")
             .unwrap();
     let env_id = shared["env_id"].as_str().unwrap();
-    let owner_device = DeviceKey::load_or_create(owner.state, owner.kms).unwrap();
-    let owner_fp = owner_device.fingerprint().unwrap();
     let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
     let owner_transport = Arc::new(InProcessTransport::new(owner_device.clone(), empty));
     let owner_sync = sync::TeamSync::new(owner.clone(), owner_transport, owner_device);
     owner_sync.start(Some("rust-team-order-o:47101")).unwrap();
 
-    // An administrator device whose fingerprint sorts before the owner's.
-    let (admin, admin_device) = (0..64)
-        .find_map(|n| {
-            let ctx = new_context_syncing_every(&root, &format!("admin{n}"), 60.0);
-            let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
-            (device.fingerprint().unwrap() < owner_fp).then_some((ctx, device))
-        })
-        .unwrap();
     let empty: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
     let admin_transport = Arc::new(InProcessTransport::new(admin_device.clone(), empty));
     let admin_sync = sync::TeamSync::new(admin.clone(), admin_transport.clone(), admin_device);
