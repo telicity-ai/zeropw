@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { Commands, SecretKind, SecretSource, SecretView } from '../ipc/contract';
-import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId } from '../lib/dash';
+import type { Commands, EnvFileRef, SecretKind, SecretSource, SecretView } from '../ipc/contract';
+import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
+import { dropErrorKey } from '../lib/envimport';
 import { shortTime } from '../lib/format';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
@@ -11,12 +12,14 @@ import { Callout, Segmented } from '../ui/form';
 import { useSecureGate } from '../ui/secure';
 import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
+import { ImportSheet } from './Import';
 import { Empty, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
 /** The version goes back to the core exactly as the CLI printed it (a JSON number today). */
 type VersionArg = Commands['secret_revoke'][0]['version'];
 const versionArg = (v: VersionId): VersionArg => v as VersionArg;
+const NO_PAIRS: EnvPair[] = [];
 
 export const KIND_LABEL: Record<SecretKind, CopyKey> = {
   api_key: 'keys.kind.api_key', password: 'keys.kind.password', env_var: 'keys.kind.env_var', ssh_private_key: 'keys.kind.ssh_private_key',
@@ -32,29 +35,51 @@ type KeySheet =
   | { kind: 'versions'; id: string }
   | { kind: 'confirm'; action: 'retire' | 'revoke'; id: string; version: VersionId }
   | { kind: 'reveal'; id: string; version?: VersionId }
-  | { kind: 'project' };
+  | { kind: 'project' }
+  | { kind: 'import'; file: EnvFileRef };
 
 /** Keys: secrets and environment variables grouped by project/environment. The list never holds a
  *  value; a value is shown only after the admin passphrase, once, for 30 seconds. */
-export function KeysPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
+export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
+  intent?: Intent; onIntent(): void; incomingFile?: EnvFileRef | null; onFileTaken?(): void;
+}) {
   const { tick } = useDash();
+  const { toast } = useApp();
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [p, s] = await Promise.all([call('project_list'), call('secret_list', {})]);
-    return { projects: p.projects, secrets: s.secrets };
+    // a team environment this device joined is listed apart from its projects: a .env can go there too
+    return { projects: p.projects, envs: teamEnvPairs(p), secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<KeySheet>();
   const groups = load.data ? groupSecrets(load.data.secrets, load.data.projects) : null;
 
-  useIntent(intent, onIntent, (i) => { if (i === 'add-key') { sheets.open({ kind: 'add' }); return true; } return false; });
+  useIntent(intent, onIntent, (i) => {
+    if (i === 'add-key') { sheets.open({ kind: 'add' }); return true; }
+    if (i === 'import' && incomingFile) { sheets.open({ kind: 'import', file: incomingFile }); onFileTaken?.(); return true; }
+    return false;
+  });
+
+  // a .env file picked here; one dropped on the window arrives as an intent
+  const pickEnv = async () => {
+    try {
+      const f = await call('file_pick', { purpose: 'env_file' });
+      if (f) sheets.open({ kind: 'import', file: await call('env_file_load', { file_token: f.file_token }) });
+    } catch (e) {
+      const r = toIpcError(e).reason;
+      toast(t(r === 'ipc_failed' || r === 'mock_unsupported' ? 'error.desktopOnly' : dropErrorKey(r)), 'warn');
+    }
+  };
 
   const addBtn = <button className="btn btn-primary btn-sm" type="button" onClick={() => sheets.open({ kind: 'add' })}>{t('keys.add')}</button>;
+  const importBtn = <button className="btn btn-ghost btn-sm" type="button" title={t('keys.import.title')} onClick={() => void pickEnv()}>{t('keys.import')}</button>;
 
   return (
     <>
       <SectionHead title={t('keys.list')}>
         <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'project' })}>{t('keys.project.add')}</button>
+        {importBtn}
         {groups && groups.length > 0 && addBtn}
       </SectionHead>
       <p className="page-help">{t('keys.envNote')}</p>
@@ -92,6 +117,8 @@ export function KeysPage({ intent, onIntent }: { intent?: Intent; onIntent(): vo
         onDone={(id) => { reload(); sheets.open({ kind: 'versions', id }); }} />
       <ProjectSheet key={sheets.key('project')} open={sheets.isOpen('project')} onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
       <RevealSheet key={sheets.key('reveal')} open={sheets.isOpen('reveal')} data={sheets.data('reveal')} onClose={sheets.close} />
+      <ImportSheet key={sheets.key('import')} open={sheets.isOpen('import')} file={sheets.data('import')?.file} pairs={load.data?.envs ?? NO_PAIRS}
+        onClose={sheets.close} onDone={reload} />
     </>
   );
 }

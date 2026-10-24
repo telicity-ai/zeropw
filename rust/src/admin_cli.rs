@@ -226,6 +226,57 @@ fn build_parser() -> Parser {
     )
     .arg(Arg::opt("--id").required())
     .arg(Arg::opt("--version").ty(EXACT_INT).required());
+    // docs/env-import.md §6. Hidden from `secret`'s listing and choices, like
+    // `status`: the recorded command-line contract pins that help text.
+    let p = secret.add_hidden_parser(
+        "import",
+        Some("store the keys of a .env file at once; values are never printed"),
+    );
+    p.arg(Arg::opt("--project").required())
+        .arg(Arg::opt("--environment").required())
+        .arg(
+            Arg::opt("--dry-run")
+                .flag()
+                .help("print what would be stored; write nothing"),
+        )
+        .arg(
+            Arg::opt("--include")
+                .append()
+                .metavar("A,B")
+                .help("also import these variable names (repeatable)"),
+        )
+        .arg(
+            Arg::opt("--exclude")
+                .append()
+                .metavar("A,B")
+                .help("leave out these variable names (repeatable)"),
+        )
+        .arg(
+            Arg::opt("--id-prefix")
+                .metavar("X")
+                .help("put X before every key ID"),
+        )
+        .arg(
+            Arg::opt("--kind")
+                .choices(crate::envfile::IMPORT_KINDS)
+                .help("kind of new keys (default: env_var)"),
+        )
+        .arg(
+            Arg::opt("--update")
+                .flag()
+                .help("store a new version where a key exists with another value"),
+        );
+    p.exclusive(
+        true,
+        vec![
+            Arg::opt("--file")
+                .metavar("PATH")
+                .help("read the .env file at PATH (it is left in place)"),
+            Arg::opt("--stdin")
+                .flag()
+                .help("read the .env file from standard input (or the input envelope)"),
+        ],
+    );
 
     let connection = group(sub, "connection", "service connections");
     add(
@@ -1913,23 +1964,25 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             json!({"state_dir":ctx.state.path.to_string_lossy(),"kms_key_id":ctx.kms.key_id()}),
         );
     }
-    let mutating = !matches!(
-        (a.command.as_str(), a.action.as_str()),
-        ("status", "")
-            | ("project", "list")
-            | ("secret", "list" | "versions" | "reveal")
-            | ("connection", "list" | "show")
-            | ("principal", "list")
-            | ("grant", "list")
-            | ("approvals", "list")
-            | ("incident", "list" | "show")
-            | ("audit", "tail")
-            | ("alerts", "")
-            | (
-                "team",
-                "members" | "status" | "log" | "show" | "diff" | "incidents"
-            )
-    );
+    let dry_import = a.command == "secret" && a.action == "import" && a.has("dry-run");
+    let mutating = !dry_import
+        && !matches!(
+            (a.command.as_str(), a.action.as_str()),
+            ("status", "")
+                | ("project", "list")
+                | ("secret", "list" | "versions" | "reveal")
+                | ("connection", "list" | "show")
+                | ("principal", "list")
+                | ("grant", "list")
+                | ("approvals", "list")
+                | ("incident", "list" | "show")
+                | ("audit", "tail")
+                | ("alerts", "")
+                | (
+                    "team",
+                    "members" | "status" | "log" | "show" | "diff" | "incidents"
+                )
+        );
     let mut ctx = open(a, mutating)?;
     match (a.command.as_str(), a.action.as_str()) {
         ("project", "create") => {
@@ -2008,6 +2061,7 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             }
             Ok(out)
         }
+        ("secret", "import") => secret_import(&ctx, a),
         ("secret", "list") => Ok(
             json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(secret_view).collect::<Vec<_>>()}),
         ),
@@ -3037,6 +3091,375 @@ fn shared_put(
     }
     Ok(out)
 }
+/// The `.env` file of `secret import`: `--file`, or standard input (the
+/// envelope's `value_b64` when there is one), read up to one byte over the
+/// limit so that `envfile::parse` can refuse it.
+fn read_env_file(a: &Args) -> Result<(Zeroizing<Vec<u8>>, &'static str), Error> {
+    let limit = crate::envfile::MAX_ENV_FILE_BYTES + 1;
+    if let Some(path) = a.get("file").filter(|p| !p.is_empty()) {
+        let file = fs::File::open(path).map_err(|e| os_error(&e))?;
+        let mut data = Zeroizing::new(Vec::with_capacity(limit));
+        file.take(limit as u64)
+            .read_to_end(&mut data)
+            .map_err(|e| os_error(&e))?;
+        return Ok((data, "file"));
+    }
+    if !a.has("stdin") {
+        return Err(
+            Error::invalid_input("secret_source_required").with_detail("use --file or --stdin")
+        );
+    }
+    match with_envelope(InputEnvelope::value) {
+        Some(Some(value)) => Ok((value, "stdin")),
+        Some(None) => Err(Error::invalid_input("secret_source_required")
+            .with_detail("the input envelope has no value_b64")),
+        None => {
+            let mut data = Zeroizing::new(Vec::with_capacity(limit));
+            io::stdin()
+                .take(limit as u64)
+                .read_to_end(&mut data)
+                .map_err(|_| Error::invalid_input("io_error"))?;
+            Ok((data, "stdin"))
+        }
+    }
+}
+
+/// Where an imported entry's key ID stands in the vault.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportState {
+    New,
+    /// In this environment with the same active value.
+    Same,
+    /// In this environment with another value (or none active).
+    Different,
+    /// In another project or environment (`secret_identity_mismatch`).
+    Elsewhere,
+}
+
+struct ImportPlan<'e> {
+    entry: &'e crate::envfile::Entry,
+    selected: bool,
+    why: &'static str,
+    forced: bool,
+    state: ImportState,
+    kind: String,
+    /// A saved CLI connection whose profile carries this value.
+    blocked_by: Option<String>,
+}
+
+impl ImportState {
+    fn name(self) -> &'static str {
+        match self {
+            ImportState::New => "new",
+            ImportState::Same => "same",
+            ImportState::Different => "different",
+            ImportState::Elsewhere => "elsewhere",
+        }
+    }
+}
+
+impl ImportPlan<'_> {
+    fn writes(&self) -> bool {
+        self.selected && matches!(self.state, ImportState::New | ImportState::Different)
+    }
+}
+
+/// `secret import` (docs/env-import.md): the keys of one `.env` file, all
+/// written or none. Values never reach the output, an error or the audit log.
+/// `--dry-run` reports what a run would do without stopping on conflicts. A
+/// refused run is recorded as `secret_import` `denied` with its reason.
+fn secret_import(ctx: &Context, a: &Args) -> Result<Value, Error> {
+    let result = secret_import_run(ctx, a);
+    if let Err(error) = &result
+        && !a.has("dry-run")
+        // recorded where it is refused, with the connection
+        && error.reason != "cli_env_contains_credential"
+    {
+        let _ = ctx.audit.record(
+            "secret_import",
+            RecordArgs {
+                caller: Some("admin"),
+                result: Some("denied"),
+                reason: Some(error.reason.as_ref()),
+                extra: vec![
+                    ("project", json!(a.req("project"))),
+                    ("environment", json!(a.req("environment"))),
+                ],
+                ..Default::default()
+            },
+        );
+    }
+    result
+}
+
+fn secret_import_run(ctx: &Context, a: &Args) -> Result<Value, Error> {
+    use crate::envfile;
+    let project = a.req("project");
+    let environment = a.req("environment");
+    let prefix = a.get("id-prefix").unwrap_or("");
+    envfile::validate_prefix(prefix)?;
+    let new_kind = a.get("kind").unwrap_or("env_var");
+    let dry_run = a.has("dry-run");
+    let update = a.has("update");
+    let names =
+        |key: &str| -> Vec<String> { a.list(key).iter().flat_map(|v| csv(Some(v))).collect() };
+    let include = names("include");
+    let exclude = names("exclude");
+    if include.iter().any(|name| exclude.contains(name)) {
+        return Err(Error::invalid_input("import_selection_conflict"));
+    }
+    let (input, source) = read_env_file(a)?;
+    // A joined environment is mapped in the team state, not `projects.json`.
+    let shared = project_shared_env(ctx, project, environment)?;
+    if shared.is_none() {
+        ctx.projects.require_environment(project, environment)?;
+    }
+    let parsed = envfile::parse(&input, prefix)?;
+    drop(input);
+    let unknown = include
+        .iter()
+        .chain(&exclude)
+        .filter(|name| !parsed.entries.iter().any(|e| &e.name == *name))
+        .count();
+    if unknown > 0 {
+        return Err(Error::invalid_input("import_name_unknown")
+            .with_detail(format!("{unknown} name(s) are not entries with a value")));
+    }
+    // A run plans and writes under one lock.
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(ctx.state.lock()?)
+    };
+    let vault_doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    let team_doc = match &shared {
+        Some(env_id) => Some(shared_document(ctx, env_id)?),
+        None => None,
+    };
+    let connections = ctx.policy.list_connections()?;
+    let mut plans = Vec::with_capacity(parsed.entries.len());
+    for entry in &parsed.entries {
+        let (default, why) = envfile::classify(&entry.name, &entry.value);
+        let selected = (default || include.contains(&entry.name)) && !exclude.contains(&entry.name);
+        let existing = &vault_doc["secrets"][&entry.id];
+        let mut kind = new_kind.to_owned();
+        let state = if existing.is_null() {
+            match team_doc.as_ref().map(|doc| &doc["secrets"][&entry.id]) {
+                // in the shared document but not derived here: only a new
+                // version can be compared
+                Some(found) if !found.is_null() => {
+                    if let Some(k) = found["kind"].as_str() {
+                        kind = k.to_owned();
+                    }
+                    ImportState::Different
+                }
+                _ => ImportState::New,
+            }
+        } else {
+            let here = existing["project"] == project
+                && existing["environment"] == environment
+                && match &shared {
+                    Some(env_id) => existing["shared_env"] == env_id.as_str(),
+                    None => existing
+                        .get("shared_env")
+                        .is_none_or(crate::team::json_falsy),
+                };
+            if !here {
+                ImportState::Elsewhere
+            } else {
+                if let Some(k) = existing["kind"].as_str() {
+                    kind = k.to_owned();
+                }
+                match ctx.vault.secret_for_trusted_use(&entry.id, None) {
+                    Ok(active) if active.expose() == entry.value.as_slice() => ImportState::Same,
+                    Ok(_) => ImportState::Different,
+                    Err(error) if error.is(crate::errors::ErrorClass::NotFound) => {
+                        ImportState::Different
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        };
+        let blocked_by = connections
+            .iter()
+            .find(|conn| profile_env_carries_new_value(conn, &entry.id, &entry.value))
+            .map(|conn| conn.id.clone());
+        plans.push(ImportPlan {
+            entry,
+            selected,
+            why,
+            forced: selected && !default,
+            state,
+            kind,
+            blocked_by,
+        });
+    }
+
+    let mut out = json!({
+        "project": project, "environment": environment, "dry_run": dry_run,
+        "shared": shared.is_some(), "empty_lines": parsed.empty_lines,
+        "commit": null, "propagated_to": 0,
+    });
+    if source == "file" {
+        out["source_left_in_place"] = json!(true);
+    }
+    let view = |plan: &ImportPlan, action: &str| {
+        let mut v = json!({
+            "line": plan.entry.line, "name": plan.entry.name, "id": plan.entry.id,
+            "kind": plan.kind, "selected": plan.selected, "why": plan.why, "action": action,
+            "state": plan.state.name(),
+        });
+        if plan.forced {
+            v["forced"] = json!(true);
+        }
+        if let Some(conn) = &plan.blocked_by {
+            v["blocked_by"] = json!(conn);
+        }
+        v
+    };
+    if dry_run {
+        out["entries"] = json!(
+            plans
+                .iter()
+                .map(|plan| {
+                    let action = match (plan.selected, plan.state) {
+                        (false, _) => "skip",
+                        (true, ImportState::New) => "create",
+                        (true, ImportState::Same) => "unchanged",
+                        (true, ImportState::Different) if update => "new_version",
+                        (true, ImportState::Different) => "conflict",
+                        (true, ImportState::Elsewhere) => "id_taken",
+                    };
+                    view(plan, action)
+                })
+                .collect::<Vec<_>>()
+        );
+        return Ok(out);
+    }
+
+    let ids_where = |state: ImportState| {
+        plans
+            .iter()
+            .filter(|p| p.selected && p.state == state)
+            .map(|p| p.entry.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    if !plans.iter().any(|p| p.selected) {
+        return Err(Error::invalid_input("import_nothing_selected"));
+    }
+    let elsewhere = ids_where(ImportState::Elsewhere);
+    if !elsewhere.is_empty() {
+        return Err(Error::invalid_input("secret_identity_mismatch").with_detail(elsewhere));
+    }
+    let different = ids_where(ImportState::Different);
+    if !update && !different.is_empty() {
+        return Err(Error::invalid_input("import_conflict").with_detail(different));
+    }
+    if let Some(plan) = plans.iter().find(|p| p.writes() && p.blocked_by.is_some()) {
+        let conn = plan.blocked_by.as_deref().unwrap_or_default();
+        ctx.audit.record(
+            "secret_import",
+            RecordArgs {
+                caller: Some("admin"),
+                connection: Some(conn),
+                result: Some("denied"),
+                reason: Some("cli_env_contains_credential"),
+                extra: vec![("secret_id", json!(plan.entry.id))],
+                ..Default::default()
+            },
+        )?;
+        return Err(Error::invalid_input("cli_env_contains_credential")
+            .with_detail(format!("{conn}:{}", plan.entry.name)));
+    }
+
+    let writes: Vec<&ImportPlan> = plans.iter().filter(|p| p.writes()).collect();
+    let mut written: BTreeMap<&str, Value> = BTreeMap::new();
+    if !writes.is_empty() {
+        if let (Some(env_id), Some(doc)) = (&shared, &team_doc) {
+            let (generation, dek) = current_dek(ctx, env_id, doc)?;
+            let mut ops = Vec::new();
+            for plan in &writes {
+                let id = plan.entry.id.as_str();
+                let version_id = random_version_id();
+                let ciphertext = crate::team::envelope::encrypt_secret(
+                    dek.expose(),
+                    env_id,
+                    id,
+                    &version_id,
+                    &plan.entry.value,
+                )?;
+                let public = Vault::public_metadata(&plan.kind, &plan.entry.value)?;
+                ops.push(json!({"op":"secret.put_version","secret_id":id,"kind":plan.kind,"generation_id":generation,"version_id":version_id,"ciphertext":ciphertext,"public":public}));
+                ops.push(json!({"op":"secret.activate","secret_id":id,"version_id":version_id}));
+                let (follow, moved) = follow_activation_ops(doc, id, &version_id, None);
+                ops.extend(follow);
+                let mut v = json!({"version_id": version_id});
+                if !moved.is_empty() {
+                    v["moved_connections"] = json!(moved);
+                }
+                written.insert(id, v);
+            }
+            out["commit"] = team_commit(ctx, env_id, ops)?["commit"].clone();
+        } else {
+            let mut pinned = Vec::with_capacity(writes.len());
+            for plan in &writes {
+                pinned.push(pinned_to_active(ctx, &plan.entry.id)?);
+            }
+            let items: Vec<crate::vault::NewSecret> = writes
+                .iter()
+                .map(|plan| crate::vault::NewSecret {
+                    id: &plan.entry.id,
+                    kind: &plan.kind,
+                    value: &plan.entry.value,
+                })
+                .collect();
+            let versions = ctx.vault.put_secrets(project, environment, &items)?;
+            for ((plan, version), pinned) in writes.iter().zip(versions).zip(pinned) {
+                let moved = follow_activation(ctx, &pinned, &version)?;
+                let mut v = json!({"version": version.value()});
+                if !moved.is_empty() {
+                    v["moved_connections"] = json!(moved);
+                }
+                written.insert(&plan.entry.id, v);
+            }
+        }
+    }
+    admin_record(
+        ctx,
+        "secret_import",
+        vec![
+            ("project", json!(project)),
+            ("environment", json!(environment)),
+            // the IDs are in each key's `secret_put` record (personal) or
+            // the commit (shared); an audit field holds no list
+            ("detail", json!(source)),
+            ("count", json!(writes.len())),
+        ],
+    )?;
+    out["entries"] = json!(
+        plans
+            .iter()
+            .map(|plan| {
+                let action = match (plan.selected, plan.state) {
+                    (false, _) => "skipped",
+                    (true, ImportState::Same) => "unchanged",
+                    (true, ImportState::New) => "created",
+                    _ => "new_version",
+                };
+                let mut v = view(plan, action);
+                if let Some(Value::Object(extra)) = written.get(plan.entry.id.as_str()) {
+                    for (key, value) in extra {
+                        v[key] = value.clone();
+                    }
+                }
+                v
+            })
+            .collect::<Vec<_>>()
+    );
+    Ok(out)
+}
+
 /// `connection update --cli-program`: give an SSH connection made without an ssh (`cli: null`,
 /// which `exec` refuses with `cli_not_supported`) the one its agents run. Only a missing program
 /// is filled; changing one stays disable and recreate. A new program widens the connection

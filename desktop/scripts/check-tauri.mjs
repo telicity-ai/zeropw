@@ -2,8 +2,9 @@
 // Static checks for the Tauri shell (docs/desktop-app.md §8.2–§8.4, §9). No dependencies.
 //
 // - tauri.conf.json: the exact CSP of §8.3 (also verbatim in the doc), withGlobalTauri false,
-//   no CSP or IPC loosening, the main window as specified, deep links for `zeropw` only, and a
-//   minimal bundle section: sidecars, resources and macOS settings are release-only.
+//   no CSP or IPC loosening, the main window as specified (drag and drop on, for .env import),
+//   deep links for `zeropw` only, and a minimal bundle section: sidecars, resources and macOS
+//   settings are release-only. The tauri dependency has no features (no protocol-asset).
 // - tauri.bundle.conf.json (the release config, §9): exactly the three sidecars, LICENSE and
 //   THIRD_PARTY_LICENSES.md as resources, and bundle.macOS with minimum macOS 11.0, the
 //   Info.release.plist that holds only the Local Network usage description, and an ad-hoc
@@ -29,6 +30,7 @@
 // - No file under desktop/ (build outputs aside) contains a NUL byte or exceeds the review
 //   harness's 300,000-byte limit.
 
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +102,14 @@ const main = windows[0] ?? {};
 const want = { label: 'main', width: 1180, height: 780, minWidth: 1100, minHeight: 740, titleBarStyle: 'Overlay', hiddenTitle: true };
 if (windows.length !== 1) fail('tauri.conf.json: exactly one window (main)');
 for (const [k, v] of Object.entries(want)) if (main[k] !== v) fail(`tauri.conf.json: window ${k} must be ${JSON.stringify(v)}`);
-if (main.dragDropEnabled !== false) fail('tauri.conf.json: dragDropEnabled must be false (drop events would hand file paths to the webview)');
+// Drops reach the core (src-tauri/src/shell.rs), which reads a dropped .env file and tells the
+// page only an import reference. Tauri still emits drag events with the paths to page
+// listeners: check-static.mjs keeps the page from listening, and without protocol-asset the
+// scope a drop widens grants nothing.
+if (main.dragDropEnabled !== true) fail('tauri.conf.json: dragDropEnabled must be true (a dropped .env file is read by the core)');
+const tauriDep = read(join(tauriDir, 'Cargo.toml')).match(/^tauri\s*=\s*\{([^}]*)\}/m);
+if (!tauriDep || !/features\s*=\s*\[\s*\]/.test(tauriDep[1])) fail('src-tauri/Cargo.toml: the tauri dependency must have no features (protocol-asset would serve dropped files to the page)');
+checkResolvedTauriFeatures();
 
 const plugins = conf.plugins ?? {};
 if (Object.keys(plugins).join() !== 'deep-link') fail('tauri.conf.json: only the deep-link plugin is configured');
@@ -235,6 +244,19 @@ function checkFreezePrototype() {
 // tauri.conf.json stays minimal (it is also what `tauri dev`, Clippy and the tests build with);
 // what only the distributed app needs lives in tauri.bundle.conf.json, merged by `tauri build
 // --config` in npm run bundle and desktop/scripts/package-macos.py.
+// A plugin can switch tauri features on too: read the resolved set from Cargo (no build).
+function checkResolvedTauriFeatures() {
+  const out = spawnSync('cargo', ['metadata', '--format-version', '1', '--locked', '--manifest-path', join(root, 'Cargo.toml')], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (out.status !== 0) { fail('cargo metadata failed: cannot read the resolved tauri features'); return; }
+  const meta = JSON.parse(out.stdout);
+  const names = new Map(meta.packages.map((p) => [p.id, p.name]));
+  const nodes = meta.resolve.nodes.filter((n) => names.get(n.id) === 'tauri');
+  if (nodes.length !== 1) fail(`cargo metadata: expected one tauri package, found ${nodes.length}`);
+  for (const n of nodes) {
+    if (n.features.includes('protocol-asset')) fail('tauri resolves with protocol-asset: a dropped path would widen the asset protocol scope');
+  }
+}
+
 function checkReleaseConfig() {
   const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
   const extraTop = Object.keys(conf).filter((k) => !BASE_KEYS.includes(k));

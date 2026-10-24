@@ -15,6 +15,11 @@
 //!   @xterm/xterm throw while the bundle loads (assigning `toString` on a plain object), which
 //!   leaves the window blank; scripts/check-tauri.mjs checks the replacement in a fresh realm.
 //! - Deep links are handled in [`crate::deeplink`].
+//! - A file dropped on the window goes to the core, which reads it for a `.env` import and
+//!   tells the page an import reference and the file's base name (`envfile://dropped`). Tauri
+//!   also emits its own drag events with the dropped paths, but only to page listeners for
+//!   them, and the page registers none (scripts/check-static.mjs). With the `protocol-asset`
+//!   feature off, the scope Tauri widens for a dropped path grants nothing.
 //! - One instance per user. On Linux the single-instance plugin rendezvouses on the user's own
 //!   D-Bus session bus (Windows: a session-local named mutex), and a second launch hands its
 //!   argv (`--quit`, a `zeropw://` link) to the first and exits. On macOS that plugin would use
@@ -32,7 +37,8 @@ use std::time::{Duration, Instant};
 
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{
-    App, AppHandle, Manager, RunEvent, Url, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    App, AppHandle, DragDropEvent, Manager, RunEvent, Url, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
 use zeropw_desktop_core::{AppPaths, Core, CoreConfig, paths};
@@ -148,17 +154,43 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if window.label() == MAIN
-                && matches!(event, WindowEvent::Destroyed)
-                && let Some(shell) = window.try_state::<Shell>()
-            {
-                shell.page_gone();
+            if window.label() != MAIN {
+                return;
+            }
+            let Some(shell) = window.try_state::<Shell>() else {
+                return;
+            };
+            match event {
+                WindowEvent::Destroyed => shell.page_gone(),
+                WindowEvent::DragDrop(drag) => on_drag_drop(&shell, drag),
+                _ => {}
             }
         })
         .setup(move |app| setup(app, quit_only))
         .build(tauri::generate_context!())
         .expect("ZeroPW could not start")
         .run(on_run_event);
+}
+
+/// Files dragged onto the main window (docs/env-import.md §8). The core reads a dropped file
+/// into its one-time store and tells the page only an import reference and the file's base
+/// name; the page never registers a listener for Tauri's own drag events, whose payload holds
+/// the paths (scripts/check-static.mjs).
+fn on_drag_drop(shell: &Shell, event: &DragDropEvent) {
+    let core = shell.core();
+    match event {
+        // a drag of text or of anything else without a file path is not a file drop
+        DragDropEvent::Enter { paths, .. } => core.env_file_hover(!paths.is_empty()),
+        DragDropEvent::Leave => core.env_file_hover(false),
+        DragDropEvent::Drop { paths, .. } => {
+            core.env_file_hover(false);
+            if !paths.is_empty() {
+                let paths = paths.clone();
+                std::thread::spawn(move || core.env_file_drop(&paths));
+            }
+        }
+        _ => {}
+    }
 }
 
 fn setup(app: &mut App, quit_only: bool) -> Result<(), Box<dyn Error>> {

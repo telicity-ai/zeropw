@@ -91,10 +91,11 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 ### 4.3 일회용 보관소 (OneTimeStore)
 
-복구 코드, 호출 토큰, 초대 링크, 다시 본 비밀 값, 붙여 넣거나 링크로 받은 초대를 `Zeroizing` 버퍼로 잠깐 들고 있는다. 무작위 128비트 참조로 꺼내며, 한 번 보여 주면 지운다. 수명은 비밀 값 60초, 붙여 넣거나 링크로 받은 초대 60분, 나머지 10분. 받은 초대만 길게 두는 것은 초대받은 사람이 링크를 확인한 뒤 보관함을 만들고(§7의 2~4단계) 합류하기 때문이다. `Debug`·`Serialize`를 구현하지 않는다.
+복구 코드, 호출 토큰, 초대 링크, 다시 본 비밀 값, 붙여 넣거나 링크로 받은 초대, 가져오려고 읽은 `.env` 파일을 `Zeroizing` 버퍼로 잠깐 들고 있는다. 무작위 128비트 참조로 꺼내며, 한 번 보여 주면 지운다. 수명은 비밀 값 60초, 붙여 넣거나 링크로 받은 초대 60분, 나머지 10분. 받은 초대만 길게 두는 것은 초대받은 사람이 링크를 확인한 뒤 보관함을 만들고(§7의 2~4단계) 합류하기 때문이다. `Debug`·`Serialize`를 구현하지 않는다.
 
-- 항목마다 종류가 있어서 다른 용도로 꺼낼 수 없다. 웹뷰로 나갈 수 있는(`onetime_show`·`onetime_copy`) 것은 호출 토큰, 초대 링크, 다시 본 값뿐이다. 복구 코드는 `vault_init`만, 받은 초대는 `team_join`만 읽는다.
+- 항목마다 종류가 있어서 다른 용도로 꺼낼 수 없다. 웹뷰로 나갈 수 있는(`onetime_show`·`onetime_copy`) 것은 호출 토큰, 초대 링크, 다시 본 값뿐이다. 복구 코드는 `vault_init`만, 받은 초대는 `team_join`만, `.env` 파일은 `secret_import_preview`·`secret_import`만 읽는다.
 - 앱이 만든 값은 예약까지 합쳐 256개까지 든다. CLI 호출이 상태를 바꾸고 값을 한 번만 출력하는 명령(`principal_create`의 토큰, `team_invite_create`의 링크, 감사 기록을 남기는 `secret_reveal`)은 CLI를 실행하기 전에 자리를 예약한다. 보관소가 가득 차면 아무것도 바꾸기 전에 `onetime_store_full`로 거절하고, 만든 뒤에 값을 잃는 일은 없다.
+- `.env` 파일은 10분 동안 따로 4개까지 들고, 넘치면 가장 오래된 것부터 버린다. 가져오기가 성공하거나 시트를 닫으면 지운다([env-import.md](env-import.md) §8).
 - 붙여 넣거나 딥 링크로 받은 초대는 따로 16개까지 들고, 넘치면 가장 오래된 것부터 버린다. 앱 밖에서 링크를 아무리 열어도 앱이 만든 값의 자리를 차지하지 못한다. `team_join`이 성공하면 그 초대는 바로 지운다. 실패하면 다시 시도할 수 있게 60분이 지날 때까지 둔다.
 
 ### 4.4 앱 안 터미널
@@ -116,7 +117,8 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 - 상태 디렉터리: 앱 데이터 폴더의 `state/` (macOS `~/Library/Application Support/ZeroPW/state`).
 - 앱 설정 `settings.json`(0600): 중계기 포트, 팀 동기화 주소. 상태 디렉터리 안에는 쓰지 않는다.
-- 파일 선택(키 파일, CA, 백업)은 Rust에서 네이티브 창을 열고 경로를 불투명한 `file_token`으로만 웹뷰에 알린다.
+- 파일 선택(키 파일, CA, 백업, `.env`)은 Rust에서 네이티브 창을 열고 경로를 불투명한 `file_token`으로만 웹뷰에 알린다.
+- 창에 끌어다 놓은 파일도 경로는 Rust에만 있다. 셸이 놓인 경로를 코어에 넘기면 코어가 일반 파일 하나만 읽어 일회용 보관소에 두고, 웹뷰에는 `envfile://dropped`로 참조와 파일 이름만 알린다(§5, §8.10).
 
 ## 5. IPC 명령
 
@@ -152,7 +154,10 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `team_invite_preview` | `{text}` | `{ref, preview}` | `team invite-info --stdin` | |
 | `team_join` | `{ref, project?, environment?}` | 합류 결과 | `team join --stdin` | |
 | `onetime_show` / `onetime_copy` / `onetime_discard` | `{ref}` | 한 번만 값 / 복사 결과 | 보관소 | |
-| `file_pick` | `{purpose}` | `{file_token, name}` | 네이티브 창 | |
+| `file_pick` | `{purpose}`: `secret`, `ssh_key`, `ca`, `env_file` | `{file_token, name}` | 네이티브 창 | |
+| `env_file_load` | `{file_token}` (`env_file`로 고른 것) | `{import_ref, name}` | 코어가 파일을 읽어 보관소에 둔다(64 KiB, UTF-8) | |
+| `secret_import_preview` | `{import_ref, project, environment, id_prefix?}` | 값 없는 미리 보기: 이름, 키 ID, 종류, 기본 선택과 이유, 동작, 상태, 빈 줄 | `secret import --stdin --dry-run` | |
+| `secret_import` | `{import_ref, project, environment, id_prefix?, selected, update}` | 값 없는 결과 | `secret import --stdin`, 기본 선택과의 차이를 `--include`/`--exclude`로 | |
 | `settings_get` / `settings_set` / `net_interfaces` | | 설정 / 주소 목록 | 코어 | |
 
 중계기 시작(`serve_start`, `vault_init` 끝의 시작도 같다)이 실패하면, 사이드카가 끝나면서 로그(표준 오류)에 남긴 CLI 오류의 `error`와 `reason`을 그대로 돌려준다. 주소를 열지 못한 실패는 `detail`에 어느 설정 때문인지만 적어서, 화면이 중계기 포트 문제와 팀 동기화 주소 문제를 가릴 수 있다. 그 밖의 CLI `detail`은 중계기 주소나 팀 동기화 주소가 들어 있으면 버린다.
@@ -180,7 +185,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결에는 ssh가 없다. `connection_set_cli_program`은 그런 연결에 같은 이름 그대로 ssh를 넣는다(`connection update --cli-program`). 코어는 빈 값을 `cli_program_required`로 막고, 어느 연결에 넣을 수 있는지는 CLI가 정한다. SSH가 아니면 `cli_requires_ssh`, 끈 연결이면 `connection_disabled`, 이미 ssh가 있으면 `cli_already_set`이다. 넣은 ssh는 바꿀 수 없고, 바꾸려면 연결을 끄고 새로 만든다. ssh를 넣으면 연결이 넓어진 것으로 보아 그 연결에 준 권한은 모두 `stale`이 되고, 에이전트에게 권한을 다시 줘야 한다. 연결 화면은 ssh가 없는 SSH 연결의 줄에 "에이전트가 아직 못 써요"와 "ssh 경로 넣기" 버튼을 보인다. 확인 시트는 `/usr/bin/ssh`를 미리 채우고, 권한을 다시 줘야 한다는 파랑 알림과 경로를 나중에 바꿀 수 없다는 주황 알림을 단 뒤 관리 비밀번호를 받는다. 팀으로 공유한 환경에서는 CLI가 `connection.update` 커밋을 만들어 다른 기기에도 퍼진다([team-sync.md](team-sync.md) §12). `e2e_real_admin.rs`가 ssh 없이 만든 연결에서 `exec`가 `cli_not_supported`로 거절되고, ssh를 넣은 뒤 예전 권한은 `grant_stale`로 거절되며, 권한을 다시 주면 시험용 sshd에서 명령이 도는지 본다.
 
-코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
+코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
 
 `recover`는 복구 코드를 두 가지 형태로 시도할 수 있다. 앱이 만든 보관함은 표준형(`XXXX-XXXX-…`, 대문자 base32)을 저장했고, `zeropw-admin init`에 직접 넣은 보관함은 입력한 그대로를 저장했기 때문이다. 입력이 복구 코드 모양(하이픈과 공백을 빼면 base32 24자)인데 표준형과 다르면 표준형으로 먼저 시도하고, CLI가 `AuthFailed`로 답할 때만 입력 그대로 한 번 더 시도한다. 그 밖에는 한 번만 부른다. 그래서 요청 한 번에 CLI 호출은 최대 두 번이고, 틀린 코드는 `auth_failed` 감사 기록을 최대 두 줄 남긴다. `serve`가 돌고 있었다면 앱은 복구하는 동안 `serve`를 멈추고, 복구가 성공하든 실패하든 끝나면 다시 시작한다. 그사이 앱을 켤 때의 자동 시작이나 중계기 버튼이 `serve`를 시작하려 하면, 복구가 끝날 때까지 기다린다. `serve`는 KMS 키를 메모리에 들고 있어서, 계속 돌면 복구가 은퇴시킨 키를 그대로 쓴다. 그러면 새 키로 다시 감싼 팀 키를 읽지 못하고, 새로 받는 팀 키를 옛 키로 감싸 저장할 수 있다([#59](https://github.com/telicity-ai/zeropw/issues/59)). `serve`가 다시 시작하지 못해도 `recover`는 복구의 결과를 그대로 돌려주고, `serve`는 멈춘 상태로 보여 다시 시작할 수 있다.
 
@@ -191,7 +196,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | 온보딩 | 관리 비밀번호, 복구 코드, 보관함 만들기, 첫 프로젝트, 에이전트 연결(터미널) | `password_strength`, `recovery_generate`, `vault_init`, `project_create`, `principal_create`, `terminal_open` |
 | 상단 막대 | 중계기 상태, 전체 정지·재개 | `serve_status`, `control_get`, `stop_all`, `resume` |
 | 홈 | 상태 요약, 최근 알림 | `app_status`, `alerts` |
-| 키 | 비밀·환경변수 목록과 추가, 다시 보기, 교체·폐기 | `secret_*`, `onetime_*` |
+| 키 | 비밀·환경변수 목록과 추가, 다시 보기, 교체·폐기, `.env` 가져오기(창 어디에 놓아도 이 화면에서 열린다) | `secret_*`, `onetime_*`, `file_pick`, `env_file_load` |
 | 연결 | API·SSH 연결 만들기, 범위, 끄기 | `connection_*`, `file_pick` |
 | 에이전트 | 에이전트와 권한, 앱 안 터미널, 승인 대기 | `principal_*`, `grant_*`, `terminal_*`, `approvals_*` |
 | 기록 | 사용 기록, 알림, 사고 | `audit_tail`, `alerts`, `incident_*` |
@@ -229,6 +234,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
    - Linux: 창 시스템에 이런 장치가 없어서 아무것도 하지 않고, `secure_view`는 늘 `{protected: false}`를 돌려준다.
    - 화면은 어느 플랫폼에서도 캡처를 막는다고 말하지 않는다.
 9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
+10. 창은 파일을 끌어다 놓을 수 있다(`dragDropEnabled`). 놓인 경로는 셸이 코어로 넘기고, 코어는 일반 파일 하나만 막히지 않게 열어 읽는다(FIFO·장치 파일은 거절). 파일 내용은 웹뷰로 가지 않고, 앱 코드는 경로도 받지 않는다. 다만 Tauri가 자체 끌기 이벤트(`tauri://drag-*`)에 경로를 담아 그 이벤트를 듣는 페이지 리스너에 보내므로, 페이지에서 도는 스크립트가 리스너를 달면 경로를 알 수 있다(`core:default`가 이벤트 듣기를 허락한다). 앱 소스에는 그런 리스너가 없다(`scripts/check-static.mjs`가 막는다). Tauri가 놓인 경로에 넓히는 범위는 `protocol-asset` 기능이 꺼져 있어 아무것도 허락하지 않는다(`scripts/check-tauri.mjs`가 `cargo metadata`로 tauri에 실제로 켜진 기능을 본다).
 
 ## 9. 빌드·시험·CI
 
@@ -249,6 +255,8 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ## 10. 남은 한계
 
 - 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
+- 창에 놓은 파일의 경로는 Tauri가 자체 끌기 이벤트로 그 이벤트를 듣는 페이지 리스너에 보낸다. 앱 페이지는 듣지 않지만, 웹뷰가 침해되면 리스너를 달아 놓인 파일의 경로를 알 수 있다. 파일 내용은 코어만 읽는다(§8.10).
+- `.env`를 가져와도 원래 파일은 그대로 남는다. 앱은 파일을 고치거나 지우지 않고, 에이전트가 읽을 수 있는 곳이면 지우라고 알린다([env-import.md](env-import.md) §8).
 - 화면은 한국어로만 나온다. 영어판은 없다(§1, 소유자 결정).
 - Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 배포하는 것은 ad-hoc 서명한 .dmg 미리 보기뿐이다(v0.2.0에 싣기로 한 소유자 결정, §1). 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다(§9). 앱은 응용 프로그램 폴더로 옮긴 뒤에 열어야 한다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다. v0.2.0 미리 보기는 내려받은 이미지를 Gatekeeper를 거쳐 여는 과정을 어느 Mac에서도 시험하지 않았다. 다른 계정의 에이전트 실행, "그래도 열기" 뒤 사이드카에 대한 macOS의 처리, Cmd+Q로 앱을 끝내는 과정도 확인하지 않았다(§1, §9, 소유자 면제).
 - 복구 코드로 기기 키를 바꾸려면 지금 기기 키 파일이 있어야 한다. 바꾼 뒤에도 같은 데이터 키를 새 기기 키 파일로 다시 감쌀 뿐이라, 기기 키 파일이 새었을 때의 대책이 아니다. 바꾸기 전에 만든 백업은 더 이상 복원할 수 없다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 설정 화면은 되돌릴 수 없다는 점을 주황 알림(`src/copy.ts`의 `set.recover.warn`)으로, 키 파일이 새었을 수 있을 때 할 일을 파랑 알림(`set.recover.leak`)으로 알리며, 기기 키를 바꾸는 일을 유출 대책으로 소개하지 않는다([DESIGN.md](../DESIGN.md) §5.3).

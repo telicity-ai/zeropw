@@ -785,6 +785,14 @@ pub struct SecretMeta {
     pub versions: Vec<VersionMeta>,
 }
 
+/// One item of [`Vault::put_secrets`].
+#[derive(Clone, Copy)]
+pub struct NewSecret<'v> {
+    pub id: &'v str,
+    pub kind: &'v str,
+    pub value: &'v [u8],
+}
+
 /// Port of `vault.Vault`. `kms`/`audit`/`projects` are borrowed, not owned:
 /// `Context` (the only constructor of these in this crate) leaks their
 /// backing allocations to get a `'static` lifetime so several fields can
@@ -1128,108 +1136,95 @@ impl<'a> Vault<'a> {
         {
             let _lock = self.state.lock()?;
             let mut doc_val = self.doc()?;
-            // Python: `doc["secrets"].get(secret_id)` -- a non-dict document cannot be subscripted
-            // (`TypeError`), a missing `secrets` is `KeyError`, and a non-dict `secrets` has no
-            // `.get` (`AttributeError`); nothing is committed (finding E-R5-1).
-            let secrets_obj = dict_methods_mut(index_mut(&mut doc_val, "secrets")?)?;
-
-            // Python: `entry = doc["secrets"].get(secret_id); if entry is None: entry = {...}`.
-            // `dict.get` returns `None` both when the key is absent *and* when it maps to a JSON
-            // `null` (finding E-R4-2), so a `"secrets": {"ghost": null}` entry takes the
-            // fresh-entry branch.
-            let mut entry: Value = match secrets_obj.get(&secret_id).filter(|v| !v.is_null()) {
-                Some(existing) => {
-                    // Python: `(entry["project"], entry["environment"], entry["kind"]) != (project,
-                    // environment, kind)`: the whole tuple is built first, so any missing field is
-                    // `KeyError` (a non-dict entry `TypeError`) even when an earlier field already
-                    // differs; a present field of another type simply compares unequal.
-                    let fields = [
-                        index(existing, "project")?,
-                        index(existing, "environment")?,
-                        index(existing, "kind")?,
-                    ];
-                    let expected = [project, environment, &json!(kind)];
-                    if fields
-                        .iter()
-                        .zip(expected)
-                        .any(|(field, expected)| !python_eq(field, expected))
-                    {
-                        return Err(Error::invalid_input("secret_identity_mismatch"));
-                    }
-                    existing.clone()
-                }
-                None => json!({
-                    "project": project,
-                    "environment": environment,
-                    "kind": kind,
-                    "created_at": iso(None),
-                    "active_version": null,
-                    "versions": {},
-                }),
-            };
-
-            // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` is arbitrary
-            // precision, so the parsed keys and the increment stay exact beyond every
-            // machine-integer boundary. A non-dict `versions` fails as Python's iteration,
-            // `int()` and item assignment do ([`non_dict_versions_error`]).
-            let mut versions_obj = match index(&entry, "versions")? {
-                Value::Object(map) => map.clone(),
-                other => return Err(non_dict_versions_error(other)),
-            };
-            let next_version = versions_obj
-                .keys()
-                .map(|k| parse_version_key(k))
-                .collect::<Result<Vec<PyInt>, Error>>()?
-                .into_iter()
-                .max()
-                .unwrap_or_else(|| PyInt::from(0_i64));
-            let next_version = PyInt(next_version.0 + 1);
-            let mut record = self.encrypt(&secret_id, &next_version, value)?;
-            record.insert("created_at".into(), json!(iso(None)));
-            record.insert(
-                "status".into(),
-                json!(if activate { "active" } else { "staged" }),
-            );
-            record.insert("public".into(), public);
-            versions_obj.insert(next_version.to_string(), Value::Object(record));
-
-            if activate {
-                // Python: `previous = entry["active_version"]` (`KeyError` when missing); then, for
-                // a non-`None` previous, `entry["versions"][str(previous)]["status"] == "active"`.
-                // `str(previous)` is computed from whatever raw JSON value `active_version` holds;
-                // a key naming no version (`7`, or `1.0` -> `"1.0"`) is `KeyError`, a non-dict
-                // record `TypeError`, a missing status `KeyError` -- all before `write_json`, so
-                // nothing is committed (finding E-R4-4). A present status of another type just
-                // compares unequal to `"active"`.
-                let entry_obj = entry.as_object_mut().ok_or_else(|| escaped(TYPE_ERROR))?;
-                let previous = entry_obj
-                    .get("active_version")
-                    .cloned()
-                    .ok_or_else(|| escaped(KEY_ERROR))?;
-                entry_obj.insert("active_version".into(), next_version.value());
-                if !previous.is_null() {
-                    let prev_rec = versions_obj
-                        .get_mut(&python_str_scalar(&previous))
-                        .ok_or_else(|| escaped(KEY_ERROR))?;
-                    if index(prev_rec, "status")?.as_str() == Some("active") {
-                        index_mut(prev_rec, "status")?.clone_from(&json!("retired"));
-                    }
-                }
-            }
-            entry
-                .as_object_mut()
-                .ok_or_else(|| escaped(TYPE_ERROR))?
-                .insert("versions".into(), Value::Object(versions_obj));
-            secrets_obj.insert(secret_id.clone(), entry);
-
+            version = self.stage_version(
+                &mut doc_val,
+                &secret_id,
+                kind,
+                value,
+                (project, environment),
+                activate,
+                public,
+            )?;
             self.state.write_json(VAULT_DOC, &doc_val)?;
-            version = next_version;
             rebound = if activate {
                 self.rebind_connections(&secret_id)?
             } else {
                 Vec::new()
             };
         }
+        self.audit_put(&secret_id, &version, kind, project, environment)?;
+        self.audit_rebound(&secret_id, &rebound)?;
+        Ok(version)
+    }
+
+    /// New active versions of several secrets of one environment, written to
+    /// the vault document once (docs/env-import.md §7). Every item is checked
+    /// and staged before the write, so a failure leaves the document as it
+    /// was. Each item is audited as `secret_put`, like [`Vault::put_secret`].
+    pub fn put_secrets(
+        &self,
+        project: &str,
+        environment: &str,
+        items: &[NewSecret<'_>],
+    ) -> Result<Vec<PyInt>, Error> {
+        let (project, environment) = (json!(project), json!(environment));
+        let mut ids = std::collections::BTreeSet::new();
+        let mut staged = Vec::with_capacity(items.len());
+        for item in items {
+            let secret_id = validate_name(item.id, "secret_id")?;
+            if !ids.insert(secret_id.clone()) {
+                return Err(Error::invalid_input("duplicate_secret_id"));
+            }
+            if !SECRET_KINDS.contains(&item.kind) {
+                return Err(Error::invalid_input("invalid_secret_kind"));
+            }
+            if item.value.is_empty() || item.value.len() > MAX_SECRET_BYTES {
+                return Err(Error::invalid_input("invalid_secret_value"));
+            }
+            staged.push((secret_id, Vault::public_metadata(item.kind, item.value)?));
+        }
+        self.projects
+            .require_environment_value(&project, &environment)?;
+        let mut versions = Vec::with_capacity(items.len());
+        let mut rebound = Vec::with_capacity(items.len());
+        {
+            let _lock = self.state.lock()?;
+            let mut doc_val = self.doc()?;
+            for (item, (secret_id, public)) in items.iter().zip(staged.iter()) {
+                versions.push(self.stage_version(
+                    &mut doc_val,
+                    secret_id,
+                    item.kind,
+                    item.value,
+                    (&project, &environment),
+                    true,
+                    public.clone(),
+                )?);
+            }
+            self.state.write_json(VAULT_DOC, &doc_val)?;
+            for (secret_id, _) in &staged {
+                rebound.push(self.rebind_connections(secret_id)?);
+            }
+        }
+        for ((item, (secret_id, _)), (version, rebound)) in items
+            .iter()
+            .zip(staged.iter())
+            .zip(versions.iter().zip(rebound.iter()))
+        {
+            self.audit_put(secret_id, version, item.kind, &project, &environment)?;
+            self.audit_rebound(secret_id, rebound)?;
+        }
+        Ok(versions)
+    }
+
+    fn audit_put(
+        &self,
+        secret_id: &str,
+        version: &PyInt,
+        kind: &str,
+        project: &Value,
+        environment: &Value,
+    ) -> Result<(), Error> {
         self.audit.record(
             "secret_put",
             RecordArgs {
@@ -1244,8 +1239,117 @@ impl<'a> Vault<'a> {
                 ..Default::default()
             },
         )?;
-        self.audit_rebound(&secret_id, &rebound)?;
-        Ok(version)
+        Ok(())
+    }
+
+    /// One new version of `secret_id` in the vault document `doc_val`,
+    /// checked against its entry; nothing is written.
+    #[allow(clippy::too_many_arguments)]
+    fn stage_version(
+        &self,
+        doc_val: &mut Value,
+        secret_id: &str,
+        kind: &str,
+        value: &[u8],
+        (project, environment): (&Value, &Value),
+        activate: bool,
+        public: Value,
+    ) -> Result<PyInt, Error> {
+        let secret_id = secret_id.to_owned();
+        // Python: `doc["secrets"].get(secret_id)` -- a non-dict document cannot be subscripted
+        // (`TypeError`), a missing `secrets` is `KeyError`, and a non-dict `secrets` has no
+        // `.get` (`AttributeError`); nothing is committed (finding E-R5-1).
+        let secrets_obj = dict_methods_mut(index_mut(doc_val, "secrets")?)?;
+
+        // Python: `entry = doc["secrets"].get(secret_id); if entry is None: entry = {...}`.
+        // `dict.get` returns `None` both when the key is absent *and* when it maps to a JSON
+        // `null` (finding E-R4-2), so a `"secrets": {"ghost": null}` entry takes the
+        // fresh-entry branch.
+        let mut entry: Value = match secrets_obj.get(&secret_id).filter(|v| !v.is_null()) {
+            Some(existing) => {
+                // Python: `(entry["project"], entry["environment"], entry["kind"]) != (project,
+                // environment, kind)`: the whole tuple is built first, so any missing field is
+                // `KeyError` (a non-dict entry `TypeError`) even when an earlier field already
+                // differs; a present field of another type simply compares unequal.
+                let fields = [
+                    index(existing, "project")?,
+                    index(existing, "environment")?,
+                    index(existing, "kind")?,
+                ];
+                let expected = [project, environment, &json!(kind)];
+                if fields
+                    .iter()
+                    .zip(expected)
+                    .any(|(field, expected)| !python_eq(field, expected))
+                {
+                    return Err(Error::invalid_input("secret_identity_mismatch"));
+                }
+                existing.clone()
+            }
+            None => json!({
+                "project": project,
+                "environment": environment,
+                "kind": kind,
+                "created_at": iso(None),
+                "active_version": null,
+                "versions": {},
+            }),
+        };
+
+        // Python: `max((int(v) for v in entry["versions"]), default=0) + 1` is arbitrary
+        // precision, so the parsed keys and the increment stay exact beyond every
+        // machine-integer boundary. A non-dict `versions` fails as Python's iteration,
+        // `int()` and item assignment do ([`non_dict_versions_error`]).
+        let mut versions_obj = match index(&entry, "versions")? {
+            Value::Object(map) => map.clone(),
+            other => return Err(non_dict_versions_error(other)),
+        };
+        let next_version = versions_obj
+            .keys()
+            .map(|k| parse_version_key(k))
+            .collect::<Result<Vec<PyInt>, Error>>()?
+            .into_iter()
+            .max()
+            .unwrap_or_else(|| PyInt::from(0_i64));
+        let next_version = PyInt(next_version.0 + 1);
+        let mut record = self.encrypt(&secret_id, &next_version, value)?;
+        record.insert("created_at".into(), json!(iso(None)));
+        record.insert(
+            "status".into(),
+            json!(if activate { "active" } else { "staged" }),
+        );
+        record.insert("public".into(), public);
+        versions_obj.insert(next_version.to_string(), Value::Object(record));
+
+        if activate {
+            // Python: `previous = entry["active_version"]` (`KeyError` when missing); then, for
+            // a non-`None` previous, `entry["versions"][str(previous)]["status"] == "active"`.
+            // `str(previous)` is computed from whatever raw JSON value `active_version` holds;
+            // a key naming no version (`7`, or `1.0` -> `"1.0"`) is `KeyError`, a non-dict
+            // record `TypeError`, a missing status `KeyError` -- all before `write_json`, so
+            // nothing is committed (finding E-R4-4). A present status of another type just
+            // compares unequal to `"active"`.
+            let entry_obj = entry.as_object_mut().ok_or_else(|| escaped(TYPE_ERROR))?;
+            let previous = entry_obj
+                .get("active_version")
+                .cloned()
+                .ok_or_else(|| escaped(KEY_ERROR))?;
+            entry_obj.insert("active_version".into(), next_version.value());
+            if !previous.is_null() {
+                let prev_rec = versions_obj
+                    .get_mut(&python_str_scalar(&previous))
+                    .ok_or_else(|| escaped(KEY_ERROR))?;
+                if index(prev_rec, "status")?.as_str() == Some("active") {
+                    index_mut(prev_rec, "status")?.clone_from(&json!("retired"));
+                }
+            }
+        }
+        entry
+            .as_object_mut()
+            .ok_or_else(|| escaped(TYPE_ERROR))?
+            .insert("versions".into(), Value::Object(versions_obj));
+        secrets_obj.insert(secret_id.clone(), entry);
+        Ok(next_version)
     }
 
     fn rebind_connections(&self, secret_id: &str) -> Result<Vec<crate::policy::Connection>, Error> {

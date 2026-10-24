@@ -642,6 +642,32 @@ fn dialog_path(path: tauri_plugin_dialog::FilePath) -> Out<PathBuf> {
         .map_err(|_| AppError::invalid_input("file_path_invalid"))
 }
 
+// -- .env import ------------------------------------------------------------------------------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn env_file_load(shell: State<'_, Shell>, request: Request<'_>) -> Out<EnvFileOut> {
+    let input: FileTokenIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.env_file_load(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn secret_import_preview(
+    shell: State<'_, Shell>,
+    request: Request<'_>,
+) -> Out<ImportReport> {
+    let input: SecretImportPreviewIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.secret_import_preview(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn secret_import(shell: State<'_, Shell>, request: Request<'_>) -> Out<ImportReport> {
+    let input: SecretImportIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.secret_import(input)).await
+}
+
 // -- settings ---------------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
@@ -727,6 +753,9 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         onetime_copy,
         onetime_discard,
         file_pick,
+        env_file_load,
+        secret_import_preview,
+        secret_import,
         settings_get,
         settings_set,
         net_interfaces,
@@ -751,6 +780,8 @@ mod tests {
         assert_eq!((r.cols, r.rows), (100, 30));
         let f: FilePickIn = parse(json!({"purpose": "ssh_key"})).unwrap();
         assert_eq!(f.purpose, FilePurpose::SshKey);
+        let f: FilePickIn = parse(json!({"purpose": "env_file"})).unwrap();
+        assert_eq!(f.purpose, FilePurpose::EnvFile);
         assert!(parse::<FilePickIn>(json!({"purpose": "anything"})).is_err());
         assert!(parse::<FilePickIn>(json!({"purpose": "ca", "path": "/etc/passwd"})).is_err());
         assert!(

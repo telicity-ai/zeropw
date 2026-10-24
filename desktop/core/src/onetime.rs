@@ -1,5 +1,6 @@
 //! [`OneTimeStore`] (docs/desktop-app.md §4.3): recovery codes, caller tokens, invite links,
-//! pasted invites and revealed secret values are held briefly in wiped buffers and handed out
+//! pasted invites, revealed secret values and `.env` files waiting for an import are held
+//! briefly in wiped buffers and handed out
 //! by random 128-bit references. Showing a value removes it. Revealed secrets live 60 s,
 //! pasted and deep-linked invites 60 minutes (an invitee previews the link first, then makes a
 //! vault, then joins), everything else 10 minutes. Entries have a kind, so a reference minted
@@ -12,7 +13,8 @@
 //! happens instead of losing the value afterwards. Pasted and deep-linked invites have their
 //! own pool of [`MAX_INVITE_TEXTS`]; the oldest is dropped for a new one, so links opened from
 //! outside the app can never take the room the app's own values need. A joined invite is
-//! removed at once (`team_join`).
+//! removed at once (`team_join`). `.env` files dropped on the window or picked for an import
+//! have a pool of [`MAX_ENV_IMPORTS`] that works the same way; an import removes its file.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -30,6 +32,8 @@ pub const DEFAULT_TTL: Duration = Duration::from_secs(10 * 60);
 pub const MAX_ENTRIES: usize = 256;
 /// Pasted or deep-linked invites kept for `team_join`; the oldest goes first.
 pub const MAX_INVITE_TEXTS: usize = 16;
+/// `.env` files kept for `secret_import`; the oldest goes first.
+pub const MAX_ENV_IMPORTS: usize = 4;
 
 /// What a stored value is, which fixes its lifetime and who may redeem it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +48,8 @@ pub enum OneTimeKind {
     InviteText,
     /// One secret version revealed after re-authentication.
     RevealedSecret,
+    /// A `.env` file read for an import; read only by `secret_import_preview`/`secret_import`.
+    EnvImport,
 }
 
 impl OneTimeKind {
@@ -60,7 +66,20 @@ impl OneTimeKind {
     /// also stays: `recovery_generate` already returned its groups, once, and only
     /// `vault_init` reads it again.
     pub fn showable(self) -> bool {
-        !matches!(self, OneTimeKind::InviteText | OneTimeKind::RecoveryCode)
+        !matches!(
+            self,
+            OneTimeKind::InviteText | OneTimeKind::RecoveryCode | OneTimeKind::EnvImport
+        )
+    }
+
+    /// Kinds with their own evicting pool and its size; they never count against the app's
+    /// own values.
+    fn pool(self) -> Option<usize> {
+        match self {
+            OneTimeKind::InviteText => Some(MAX_INVITE_TEXTS),
+            OneTimeKind::EnvImport => Some(MAX_ENV_IMPORTS),
+            _ => None,
+        }
     }
 }
 
@@ -84,27 +103,24 @@ struct Entries {
 }
 
 impl Entries {
-    /// Room for one more value the app made (anything but an `InviteText`).
+    /// Room for one more value the app made (anything outside the pools).
     fn has_room(&self) -> bool {
         let made = self
             .map
             .values()
-            .filter(|e| e.kind != OneTimeKind::InviteText)
+            .filter(|e| e.kind.pool().is_none())
             .count();
         made + self.reserved < MAX_ENTRIES
     }
 
-    /// Drop the oldest invites until one more fits in their pool.
-    fn make_room_for_invite(&mut self) {
+    /// Drop the oldest entries of `kind`'s pool until one more fits.
+    fn make_room_in_pool(&mut self, kind: OneTimeKind, size: usize) {
         loop {
-            let invites = self
-                .map
-                .iter()
-                .filter(|(_, e)| e.kind == OneTimeKind::InviteText);
-            if invites.clone().count() < MAX_INVITE_TEXTS {
+            let pooled = self.map.iter().filter(|(_, e)| e.kind == kind);
+            if pooled.clone().count() < size {
                 return;
             }
-            let oldest = invites
+            let oldest = pooled
                 .min_by_key(|(_, e)| (e.expires_at, e.seq))
                 .map(|(reference, _)| reference.clone());
             match oldest {
@@ -130,7 +146,7 @@ pub struct OneTimeStore {
 pub struct Reservation<'a> {
     store: &'a OneTimeStore,
     kind: OneTimeKind,
-    /// Counted in `Entries::reserved`. Never for an invite, which has its own evicting pool.
+    /// Counted in `Entries::reserved`. Never for a pooled kind, which evicts instead.
     held: bool,
 }
 
@@ -153,8 +169,8 @@ impl Reservation<'_> {
         if self.held {
             entries.reserved = entries.reserved.saturating_sub(1);
             self.held = false;
-        } else {
-            entries.make_room_for_invite();
+        } else if let Some(size) = self.kind.pool() {
+            entries.make_room_in_pool(self.kind, size);
         }
         entries.map.insert(
             reference.clone(),
@@ -227,7 +243,8 @@ impl OneTimeStore {
     /// Fails with `onetime_store_full` while the store is full, before anything has run.
     pub fn reserve(&self, kind: OneTimeKind) -> Result<Reservation<'_>, AppError> {
         let mut entries = self.locked_live();
-        if kind != OneTimeKind::InviteText {
+        let pooled = kind.pool().is_some();
+        if !pooled {
             if !entries.has_room() {
                 return Err(full());
             }
@@ -236,7 +253,7 @@ impl OneTimeStore {
         Ok(Reservation {
             store: self,
             kind,
-            held: kind != OneTimeKind::InviteText,
+            held: !pooled,
         })
     }
 
@@ -266,8 +283,8 @@ impl OneTimeStore {
         let expires_at = (self.now)() + kind.ttl();
         let seq = self.seq();
         let mut entries = self.locked_live();
-        if kind == OneTimeKind::InviteText {
-            entries.make_room_for_invite();
+        if let Some(size) = kind.pool() {
+            entries.make_room_in_pool(kind, size);
         } else if !entries.has_room() {
             return Err(full());
         }
@@ -675,5 +692,46 @@ mod tests {
                 .put(OneTimeKind::InviteText, "zeropw://join#late".into())
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn env_files_stay_in_rust_for_ten_minutes_in_a_pool_of_their_own() {
+        let (store, clock) = store_with_clock();
+        let file = store
+            .put(
+                OneTimeKind::EnvImport,
+                "OPENAI_API_KEY=synthetic-1\n".into(),
+            )
+            .unwrap();
+        // never handed to the webview, and not redeemable as anything else
+        assert!(store.take_showable(&file).is_err());
+        assert!(store.peek_showable(&file).is_err());
+        assert!(store.peek_kind(&file, OneTimeKind::InviteText).is_err());
+        assert_eq!(
+            store
+                .peek_kind(&file, OneTimeKind::EnvImport)
+                .unwrap()
+                .expose(),
+            "OPENAI_API_KEY=synthetic-1\n"
+        );
+        clock.store(DEFAULT_TTL.as_secs() - 1, Ordering::SeqCst);
+        assert!(store.contains_kind(&file, OneTimeKind::EnvImport));
+        clock.store(DEFAULT_TTL.as_secs(), Ordering::SeqCst);
+        assert!(!store.contains_kind(&file, OneTimeKind::EnvImport));
+
+        let first = store
+            .put(OneTimeKind::EnvImport, "A=synthetic-first".into())
+            .unwrap();
+        for i in 0..MAX_ENV_IMPORTS {
+            store
+                .put(OneTimeKind::EnvImport, format!("A=synthetic-{i}").into())
+                .unwrap();
+        }
+        assert!(!store.contains_kind(&first, OneTimeKind::EnvImport));
+        assert_eq!(store.len(), MAX_ENV_IMPORTS);
+        let held: Vec<Reservation<'_>> = (0..MAX_ENTRIES)
+            .map(|_| store.reserve(OneTimeKind::CallerToken).unwrap())
+            .collect();
+        assert_eq!(held.len(), MAX_ENTRIES);
     }
 }

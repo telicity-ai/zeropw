@@ -12,7 +12,7 @@ ZeroPW synchronizes encrypted secrets between trusted devices. Agents use suppor
 | Use it from an agent | Agent usage, then install the skill |
 | Inject an existing `.env` into an application | Unsupported; first check the application's authentication path |
 
-There is no whole-file `.env` import or export. Store API keys in the vault and keep non-secret settings, such as service URLs, in application configuration. Applications that read a raw key from `process.env`, or database drivers that directly require a password, need a dedicated integration. The tested CLI paths are `zeropw-democli` and OpenSSH.
+`secret import` stores the keys of an existing `.env` file in the vault; there is no export, and values never go back into an environment. Keep non-secret settings, such as service URLs, in application configuration. Applications that read a raw key from `process.env`, or database drivers that directly require a password, need a dedicated integration. The tested CLI paths are `zeropw-democli` and OpenSSH.
 
 ## 1. Install and demo
 
@@ -75,6 +75,17 @@ zeropw-admin --state-dir "$ZPW_STATE" connection create-http \
   --secret-id service-key --target https://api.example.com \
   --auth bearer --methods GET --path-prefixes /v1
 ```
+
+To move the keys of an existing `.env` at once, preview and then import it. Only entries that look like keys (by name, or a URL with a password) are selected; `--include` and `--exclude` change that. An ambiguous line (an unquoted `$`, a `#` right after text, other backslash escapes) stops the import with its line number. The desktop app does the same when the file is dropped on its window.
+
+```sh
+zeropw-admin --state-dir "$ZPW_STATE" secret import --project team-app --environment dev \
+  --file /trusted/path/.env --dry-run
+zeropw-admin --state-dir "$ZPW_STATE" secret import --project team-app --environment dev \
+  --file /trusted/path/.env
+```
+
+The original file stays where it was. If an agent could read it there, the keys in it were already exposed: delete the file and, where needed, issue new keys at the service.
 
 After successful import, the administrator safely removes any temporary plaintext value file. Before connecting a real service, verify credential-query and reflection endpoints and how the gateway handles their responses. Creating a connection does not establish safe service compatibility. HTTP API requests do not require `--cli-program`; CLI execution requires a separately validated profile.
 

@@ -53,6 +53,29 @@ export interface InvitePreview { env_id: string; inviter: string; addresses: str
 export interface InviteListItem { invite_id: string; role: string; name: string; link: boolean; created_at: string | null; expires_at: string; status: 'pending' | 'used' | 'expired' | 'revoked'; used_at: string | null; used_by: string | null; revoked_at: string | null }
 export interface Member { fingerprint: string; name: string; role: string; status: string; owner: boolean }
 export interface Settings { gateway_port: number; team_listen: string | null }
+
+/** A `.env` file the core read for an import (picked or dropped). Its content stays in the core
+ *  behind `import_ref` for 10 minutes; only the file's base name comes here. */
+export interface EnvFileRef { import_ref: string; name: string }
+/** Why an entry is or is not selected by default (rust/src/envfile.rs `classify`). */
+export type ImportWhy = 'secret_name' | 'url_password' | 'plain_value' | 'short_value' | 'no_hint';
+/** Preview: create · new_version (with update) · unchanged · conflict (another value, no update) ·
+ *  id_taken (the key ID is used in another environment) · skip. Result: created · new_version ·
+ *  unchanged · skipped. */
+export type ImportAction = 'create' | 'new_version' | 'unchanged' | 'conflict' | 'id_taken' | 'skip' | 'created' | 'skipped';
+/** What importing an entry meets: no key with its ID, the same value, another value, or the ID
+ *  in another project or environment. */
+export type ImportState = 'new' | 'same' | 'different' | 'elsewhere';
+export interface ImportEntry {
+  line: number; name: string; id: string; kind: SecretKind; selected: boolean; why: ImportWhy; action: ImportAction; state: ImportState;
+  /** Selected although the default would skip it. */
+  forced: boolean;
+  /** A saved CLI connection whose profile carries this value: importing it is refused. */
+  blocked_by?: string;
+  moved_connections?: string[];
+}
+/** `secret import` as the core passes it on: names and IDs, never a value. */
+export interface ImportReport { project: string; environment: string; shared: boolean; dry_run: boolean; entries: ImportEntry[]; empty_lines: number[] }
 export interface NetInterface { name: string; ip: string; kind: 'vpn' | 'lan' | 'other' }
 
 /** Command name → [input, output]. */
@@ -145,7 +168,14 @@ export interface Commands {
   onetime_show: [{ ref: string }, { text: string }];
   onetime_copy: [{ ref: string }, { copied: boolean; clears_in_s: number }];
   onetime_discard: [{ ref: string }, void];
-  file_pick: [{ purpose: 'secret' | 'ssh_key' | 'ca' }, { file_token: string; name: string } | null];
+  file_pick: [{ purpose: 'secret' | 'ssh_key' | 'ca' | 'env_file' }, { file_token: string; name: string } | null];
+  /** Reads a file picked for `env_file` into the core. */
+  env_file_load: [{ file_token: string }, EnvFileRef];
+  /** `secret import --dry-run`. A file the parser refuses fails with `env_file_invalid` and a
+   *  detail of `line:reason` pairs (cut at 300 characters). */
+  secret_import_preview: [{ import_ref: string; project: string; environment: string; id_prefix?: string }, ImportReport];
+  /** Imports the `selected` names; the core forgets the file once this succeeds. */
+  secret_import: [{ import_ref: string; project: string; environment: string; id_prefix?: string; selected: string[]; update: boolean }, ImportReport];
 
   settings_get: [void, Settings];
   settings_set: [Settings, Settings];
@@ -160,4 +190,8 @@ export interface Events {
   'audit://records': { records: AuditRecord[] };
   'control://changed': Control;
   'serve://status': ServeStatus;
+  /** A file is dragged over the window, or no longer. */
+  'envfile://hover': { over: boolean };
+  /** A file dropped on the window: read for an import (`import_ref`, `name`), or why not. */
+  'envfile://dropped': { import_ref?: string; name?: string; error?: string };
 }

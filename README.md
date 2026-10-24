@@ -66,7 +66,7 @@ Concurrent administrator removals can leave different accepted membership facts.
 
 Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite --link` prints and which are the only kind of invitation the desktop app creates. A teammate who joins with the CLI needs 0.2.0: install it with Homebrew or the installer above, and upgrade an earlier Homebrew installation with `brew update` and `brew upgrade telicity-ai/zeropw/zeropw`. Teams that mix 0.1.0 and 0.2.0 devices have not been tested.
 
-ZeroPW does not import or export a complete `.env` file. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
+ZeroPW can import the keys of a `.env` file into the vault (`secret import`, or dropping the file on the desktop app; not in the 0.2.0 release) but never exports one or puts values into a process environment. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 
 ## Desktop app (preview)
 
