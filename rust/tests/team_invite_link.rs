@@ -1050,6 +1050,76 @@ fn cli_join_through_an_enveloped_link_records_the_joiner() {
     node.stop();
 }
 
+/// `project list` lists the team environments as well: a joined environment
+/// is kept only in the team mapping (never in `projects.json`), so without
+/// this the joining device could not find it by its local name. A state with
+/// no team environment prints the list exactly as before.
+#[test]
+fn project_list_names_shared_and_joined_environments() {
+    let tmp = TempDir::new().unwrap();
+    let inviter = cli_shared(&tmp.path().join("inviter"));
+    let ctx = Arc::new(
+        Context::open(&inviter.state, Config::default(), zeropw::clock::system()).unwrap(),
+    );
+    let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+    let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 8);
+    let node = sync::TeamSync::new(ctx.clone(), Arc::new(transport), device.clone());
+    let address = format!("127.0.0.1:{}", free_port());
+    node.start(Some(&address)).unwrap();
+    let linked = inviter.ok(&[
+        "team",
+        "invite",
+        "--env",
+        "demo/dev",
+        "--role",
+        "user",
+        "--name",
+        "bob",
+        "--address",
+        &address,
+        "--link",
+    ]);
+    let env_id = linked["env_id"].as_str().unwrap().to_owned();
+
+    let joiner = Admin::new(&tmp.path().join("joiner"));
+    joiner.ok(&["init"]);
+    joiner.ok(&["project", "create", "mine", "--environments", "dev"]);
+    let before = joiner.ok(&["project", "list"]);
+    assert_eq!(keys(&before), ["projects"]);
+    let joined = joiner
+        .cmd(&["--input-envelope", "team", "join", "--stdin"])
+        .stdin(json!({"invite": linked["link"]}).to_string().as_bytes())
+        .ok();
+    node.stop();
+    // The default local name comes from the inviter's fingerprint.
+    let fingerprint = device.fingerprint().unwrap();
+    let project = format!("team-{}", &fingerprint[..8]);
+    assert_eq!(joined["project"], project);
+    assert_eq!(joined["environment"], "shared");
+
+    let listed = joiner.ok(&["project", "list"]);
+    assert_eq!(listed["projects"], before["projects"]);
+    assert_eq!(
+        listed["team_environments"],
+        json!([{"project": project, "environment": "shared", "env_id": env_id}])
+    );
+    // The listed name is the one the team commands take.
+    let env = format!("{project}/shared");
+    let members = joiner.ok(&["team", "members", "--env", &env]);
+    assert_eq!(members["env_id"], env_id.as_str());
+    // Listing it does not make it a local project.
+    let local = std::fs::read_to_string(joiner.state.join("projects.json")).unwrap();
+    assert!(!local.contains(&project), "{local}");
+
+    // The device that shared it lists it too, beside its local project.
+    let shared = inviter.ok(&["project", "list"]);
+    assert_eq!(
+        shared["team_environments"],
+        json!([{"project": "demo", "environment": "dev", "env_id": env_id}])
+    );
+    assert_eq!(shared["projects"][0]["name"], "demo");
+}
+
 /// `team invite` without `--link` refuses every address its own `team join`
 /// would refuse, and a plain invite to a bracketed IPv6 address with a zone
 /// is created, previewed and joined over TCP.

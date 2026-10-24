@@ -28,6 +28,7 @@
     "allow-connection-list",
     "allow-connection-create-http",
     "allow-connection-create-ssh",
+    "allow-connection-set-cli-program",
     "allow-connection-disable",
     "allow-principal-list",
     "allow-principal-create",

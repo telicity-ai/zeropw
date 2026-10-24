@@ -24,7 +24,7 @@ canvas.field.glow { image-rendering: auto; opacity: .55; }
 .status-pill { display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.02); font-size: var(--fs-sm); color: var(--fg-2); white-space: nowrap; }
 .status-pill .dot { width: 6px; height: 6px; border-radius: 1px; background: var(--fg-4); flex: none; }
 .status-pill.live .dot { background: var(--azure); box-shadow: 0 0 8px var(--azure); animation: blink 2.4s var(--ease-in-out) infinite; }
-.status-pill.stopped .dot { background: var(--fg-3); }
+.status-pill.stopped .dot, .status-pill.held .dot { background: var(--fg-3); }
 .status-pill .mono { font: 500 11px/1 var(--mono); color: var(--fg-3); }
 @keyframes blink { 50% { opacity: .35; } }
 .icon-tb { width: 26px; height: 26px; border-radius: 999px; border: 1px solid var(--line); background: transparent; display: grid; place-items: center; cursor: pointer; color: var(--fg-3); }

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, defaultListenIp, interfaceLabel, envPairs, inviteFraction, msLeft, parseListen, parsePort, splitEnv } from '../lib/dash';
+import { DEFAULT_TEAM_PORT, defaultListenIp, envKey, interfaceLabel, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
@@ -30,7 +30,9 @@ const INVITE_STATUS: Record<string, CopyKey> = { pending: 'st.pending', used: 's
 const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r === 'user' ? t('inv.role.user') : r);
 
 /** Team: share an environment, its members and invite links, and joining another device's team.
- *  Names, fingerprints and addresses written by other devices are rendered as text. */
+ *  The environments are the local ones and the team ones, including those joined from another
+ *  device, which are in no project. Names, fingerprints and addresses written by other devices
+ *  are rendered as text. */
 export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   intent?: Intent; onIntent(): void; incoming: Incoming | null; onIncomingTaken(): void;
 }) {
@@ -40,7 +42,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const reload = () => setN((x) => x + 1);
   const base = useLoad(async () => {
     const [p, s, i] = await Promise.all([call('project_list'), call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { pairs: envPairs(p.projects), settings: s, interfaces: i };
+    return { pairs: teamEnvPairs(p), settings: s, interfaces: i };
   }, [tick, n]);
   const [env, setEnv] = useState('');
   const pairs = base.data?.pairs ?? [];
@@ -175,7 +177,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           toast(t('toast.team.removed'), 'warn'); sheets.close(); reload();
         }} />
       <JoinSheet key={sheets.key('join')} open={sheets.isOpen('join')} incoming={sheets.data('join')?.incoming ?? null}
-        onClose={sheets.close} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
+        onClose={sheets.close} onEnv={setEnv} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
     </>
   );
 }
@@ -412,8 +414,8 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
  *  is untrusted and shown as text; nothing joins until the button is pressed. After joining, this
  *  device syncs only with other-device access on, so the sheet offers to turn it on right there.
  *  The pasted link leaves the sheet's state when the join is tried and when the sheet closes. */
-function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
-  open: boolean; incoming: Incoming | null; onClose(): void; onChanged(): void; onJoined(): void;
+function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
+  open: boolean; incoming: Incoming | null; onClose(): void; onEnv(key: string): void; onChanged(): void; onJoined(): void;
 }) {
   const { desktop, toast, field, announce } = useApp();
   const [text, setText] = useState('');
@@ -491,8 +493,10 @@ function JoinSheet({ open, incoming, onClose, onChanged, onJoined }: {
     seq.current++;
     setText('');   // the core holds the invite behind the reference; the link is not needed any more
     try {
-      await call('team_join', { ref: h.ref, project: parsed.project, environment: parsed.environment });
+      const out = await call('team_join', { ref: h.ref, project: parsed.project, environment: parsed.environment });
       heldRef.current = null; setHeld(null);
+      // the page shows the environment just joined
+      onEnv(envKey(String(out.project), String(out.environment)));
       field.ripple(0.1);
       // sync needs other-device access on this device (no team listener, no team sync)
       const [s, i] = await Promise.all([

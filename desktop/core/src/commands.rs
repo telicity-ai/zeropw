@@ -25,7 +25,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -340,8 +340,21 @@ pub struct SshConnectionIn {
     pub port: u16,
     pub username: String,
     pub host_keys: Vec<String>,
+    /// The ssh the agent's `exec` runs. Required: a connection without one is refused with
+    /// `cli_not_supported` and never reaches the server.
+    pub cli_program: String,
     #[serde(default)]
     pub description: Option<String>,
+    pub admin_passphrase: SecretString,
+}
+
+/// Gives an SSH connection made without an ssh (before the app sent one) the ssh its agents run.
+/// Which connections can take one is the CLI's rule (`connection update --cli-program`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliProgramIn {
+    pub id: String,
+    pub cli_program: String,
     pub admin_passphrase: SecretString,
 }
 
@@ -695,6 +708,8 @@ pub struct CoreConfig {
     pub join_timeout: Duration,
     pub serve_start_timeout: Duration,
     pub serve_stop_grace: Duration,
+    /// How often a running sidecar is checked for having exited (`serve://status`).
+    pub serve_watch_interval: Duration,
     pub clipboard_clear_after: Duration,
     pub terminal_program: TerminalProgram,
     pub terminal_ring_bytes: usize,
@@ -708,6 +723,7 @@ impl CoreConfig {
             join_timeout: JOIN_TIMEOUT,
             serve_start_timeout: serve::START_TIMEOUT,
             serve_stop_grace: serve::STOP_GRACE,
+            serve_watch_interval: serve::WATCH_INTERVAL,
             clipboard_clear_after: CLIPBOARD_CLEAR_AFTER,
             terminal_program: TerminalProgram::LoginShell,
             terminal_ring_bytes: RING_BYTES,
@@ -732,7 +748,9 @@ pub struct Core {
     paths: AppPaths,
     runner: AdminRunner,
     join_timeout: Duration,
-    serve: ServeSupervisor,
+    serve: Arc<ServeSupervisor>,
+    /// The serve status last sent to the window (`serve://status`).
+    serve_shown: Arc<Mutex<ServeStatus>>,
     store: OneTimeStore,
     files: FileTokens,
     terminals: TerminalManager,
@@ -747,12 +765,23 @@ pub struct Core {
 impl Core {
     pub fn new(config: CoreConfig, events: Arc<dyn EventSink>) -> Self {
         let paths = config.paths;
+        let serve = Arc::new(
+            ServeSupervisor::new(&paths)
+                .with_timeouts(config.serve_start_timeout, config.serve_stop_grace),
+        );
+        let serve_shown = Arc::new(Mutex::new(ServeStatus::stopped()));
+        watch_serve(
+            Arc::downgrade(&serve),
+            serve_shown.clone(),
+            events.clone(),
+            config.serve_watch_interval,
+        );
         Self {
             runner: AdminRunner::new(&paths.bin_dir, &paths.state_dir())
                 .with_default_timeout(config.admin_timeout),
             join_timeout: config.join_timeout,
-            serve: ServeSupervisor::new(&paths)
-                .with_timeouts(config.serve_start_timeout, config.serve_stop_grace),
+            serve,
+            serve_shown,
             store: OneTimeStore::new(),
             files: FileTokens::new(),
             terminals: TerminalManager::with_ring_bytes(
@@ -780,8 +809,13 @@ impl Core {
     /// App start: adopt a serve sidecar left running by an earlier app run.
     pub fn startup(&self) -> ServeStatus {
         let status = self.serve.attach();
-        self.events.emit(CoreEvent::ServeStatus(status.clone()));
+        self.show_serve(status.clone());
         status
+    }
+
+    /// Send the window a serve status (`serve://status`) and remember it for the watcher.
+    fn show_serve(&self, status: ServeStatus) {
+        show_serve(&self.serve_shown, self.events.as_ref(), status, true);
     }
 
     /// App quit: clear the clipboard if it still holds a value copied in the last 60 s, forget
@@ -791,7 +825,7 @@ impl Core {
         self.store.clear();
         self.terminals.close_all();
         let status = self.serve.stop();
-        self.events.emit(CoreEvent::ServeStatus(status));
+        self.show_serve(status);
     }
 
     /// The early run of every pending 60 s clear: the clipboard is emptied if it still holds
@@ -921,13 +955,13 @@ impl Core {
             port: settings.gateway_port,
             team_listen: settings.team_listen,
         })?;
-        self.events.emit(CoreEvent::ServeStatus(status.clone()));
+        self.show_serve(status.clone());
         Ok(status)
     }
 
     pub fn serve_stop(&self) -> ServeStatus {
         let status = self.serve.stop();
-        self.events.emit(CoreEvent::ServeStatus(status.clone()));
+        self.show_serve(status.clone());
         status
     }
 
@@ -1134,6 +1168,9 @@ impl Core {
         if input.host_keys.is_empty() {
             return Err(AppError::invalid_input("host_key_required"));
         }
+        if input.cli_program.is_empty() {
+            return Err(AppError::invalid_input("cli_program_required"));
+        }
         let mut args = AdminArgs::command(&["connection", "create-ssh"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1147,7 +1184,27 @@ impl Core {
         for key in &input.host_keys {
             args = args.opt("host-key", key)?;
         }
-        args = args.opt_nonempty("description", input.description.as_deref())?;
+        args = args
+            .opt("cli-program", &input.cli_program)?
+            .opt_nonempty("description", input.description.as_deref())?;
+        self.run(
+            args,
+            Envelope::new().admin_passphrase(&input.admin_passphrase),
+        )
+    }
+
+    /// `connection update --cli-program`: the CLI refuses a connection that is not SSH
+    /// (`cli_requires_ssh`), is disabled (`connection_disabled`) or already has one
+    /// (`cli_already_set`). A new program widens the connection, so its grants go stale.
+    pub fn connection_set_cli_program(&self, input: CliProgramIn) -> Result<Value, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        if input.cli_program.is_empty() {
+            return Err(AppError::invalid_input("cli_program_required"));
+        }
+        let args = AdminArgs::command(&["connection", "update"])
+            .require_admin()
+            .opt("id", &input.id)?
+            .opt("cli-program", &input.cli_program)?;
         self.run(
             args,
             Envelope::new().admin_passphrase(&input.admin_passphrase),
@@ -1884,6 +1941,47 @@ fn same_passphrase(a: &str, b: &str) -> bool {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Send a serve status to the window and remember it as `shown`. A start, stop or startup
+/// always sends its result (`always`); the watcher sends only what differs from what the
+/// window was last told.
+fn show_serve(
+    shown: &Mutex<ServeStatus>,
+    events: &dyn EventSink,
+    status: ServeStatus,
+    always: bool,
+) {
+    let mut last = lock(shown);
+    if always || *last != status {
+        *last = status.clone();
+        events.emit(CoreEvent::ServeStatus(status));
+    }
+}
+
+/// The sidecar watch (docs/desktop-app.md §4.2): every `every`, look at the sidecar without
+/// waiting for a start or stop in progress, and tell the window when it no longer matches
+/// what the window was last told, so a sidecar that exited on its own (or was killed) shows
+/// as stopped without waiting for the window to ask. Comparing under the supervisor's lock
+/// means a stale look never overrides a newer start or stop; a start that reports a sidecar
+/// which died right after is corrected on the next look. Ends once the core is gone.
+fn watch_serve(
+    serve: Weak<ServeSupervisor>,
+    shown: Arc<Mutex<ServeStatus>>,
+    events: Arc<dyn EventSink>,
+    every: Duration,
+) {
+    let _ = thread::Builder::new()
+        .name("serve-watch".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(every);
+                let Some(serve) = serve.upgrade() else {
+                    return;
+                };
+                serve.watch(|status| show_serve(&shown, events.as_ref(), status, false));
+            }
+        });
 }
 
 fn digest(text: &str) -> [u8; 32] {

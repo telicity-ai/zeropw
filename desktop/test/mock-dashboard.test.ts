@@ -4,7 +4,9 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListe
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { grantState, liveGrants, pendingApprovals, runtimeStopsAll } from '../src/lib/dash';
+import { declareOutcome, grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
+import { watchRecords } from '../src/dashboard/watch';
+import type { Control } from '../src/ipc/contract';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
@@ -122,11 +124,63 @@ describe('connections', () => {
   it('creates an SSH connection only with an Ed25519 host key and an SSH key', async () => {
     ready();
     await call('secret_put', { id: 'git', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
-    const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', admin_passphrase: PASS };
+    const ssh = { id: 'git', project: 'demo', environment: 'dev', service: 'git', secret_id: 'git', host: 'git.example.com', port: 22, username: 'git', cli_program: SSH_PROGRAM, admin_passphrase: PASS };
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB'] }))).reason).toBe('unsupported_host_key');
     expect((await rejection(call('connection_create_ssh', { ...ssh, host_keys: [] }))).reason).toBe('host_key_required');
     const c = await call('connection_create_ssh', { ...ssh, host_keys: [HOST_KEY] });
     expect(c.kind).toBe('ssh');
+  });
+
+  // desktop E2E finding F8: the agent's exec refuses a connection without its ssh (cli_not_supported)
+  it('creates an SSH connection the agent can run, with the ssh the form sends', async () => {
+    ready();
+    await call('secret_put', { id: 'box', kind: 'ssh_private_key', project: 'demo', environment: 'dev', source: { generate_ed25519: true } });
+    const ssh = { id: 'box', project: 'demo', environment: 'dev', service: 'box', secret_id: 'box', host: '10.0.0.5', port: 22, username: 'deploy', host_keys: [HOST_KEY], admin_passphrase: PASS };
+    // the contract requires the field; the core does not even read a payload without it
+    expect((await rejection(call('connection_create_ssh', ssh as typeof ssh & { cli_program: string }))).reason).toBe('invalid_payload');
+    expect((await rejection(call('connection_create_ssh', { ...ssh, cli_program: '' }))).reason).toBe('cli_program_required');
+    expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
+
+    const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
+    expect(c.cli).toEqual({ program: '/usr/bin/ssh', kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
+    const listed = (await call('connection_list')).connections.find((x) => x.id === 'box');
+    expect(listed?.cli).not.toBeNull();
+    expect((listed?.cli as { program?: string } | null)?.program).toBe(SSH_PROGRAM);
+  });
+
+  // F8 repair: an SSH connection made before the fix gets its ssh in place (rust/src/admin_cli.rs
+  // update_connection_cli); only a missing one is filled, and the connection's grants go stale
+  it('gives an SSH connection without its ssh one, once, and its grants must be given again', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, sshWithoutCli: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const fill = { id: 'deploy-ssh', cli_program: SSH_PROGRAM, admin_passphrase: PASS };
+    const before = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(before?.cli).toBeNull();
+    const grant = (await call('grant_list', {})).grants.find((g) => g.connection === 'deploy-ssh');
+    expect(grant?.status).toBe('active');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
+    expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
+    // the core's order: no passphrase, then an empty path, and only then the CLI's passphrase check
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }))).reason).toBe('passphrase_missing');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_required');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
+    expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);
+
+    const out = await call('connection_set_cli_program', fill);
+    expect(out).toMatchObject({ id: 'deploy-ssh', widened: true, policy_version: 2 });
+    const after = (await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh');
+    expect(after?.cli).toEqual({ program: SSH_PROGRAM, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
+    expect(after?.ssh_target).toEqual(before?.ssh_target);
+    const stale = (await call('grant_list', {})).grants.find((g) => g.id === grant?.id);
+    expect(stale?.status).toBe('stale');
+    expect(grantState(stale!, Date.now())).not.toBe('live');
+
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/false' }))).reason).toBe('cli_already_set');
+    await call('connection_disable', { id: 'deploy-ssh' });
+    expect((await rejection(call('connection_set_cli_program', fill))).reason).toBe('connection_disabled');
   });
 });
 
@@ -272,9 +326,29 @@ describe('team', () => {
     const link = 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(4);
     const { ref, preview } = await call('team_invite_preview', { text: link });
     expect((await rejection(call('onetime_show', { ref }))).reason).toBe('onetime_ref_unknown');   // a pasted invite stays in the core
+    const before = await call('project_list');
+    expect(before.team_environments).toBeUndefined();   // no team environment: the list as before
     const joined = await call('team_join', { ref, project: 'team-x', environment: 'shared' });
     expect(joined.inviter_fingerprint).toBe(preview.inviter);
     expect((await call('team_members', { env: 'team-x/shared' })).members.map((m) => m.owner)).toEqual([true, false]);
+    // as `team join` does, the environment is mapped, not made a project; `project list` names it
+    // so the Team page lists it
+    const listed = await call('project_list');
+    expect(listed.projects).toEqual(before.projects);
+    expect(listed.team_environments).toEqual([{ project: 'team-x', environment: 'shared', env_id: preview.env_id }]);
+    expect(teamEnvPairs(listed).map((p) => p.key)).toContain('team-x/shared');
+    // keys go into it through the team, as the CLI's shared-environment branch does
+    await call('secret_put', { id: 'team-key', kind: 'api_key', project: 'team-x', environment: 'shared', source: { typed: 'synthetic-team-value' } });
+    expect((await rejection(call('secret_put', { id: 'k2', kind: 'api_key', project: 'team-y', environment: 'shared', source: { typed: 'v' } }))).reason).toBe('project_unknown');
+  });
+
+  it('lists an environment shared from here once, among the projects and as a team environment', async () => {
+    ready();
+    await call('team_share', { project: 'demo', environment: 'dev', admin_passphrase: PASS });
+    const listed = await call('project_list');
+    expect(listed.team_environments).toHaveLength(1);
+    expect(listed.team_environments?.[0]).toMatchObject({ project: 'demo', environment: 'dev' });
+    expect(teamEnvPairs(listed).filter((p) => p.key === 'demo/dev')).toHaveLength(1);
   });
 });
 
@@ -361,7 +435,10 @@ describe('versions as the CLI prints them', () => {
     };
     expect((await call('connection_create_http', http)).secret_id).toBe('database-url');
     expect((await rejection(call('connection_create_http', { ...http, id: 'x2', environment: 'dev' }))).reason).toBe('secret_scope_mismatch');
-    const ssh = { id: 'git2', project: 'demo', environment: 'staging', service: 'git2', secret_id: 'database-url', host: 'git.example.com', port: 22, username: 'git', host_keys: [HOST_KEY], admin_passphrase: PASS };
+    const ssh = {
+      id: 'git2', project: 'demo', environment: 'staging', service: 'git2', secret_id: 'database-url', host: 'git.example.com', port: 22, username: 'git',
+      host_keys: [HOST_KEY], cli_program: SSH_PROGRAM, admin_passphrase: PASS,
+    };
     expect((await rejection(call('connection_create_ssh', ssh))).reason).toBe('secret_kind_mismatch');
   });
 });
@@ -415,6 +492,39 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     expect(runtimeStopsAll(principals, 'user-agent')).toBe(true);
     await call('incident_declare', { scope: 'runtime', runtime: 'user-agent' });
     expect((await call('control_get')).stopped).toBe(true);
+  });
+
+  it('takes in a declaration that is not wider than the open incident, and widens for a wider one', async () => {
+    ready();
+    await call('principal_create', { id: 'agent-2', runtime: 'user-agent' });
+    await call('principal_create', { id: 'agent-3', runtime: 'other-user' });
+    const first = await call('incident_declare', { scope: 'runtime', runtime: 'other-user' });
+    expect(first.existing).toBeUndefined();
+    // the core returns the open incident and contains no one (rust/src/incident.rs `open_incident`)
+    const same = await call('incident_declare', { scope: 'principal', principal: 'agent-2' });
+    expect([same.id, same.scope, same.existing, same.widened]).toEqual([first.id, 'runtime', true, false]);
+    expect(declareOutcome(same)).toBe('unchanged');
+    const other = await call('incident_declare', { scope: 'runtime', runtime: 'user-agent' });
+    expect([other.id, other.existing, other.widened]).toEqual([first.id, true, false]);
+    expect((await call('principal_list')).principals.find((p) => p.id === 'agent-2')?.status).toBe('active');
+    expect((await call('control_get')).stopped).toBe(false);
+    const wider = await call('incident_declare', { scope: 'all', admin_passphrase: PASS });
+    expect([wider.id, wider.scope, wider.existing, wider.widened]).toEqual([first.id, 'all', true, true]);
+    expect(declareOutcome(wider)).toBe('widened');
+    expect((await call('principal_list')).principals.every((p) => p.status === 'disabled')).toBe(true);
+    expect((await call('incident_list')).incidents.filter((i) => i.status === 'open').map((i) => i.id)).toEqual([first.id]);
+    expect(await call('control_get')).toMatchObject({ stopped: true, incident_open: true });
+  });
+
+  it('keeps an open incident through a restore of an older backup (rust/src/vault.rs restore)', async () => {
+    ready();
+    await call('backup_create');
+    await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    await call('backup_restore', { admin_passphrase: PASS });
+    await call('restore_ack', { admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(true);
+    const e = await rejection(call('resume', { admin_passphrase: PASS }));
+    expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
   });
 
   it('keeps a global stop after acknowledging a restore', async () => {
@@ -584,5 +694,50 @@ describe('relay start', () => {
     expect([e.error, e.reason, e.detail]).toEqual(['Unavailable', 'serve_exited', undefined]);
     expect(relayError(e.reason, e.detail).key).toBe('relay.err.exited');
     expect((await call('serve_start')).running).toBe(true);
+  });
+});
+
+describe('state changes the window did not make', () => {
+  // The relay opens an incident and stops everything on its own (docs/compromise-response.md),
+  // and commands run in the app's terminal; both leave records, which the dashboard reads.
+  it('reads the stop, incident and restore state again when records come, and reports a change', async () => {
+    const b = ready();
+    let current = await call('control_get');
+    const records: number[] = [], changes: Control[] = [];
+    const w = watchRecords({ records: (n) => records.push(n), control: (c) => { changes.push(c); current = c; } }, () => current);
+    const reads = () => b.calls().filter((n) => n === 'control_get').length;
+    await w.poll();                                                   // marks where the log ends
+    expect([records, changes]).toEqual([[], []]);
+
+    await call('incident_declare', { scope: 'all', admin_passphrase: PASS });
+    await w.poll();
+    expect(records).toHaveLength(1);
+    expect(changes).toEqual([{ stopped: true, restore_pending: false, incident_open: true }]);
+
+    // no new records: the state is not read again
+    const n = reads();
+    await w.poll();
+    expect(reads()).toBe(n);
+    // new records that change nothing are not a change
+    await call('project_create', { name: 'other', environments: ['dev'] });
+    await w.poll();
+    expect(records).toHaveLength(2);
+    expect(changes).toHaveLength(1);
+
+    // a state read that fails is tried again on the next poll, without new records
+    await call('backup_create');
+    await call('backup_restore', { admin_passphrase: PASS });
+    b.failNext('control_get', { error: 'Unavailable', reason: 'admin_unavailable' });
+    await w.poll();
+    expect(records).toHaveLength(3);
+    expect(changes).toHaveLength(1);
+    await w.poll();
+    expect(changes[1]).toMatchObject({ restore_pending: true });
+
+    // stopped: nothing more is reported
+    w.stop();
+    await call('project_create', { name: 'third', environments: ['dev'] });
+    await w.poll();
+    expect(records).toHaveLength(3);
   });
 });

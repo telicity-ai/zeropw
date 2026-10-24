@@ -86,6 +86,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 시작: `zeropw-admin --state-dir D serve --listen 127.0.0.1:<port> [--team-listen IP:PORT] --quiet`, 환경은 4.1과 같다. 첫 stdout 줄의 JSON에서 `url`을 읽고 `/healthz`가 200을 줄 때까지 기다린다(60초).
 - 단일 인스턴스: 앱 데이터 폴더의 `serve.json`(pid, url, 시작 시각). 다시 켤 때는 pid가 살아 있고 `/healthz`와 `Server: zeropw-prototype` 헤더가 맞을 때만 이어 붙는다.
 - 중지: SIGTERM, 최대 25초 기다린 뒤에만 SIGKILL.
+- 감시: 코어는 2초마다 사이드카가 아직 있는지 본다. 앱이 띄운 사이드카는 자식 프로세스가 끝났는지로, 이어 붙은 사이드카는 pid로 안다. 시작이나 중지가 진행 중이면 그 차례는 건너뛴다. 사이드카가 스스로 끝났거나 누가 끝냈으면 창이 묻기 전에 `serve://status`로 꺼졌다고 알린다. 창에 마지막으로 알린 상태와 다를 때만 보낸다. 끝난 사이드카를 다시 켜지는 않는다.
 - 시작하다 사이드카가 끝나면 로그에 남은 CLI 오류를 돌려준다. 주소를 열지 못한 실패는 어느 설정(`gateway_port`, `team_listen`) 때문인지 알린다(§5).
 
 ### 4.3 일회용 보관소 (OneTimeStore)
@@ -131,12 +132,13 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `vault_init` | `{admin_passphrase, recovery: {ref}\|{typed}}` | `{state_dir, kms_key_id}` | `init` 후 `serve` 시작 | 두 비밀번호 |
 | `serve_start` / `serve_stop` / `serve_status` | | `ServeStatus`. 시작 실패 이유는 표 아래 | §4.2 | |
 | `control_get` / `stop_all` / `resume` | | `{stopped, restore_pending, incident_open}` | `status`, `stop-all`, `resume` | `resume`은 재인증 |
-| `project_list` / `project_create` | `{name, environments[]}` | 프로젝트 | `project …` | |
+| `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
 | `secret_put` | `{id, kind, project, environment, source}` | 버전 정보 | `secret put --stdin` | |
 | `secret_reveal` | `{id, version?, admin_passphrase}` | `{ref, id, version}` | `secret reveal` | 매번 |
 | `secret_retire` / `secret_revoke` | `{id, version}` | CLI 출력 | `secret retire/revoke` | |
 | `connection_list` / `connection_create_http` / `connection_create_ssh` / `connection_disable` | 연결 필드 | CLI 출력 | `connection …` | 만들기 재인증 |
+| `connection_set_cli_program` | `{id, cli_program, admin_passphrase}` | CLI 출력 | `connection update --cli-program` | 재인증 |
 | `principal_list` / `principal_create` / `principal_disable` | `{id, runtime}` | 생성 시 `{id, runtime, token_ref}` | `principal …` | |
 | `grant_list` / `grant_create` / `grant_revoke` | `{principal, connection, ttl, max_uses?}` | 권한 정보 | `grant …` | 만들기 재인증 |
 | `terminal_open` / `terminal_write` / `terminal_resize` / `terminal_close` | `{token_ref, as_user?}` 등 | `{terminal_id, suggestions[]}`, 출력은 채널. `terminal_write`는 `terminal_busy`일 수 있고 `terminal_close`는 그 터미널의 프로세스를 멈춘 뒤 돌아온다 | §4.4 | |
@@ -179,7 +181,11 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 `secret_reveal`·`secret_retire`·`secret_revoke`의 `version`은 CLI가 `secret_list`·`secret_versions`에 출력한 값 그대로다. CLI는 버전을 JSON 숫자로 출력하지만 코어는 숫자와 문자열(영숫자, `-`, `_`, 64자 이하)을 모두 받아 바꾸지 않고 `--version=<값>`으로 넘긴다. 받아들일지는 CLI가 정한다.
 
-코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 `audit_tail`을 주기적으로 다시 불러 새 기록을 안다.
+`connection_create_ssh`는 에이전트의 `exec`가 실행할 ssh의 경로 `cli_program`을 꼭 받아 `--cli-program`으로 넘긴다. ssh가 없는 SSH 연결은 `exec`가 `cli_not_supported`로 거절해 서버에 닿지 못하므로(2026-10-22 데스크톱 E2E의 F8), 코어는 이 필드가 빠진 요청을 `invalid_payload`로, 빈 값을 `cli_program_required`로 CLI를 부르기 전에 막는다. 연결 화면은 시스템 ssh(`/usr/bin/ssh`)를 미리 채워 두고 "더 보기"에서 바꾸게 한다. HTTP 연결 화면의 직접 지정처럼 `/`로 시작하는 전체 경로만 받는다. `desktop/core/tests/e2e_real_admin.rs`가 이렇게 만든 연결로 실제 `serve`와 `zeropw-agent exec`가 시험용 sshd에서 명령을 실행하는지 본다.
+
+이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결에는 ssh가 없다. `connection_set_cli_program`은 그런 연결에 같은 이름 그대로 ssh를 넣는다(`connection update --cli-program`). 코어는 빈 값을 `cli_program_required`로 막고, 어느 연결에 넣을 수 있는지는 CLI가 정한다. SSH가 아니면 `cli_requires_ssh`, 끈 연결이면 `connection_disabled`, 이미 ssh가 있으면 `cli_already_set`이다. 넣은 ssh는 바꿀 수 없고, 바꾸려면 연결을 끄고 새로 만든다. ssh를 넣으면 연결이 넓어진 것으로 보아 그 연결에 준 권한은 모두 `stale`이 되고, 에이전트에게 권한을 다시 줘야 한다. 연결 화면은 ssh가 없는 SSH 연결의 줄에 "에이전트가 아직 못 써요"와 "ssh 경로 넣기" 버튼을 보인다. 확인 시트는 `/usr/bin/ssh`를 미리 채우고, 권한을 다시 줘야 한다는 파랑 알림과 경로를 나중에 바꿀 수 없다는 주황 알림을 단 뒤 관리 비밀번호를 받는다. 팀으로 공유한 환경에서는 CLI가 `connection.update` 커밋을 만들어 다른 기기에도 퍼진다([team-sync.md](team-sync.md) §12). `e2e_real_admin.rs`가 ssh 없이 만든 연결에서 `exec`가 `cli_not_supported`로 거절되고, ssh를 넣은 뒤 예전 권한은 `grant_stale`로 거절되며, 권한을 다시 주면 시험용 sshd에서 명령이 도는지 본다.
+
+코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
 
 `recover`는 복구 코드를 두 가지 형태로 시도할 수 있다. 앱이 만든 보관함은 표준형(`XXXX-XXXX-…`, 대문자 base32)을 저장했고, `zeropw-admin init`에 직접 넣은 보관함은 입력한 그대로를 저장했기 때문이다. 입력이 복구 코드 모양(하이픈과 공백을 빼면 base32 24자)인데 표준형과 다르면 표준형으로 먼저 시도하고, CLI가 `AuthFailed`로 답할 때만 입력 그대로 한 번 더 시도한다. 그 밖에는 한 번만 부른다. 그래서 요청 한 번에 CLI 호출은 최대 두 번이고, 틀린 코드는 `auth_failed` 감사 기록을 최대 두 줄 남긴다. `serve`가 돌고 있었다면 앱은 복구하는 동안 `serve`를 멈추고, 복구가 성공하든 실패하든 끝나면 다시 시작한다. 그사이 앱을 켤 때의 자동 시작이나 중계기 버튼이 `serve`를 시작하려 하면, 복구가 끝날 때까지 기다린다. `serve`는 KMS 키를 메모리에 들고 있어서, 계속 돌면 복구가 은퇴시킨 키를 그대로 쓴다. 그러면 새 키로 다시 감싼 팀 키를 읽지 못하고, 새로 받는 팀 키를 옛 키로 감싸 저장할 수 있다([#59](https://github.com/telicity-ai/zeropw/issues/59)). `serve`가 다시 시작하지 못해도 `recover`는 복구의 결과를 그대로 돌려주고, `serve`는 멈춘 상태로 보여 다시 시작할 수 있다.
 
@@ -194,10 +200,12 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | 연결 | API·SSH 연결 만들기, 범위, 끄기 | `connection_*`, `file_pick` |
 | 에이전트 | 에이전트와 권한, 앱 안 터미널, 승인 대기 | `principal_*`, `grant_*`, `terminal_*`, `approvals_*` |
 | 기록 | 사용 기록, 알림, 사고 | `audit_tail`, `alerts`, `incident_*` |
-| 팀 | 공유, 팀원, 초대 링크, 합류 | `team_*` |
+| 팀 | 공유, 팀원, 초대 링크, 합류. 환경 목록에는 이 기기에서 공유한 환경과 다른 기기에서 합류한 환경(`project_list`의 `team_environments`)도 나온다 | `team_*`, `project_list` |
 | 설정 | 중계기 포트, 이 기기 주소, 백업·복원·복구 | `settings_*`, `net_interfaces`, `backup_*`, `restore_ack`, `recover` |
 
 환경변수는 `env_var` 종류의 비밀이다. 값은 중계기가 인증에 쓸 뿐 어느 프로세스의 환경변수로도 들어가지 않는다는 점을 키 화면에서 한 줄로 알린다.
+
+사고가 열려 있으면 `incident declare`는 더 넓은 범위일 때만 그 사고를 넓힌다. 그 밖의 선언은 다른 에이전트나 실행 계정을 골라도 아무도 막지 않고 열린 사고를 `existing: true`, `widened: false`와 함께 그대로 돌려준다. 그래서 기록 화면의 사고 선언 시트는 열린 사고보다 넓은 범위만 보여 주고 주 버튼을 범위 넓히기로 쓰며, 전체 범위의 사고가 열려 있으면 더 넓힐 수 없다고만 쓴다. 시트를 연 뒤 다른 곳에서 사고가 열려 넓히지 못한 선언은 성공 알림 없이 아무 에이전트도 막지 않았다고 쓰고, 에이전트 하나를 막으려면 에이전트 화면에서 끄라며 그 화면으로 가는 버튼을 단다. 고른 범위가 그 사고 때문에 빠지면 다시 고를 때까지 선언하지 않는다.
 
 ## 7. 온보딩 흐름
 
@@ -262,5 +270,6 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 클립보드 기록에서 빼 달라는 표시를 따르지 않는 도구는 복사한 값을 남길 수 있고, macOS 유니버설 클립보드는 그 값을 다른 Apple 기기로 보낼 수 있다(§8.7).
 - Linux에서 `zeropw://` 링크는 deb·AppImage로 설치해 `.desktop` 등록이 된 뒤에만 앱으로 온다. 실행 중에 스킴을 등록하지 않는다.
 - 웹뷰에서 보낸 비밀번호는 Tauri IPC 버퍼에 사본이 남을 수 있다. 관리 비밀번호와 직접 정한 복구 코드는 강도 확인 때문에 입력이 바뀔 때마다 그때까지의 값이 넘어가므로 사본이 여럿일 수 있다(§7). 코어로 넘어온 뒤에는 `Zeroizing`으로 지운다.
+- 이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결은 ssh가 없어서, 연결 화면의 "ssh 경로 넣기"로 ssh를 넣기 전까지 에이전트가 쓸 수 없다(§5). ssh를 넣으면 그 연결에 준 권한은 다시 줘야 한다. 넣은 ssh는 바꿀 수 없어서, 다른 ssh를 쓰려면 연결을 끄고 새 이름으로 다시 만들어야 한다. 끈 연결의 이름은 다시 쓸 수 없다.
 - 관리 비밀번호를 바꾸는 기능은 아직 없다. 사고 종료 절차가 요구하는 비밀번호 교체 단계는 화면에서 수동 단계로 안내한다.
 - 앱은 초대를 링크(`zeropw://join#…`)로만 만든다. 0.1.0 CLI는 링크를 읽지 못하므로 CLI로 합류하는 팀원은 0.2.0을 써야 한다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.

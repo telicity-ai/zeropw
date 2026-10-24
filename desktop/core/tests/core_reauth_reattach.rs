@@ -140,6 +140,7 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
         port: 22,
         username: "deploy".into(),
         host_keys: vec!["ssh-ed25519 AAAAsynthetic".into()],
+        cli_program: "/usr/bin/ssh".into(),
         description: None,
         admin_passphrase: pass(),
     })

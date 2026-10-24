@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Incident, Principal } from '../ipc/contract';
-import { isPlainText, recordFields, runtimeStopsAll, valueText } from '../lib/dash';
+import { declarableScopes, declareOutcome, isPlainText, openIncident, recordFields, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
@@ -14,7 +14,7 @@ import { ListCard, metaLine, Row, Tag } from './parts';
 import { Sheet } from './Sheet';
 
 type Tab = 'audit' | 'alerts' | 'incidents';
-type Scope = 'principal' | 'runtime' | 'all';
+type Scope = IncidentScope;
 type LogSheet = { kind: 'declare' } | { kind: 'close'; incident: Incident };
 const LIMIT = 200;
 const SCOPE_LABEL: Record<Scope, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
@@ -31,7 +31,7 @@ function RecordRow({ rec, titleKey, warn }: { rec: Record<string, unknown>; titl
 
 /** Records: the usage log, alerts and incidents (declare and close). */
 export function LogsPage() {
-  const { tick: shellTick, activity, bump } = useDash();
+  const { tick: shellTick, activity, bump, go } = useDash();
   const tick = shellTick + activity;
   const { toast } = useApp();
   const [tab, setTab] = useState<Tab>('audit');
@@ -49,6 +49,7 @@ export function LogsPage() {
 
   const declareBtn = <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'declare' })}>{t('inc.declare')}</button>;
   const closing = sheets.data('close')?.incident;
+  const openInc = incidents.data ? openIncident(incidents.data.incidents) : null;
 
   return (
     <>
@@ -89,7 +90,8 @@ export function LogsPage() {
       {skipped > 0 && <div className="help">{t('home.alerts.skipped', { n: skipped })}</div>}
 
       <DeclareSheet key={sheets.key('declare')} open={sheets.isOpen('declare')} principals={incidents.data?.principals ?? []}
-        onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }} />
+        openScope={openInc?.scope ?? null} onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }}
+        onRefresh={() => { reload(); bump(); }} onAgents={() => { sheets.close(); go('agents'); }} />
       <ConfirmSheet key={sheets.key('close')} id="sheet-inc-close" open={sheets.isOpen('close')} title={t('inc.close.title')} lead={t('inc.close.sub')}
         confirmLabel={t('inc.close.confirm')} onClose={sheets.close} needPass chips={closing ? [closing.id, scopeText(closing.scope)] : []}
         info={t('inc.close.note')}
@@ -103,10 +105,20 @@ export function LogsPage() {
   );
 }
 
-function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; principals: Principal[]; onClose(): void; onDone(): void }) {
+/** Declare an incident. While one is open the core only widens it, so only wider scopes are
+ *  offered, and output saying the open incident was met unchanged is shown as such: a declaration
+ *  that contained no one never reads as a lockdown (DESIGN.md §1.3). */
+function DeclareSheet({ open, principals, openScope, onClose, onDone, onRefresh, onAgents }: {
+  open: boolean; principals: Principal[]; openScope: string | null; onClose(): void; onDone(): void; onRefresh(): void; onAgents(): void;
+}) {
   const { toast, field } = useApp();
   const runtimes = [...new Set(principals.map((p) => p.runtime))];
-  const [scope, setScope] = useState<Scope>('principal');
+  const scopes = declarableScopes(openScope);
+  const [picked, setScope] = useState<Scope | null>(scopes[0] ?? null);
+  // an incident opened meanwhile (detection, another window) can take the picked scope away: the
+  // sheet then waits for a new choice instead of declaring a scope nobody picked
+  const scope: Scope | null = picked && scopes.includes(picked) ? picked : null;
+  const [unchanged, setUnchanged] = useState(false);
   const [who, setWho] = useState(principals[0]?.id ?? '');
   const [runtime, setRuntime] = useState(runtimes[0] ?? '');
   useSelectDefault(who, principals.map((p) => p.id), setWho);
@@ -119,13 +131,16 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
   const rtRef = useRef<HTMLSelectElement>(null);
   const reasonRef = useRef<HTMLInputElement>(null);
   const passRef = useRef<HTMLInputElement>(null);
+  const scopeRef = useRef<HTMLInputElement | null>(null);
   const pick = who || principals[0]?.id || '';
   const rt = runtime || runtimes[0] || '';
   // a runtime incident that covers every active agent stops everything, like the `all` scope
   const stopsAll = scope === 'all' || (scope === 'runtime' && runtimeStopsAll(principals, rt));
+  const toAgents = <button className="btn btn-ghost btn-sm" type="button" onClick={onAgents}>{t('inc.toAgents')}</button>;
   useClearOnClose(open, () => setPass(''));
 
   const submit = async () => {
+    if (!scope) return;
     const e: typeof errs = {};
     if (scope === 'principal' && !principals.some((p) => p.id === pick)) e.who = 'grant.err.agent';
     if (scope === 'runtime' && !isValidName(rt)) e.runtime = 'inc.err.runtime';
@@ -137,14 +152,17 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
     if (e.reason) { reasonRef.current?.focus(); return; }
     if (e.pass) { passRef.current?.focus(); return; }
     setBusy(true);
+    setUnchanged(false);
     try {
-      await call('incident_declare', {
+      const out = await call('incident_declare', {
         scope, ...(scope === 'principal' ? { principal: pick } : {}), ...(scope === 'runtime' ? { runtime: rt } : {}),
         ...(reason.trim() ? { reason: reason.trim() } : {}), ...(scope === 'all' ? { admin_passphrase: pass } : {}),
       });
       setPass('');
+      const outcome = declareOutcome(out);
+      if (outcome === 'unchanged') { setUnchanged(true); onRefresh(); return; }
       field.ripple(0.1);
-      toast(t('toast.inc.declared'), 'warn');
+      toast(t(outcome === 'widened' ? 'toast.inc.widened' : 'toast.inc.declared'), 'warn');
       onDone();
     } catch (err) {
       setPass('');
@@ -153,13 +171,26 @@ function DeclareSheet({ open, principals, onClose, onDone }: { open: boolean; pr
     } finally { setBusy(false); }
   };
 
+  const absorbed = unchanged && <div role="alert"><Callout kind="info">{t('inc.unchanged')} {toAgents}</Callout></div>;
+  // an open incident of the widest scope leaves nothing to declare, and this sheet blocks nothing
+  if (scopes.length === 0) {
+    return (
+      <Sheet id="sheet-inc-full" open={open} title={t('inc.declare.title')} lead={t('inc.declare.sub')} onClose={onClose}>
+        {absorbed}
+        <Callout kind="info">{t('inc.open.full')}</Callout>
+      </Sheet>
+    );
+  }
   return (
-    <Sheet id="sheet-inc-declare" open={open} title={t('inc.declare.title')} lead={t('inc.declare.sub')} primaryLabel={t('inc.declare.confirm')}
-      busy={busy} onPrimary={() => void submit()} onClose={onClose}>
+    <Sheet id="sheet-inc-declare" open={open} title={t('inc.declare.title')} lead={t('inc.declare.sub')}
+      primaryLabel={t(openScope === null ? 'inc.declare.confirm' : 'inc.widen.confirm')} busy={busy} ready={scope !== null}
+      onPrimary={() => void submit()} onBlocked={() => scopeRef.current?.focus()} onClose={onClose}>
+      {absorbed}
+      {openScope !== null && !unchanged && <Callout kind="info">{t('inc.open.note')} {toAgents}</Callout>}
       <div className="field">
         <div className="label"><span id="inc-scope-lbl">{t('inc.scope')}</span></div>
-        <Segmented<Scope> name="inc-scope" labelledBy="inc-scope-lbl" value={scope} onChange={(v) => { setScope(v); setErrs({}); }}
-          options={(['principal', 'runtime', 'all'] as const).map((s) => ({ value: s, label: t(SCOPE_LABEL[s]) }))} />
+        <Segmented<Scope> name="inc-scope" labelledBy="inc-scope-lbl" value={scope} onChange={(v) => { setScope(v); setErrs({}); setUnchanged(false); }}
+          options={scopes.map((s) => ({ value: s, label: t(SCOPE_LABEL[s]) }))} firstRef={(el) => { scopeRef.current = el; }} />
       </div>
       {scope === 'principal' && (
         <SelectField id="inc-who" label={t('grant.agent')} mono value={pick} selectRef={whoRef} error={errs.who ? t(errs.who) : null}

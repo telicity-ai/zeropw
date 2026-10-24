@@ -16,7 +16,7 @@
 .relay { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-sm); color: var(--fg-2); }
 .relay .dot { width: 6px; height: 6px; border-radius: 1px; flex: none; background: var(--fg-4); }
 .relay.live .dot { background: var(--azure); box-shadow: 0 0 8px var(--azure); animation: blink 2.4s var(--ease-in-out) infinite; }
-.relay.stopped .dot { background: var(--fg-3); }
+.relay.stopped .dot, .relay.held .dot { background: var(--fg-3); }
 .relay .mono { margin-left: auto; font: 500 11px/1 var(--mono); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-foot .btn { width: 100%; }
 
@@ -136,7 +136,7 @@
 .relay-note { margin: 14px 0 0; }
 .relay-note .help.err { margin: 4px 0 0; }
 .relay-note .relay-team { display: block; margin: 8px 0 0; }
-.side-foot .side-listen-off { width: auto; justify-self: start; height: 24px; padding: 0 6px; margin: -4px 0 0; }
+.side-foot .side-listen-off, .side-foot .side-ack { width: auto; justify-self: start; height: 24px; padding: 0 6px; margin: -4px 0 0; }
 
 /* approvals: the request target and body preview are shown whole, as text */
 .sheet-kv dd { white-space: normal; overflow-wrap: anywhere; word-break: break-all; }

@@ -14,6 +14,9 @@ export interface ServeStatus { running: boolean; url: string | null; pid: number
 export interface AppStatus { initialized: boolean; state_dir: string; serve: ServeStatus; control: Control | null }
 
 export interface Project { name: string; environments: string[]; created_at: string }
+/** A team environment under its local name: one this device shared, or one it joined (which is
+ *  in no project). `project list` adds the list only when there is one. */
+export interface TeamEnvironment { project: string; environment: string; env_id: string }
 export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
 /** A secret version exactly as the CLI printed it (the CLI prints JSON numbers; a string is
  *  accepted too). The version commands take it back unchanged; do not convert it. */
@@ -31,7 +34,9 @@ export interface HttpConnectionInput {
 }
 export interface SshConnectionInput {
   id: string; project: string; environment: string; service: string; secret_id: string;
-  host: string; port: number; username: string; host_keys: string[]; description?: string;
+  host: string; port: number; username: string; host_keys: string[];
+  /** The ssh the agent's exec runs; without one exec is refused with `cli_not_supported`. */
+  cli_program: string; description?: string;
 }
 /** Connection::to_value as printed by the CLI; kept loose on purpose. */
 export type ConnectionView = Record<string, unknown> & { id: string; project: string; environment: string; kind: string; status: string };
@@ -41,6 +46,8 @@ export interface Grant { id: string; principal: string; connection: string; expi
 export interface AuditRecord { [k: string]: unknown }
 export interface Alert { ts: string; alert: string; caller?: string; connection?: string; event?: string; reason?: string; detail?: string }
 export interface Incident { id: string; status: string; scope: string; opened_at: string; [k: string]: unknown }
+/** `incident declare` output: the incident, plus `existing`/`widened` when it met an open one. */
+export interface IncidentDeclared extends Incident { existing?: boolean; widened?: boolean }
 
 export interface InvitePreview { env_id: string; inviter: string; addresses: string[]; role: 'user' | 'admin'; name: string; expires_at: string; expired: boolean; invite_id: string }
 export interface InviteListItem { invite_id: string; role: string; name: string; link: boolean; created_at: string | null; expires_at: string; status: 'pending' | 'used' | 'expired' | 'revoked'; used_at: string | null; used_by: string | null; revoked_at: string | null }
@@ -89,7 +96,7 @@ export interface Commands {
   stop_all: [void, Control];
   resume: [{ admin_passphrase: string }, Control];
 
-  project_list: [void, { projects: Project[] }];
+  project_list: [void, { projects: Project[]; team_environments?: TeamEnvironment[] }];
   project_create: [{ name: string; environments: string[] }, Project];
 
   secret_list: [{ project?: string; environment?: string }, { secrets: SecretView[] }];
@@ -102,6 +109,11 @@ export interface Commands {
   connection_list: [void, { connections: ConnectionView[] }];
   connection_create_http: [HttpConnectionInput & { admin_passphrase: string }, ConnectionView];
   connection_create_ssh: [SshConnectionInput & { admin_passphrase: string }, ConnectionView];
+  /** Gives an SSH connection made without an ssh (before the app sent one) the ssh its agents
+   *  run. Refused for a connection that is not SSH (`cli_requires_ssh`), is disabled
+   *  (`connection_disabled`) or has one already (`cli_already_set`). The connection's grants go
+   *  stale and must be given again. */
+  connection_set_cli_program: [{ id: string; cli_program: string; admin_passphrase: string }, Record<string, unknown>];
   connection_disable: [{ id: string }, Record<string, unknown>];
 
   principal_list: [void, { principals: Principal[] }];
@@ -133,7 +145,7 @@ export interface Commands {
 
   incident_list: [void, { incidents: Incident[] }];
   incident_show: [{ id: string }, Incident];
-  incident_declare: [{ scope: 'principal' | 'runtime' | 'all'; principal?: string; runtime?: string; reason?: string; admin_passphrase?: string }, Incident];
+  incident_declare: [{ scope: 'principal' | 'runtime' | 'all'; principal?: string; runtime?: string; reason?: string; admin_passphrase?: string }, IncidentDeclared];
   incident_close: [{ id: string; admin_passphrase: string }, Incident];
 
   backup_create: [void, Record<string, unknown>];

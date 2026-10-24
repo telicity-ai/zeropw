@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "connection_list",
     "connection_create_http",
     "connection_create_ssh",
+    "connection_set_cli_program",
     "connection_disable",
     "principal_list",
     "principal_create",

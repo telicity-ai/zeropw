@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectionView, Grant, Project, SecretView } from '../src/ipc/contract';
+import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../src/ipc/contract';
 import {
-  blockText, countOf, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
-  recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, summarizeConnection, valueText, writeConsequences,
+  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
+  teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -21,6 +22,19 @@ describe('projects and environments', () => {
     expect(envPairs(projects).map((p) => p.key)).toEqual(['demo/dev', 'demo/staging', 'demo/prod', 'shop/prod']);
     expect(splitEnv('demo/dev')).toEqual({ project: 'demo', environment: 'dev' });
     for (const bad of ['demo', 'demo/dev/x', 'Demo/dev', '/dev', 'demo/']) expect(splitEnv(bad)).toBeNull();
+  });
+
+  it('adds the team environments the projects do not list, such as one joined from another device', () => {
+    const team: TeamEnvironment[] = [
+      { project: 'demo', environment: 'dev', env_id: 'own' },          // shared from here: already a local pair
+      { project: 'team-abcdefgh', environment: 'shared', env_id: 'joined' },
+    ];
+    expect(teamEnvPairs({ projects, team_environments: team }).map((p) => p.key))
+      .toEqual(['demo/dev', 'demo/staging', 'demo/prod', 'shop/prod', 'team-abcdefgh/shared']);
+    expect(teamEnvPairs({ projects: [], team_environments: team.slice(1) })).toEqual([{ project: 'team-abcdefgh', environment: 'shared', key: 'team-abcdefgh/shared' }]);
+    // an older CLI prints no team list; a malformed entry is skipped
+    expect(teamEnvPairs({ projects })).toEqual(envPairs(projects));
+    expect(teamEnvPairs({ projects, team_environments: [{ project: 7, environment: 'x', env_id: 'e' } as unknown as TeamEnvironment] })).toEqual(envPairs(projects));
   });
 
   it('groups secrets by pair, drops empty groups and keeps pairs the project list does not know', () => {
@@ -87,6 +101,11 @@ describe('SSH connection form', () => {
     expect(isHostKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl')).toBe(true);
     expect(isHostKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl host comment')).toBe(true);
     for (const bad of ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ', 'ssh-ed25519 short', 'AAAAC3NzaC1lZDI1NTE5', '']) expect(isHostKey(bad)).toBe(false);
+  });
+  it('starts with the system ssh, a path the form itself accepts', () => {
+    // left as it is, the field must not stop the form (desktop E2E finding F8)
+    expect(SSH_PROGRAM).toBe('/usr/bin/ssh');
+    expect(isCliPath(SSH_PROGRAM)).toBe(true);
   });
   it('parses ports within range', () => {
     expect(parsePort('22')).toBe(22);
@@ -162,19 +181,55 @@ describe('incident scope', () => {
     expect(runtimeStopsAll([p('user-a'), p('default')], 'user-a')).toBe(false);
     expect(runtimeStopsAll([], 'user-a')).toBe(true);
   });
+
+  // rust/src/incident.rs `open_incident` widens an open incident only to a wider scope and returns
+  // it unchanged for any other, even one naming another agent or runtime
+  it('offers only scopes wider than the open incident', () => {
+    expect(declarableScopes(null)).toEqual(['principal', 'runtime', 'all']);
+    expect(declarableScopes('principal')).toEqual(['runtime', 'all']);
+    expect(declarableScopes('runtime')).toEqual(['all']);
+    expect(declarableScopes('all')).toEqual([]);
+    // an unknown stored scope ranks below every scope in the core, so each one widens it
+    expect(declarableScopes('weird')).toEqual(['principal', 'runtime', 'all']);
+  });
+
+  it('finds the open incident, the widest when several are open', () => {
+    const i = (id: string, status: string, scope: string) => ({ id, status, scope });
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'closed', 'principal')])).toBeNull();
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'open', 'principal')])?.id).toBe('b');
+    expect(openIncident([i('a', 'open', 'principal'), i('b', 'open', 'runtime'), i('c', 'open', 'principal')])?.id).toBe('b');
+  });
+
+  it('reads a declaration that met an open incident as no lockdown unless it widened it', () => {
+    expect(declareOutcome({})).toBe('opened');
+    expect(declareOutcome({ existing: false })).toBe('opened');
+    expect(declareOutcome({ existing: true, widened: true })).toBe('widened');
+    expect(declareOutcome({ existing: true, widened: false })).toBe('unchanged');
+    expect(declareOutcome({ existing: true })).toBe('unchanged');
+    expect(declareOutcome({ existing: 'yes', widened: 'yes' })).toBe('unchanged');
+  });
 });
 
 describe('connection summaries (CLI output read defensively)', () => {
   const base = { id: 'x', project: 'demo', environment: 'dev', status: 'active' };
   it('shows the HTTP host, hiding the default port', () => {
     const c = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, http_auth: { mode: 'bearer' } } as ConnectionView;
-    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true });
+    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true, noCli: false });
     const odd = { ...c, http_target: { scheme: 'https', host: 'api.example.com', port: 8443 } } as ConnectionView;
     expect(summarizeConnection(odd).host).toBe('api.example.com:8443');
   });
   it('shows user@host for SSH', () => {
     const c = { ...base, kind: 'ssh', status: 'disabled', ssh_target: { host: 'git.example.com', port: 2222, username: 'git' } } as ConnectionView;
     expect(summarizeConnection(c)).toMatchObject({ kind: 'ssh', host: 'git@git.example.com:2222', active: false });
+  });
+  // an SSH connection the app made before it sent an ssh: exec refuses it (cli_not_supported)
+  it('marks an SSH connection without its ssh, and only that', () => {
+    const ssh = { ...base, kind: 'ssh', ssh_target: { host: 'git.example.com', port: 22, username: 'git' } };
+    expect(summarizeConnection({ ...ssh, cli: null } as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection(ssh as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection({ ...ssh, cli: { program: SSH_PROGRAM, kind: 'ssh' } } as ConnectionView).noCli).toBe(false);
+    const http = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, cli: null } as ConnectionView;
+    expect(summarizeConnection(http).noCli).toBe(false);
   });
   it('does not throw on unexpected shapes', () => {
     const c = { ...base, kind: 'weird', http_target: 'nope', ssh_target: [1, 2] } as unknown as ConnectionView;
@@ -264,5 +319,39 @@ describe('team helpers', () => {
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }, { ip: '192.168.0.12', kind: 'lan' }])).toBe('192.168.0.12');
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }])).toBe('10.9.0.1');
     expect(defaultListenIp([])).toBe('');
+  });
+});
+
+describe('relay status', () => {
+  const live: ServeStatus = { running: true, url: 'http://127.0.0.1:47380', pid: 7, team_listen: null };
+  const off: ServeStatus = { running: false, url: null, pid: null, team_listen: null };
+  const open: Control = { stopped: false, restore_pending: false, incident_open: false };
+
+  it('says the relay is held while a restore waits, whether or not it runs or is stopped too', () => {
+    const held = { ...open, restore_pending: true };
+    expect(relayState(live, held)).toBe('held');
+    expect(relayState(off, held)).toBe('held');
+    expect(relayState(live, { ...held, stopped: true })).toBe('held');
+    expect(relayPill(live, held)).toEqual({ kind: 'held' });
+    expect(relayBlocked(held)).toBe(true);
+  });
+
+  it('says stopped under a global stop, otherwise whether the relay runs', () => {
+    const stopped = { ...open, stopped: true, incident_open: true };
+    expect(relayState(live, stopped)).toBe('stopped');
+    expect(relayPill(live, stopped)).toEqual({ kind: 'stopped' });
+    expect(relayBlocked(stopped)).toBe(true);
+    expect(relayState(live, open)).toBe('live');
+    expect(relayPill(live, open)).toEqual({ kind: 'live', addr: '127.0.0.1:47380' });
+    expect(relayState(off, open)).toBe('off');
+    expect(relayPill(off, null)).toEqual({ kind: 'off' });
+    // an open incident alone does not refuse requests (it revokes grants and disables agents)
+    expect(relayBlocked({ ...open, incident_open: true })).toBe(false);
+    expect(relayBlocked(null)).toBe(false);
+  });
+
+  it('compares stop, incident and restore states field by field', () => {
+    expect(sameControl(open, { ...open })).toBe(true);
+    for (const k of ['stopped', 'restore_pending', 'incident_open'] as const) expect(sameControl(open, { ...open, [k]: true })).toBe(false);
   });
 });

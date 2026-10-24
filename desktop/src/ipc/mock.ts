@@ -12,11 +12,11 @@
 
 import type {
   Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, Events, Grant, ImportEntry, ImportReport, ImportState, ImportWhy,
-  Incident, InviteListItem, InvitePreview, Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings,
+  Incident, InviteListItem, InvitePreview, Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings, TeamEnvironment,
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
-import { CONNECTION_KEY_KINDS, countOf, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
+import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, openIncident, parseListen, splitEnv } from '../lib/dash';
 
 export interface MockChannel { onmessage: (data: string) => void }
 export interface MockSeed {
@@ -42,6 +42,9 @@ export interface MockSeed {
   teamListen?: string | null;
   /** The VPN is down: its interface is gone, and a team address on it cannot be opened. */
   vpnDown?: boolean;
+  /** With `initialized`: an SSH connection the app made before it sent an ssh (`cli: null`),
+   *  with a grant for agent-1. */
+  sshWithoutCli?: boolean;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -294,6 +297,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!p) throw fail('InvalidInput', 'project_unknown');
     if (typeof environment !== 'string' || !p.environments.includes(environment)) throw fail('InvalidInput', 'environment_unknown');
   };
+  // `secret put` and `connection create-*` take a team environment's branch before they look at
+  // the projects (rust/src/admin_cli.rs `project_shared_env`), so a joined one is accepted there
+  const requireEnvOrTeam = (project: unknown, environment: unknown) => {
+    if (!teams.has(`${String(project)}/${String(environment)}`)) requireEnv(project, environment);
+  };
   const fingerprint = () => (deviceFp ??= randFrom(26, B32).toUpperCase());
   const inviteView = (i: MockInvite): InviteListItem => {
     const v: InviteListItem = {
@@ -397,6 +405,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       http_scope: { methods: ['GET', 'HEAD', 'POST'], path_prefixes: [], confirm_methods: ['POST'] }, ssh_target: null, cli: null,
       policy_version: 1, status: 'active', created_at: ago(20 * HOUR), updated_at: ago(20 * HOUR),
     });
+    if (seed.sshWithoutCli) {
+      addSecret('deploy-ssh', 'ssh_private_key', 'demo', 'dev', 'mock-ssh-key-' + randFrom(16, B32));
+      connections.set('deploy-ssh', {
+        id: 'deploy-ssh', project: 'demo', environment: 'dev', service: 'deploy-ssh', kind: 'ssh', secret_id: 'deploy-ssh', secret_version: null,
+        description: null, http_target: null, http_auth: null, http_scope: null,
+        ssh_target: { host: 'git.example.com', port: 22, username: 'git', host_keys: ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockHostKeyMockHostKeyMockHostKey00 host'] },
+        cli: null, policy_version: 1, status: 'active', created_at: ago(19 * HOUR), updated_at: ago(19 * HOUR),
+      });
+      grants.push({ id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'deploy-ssh', expires_at: iso(Date.now() + 5 * HOUR), max_uses: null, uses: 0, status: 'active' });
+    }
     grants.push(
       { id: 'grant_' + randFrom(12, HEX), principal: 'agent-1', connection: 'example-api', expires_at: iso(Date.now() + 6 * HOUR), max_uses: null, uses: 14, status: 'active' },
       // the CLI keeps these `active`: one expired an hour ago, one used up its uses
@@ -603,7 +621,17 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
 
     // ---- projects
-    project_list: () => { needInit(); return { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) }; },
+    // `project list`: the projects, and the team environments when there are any (one joined from
+    // another device is in no project)
+    project_list: () => {
+      needInit();
+      const out: { projects: Project[]; team_environments?: TeamEnvironment[] } = { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) };
+      const team = [...teams.values()]
+        .map((x) => ({ project: x.project, environment: x.environment, env_id: x.env_id }))
+        .sort((a, b) => (a.project < b.project ? -1 : a.project > b.project ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
+      if (team.length) out.team_environments = team;
+      return out;
+    },
     project_create: async ({ name, environments }) => {
       needInit();
       if (!isValidName(name)) throw fail('InvalidInput', 'invalid_name', 'project');
@@ -631,7 +659,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit();
       if (!isValidName(id)) throw fail('InvalidInput', 'invalid_secret_id');
       if (!KINDS.includes(kind)) throw fail('InvalidInput', 'invalid_secret_kind');
-      requireEnv(project, environment);
+      requireEnvOrTeam(project, environment);
       let value: string, pub: MockVersion['public'] = null;
       if (source && 'typed' in source) {
         if (typeof source.typed !== 'string' || !source.typed) throw fail('InvalidInput', 'invalid_secret_value');
@@ -703,7 +731,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
-      requireEnv(input.project, input.environment);
+      requireEnvOrTeam(input.project, input.environment);
       checkSecretFor('http', input.secret_id, input.project, input.environment);
       const target = parseTarget(input.target);
       if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'metadata_address_not_allowed' : 'invalid_scheme');
@@ -728,8 +756,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
-      requireEnv(input.project, input.environment);
+      requireEnvOrTeam(input.project, input.environment);
       if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
+      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
+      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
       checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
@@ -739,11 +770,31 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const c: ConnectionView = {
         id: input.id, project: input.project, environment: input.environment, service: input.service, kind: 'ssh', secret_id: input.secret_id,
         secret_version: null, description: input.description ?? null, http_target: null, http_auth: null, http_scope: null,
-        ssh_target: { host: input.host, port: input.port, username: input.username, host_keys: input.host_keys.slice() }, cli: null,
+        ssh_target: { host: input.host, port: input.port, username: input.username, host_keys: input.host_keys.slice() },
+        cli: { program: input.cli_program, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} },
         policy_version: 1, status: 'active', created_at: now, updated_at: now,
       };
       connections.set(c.id, c); record({ ts: now, event: 'connection_create', connection: c.id, kind: 'ssh' });
       return { ...c };
+    },
+    // rust/src/admin_cli.rs update_connection_cli: fills a missing ssh only; the grants go stale
+    connection_set_cli_program: async (input) => {
+      needInit(); await wait(300);
+      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
+      // the core's order: a missing passphrase, an empty path, then the CLI checks the passphrase
+      if (typeof input.admin_passphrase !== 'string' || !input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
+      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      checkAdmin(input.admin_passphrase);
+      const c = connections.get(input.id);
+      if (!c) throw fail('NotFound', 'connection_not_found');
+      if (c.kind !== 'ssh') throw fail('InvalidInput', 'cli_requires_ssh');
+      if (c.status !== 'active') throw fail('InvalidInput', 'connection_disabled');
+      if (c.cli !== null && c.cli !== undefined) throw fail('InvalidInput', 'cli_already_set');
+      c.cli = { program: input.cli_program, kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} };
+      c.policy_version = Number(c.policy_version) + 1; c.updated_at = iso();
+      for (const g of grants) if (g.connection === c.id && g.status === 'active') g.status = 'stale';
+      record({ ts: iso(), event: 'connection_update', connection: c.id, detail: 'cli', state: 'widened' });
+      return { id: c.id, widened: true, policy_version: c.policy_version, cli: { ...(c.cli as object) }, note: 'existing grants are stale and need regrant' };
     },
     connection_disable: ({ id }) => {
       needInit();
@@ -888,6 +939,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit(); await wait(400);
       if (scope === 'all') checkAdmin(admin_passphrase);
       else if (admin_passphrase) checkAdmin(admin_passphrase);
+      // rust/src/incident.rs `open_incident`: an open incident takes in a declaration that is not
+      // wider unchanged, and a wider one widens it
+      const current = openIncident(incidents);
+      if (current && !declarableScopes(current.scope).includes(scope)) return { ...current, existing: true, widened: false };
       let affected: string[];
       if (scope === 'principal') {
         if (!principal || !principals.some((p) => p.id === principal)) throw fail('InvalidInput', 'principal_unknown');
@@ -904,6 +959,15 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const stops = scope === 'all' || (scope === 'runtime' && principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime));
       for (const g of grants) if (affected.includes(g.principal) && g.status === 'active') g.status = 'revoked';
       for (const p of principals) if (affected.includes(p.id)) p.status = 'disabled';
+      if (current) {
+        current.widened_from = [...(Array.isArray(current.widened_from) ? current.widened_from : []), { scope: current.scope, runtime: current.runtime ?? null, at: iso() }];
+        current.scope = scope;
+        current.runtime = scope === 'runtime' ? runtime ?? null : null;
+        current.principals = [...new Set([...(Array.isArray(current.principals) ? current.principals as string[] : []), ...affected])].sort();
+        record({ ts: iso(), event: 'incident_widen', incident: current.id, scope });
+        setControl({ ...control, stopped: stops ? true : control.stopped });
+        return { ...current, existing: true, widened: true };
+      }
       const inc: Incident = {
         id: 'inc_' + randFrom(12, HEX), status: 'open', scope, opened_at: iso(), runtime: scope === 'runtime' ? runtime ?? null : null,
         principals: affected, trigger: 'manual', rule: null, detail: reason ?? null, actions: { grants_revoked: true, stopped: stops }, assessment: {}, notification: {},
@@ -1051,10 +1115,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (environment !== undefined && !isValidName(environment)) throw fail('InvalidInput', 'invalid_name', 'environment');
       await wait(1600);
       onetime.delete(ref);
+      // `team join` maps the environment to its local name (rust/src/team/membership.rs `join`);
+      // it adds no project
       const p = project ?? `team-${item.preview.inviter.slice(0, 8).toLowerCase()}`, e = environment ?? 'shared';
-      const existing = projects.find((x) => x.name === p);
-      if (existing) { if (!existing.environments.includes(e)) existing.environments.push(e); }
-      else projects.push({ name: p, environments: [e], created_at: iso() });
       teams.set(`${p}/${e}`, {
         env_id: item.preview.env_id, project: p, environment: e, invites: [],
         members: [

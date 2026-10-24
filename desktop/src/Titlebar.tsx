@@ -5,7 +5,7 @@ import type { Pill } from './ui/context';
 export function Titlebar({ desktop, motionOn, onToggleMotion, pill }: {
   desktop: boolean; motionOn: boolean; onToggleMotion(): void; pill: Pill;
 }) {
-  const cls = 'status-pill' + (pill.kind === 'live' ? ' live' : pill.kind === 'stopped' ? ' stopped' : '');
+  const cls = 'status-pill' + (pill.kind === 'live' || pill.kind === 'stopped' || pill.kind === 'held' ? ' ' + pill.kind : '');
   return (
     <header className={'titlebar' + (desktop ? ' native' : '')} data-tauri-drag-region="">
       {!desktop && <div className="lights" aria-hidden="true"><i /><i /><i /></div>}
@@ -20,6 +20,7 @@ export function Titlebar({ desktop, motionOn, onToggleMotion, pill }: {
           {pill.kind === 'none' && t('top.status.none')}
           {pill.kind === 'off' && t('top.status.off')}
           {pill.kind === 'stopped' && t('top.status.stopped')}
+          {pill.kind === 'held' && t('top.status.held')}
           {pill.kind === 'live' && <>{t('top.status.ready')} {pill.addr && <span className="mono">{pill.addr}</span>}</>}
         </span>
       </span>

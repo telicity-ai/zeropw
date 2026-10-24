@@ -6,7 +6,8 @@ export type Pill =
   | { kind: 'none' }
   | { kind: 'live'; addr: string | null }
   | { kind: 'off' }
-  | { kind: 'stopped' };
+  | { kind: 'stopped' }
+  | { kind: 'held' };
 
 export interface AppApi {
   field: Field;

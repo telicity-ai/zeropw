@@ -2036,6 +2036,14 @@ impl<'a> Vault<'a> {
                     get_or_null(&current, "stopped_at").clone(),
                 );
             }
+            // The open incident is current state, like the stop: `incidents/` is not in the
+            // archive, so the archived pointer is either absent (an incident opened after the
+            // backup would stop blocking `resume`) or names one closed since (which no
+            // `incident close` could clear again).
+            match current.get("incident_open") {
+                Some(open) => control.insert("incident_open".into(), open.clone()),
+                None => control.remove("incident_open"),
+            };
             let (merged_approvals, dropped) = Vault::merge_restored_approvals(
                 get_or_null(&current, "approvals"),
                 get_or_null(&control, "approvals"),

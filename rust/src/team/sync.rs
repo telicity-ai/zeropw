@@ -4401,6 +4401,28 @@ pub fn write_env_mapping(
     doc[env_id] = json!({"project":project,"environment":environment});
     state.write_json(ENVS_MAP_PATH, &doc)
 }
+/// Every mapped team environment as `(env_id, project, environment)`, sorted
+/// by project, environment and id: the ones this node shared and the ones it
+/// joined, under the local names `team share` or `team join` gave them. An
+/// entry without string names is left out, as [`resolve_env_id`] never
+/// matches it either.
+pub fn env_mappings(state: &StateDir) -> Result<Vec<(String, String, String)>> {
+    let doc = read_env_mapping(state)?;
+    let mut out: Vec<(String, String, String)> = doc
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(id, entry)| {
+            Some((
+                id.clone(),
+                entry["project"].as_str()?.to_owned(),
+                entry["environment"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.1, &a.2, &a.0).cmp(&(&b.1, &b.2, &b.0)));
+    Ok(out)
+}
 pub fn env_project_environment(
     state: &StateDir,
     env_id: &str,
