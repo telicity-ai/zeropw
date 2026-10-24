@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectionView, Grant, Project, SecretView } from '../src/ipc/contract';
+import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../src/ipc/contract';
 import {
   blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
   newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
-  recordSig, runtimeStopsAll, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection, valueText, writeConsequences,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
+  teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -21,6 +22,19 @@ describe('projects and environments', () => {
     expect(envPairs(projects).map((p) => p.key)).toEqual(['demo/dev', 'demo/staging', 'demo/prod', 'shop/prod']);
     expect(splitEnv('demo/dev')).toEqual({ project: 'demo', environment: 'dev' });
     for (const bad of ['demo', 'demo/dev/x', 'Demo/dev', '/dev', 'demo/']) expect(splitEnv(bad)).toBeNull();
+  });
+
+  it('adds the team environments the projects do not list, such as one joined from another device', () => {
+    const team: TeamEnvironment[] = [
+      { project: 'demo', environment: 'dev', env_id: 'own' },          // shared from here: already a local pair
+      { project: 'team-abcdefgh', environment: 'shared', env_id: 'joined' },
+    ];
+    expect(teamEnvPairs({ projects, team_environments: team }).map((p) => p.key))
+      .toEqual(['demo/dev', 'demo/staging', 'demo/prod', 'shop/prod', 'team-abcdefgh/shared']);
+    expect(teamEnvPairs({ projects: [], team_environments: team.slice(1) })).toEqual([{ project: 'team-abcdefgh', environment: 'shared', key: 'team-abcdefgh/shared' }]);
+    // an older CLI prints no team list; a malformed entry is skipped
+    expect(teamEnvPairs({ projects })).toEqual(envPairs(projects));
+    expect(teamEnvPairs({ projects, team_environments: [{ project: 7, environment: 'x', env_id: 'e' } as unknown as TeamEnvironment] })).toEqual(envPairs(projects));
   });
 
   it('groups secrets by pair, drops empty groups and keeps pairs the project list does not know', () => {
@@ -305,5 +319,39 @@ describe('team helpers', () => {
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }, { ip: '192.168.0.12', kind: 'lan' }])).toBe('192.168.0.12');
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }])).toBe('10.9.0.1');
     expect(defaultListenIp([])).toBe('');
+  });
+});
+
+describe('relay status', () => {
+  const live: ServeStatus = { running: true, url: 'http://127.0.0.1:47380', pid: 7, team_listen: null };
+  const off: ServeStatus = { running: false, url: null, pid: null, team_listen: null };
+  const open: Control = { stopped: false, restore_pending: false, incident_open: false };
+
+  it('says the relay is held while a restore waits, whether or not it runs or is stopped too', () => {
+    const held = { ...open, restore_pending: true };
+    expect(relayState(live, held)).toBe('held');
+    expect(relayState(off, held)).toBe('held');
+    expect(relayState(live, { ...held, stopped: true })).toBe('held');
+    expect(relayPill(live, held)).toEqual({ kind: 'held' });
+    expect(relayBlocked(held)).toBe(true);
+  });
+
+  it('says stopped under a global stop, otherwise whether the relay runs', () => {
+    const stopped = { ...open, stopped: true, incident_open: true };
+    expect(relayState(live, stopped)).toBe('stopped');
+    expect(relayPill(live, stopped)).toEqual({ kind: 'stopped' });
+    expect(relayBlocked(stopped)).toBe(true);
+    expect(relayState(live, open)).toBe('live');
+    expect(relayPill(live, open)).toEqual({ kind: 'live', addr: '127.0.0.1:47380' });
+    expect(relayState(off, open)).toBe('off');
+    expect(relayPill(off, null)).toEqual({ kind: 'off' });
+    // an open incident alone does not refuse requests (it revokes grants and disables agents)
+    expect(relayBlocked({ ...open, incident_open: true })).toBe(false);
+    expect(relayBlocked(null)).toBe(false);
+  });
+
+  it('compares stop, incident and restore states field by field', () => {
+    expect(sameControl(open, { ...open })).toBe(true);
+    for (const k of ['stopped', 'restore_pending', 'incident_open'] as const) expect(sameControl(open, { ...open, [k]: true })).toBe(false);
   });
 });

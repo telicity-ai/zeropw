@@ -12,7 +12,7 @@
 
 import type {
   Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, Events, Grant, Incident, InviteListItem, InvitePreview,
-  Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings,
+  Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings, TeamEnvironment,
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
@@ -256,6 +256,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     const p = projects.find((x) => x.name === project);
     if (!p) throw fail('InvalidInput', 'project_unknown');
     if (typeof environment !== 'string' || !p.environments.includes(environment)) throw fail('InvalidInput', 'environment_unknown');
+  };
+  // `secret put` and `connection create-*` take a team environment's branch before they look at
+  // the projects (rust/src/admin_cli.rs `project_shared_env`), so a joined one is accepted there
+  const requireEnvOrTeam = (project: unknown, environment: unknown) => {
+    if (!teams.has(`${String(project)}/${String(environment)}`)) requireEnv(project, environment);
   };
   const fingerprint = () => (deviceFp ??= randFrom(26, B32).toUpperCase());
   const inviteView = (i: MockInvite): InviteListItem => {
@@ -529,7 +534,17 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
 
     // ---- projects
-    project_list: () => { needInit(); return { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) }; },
+    // `project list`: the projects, and the team environments when there are any (one joined from
+    // another device is in no project)
+    project_list: () => {
+      needInit();
+      const out: { projects: Project[]; team_environments?: TeamEnvironment[] } = { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) };
+      const team = [...teams.values()]
+        .map((x) => ({ project: x.project, environment: x.environment, env_id: x.env_id }))
+        .sort((a, b) => (a.project < b.project ? -1 : a.project > b.project ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
+      if (team.length) out.team_environments = team;
+      return out;
+    },
     project_create: async ({ name, environments }) => {
       needInit();
       if (!isValidName(name)) throw fail('InvalidInput', 'invalid_name', 'project');
@@ -557,7 +572,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit();
       if (!isValidName(id)) throw fail('InvalidInput', 'invalid_secret_id');
       if (!KINDS.includes(kind)) throw fail('InvalidInput', 'invalid_secret_kind');
-      requireEnv(project, environment);
+      requireEnvOrTeam(project, environment);
       let value: string, pub: MockVersion['public'] = null;
       if (source && 'typed' in source) {
         if (typeof source.typed !== 'string' || !source.typed) throw fail('InvalidInput', 'invalid_secret_value');
@@ -629,7 +644,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
-      requireEnv(input.project, input.environment);
+      requireEnvOrTeam(input.project, input.environment);
       checkSecretFor('http', input.secret_id, input.project, input.environment);
       const target = parseTarget(input.target);
       if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'metadata_address_not_allowed' : 'invalid_scheme');
@@ -654,7 +669,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
-      requireEnv(input.project, input.environment);
+      requireEnvOrTeam(input.project, input.environment);
       if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
       // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
       if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
@@ -1013,10 +1028,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (environment !== undefined && !isValidName(environment)) throw fail('InvalidInput', 'invalid_name', 'environment');
       await wait(1600);
       onetime.delete(ref);
+      // `team join` maps the environment to its local name (rust/src/team/membership.rs `join`);
+      // it adds no project
       const p = project ?? `team-${item.preview.inviter.slice(0, 8).toLowerCase()}`, e = environment ?? 'shared';
-      const existing = projects.find((x) => x.name === p);
-      if (existing) { if (!existing.environments.includes(e)) existing.environments.push(e); }
-      else projects.push({ name: p, environments: [e], created_at: iso() });
       teams.set(`${p}/${e}`, {
         env_id: item.preview.env_id, project: p, environment: e, invites: [],
         members: [

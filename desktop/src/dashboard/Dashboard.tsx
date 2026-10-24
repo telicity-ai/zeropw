@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { t, type CopyKey } from '../copy';
 import { call, on, toIpcError } from '../ipc/client';
 import type { AppStatus, Control, InvitePreview, ServeStatus } from '../ipc/contract';
-import { newRecordCount, recordSig } from '../lib/dash';
+import { relayBlocked, relayPill, relayState } from '../lib/dash';
 import { hostPort } from '../lib/format';
 import { offersListenOff, relayError } from '../lib/reasons';
 import { useApp } from '../ui/context';
@@ -22,6 +22,7 @@ import { turnOffListen } from './relay';
 import { SettingsPage } from './Settings';
 import { Sheet } from './Sheet';
 import { TeamPage } from './Team';
+import { watchRecords } from './watch';
 
 export type { PageId } from './pages';
 
@@ -53,8 +54,11 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   const title = useRef<HTMLHeadingElement>(null);
   const passRef = useRef<HTMLInputElement>(null);
   const first = useRef(true);
-  const stopped = useRef(control.stopped);
-  stopped.current = control.stopped;
+  const blocked = relayBlocked(control);
+  const blockedRef = useRef(blocked);
+  blockedRef.current = blocked;
+  const controlRef = useRef(control);
+  controlRef.current = control;
   const lastIncoming = useRef<string | null>(null);
 
   // park the sphere in the sidebar header; it follows the slot when the window resizes
@@ -76,19 +80,18 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     return () => ro.disconnect();
   }, [field, serve.running]);
 
-  // stop-all: the sphere stops turning and cools to grey (DESIGN.md §3.2)
-  useEffect(() => { field.setStopped(control.stopped); }, [field, control.stopped]);
+  // every request refused (stop-all, or a restore not yet acknowledged): the sphere stops turning
+  // and cools to grey (DESIGN.md §3.2)
+  useEffect(() => { field.setStopped(blocked); }, [field, blocked]);
   useEffect(() => () => field.setStopped(false), [field]);
 
-  useEffect(() => {
-    setPill(control.stopped ? { kind: 'stopped' } : serve.running ? { kind: 'live', addr: hostPort(serve.url) } : { kind: 'off' });
-  }, [control.stopped, serve, setPill]);
+  useEffect(() => { setPill(relayPill(serve, control)); }, [control, serve, setPill]);
 
   const refresh = useCallback(() => {
     call('app_status').then((s) => { setServe(s.serve); if (s.control) setControl(s.control); setTick((k) => k + 1); }, () => undefined);
   }, []);
 
-  // core events: relay status and stop-all changes
+  // core events: relay status (also when the relay exits on its own) and stop-all changes
   useEffect(() => {
     const offs: Array<() => void> = [];
     let dead = false;
@@ -99,34 +102,27 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
     return () => { dead = true; offs.forEach((f) => f()); window.removeEventListener('focus', refresh); };
   }, [refresh]);
 
-  // usage records: read the tail while the window is visible; each new batch is one small ripple
+  // usage records: read the tail while the window is visible; each new batch is one small ripple.
+  // A batch can come with a stop, incident or restore hold the window did not make (the relay
+  // opens an incident on its own): then everything is read again, as on focus.
   useEffect(() => {
-    let dead = false, inflight = false, firstPoll = true, sig: string | null = null;
-    const poll = () => {
-      if (dead || inflight || document.hidden) return;
-      inflight = true;
-      call('audit_tail', { limit: 50 }).then(
-        (r) => {
-          if (dead) return;
-          const n = firstPoll ? 0 : newRecordCount(sig, r.records);
-          firstPoll = false;
-          sig = recordSig(r.records[r.records.length - 1]);
-          if (n > 0) {
-            if (!stopped.current) field.ripple(Math.min(0.12, 0.05 + 0.015 * n));
-            setActivity((k) => k + 1);
-          }
-        },
-        () => undefined,
-      ).finally(() => { inflight = false; });
-    };
+    let dead = false;
+    const watch = watchRecords({
+      records: (n) => {
+        if (!blockedRef.current) field.ripple(Math.min(0.12, 0.05 + 0.015 * n));
+        setActivity((k) => k + 1);
+      },
+      control: (c) => { setControl(c); refresh(); },
+    }, () => controlRef.current);
+    const poll = () => { if (!dead && !document.hidden) void watch.poll(); };
     poll();
     const id = setInterval(poll, AUDIT_POLL_MS);
     const vis = () => { if (!document.hidden) poll(); };
     document.addEventListener('visibilitychange', vis);
     let off: (() => void) | null = null;
     on('audit://records', () => poll()).then((un) => { if (dead) un(); else off = un; }, () => undefined);
-    return () => { dead = true; clearInterval(id); document.removeEventListener('visibilitychange', vis); off?.(); };
-  }, [field]);
+    return () => { dead = true; watch.stop(); clearInterval(id); document.removeEventListener('visibilitychange', vis); off?.(); };
+  }, [field, refresh]);
 
   // a zeropw://join link opened while the dashboard is up: the team page shows its preview
   useEffect(() => {
@@ -233,8 +229,9 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   };
 
   const meta = pageMeta(page);
-  const relayCls = 'relay' + (control.stopped ? ' stopped' : serve.running ? ' live' : '');
-  const relayText = control.stopped ? t('side.relay.stopped') : serve.running ? t('side.relay.on') : t('side.relay.off');
+  const relayNow = relayState(serve, control);
+  const relayCls = 'relay' + (relayNow === 'off' ? '' : ' ' + relayNow);
+  const relayText = t(relayNow === 'held' ? 'side.relay.held' : relayNow === 'stopped' ? 'side.relay.stopped' : relayNow === 'live' ? 'side.relay.on' : 'side.relay.off');
   const pageIntent = intent ?? undefined;
 
   return (
@@ -257,7 +254,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
             <div className="side-foot">
               <div className={relayCls}>
                 <span className="dot" aria-hidden="true" /><span>{relayText}</span>
-                {serve.running && !control.stopped && <span className="mono">{hostPort(serve.url)}</span>}
+                {relayNow === 'live' && <span className="mono">{hostPort(serve.url)}</span>}
                 {!serve.running && (
                   <button className="btn btn-text btn-sm relay-start" type="button" aria-busy={relayBusy || undefined} aria-describedby={relayProblem ? 'side-relay-err' : undefined}
                     onClick={() => { if (!relayBusy) void startRelay(); }}>{t(relayProblem ? 'relay.retry' : 'relay.start')}</button>
@@ -265,6 +262,9 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               </div>
               {!serve.running && relayProblem && (
                 <div className="help err side-err" id="side-relay-err">{t(relayProblem.key, { reason: relayProblem.reason })}</div>
+              )}
+              {relayNow === 'held' && (
+                <button className="btn btn-text btn-sm side-ack" type="button" onClick={() => go('settings', 'ack-restore')}>{t('side.ack')}</button>
               )}
               {offerListenOff && (
                 <button className="btn btn-text btn-sm side-listen-off" type="button" onClick={confirmListenOff}>{t('relay.team.off')}</button>
@@ -286,7 +286,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'logs' && <LogsPage />}
               {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={() => setInvite(null)} />}
-              {page === 'settings' && <SettingsPage />}
+              {page === 'settings' && <SettingsPage intent={pageIntent} onIntent={clearIntent} />}
             </div>
           </div>
         </div>

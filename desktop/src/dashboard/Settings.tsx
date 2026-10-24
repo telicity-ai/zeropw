@@ -8,7 +8,7 @@ import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { useClearOnClose, useDash, useLoad, useSheets } from './context';
+import { useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { Empty, SectionHead } from './parts';
 import { listenErrorLines, relayLeftOff, restartRelay, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
@@ -18,8 +18,8 @@ const CANCELLED = new Set(['file_dialog_cancelled']);
 
 /** Settings: the relay port, this device's address for other devices, backup, restore and
  *  replacing the device key with the recovery code. Files are picked in native dialogs owned by
- *  the core. */
-export function SettingsPage() {
+ *  the core. The sidebar sends the user here to acknowledge a restore (`ack-restore`). */
+export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
   const { tick, bump, control, serve, relay } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
@@ -32,6 +32,11 @@ export function SettingsPage() {
   const s = load.data?.settings ?? null;
   const ifaces = load.data?.interfaces ?? [];
   const listen = parseListen(s?.team_listen);
+  useIntent(intent, onIntent, (i) => {
+    if (i !== 'ack-restore') return false;
+    if (control.restore_pending) sheets.open({ kind: 'ack' });
+    return true;
+  });
 
   const [port, setPort] = useState('');
   const [portErr, setPortErr] = useState<CopyKey | null>(null);
