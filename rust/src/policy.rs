@@ -1940,7 +1940,7 @@ impl CliProfile {
         })
     }
 
-    fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self) -> Value {
         json!({
             "program": self.program_value(), "kind": self.kind, "base_url_env": self.base_url_env,
             "extra_env": self.extra_env,

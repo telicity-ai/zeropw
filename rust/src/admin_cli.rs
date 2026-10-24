@@ -326,12 +326,17 @@ fn build_parser() -> Parser {
         add(
             connection,
             name,
-            "change the HTTP scope (widening stales grants)",
+            "change the HTTP scope, or give an SSH connection without one its ssh (widening stales grants)",
         )
         .arg(Arg::opt("--id").required())
         .arg(Arg::opt("--methods").metavar("GET,POST|all"))
         .arg(Arg::opt("--path-prefixes").metavar("/a,/b|all"))
-        .arg(Arg::opt("--confirm-methods").metavar("DELETE|none"));
+        .arg(Arg::opt("--confirm-methods").metavar("DELETE|none"))
+        .arg(
+            Arg::opt("--cli-program")
+                .metavar("PATH")
+                .help("ssh executable for an SSH connection that has none"),
+        );
     }
     add(
         connection,
@@ -2345,6 +2350,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             json!({"connections":ctx.policy.list_connections()?.into_iter().map(|c| c.to_value()).collect::<Vec<_>>()}),
         ),
         ("connection", "show") => Ok(ctx.policy.get_connection(a.req("id"))?.to_value()),
+        ("connection", "update" | "update-scope") if a.has("cli-program") => {
+            update_connection_cli(&ctx, a)
+        }
         ("connection", "update" | "update-scope") => {
             let before = ctx.policy.get_connection(a.req("id"))?;
             let prev = before.http_scope.as_ref().ok_or_else(|| {
@@ -3018,6 +3026,59 @@ fn shared_put(
     }
     Ok(out)
 }
+/// `connection update --cli-program`: give an SSH connection made without an ssh (`cli: null`,
+/// which `exec` refuses with `cli_not_supported`) the one its agents run. Only a missing program
+/// is filled; changing one stays disable and recreate. A new program widens the connection
+/// (`Policy::widens`), so its grants go stale. The checks and the change share one state lock.
+fn update_connection_cli(ctx: &Context, a: &Args) -> Result<Value, Error> {
+    let _lock = ctx.state.lock()?;
+    let id = a.req("id");
+    let before = ctx.policy.get_connection(id)?;
+    if before.kind != "ssh" {
+        return Err(Error::invalid_input("cli_requires_ssh")
+            .with_detail("only an SSH connection without an ssh program can be given one"));
+    }
+    if a.has("methods") || a.has("path-prefixes") || a.has("confirm-methods") {
+        return Err(Error::invalid_input("scope_requires_http")
+            .with_detail("only HTTP connections carry a method/path scope"));
+    }
+    if before.status != "active" {
+        return Err(Error::invalid_input("connection_disabled"));
+    }
+    if before.cli.is_some() {
+        return Err(Error::invalid_input("cli_already_set")
+            .with_detail("disable the connection and create a new one to change its ssh program"));
+    }
+    let cli = CliProfile::new(a.req("cli-program"), "ssh", None, BTreeMap::new())?;
+    if let Some(env_id) = connection_shared_env(ctx, id)? {
+        let result = team_commit(
+            ctx,
+            &env_id,
+            vec![json!({"op":"connection.update","id":id,"cli":cli.to_value()})],
+        )?;
+        let after = ctx.policy.get_connection(id)?;
+        return Ok(
+            json!({"id":after.id,"policy_version":after.policy_version,"cli":after.to_value()["cli"],"commit":result["commit"],"propagated_to":0}),
+        );
+    }
+    let (after, widened) = ctx
+        .policy
+        .update_connection(id, ConnectionChanges::new().cli(Some(cli)))?;
+    admin_record_for(
+        ctx,
+        "connection_update",
+        Some(&after.id),
+        Some(after.policy_version.clone()),
+        vec![
+            ("detail", json!("cli")),
+            ("state", json!(if widened { "widened" } else { "narrowed" })),
+        ],
+    )?;
+    Ok(
+        json!({"id":after.id,"widened":widened,"policy_version":after.policy_version,"cli":after.to_value()["cli"],"note":if widened {"existing grants are stale and need regrant"} else {"existing grants re-evaluated in place"}}),
+    )
+}
+
 fn shared_connection_op(connection: &Connection, secret_version_id: Option<String>) -> Value {
     let mut data = connection.to_value();
     if let Some(obj) = data.as_object_mut() {
