@@ -118,6 +118,10 @@ describe('copy table', () => {
       expect(COPY[k], k).toContain('새 ');
     }
     expect(COPY['session.note']).toContain('SSH');
+    // a declaration that met an open incident without widening it contained no one
+    // (rust/src/incident.rs `open_incident`), and turning the agent off is what blocks it
+    expect(COPY['inc.unchanged']).toMatch(/막지 않았어요/);
+    expect(COPY['inc.unchanged']).toContain('끄세요');
     // a key revoked or replaced in the vault still works at the service
     for (const k of ['inc.close.note', 'team.remove.warn', 'toast.team.removed', 'toast.key.revoked', 'toast.key.replaced', 'keys.provider.note'] as const) {
       expect(COPY[k], k).toContain('서비스');

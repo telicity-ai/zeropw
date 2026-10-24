@@ -262,6 +262,115 @@ fn recover_reaches_a_vault_whose_code_was_typed_into_the_cli() {
     assert_eq!(failures(&core), 3);
 }
 
+/// What the app sees of an open incident (2026-10-22 desktop run, F10 and F15): a declaration
+/// the open incident takes in comes back marked `existing` and not `widened`, and contains no
+/// one, while a wider one widens the same incident; a backup from before the incident, restored
+/// while it is open, leaves resume refused.
+#[test]
+#[ignore = "needs ZEROPW_BIN_DIR with a zeropw-admin that supports --input-envelope"]
+fn an_open_incident_takes_in_a_narrower_declaration_and_survives_a_restore() {
+    const ADMIN: &str = "velvet-ocean-27-quartz-lantern";
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(dir.path().join("app"), bin_dir());
+    zeropw_desktop_core::paths::ensure_private_dir(&paths.app_data_dir).unwrap();
+    let init = Command::new(paths.admin_bin())
+        .arg(format!("--state-dir={}", paths.state_dir().display()))
+        .arg("init")
+        .env("ZEROPW_ADMIN_PASSPHRASE", ADMIN)
+        .env(
+            "ZEROPW_RECOVERY_PASSPHRASE",
+            "another-lantern-42-quartz-velvet",
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let core = Core::new(CoreConfig::new(paths), Arc::new(NoEvents));
+    for (id, runtime) in [("agent-a", "rt-a"), ("agent-b", "rt-b")] {
+        core.principal_create(PrincipalCreateIn {
+            id: id.into(),
+            runtime: runtime.into(),
+        })
+        .unwrap();
+    }
+    let status = |id: &str| {
+        core.principal_list().unwrap()["principals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()["status"]
+            .clone()
+    };
+    let archive = dir.path().join("before-incident.zpw");
+    core.backup_create(&archive).unwrap();
+
+    let declare = |scope, principal: Option<&str>, runtime: Option<&str>, pass: Option<&str>| {
+        core.incident_declare(IncidentDeclareIn {
+            scope,
+            principal: principal.map(str::to_owned),
+            runtime: runtime.map(str::to_owned),
+            reason: None,
+            admin_passphrase: pass.map(Into::into),
+        })
+        .unwrap()
+    };
+    let first = declare(IncidentScope::Runtime, None, Some("rt-a"), None);
+    assert!(first.get("existing").is_none(), "{first}");
+    let taken_in = declare(IncidentScope::Principal, Some("agent-b"), None, None);
+    assert_eq!(
+        (
+            &taken_in["id"],
+            &taken_in["scope"],
+            &taken_in["existing"],
+            &taken_in["widened"]
+        ),
+        (&first["id"], &"runtime".into(), &true.into(), &false.into()),
+        "{taken_in}"
+    );
+    assert_eq!(status("agent-b"), "active");
+
+    core.backup_restore(
+        &archive,
+        PassphraseIn {
+            admin_passphrase: ADMIN.into(),
+        },
+    )
+    .unwrap();
+    core.restore_ack(PassphraseIn {
+        admin_passphrase: ADMIN.into(),
+    })
+    .unwrap();
+    assert!(core.control_get().unwrap().incident_open);
+    assert_eq!(status("agent-a"), "disabled");
+    let refused = core
+        .resume(PassphraseIn {
+            admin_passphrase: ADMIN.into(),
+        })
+        .unwrap_err();
+    assert_eq!(
+        (refused.error.as_str(), refused.reason.as_str()),
+        ("InvalidInput", "incident_open")
+    );
+
+    let wider = declare(IncidentScope::All, None, None, Some(ADMIN));
+    assert_eq!(
+        (
+            &wider["id"],
+            &wider["scope"],
+            &wider["existing"],
+            &wider["widened"]
+        ),
+        (&first["id"], &"all".into(), &true.into(), &true.into()),
+        "{wider}"
+    );
+    assert_eq!(status("agent-b"), "disabled");
+}
+
 /// `sshd`, `ssh-keygen`: the SSH test below must fail, not silently pass, without them.
 fn openssh_tools() -> (PathBuf, PathBuf) {
     let find = |name: &str, fallback: &str| {

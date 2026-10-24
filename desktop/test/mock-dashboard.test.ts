@@ -4,7 +4,7 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListe
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM } from '../src/lib/dash';
+import { declareOutcome, grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM } from '../src/lib/dash';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
@@ -470,6 +470,39 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     expect(runtimeStopsAll(principals, 'user-agent')).toBe(true);
     await call('incident_declare', { scope: 'runtime', runtime: 'user-agent' });
     expect((await call('control_get')).stopped).toBe(true);
+  });
+
+  it('takes in a declaration that is not wider than the open incident, and widens for a wider one', async () => {
+    ready();
+    await call('principal_create', { id: 'agent-2', runtime: 'user-agent' });
+    await call('principal_create', { id: 'agent-3', runtime: 'other-user' });
+    const first = await call('incident_declare', { scope: 'runtime', runtime: 'other-user' });
+    expect(first.existing).toBeUndefined();
+    // the core returns the open incident and contains no one (rust/src/incident.rs `open_incident`)
+    const same = await call('incident_declare', { scope: 'principal', principal: 'agent-2' });
+    expect([same.id, same.scope, same.existing, same.widened]).toEqual([first.id, 'runtime', true, false]);
+    expect(declareOutcome(same)).toBe('unchanged');
+    const other = await call('incident_declare', { scope: 'runtime', runtime: 'user-agent' });
+    expect([other.id, other.existing, other.widened]).toEqual([first.id, true, false]);
+    expect((await call('principal_list')).principals.find((p) => p.id === 'agent-2')?.status).toBe('active');
+    expect((await call('control_get')).stopped).toBe(false);
+    const wider = await call('incident_declare', { scope: 'all', admin_passphrase: PASS });
+    expect([wider.id, wider.scope, wider.existing, wider.widened]).toEqual([first.id, 'all', true, true]);
+    expect(declareOutcome(wider)).toBe('widened');
+    expect((await call('principal_list')).principals.every((p) => p.status === 'disabled')).toBe(true);
+    expect((await call('incident_list')).incidents.filter((i) => i.status === 'open').map((i) => i.id)).toEqual([first.id]);
+    expect(await call('control_get')).toMatchObject({ stopped: true, incident_open: true });
+  });
+
+  it('keeps an open incident through a restore of an older backup (rust/src/vault.rs restore)', async () => {
+    ready();
+    await call('backup_create');
+    await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    await call('backup_restore', { admin_passphrase: PASS });
+    await call('restore_ack', { admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(true);
+    const e = await rejection(call('resume', { admin_passphrase: PASS }));
+    expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
   });
 
   it('keeps a global stop after acknowledging a restore', async () => {

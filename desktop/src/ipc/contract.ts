@@ -43,6 +43,8 @@ export interface Grant { id: string; principal: string; connection: string; expi
 export interface AuditRecord { [k: string]: unknown }
 export interface Alert { ts: string; alert: string; caller?: string; connection?: string; event?: string; reason?: string; detail?: string }
 export interface Incident { id: string; status: string; scope: string; opened_at: string; [k: string]: unknown }
+/** `incident declare` output: the incident, plus `existing`/`widened` when it met an open one. */
+export interface IncidentDeclared extends Incident { existing?: boolean; widened?: boolean }
 
 export interface InvitePreview { env_id: string; inviter: string; addresses: string[]; role: 'user' | 'admin'; name: string; expires_at: string; expired: boolean; invite_id: string }
 export interface InviteListItem { invite_id: string; role: string; name: string; link: boolean; created_at: string | null; expires_at: string; status: 'pending' | 'used' | 'expired' | 'revoked'; used_at: string | null; used_by: string | null; revoked_at: string | null }
@@ -117,7 +119,7 @@ export interface Commands {
 
   incident_list: [void, { incidents: Incident[] }];
   incident_show: [{ id: string }, Incident];
-  incident_declare: [{ scope: 'principal' | 'runtime' | 'all'; principal?: string; runtime?: string; reason?: string; admin_passphrase?: string }, Incident];
+  incident_declare: [{ scope: 'principal' | 'runtime' | 'all'; principal?: string; runtime?: string; reason?: string; admin_passphrase?: string }, IncidentDeclared];
   incident_close: [{ id: string; admin_passphrase: string }, Incident];
 
   backup_create: [void, Record<string, unknown>];

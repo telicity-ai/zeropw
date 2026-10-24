@@ -16,7 +16,7 @@ import type {
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
-import { CONNECTION_KEY_KINDS, countOf, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
+import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, openIncident, parseListen, splitEnv } from '../lib/dash';
 
 export interface MockChannel { onmessage: (data: string) => void }
 export interface MockSeed {
@@ -837,6 +837,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit(); await wait(400);
       if (scope === 'all') checkAdmin(admin_passphrase);
       else if (admin_passphrase) checkAdmin(admin_passphrase);
+      // rust/src/incident.rs `open_incident`: an open incident takes in a declaration that is not
+      // wider unchanged, and a wider one widens it
+      const current = openIncident(incidents);
+      if (current && !declarableScopes(current.scope).includes(scope)) return { ...current, existing: true, widened: false };
       let affected: string[];
       if (scope === 'principal') {
         if (!principal || !principals.some((p) => p.id === principal)) throw fail('InvalidInput', 'principal_unknown');
@@ -853,6 +857,15 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const stops = scope === 'all' || (scope === 'runtime' && principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime));
       for (const g of grants) if (affected.includes(g.principal) && g.status === 'active') g.status = 'revoked';
       for (const p of principals) if (affected.includes(p.id)) p.status = 'disabled';
+      if (current) {
+        current.widened_from = [...(Array.isArray(current.widened_from) ? current.widened_from : []), { scope: current.scope, runtime: current.runtime ?? null, at: iso() }];
+        current.scope = scope;
+        current.runtime = scope === 'runtime' ? runtime ?? null : null;
+        current.principals = [...new Set([...(Array.isArray(current.principals) ? current.principals as string[] : []), ...affected])].sort();
+        record({ ts: iso(), event: 'incident_widen', incident: current.id, scope });
+        setControl({ ...control, stopped: stops ? true : control.stopped });
+        return { ...current, existing: true, widened: true };
+      }
       const inc: Incident = {
         id: 'inc_' + randFrom(12, HEX), status: 'open', scope, opened_at: iso(), runtime: scope === 'runtime' ? runtime ?? null : null,
         principals: affected, trigger: 'manual', rule: null, detail: reason ?? null, actions: { grants_revoked: true, stopped: stops }, assessment: {}, notification: {},
