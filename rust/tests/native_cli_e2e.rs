@@ -729,6 +729,171 @@ fn test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd() {
     );
 }
 
+/// F8 repair, end to end: an SSH connection created without an ssh (as the
+/// desktop app did before it sent one) is refused by `exec`; a separate admin
+/// process gives it its ssh in place while `serve` runs; the old grant is
+/// stale, and a new one runs a command on a real sshd under the same id.
+#[test]
+fn test_ssh_connection_without_its_ssh_is_repaired_in_place() {
+    let (_sshd, ssh, _keygen) = native_e2e::ssh_tools();
+    let mut p = processes();
+    admin_base(&mut p);
+    let user_key = zeropw::sshwire::generate_ed25519_private_key("cli-e2e-repair");
+    let private_pem = user_key.to_openssh_private_key();
+    let sshd = Sshd::start(
+        &p.root,
+        &user_key.public.to_authorized_key("cli-e2e-repair").unwrap(),
+    );
+    p.admin(
+        &[
+            "secret",
+            "put",
+            "--id",
+            "box-key",
+            "--kind",
+            "ssh_private_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ],
+        Some(private_pem.as_bytes()),
+        0,
+    );
+    let port = sshd.port.to_string();
+    let user = username();
+    let created = p.admin(
+        &[
+            "connection",
+            "create-ssh",
+            "--id",
+            "box",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--service",
+            "ssh-box",
+            "--secret-id",
+            "box-key",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port,
+            "--username",
+            &user,
+            "--host-key",
+            &sshd.host_key_line,
+        ],
+        None,
+        0,
+    );
+    assert!(created["cli"].is_null(), "{created}");
+    let grant = p.admin(
+        &[
+            "grant",
+            "create",
+            "--principal",
+            "agent-1",
+            "--connection",
+            "box",
+            "--ttl",
+            "1h",
+        ],
+        None,
+        0,
+    );
+    p.start_serve();
+    let exec = [
+        "exec",
+        "--connection",
+        "box",
+        "--",
+        "echo",
+        "cli-e2e-repaired",
+    ];
+    let (code, refused) = p.agent(&exec, None);
+    assert_eq!((code != 0, reason(&refused)), (true, "cli_not_supported"));
+
+    let program = ssh.to_string_lossy();
+    let filled = p.admin(
+        &[
+            "connection",
+            "update",
+            "--id",
+            "box",
+            "--cli-program",
+            &program,
+        ],
+        None,
+        0,
+    );
+    assert_eq!(
+        (
+            &filled["widened"],
+            &filled["cli"]["program"],
+            &filled["policy_version"]
+        ),
+        (&json!(true), &json!(program), &json!(2)),
+        "{filled}"
+    );
+    let (code, refused) = p.agent(&exec, None);
+    assert_eq!((code != 0, reason(&refused)), (true, "grant_stale"));
+    let grants = p.admin(&["grant", "list"], None, 0);
+    let old = grants["grants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == grant["id"])
+        .unwrap();
+    assert_eq!(old["status"], "stale");
+
+    p.admin(
+        &[
+            "grant",
+            "create",
+            "--principal",
+            "agent-1",
+            "--connection",
+            "box",
+            "--ttl",
+            "1h",
+        ],
+        None,
+        0,
+    );
+    let (_code, run) = p.agent(&exec, Some(0));
+    let done = p.wait_run(run["run_id"].as_str().unwrap(), RUN_TIMEOUT);
+    assert_eq!(
+        (
+            done["state"].as_str(),
+            done["exit_code"].as_i64(),
+            done["stdout"].as_str().map(str::trim)
+        ),
+        (Some("completed"), Some(0), Some("cli-e2e-repaired")),
+        "{done}"
+    );
+    // The program stays what it was filled with.
+    let again = p.admin(
+        &[
+            "connection",
+            "update",
+            "--id",
+            "box",
+            "--cli-program",
+            "/bin/false",
+        ],
+        None,
+        1,
+    );
+    assert_eq!(reason(&again), "cli_already_set");
+
+    let (code, serve_output) = p.stop_serve();
+    assert_eq!(code, 0, "{serve_output}");
+    p.assert_no_secret_anywhere(SYNTHETIC, Some(&private_pem));
+}
+
 // ------------------------------------------------------ compromise response
 
 /// One `POST <gateway>/v1/tools/reveal_secret` with the caller token; any

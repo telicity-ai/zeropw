@@ -124,6 +124,67 @@ impl Case {
         .unwrap();
         shared["env_id"].as_str().unwrap().to_owned()
     }
+
+    /// A shared environment whose one connection, `box`, is an SSH connection
+    /// made without an ssh (`cli: null`, as the desktop app made them before
+    /// it sent one); returns the env id.
+    fn share_ssh(&self) -> String {
+        self.seed_project();
+        let key = zeropw::sshwire::generate_ed25519_private_key("team-box");
+        let pem = key.to_openssh_private_key();
+        self.admin.add_needle(pem.lines().nth(1).unwrap());
+        self.admin
+            .cmd(&[
+                "secret",
+                "put",
+                "--id",
+                "box-key",
+                "--kind",
+                "ssh_private_key",
+                "--project",
+                "demo",
+                "--environment",
+                "dev",
+                "--stdin",
+            ])
+            .stdin(pem.as_bytes())
+            .ok();
+        let host_key = zeropw::sshwire::generate_ed25519_private_key("host")
+            .public
+            .to_authorized_key("host")
+            .unwrap();
+        let created = self.ok(&[
+            "connection",
+            "create-ssh",
+            "--id",
+            "box",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--service",
+            "ssh-box",
+            "--secret-id",
+            "box-key",
+            "--host",
+            "127.0.0.1",
+            "--username",
+            "deploy",
+            "--host-key",
+            &host_key,
+        ]);
+        assert!(created["cli"].is_null(), "{created}");
+        let shared = membership::share_environment(
+            &self.ctx(),
+            None,
+            "demo",
+            "dev",
+            "owner",
+            ADMIN_PASSPHRASE,
+        )
+        .unwrap();
+        shared["env_id"].as_str().unwrap().to_owned()
+    }
 }
 
 fn assert_absent(blob: &str, forbidden: &[&str]) {
@@ -554,6 +615,159 @@ fn user_device_editing_commands_fail_before_any_commit() {
         member_entry(user, "shared/dev", &member.fp)["status"],
         "removed"
     );
+}
+
+/// F8 repair in a shared environment: `connection update --cli-program` is a
+/// `connection.update` commit carrying `cli`, the field every release since
+/// v0.1.0 folds. Another admin's node derives the connection with its ssh;
+/// its own grants on the connection go stale, and it refuses a second fill.
+#[test]
+fn shared_ssh_connection_gets_its_ssh_on_every_node() {
+    let case = Case::new();
+    let env_id = case.share_ssh();
+    let config = Config {
+        team_sync_interval_seconds: Some(0.1),
+        team_dial_backoff: (0.05, 0.3),
+        ..Config::default()
+    };
+    let address = "native-cli-ssh-fill:47304";
+    let owner_ctx = Arc::new(
+        Context::open(&case.admin.state, config.clone(), zeropw::clock::system()).unwrap(),
+    );
+    let owner_device = DeviceKey::load_or_create(owner_ctx.state, owner_ctx.kms).unwrap();
+    let nobody: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(owner_device.clone(), nobody));
+    let owner_sync = StopOnDrop(TeamSync::new(owner_ctx.clone(), transport, owner_device));
+    owner_sync.0.start(Some(address)).unwrap();
+    let invite = membership::create_invite(
+        &owner_ctx,
+        &env_id,
+        "admin",
+        "dave",
+        3600,
+        &[address.into()],
+    )
+    .unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let member = Admin::new(tmp.path());
+    member.ok(&["init"]);
+    let member_ctx =
+        Arc::new(Context::open(&member.state, config, zeropw::clock::system()).unwrap());
+    let device = DeviceKey::load_or_create(member_ctx.state, member_ctx.kms).unwrap();
+    let nobody: MembershipCheck = Arc::new(|_: &str, _: &str| -> Option<DeviceRecord> { None });
+    let transport = Arc::new(InProcessTransport::new(device.clone(), nobody));
+    let member_sync = StopOnDrop(TeamSync::new(member_ctx.clone(), transport.clone(), device));
+    member_sync.0.start(None).unwrap();
+    membership::join(
+        &member_ctx,
+        &invite,
+        transport.as_ref() as &dyn Transport,
+        &member_sync.0,
+        Some("shared"),
+        Some("dev"),
+        10.0,
+    )
+    .unwrap();
+    member.ok(&["principal", "create", "--id", "agent-1"]);
+    let grant = member.ok(&[
+        "grant",
+        "create",
+        "--principal",
+        "agent-1",
+        "--connection",
+        "box",
+    ]);
+    let grant_id = grant["id"].as_str().unwrap();
+    let before = member_ctx.policy.get_connection("box").unwrap();
+    assert!(before.cli.is_none());
+
+    let filled = case.ok(&[
+        "connection",
+        "update",
+        "--id",
+        "box",
+        "--cli-program",
+        "/usr/bin/ssh",
+    ]);
+    assert!(filled.get("commit").is_some(), "{filled}");
+    assert_eq!(filled["propagated_to"], 0);
+    assert_eq!(filled["cli"]["program"], "/usr/bin/ssh");
+    let store = CommitStore::new(owner_ctx.state, &env_id);
+    let last = store
+        .all_commits()
+        .unwrap()
+        .into_iter()
+        .max_by_key(|c| c.author_seq.clone())
+        .unwrap();
+    assert_eq!(
+        last.ops,
+        vec![json!({"op": "connection.update", "id": "box",
+                    "cli": {"program": "/usr/bin/ssh", "kind": "ssh",
+                            "base_url_env": "ZEROPW_API_BASE_URL", "extra_env": {}}})]
+    );
+
+    // The serve stand-in picks the CLI's commit up and sends it on.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let after = loop {
+        let c = member_ctx.policy.get_connection("box").unwrap();
+        if c.cli.is_some() {
+            break c;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fill did not reach the member"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(after.cli.as_ref().unwrap().program, "/usr/bin/ssh");
+    assert_eq!(after.cli.as_ref().unwrap().kind, "ssh");
+    assert_eq!(after.ssh_target, before.ssh_target);
+    assert_eq!(after.policy_version, &before.policy_version + 1);
+    assert_eq!(
+        member_ctx.policy.get_grant(grant_id).unwrap().status,
+        "stale"
+    );
+    let refused = member.fail(&[
+        "connection",
+        "update",
+        "--id",
+        "box",
+        "--cli-program",
+        "/bin/false",
+    ]);
+    assert_eq!(refused["reason"], "cli_already_set");
+    assert_eq!(
+        member_ctx.policy.get_connection("box").unwrap().cli,
+        after.cli
+    );
+}
+
+/// A device that joined as `user` cannot fill a shared SSH connection's ssh:
+/// `not_admin`, and no commit is stored.
+#[test]
+fn user_device_cannot_give_a_shared_ssh_connection_its_ssh() {
+    let case = Case::new();
+    let env_id = case.share_ssh();
+    let member = join_member(&case, &env_id, "user", "native-cli-user-ssh:47305");
+    let ctx = Context::open(
+        &member.admin.state,
+        Config::default(),
+        zeropw::clock::system(),
+    )
+    .unwrap();
+    let store = CommitStore::new(ctx.state, &env_id);
+    let before = store.vector().unwrap();
+    let refused = member.admin.fail(&[
+        "connection",
+        "update",
+        "--id",
+        "box",
+        "--cli-program",
+        "/usr/bin/ssh",
+    ]);
+    assert_eq!(refused["reason"], "not_admin", "{refused}");
+    assert_eq!(store.vector().unwrap(), before);
+    assert!(ctx.policy.get_connection("box").unwrap().cli.is_none());
 }
 
 #[test]

@@ -252,6 +252,16 @@ pub async fn connection_create_ssh(shell: State<'_, Shell>, request: Request<'_>
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn connection_set_cli_program(
+    shell: State<'_, Shell>,
+    request: Request<'_>,
+) -> Out<Value> {
+    let input: CliProgramIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.connection_set_cli_program(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn connection_disable(shell: State<'_, Shell>, request: Request<'_>) -> Out<Value> {
     let input: IdIn = input(&request)?;
     let core = core(&shell);
@@ -677,6 +687,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         connection_list,
         connection_create_http,
         connection_create_ssh,
+        connection_set_cli_program,
         connection_disable,
         principal_list,
         principal_create,

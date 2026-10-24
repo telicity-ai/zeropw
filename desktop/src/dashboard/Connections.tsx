@@ -4,8 +4,8 @@ import { call, toIpcError } from '../ipc/client';
 import type { ConnectionView, Project, SecretKind, SecretSource, SecretView } from '../ipc/contract';
 import {
   defaultMethodStates, envPairs, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
-  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, summarizeConnection, writeConsequences, type Method,
-  type MethodStates,
+  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, writeConsequences,
+  type Method, type MethodStates,
 } from '../lib/dash';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
@@ -17,7 +17,7 @@ import { kindLabel, PublicKey } from './Keys';
 import { ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
-type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string };
+type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string } | { kind: 'ssh-cli'; id: string };
 const CONSQ: Record<'POST' | 'PUT' | 'PATCH' | 'DELETE', CopyKey> = {
   POST: 'conn.consq.POST', PUT: 'conn.consq.PUT', PATCH: 'conn.consq.PATCH', DELETE: 'conn.consq.DELETE',
 };
@@ -43,10 +43,16 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
       <ListCard items={list} failed={load.failed} empty="page.connections.empty" emptyAction={addBtn} label={t('conns.list')}>
         {(items) => items.map((c) => {
           const s = summarizeConnection(c);
+          // an SSH connection the app made before it sent an ssh: exec refuses it until it gets one
+          const noCli = s.active && s.noCli;
           return (
-            <Row key={c.id} dot={s.active ? 'on' : 'idle'} mono name={c.id}
+            <Row key={c.id} dot={s.active && !noCli ? 'on' : 'idle'} mono name={c.id}
               tag={<Tag>{s.kind === 'http' ? 'API' : s.kind === 'ssh' ? 'SSH' : String(c.kind)}</Tag>}
-              meta={metaLine(s.host, s.env, s.active ? null : t('st.disabled'))}>
+              meta={metaLine(s.host, s.env, s.active ? null : t('st.disabled'), noCli ? t('conns.nocli') : null)}>
+              {noCli && (
+                <button className="btn btn-ghost btn-sm" type="button" aria-label={t('conns.sshcli.aria', { id: c.id })}
+                  onClick={() => sheets.open({ kind: 'ssh-cli', id: c.id })}>{t('conns.sshcli')}</button>
+              )}
               {s.active && (
                 <button className="btn btn-text btn-sm" type="button" aria-label={t('conns.disable.aria', { id: c.id })}
                   onClick={() => sheets.open({ kind: 'disable', id: c.id })}>{t('conns.disable')}</button>
@@ -60,7 +66,45 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
         connections={list ?? []} secrets={load.data?.secrets ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
       <DisableSheet key={sheets.key('disable')} open={sheets.isOpen('disable')} id={sheets.data('disable')?.id ?? ''}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
+      <SshCliSheet key={sheets.key('ssh-cli')} open={sheets.isOpen('ssh-cli')} id={sheets.data('ssh-cli')?.id ?? ''}
+        onClose={sheets.close} onStale={reload} onDone={() => { sheets.close(); reload(); bump(); }} />
     </>
+  );
+}
+
+/** Gives an SSH connection made without an ssh the one its agents run (`connection_set_cli_program`).
+ *  The CLI fills a missing ssh only, and the connection's grants go stale, so the sheet says the
+ *  path cannot be changed later and that the agents' permissions must be given again. */
+function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id: string; onClose(): void; onStale(): void; onDone(): void }) {
+  const { toast } = useApp();
+  const [path, setPath] = useState(SSH_PROGRAM);
+  const [pathErr, setPathErr] = useState<CopyKey | null>(null);
+  const pathRef = useRef<HTMLInputElement>(null);
+  return (
+    <ConfirmSheet id="sheet-conn-ssh-cli" open={open} title={t('conns.sshcli.title')} lead={t('conns.sshcli.sub')}
+      confirmLabel={t('conns.sshcli.confirm')} chips={[id]} info={t('conns.sshcli.regrant')} warn={t('conns.sshcli.warn')} needPass
+      check={() => {
+        if (isCliPath(path.trim())) return true;
+        setPathErr('conn.cli.err'); pathRef.current?.focus();
+        return false;
+      }}
+      run={async (pass) => {
+        await call('connection_set_cli_program', { id, cli_program: path.trim(), admin_passphrase: pass });
+        toast(t('toast.conn.sshcli'));
+        onDone();
+      }}
+      errorFor={(e) => {
+        const r = toIpcError(e).reason;
+        if (r === 'cli_program_required' || r === 'invalid_cli_program') return 'conn.cli.err';
+        // the list was out of date: show the connection as it is now
+        if (r === 'cli_already_set') { onStale(); return 'conns.sshcli.err.set'; }
+        if (r === 'connection_disabled' || r === 'connection_not_found') { onStale(); return 'conns.sshcli.err.off'; }
+        return null;
+      }}
+      onClose={onClose}>
+      <TextField id="conn-sshcli-path" label={t('conn.ssh.cli')} mono value={path} inputRef={pathRef} placeholder={SSH_PROGRAM}
+        error={pathErr ? t(pathErr) : null} onChange={(v) => { setPath(v); setPathErr(null); }} />
+    </ConfirmSheet>
   );
 }
 
@@ -79,7 +123,7 @@ type ConnType = 'http' | 'ssh';
 type Auth = 'bearer' | 'basic' | 'header';
 type Cli = '' | 'democli' | 'custom';
 type KeySrc = 'new' | 'existing';
-type ErrKey = 'env' | 'id' | 'target' | 'basic' | 'header' | 'prefix' | 'methods' | 'paths' | 'cli' | 'host' | 'port' | 'user' | 'hostKey' | 'key' | 'pass' | 'form';
+type ErrKey = 'env' | 'id' | 'target' | 'basic' | 'header' | 'prefix' | 'methods' | 'paths' | 'cli' | 'host' | 'port' | 'user' | 'hostKey' | 'sshCli' | 'key' | 'pass' | 'form';
 type Errs = Partial<Record<ErrKey, CopyKey>>;
 
 /** The API/SSH form from the mockup's connection step. The key is either a stored one from the
@@ -115,6 +159,7 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
   const [port, setPort] = useState('22');
   const [user, setUser] = useState('');
   const [hostKey, setHostKey] = useState('');
+  const [sshCli, setSshCli] = useState(SSH_PROGRAM);
   const [value, setValue] = useState('');
   const [file, setFile] = useState<{ file_token: string; name: string } | null>(null);
   const [gen, setGen] = useState(false);
@@ -129,8 +174,9 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
     basic: useRef<HTMLInputElement>(null), header: useRef<HTMLInputElement>(null), prefix: useRef<HTMLInputElement>(null),
     methods: useRef<HTMLButtonElement>(null), paths: useRef<HTMLInputElement>(null), cli: useRef<HTMLInputElement>(null),
     host: useRef<HTMLInputElement>(null), port: useRef<HTMLInputElement>(null), user: useRef<HTMLInputElement>(null),
-    hostKey: useRef<HTMLInputElement>(null), key: useRef<HTMLInputElement>(null), keyFile: useRef<HTMLButtonElement>(null),
-    pass: useRef<HTMLInputElement>(null), more: useRef<HTMLDetailsElement>(null), pick: useRef<HTMLSelectElement>(null),
+    hostKey: useRef<HTMLInputElement>(null), sshCli: useRef<HTMLInputElement>(null), key: useRef<HTMLInputElement>(null),
+    keyFile: useRef<HTMLButtonElement>(null), pass: useRef<HTMLInputElement>(null), more: useRef<HTMLDetailsElement>(null),
+    pick: useRef<HTMLSelectElement>(null),
   };
 
   const ssh = type === 'ssh';
@@ -192,17 +238,19 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
       if (parsePort(port) === null) e.port = 'conn.ssh.port.err';
       if (!isSshUser(user)) e.user = 'conn.ssh.user.err';
       if (!isHostKey(hostKey)) e.hostKey = 'conn.ssh.hostkey.err';
+      if (!isCliPath(sshCli.trim())) e.sshCli = 'conn.cli.err';
     }
     if (existing) { if (!pick) e.key = 'conn.key.err.pick'; }
     else if (!keyStored && !value && !file && !gen) e.key = ssh ? 'conn.ssh.keyerr' : 'conn.key.need';
     if (!pass) e.pass = 'pass.err.empty';
     setErrs(e);
-    const order: ErrKey[] = ['env', 'id', 'target', 'basic', 'header', 'prefix', 'methods', 'paths', 'cli', 'host', 'port', 'user', 'hostKey', 'key', 'pass'];
+    const order: ErrKey[] = ['env', 'id', 'target', 'basic', 'header', 'prefix', 'methods', 'paths', 'cli', 'host', 'port', 'user', 'hostKey', 'sshCli', 'key', 'pass'];
     return order.find((k) => e[k]) ?? null;
   };
 
   const focusErr = (k: ErrKey) => {
-    if ((k === 'paths' || k === 'cli') && refs.more.current) refs.more.current.open = true;
+    // the HTTP and SSH forms each have their own "more" section; only the shown one holds the ref
+    if ((k === 'paths' || k === 'cli' || k === 'sshCli') && refs.more.current) refs.more.current.open = true;
     const el = k === 'key' && existing ? refs.pick.current : k === 'key' && ssh ? refs.keyFile.current : (refs as Record<string, { current: HTMLElement | null }>)[k]?.current;
     setTimeout(() => el?.focus(), 0);
   };
@@ -229,7 +277,7 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
       if (ssh) {
         await call('connection_create_ssh', {
           id: connId, project: pair.project, environment: pair.environment, service: connId, secret_id: secretId,
-          host, port: parsePort(port) ?? 22, username: user, host_keys: [hostKey.trim()], admin_passphrase: pass,
+          host, port: parsePort(port) ?? 22, username: user, host_keys: [hostKey.trim()], cli_program: sshCli.trim(), admin_passphrase: pass,
         });
       } else {
         const m = methodsPayload(methods);
@@ -262,6 +310,7 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
         invalid_header_name: ['header', 'conn.header.err'], invalid_basic_username: ['basic', 'conn.basic.err'],
         invalid_secret_value: ['key', 'keys.err.value'], file_token_unknown: ['key', 'keys.err.value'],
         host_key_required: ['hostKey', 'conn.ssh.hostkey.err'],
+        cli_program_required: ['sshCli', 'conn.cli.err'], invalid_cli_program: [ssh ? 'sshCli' : 'cli', 'conn.cli.err'],
         secret_kind_mismatch: ['key', 'conn.key.err.kind'], secret_scope_mismatch: ['key', 'conn.key.err.pick'],
         secret_version_unusable: ['key', 'conn.key.err.unusable'], secret_not_found: ['key', 'conn.key.err.pick'],
       };
@@ -386,6 +435,13 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
             onChange={(v) => { setUser(v); clear('user'); }} />
           <TextField id="conn-ssh-hostkey" label={t('conn.ssh.hostkey')} hint={t('conn.ssh.hostkey.hint')} mono value={hostKey} inputRef={refs.hostKey}
             placeholder="ssh-ed25519 AAAA…" error={err('hostKey')} help={t('conn.ssh.note')} onChange={(v) => { setHostKey(v); clear('hostKey'); }} />
+          <details className="more" ref={refs.more}>
+            <summary>{t('conn.more')}</summary>
+            <div className="inner">
+              <TextField id="conn-ssh-cli" label={t('conn.ssh.cli')} mono value={sshCli} inputRef={refs.sshCli} placeholder={SSH_PROGRAM}
+                error={err('sshCli')} onChange={(v) => { setSshCli(v); clear('sshCli'); }} />
+            </div>
+          </details>
         </>
       )}
 

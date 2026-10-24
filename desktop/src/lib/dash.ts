@@ -145,6 +145,9 @@ const HOST_RE = new RegExp(`^(${HOST_LABEL}\\.)*${HOST_LABEL}$`);
 /** Lower-case DNS name or IPv4 literal, as the core's connection rules accept. */
 export const isSshHost = (v: string): boolean => v.length <= 253 && (HOST_RE.test(v) || /^\d{1,3}(\.\d{1,3}){3}$/.test(v));
 export const isSshUser = (v: string): boolean => /^[a-z_][a-z0-9_.-]{0,31}$/.test(v);
+/** The ssh a new SSH connection names by default. The agent can only use a connection that names
+ *  one (rust/src/tools.rs `exec`: `cli_not_supported`), so the form starts with the system's. */
+export const SSH_PROGRAM = '/usr/bin/ssh';
 /** The core accepts Ed25519 host keys only (`unsupported_host_key` otherwise). */
 export const isHostKey = (v: string): boolean => /^ssh-ed25519 [A-Za-z0-9+/]{16,}={0,3}( [^\x00-\x1f\x7f]*)?$/.test(v.trim());
 
@@ -208,9 +211,41 @@ export function runtimeStopsAll(principals: readonly { runtime: string; status: 
   return principals.filter((p) => p.status === 'active').every((p) => p.runtime === runtime);
 }
 
+/** Incident scopes, narrowest first (rust/src/incident.rs `SCOPES`). */
+export const INCIDENT_SCOPES = ['principal', 'runtime', 'all'] as const;
+export type IncidentScope = typeof INCIDENT_SCOPES[number];
+const scopeRank = (s: string): number => INCIDENT_SCOPES.indexOf(s as IncidentScope);
+
+/** The open incident a new declaration meets: the widest when the list holds more than one. */
+export function openIncident<T extends { status: string; scope: string }>(incidents: readonly T[]): T | null {
+  let found: T | null = null;
+  for (const x of incidents) if (x.status === 'open' && (!found || scopeRank(x.scope) > scopeRank(found.scope))) found = x;
+  return found;
+}
+
+/** Scopes a declaration still contains while an incident of scope `open` is open: the core widens
+ *  an open incident to a wider scope and returns it unchanged for any other, even one naming
+ *  another agent or runtime (rust/src/incident.rs `open_incident`). An unknown scope ranks below
+ *  every scope there, so every scope widens it. */
+export function declarableScopes(open: string | null): IncidentScope[] {
+  if (open === null) return [...INCIDENT_SCOPES];
+  return INCIDENT_SCOPES.filter((s) => scopeRank(s) > scopeRank(open));
+}
+
+export type DeclareOutcome = 'opened' | 'widened' | 'unchanged';
+
+/** What `incident declare` did. Output that met an open incident carries `existing` (and
+ *  `widened` only when it widened it); anything else from such output contained no one. */
+export function declareOutcome(out: { existing?: unknown; widened?: unknown }): DeclareOutcome {
+  if (out.existing === undefined || out.existing === false) return 'opened';
+  return out.widened === true ? 'widened' : 'unchanged';
+}
+
 // ---------------------------------------------------------------- connections (CLI output, untyped)
 
-export interface ConnectionSummary { kind: 'http' | 'ssh' | 'other'; host: string; env: string; auth: string | null; active: boolean }
+/** `noCli`: an SSH connection without the ssh its agents run (made by the app before it sent
+ *  one); `exec` refuses it with `cli_not_supported` until it gets one. */
+export interface ConnectionSummary { kind: 'http' | 'ssh' | 'other'; host: string; env: string; auth: string | null; active: boolean; noCli: boolean }
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {});
 const str = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
@@ -230,7 +265,8 @@ export function summarizeConnection(c: ConnectionView): ConnectionSummary {
     host = (user ? `${user}@` : '') + str(t.host) + (port && port !== '22' ? `:${port}` : '');
   }
   const auth = kind === 'http' ? str(obj(c.http_auth).mode) || null : null;
-  return { kind, host, env: envKey(str(c.project), str(c.environment)), auth, active: c.status === 'active' };
+  const noCli = kind === 'ssh' && (c.cli === null || c.cli === undefined);
+  return { kind, host, env: envKey(str(c.project), str(c.environment)), auth, active: c.status === 'active', noCli };
 }
 
 // ---------------------------------------------------------------- audit records

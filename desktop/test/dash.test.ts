@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../src/ipc/contract';
 import {
-  blockText, countOf, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
-  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, summarizeConnection,
+  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
 
@@ -102,6 +102,11 @@ describe('SSH connection form', () => {
     expect(isHostKey('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl host comment')).toBe(true);
     for (const bad of ['ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ', 'ssh-ed25519 short', 'AAAAC3NzaC1lZDI1NTE5', '']) expect(isHostKey(bad)).toBe(false);
   });
+  it('starts with the system ssh, a path the form itself accepts', () => {
+    // left as it is, the field must not stop the form (desktop E2E finding F8)
+    expect(SSH_PROGRAM).toBe('/usr/bin/ssh');
+    expect(isCliPath(SSH_PROGRAM)).toBe(true);
+  });
   it('parses ports within range', () => {
     expect(parsePort('22')).toBe(22);
     expect(parsePort('65535')).toBe(65535);
@@ -176,19 +181,55 @@ describe('incident scope', () => {
     expect(runtimeStopsAll([p('user-a'), p('default')], 'user-a')).toBe(false);
     expect(runtimeStopsAll([], 'user-a')).toBe(true);
   });
+
+  // rust/src/incident.rs `open_incident` widens an open incident only to a wider scope and returns
+  // it unchanged for any other, even one naming another agent or runtime
+  it('offers only scopes wider than the open incident', () => {
+    expect(declarableScopes(null)).toEqual(['principal', 'runtime', 'all']);
+    expect(declarableScopes('principal')).toEqual(['runtime', 'all']);
+    expect(declarableScopes('runtime')).toEqual(['all']);
+    expect(declarableScopes('all')).toEqual([]);
+    // an unknown stored scope ranks below every scope in the core, so each one widens it
+    expect(declarableScopes('weird')).toEqual(['principal', 'runtime', 'all']);
+  });
+
+  it('finds the open incident, the widest when several are open', () => {
+    const i = (id: string, status: string, scope: string) => ({ id, status, scope });
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'closed', 'principal')])).toBeNull();
+    expect(openIncident([i('a', 'closed', 'all'), i('b', 'open', 'principal')])?.id).toBe('b');
+    expect(openIncident([i('a', 'open', 'principal'), i('b', 'open', 'runtime'), i('c', 'open', 'principal')])?.id).toBe('b');
+  });
+
+  it('reads a declaration that met an open incident as no lockdown unless it widened it', () => {
+    expect(declareOutcome({})).toBe('opened');
+    expect(declareOutcome({ existing: false })).toBe('opened');
+    expect(declareOutcome({ existing: true, widened: true })).toBe('widened');
+    expect(declareOutcome({ existing: true, widened: false })).toBe('unchanged');
+    expect(declareOutcome({ existing: true })).toBe('unchanged');
+    expect(declareOutcome({ existing: 'yes', widened: 'yes' })).toBe('unchanged');
+  });
 });
 
 describe('connection summaries (CLI output read defensively)', () => {
   const base = { id: 'x', project: 'demo', environment: 'dev', status: 'active' };
   it('shows the HTTP host, hiding the default port', () => {
     const c = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, http_auth: { mode: 'bearer' } } as ConnectionView;
-    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true });
+    expect(summarizeConnection(c)).toEqual({ kind: 'http', host: 'api.example.com', env: 'demo/dev', auth: 'bearer', active: true, noCli: false });
     const odd = { ...c, http_target: { scheme: 'https', host: 'api.example.com', port: 8443 } } as ConnectionView;
     expect(summarizeConnection(odd).host).toBe('api.example.com:8443');
   });
   it('shows user@host for SSH', () => {
     const c = { ...base, kind: 'ssh', status: 'disabled', ssh_target: { host: 'git.example.com', port: 2222, username: 'git' } } as ConnectionView;
     expect(summarizeConnection(c)).toMatchObject({ kind: 'ssh', host: 'git@git.example.com:2222', active: false });
+  });
+  // an SSH connection the app made before it sent an ssh: exec refuses it (cli_not_supported)
+  it('marks an SSH connection without its ssh, and only that', () => {
+    const ssh = { ...base, kind: 'ssh', ssh_target: { host: 'git.example.com', port: 22, username: 'git' } };
+    expect(summarizeConnection({ ...ssh, cli: null } as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection(ssh as ConnectionView).noCli).toBe(true);
+    expect(summarizeConnection({ ...ssh, cli: { program: SSH_PROGRAM, kind: 'ssh' } } as ConnectionView).noCli).toBe(false);
+    const http = { ...base, kind: 'http', http_target: { scheme: 'https', host: 'api.example.com', port: 443 }, cli: null } as ConnectionView;
+    expect(summarizeConnection(http).noCli).toBe(false);
   });
   it('does not throw on unexpected shapes', () => {
     const c = { ...base, kind: 'weird', http_target: 'nope', ssh_target: [1, 2] } as unknown as ConnectionView;
