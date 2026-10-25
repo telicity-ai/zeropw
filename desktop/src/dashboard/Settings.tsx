@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { NetInterface } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, interfaceLabel, MIN_GATEWAY_PORT, parseListen, parsePort } from '../lib/dash';
+import { addressChoices, DEFAULT_GATEWAY_PORT, MIN_GATEWAY_PORT, parseListen, parsePort, settingsFields, type SettingsFields } from '../lib/dash';
 import { restoreErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
@@ -10,26 +10,30 @@ import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { Empty, SectionHead } from './parts';
-import { listenErrorLines, relayLeftOff, restartRelay, turnOnListen } from './relay';
+import { listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
-type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
+type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' } | { kind: 'reset' };
 const CANCELLED = new Set(['file_dialog_cancelled']);
 
 /** Settings: the relay port, this device's address for other devices, backup, restore and
  *  replacing the device key with the recovery code. Files are picked in native dialogs owned by
- *  the core. The sidebar sends the user here to acknowledge a restore (`ack-restore`). */
+ *  the core. The sidebar sends the user here to acknowledge a restore (`ack-restore`). A settings
+ *  file the core refuses as damaged is never reset on its own: the page says so and offers to
+ *  write the defaults over it, after a confirmation. */
 export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
   const { tick, bump, control, serve, relay } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
-    const [s, i] = await Promise.all([call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { settings: s, interfaces: i };
+    const [s, i] = await Promise.all([readSettings(), call('net_interfaces').catch(() => [] as NetInterface[])]);
+    return { ...s, interfaces: i };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<SetSheet>();
   const s = load.data?.settings ?? null;
+  const corrupt = load.data?.corrupt === true;
+  const unread = t(corrupt ? 'set.corrupt' : load.failed ? 'error.load' : 'boot.loading');
   const ifaces = load.data?.interfaces ?? [];
   const listen = parseListen(s?.team_listen);
   useIntent(intent, onIntent, (i) => {
@@ -38,10 +42,10 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
     return true;
   });
 
-  const [port, setPort] = useState('');
+  const [fields, setFields] = useState<SettingsFields | null>(null);
+  const { port = '', ip = '', tport = '' } = fields ?? {};
+  const setField = (k: keyof SettingsFields, v: string) => setFields((f) => ({ ...(f ?? { port: '', ip: '', tport: '' }), [k]: v }));
   const [portErr, setPortErr] = useState<CopyKey | null>(null);
-  const [ip, setIp] = useState('');
-  const [tport, setTport] = useState('');
   const [tErr, setTErr] = useState<CopyLine[] | null>(null);
   const [busy, setBusy] = useState<'port' | 'listen' | 'backup' | null>(null);
   // after the device key is replaced, earlier backups no longer restore: ask for a new one
@@ -49,13 +53,8 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
   const portRef = useRef<HTMLInputElement>(null);
   const tportRef = useRef<HTMLInputElement>(null);
 
-  // fill the fields once the settings arrive
-  useEffect(() => {
-    if (!s) return;
-    setPort((p) => p || String(s.gateway_port));
-    setIp((v) => v || listen?.ip || ifaces[0]?.ip || '');
-    setTport((v) => v || String(listen?.port ?? DEFAULT_TEAM_PORT));
-  }, [s, listen, ifaces]);
+  // fill the fields when the settings first arrive; later loads leave them as the user left them
+  useEffect(() => { if (s) setFields((f) => settingsFields(f, s, ifaces)); }, [s, ifaces]);
 
   /** Restart the relay after a saved change; a relay that does not come back shows why. */
   const restart = async (done: CopyKey) => {
@@ -122,10 +121,17 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
     <>
       <SectionHead title={t('set.relay')} />
       <div className="glass pad">
-        {!s ? <Empty text={load.failed ? t('error.load') : t('boot.loading')} /> : (
+        {!s ? (
+          corrupt ? (
+            <Callout kind="info" className="flush">
+              {t('set.corrupt')}{' '}
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'reset' })}>{t('set.reset')}</button>
+            </Callout>
+          ) : <Empty text={unread} />
+        ) : (
           <div className="inline">
             <TextField id="set-port" label={t('set.port')} hint={t('set.port.hint')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5}
-              error={portErr ? t(portErr) : null} onChange={(v) => { setPort(v); setPortErr(null); }} />
+              error={portErr ? t(portErr) : null} onChange={(v) => { setField('port', v); setPortErr(null); }} />
             <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'port' || undefined} onClick={() => void savePort()}>{t('set.save')}</button>
           </div>
         )}
@@ -133,7 +139,7 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
 
       <SectionHead title={t('inv.pre1')} />
       <div className="glass pad">
-        {!s ? <Empty text={load.failed ? t('error.load') : t('boot.loading')} /> : (
+        {!s ? <Empty text={unread} /> : (
           <>
             <div className={'share-state' + (listen ? ' on' : '')} role="status">
               <span className="px" aria-hidden="true" />
@@ -141,10 +147,10 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
               {listen && <span className="mono">{`${listen.ip}:${listen.port}`}</span>}
             </div>
             <div className="inline" style={{ marginTop: 14 }}>
-              <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={ifaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
-                onChange={(v) => { setIp(v); setTErr(null); }} style={{ flex: 1.7 }} />
+              <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(ifaces, ip, listen?.ip)}
+                onChange={(v) => { setField('ip', v); setTErr(null); }} style={{ flex: 1.7 }} />
               <TextField id="set-tport" label={t('conn.ssh.port')} mono value={tport} inputRef={tportRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 92px' }}
-                error={tErr ? tLines(tErr) : null} onChange={(v) => { setTport(v); setTErr(null); }} />
+                error={tErr ? tLines(tErr) : null} onChange={(v) => { setField('tport', v); setTErr(null); }} />
               <button className="btn btn-ghost btn-sm tall" type="button" aria-busy={busy === 'listen' || undefined} onClick={() => void listenOn()}>
                 {t(listen ? 'set.listen.change' : 'inv.pre1.btn')}
               </button>
@@ -188,6 +194,14 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
           const out = await call('restore_ack', { admin_passphrase: pass });
           // restore-ack lifts only the restore hold; a global stop stays until it is resumed
           toast(t(out.stopped === true ? 'toast.ack.stopped' : 'toast.ack.done'), out.stopped === true ? 'warn' : 'info'); sheets.close(); bump();
+        }} />
+      <ConfirmSheet key={sheets.key('reset')} id="sheet-settings-reset" open={sheets.isOpen('reset')} title={t('set.reset')}
+        lead={t('set.reset.sub', { port: DEFAULT_GATEWAY_PORT })} confirmLabel={t('set.reset')} info={t('set.reset.note')} onClose={sheets.close}
+        run={async () => {
+          await resetSettings();
+          sheets.close();
+          setFields(null);
+          await restart('toast.set.reset');
         }} />
       <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); setNeedBackup(true); bump(); }} />
     </>

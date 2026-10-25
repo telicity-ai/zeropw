@@ -2,7 +2,8 @@
 // value-free text for records. The core re-checks every input; these only decide what the UI
 // marks as ready and which inline error it shows. Nothing here ever handles a secret value.
 
-import type { AuditRecord, ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../ipc/contract';
+import { t } from '../copy';
+import type { AuditRecord, ConnectionView, Control, Grant, NetInterface, Project, SecretView, ServeStatus, Settings, TeamEnvironment } from '../ipc/contract';
 import { hostPort } from './format';
 import { isValidName } from './validators';
 
@@ -39,6 +40,11 @@ export function teamEnvPairs(listing: { projects: readonly Project[]; team_envir
   return out;
 }
 
+/** `project list` could not read the team environments (`team_environments_error`): the projects
+ *  are all there, but environments shared from here or joined are missing from the lists. */
+export const teamEnvsUnread = (listing: { team_environments_error?: unknown }): boolean =>
+  typeof listing.team_environments_error === 'string' && listing.team_environments_error !== '';
+
 export function splitEnv(key: string): { project: string; environment: string } | null {
   const parts = key.split('/');
   if (parts.length !== 2) return null;
@@ -71,6 +77,14 @@ export type VersionId = string | number;
 /** Versions newest first; the CLI prints them as numbers or numeric strings. */
 export function sortedVersions(s: SecretView): SecretView['versions'] {
   return s.versions.slice().sort((a, b) => Number(b.version) - Number(a.version));
+}
+
+/** Versions other than the one in use: all of them when none is (every version revoked or
+ *  retired), not one fewer (desktop E2E F9). */
+export function olderVersionCount(s: Pick<SecretView, 'active_version' | 'versions'>): number {
+  const active = s.active_version;
+  if (active === null || active === undefined || String(active) === '') return s.versions.length;
+  return s.versions.filter((v) => String(v.version) !== String(active)).length;
 }
 
 /** Kinds of stored key the core accepts for each connection type (`secret_kind_mismatch`). */
@@ -223,6 +237,16 @@ export function openIncident<T extends { status: string; scope: string }>(incide
   return found;
 }
 
+/** The scope of the open incident a declaration meets, or null when it meets none. The core goes
+ *  by its pointer to the open incident (`control.incident_open`; rust/src/incident.rs
+ *  `open_incident`), not by the files: a file still marked open while the pointer names none (a
+ *  restore by an earlier build left that, or a crash between writing the file and the pointer)
+ *  is met by a new incident of any scope. So the list gives the scope only while the pointer says
+ *  an incident is open (pr3-incident-1). */
+export function openIncidentScope(incidents: readonly { status: string; scope: string }[], control: Pick<Control, 'incident_open'> | null | undefined): string | null {
+  return control?.incident_open ? openIncident(incidents)?.scope ?? null : null;
+}
+
 /** Scopes a declaration still contains while an incident of scope `open` is open: the core widens
  *  an open incident to a wider scope and returns it unchanged for any other, even one naming
  *  another agent or runtime (rust/src/incident.rs `open_incident`). An unknown scope ranks below
@@ -281,20 +305,6 @@ export function valueText(v: unknown): string {
   else { try { s = JSON.stringify(v) ?? ''; } catch { s = ''; } }
   s = s.replace(/[\x00-\x1f\x7f]+/g, ' ');
   return s.length > CLIP ? s.slice(0, CLIP - 1) + '…' : s;
-}
-
-/** Title and fields of an audit record or alert: the event name, then every other field as
- *  `key=value` text in the order the record has them. */
-export function recordFields(rec: AuditRecord, titleKey = 'event'): { ts: string; title: string; fields: string[] } {
-  const ts = valueText(rec.ts);
-  const title = valueText(rec[titleKey]) || valueText(rec.alert) || valueText(rec.event);
-  const fields: string[] = [];
-  for (const [k, v] of Object.entries(rec)) {
-    if (k === 'ts' || k === titleKey) continue;
-    const text = valueText(v);
-    if (text !== '') fields.push(`${valueText(k)}=${text}`);
-  }
-  return { ts, title, fields };
 }
 
 /** A stable signature for "the newest record I have seen". */
@@ -401,6 +411,33 @@ export function defaultListenIp(interfaces: readonly { ip: string; kind: string 
 export const interfaceLabel = (i: { ip: string; name: string; kind: string }): string =>
   `${i.ip} · ${i.kind === 'vpn' ? 'VPN' : i.kind === 'lan' ? 'LAN' : i.name}`;
 export const MIN_GATEWAY_PORT = 1024;
+/** The relay port a fresh app uses (desktop/core/src/settings.rs `DEFAULT_GATEWAY_PORT`). */
+export const DEFAULT_GATEWAY_PORT = 47380;
+
+/** The address picker's choices: this device's addresses, and first the saved address and the
+ *  picked one (`current`) when they are not among them (a saved address a VPN or DHCP change took
+ *  away, or one the list leaves out such as loopback), marked so. A <select> whose value matches
+ *  no option shows the first option, so without it the picker would show one address while the
+ *  app saves another (desktop E2E F16); the saved one stays a choice after another is picked. */
+export function addressChoices(interfaces: readonly NetInterface[], current: string, saved?: string | null): Array<{ value: string; label: string }> {
+  const out = interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }));
+  const unlisted = [...new Set([saved ?? '', current])].filter((ip) => ip && !interfaces.some((i) => i.ip === ip));
+  return [...unlisted.map((ip) => ({ value: ip, label: `${ip} · ${t('set.listen.unlisted')}` })), ...out];
+}
+
+/** The settings page's fields: the relay port, and the address and port for other devices. */
+export interface SettingsFields { port: string; ip: string; tport: string }
+
+/** The fields after the saved settings (re)load: filled from them the first time only. Later
+ *  loads (after a save, on focus) keep what is in the fields, an emptied field included, so a
+ *  field is never refilled under the user's typing (desktop E2E F13); only an address still
+ *  unpicked takes one. The saved address is kept even when it is not in `interfaces`. */
+export function settingsFields(prev: SettingsFields | null, s: Settings, interfaces: readonly NetInterface[]): SettingsFields {
+  const listen = parseListen(s.team_listen);
+  const ip = listen?.ip ?? defaultListenIp(interfaces);
+  if (prev) return prev.ip || !ip ? prev : { ...prev, ip };
+  return { port: String(s.gateway_port), ip, tport: String(listen?.port ?? DEFAULT_TEAM_PORT) };
+}
 
 export const msLeft = (expiresAt: string, now: number): number => {
   const t = Date.parse(expiresAt);

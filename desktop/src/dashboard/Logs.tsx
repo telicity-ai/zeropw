@@ -2,14 +2,15 @@ import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Incident, Principal } from '../ipc/contract';
-import { declarableScopes, declareOutcome, isPlainText, openIncident, recordFields, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
+import { declarableScopes, declareOutcome, isPlainText, openIncidentScope, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
 import { shortTime } from '../lib/format';
+import { recordView } from '../lib/records';
 import { isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useClearOnClose, useDash, useLoad, useSheets } from './context';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { ListCard, metaLine, Row, Tag } from './parts';
 import { Sheet } from './Sheet';
 
@@ -20,28 +21,32 @@ const LIMIT = 200;
 const SCOPE_LABEL: Record<Scope, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
 const scopeText = (s: string): string => (s in SCOPE_LABEL ? t(SCOPE_LABEL[s as Scope]) : s);
 
-/** Fields of a record as text lines: every field the core wrote, nothing interpreted. */
-function RecordRow({ rec, titleKey, warn }: { rec: Record<string, unknown>; titleKey: string; warn?: boolean }) {
-  const f = recordFields(rec, titleKey);
+/** A usage record or an alert in plain words (lib/records.ts). What the table does not know (a
+ *  new code, the CLI's own English, the other fields) stays on a second line as the core wrote it. */
+export function RecordRow({ rec, kind }: { rec: Record<string, unknown>; kind: 'audit' | 'alert' }) {
+  const v = recordView(rec, kind);
   return (
-    <Row dot={warn ? 'warn' : 'idle'} mono name={f.title || '?'} meta={metaLine(shortTime(f.ts))}
-      sub={f.fields.length > 0 && <div className="meta wrap">{f.fields.join('  ')}</div>} />
+    <Row dot={kind === 'alert' ? 'warn' : 'idle'} name={v.title} meta={metaLine(shortTime(v.ts), ...v.meta)}
+      sub={v.raw.length > 0 && <div className="meta wrap">{v.raw.join('  ')}</div>} />
   );
 }
 
-/** Records: the usage log, alerts and incidents (declare and close). */
-export function LogsPage() {
+/** Records: the usage log, alerts and incidents (declare and close). The home's recent alerts
+ *  open it on the alerts (`alerts`). */
+export function LogsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
   const { tick: shellTick, activity, bump, go } = useDash();
   const tick = shellTick + activity;
   const { toast } = useApp();
-  const [tab, setTab] = useState<Tab>('audit');
+  const [tab, setTab] = useState<Tab>(intent === 'alerts' ? 'alerts' : 'audit');
+  useIntent(intent, onIntent, (i) => { if (i === 'alerts') { setTab('alerts'); return true; } return false; });
   const [n, setN] = useState(0);
   const audit = useLoad(() => (tab === 'audit' ? call('audit_tail', { limit: LIMIT }) : Promise.resolve(null)), [tab, tick, n]);
   const alerts = useLoad(() => (tab === 'alerts' ? call('alerts', { limit: LIMIT }) : Promise.resolve(null)), [tab, tick, n]);
   const incidents = useLoad(async () => {
     if (tab !== 'incidents') return null;
-    const [i, p] = await Promise.all([call('incident_list'), call('principal_list')]);
-    return { incidents: i.incidents.slice().reverse(), principals: p.principals };
+    // the core decides whether an incident is open by its pointer (control), not by the files
+    const [i, p, c] = await Promise.all([call('incident_list'), call('principal_list'), call('control_get')]);
+    return { incidents: i.incidents.slice().reverse(), principals: p.principals, control: c };
   }, [tab, tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<LogSheet>();
@@ -49,7 +54,7 @@ export function LogsPage() {
 
   const declareBtn = <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'declare' })}>{t('inc.declare')}</button>;
   const closing = sheets.data('close')?.incident;
-  const openInc = incidents.data ? openIncident(incidents.data.incidents) : null;
+  const openScope = incidents.data ? openIncidentScope(incidents.data.incidents, incidents.data.control) : null;
 
   return (
     <>
@@ -61,12 +66,12 @@ export function LogsPage() {
 
       {tab === 'audit' && (
         <ListCard items={audit.data ? audit.data.records.slice().reverse() : null} failed={audit.failed} empty="page.logs.empty" label={t('logs.tab.audit')}>
-          {(items) => items.map((r, i) => <RecordRow key={i} rec={r} titleKey="event" />)}
+          {(items) => items.map((r, i) => <RecordRow key={i} rec={r} kind="audit" />)}
         </ListCard>
       )}
       {tab === 'alerts' && (
         <ListCard items={alerts.data ? alerts.data.alerts.slice().reverse() : null} failed={alerts.failed} empty="home.alerts.empty" label={t('logs.tab.alerts')}>
-          {(items) => items.map((r, i) => <RecordRow key={i} rec={r as unknown as Record<string, unknown>} titleKey="alert" warn />)}
+          {(items) => items.map((r, i) => <RecordRow key={i} rec={r as unknown as Record<string, unknown>} kind="alert" />)}
         </ListCard>
       )}
       {tab === 'incidents' && (
@@ -90,7 +95,7 @@ export function LogsPage() {
       {skipped > 0 && <div className="help">{t('home.alerts.skipped', { n: skipped })}</div>}
 
       <DeclareSheet key={sheets.key('declare')} open={sheets.isOpen('declare')} principals={incidents.data?.principals ?? []}
-        openScope={openInc?.scope ?? null} onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }}
+        openScope={openScope} onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }}
         onRefresh={() => { reload(); bump(); }} onAgents={() => { sheets.close(); go('agents'); }} />
       <ConfirmSheet key={sheets.key('close')} id="sheet-inc-close" open={sheets.isOpen('close')} title={t('inc.close.title')} lead={t('inc.close.sub')}
         confirmLabel={t('inc.close.confirm')} onClose={sheets.close} needPass chips={closing ? [closing.id, scopeText(closing.scope)] : []}

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COPY, hasCopy } from '../src/copy';
 import { call, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, INVITE_TTL_MS, type MockBackend } from '../src/ipc/mock';
-import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, listenFailureLines, offersListenOff, relayError } from '../src/lib/reasons';
+import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, listenFailureLines, offersListenOff, relayError, sshProgramError } from '../src/lib/reasons';
 import { holdSecureView, protectionOf } from '../src/ui/secure';
 
 let backend: MockBackend | null = null;
@@ -63,6 +63,9 @@ describe('relay start failures', () => {
     expect(relayError('serve_spawn_failed')).toEqual({ key: 'relay.err.other', reason: 'serve_spawn_failed' });
     expect(relayError('<b>not a code</b>').reason).toBe('unknown');
     for (const r of ['serve_exited', 'serve_start_timeout', 'admin_binary_missing', 'invalid_port', 'invalid_listen', 'listen_failed', 'x']) expect(hasCopy(relayError(r).key)).toBe(true);
+    // a damaged settings file (desktop/core/src/settings.rs) is said in words and points at the fix
+    expect(relayError('settings_corrupt').key).toBe('relay.err.settings');
+    expect(COPY['relay.err.settings']).toContain('기본값으로 되돌려');
   });
 
   it('tells a busy gateway port from a team address by the setting the core names (desktop/core/src/serve.rs listen_setting)', () => {
@@ -102,6 +105,23 @@ describe('relay start failures', () => {
     expect(COPY['listen.err.port']).not.toContain('{address}');
     expect(listenFailureLines({ ...base, reason: 'invalid_listen', detail: 'team_listen' })[0]?.key).toBe('set.listen.port.err');
     expect(listenFailureLines({ ...base, reason: 'team_invalid_listen_address', detail: 'team_listen' })[0]).toEqual({ key: 'listen.err.open', vars: { address: base.address } });
+  });
+});
+
+describe('the ssh of an SSH connection', () => {
+  it('puts a refused path under the path field, a missing program included', () => {
+    expect(sshProgramError('cli_program_not_found')).toEqual({ field: 'conn.cli.err.notFound' });
+    expect(sshProgramError('cli_program_required')).toEqual({ field: 'conn.cli.err' });
+    expect(sshProgramError('invalid_cli_program')).toEqual({ field: 'conn.cli.err' });
+    expect(COPY['conn.cli.err.notFound']).toContain('없어요');
+  });
+
+  it('reads the list again for a connection that changed, and calls only a disabled one off', () => {
+    expect(sshProgramError('cli_already_set')).toEqual({ form: 'conns.sshcli.err.set', stale: true });
+    expect(sshProgramError('connection_disabled')).toEqual({ form: 'conns.sshcli.err.off', stale: true });
+    // a connection that is gone (a restore while the list was open) was never turned off
+    expect(sshProgramError('connection_not_found')).toEqual({ form: null, stale: true });
+    expect(sshProgramError('bad_passphrase')).toBeNull();
   });
 });
 

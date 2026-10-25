@@ -58,7 +58,9 @@ describe('copy table', () => {
   it('has the placeholders the dashboard fills in', () => {
     const need: Record<string, string[]> = {
       'keys.version': ['n'], 'keys.older': ['n'], 'keys.reveal.left': ['s'], 'keys.value.loaded': ['name'], 'keys.reveal.aria': ['id'],
-      'grant.until': ['time'], 'grant.uses': ['n'], 'grant.usesOf': ['n', 'max'], 'grant.revoke.aria': ['conn'], 'grant.for.aria': ['id'],
+      'grant.until': ['time'], 'grant.uses': ['n'], 'grant.usesOf': ['n', 'max'], 'grant.revoke.aria': ['agent', 'conn'], 'grant.for.aria': ['id'],
+      // desktop E2E F6: two agents can hold the same connection, and every terminal row has the same buttons
+      'term.attach.aria': ['name'], 'term.hide.aria': ['name'], 'keys.retire.aria': ['id', 'n'], 'keys.revoke.aria': ['id', 'n'],
       'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
       'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
       'relay.err.other': ['reason'], 'toast.recovered': ['n'], 'appr.body.size': ['n'], 'rec.verify.err': ['n'], 'rec.verify.need': ['n'],

@@ -141,7 +141,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `vault_init` | `{admin_passphrase, recovery: {ref}\|{typed}}` | `{state_dir, kms_key_id}` | `init` 후 `serve` 시작 | 두 비밀번호 |
 | `serve_start` / `serve_stop` / `serve_status` | | `ServeStatus`. 시작 실패 이유는 표 아래 | §4.2 | |
 | `control_get` / `stop_all` / `resume` | | `{stopped, restore_pending, incident_open}` | `status`, `stop-all`, `resume` | `resume`은 재인증 |
-| `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다 | `project …` | |
+| `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다. 팀 환경 연결표(`team/envs.json`)를 읽지 못하면 프로젝트는 그대로 주고 `team_environments` 대신 `team_environments_error`(`state_corrupt`)를 준다 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
 | `secret_put` | `{id, kind, project, environment, source}` | 버전 정보 | `secret put --stdin` | |
 | `secret_reveal` | `{id, version?, admin_passphrase}` | `{ref, id, version}` | `secret reveal` | 매번 |
@@ -204,17 +204,25 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | --- | --- | --- |
 | 온보딩 | 관리 비밀번호, 복구 코드, 보관함 만들기, 첫 프로젝트, 에이전트 연결(터미널) | `password_strength`, `recovery_generate`, `vault_init`, `project_create`, `principal_create`, `terminal_open` |
 | 상단 막대 | 중계기 상태, 전체 정지·재개 | `serve_status`, `control_get`, `stop_all`, `resume` |
-| 홈 | 상태 요약, 최근 알림 | `app_status`, `alerts` |
+| 홈 | 상태 요약, 최근 알림. 최근 알림의 "모두 보기"는 기록 화면을 알림 탭으로 연다 | `app_status`, `alerts` |
 | 키 | 비밀·환경변수 목록과 추가, 다시 보기, 교체·폐기, `.env` 가져오기(창 어디에 놓아도 이 화면에서 열린다) | `secret_*`, `onetime_*`, `file_pick`, `env_file_load` |
 | 연결 | API·SSH 연결 만들기, 범위, 끄기 | `connection_*`, `file_pick` |
 | 에이전트 | 에이전트와 권한, 앱 안 터미널, 승인 대기 | `principal_*`, `grant_*`, `terminal_*`, `approvals_*` |
-| 기록 | 사용 기록, 알림, 사고 | `audit_tail`, `alerts`, `incident_*` |
-| 팀 | 공유, 팀원, 초대 링크, 합류. 환경 목록에는 이 기기에서 공유한 환경과 다른 기기에서 합류한 환경(`project_list`의 `team_environments`)도 나온다 | `team_*`, `project_list` |
-| 설정 | 중계기 포트, 이 기기 주소, 백업·복원·복구 | `settings_*`, `net_interfaces`, `backup_*`, `restore_ack`, `recover` |
+| 기록 | 사용 기록, 알림, 사고 | `audit_tail`, `alerts`, `incident_*`, `control_get` |
+| 팀 | 공유, 팀원, 초대 링크, 합류. 환경 목록에는 이 기기에서 공유한 환경과 다른 기기에서 합류한 환경(`project_list`의 `team_environments`)도 나온다. `team_environments_error`가 오면 공유하거나 합류한 환경이 빠졌을 수 있다고 짧게 알린다 | `team_*`, `project_list` |
+| 설정 | 중계기 포트, 이 기기 주소, 백업·복원·복구, 망가진 설정 파일 되돌리기 | `settings_*`, `net_interfaces`, `backup_*`, `restore_ack`, `recover` |
 
 환경변수는 `env_var` 종류의 비밀이다. 값은 중계기가 인증에 쓸 뿐 어느 프로세스의 환경변수로도 들어가지 않는다는 점을 키 화면에서 한 줄로 알린다.
 
-사고가 열려 있으면 `incident declare`는 더 넓은 범위일 때만 그 사고를 넓힌다. 그 밖의 선언은 다른 에이전트나 실행 계정을 골라도 아무도 막지 않고 열린 사고를 `existing: true`, `widened: false`와 함께 그대로 돌려준다. 그래서 기록 화면의 사고 선언 시트는 열린 사고보다 넓은 범위만 보여 주고 주 버튼을 범위 넓히기로 쓰며, 전체 범위의 사고가 열려 있으면 더 넓힐 수 없다고만 쓴다. 시트를 연 뒤 다른 곳에서 사고가 열려 넓히지 못한 선언은 성공 알림 없이 아무 에이전트도 막지 않았다고 쓰고, 에이전트 하나를 막으려면 에이전트 화면에서 끄라며 그 화면으로 가는 버튼을 단다. 고른 범위가 그 사고 때문에 빠지면 다시 고를 때까지 선언하지 않는다.
+키 넣기, 연결 만들기, `.env` 가져오기의 환경 목록은 팀 화면과 같다. 로컬 프로젝트의 환경 뒤에 다른 기기에서 합류한 팀 환경이 온다. 그 환경에 쓸 수 있는지는 CLI가 역할을 보고 정하고, 거절하면 다른 거절처럼 보인다.
+
+기록 화면과 홈의 최근 알림은 CLI가 쓴 이벤트·알림·결과·이유 코드를 짧고 쉬운 한국어로 보여 준다(`src/lib/records.ts`). 표는 `rust/src/audit.rs`의 이벤트 전부, 그 파일이 쓰는 알림 전부, 결과 전부, 중계기·SSH 서명·에이전트 명령이 남기는 이유와 그 밖에 자주 나오는 이유를 다룬다. `desktop/test/records.test.ts`가 이 코드들을 Rust 소스에서 읽어 빠진 것이 없는지 본다. 에이전트와 연결 이름은 그대로 쓴다. 표에 없는 코드, CLI가 쓴 영어 문장(`detail`), 그 밖의 필드는 둘째 줄에 CLI가 쓴 그대로 `key=value`로 남긴다. 알림의 정해진 영어 설명은 알림 이름과 이유가 이미 말하므로 둘째 줄에도 넣지 않는다. 기록에는 값이 없고, 화면은 전에 보여 주던 것 말고는 새로 읽어 내지 않는다.
+
+SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어가 그 경로에 실행 파일이 없다고 거절하면(`cli_program_not_found`) 경로 칸 아래에 쓴다. 비었거나 형식이 틀린 경로도 같은 자리에 쓴다. 넣으려는 연결이 그사이 사라졌으면(`connection_not_found`) 꺼진 연결이라고 하지 않고 목록을 다시 읽은 뒤 일반 오류로 쓴다.
+
+설정 화면은 저장된 값으로 칸을 한 번만 채운다. 그 뒤 다시 불러와도 사용자가 고치거나 비운 칸은 그대로 둔다. 저장된 다른 기기 접속 주소가 지금 주소 목록(`net_interfaces`)에 없으면(VPN이 꺼졌거나 DHCP로 바뀐 경우, 목록이 빼는 루프백 등) 그 주소를 "지금 목록에 없음"이라고 단 항목으로 목록 맨 앞에 넣는다. 그래서 고른 주소와 저장할 주소가 언제나 같고, 다른 주소를 고르면 그 주소로 바뀐다. 다른 주소를 골라도 저장된 주소는 목록에 남아 다시 고를 수 있다. 초대 시트와 합류 뒤 접속 켜기의 주소 목록도 같다. 코어가 설정 파일을 `settings_corrupt`로 거절하면 사이드바는 설정 파일이 망가져 중계기를 켜지 못했다고 쓰고, 설정 화면은 파일이 망가졌다고 알린 뒤 "기본값으로 되돌리기"를 둔다. 확인 시트를 거쳐 `settings_set`으로 기본값(중계기 포트 47380, 다른 기기 접속 꺼짐)을 덮어쓰고 중계기를 다시 켠다. 코어는 이 파일을 스스로 되돌리지 않는다.
+
+사고가 열려 있으면 `incident declare`는 더 넓은 범위일 때만 그 사고를 넓힌다. 그 밖의 선언은 다른 에이전트나 실행 계정을 골라도 아무도 막지 않고 열린 사고를 `existing: true`, `widened: false`와 함께 그대로 돌려준다. 그래서 기록 화면의 사고 선언 시트는 열린 사고보다 넓은 범위만 보여 주고 주 버튼을 범위 넓히기로 쓰며, 전체 범위의 사고가 열려 있으면 더 넓힐 수 없다고만 쓴다. 사고가 열려 있는지는 코어처럼 열린 사고 포인터(`control_get`의 `incident_open`)로 정한다. 포인터가 없는데 사고 파일만 열림으로 남아 있으면(이 수정 전의 앱이 복원하며 남긴 상태 등) 모든 범위와 처음 선언하는 화면을 보인다. 포인터가 있으면 목록에서 열린 사고 가운데 가장 넓은 범위를 그 사고로 본다. `control_get`은 열려 있는지만 알려 주므로, 그런 낡은 파일과 새 사고가 함께 열려 있으면 시트가 넓힐 수 있는 범위를 덜 보일 수 있다. 낡은 사고는 목록에서 끝내면 된다. 시트를 연 뒤 다른 곳에서 사고가 열려 넓히지 못한 선언은 성공 알림 없이 아무 에이전트도 막지 않았다고 쓰고, 에이전트 하나를 막으려면 에이전트 화면에서 끄라며 그 화면으로 가는 버튼을 단다. 고른 범위가 그 사고 때문에 빠지면 다시 고를 때까지 선언하지 않는다.
 
 ## 7. 온보딩 흐름
 
@@ -272,6 +280,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - Apple Silicon(arm64)용만 만든다. Intel Mac용이나 유니버설 빌드는 없다.
 - 새 버전이 나와도 앱이 알려 주거나 바꿔 주지 않는다. 사용자가 직접 받아 바꿔 넣어야 하고, 보안 수정도 그때까지 들어오지 않는다.
 - 팀 공유는 기존 명세대로 같은 LAN·VPN 안의 직접 연결만 지원한다.
+- 앱 안 터미널에서 번들 폴더를 `PATH` 맨 앞에 지키는 것은 zsh뿐이다. bash 같은 다른 셸에서는 시작 파일이 Homebrew 같은 다른 폴더를 앞에 두면 `zeropw-agent`가 그쪽 바이너리를 가리킬 수 있다. 앱이 제안하는 명령은 절대 경로라 영향이 없다(§4.4).
 - 창을 닫아도 앱, 중계기, 에이전트 터미널은 계속 돈다. macOS는 Dock에서 다시 열고 Cmd+Q로 끝낸다. Linux에는 트레이가 없어서 다시 실행하면 창이 열리고 `zeropw-desktop --quit`로 끝낸다.
 - 앱은 사용자마다 하나만 뜬다. Linux는 단일 인스턴스 플러그인이 사용자의 D-Bus 세션 버스에서 두 번째 실행의 인자(`--quit`, `zeropw://` 링크)를 첫 실행에 넘긴다. macOS에서는 그 플러그인이 모든 계정이 같이 쓰는 `/tmp`의 고정 소켓을 써서, 다른 계정이 그 자리를 차지하면 앱이 아예 뜨지 않는다. 그래서 macOS에서는 쓰지 않는다. LaunchServices가 사용자마다 하나만 띄우고 링크는 open-url 이벤트로 오며, 실행 파일을 직접 실행하거나 `open -n`으로 띄운 두 번째 앱은 앱 데이터 폴더(0700)의 잠금 파일을 보고 끝난다. 대신 macOS에서 `--quit`는 실행 중인 앱을 끝내지 못한다.
 - 화면 캡처를 막는다고 약속하지 않는다(§8.8). macOS에서는 창 내용 보호를 요청할 뿐이고, macOS 15부터 ScreenCaptureKit을 쓰는 도구가 이를 따르지 않는다는 보고가 있으며 배포 빌드에서 시험하지 않았다. Linux에는 창 내용 보호가 없다. 복구 코드, 토큰, 초대 링크, 다시 본 값을 띄운 창도 스크린숏, 화면 녹화, 화면 공유에 그대로 찍힌다.
