@@ -283,20 +283,6 @@ export function valueText(v: unknown): string {
   return s.length > CLIP ? s.slice(0, CLIP - 1) + '…' : s;
 }
 
-/** Title and fields of an audit record or alert: the event name, then every other field as
- *  `key=value` text in the order the record has them. */
-export function recordFields(rec: AuditRecord, titleKey = 'event'): { ts: string; title: string; fields: string[] } {
-  const ts = valueText(rec.ts);
-  const title = valueText(rec[titleKey]) || valueText(rec.alert) || valueText(rec.event);
-  const fields: string[] = [];
-  for (const [k, v] of Object.entries(rec)) {
-    if (k === 'ts' || k === titleKey) continue;
-    const text = valueText(v);
-    if (text !== '') fields.push(`${valueText(k)}=${text}`);
-  }
-  return { ts, title, fields };
-}
-
 /** A stable signature for "the newest record I have seen". */
 export function recordSig(rec: AuditRecord | undefined): string | null {
   if (!rec) return null;

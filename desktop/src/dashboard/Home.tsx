@@ -1,11 +1,12 @@
 import { t, type CopyKey } from '../copy';
 import { call } from '../ipc/client';
-import { hostPort, shortTime } from '../lib/format';
+import { hostPort } from '../lib/format';
 import { valueText } from '../lib/dash';
 import { Callout } from '../ui/form';
 import { useDash, useLoad, type Intent } from './context';
 import type { PageId } from './pages';
-import { ListCard, metaLine, Row, SectionHead } from './parts';
+import { RecordRow } from './Logs';
+import { ListCard, SectionHead } from './parts';
 
 interface Tile { k: string; v: string; s: string; st: 'on' | 'idle' | 'warn' }
 const QUICK: Array<{ label: CopyKey; page: PageId; intent: Intent }> = [
@@ -16,7 +17,7 @@ const QUICK: Array<{ label: CopyKey; page: PageId; intent: Intent }> = [
 ];
 
 /** Home: status summary, quick actions and recent alerts. Alert fields come from the audit log
- *  and are rendered as text only. */
+ *  and are rendered as text only, in plain words as on the records page. */
 export function Home() {
   const { serve, control, tick, activity, go, relay } = useDash();
   const alerts = useLoad(() => call('alerts', { limit: 5 }), [tick, activity]);
@@ -75,10 +76,7 @@ export function Home() {
         <button className="btn btn-text btn-sm" type="button" onClick={() => go('logs')}>{t('home.alerts.all')}</button>
       </SectionHead>
       <ListCard items={list} failed={alerts.failed} empty="home.alerts.empty" label={t('home.alerts')}>
-        {(items) => items.map((a, i) => (
-          <Row key={`${valueText(a.ts)}-${i}`} dot="warn" name={valueText(a.alert)}
-            meta={metaLine(shortTime(valueText(a.ts)), valueText(a.caller), valueText(a.connection), valueText(a.reason))} />
-        ))}
+        {(items) => items.map((a, i) => <RecordRow key={`${valueText(a.ts)}-${i}`} rec={a as unknown as Record<string, unknown>} kind="alert" />)}
       </ListCard>
       {skipped > 0 && <div className="help">{t('home.alerts.skipped', { n: skipped })}</div>}
     </>

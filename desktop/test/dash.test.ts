@@ -3,7 +3,7 @@ import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, 
 import {
   blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
+  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
   recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
@@ -245,12 +245,6 @@ describe('records rendered as text', () => {
     expect(valueText({ a: [1, 2] })).toBe('{"a":[1,2]}');
     expect(valueText('x'.repeat(500))).toHaveLength(160);
     expect(valueText('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');   // kept verbatim, shown as text
-  });
-
-  it('keeps every field of a record except the title and time', () => {
-    const f = recordFields({ ts: '2026-10-15T10:00:00Z', event: 'proxy_request', caller: 'agent-1', status: 200, path: '/v1/<b>' });
-    expect(f).toEqual({ ts: '2026-10-15T10:00:00Z', title: 'proxy_request', fields: ['caller=agent-1', 'status=200', 'path=/v1/<b>'] });
-    expect(recordFields({ ts: 't', alert: 'grant_expired', caller: 'a' }, 'alert').title).toBe('grant_expired');
   });
 
   it('counts records that arrived since the last one seen', () => {

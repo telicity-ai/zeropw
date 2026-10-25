@@ -440,15 +440,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       id: 'inc_' + randFrom(12, HEX), status: 'closed', scope: 'principal', opened_at: ago(30 * HOUR), runtime: null, principals: ['agent-0'],
       trigger: 'manual', rule: null, detail: 'rotated after a test', actions: {}, assessment: {}, notification: {}, closed_at: ago(29 * HOUR), widened_from: [],
     });
+    // alerts as rust/src/audit.rs `maybe_alert` writes them, with its fixed English detail
     alerts.push(
-      { ts: ago(HOUR), alert: 'grant_expired', caller: 'agent-1', connection: 'example-api' },
-      { ts: ago(600_000), alert: 'policy_denied', caller: 'agent-1', connection: 'example-api', reason: 'method_not_allowed' },
+      { ts: ago(HOUR), alert: 'revoked_use_attempt', caller: 'agent-1', connection: 'example-api', event: 'http_relay', reason: 'grant_revoked', detail: 'use attempted under a revoked, stale, or stopped grant' },
+      { ts: ago(600_000), alert: 'repeated_denials', caller: 'agent-1', connection: 'example-api', event: 'http_relay', reason: 'method_not_allowed', detail: '5 denials within 60s' },
     );
     for (const [ms, rec] of [
       [24 * HOUR, { event: 'init' }], [24 * HOUR, { event: 'project_create', project: 'demo' }],
       [22 * HOUR, { event: 'principal_create', principal: 'agent-1' }], [20 * HOUR, { event: 'connection_create', connection: 'example-api' }],
       [19 * HOUR, { event: 'grant_create', principal: 'agent-1', connection: 'example-api' }],
-      [3 * HOUR, { event: 'proxy_request', caller: 'agent-1', connection: 'example-api', method: 'GET', path: '/v1/items', status: 200 }],
+      [3 * HOUR, { event: 'http_relay', caller: 'agent-1', connection: 'example-api', action: 'GET', result: 'ok', path: '/v1/items', status: 200 }],
       [90_000, { event: 'approval_request', caller: 'agent-1', connection: 'example-api', method: 'POST', path: '/v1/items' }],
     ] as const) audit.push({ ts: ago(ms), ...rec });
     // a terminal left running by the onboarding, so the agents page has something to reattach
@@ -559,7 +560,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   if (seed.activity && typeof window !== 'undefined') {
     activity = setInterval(() => {
       if (!initialized || !serve.running || control.stopped) return;
-      record({ ts: iso(), event: 'proxy_request', caller: 'agent-1', connection: 'example-api', method: 'GET', status: 200 });
+      record({ ts: iso(), event: 'http_relay', caller: 'agent-1', connection: 'example-api', action: 'GET', result: 'ok', status: 200 });
     }, 9000);
   }
 
@@ -696,6 +697,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (v.status === 'revoked') throw fail('InvalidInput', 'version_revoked');
       const ref = putOnce({ kind: 'secret', text: v.value });
       record({ ts: iso(), event: 'secret_reveal', secret: id, version: v.version });
+      alerts.push({ ts: iso(), alert: 'secret_reveal', caller: 'admin', event: 'secret_reveal', detail: 'administrator revealed a single secret version' });
       return { ref, id, version: String(v.version) };
     },
     // rust/src/admin_cli.rs secret retire/revoke: output keyed `secret_id`, the version as a number,
@@ -1057,7 +1059,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const m = t.members.find((x) => x.fingerprint === device);
       if (!m) throw fail('InvalidInput', 'member_unknown');
       if (m.owner) throw fail('InvalidInput', 'cannot_remove_owner');
-      m.status = 'removed'; record({ ts: iso(), event: 'team_remove', device });
+      m.status = 'removed'; record({ ts: iso(), event: 'team_member_remove', device });
       return { env_id: t.env_id, fingerprint: device, status: 'removed' };
     },
     team_invite_create: async ({ env, role, name, address, admin_passphrase }) => {
@@ -1075,7 +1077,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       };
       t.invites.push(inv);
       const link_ref = putOnce({ kind: 'link', text: `zeropw://join#${secret}` });
-      record({ ts: iso(), event: 'team_invite', invite_id: inv.invite_id, role });
+      record({ ts: iso(), event: 'team_invite_create', invite_id: inv.invite_id, role });
       return { invite_id: inv.invite_id, link_ref, expires_at: inv.expires_at, inviter: fingerprint() };
     },
     team_invites: ({ env }) => {

@@ -2,8 +2,9 @@ import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Incident, Principal } from '../ipc/contract';
-import { declarableScopes, declareOutcome, isPlainText, openIncident, recordFields, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
+import { declarableScopes, declareOutcome, isPlainText, openIncident, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
 import { shortTime } from '../lib/format';
+import { recordView } from '../lib/records';
 import { isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
@@ -20,12 +21,13 @@ const LIMIT = 200;
 const SCOPE_LABEL: Record<Scope, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
 const scopeText = (s: string): string => (s in SCOPE_LABEL ? t(SCOPE_LABEL[s as Scope]) : s);
 
-/** Fields of a record as text lines: every field the core wrote, nothing interpreted. */
-function RecordRow({ rec, titleKey, warn }: { rec: Record<string, unknown>; titleKey: string; warn?: boolean }) {
-  const f = recordFields(rec, titleKey);
+/** A usage record or an alert in plain words (lib/records.ts). What the table does not know (a
+ *  new code, the CLI's own English, the other fields) stays on a second line as the core wrote it. */
+export function RecordRow({ rec, kind }: { rec: Record<string, unknown>; kind: 'audit' | 'alert' }) {
+  const v = recordView(rec, kind);
   return (
-    <Row dot={warn ? 'warn' : 'idle'} mono name={f.title || '?'} meta={metaLine(shortTime(f.ts))}
-      sub={f.fields.length > 0 && <div className="meta wrap">{f.fields.join('  ')}</div>} />
+    <Row dot={kind === 'alert' ? 'warn' : 'idle'} name={v.title} meta={metaLine(shortTime(v.ts), ...v.meta)}
+      sub={v.raw.length > 0 && <div className="meta wrap">{v.raw.join('  ')}</div>} />
   );
 }
 
@@ -61,12 +63,12 @@ export function LogsPage() {
 
       {tab === 'audit' && (
         <ListCard items={audit.data ? audit.data.records.slice().reverse() : null} failed={audit.failed} empty="page.logs.empty" label={t('logs.tab.audit')}>
-          {(items) => items.map((r, i) => <RecordRow key={i} rec={r} titleKey="event" />)}
+          {(items) => items.map((r, i) => <RecordRow key={i} rec={r} kind="audit" />)}
         </ListCard>
       )}
       {tab === 'alerts' && (
         <ListCard items={alerts.data ? alerts.data.alerts.slice().reverse() : null} failed={alerts.failed} empty="home.alerts.empty" label={t('logs.tab.alerts')}>
-          {(items) => items.map((r, i) => <RecordRow key={i} rec={r as unknown as Record<string, unknown>} titleKey="alert" warn />)}
+          {(items) => items.map((r, i) => <RecordRow key={i} rec={r as unknown as Record<string, unknown>} kind="alert" />)}
         </ListCard>
       )}
       {tab === 'incidents' && (
