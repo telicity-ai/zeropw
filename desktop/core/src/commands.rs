@@ -17,8 +17,8 @@
 //! input envelope; the core refuses an empty one. `secret reveal`, `restore-ack`, `incident
 //! close`, `incident declare --scope all` and `team share` verify it in the CLI itself. For
 //! the commands the app re-authenticates but the CLI would run without a passphrase
-//! (`resume`, `connection create-http`/`create-ssh`, `grant create`, `approvals approve`,
-//! `team invite`, `team remove` and `restore`) the core adds the hidden global
+//! (`resume`, `connection create-http`/`create-ssh`/`update`, `grant create`, `approvals
+//! approve`, `team invite`, `team remove` and `restore`) the core adds the hidden global
 //! `--require-admin` ([`REQUIRE_ADMIN_COMMANDS`]) so the CLI checks the envelope's passphrase
 //! before it runs them.
 
@@ -70,10 +70,11 @@ const MAX_VERSION_CHARS: usize = 64;
 
 /// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
 /// re-authenticates them, the CLI alone would not).
-pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 8] = [
+pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 9] = [
     &["resume"],
     &["connection", "create-http"],
     &["connection", "create-ssh"],
+    &["connection", "update"],
     &["grant", "create"],
     &["approvals", "approve"],
     &["team", "invite"],
