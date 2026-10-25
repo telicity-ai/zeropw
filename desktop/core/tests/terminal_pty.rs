@@ -384,15 +384,18 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
         .collect();
     names.sort();
     // Debian's /etc/zsh/zshrc runs compinit while ZDOTDIR is this folder, so zsh may keep its
-    // completion cache here; everything else is one of the four startup files.
+    // completion cache here (written with the shell's umask); everything else is one of the four
+    // startup files. No file in the folder, the cache included, holds a value.
     let startup: Vec<&String> = names
         .iter()
         .filter(|n| !n.starts_with(".zcompdump"))
         .collect();
     assert_eq!(startup, [".zlogin", ".zprofile", ".zshenv", ".zshrc"]);
-    for name in startup {
+    for name in &names {
         let file = zsh_dir.join(name);
-        assert_eq!(mode(&file), 0o600, "{name}");
+        if startup.contains(&name) {
+            assert_eq!(mode(&file), 0o600, "{name}");
+        }
         let text = std::fs::read_to_string(&file).unwrap();
         for value in [TOKEN, "127.0.0.1", bin_text.as_str()] {
             assert!(!text.contains(value), "{value} in {name}");
