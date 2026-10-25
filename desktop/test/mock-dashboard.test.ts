@@ -147,6 +147,17 @@ describe('connections', () => {
     expect([typo.error, typo.reason]).toEqual(['InvalidInput', 'cli_program_not_found']);
     expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
+    // pr69-frontend-flows-mock-5: the core's order, as the app answers: an empty passphrase, no
+    // host key, an empty path, a path with nothing there, and only then the CLI's passphrase check
+    const order = async (over: Partial<typeof ssh & { cli_program: string }>) => {
+      const e = await rejection(call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM, ...over }));
+      return [e.error, e.reason];
+    };
+    expect(await order({ admin_passphrase: '', host_keys: [], cli_program: '' })).toEqual(['AuthFailed', 'passphrase_missing']);
+    expect(await order({ admin_passphrase: 'wrong', host_keys: [], cli_program: '' })).toEqual(['InvalidInput', 'host_key_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '' })).toEqual(['InvalidInput', 'cli_program_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '/usr/bin/sshh' })).toEqual(['InvalidInput', 'cli_program_not_found']);
+    expect(await order({ admin_passphrase: 'wrong', id: 'Not A Name' })).toEqual(['AuthFailed', 'bad_passphrase']);
 
     const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
     expect(c.cli).toEqual({ program: '/usr/bin/ssh', kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });

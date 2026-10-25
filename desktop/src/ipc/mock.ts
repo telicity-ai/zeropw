@@ -789,15 +789,21 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     connection_create_ssh: async (input) => {
       needInit(); await wait(400);
+      // desktop/core/src/commands.rs connection_create_ssh: a payload missing a field is not read
+      // (serde: `invalid_payload`); then an empty passphrase, no host key, an empty path (the agent
+      // cannot use an SSH connection without its ssh), a path with no executable there, and only
+      // then the CLI, which checks the passphrase before the connection
+      if (typeof input.cli_program !== 'string' || typeof input.admin_passphrase !== 'string' || !Array.isArray(input.host_keys)) {
+        throw fail('InvalidInput', 'invalid_payload');
+      }
+      if (!input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
+      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnvOrTeam(input.project, input.environment);
-      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
-      // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
-      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
-      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
-      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
