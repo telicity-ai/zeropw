@@ -45,6 +45,11 @@ export function teamEnvPairs(listing: { projects: readonly Project[]; team_envir
 export const teamEnvsUnread = (listing: { team_environments_error?: unknown }): boolean =>
   typeof listing.team_environments_error === 'string' && listing.team_environments_error !== '';
 
+/** The option a list picker shows for `value`, and so the one in use: `value` when it is among
+ *  `options`, the first option otherwise, as a <select> shows a value it has no option for
+ *  (DESIGN.md §5.4). '' when there are none. */
+export const shownChoice = (value: string, options: readonly string[]): string => (options.includes(value) ? value : options[0] ?? '');
+
 export function splitEnv(key: string): { project: string; environment: string } | null {
   const parts = key.split('/');
   if (parts.length !== 2) return null;

@@ -3,7 +3,7 @@ import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
 import {
-  addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs, teamEnvsUnread,
+  addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, shownChoice, splitEnv, teamEnvPairs, teamEnvsUnread,
 } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
@@ -51,7 +51,9 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   }, [tick, n]);
   const [env, setEnv] = useState('');
   const pairs = base.data?.pairs ?? [];
-  const cur = env || pairs[0]?.key || '';
+  // the environment loaded is the one the picker shows, also when the chosen one left the list
+  // (a team mapping that can no longer be read)
+  const cur = shownChoice(env, pairs.map((p) => p.key));
   const team = useLoad(async () => {
     if (!cur) return null;
     try {
