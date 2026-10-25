@@ -10,7 +10,7 @@ import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useClearOnClose, useDash, useLoad, useSheets } from './context';
+import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { ListCard, metaLine, Row, Tag } from './parts';
 import { Sheet } from './Sheet';
 
@@ -31,12 +31,14 @@ export function RecordRow({ rec, kind }: { rec: Record<string, unknown>; kind: '
   );
 }
 
-/** Records: the usage log, alerts and incidents (declare and close). */
-export function LogsPage() {
+/** Records: the usage log, alerts and incidents (declare and close). The home's recent alerts
+ *  open it on the alerts (`alerts`). */
+export function LogsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
   const { tick: shellTick, activity, bump, go } = useDash();
   const tick = shellTick + activity;
   const { toast } = useApp();
-  const [tab, setTab] = useState<Tab>('audit');
+  const [tab, setTab] = useState<Tab>(intent === 'alerts' ? 'alerts' : 'audit');
+  useIntent(intent, onIntent, (i) => { if (i === 'alerts') { setTab('alerts'); return true; } return false; });
   const [n, setN] = useState(0);
   const audit = useLoad(() => (tab === 'audit' ? call('audit_tail', { limit: LIMIT }) : Promise.resolve(null)), [tab, tick, n]);
   const alerts = useLoad(() => (tab === 'alerts' ? call('alerts', { limit: LIMIT }) : Promise.resolve(null)), [tab, tick, n]);

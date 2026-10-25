@@ -73,7 +73,7 @@ export function Home() {
         ))}
       </div>
       <SectionHead title={t('home.alerts')}>
-        <button className="btn btn-text btn-sm" type="button" onClick={() => go('logs')}>{t('home.alerts.all')}</button>
+        <button className="btn btn-text btn-sm" type="button" onClick={() => go('logs', 'alerts')}>{t('home.alerts.all')}</button>
       </SectionHead>
       <ListCard items={list} failed={alerts.failed} empty="home.alerts.empty" label={t('home.alerts')}>
         {(items) => items.map((a, i) => <RecordRow key={`${valueText(a.ts)}-${i}`} rec={a as unknown as Record<string, unknown>} kind="alert" />)}

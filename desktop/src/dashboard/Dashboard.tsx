@@ -301,7 +301,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               {page === 'keys' && <KeysPage intent={pageIntent} onIntent={clearIntent} incomingFile={envFile} onFileTaken={() => setEnvFile(null)} />}
               {page === 'connections' && <ConnectionsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
-              {page === 'logs' && <LogsPage />}
+              {page === 'logs' && <LogsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={() => setInvite(null)} />}
               {page === 'settings' && <SettingsPage intent={pageIntent} onIntent={clearIntent} />}
             </div>
