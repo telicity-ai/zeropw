@@ -276,6 +276,15 @@ pub fn value_leak(ctx: &Context, payload: &[u8]) -> Result<bool> {
     }))
 }
 
+/// The record of `incident_id` says it was closed. A missing or unreadable
+/// record does not, so only a closed incident makes a pointer to it stale
+/// ([`crate::policy::Policy::open_incident_id`]).
+pub(crate) fn recorded_closed(state: &crate::store::StateDir, incident_id: &str) -> bool {
+    state
+        .read_json(&path_for(incident_id), Value::Null)
+        .is_ok_and(|data| data.get("status").and_then(Value::as_str) == Some("closed"))
+}
+
 pub fn get_incident(ctx: &Context, incident_id: &str) -> Result<Incident> {
     let data = ctx.state.read_json(&path_for(incident_id), Value::Null)?;
     if data.is_null() {
@@ -630,9 +639,7 @@ pub fn close_incident(ctx: &Arc<Context>, incident_id: &str) -> Result<Incident>
     incident.closed_at = Some(iso(Some((ctx.clock)())));
     incident.raw_fields.remove("closed_at");
     save_incident(ctx, &mut incident)?;
-    if ctx.policy.open_incident_id()?.as_deref() == Some(&incident.id) {
-        ctx.policy.set_open_incident(None)?;
-    }
+    ctx.policy.clear_open_incident(&incident.id)?;
     audit_incident(ctx, "incident_close", &mut incident, None)?;
     Ok(incident)
 }
