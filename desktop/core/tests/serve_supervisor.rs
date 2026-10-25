@@ -7,6 +7,7 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{Events, Fixture, arc_events, free_port, health_server, wait_until};
@@ -355,7 +356,9 @@ fn kill_sidecar(pid: u32) {
 
 /// docs/desktop-app.md §4.2: a sidecar this app run started that dies on its own is reported
 /// as stopped (`serve://status`) without the window asking first; one report, not one per
-/// look. A sidecar that keeps running is not reported again.
+/// look. A sidecar that keeps running is not reported again. The counts are exact: a start or
+/// stop reports under the supervisor's lock, so no look of the 100 ms watcher can come between
+/// it and its report and send the same status twice.
 #[test]
 fn the_core_reports_a_sidecar_it_started_that_died() {
     let fx = Fixture::new();
@@ -417,4 +420,48 @@ fn the_core_reports_an_adopted_sidecar_that_died() {
     assert!(!running(&statuses()[1]));
     assert!(!core.serve_status().running);
     assert!(!first.status().running);
+}
+
+/// The watch's look from another thread: `None` while the supervisor's state is locked.
+fn look_elsewhere(sup: &Arc<ServeSupervisor>) -> Option<bool> {
+    let sup = sup.clone();
+    std::thread::spawn(move || sup.watch(|status| status.running))
+        .join()
+        .unwrap()
+}
+
+/// A start's, stop's or attach's report runs before the supervisor's state is unlocked, like
+/// the watch's own: a look from another thread meanwhile is skipped, so the core never sends
+/// the window a look made between a change and its report, nor reports a change after a
+/// newer look.
+#[test]
+fn reports_of_a_start_a_stop_and_an_attach_come_before_any_other_look() {
+    let fx = Fixture::new();
+    let config = ServeConfig {
+        port: health_server(),
+        team_listen: None,
+    };
+    let sup = Arc::new(supervisor(&fx, Duration::from_secs(2)));
+    let adopter = Arc::new(supervisor(&fx, Duration::from_secs(2)));
+    let mut reported = Vec::new();
+
+    let started = sup
+        .start_reported(&config, |status| {
+            reported.push((status.clone(), look_elsewhere(&sup)))
+        })
+        .unwrap();
+    assert!(started.running);
+    assert_eq!(look_elsewhere(&sup), Some(true));
+    let adopted =
+        adopter.attach_reported(|status| reported.push((status.clone(), look_elsewhere(&adopter))));
+    assert_eq!(adopted.pid, started.pid);
+    assert_eq!(look_elsewhere(&adopter), Some(true));
+    let stopped = sup.stop_reported(|status| reported.push((status.clone(), look_elsewhere(&sup))));
+    assert_eq!(look_elsewhere(&sup), Some(false));
+
+    assert_eq!(
+        reported,
+        [(started, None), (adopted, None), (stopped, None)]
+    );
+    assert_eq!(adopter.stop(), ServeStatus::stopped());
 }

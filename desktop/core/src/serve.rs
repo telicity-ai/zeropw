@@ -16,7 +16,9 @@
 //!   instead of waiting out the 60 s start budget, so quitting the app is never held up.
 //! - Watch: [`ServeSupervisor::watch`] looks without waiting for a start or stop in progress,
 //!   so the core can check every [`WATCH_INTERVAL`] whether the sidecar is still there and tell
-//!   the window when it is gone (docs/desktop-app.md §4.2).
+//!   the window when it is gone (docs/desktop-app.md §4.2). It reports what it saw before the
+//!   state is unlocked, and so do the `*_reported` start, stop and attach, so the window is
+//!   told about them in the order they happened.
 //! - Closing the window does not stop it; the app calls [`ServeSupervisor::stop`] on quit.
 
 use std::ffi::OsString;
@@ -170,6 +172,12 @@ impl ServeSupervisor {
 
     /// At app start: adopt a sidecar left by an earlier app run, without starting a new one.
     pub fn attach(&self) -> ServeStatus {
+        self.attach_reported(|_| {})
+    }
+
+    /// [`attach`](Self::attach), with `report` run on the result before the state is unlocked,
+    /// as [`watch`](Self::watch) does: no look comes between the two.
+    pub fn attach_reported(&self, report: impl FnOnce(&ServeStatus)) -> ServeStatus {
         let mut running = self.lock();
         self.refresh(&mut running);
         if matches!(*running, Running::Stopped)
@@ -177,37 +185,57 @@ impl ServeSupervisor {
         {
             *running = attached;
         }
-        status_of(&mut running)
+        let status = status_of(&mut running);
+        report(&status);
+        status
     }
 
     /// Start (or attach to) the sidecar. Already running: returns the current status.
     pub fn start(&self, config: &ServeConfig) -> Result<ServeStatus, AppError> {
+        self.start_reported(config, |_| {})
+    }
+
+    /// [`start`](Self::start), with `report` run on a successful result before the state is
+    /// unlocked, as [`watch`](Self::watch) does: no look comes between the start and its
+    /// report, so a look made just before cannot be reported after it, nor the other way round.
+    pub fn start_reported(
+        &self,
+        config: &ServeConfig,
+        report: impl FnOnce(&ServeStatus),
+    ) -> Result<ServeStatus, AppError> {
         if config.port == 0 {
             return Err(AppError::invalid_input("invalid_port").with_detail("gateway_port"));
         }
         let mut running = self.lock();
         self.cancel_start.store(false, Ordering::SeqCst);
         self.refresh(&mut running);
-        if !matches!(*running, Running::Stopped) {
-            return Ok(status_of(&mut running));
-        }
-        match self.recorded() {
-            Some(Recorded::Healthy(attached)) => {
-                *running = attached;
-                return Ok(status_of(&mut running));
+        if matches!(*running, Running::Stopped) {
+            match self.recorded() {
+                Some(Recorded::Healthy(attached)) => *running = attached,
+                recorded => {
+                    // Ours but not answering: replace it rather than fight it for the port.
+                    if let Some(Recorded::Unhealthy(pid)) = recorded {
+                        terminate_pid(pid, self.stop_grace);
+                    }
+                    self.remove_pid_file();
+                    *running = self.spawn(config)?;
+                }
             }
-            // Ours but not answering: replace it rather than fight it for the port.
-            Some(Recorded::Unhealthy(pid)) => terminate_pid(pid, self.stop_grace),
-            None => {}
         }
-        self.remove_pid_file();
-        *running = self.spawn(config)?;
-        Ok(status_of(&mut running))
+        let status = status_of(&mut running);
+        report(&status);
+        Ok(status)
     }
 
     /// SIGTERM, wait up to the grace period, then SIGKILL. Also stops a sidecar recorded by an
     /// earlier app run that this run never attached to.
     pub fn stop(&self) -> ServeStatus {
+        self.stop_reported(|_| {})
+    }
+
+    /// [`stop`](Self::stop), with `report` run on the result before the state is unlocked, as
+    /// [`watch`](Self::watch) does: no look or start comes between the stop and its report.
+    pub fn stop_reported(&self, report: impl FnOnce(&ServeStatus)) -> ServeStatus {
         // Before taking the lock: a start holding it notices and gives up.
         self.cancel_start.store(true, Ordering::SeqCst);
         let mut running = self.lock();
@@ -225,7 +253,9 @@ impl ServeSupervisor {
             },
         }
         self.remove_pid_file();
-        ServeStatus::stopped()
+        let status = ServeStatus::stopped();
+        report(&status);
+        status
     }
 
     fn refresh(&self, running: &mut Running) {

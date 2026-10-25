@@ -809,13 +809,13 @@ impl Core {
 
     /// App start: adopt a serve sidecar left running by an earlier app run.
     pub fn startup(&self) -> ServeStatus {
-        let status = self.serve.attach();
-        self.show_serve(status.clone());
-        status
+        self.serve.attach_reported(|status| self.show_serve(status))
     }
 
     /// Send the window a serve status (`serve://status`) and remember it for the watcher.
-    fn show_serve(&self, status: ServeStatus) {
+    /// Called with the supervisor's state locked ([`ServeSupervisor::start_reported`] and the
+    /// like), as the watcher's reports are.
+    fn show_serve(&self, status: &ServeStatus) {
         show_serve(&self.serve_shown, self.events.as_ref(), status, true);
     }
 
@@ -825,8 +825,7 @@ impl Core {
         self.clear_pending_clipboard();
         self.store.clear();
         self.terminals.close_all();
-        let status = self.serve.stop();
-        self.show_serve(status);
+        self.serve.stop_reported(|status| self.show_serve(status));
     }
 
     /// The early run of every pending 60 s clear: the clipboard is emptied if it still holds
@@ -952,18 +951,17 @@ impl Core {
 
     fn start_serve(&self) -> Result<ServeStatus, AppError> {
         let settings = self.settings_get()?;
-        let status = self.serve.start(&ServeConfig {
-            port: settings.gateway_port,
-            team_listen: settings.team_listen,
-        })?;
-        self.show_serve(status.clone());
-        Ok(status)
+        self.serve.start_reported(
+            &ServeConfig {
+                port: settings.gateway_port,
+                team_listen: settings.team_listen,
+            },
+            |status| self.show_serve(status),
+        )
     }
 
     pub fn serve_stop(&self) -> ServeStatus {
-        let status = self.serve.stop();
-        self.show_serve(status.clone());
-        status
+        self.serve.stop_reported(|status| self.show_serve(status))
     }
 
     pub fn serve_status(&self) -> ServeStatus {
@@ -1965,26 +1963,28 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Send a serve status to the window and remember it as `shown`. A start, stop or startup
 /// always sends its result (`always`); the watcher sends only what differs from what the
-/// window was last told.
+/// window was last told. Every caller holds the supervisor's state locked, so `shown` and the
+/// events follow the order of the supervisor's looks.
 fn show_serve(
     shown: &Mutex<ServeStatus>,
     events: &dyn EventSink,
-    status: ServeStatus,
+    status: &ServeStatus,
     always: bool,
 ) {
     let mut last = lock(shown);
-    if always || *last != status {
+    if always || *last != *status {
         *last = status.clone();
-        events.emit(CoreEvent::ServeStatus(status));
+        events.emit(CoreEvent::ServeStatus(status.clone()));
     }
 }
 
 /// The sidecar watch (docs/desktop-app.md §4.2): every `every`, look at the sidecar without
 /// waiting for a start or stop in progress, and tell the window when it no longer matches
 /// what the window was last told, so a sidecar that exited on its own (or was killed) shows
-/// as stopped without waiting for the window to ask. Comparing under the supervisor's lock
-/// means a stale look never overrides a newer start or stop; a start that reports a sidecar
-/// which died right after is corrected on the next look. Ends once the core is gone.
+/// as stopped without waiting for the window to ask. Starts, stops and the startup report
+/// under the supervisor's lock too, so a look never comes between one of them and its
+/// report: a stale look never overrides a newer start or stop, and a start is never reported
+/// after a newer look found its sidecar gone. Ends once the core is gone.
 fn watch_serve(
     serve: Weak<ServeSupervisor>,
     shown: Arc<Mutex<ServeStatus>>,
@@ -1999,7 +1999,7 @@ fn watch_serve(
                 let Some(serve) = serve.upgrade() else {
                     return;
                 };
-                serve.watch(|status| show_serve(&shown, events.as_ref(), status, false));
+                serve.watch(|status| show_serve(&shown, events.as_ref(), &status, false));
             }
         });
 }
