@@ -1540,6 +1540,47 @@ fn terminal_open_injects_the_principal_token_from_the_store() {
     assert!(!core.serve_status().running);
 }
 
+/// Desktop E2E F18: a damaged settings.json is never reset quietly, so `settings_get` and
+/// `serve_start` refuse it with `settings_corrupt`. The settings screen repairs it by saving
+/// the defaults with `settings_set`, which replaces the file without reading it (0600 again);
+/// `settings_get` then returns what was saved.
+#[test]
+fn settings_set_replaces_a_damaged_settings_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let oversized = vec![b' '; 70 * 1024];
+    for damaged in [
+        &br#"{"gateway_port": 80}"#[..],
+        br#"{"gateway_port": 47380, "team_listen": "0.0.0.0:47390"}"#,
+        b"{not json",
+        &oversized,
+    ] {
+        let fx = Fixture::new();
+        let core = core(&fx);
+        let file = fx.paths.settings_file();
+        fs::create_dir_all(&fx.paths.app_data_dir).unwrap();
+        fs::write(&file, damaged).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let reason = |e: zeropw_desktop_core::AppError| (e.error, e.reason);
+        let corrupt = ("StateError".to_owned(), "settings_corrupt".to_owned());
+        assert_eq!(reason(core.settings_get().unwrap_err()), corrupt);
+        assert_eq!(reason(core.serve_start().unwrap_err()), corrupt);
+
+        let defaults = Settings {
+            gateway_port: 47380,
+            team_listen: None,
+        };
+        assert_eq!(defaults, Settings::default());
+        assert_eq!(core.settings_set(defaults.clone()).unwrap(), defaults);
+        assert_eq!(core.settings_get().unwrap(), defaults);
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fx.count("serve"), 0);
+    }
+}
+
 #[test]
 fn app_status_before_init_does_not_run_the_cli() {
     let fx = Fixture::new();
