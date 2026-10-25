@@ -64,7 +64,7 @@ const HANGUL = /[가-힣]/;
 // Every result the CLI records, and the reasons the relay (its requests, its policy and the
 // service behind a connection), the SSH signer and an agent's commands and runs record.
 const product = Object.keys(rust).map((k) => withoutTests(rust[k] ?? '')).join('\n');
-const gateway = rs('gateway.rs'), policy = rs('policy.rs'), signer = rs('signer.rs'), tools = rs('tools.rs'), runs = rs('runs.rs'), server = rs('server.rs');
+const gateway = rs('gateway.rs'), policy = rs('policy.rs'), handles = rs('handles.rs'), signer = rs('signer.rs'), tools = rs('tools.rs'), runs = rs('runs.rs'), server = rs('server.rs');
 const RESULTS = unique([
   ...all(product, /result: Some\("([a-z_]+)"\)/g),
   ...all(gateway, /result: "([a-z_]+)"/g), ...all(gateway, /self\.audit\("([a-z_]+)"/g),
@@ -79,9 +79,10 @@ const REASONS = unique([
   ...all(gateway, /self\.refuse\(\s*\d+,\s*"([a-z_]+)"/g), ...all(gateway, /Invalid\("([a-z_]+)"\)/g),
   ...all(gateway, /UpstreamFailure::(?:denied|error|blocked)\(\s*"([a-z_]+)"/g),
   ...all(gateway, /fn (classify_\w+)/g).flatMap((name) => all(fnBody(gateway, name), /"([a-z_]+)"/g)),
-  // its policy's denials
+  // its policy's denials, and the refused handle or token it records (`try_relay`, `authenticate`)
   ...all(policy, /Decision::denied(?:_with_connection)?\(\s*"([a-z_]+)"/g),
   ...['grant_state', 'scope_reason', 'address_block_reason'].flatMap((name) => all(fnBody(policy, name), /Some\("([a-z_]+)"\)/g)),
+  ...all(policy, /Error::policy_denied\("([a-z_]+)"\)/g), ...all(policy + handles + server, /Error::auth_failed\("([a-z_]+)"\)/g),
   // the SSH signer
   ...all(signer, /safe_audit\(\s*"[a-z_]+",\s*"[a-z_]+",\s*Some\("([a-z_]+)"\)/g),
   // an agent's commands, and why a run failed or was cancelled
@@ -115,8 +116,9 @@ describe('records and alerts in plain words', () => {
     expect(REASONS).toEqual(expect.arrayContaining([
       'unknown_key', 'no_session_bind', 'upstream_unreachable', 'request_in_flight', 'cli_not_supported', 'cli_program_missing',
       'grant_revoked', 'global_stop', 'path_not_allowed', 'upstream_timeout', 'replay_body_unavailable', 'cancelled_by_caller',
+      'grant_mismatch', 'handle_expired', 'caller_token_invalid',
     ]));
-    for (const [name, text] of Object.entries({ audit, gateway, policy, signer, tools, runs, server, adminCli, membership })) {
+    for (const [name, text] of Object.entries({ audit, gateway, policy, handles, signer, tools, runs, server, adminCli, membership })) {
       expect(text.length, name).toBeGreaterThan(1000);
     }
     // only test modules are left out, whole: no test is read, and no product item after a test
