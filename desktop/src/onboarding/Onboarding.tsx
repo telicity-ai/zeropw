@@ -7,7 +7,6 @@ import { hostPort } from '../lib/format';
 import { finaleJoinErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { AdminStep } from './AdminStep';
-import { AgentStep, type AgentInfo } from './AgentStep';
 import { CreateStep } from './CreateStep';
 import { Finale, type JoinOutcome } from './Finale';
 import { afterRelayFailure, counted, fieldExtras, isCard, neighbour, progressOf, TITLE, type Step } from './flow';
@@ -22,7 +21,7 @@ const FOCUSABLE = '.step-body input:not([type=checkbox]):not([type=radio]), .ste
 const visible = (el: HTMLElement) => (typeof el.checkVisibility === 'function' ? el.checkVisibility() : !!el.offsetParent);
 
 /** First-run onboarding (mockup v0.5): welcome → admin passphrase → recovery code → create vault →
- *  project → agent with in-app terminal → done; or welcome → join → admin → recovery → create → done. */
+ *  project → done (agent setup is available from the dashboard); or welcome → join → admin → recovery → create → done. */
 export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }: {
   onFlowChange(inFlow: boolean): void; onFinish(page: PageId): void;
   incoming: { ref: string; preview: InvitePreview } | null; onIncomingTaken(): void;
@@ -45,8 +44,6 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
   const [recoveryKey, setRecoveryKey] = useState(0);
   const [created, setCreated] = useState(false);
   const [project, setProject] = useState<Project | null>(null);
-  const [agent, setAgent] = useState<AgentInfo | null>(null);
-  const agentRef = useRef<AgentInfo | null>(null);
   const [join, setJoin] = useState<JoinPlan | null>(null);
   const joinRef = useRef<JoinPlan | null>(null);
   const [joinOutcome, setJoinOutcome] = useState<JoinOutcome>('idle');
@@ -71,7 +68,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     onFlowChange(pr !== null);
     // a teammate is drawn as a ghost until this device has actually joined (DESIGN.md §3.2)
     field.setPeerGhost(!(to === 'done' && joining));
-    field.setMode(to, fieldExtras(to, { agent: !!agentRef.current, joining }));
+    field.setMode(to, fieldExtras(to, { joining }));
     const card = isCard(to), cardBefore = from !== to && isCard(from), lateNow = card && (from === 'welcome' || from === 'done');
     setLate(lateNow);
     if (cardBefore) {
@@ -122,7 +119,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
       const tgt = e.target;
       if (!(tgt instanceof HTMLInputElement) || /^(checkbox|radio)$/.test(tgt.type)) return;
       const s = stepRef.current;
-      if (s === 'join' || (s === 'agent' && agentRef.current)) return;
+      if (s === 'join') return;
       const btn = s === 'welcome' ? startBtn.current : sections.current[s]?.querySelector<HTMLButtonElement>('.nav .btn-primary');
       if (btn) { e.preventDefault(); btn.click(); }
     };
@@ -226,10 +223,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
               onSkipRelay={skipRelay}
               onBack={() => go('recovery')} onNext={() => go(joinRef.current ? 'done' : 'project')} />
             <ProjectStep frame={frame('project')} sectionRef={secRef('project')} created={project} onBack={back('project')}
-              onNext={(p) => { setProject(p); field.ripple(0.06); go('agent'); }} />
-            <AgentStep frame={frame('agent')} sectionRef={secRef('agent')}
-              onOpened={(a) => { agentRef.current = a; setAgent(a); }}
-              onSkip={() => go('done')} onDone={() => go('done')} />
+              onNext={(p) => { setProject(p); field.ripple(0.06); go('done'); }} />
             <JoinStep frame={frame('join')} sectionRef={secRef('join')} incoming={deepLink}
               onBack={() => { setDeepLink(null); go('welcome'); }}
               onNext={(plan) => {
@@ -240,7 +234,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
           </div>
         </div>
 
-        <Finale visible={step === 'done'} titleRef={doneTitle} project={project} agent={agent}
+        <Finale visible={step === 'done'} titleRef={doneTitle} project={project} agent={null}
           join={join ? { preview: join.preview, local: join.local } : null} joinOutcome={joinOutcome} joinError={joinError}
           onDashboard={() => onFinish('home')} onInvite={() => onFinish('team')} />
       </main>

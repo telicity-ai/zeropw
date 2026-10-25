@@ -1,0 +1,866 @@
+{
+  "status": "complete_original_full_rust_script_failed_one_target_final_same_target_rerun_passed",
+  "runner": {
+    "system": "Lima zeropw-parity Linux arm64",
+    "user": "parity uid 2000",
+    "source_transfer": "tracked plus explicit nonignored task source via tar/stdin; no host filesystem mounts",
+    "node": "22.20.0",
+    "rust": "1.98.1",
+    "python": "3.12.14",
+    "resource_limits": {
+      "CARGO_BUILD_JOBS": 2,
+      "RUST_TEST_THREADS": 2,
+      "VITEST_MAX_WORKERS": 1
+    },
+    "ui": "native Tauri/WebKitGTK 4.1 2.52.6 on task Xvfb :97 with task-local twm and localhost-only noVNC; WEBKIT_DISABLE_DMABUF_RENDERER=1"
+  },
+  "final_source": {
+    "snapshot": "src-final260",
+    "manifest_sha256": "7d91a115ea273b5b185a2afea50730036fe4a423f86d99cf2261aedd1e291d86",
+    "native_binary_sha256": "323122830c3f985774e0729d38e5d20025e69fde193b62953536772b1a64a4ef",
+    "frontend": {
+      "npm_ci_ignore_scripts": "PASS",
+      "static_checks": "PASS",
+      "tests_passed": 260,
+      "test_files": 15,
+      "react_component_cases_passed": 27,
+      "typescript_vite_build": "PASS",
+      "native_build": "PASS"
+    },
+    "source_manifest_file": "2026-10-26-desktop-linux-source-260.sha256"
+  },
+  "desktop_exact_script": {
+    "snapshot": "src-final259",
+    "manifest_sha256": "ca706f550d1da78785d62f4071c2505906421fd4d893ad149208b9ab91e5ee17",
+    "command": "bash desktop/verify.sh",
+    "completed_steps": 8,
+    "failed_steps": [],
+    "frontend_tests_passed": 259,
+    "rust_tests_passed": 142,
+    "result": "PASS, VERIFY_FAILED empty",
+    "scope": "Exact script covered snapshot 259; final 260 separately passed frontend checks. Rust/core/shell 279-file manifests are identical between 259 and 260.",
+    "unchanged_rust_core_shell_manifest_sha256": "38659d06ba3a645360fbcd207192fb38bfa2b1a618baa7d54e45675f977fdbc8",
+    "unchanged_rust_core_shell_manifest_file": "2026-10-26-desktop-linux-unchanged-rust-279.sha256",
+    "unchanged_workspace_inputs_file": "2026-10-26-desktop-linux-unchanged-workspace.sha256"
+  },
+  "full_rust_script": {
+    "command": "bash rust/verify.sh",
+    "completed_steps": 97,
+    "total_steps": 97,
+    "integration_targets_completed": 92,
+    "integration_targets_total": 92,
+    "current_step": "complete",
+    "failed_steps": [
+      {
+        "step": "test:astra_cli_runtime_round2",
+        "exit": 101
+      }
+    ],
+    "library": {
+      "passed": 642,
+      "ignored_for_dedicated_step": 4
+    },
+    "initial_failure": {
+      "target": "astra_cli_runtime_round2",
+      "case": "ar_cli_01_terminal_prompts_hide_both_passphrases",
+      "location": "rust/tests/cli_pty/mod.rs:318",
+      "message": "session leader still running after administrator and recovery prompts",
+      "meaning": "15-second completion deadline unmet; cause not established",
+      "target_result": "3 passed, 1 failed; exit 101"
+    },
+    "target_rerun": {
+      "first_rerun": "FAIL: same case; 3 passed, 1 failed; 40.93s; exit 101",
+      "diagnostic_repetition": "FAIL: same case; 3 passed, 1 failed; 40.86s; exit 101",
+      "final_after_own_matrix_builds_and_ui_finished": {
+        "result": "PASS",
+        "passed": 4,
+        "failed": 0,
+        "seconds": 5.19,
+        "exit": 0,
+        "assertions_deadlines_and_resource_settings": "unchanged"
+      },
+      "evidence_file": "2026-10-26-desktop-linux-pty-evidence.json",
+      "cause": "not established; final target PASS does not retroactively make the original script PASS"
+    },
+    "diagnostic_repetition": {
+      "result": "FAIL, same case, 3 passed/1 failed, exit 101",
+      "seconds": 40.86,
+      "safe_process_summary": {
+        "57916": {
+          "first": 6.25,
+          "last": 21.18,
+          "states": {
+            "Rsl+": 23,
+            "Rs+": 1
+          },
+          "wchan": {
+            "-": 24
+          },
+          "cpu_first": "34.7",
+          "cpu_last": "53.1",
+          "thread_wchans": {
+            "0": 24,
+            "unix_stream_data_wait": 23
+          }
+        }
+      },
+      "interpretation": "Admin remained runnable and CPU active during the unmet 15-second deadline; exact cause not established. No argv/environment/memory inspected."
+    },
+    "actual_script_exit": 1,
+    "result": "FAIL: original full script retained one failed target",
+    "passed_test_case_invocations": 1561,
+    "failed_test_case_invocations": 1,
+    "step_results_file": "2026-10-26-desktop-linux-full-rust-steps.json",
+    "steps": [
+      {
+        "step": "fmt",
+        "exit": 0,
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "clippy",
+        "exit": 0,
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "lib-and-bins",
+        "exit": 0,
+        "passed": 642,
+        "failed": 0,
+        "ignored": 4
+      },
+      {
+        "step": "test:admin_expanduser_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:admin_input_envelope",
+        "exit": 0,
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:admin_secret_import",
+        "exit": 0,
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:admin_sigint_cleanup_boundaries",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:admin_sigint_exit",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:agent_help",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:agent_proxy_parity",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_cleanup_publication_order",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_cli_runtime_round2",
+        "exit": 101,
+        "passed": 3,
+        "failed": 1,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_cli_runtime_round3",
+        "exit": 0,
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_cli_runtime_round4",
+        "exit": 0,
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_projects_final",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_pty_portability",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_acceptance",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_final",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_final_recheck",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_review",
+        "exit": 0,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_round2",
+        "exit": 0,
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_round3",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_response_round4",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_run_context_lease",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_runtime_final",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_runtime_review",
+        "exit": 0,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_sigint_cleanup",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_sigint_cleanup_final",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_fact_catchup",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_fact_duplicate_diagnostic",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_reconnect_diagnostic",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_review",
+        "exit": 0,
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_round2",
+        "exit": 0,
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_round3",
+        "exit": 0,
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:astra_team_round4",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:base_cli_error_parity",
+        "exit": 0,
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:canonical_helpers",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:cli_commands",
+        "exit": 0,
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:cli_grant_limits_parity",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:cli_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:democli_parity",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:escaped_builtin_http_parity",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:fake_upstream",
+        "exit": 0,
+        "passed": 20,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:gateway",
+        "exit": 0,
+        "passed": 148,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:gateway_oracle",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:gateway_replay_status_parity",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:gateway_tls_parity",
+        "exit": 0,
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:gateway_x1_credential_e2e",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:ledger_float_parity",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_admin_cli",
+        "exit": 0,
+        "passed": 25,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_admin_cli_more",
+        "exit": 0,
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_agent_cli",
+        "exit": 0,
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_atomic_cli",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_cli_e2e",
+        "exit": 0,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_response_cli",
+        "exit": 0,
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_team_cli",
+        "exit": 0,
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:native_team_e2e",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:policy_oracle",
+        "exit": 0,
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:policy_parity_close",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:python_numeric_comparison_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:relay_escape_parity",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:response",
+        "exit": 0,
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:response_contract",
+        "exit": 0,
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:response_integer_boundaries",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:response_parity_gaps",
+        "exit": 0,
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:runs",
+        "exit": 0,
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:runtime_fix_boundaries",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:runtime_parity_gaps",
+        "exit": 0,
+        "passed": 15,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:serve_request_log",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:server_accept_resilience",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:signer_e2e",
+        "exit": 0,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:signer_oracle",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:sshwire",
+        "exit": 0,
+        "passed": 86,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:state_dir_cross_language",
+        "exit": 0,
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:store_cross_process_lock",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:store_oracle",
+        "exit": 0,
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_derive_lazy_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_envelope_parity_edges",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_fold",
+        "exit": 0,
+        "passed": 31,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_fold_lazy_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_invite_link",
+        "exit": 0,
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_membership_sync",
+        "exit": 0,
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_oracle",
+        "exit": 0,
+        "passed": 35,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_parity_gaps",
+        "exit": 0,
+        "passed": 16,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_remaining_contract",
+        "exit": 0,
+        "passed": 24,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_secret_import",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_share_policy_version_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_snapshot_total_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_snapshot_version_order_parity",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_transport",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:team_uncaught_scope_parity",
+        "exit": 0,
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:tools_server",
+        "exit": 0,
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:vault_context",
+        "exit": 0,
+        "passed": 46,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:vault_context_oracle",
+        "exit": 0,
+        "passed": 32,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "test:vault_public_parity",
+        "exit": 0,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "signer-probes",
+        "exit": 0,
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "step": "doc-tests",
+        "exit": 0,
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "rust_source_matches_final_260": true,
+    "rust_source_file_count": 241,
+    "rust_source_manifest_sha256": "07d544517c8f310fc813f91db6d577274935df0ed1954de39099bf855d10203b"
+  },
+  "native_e2e": {
+    "crosscheck_file": "2026-10-26-desktop-native-linux-crosscheck.json",
+    "fixture": "synthetic only; no production vault, keys, or endpoints",
+    "snapshot_255": "Coordinator drove actual native onboarding, share/invite, wrong-passphrase retry, join and self-removal. Public CLI crosschecks preserved.",
+    "snapshot_260": "Coordinator reports focused UX05 disclosure/error-repair, repeated invalid-submit focus, used-invite rejection, link-error retention while alias changes, Home-to-Agents connection sheet and page navigation smoke passed. See 2026-10-26-desktop-ux-linux-final-ui.json.",
+    "final_fixture_check": {
+      "stage": "final_native_ui_fixture_check",
+      "codex_final_project_absent": true,
+      "projects": [
+        {
+          "name": "codex-ux",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "own_invite_count": 1,
+      "own_invite_statuses": [
+        {
+          "name": "Codex E2E teammate",
+          "role": "admin",
+          "status": "pending"
+        }
+      ]
+    },
+    "fixture_cleanup": "Complete: identity-checked task native app, owned relays, peer B, twm, noVNC, x11vnc, Xvfb and own SSH port forward stopped. Synthetic state/evidence preserved. VM and unrelated jobs untouched.",
+    "clipboard_fixture_check": {
+      "stage": "after_native_clipboard_test_and_extra_invite_revocation",
+      "fixture_only": true,
+      "own_invite_count": 2,
+      "pending_count": 1,
+      "invites": [
+        {
+          "invite_id": "62bf66edf99204a2b391ef300f9466d7",
+          "name": "Codex E2E teammate",
+          "role": "admin",
+          "status": "pending"
+        },
+        {
+          "invite_id": "8ac90073f1b3091f401cc04600414942",
+          "name": "Clipboard E2E",
+          "role": "user",
+          "status": "revoked"
+        }
+      ]
+    },
+    "clipboard_fixture_check_file": "2026-10-26-desktop-native-linux-clipboard-fixture.json",
+    "native_clipboard": "Coordinator verified native Copy -> native paste produced the expected user-role invite preview, then revoked only Clipboard E2E; later paste into fresh input remained empty after the clear interval."
+  },
+  "negative_control": {
+    "fixed_test": "delayed sheet autofocus preserves newer validation focus",
+    "fixed_result": "PASS in full 249 suite",
+    "disposable_copy_without_guard": "expected 1 failure, 248 skipped; original source unchanged"
+  },
+  "limitations": [
+    "All 97 original Rust steps executed, with one PTY target failure (1561 passed case invocations, 1 failed). The final identical full target passed 4/4 in 5.19s after own concurrent work finished. Original script remains recorded as FAIL; cause not established.",
+    "Separate unrelated VM jobs shared CPU. Some earlier frontend attempts hit unchanged 5000ms timeouts; bounded final runs passed, failed logs retained.",
+    "A mid-edit initial tracked-only snapshot excluded new invite.ts and is not baseline acceptance evidence.",
+    "Origin/main frontend control passed 223 tests and build.",
+    "Validation worker made no harness/CI changes and no host product builds/runs."
+  ],
+  "validation_model_provenance": {
+    "exact_runtime_model": "unavailable to validation worker",
+    "system_model_family": "GPT-6",
+    "parent_spawn_message_reported": "gpt-6.1-sol",
+    "verification": "No exact model ID exposed in this worker runtime metadata; parent message is not treated as runtime verification."
+  }
+}

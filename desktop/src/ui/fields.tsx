@@ -8,7 +8,7 @@ import { t } from '../copy';
 
 interface Common {
   id: string; label: ReactNode; error?: string | null; hint?: ReactNode; help?: ReactNode;
-  mono?: boolean; disabled?: boolean; className?: string; style?: CSSProperties; describedBy?: string;
+  mono?: boolean; disabled?: boolean; ariaDisabled?: boolean; className?: string; style?: CSSProperties; describedBy?: string;
 }
 
 const describe = (id: string, hint: boolean, help: boolean, extra?: string) =>
@@ -41,7 +41,7 @@ export function TextField(props: Common & {
       <div className={'input' + (mono ? ' mono' : '')} data-invalid={bad ? '' : undefined}>
         {prefix !== undefined && <span className="prefix" aria-hidden="true">{prefix}</span>}
         <input id={id} ref={inputRef} type={type} value={value} placeholder={placeholder} autoComplete={autoComplete} spellCheck={false}
-          autoCapitalize="off" autoCorrect="off" maxLength={maxLength} inputMode={inputMode} disabled={disabled}
+          autoCapitalize="off" autoCorrect="off" maxLength={maxLength} inputMode={inputMode} disabled={disabled} aria-disabled={props.ariaDisabled || undefined}
           aria-invalid={bad ? true : undefined} aria-describedby={describe(id, props.hint !== undefined, props.help !== undefined, props.describedBy)}
           onChange={(e) => onChange(e.target.value)} />
         {suffix !== undefined && <span className="suffix">{suffix}</span>}
@@ -66,7 +66,7 @@ export function SelectField(props: Common & { value: string; onChange(v: string)
   return (
     <Frame {...props}>
       <div className={'input select' + (mono ? ' mono' : '')} data-invalid={error ? '' : undefined}>
-        <select id={id} ref={selectRef} value={value} disabled={disabled} aria-invalid={error ? true : undefined}
+        <select id={id} ref={selectRef} value={value} disabled={disabled} aria-disabled={props.ariaDisabled || undefined} aria-invalid={error ? true : undefined}
           aria-describedby={describe(id, props.hint !== undefined, props.help !== undefined, props.describedBy)} onChange={(e) => onChange(e.target.value)}>
           {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>

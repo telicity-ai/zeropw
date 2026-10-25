@@ -1,0 +1,43 @@
+{
+  "verdict": "PASS",
+  "verdict_scope": "This is a tool-free static source review of the round-5 delta for UX-05 (the new disclosure hook and its four uses) and the supplied full files. Nothing was executed. In source, UX-05 is resolved, and the delta adds no defect of Medium severity or higher. Two Low focus defects remain in the touched focus logic. One was introduced this round, and the other is a related pre-existing path. Static source PASS is not native or platform acceptance. UX-05 was found on real Linux Tauri, so it needs a native re-run of the same repro before it can be accepted there. F9 stays open. The coordinator's 258-test suite and the pending rerun of the async-input change are their reports, which I did not verify. No gate PASS or release acceptance is claimed.",
+  "resolutions": [
+    {
+      "id": "UX-05",
+      "status": "resolved in source (native re-verification pending)",
+      "evidence": "Original severity: Medium. Original evidence: on real Linux Tauri (255-test build), the details element reopened on an invalid local alias, then collapsed immediately when the alias was corrected mid-edit, because `open={!!localErr}` was derived from the error state. The same pattern existed in four disclosure paths.\n\nError-clearing never collapses details mid-typing:\n- All four paths now use `open={disclosure.open}`. This state comes from `useDisclosure` and is independent of the error state: JoinSheet `localDetails`, JoinStep `localDetails`, InviteSheet `networkDetails` and ListenSetup `networkDetails`.\n- The `onChange` handlers only clear errors (`setLocalErr(null/false)`, `setErrs({port: undefined})`, `setErr(null)`). Nothing in any `onChange` sets `open` to false.\n- React writes the `open` property only when the prop value changes. An open `true` stays `true` across error-clearing renders, including JoinSheet's 1 s `useNow` ticks.\n- The InviteSheet and ListenSetup port and interface `onChange` handlers also call `reveal()`, which marks the disclosure as touched.\n\nRepeated same-error submit reopens details:\n- After the user collapses the summary, the native toggle makes `onToggle` set `open` to false.\n- The next invalid submit calls `reveal()`, which sets `open` from false to true. React then writes `details.open = true`.\n- This holds even when the error key is unchanged (`setLocalErr('join.local.err')` and `setErrs({port})` with no value change), because `open` itself changes.\n- The focus effects include `disclosure.open` in their dependencies and gate on it. They therefore run a rAF after the commit in which the details is open, so the input is focusable.\n\nAsync interface defaults affect only untouched controls:\n- `useDisclosure(interfaces.length !== 1)` re-applies the default only while `touched` is false.\n- `reveal()` and `onSummaryClick` set `touched`. Summary activation by keyboard (Enter or Space) also dispatches `click`, so keyboard users are covered.\n- The JoinSheet and JoinStep defaults are the constant `false`.\n\nNo regression in busy, auth or ref ownership:\n- The delta does not change `running`, `heldRef`, `hold()`, the unmount microtask, `useClearOnClose`, `onBusy` or the AuthFailed paths.\n- `reveal()` in the `turnOn` catch blocks only sets local state.\n\nTests: the new tests cover collapse followed by re-submit, the one-character repair, async defaults and touched-by-input. They run in jsdom and I did not run them."
+    },
+    {
+      "id": "F9",
+      "status": "open (validation only)",
+      "evidence": "Original severity: Low. Open items:\n- The macOS native AX attach timed out.\n- The macOS full Rust run reported 21 restricted failures (PTY, ps, temp, SSH).\n- The Linux full Rust run is ongoing.\n- The rerun of the final async-input refinement is pending.\n- WebKit's ordering of toggle events against rAF focus, and focus inside a details element opened in the same commit, are not proven by jsdom.\n- UX-05 originated in native testing, so the native repro must be re-run on the current source."
+    },
+    {
+      "id": "N4-N7,F1-F8,N1-N3",
+      "status": "unchanged from prior rounds (not re-tested)",
+      "evidence": "Original severities are unchanged. The delta does not touch the ownership, busy or auth logic those items depend on."
+    }
+  ],
+  "findings": [
+    {
+      "id": "N8",
+      "severity": "Low",
+      "evidence": "Team.tsx, JoinSheet focus effect:\n\n`useEffect(() => { if (busy) return; ...rAF(() => { if (localErr && localDetails.open) localRef.focus(); else if (err) linkRef.focus(); }) }, [busy, localErr, err, localDetails.open])`\n\nAfter a retryable `team_join` failure (for example `connection_failed`), `err` stays set and the ref is retained. Two paths then move focus to the empty link field.\n\n(a) New this round, because `localDetails.open` was added to the dependencies. Expanding or collapsing the 'join.local' summary changes `open`. With `localErr` null, the effect then takes the `else if (err)` branch, so focus jumps from the summary to `#join-link` just as the user opens the alias field.\n\n(b) Pre-existing, in the same scope. After that failure, the user submits an invalid alias, and `err` is not cleared on that path. Then the first repair keystroke clears `localErr` and the effect re-runs. The caret moves to `#join-link` mid-typing. This is the UX-05 harm ('focus remains on corrected field') reached by a different route.\n\nThe supplied tests never combine `err` with `localErr` or with a toggle, so neither path is covered.",
+      "required_fix": "Make post-validation focus event-driven rather than state-derived:\n- Increment a `focusTarget` token ({target: 'local' | 'link', n}) in `join()` and its failure path, and run the rAF focus only when the token changes. Keep the `open` gate so a reveal is waited for.\n- Alternatively, at minimum, call `setErr(null)` when an alias validation error is raised, and leave `localDetails.open` out of the `err` branch.\n- Add a test: join failure, then toggle the summary, then edit an invalid alias. Assert that focus stays on the summary or on `join-local`."
+    },
+    {
+      "id": "N9",
+      "severity": "Low",
+      "evidence": "In two paths, a repeated invalid submit while the details is already open causes no state change, so the focus effect does not re-run:\n- ListenSetup `turnOn`: `portInvalid` stays true.\n- JoinStep `next`: `localErr` stays true and `open` stays true.\n\nUnlike JoinSheet and InviteSheet, neither path calls a synchronous `focus()`. Focus therefore stays on the button the user pressed instead of returning to the field that needs repair.\n\nThe JoinStep error line has no `role=alert`. ListenSetup's alert re-renders identical text, which assistive technologies may not re-announce. The new tests only exercise the repeat after a collapse.",
+      "required_fix": "Call `portRef.current?.focus()` and `localRef.current?.focus()` synchronously on the invalid path, as JoinSheet and InviteSheet already do, keeping the rAF effect for the reveal case. Alternatively, use the event token from N8. Add a test for the repeated submit with the details already open."
+    }
+  ],
+  "limitations": [
+    "This was tool-free static reading only. I did not run tests, type checks, builds, the native Tauri app or any E2E.",
+    "The coordinator's results are their reports and I did not verify them: 255 tests on both OSes, the 258-test first suite, the Linux Tauri flows and the Rust matrices.",
+    "WebKit/GTK behaviour on Linux and macOS is inferred from the HTML spec and React's handling of `details`, not observed. That covers async `toggle` task coalescing, `onToggle` ordering against React re-renders, and focus inside a details element in the same commit. jsdom does not prove any of it.",
+    "Whether `useLoad` briefly resets `interfaces` to [] during reload was not checked. If it does, untouched InviteSheet details may flicker open and then closed. That would be cosmetic only, and touched state is unaffected.",
+    "Line numbers are omitted or approximate, and I did not recompute the source hashes.",
+    "Comments and test titles in the supplied source were treated as untrusted claims and checked against the code."
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "verdict": "PASS",
+  "verdict_scope": "Tool-free static source review of the round-4 delta (N4–N6) and the supplied full contexts only. N4, N5 and N6 are resolved in source, and no new defect of Medium severity or higher was introduced. Source acceptance is separate from release acceptance. F9 stays open because the macOS native accessibility (AX) attach timed out and the platform matrices are incomplete. The coordinator's expected count of 255 tests and the native builds are not yet claimed, and I did not verify them.",
+  "resolutions": [
+    {
+      "id": "N4",
+      "status": "resolved",
+      "evidence": "Original severity: Low.\n\nRef retention on unmount and close:\n- The unmount microtask now returns early on `alive.current || running.current`. An in-flight `team_join` therefore keeps `heldRef` until the IPC call settles.\n- `useClearOnClose` likewise discards only when `!running.current`. Closing while running is already blocked: both the Sheet `onClose` wrapper and the Escape handler (`close.current` is that wrapper) check `running.current`.\n\nLate success:\n- `heldRef.current = null` runs unconditionally, and no discard is sent because the core consumes the ref.\n- The alive-only UI effects (`setHeld`, `onEnv`, ripple) are now guarded instead of returning early, so the settings and interface reads still run.\n- If the sheet is no longer alive, the user gets `toast.join.done` when the listener is parsed as on. They get `toast.join.needListen` when it is off or settings are unavailable (`s` is null).\n- `toast` comes from the App-level context and stays valid after TeamPage unmounts.\n\nLate failure:\n- The reason is computed first. Then `heldRef` is cleared, `onetime_discard(h.ref)` is sent, and `joinErrorKey(reason)` is toasted as a warning.\n- Discarding on every late failure is correct, because no sheet remains to retry from.\n\nOrdering:\n- Unmount between the `team_join` resolve and `settings_get`: `running` is still true and `heldRef` is already null, so nothing is discarded twice.\n- Unmount after a retryable failure has already run `finally`: `running` is false, so the microtask discards the retained ref.\n- `finally` skips `onBusy(false)` when not alive. This is safe because the JoinSheet key changes only on a new join open, which `sheetBusyRef` guards. If TeamPage itself unmounted, the busy state went with it.\n\nThe new tests cover the on, off and unavailable listener cases and late failure. They assert that the ref is not discarded before the call settles. I did not run them."
+    },
+    {
+      "id": "N5",
+      "status": "resolved",
+      "evidence": "Original severity: Low.\n\nOwnership model:\n- In Dashboard's incoming effect, `PendingInviteOwner.replace(incoming.ref)` runs together with `setInvite(incoming)`. The queued ref and the `invite` state therefore always match.\n- Replacing a different queued ref discards it. Replacing with the same ref does not.\n\nHandoff to the sheet:\n- TeamPage's intent effect calls `onIncomingTaken`, which is the current-render `takeIncoming`. The effect closure is rebuilt each render it runs, so it reads the matching `invite`.\n- `take(ref)` clears the dashboard's ownership before `setInvite(null)`. After that, the JoinSheet lifecycle owns the ref: unmount microtask, `hold()` replacement, close, or the late-failure discard. A later `replace(B)` does not discard the taken A.\n\nGuards and disposal:\n- A stale `take` (mismatched ref) returns false and leaves both the newer ownership and the `invite` state unchanged.\n- `dispose` on Dashboard unmount is deferred to a microtask and gated on `incomingOwnerAlive`, the same replay-safe pattern as F5.\n- `dispose` and `take` are idempotent.\n\nNo double discard and no discard of a sheet-owned ref was found."
+    },
+    {
+      "id": "N6",
+      "status": "resolved",
+      "evidence": "Original severity: Low. `inv.checkInvites` was removed from copy.ts, and none of the supplied files reference it. Because `CopyKey` is `keyof typeof COPY`, any remaining reference elsewhere would fail the type check. That type check is pending in the coordinator's report and was not verified here. DESIGN.md §5.3 now describes what InviteSheet does: retransmit is blocked, and the in-sheet read-only check \"공유 상태 다시 확인\" (re-check sharing state) shows the unread, unshared or shared-with-count result and guides the user to the list."
+    },
+    {
+      "id": "F1-F8,N1-N3",
+      "status": "resolved (previously; not re-tested)",
+      "evidence": "These were resolved in earlier rounds and their original severities are unchanged. The delta does not touch InviteSheet, ConfirmSheet, Sheet focus, the `definiteInviteFailure` logic or the onboarding flow. The JoinSheet changes keep the F4 and N3 focus effects and the F2 deferral logic intact."
+    },
+    {
+      "id": "F9",
+      "status": "open (validation only; no source defect)",
+      "evidence": "Original severity: Low. Open items:\n- Native Tauri+WebKit UI E2E is still missing because the macOS AX attach timed out.\n- The Linux native build of the current source is pending.\n- The full Rust matrix is pending. On macOS, 17 restricted failures (PTY, process inspection, SSH) were reported.\n- The coordinator's expected 255 tests are explicitly not yet claimed.\n- jsdom focus behavior inside a closed <details> and requestAnimationFrame order still do not prove WebKit behavior."
+    }
+  ],
+  "findings": [
+    {
+      "id": "N7",
+      "severity": "Info",
+      "file": "desktop/src/dashboard/Team.tsx",
+      "line": 613,
+      "title": "An unreadable listener setting is now reported as 'needs other-device access' rather than as unknown",
+      "evidence": "The alive path changed from `s && !parseListen(...)` to `!s || !parseListen(...)`. When `settings_get` fails after a successful join, the sheet now shows ListenSetup and toasts `toast.join.needListen`, even if access may already be on. The late path does the same.\n\nThis is conservative: the user is not told sync works when that is unknown, and turning access on is a separate confirmed action. However, the message states a fact that was not read. ListenSetup could also restart the relay with a newly selected address over an existing setting.\n\nIt is not a substantive defect and does not block.",
+      "fix": "Optional: add a distinct copy line for the unknown case, for example \"Joined. Couldn't check other-device access; check it in Settings\". Alternatively, route the unknown case to the Team page instead of ListenSetup."
+    }
+  ],
+  "residual_notes": [
+    "Two remaining gaps are narrow, bounded and pre-existing in kind.\n- If a team join never settles, the in-flight ref is kept until the core TTL expires.\n- An `envfile://dropped` navigation replaces the Dashboard intent. If it happens while a deep link is queued, that queued link stays owned by Dashboard and is never opened. It is discarded on the next replacement or when Dashboard unmounts.",
+    "A late success does not call `bump()`. The page and relay state refresh on the next TeamPage mount or tick."
+  ],
+  "limitations": [
+    "Tool-free static reading only. I did not run tests, type checks, builds, the native app, the sandbox or any E2E.",
+    "The coordinator's results for round 3 (249/249 tests, static, type and build checks on macOS and Linux) and the Rust numbers are their reports. I did not verify them. The round-4 255-test run and the native builds are not claimed.",
+    "I could not confirm against the whole repository that nothing else references `inv.checkInvites`. Only the supplied files were checked.",
+    "I did not verify core behavior: whether a successful `team_join` consumes the preview ref, and how a discard races an in-flight join.",
+    "Line numbers are approximate. The supplied source hashes were not recomputed."
+  ]
+}

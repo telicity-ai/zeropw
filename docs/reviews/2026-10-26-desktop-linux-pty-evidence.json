@@ -1,0 +1,70 @@
+{
+  "case": "ar_cli_01_terminal_prompts_hide_both_passphrases",
+  "location": "rust/tests/cli_pty/mod.rs:318",
+  "command": "cargo test --locked --manifest-path rust/Cargo.toml --test astra_cli_runtime_round2",
+  "unchanged_environment": {
+    "CARGO_BUILD_JOBS": 2,
+    "RUST_TEST_THREADS": 2,
+    "TMPDIR": "/tmp/zp-ux-20261026",
+    "ZEROPW_PYTHON": "/opt/zeropw-tools/python31214/bin/python3.12"
+  },
+  "no_source_assertion_or_deadline_changes": true,
+  "runs": [
+    {
+      "run": "initial_full_matrix",
+      "result": "FAILED",
+      "passed": 3,
+      "failed": 1,
+      "seconds": 39.78,
+      "target_exit": 101,
+      "log": "VERIFY_STEP_BEGIN=test:astra_cli_runtime_round2\n   Compiling zeropw v0.2.0 (/home/parity/codex-desktop-ux-20261026/src-complete/rust)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.86s\n     Running tests/astra_cli_runtime_round2.rs (/home/parity/codex-desktop-ux-20261026/target/debug/deps/astra_cli_runtime_round2-804dfc86ede327e4)\n\nrunning 4 tests\ntest ar_cli_01_terminal_prompts_hide_both_passphrases ... FAILED\ntest ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child ... ok\ntest cli_pty::keeper_entry ... ok\ntest ar_runtime_06_http_execution_accepts_uncreated_configured_socket_directory ... ok\n\nfailures:\n\n---- ar_cli_01_terminal_prompts_hide_both_passphrases stdout ----\n\nthread 'ar_cli_01_terminal_prompts_hide_both_passphrases' (49310) panicked at tests/cli_pty/mod.rs:318:13:\nsession leader still running: \"Administrator passphrase: \\r\\nRecovery passphrase: \\r\\n\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    ar_cli_01_terminal_prompts_hide_both_passphrases\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.78s\n\nerror: test failed, to rerun pass `--test astra_cli_runtime_round2`\nVERIFY_STEP_END=test:astra_cli_runtime_round2 exit=101"
+    },
+    {
+      "run": "first_same_flag_target_rerun",
+      "result": "FAILED",
+      "passed": 3,
+      "failed": 1,
+      "seconds": 40.93,
+      "target_exit": 101,
+      "log": "VERIFY_STEP_BEGIN=test:astra_cli_runtime_round2\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.22s\n     Running tests/astra_cli_runtime_round2.rs (/home/parity/codex-desktop-ux-20261026/target/debug/deps/astra_cli_runtime_round2-804dfc86ede327e4)\n\nrunning 4 tests\ntest ar_cli_01_terminal_prompts_hide_both_passphrases ... FAILED\ntest ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child ... ok\ntest cli_pty::keeper_entry ... ok\ntest ar_runtime_06_http_execution_accepts_uncreated_configured_socket_directory ... ok\n\nfailures:\n\n---- ar_cli_01_terminal_prompts_hide_both_passphrases stdout ----\n\nthread 'ar_cli_01_terminal_prompts_hide_both_passphrases' (57271) panicked at tests/cli_pty/mod.rs:318:13:\nsession leader still running: \"Administrator passphrase: \\r\\nRecovery passphrase: \\r\\n\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    ar_cli_01_terminal_prompts_hide_both_passphrases\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.93s\n\nerror: test failed, to rerun pass `--test astra_cli_runtime_round2`\nVERIFY_STEP_END=test:astra_cli_runtime_round2 exit=101\nVERIFY_FAILED=test:astra_cli_runtime_round2"
+    },
+    {
+      "run": "diagnostic_same_flag_target_rerun",
+      "result": "FAILED",
+      "passed": 3,
+      "failed": 1,
+      "seconds": 40.86,
+      "target_exit": 101,
+      "log": "VERIFY_STEP_BEGIN=test:astra_cli_runtime_round2\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s\n     Running tests/astra_cli_runtime_round2.rs (/home/parity/codex-desktop-ux-20261026/target/debug/deps/astra_cli_runtime_round2-804dfc86ede327e4)\n\nrunning 4 tests\ntest ar_cli_01_terminal_prompts_hide_both_passphrases ... FAILED\ntest ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child ... ok\ntest cli_pty::keeper_entry ... ok\ntest ar_runtime_06_http_execution_accepts_uncreated_configured_socket_directory ... ok\n\nfailures:\n\n---- ar_cli_01_terminal_prompts_hide_both_passphrases stdout ----\n\nthread 'ar_cli_01_terminal_prompts_hide_both_passphrases' (57914) panicked at tests/cli_pty/mod.rs:318:13:\nsession leader still running: \"Administrator passphrase: \\r\\nRecovery passphrase: \\r\\n\"\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    ar_cli_01_terminal_prompts_hide_both_passphrases\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 40.86s\n\nerror: test failed, to rerun pass `--test astra_cli_runtime_round2`\nVERIFY_STEP_END=test:astra_cli_runtime_round2 exit=101\nVERIFY_FAILED=test:astra_cli_runtime_round2"
+    },
+    {
+      "run": "final_after_own_matrix_and_ui_finished",
+      "result": "ok",
+      "passed": 4,
+      "failed": 0,
+      "seconds": 5.19,
+      "target_exit": 0,
+      "log": "VERIFY_STEP_BEGIN=test:astra_cli_runtime_round2\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s\n     Running tests/astra_cli_runtime_round2.rs (/home/parity/codex-desktop-ux-20261026/target/debug/deps/astra_cli_runtime_round2-804dfc86ede327e4)\n\nrunning 4 tests\ntest ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child ... ok\ntest ar_cli_01_terminal_prompts_hide_both_passphrases ... ok\ntest cli_pty::keeper_entry ... ok\ntest ar_runtime_06_http_execution_accepts_uncreated_configured_socket_directory ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.19s\n\nVERIFY_STEP_END=test:astra_cli_runtime_round2 exit=0\nVERIFY_FAILED="
+    }
+  ],
+  "safe_diagnostic_summary": {
+    "57916": {
+      "first": 6.25,
+      "last": 21.18,
+      "states": {
+        "Rsl+": 23,
+        "Rs+": 1
+      },
+      "wchan": {
+        "-": 24
+      },
+      "cpu_first": "34.7",
+      "cpu_last": "53.1",
+      "thread_wchans": {
+        "0": 24,
+        "unix_stream_data_wait": 23
+      }
+    }
+  },
+  "conclusion": "The final identical target passed after all own concurrent tests/build/UI fixtures finished. Original matrix failure and failed reruns remain evidence; exact cause was not established."
+}

@@ -58,6 +58,9 @@ export function Sheet({ id, open, title, lead, children, primaryLabel, busy, rea
     const timer = setTimeout(() => {
       const root = box.current;
       if (!root) return;
+      // A validation error or the user may have focused content before this delayed opener.
+      // Do not let the opening animation's timer steal that newer focus.
+      if (document.activeElement instanceof HTMLElement && root.contains(document.activeElement)) return;
       const auto = root.querySelector<HTMLElement>('[data-autofocus]');
       const first = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].find(visible);
       (auto ?? first ?? root.querySelector<HTMLElement>('h2'))?.focus({ preventScroll: true });

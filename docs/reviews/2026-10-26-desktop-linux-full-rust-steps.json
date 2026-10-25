@@ -1,0 +1,694 @@
+{
+  "command": "bash rust/verify.sh",
+  "source": "src-complete/rust (unchanged product Rust source)",
+  "actual_script_exit": 1,
+  "steps_executed": 97,
+  "integration_targets_executed": 92,
+  "failed_steps": [
+    "test:astra_cli_runtime_round2"
+  ],
+  "passed_test_case_invocations": 1561,
+  "failed_test_case_invocations": 1,
+  "note": "Ignored library probes were subsequently executed in the dedicated signer-probes step; counts are executions rather than unique source functions.",
+  "steps": [
+    {
+      "step": "fmt",
+      "exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "clippy",
+      "exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "lib-and-bins",
+      "exit": 0,
+      "passed": 642,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "step": "test:admin_expanduser_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:admin_input_envelope",
+      "exit": 0,
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:admin_secret_import",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:admin_sigint_cleanup_boundaries",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:admin_sigint_exit",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:agent_help",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:agent_proxy_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_cleanup_publication_order",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_cli_runtime_round2",
+      "exit": 101,
+      "passed": 3,
+      "failed": 1,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_cli_runtime_round3",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_cli_runtime_round4",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_projects_final",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_pty_portability",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_acceptance",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_final",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_final_recheck",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_review",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_round2",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_round3",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_response_round4",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_run_context_lease",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_runtime_final",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_runtime_review",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_sigint_cleanup",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_sigint_cleanup_final",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_fact_catchup",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_fact_duplicate_diagnostic",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_reconnect_diagnostic",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_review",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_round2",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_round3",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:astra_team_round4",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:base_cli_error_parity",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:canonical_helpers",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:cli_commands",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:cli_grant_limits_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:cli_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:democli_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:escaped_builtin_http_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:fake_upstream",
+      "exit": 0,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:gateway",
+      "exit": 0,
+      "passed": 148,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:gateway_oracle",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:gateway_replay_status_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:gateway_tls_parity",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:gateway_x1_credential_e2e",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:ledger_float_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_admin_cli",
+      "exit": 0,
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_admin_cli_more",
+      "exit": 0,
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_agent_cli",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_atomic_cli",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_cli_e2e",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_response_cli",
+      "exit": 0,
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_team_cli",
+      "exit": 0,
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:native_team_e2e",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:policy_oracle",
+      "exit": 0,
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:policy_parity_close",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:python_numeric_comparison_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:relay_escape_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:response",
+      "exit": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:response_contract",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:response_integer_boundaries",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:response_parity_gaps",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:runs",
+      "exit": 0,
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:runtime_fix_boundaries",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:runtime_parity_gaps",
+      "exit": 0,
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:serve_request_log",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:server_accept_resilience",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:signer_e2e",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:signer_oracle",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:sshwire",
+      "exit": 0,
+      "passed": 86,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:state_dir_cross_language",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:store_cross_process_lock",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:store_oracle",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_derive_lazy_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_envelope_parity_edges",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_fold",
+      "exit": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_fold_lazy_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_invite_link",
+      "exit": 0,
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_membership_sync",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_oracle",
+      "exit": 0,
+      "passed": 35,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_parity_gaps",
+      "exit": 0,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_remaining_contract",
+      "exit": 0,
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_secret_import",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_share_policy_version_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_snapshot_total_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_snapshot_version_order_parity",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_transport",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:team_uncaught_scope_parity",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:tools_server",
+      "exit": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:vault_context",
+      "exit": 0,
+      "passed": 46,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:vault_context_oracle",
+      "exit": 0,
+      "passed": 32,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "test:vault_public_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "signer-probes",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "step": "doc-tests",
+      "exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

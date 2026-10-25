@@ -23,6 +23,7 @@ import { turnOffListen } from './relay';
 import { SettingsPage } from './Settings';
 import { Sheet } from './Sheet';
 import { TeamPage } from './Team';
+import { PendingInviteOwner } from './pendingInvite';
 import { watchRecords } from './watch';
 
 export type { PageId } from './pages';
@@ -49,6 +50,19 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   const [tick, setTick] = useState(0);
   const [activity, setActivity] = useState(0);
   const [invite, setInvite] = useState<Incoming | null>(null);
+  const pendingInvite = useRef(new PendingInviteOwner((ref) => { void call('onetime_discard', { ref }).catch(() => undefined); }));
+  const incomingOwnerAlive = useRef(true);
+  useEffect(() => {
+    incomingOwnerAlive.current = true;
+    const owner = pendingInvite.current;
+    return () => {
+      incomingOwnerAlive.current = false;
+      queueMicrotask(() => { if (!incomingOwnerAlive.current) owner.dispose(); });
+    };
+  }, []);
+  const takeIncoming = () => {
+    if (invite && pendingInvite.current.take(invite.ref)) setInvite(null);
+  };
   const [envFile, setEnvFile] = useState<EnvFileRef | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const toastRef = useRef(toast);
@@ -145,6 +159,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
   useEffect(() => {
     if (!incoming || incoming.ref === lastIncoming.current) return;
     lastIncoming.current = incoming.ref;
+    pendingInvite.current.replace(incoming.ref);
     setInvite(incoming);
     setPage('team');
     setIntent('join');
@@ -302,7 +317,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               {page === 'connections' && <ConnectionsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'logs' && <LogsPage />}
-              {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={() => setInvite(null)} />}
+              {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={takeIncoming} />}
               {page === 'settings' && <SettingsPage intent={pageIntent} onIntent={clearIntent} />}
             </div>
           </div>

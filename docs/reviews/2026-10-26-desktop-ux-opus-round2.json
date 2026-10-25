@@ -1,0 +1,119 @@
+{
+  "actual_init_model": "claude-opus-5-5",
+  "actual_assistant_models": [
+    "claude-opus-5-5"
+  ],
+  "requested_model": "opus",
+  "effort": "medium",
+  "input_sha256": "24acaf96e8e6769cf525131d0e5bf529491f590be1335ae65e653e39ed13c4cd",
+  "source_hashes": {
+    "DESIGN.md": "18195ab76a49313415768effc0448e327c45361febb7615e0506f94da0d91dbe",
+    "desktop/package-lock.json": "91110a467c1ce30e93a89840fbe4ac05c71434cc61669d55c0e8d1b1e69b17cd",
+    "desktop/package.json": "f6508027e1f9b4625427855c929206a41877e990e4f9542121219f829a321e8c",
+    "desktop/src/copy.ts": "784d772e426cef7cc2a1adcdf0406e5c2251099973cb0abc0b33e2bfd4211c04",
+    "desktop/src/dashboard/Confirm.tsx": "ac227e2e7d6f78ba009fc28a6b4e1783829adf66c2cc39e0d48beed4a2bf1f5b",
+    "desktop/src/dashboard/ListenSetup.tsx": "7de27d60538af2b2c40656157a9b2a29f4024c4300e1bcf8a2c22b906e5f9590",
+    "desktop/src/dashboard/Team.tsx": "56698be5b2eff72dded81183fa66024f51bae32b24924369df6a304056b09e11",
+    "desktop/src/onboarding/JoinStep.tsx": "ab45f55cf41e22059bc856c1a2a982802e9e3ca5c66fd7f04dc5ed72265bea6b",
+    "desktop/src/onboarding/Onboarding.tsx": "9b4d2933cd0e902c31a2555831f6e8ff346f33642f9de563df5493ddaa9994c9",
+    "desktop/src/onboarding/flow.ts": "04c8ea6dadc56621710934a13fd3c52a2c72d3ca2c532c544f79684b13342b2a",
+    "desktop/src/ui/fields.tsx": "ff647ed5dffd7b81af2e223bd3a8ca10be39af176d01048ffc9050ff6c6e6c75",
+    "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+    "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb",
+    "docs/desktop-app.md": "d766e090f62334d5b9546e0c4e9527945bc2c431ce03f15efda258a81c973e39",
+    "desktop/src/dashboard/invite.ts": "0464c15c14f0976d847c08555a0eaae61debd3cf9267ce763831434778bcaa98",
+    "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+    "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+    "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+    "desktop/test/team-components.test.ts": "5b6a106dab49f1d17b41ec17dfe039753e04a2e68befafaa085f23fbc1b37eed",
+    "docs/desktop-ux-e2e-2026-10-26.md": "e1beb19d27d09bab47f4bf969ac3018301639b5430481ab88e1e019f1ab144b6"
+  },
+  "review": {
+    "verdict": "REVISE",
+    "resolutions": [
+      {
+        "id": "F1",
+        "status": "resolved",
+        "evidence": "Original severity: Medium. invite.ts now has an allowlist in definiteInviteFailure(). A failure is definite only for AuthFailed or the reasons invalid_name, invalid_argument, invalid_payload, passphrase_missing, team_env_already_shared and onetime_store_full. Each of these is rejected before any write: onetime_store_full comes from store.reserve(), which in the provided core_team_commands runs before runner.run_parsed. Every other failure sets uncertainInvite=true and shows 'inv.unknown'. That includes Timeout/admin_timeout, InternalError admin_output_invalid/admin_output_missing, IoError admin_wait_failed and Unavailable. In that state the primary button changes to 'inv.checkInvites', which only closes the sheet (create(): `if (made || uncertainInvite) { onClose(); return; }`), so the invite cannot be resubmitted. The 'shared' wording comes from sharingCommitted, which is set only when team_share returned successfully (inside the onShared callback). team-components.test.ts exercises five uncertain classes and checks that team_invite_create is called once. No test results were observed."
+      },
+      {
+        "id": "F2",
+        "status": "resolved",
+        "evidence": "Original severity: Medium. TeamPage replaced useIntent with an effect that returns early while `sheetBusyRef.current || sheets.isOpen('invite')`. The effect re-runs on [intent, incoming, sheetBusy, sheets.cur], so incoming join intents wait in the parent until the busy operation finishes and, for invite, until the user closes the sheet. onIncomingTaken() is not called until then.\n(a) A newer join sheet cannot mount during team_join, so the old completion can no longer close a newer sheet.\n(b) InviteSheet and JoinSheet now track alive and openRef. A link_ref delivered after unmount or close is discarded with an 'inv.late' toast. An unknown outcome after unmount shows 'inv.lateUnknown'.\nThe Join, Invite, Share and Remove section buttons check sheetBusyRef before opening.\nUser-acknowledgment requirement: met at the TeamPage level, because the invite sheet's `made` state blocks the intent until the user presses Done or closes the sheet. The parent routing of deep links is a limitation; see limitations.\nThe new defect N1 makes this guard block permanently after any ConfirmSheet use."
+      },
+      {
+        "id": "F3",
+        "status": "resolved",
+        "evidence": "Original severity: Medium. For an unshared environment, InviteSheet renders `<Callout>{t('inv.pre2.note')}</Callout>` before confirmation. That copy includes '되돌릴 수 없고 권한은 다시 승인해요' ('it cannot be undone and permissions must be re-approved'). The primary label becomes 'inv.shareCreate' ('공유하고 초대 링크 만들기', 'Share and create invite link'). The onShared callback toasts and announces 'toast.share.done'. A persistent info Callout ('sharedHere.includes(env)') keeps the grant-reapproval notice visible after an invite failure. Component tests assert inv.pre2.note, the announce call and the toast text."
+      },
+      {
+        "id": "F4",
+        "status": "resolved",
+        "evidence": "Original severity: Medium. Error focus is now post-render for the cited cases:\n- JoinSheet: a rAF effect keyed on [busy, localErr, err] focuses the local-name field after `<details open={!!localErr}>` renders, or the link field after busy clears. The link field uses ariaDisabled (a new TextField prop) plus an onChange guard instead of `disabled`.\n- ListenSetup and the InviteSheet listen button: use aria-disabled with running-ref guards.\n- Port errors: focused by a rAF effect in both ListenSetup and InviteSheet.\n- Onboarding JoinStep: a rAF effect focuses ob-join-local when localErr is set.\nA remaining focus loss elsewhere in InviteSheet is reported as N3."
+      },
+      {
+        "id": "F5",
+        "status": "resolved",
+        "evidence": "Original severity: Low.\n- The JoinSheet and JoinStep unmount cleanup now defers the discard with queueMicrotask and skips it if alive.current was set back to true. A StrictMode setup, cleanup, setup sequence therefore no longer discards a live incoming ref.\n- The incoming effect re-holds the same ref, and hold() does not discard when old.ref === h.ref.\n- The provided desktop/src/main.tsx renders `<App />` without StrictMode, which confirms the original concern did not apply in practice."
+      },
+      {
+        "id": "F6",
+        "status": "resolved",
+        "evidence": "Original severity: Low. Docs updated:\n- docs/desktop-app.md §6 onboarding row (principal_create and terminal_open removed)\n- §7 (step 6 is now completion, with a separate agent paragraph)\n- the §4.4 sudo reference (now points to the agent-add screen)\n- DESIGN.md §5.2 (four-step flow)\n- DESIGN.md §7 ('n/전체 단계 수', i.e. 'n/total steps'; four steps or three)\nCode updated:\n- the flow.ts comment\n- FULL in flow.ts is now ['admin','recovery','create','project']\n- Onboarding.tsx no longer imports or mounts AgentStep, its Enter-key branch for 'agent' and the agent argument of fieldExtras are removed, and Finale receives agent={null}\nThe 'agent' Step and TITLE entry remain, with a comment documenting why."
+      },
+      {
+        "id": "F7",
+        "status": "resolved",
+        "evidence": "Original severity: Low.\n- InviteSheet receives `shared={td ? td.shared : null}` and loadFailed=team.failed||base.failed.\n- While the state is unknown, the primary label is 'boot.loading' or 'inv.retryRead', not 'shareCreate'.\n- onBlocked calls onRetry() when loading failed.\n- blocked() toasts 'error.load' or 'boot.loading' instead of 'inv.blocked'.\n- A role=status line shows the state.\n- `ready` requires shared !== null.\nA test covers a load failure followed by a retry with no team_share call. Minor caveat: team.failed can stay true from a previously failed environment until the newly selected one loads."
+      },
+      {
+        "id": "F8",
+        "status": "resolved",
+        "evidence": "Original severity: Low. A localEdited ref in JoinSheet and JoinStep stops hold() from overwriting a user-edited local name. The summary shows the current value. A test checks that a replacement preview keeps 'custom/dev'. Note: localEdited is never reset, so a custom name chosen for one inviter carries over to a different team's link. It stays visible only in the collapsed summary."
+      },
+      {
+        "id": "F9",
+        "status": "open",
+        "evidence": "Original severity: Low.\nAdded test/team-components.test.ts (jsdom, ReactDOM). It mocks IPC and covers:\n- uncertain classification\n- the share-then-AuthFailed path\n- the same-tick double submit\n- deep-link deferral during invite and join\n- discarding a link delivered after unmount\n- load-failure retry\n- delayed replacement previews\n- custom alias preservation and focus\n- the expiry pre-check\n- onboarding unmount cleanup\nThis remains open because:\n- No execution results were observed. Per the request, passing results are not assumed, and docs/desktop-ux-e2e-2026-10-26.md still says the modified-source frontend, desktop-core, native UI and review evidence is pending.\n- ConfirmSheet's new busy and onBusy lifecycle has no test, which leaves defect N1 undetected.\n- jsdom allows focus inside a closed <details>, so the focus assertions do not prove real WebKit behavior."
+      }
+    ],
+    "findings": [
+      {
+        "id": "N1",
+        "severity": "High",
+        "file": "desktop/src/dashboard/Confirm.tsx",
+        "line": 33,
+        "title": "ConfirmSheet never resets its running guard or reports onBusy(false); retries are silently ignored and TeamPage stays busy permanently, so deep-link joins never open",
+        "evidence": "go() sets `running.current = true; onBusy?.(true); setBusy(true)`, but its finally block is only `finally { setBusy(false); }`. There is no `running.current = false` and no `onBusy?.(false)`.\nConsequences:\n(1) In every ConfirmSheet across the app, after the first attempt fails, for example a wrong admin passphrase that shows passErr, the next press returns at `if (running.current) return;` with no feedback. Resume, revoke, restore and similar actions cannot be retried without remounting the sheet.\n(2) On TeamPage the share and remove sheets pass onBusy={reportBusy}. After any share or remove, whether it succeeds or fails, sheetBusyRef.current stays true and sheetBusy stays true.\n(3) From then on the Join, Invite, Share and Remove buttons are all silent no-ops, because each checks `if (!sheetBusyRef.current)`.\n(4) The intent effect returns early forever, so a zeropw://join deep link or a home 'invite' quick action is never opened and onIncomingTaken() is never called. The pending invite preview ref stays held in the parent until its core TTL.\nThis converts F2's busy guard into a permanent block. The new component tests do not exercise ConfirmSheet, so nothing catches it.",
+        "fix": "Change the ConfirmSheet finally to `finally { running.current = false; onBusy?.(false); setBusy(false); }`, guarded with an alive ref as InviteSheet does if the sheet can unmount mid-run. Add component tests for the following:\n- a wrong passphrase followed by a successful retry\n- after a team share succeeds, a deep-link join intent opens the join sheet\n- the Invite and Join buttons work after a share or remove"
+      },
+      {
+        "id": "N2",
+        "severity": "Low",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 368,
+        "title": "The 'check invites' outcome can point to a list that is not shown",
+        "evidence": "If team_share itself has an uncertain outcome (for example Timeout), sharingCommitted stays false and the sheet shows 'inv.unknown' with the primary label 'inv.checkInvites'. Pressing it only calls onClose(). The TeamPage invite list renders only under `td?.shared`. So if the reload still reports the environment as unshared, or the read fails, there is no invite list to check. The guidance is honest but cannot be followed. No mutation is repeated, so this is not a safety issue.",
+        "fix": "After an uncertain outcome, reload the team data and show a state-specific message on the page, for example 'sharing state unknown: retry read'. Alternatively, keep the sheet open with a 'read state again' action that re-queries team_members and team_invites before allowing a new attempt."
+      },
+      {
+        "id": "N3",
+        "severity": "Low",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 411,
+        "title": "InviteSheet still drops keyboard focus: the name field is disabled while busy, and form-level errors are not focused",
+        "evidence": "The recipient field is rendered with `disabled={busy}`. If the user submits with Enter from that field, it becomes disabled while focused and focus falls to body. The env SelectField is also disabled while busy. On a definite or uncertain failure the code sets errs.form ('error.generic', 'inv.failedShared' or 'inv.unknown') as a role=alert line but moves no focus. Only the AuthFailed path focuses passRef. DESIGN.md §5.4 and §7 require keeping focus (aria-disabled) and moving focus to the error. JoinSheet's local field has the same `disabled={busy}` pattern, but its post-busy rAF effect recovers focus to the link field.",
+        "fix": "Use ariaDisabled plus the existing onChange guards on inv-name and inv-env instead of `disabled`. Add a post-render effect keyed on [busy, errs.form] that moves focus to the form error. Make the error element focusable with tabIndex={-1}, or focus the primary button."
+      }
+    ],
+    "limitations": [
+      "Static, tool-free source reading only. No tests, type checks, builds, native or sandboxed macOS runs, or E2E were executed or observed. Test pass status is not assumed. The user-approved macOS sandbox exception was not exercised by this reviewer.",
+      "App.tsx and Dashboard.tsx were not provided. Whether a deep link that arrives while the invite sheet shows a fresh link is routed without remounting TeamPage could not be verified. A remount would discard the unacknowledged link before the user confirms it. Also unverified: whether a second deep link replacing a still-queued `incoming` discards the first ref.",
+      "Core and CLI behavior was taken from the provided docs and core_team_commands excerpt: team share reauthenticating natively without --require-admin, the reason codes emitted before mutation, the TTLs, and slot reservation order. It was not verified against the full Rust source.",
+      "Whether core team_join tolerates a concurrent onetime_discard of the same preview ref (JoinSheet unmounting mid-join) could not be determined.",
+      "jsdom focus semantics differ from WebKit for elements inside a closed <details>. The focus tests do not prove the real webview behavior.",
+      "Callout's default kind (amber vs blue) was not provided. It is assumed amber for inv.pre2.note.",
+      "Line numbers are approximate, derived from the provided full-file text."
+    ]
+  }
+}

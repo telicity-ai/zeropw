@@ -2,10 +2,11 @@ import type { CopyKey } from '../copy';
 import type { ModeTargets } from '../field/field';
 
 // Onboarding v0.5 (DESIGN.md §5.2, docs/desktop-app.md §7): no service connection step.
+// 'agent' remains a valid frame for the retained AgentStep component; first-run flow never mounts it.
 export type Step = 'welcome' | 'admin' | 'recovery' | 'create' | 'project' | 'agent' | 'join' | 'done';
 export type CardStep = Exclude<Step, 'welcome' | 'done'>;
 
-export const FULL: readonly Step[] = ['admin', 'recovery', 'create', 'project', 'agent'];
+export const FULL: readonly Step[] = ['admin', 'recovery', 'create', 'project'];
 export const JOIN_FLOW: readonly Step[] = ['admin', 'recovery', 'create'];
 
 export const TITLE: Record<Exclude<Step, 'welcome'>, CopyKey> = {
@@ -31,7 +32,7 @@ export function neighbour(s: Step, joining: boolean, dir: -1 | 1): Step {
 
 /** Where the onboarding goes when the vault exists, the relay would not start and the user goes
  *  on without it: a join still happens on the finale; otherwise the dashboard, which has the
- *  relay's start button and the port setting (the agent step needs a running relay). */
+ *  relay's start button and port setting. */
 export const afterRelayFailure = (joining: boolean): 'done' | 'dashboard' => (joining ? 'done' : 'dashboard');
 
 /** Progress label "n/total" for the live region, or null outside the counted steps. */
@@ -41,8 +42,7 @@ export function progressOf(s: Step, joining: boolean): { index: number; total: n
 }
 
 /** Extra field targets per step; onboarding never has a service connection. */
-export function fieldExtras(s: Step, ctx: { agent: boolean; joining: boolean }): ModeTargets | null {
-  if (s === 'agent') return { svc: 0, mem: 0.35 };
-  if (s === 'done') return { agent: ctx.agent ? 0.8 : 0, svc: 0, mem: 0.3, peer: ctx.joining ? 0.8 : 0 };
+export function fieldExtras(s: Step, ctx: { joining: boolean }): ModeTargets | null {
+  if (s === 'done') return { agent: 0, svc: 0, mem: 0.3, peer: ctx.joining ? 0.8 : 0 };
   return null;
 }

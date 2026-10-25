@@ -3,8 +3,10 @@ import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InvitePreview } from '../ipc/contract';
 import { invitePreviewErrorKey } from '../lib/reasons';
+import { InvitePreviewRequests } from '../lib/invitePreview';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
 import { ri, useApp } from '../ui/context';
+import { useDisclosure } from '../ui/disclosure';
 import { Callout } from '../ui/form';
 import { Sigil } from '../ui/pixels';
 import { BackButton, StepFrame, type FrameState } from './StepFrame';
@@ -25,10 +27,14 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
   const [err, setErr] = useState<CopyKey | null>(null);
   const [held, setHeld] = useState<Held | null>(null);
   const [local, setLocal] = useState('');
+  const localEdited = useRef(false);
+  const localRef = useRef<HTMLInputElement>(null);
+  const alive = useRef(true);
   const [localErr, setLocalErr] = useState(false);
+  const localDetails = useDisclosure(false);
   const [now, setNow] = useState(() => Date.now());
   const heldRef = useRef<Held | null>(null);
-  const seq = useRef(0);
+  const previews = useRef(new InvitePreviewRequests());
   const linkRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -37,7 +43,7 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
     if (old && old.ref !== h?.ref) discard(old.ref);
     heldRef.current = h; setHeld(h);
     if (h) {
-      setLocal(defaultLocalName(h.preview.inviter)); setLocalErr(false);
+      if (!localEdited.current) setLocal(defaultLocalName(h.preview.inviter)); setLocalErr(false);
       field.chipText('peer', `${t('join.pv.picture')} · ${h.preview.inviter.slice(0, 4)}`);
       field.set('peer', 1); field.ripple(0.06);
     } else {
@@ -45,9 +51,25 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
     }
   };
 
+  useEffect(() => {
+    const requests = previews.current;
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      requests.invalidate();
+      queueMicrotask(() => {
+        if (alive.current) return; // development effect replay is not an actual unmount
+        const held = heldRef.current;
+        heldRef.current = null;
+        if (held) call('onetime_discard', { ref: held.ref }).catch(() => undefined);
+      });
+    };
+  }, []);
+
   // a deep link arrived: show its preview without the link text
   useEffect(() => {
     if (!incoming) return;
+    previews.current.invalidate();
     setLink(''); setErr(incoming.preview.expired ? 'join.err.expired' : null);
     if (incoming.preview.expired) { discard(incoming.ref); hold(null); return; }
     hold({ ref: incoming.ref, preview: incoming.preview, fromLink: true });
@@ -55,23 +77,28 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
 
   const onLink = (v: string) => {
     setLink(v);
-    const text = v.trim(), n = ++seq.current;
+    const text = v.trim();
+    previews.current.invalidate();
     if (!text) { setErr(null); hold(null); return; }
     if (!isInviteLink(text)) { setErr('join.err'); hold(null); return; }
     setErr(null);
-    call('team_invite_preview', { text }).then(
+    void previews.current.preview(text, () => hold(null),
       (r) => {
-        if (n !== seq.current) { discard(r.ref); return; }
         if (r.preview.expired) { discard(r.ref); setErr('join.err.expired'); hold(null); return; }
         hold({ ref: r.ref, preview: r.preview, fromLink: false });
       },
       (e) => {
-        if (n !== seq.current) return;
         setErr(invitePreviewErrorKey(toIpcError(e).reason));
         hold(null);
       },
     );
   };
+
+  useEffect(() => {
+    if (!localErr || !localDetails.open) return;
+    const frame = requestAnimationFrame(() => localRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [localErr, localDetails.open]);
 
   // remaining time ticks while the preview is on screen
   useEffect(() => {
@@ -88,14 +115,15 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
     toast(t('toast.paste.mock'));
   };
 
-  const back = () => { seq.current++; setLink(''); setErr(null); hold(null); onBack(); };
+  const back = () => { previews.current.invalidate(); setLink(''); setErr(null); hold(null); onBack(); };
 
   const next = () => {
     const h = heldRef.current;
     if (!h) { linkRef.current?.focus(); return; }
+    if (Date.parse(h.preview.expires_at) <= Date.now()) { setErr('join.err.expired'); linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
-    if (!parsed) { setLocalErr(true); return; }
-    heldRef.current = null; setHeld(null); seq.current++; setLink(''); setErr(null);   // the plan owns the reference now
+    if (!parsed) { localDetails.reveal(); setLocalErr(true); localRef.current?.focus(); return; }
+    heldRef.current = null; setHeld(null); previews.current.invalidate(); setLink(''); setErr(null);   // the plan owns the reference now
     onNext({ ref: h.ref, preview: h.preview, project: parsed.project, environment: parsed.environment, local: local.trim() });
   };
 
@@ -135,14 +163,15 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
                   <dt>{t('join.pv.left')}</dt><dd>{formatCountdown(left)}</dd>
                 </dl>
               </div>
-              <div className="field" style={{ marginTop: 12 }}>
+              <details open={localDetails.open} onToggle={localDetails.onToggle} className="field" style={{ marginTop: 12 }}>
+                <summary onClick={localDetails.onSummaryClick}>{t('join.local')} <span className="mono">{local}</span></summary>
                 <div className="label"><label htmlFor="ob-join-local">{t('join.local')}</label></div>
                 <div className="input mono" data-invalid={localErr ? '' : undefined}>
-                  <input id="ob-join-local" value={local} spellCheck={false} autoComplete="off" aria-invalid={localErr ? true : undefined}
-                    aria-describedby="ob-join-local-err" onChange={(e) => { setLocal(e.target.value); setLocalErr(false); }} />
+                  <input id="ob-join-local" ref={localRef} value={local} spellCheck={false} autoComplete="off" aria-invalid={localErr ? true : undefined}
+                    aria-describedby="ob-join-local-err" onChange={(e) => { localEdited.current = true; setLocal(e.target.value); setLocalErr(false); }} />
                 </div>
                 <div className="help err" id="ob-join-local-err" hidden={!localErr}>{localErr ? t('join.local.err') : ''}</div>
-              </div>
+              </details>
               <Callout>{t('join.check')}</Callout>
             </>
           )}

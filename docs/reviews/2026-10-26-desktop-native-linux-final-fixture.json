@@ -1,0 +1,20 @@
+{
+  "stage": "final_native_ui_fixture_check",
+  "codex_final_project_absent": true,
+  "projects": [
+    {
+      "name": "codex-ux",
+      "environments": [
+        "dev"
+      ]
+    }
+  ],
+  "own_invite_count": 1,
+  "own_invite_statuses": [
+    {
+      "name": "Codex E2E teammate",
+      "role": "admin",
+      "status": "pending"
+    }
+  ]
+}
