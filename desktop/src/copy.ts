@@ -521,6 +521,7 @@ export const COPY = {
   'team.env': '환경 공유',
   'team.env.select': '환경',
   'team.help': '팀원과는 같은 LAN이나 VPN 안에서만 동기화해요',
+  'team.envs.err': '팀 환경 정보를 읽지 못했어요. 공유하거나 합류한 환경이 목록에서 빠졌을 수 있어요',
   'team.members': '팀원',
   'team.owner': '소유자',
   'team.remove': '내보내기',

@@ -40,6 +40,11 @@ export function teamEnvPairs(listing: { projects: readonly Project[]; team_envir
   return out;
 }
 
+/** `project list` could not read the team environments (`team_environments_error`): the projects
+ *  are all there, but environments shared from here or joined are missing from the lists. */
+export const teamEnvsUnread = (listing: { team_environments_error?: unknown }): boolean =>
+  typeof listing.team_environments_error === 'string' && listing.team_environments_error !== '';
+
 export function splitEnv(key: string): { project: string; environment: string } | null {
   const parts = key.split('/');
   if (parts.length !== 2) return null;

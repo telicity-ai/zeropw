@@ -2,7 +2,9 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
-import { addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs } from '../lib/dash';
+import {
+  addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs, teamEnvsUnread,
+} from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
@@ -42,7 +44,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const reload = () => setN((x) => x + 1);
   const base = useLoad(async () => {
     const [p, s, i] = await Promise.all([call('project_list'), call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { pairs: teamEnvPairs(p), settings: s, interfaces: i };
+    return { pairs: teamEnvPairs(p), envsUnread: teamEnvsUnread(p), settings: s, interfaces: i };
   }, [tick, n]);
   const [env, setEnv] = useState('');
   const pairs = base.data?.pairs ?? [];
@@ -90,6 +92,8 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
         <button className="btn btn-primary btn-sm" type="button" onClick={() => sheets.open({ kind: 'invite' })}>{t('inv.title')}</button>
       </SectionHead>
       <p className="page-help">{t('team.help')}</p>
+      {/* the team mapping could not be read: the projects load, the team environments do not */}
+      {base.data?.envsUnread && <Callout kind="info">{t('team.envs.err')}</Callout>}
       <div className="glass pad">
         {pairs.length === 0
           ? <Empty text={base.failed ? t('error.load') : base.data ? t('keys.err.noEnv') : t('boot.loading')} />

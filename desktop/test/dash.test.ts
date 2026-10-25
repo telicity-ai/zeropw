@@ -6,7 +6,7 @@ import {
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
   newRecordCount, nextMethodState, olderVersionCount, openIncident, openIncidentScope, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
   recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
-  teamEnvPairs, valueText, writeConsequences,
+  teamEnvPairs, teamEnvsUnread, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -36,6 +36,13 @@ describe('projects and environments', () => {
     // an older CLI prints no team list; a malformed entry is skipped
     expect(teamEnvPairs({ projects })).toEqual(envPairs(projects));
     expect(teamEnvPairs({ projects, team_environments: [{ project: 7, environment: 'x', env_id: 'e' } as unknown as TeamEnvironment] })).toEqual(envPairs(projects));
+  });
+
+  it('notices a project list that could not read the team environments', () => {
+    expect(teamEnvsUnread({ team_environments_error: 'state_corrupt' })).toBe(true);
+    expect(teamEnvsUnread({})).toBe(false);
+    expect(teamEnvsUnread({ team_environments_error: '' })).toBe(false);
+    expect(teamEnvsUnread({ team_environments_error: { reason: 'x' } })).toBe(false);
   });
 
   it('groups secrets by pair, drops empty groups and keeps pairs the project list does not know', () => {

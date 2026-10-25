@@ -6,7 +6,7 @@ import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/m
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
 import {
   declarableScopes, declareOutcome, grantState, liveGrants, olderVersionCount, openIncident, openIncidentScope, pendingApprovals, runtimeStopsAll, SSH_PROGRAM,
-  teamEnvPairs,
+  teamEnvPairs, teamEnvsUnread,
 } from '../src/lib/dash';
 import { watchRecords } from '../src/dashboard/watch';
 import type { Control } from '../src/ipc/contract';
@@ -359,6 +359,20 @@ describe('team', () => {
     // keys go into it through the team, as the CLI's shared-environment branch does
     await call('secret_put', { id: 'team-key', kind: 'api_key', project: 'team-x', environment: 'shared', source: { typed: 'synthetic-team-value' } });
     expect((await rejection(call('secret_put', { id: 'k2', kind: 'api_key', project: 'team-y', environment: 'shared', source: { typed: 'v' } }))).reason).toBe('project_unknown');
+  });
+
+  // pr4-state-display-1: a damaged team mapping no longer fails project list, which the keys,
+  // connections and team pages all load first; the team page says what is missing
+  it('lists the projects and names the team environments it could not read', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, teamEnvsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const listed = await call('project_list');
+    expect(listed.projects.map((p) => p.name)).toEqual(['demo']);
+    expect(listed.team_environments).toBeUndefined();
+    expect(teamEnvsUnread(listed)).toBe(true);
+    expect(teamEnvPairs(listed).map((p) => p.key)).toEqual(['demo/dev', 'demo/staging', 'demo/prod']);
+    ready();
+    expect(teamEnvsUnread(await call('project_list'))).toBe(false);
   });
 
   it('lists an environment shared from here once, among the projects and as a team environment', async () => {

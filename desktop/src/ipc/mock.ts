@@ -48,6 +48,9 @@ export interface MockSeed {
   /** With `initialized`: an incident file still marked open (scope `all`) while the core's pointer
    *  to the open incident names none, as a restore by a build before the fix left it. */
   staleOpenIncident?: boolean;
+  /** The team mapping (team/envs.json) cannot be read: `project list` still lists the projects,
+   *  with `team_environments_error` in place of the team environments. */
+  teamEnvsCorrupt?: boolean;
   /** The settings file is damaged (desktop/core/src/settings.rs): reading it, and so starting the
    *  relay, fails with `settings_corrupt` until `settings_set` writes over it. */
   settingsCorrupt?: boolean;
@@ -651,10 +654,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
 
     // ---- projects
     // `project list`: the projects, and the team environments when there are any (one joined from
-    // another device is in no project)
+    // another device is in no project); a team mapping it cannot read is named, not fatal
     project_list: () => {
       needInit();
-      const out: { projects: Project[]; team_environments?: TeamEnvironment[] } = { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) };
+      const out: { projects: Project[]; team_environments?: TeamEnvironment[]; team_environments_error?: string } = {
+        projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })),
+      };
+      if (seed.teamEnvsCorrupt) { out.team_environments_error = 'state_corrupt'; return out; }
       const team = [...teams.values()]
         .map((x) => ({ project: x.project, environment: x.environment, env_id: x.env_id }))
         .sort((a, b) => (a.project < b.project ? -1 : a.project > b.project ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
