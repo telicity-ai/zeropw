@@ -703,7 +703,7 @@ fn ssh_connection_made_without_its_ssh_is_repaired_and_runs_on_a_real_sshd() {
     let again = core
         .connection_set_cli_program(CliProgramIn {
             id: "box".into(),
-            cli_program: "/bin/false".into(),
+            cli_program: "/bin/sh".into(),
             admin_passphrase: PASS.into(),
         })
         .unwrap_err();

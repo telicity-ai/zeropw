@@ -177,6 +177,204 @@ fn close_hangs_up_a_running_shell() {
     manager.close(&id);
 }
 
+/// zsh, as `command -v` or the usual places find it. The test below must fail, not silently
+/// pass, without it (the macOS host and the Linux verification VM have it).
+fn zsh() -> PathBuf {
+    std::process::Command::new("sh")
+        .args(["-c", "command -v zsh"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+        .filter(|p| p.is_absolute())
+        .or_else(|| {
+            ["/bin/zsh", "/usr/bin/zsh"]
+                .into_iter()
+                .map(PathBuf::from)
+                .find(|p| p.is_file())
+        })
+        .unwrap_or_else(|| panic!("zsh not available: this test needs zsh"))
+}
+
+/// What the shell printed after `<6*7><name>=` up to the end of the line (the echoed command
+/// line has `$((6*7))` instead).
+fn printed(text: &str, name: &str) -> String {
+    let marker = format!("42{name}=");
+    let at = text
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no {marker} in {text:?}"));
+    text[at + marker.len()..]
+        .split(['\r', '\n'])
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Write `files` (name, text) under `dir`.
+fn write_files(dir: &Path, files: &[(&str, &str)]) {
+    for (name, text) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+
+/// Desktop E2E F5: the login shell's startup files (macOS's /etc/zprofile, a `.zprofile` that
+/// puts Homebrew first) rebuilt PATH after the app had put the bundle folder first, so
+/// `zeropw-agent` ran another build. For zsh the app's own startup files run the user's and
+/// then put the bundle folder first again, once; ZDOTDIR, history and the rest stay as the
+/// user's files set them, and no helper variable is left behind, also when the user's
+/// `.zshenv` stops zsh reading further files (`unsetopt rcs`). A program the user's files
+/// start never sees the helpers. Another shell is left alone.
+#[test]
+fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let zsh = zsh();
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("ZeroPW (1).app/Contents/MacOS");
+    std::fs::create_dir_all(&bin).unwrap();
+    let bin_text = bin.to_string_lossy().into_owned();
+    let zsh_dir = dir.path().join("app/zsh");
+    // What a program started from the user's `.zshenv` sees of the helpers.
+    let child = "ZPW_CHILD=$(/bin/sh -c 'echo \"${ZEROPW_TERMINAL_BIN-none}\"')\n";
+
+    // Startup files in HOME, the most common setup.
+    let plain = dir.path().join("home plain");
+    write_files(
+        &plain,
+        &[
+            (".zshenv", &format!("ZPW_MARKS=env\n{child}")),
+            (
+                ".zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
+            ),
+            (".zshrc", "ZPW_MARKS+=,rc\ntypeset -U path\n"),
+            (".zlogin", "ZPW_MARKS+=,login\n"),
+        ],
+    );
+    // A `.zshenv` that moves the rest to ~/.config/zsh; the `.zprofile` in HOME is not read.
+    let xdg = dir.path().join("home-xdg");
+    let xdg_zdotdir = xdg.join(".config/zsh");
+    write_files(
+        &xdg,
+        &[
+            (
+                ".zshenv",
+                &format!("ZPW_MARKS=env\n{child}export ZDOTDIR=$HOME/.config/zsh\n"),
+            ),
+            (".zprofile", "ZPW_MARKS+=,home-profile\n"),
+            (
+                ".config/zsh/.zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
+            ),
+            (".config/zsh/.zshrc", "ZPW_MARKS+=,rc\n"),
+            (
+                ".config/zsh/.zlogin",
+                "ZPW_MARKS+=,login\nPATH=/synthetic/login/bin:$PATH\n",
+            ),
+        ],
+    );
+    // A `.zshenv` that turns RCS off: zsh reads none of the later files, the app's included.
+    let norcs = dir.path().join("home-norcs");
+    write_files(
+        &norcs,
+        &[
+            (".zshenv", &format!("ZPW_MARKS=env\n{child}unsetopt rcs\n")),
+            (
+                ".zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
+            ),
+        ],
+    );
+    let parent = |home: &Path, shell: &Path| {
+        vec![
+            ("HOME".into(), home.into()),
+            ("SHELL".into(), shell.into()),
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("USER".into(), "zpw-synthetic".into()),
+        ]
+    };
+    let probe = concat!(
+        r#"print -r -- "$((6*7))P=$PATH"; print -r -- "$((6*7))M=${ZPW_MARKS-}"; "#,
+        r#"print -r -- "$((6*7))Z=${ZDOTDIR-none}"; print -r -- "$((6*7))H=${HISTFILE-none}"; "#,
+        r#"print -r -- "$((6*7))X=${+ZEROPW_TERMINAL_BIN}${+ZEROPW_USER_ZDOTDIR}${+ZEROPW_ZDOTDIR}"; "#,
+        r#"print -r -- "$((6*7))C=${ZPW_CHILD-unset}"; "#,
+        "exit\n"
+    );
+
+    let all = "env,profile,rc,login";
+    for (home, zdotdir, marks, brew) in [
+        (&plain, "none".to_owned(), all, true),
+        (&xdg, xdg_zdotdir.to_string_lossy().into_owned(), all, true),
+        (&norcs, "none".to_owned(), "env", false),
+    ] {
+        let manager = TerminalManager::new(TerminalProgram::LoginShell)
+            .with_zsh_dir(&zsh_dir)
+            .with_parent_env(parent(home, &zsh));
+        let (id, out, exit) = open(&manager, &bin);
+        manager.write(&id, probe).unwrap();
+        let code = exit.recv_timeout(Duration::from_secs(20));
+        let text = out.lock().unwrap().clone();
+        assert_eq!(code, Ok(Some(0)), "{text}");
+
+        let path = printed(&text, "P");
+        let dirs: Vec<&str> = path.split(':').collect();
+        assert_eq!(dirs[0], bin_text, "{path}");
+        assert_eq!(dirs.iter().filter(|d| **d == bin_text).count(), 1, "{path}");
+        assert_eq!(dirs.contains(&"/synthetic/brew/bin"), brew, "{path}");
+        assert_eq!(printed(&text, "M"), marks);
+        assert_eq!(printed(&text, "Z"), zdotdir);
+        let history = printed(&text, "H");
+        assert!(
+            !Path::new(&history).starts_with(&zsh_dir),
+            "history in the app's folder: {history}"
+        );
+        assert_eq!(printed(&text, "X"), "000");
+        assert_eq!(printed(&text, "C"), "none");
+        assert!(!text.contains(TOKEN), "token printed: {text}");
+    }
+
+    // The app's folder is private and holds only folder-free, value-free startup files.
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&zsh_dir), 0o700);
+    let mut names: Vec<String> = std::fs::read_dir(&zsh_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    // Debian's /etc/zsh/zshrc runs compinit while ZDOTDIR is this folder, so zsh may keep its
+    // completion cache here; everything else is one of the four startup files.
+    let startup: Vec<&String> = names
+        .iter()
+        .filter(|n| !n.starts_with(".zcompdump"))
+        .collect();
+    assert_eq!(startup, [".zlogin", ".zprofile", ".zshenv", ".zshrc"]);
+    for name in startup {
+        let file = zsh_dir.join(name);
+        assert_eq!(mode(&file), 0o600, "{name}");
+        let text = std::fs::read_to_string(&file).unwrap();
+        for value in [TOKEN, "127.0.0.1", bin_text.as_str()] {
+            assert!(!text.contains(value), "{value} in {name}");
+        }
+    }
+
+    // Another shell gets neither ZDOTDIR nor the helper variables.
+    let sh = TerminalManager::new(TerminalProgram::LoginShell)
+        .with_zsh_dir(&zsh_dir)
+        .with_parent_env(parent(&plain, Path::new("/bin/sh")));
+    let (id, out, exit) = open(&sh, &bin);
+    sh.write(
+        &id,
+        "echo \"$((6*7))Z=${ZDOTDIR-none} ${ZEROPW_TERMINAL_BIN-none}\"; exit\n",
+    )
+    .unwrap();
+    let code = exit.recv_timeout(Duration::from_secs(20));
+    let text = out.lock().unwrap().clone();
+    assert_eq!(code, Ok(Some(0)), "{text}");
+    assert_eq!(printed(&text, "Z"), "none none");
+}
+
 /// Run `f` on another thread; fail the test (instead of hanging it) if it takes longer than
 /// `limit`.
 fn within<T: Send + 'static>(

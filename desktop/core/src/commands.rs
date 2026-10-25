@@ -17,8 +17,8 @@
 //! input envelope; the core refuses an empty one. `secret reveal`, `restore-ack`, `incident
 //! close`, `incident declare --scope all` and `team share` verify it in the CLI itself. For
 //! the commands the app re-authenticates but the CLI would run without a passphrase
-//! (`resume`, `connection create-http`/`create-ssh`, `grant create`, `approvals approve`,
-//! `team invite`, `team remove` and `restore`) the core adds the hidden global
+//! (`resume`, `connection create-http`/`create-ssh`/`update`, `grant create`, `approvals
+//! approve`, `team invite`, `team remove` and `restore`) the core adds the hidden global
 //! `--require-admin` ([`REQUIRE_ADMIN_COMMANDS`]) so the CLI checks the envelope's passphrase
 //! before it runs them.
 
@@ -70,10 +70,11 @@ const MAX_VERSION_CHARS: usize = 64;
 
 /// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
 /// re-authenticates them, the CLI alone would not).
-pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 8] = [
+pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 9] = [
     &["resume"],
     &["connection", "create-http"],
     &["connection", "create-ssh"],
+    &["connection", "update"],
     &["grant", "create"],
     &["approvals", "approve"],
     &["team", "invite"],
@@ -787,7 +788,8 @@ impl Core {
             terminals: TerminalManager::with_ring_bytes(
                 config.terminal_program,
                 config.terminal_ring_bytes,
-            ),
+            )
+            .with_zsh_dir(paths.zsh_dir()),
             events,
             clipboard_clear_after: config.clipboard_clear_after,
             pending_clears: Arc::new(Mutex::new(PendingClears::default())),
@@ -808,13 +810,13 @@ impl Core {
 
     /// App start: adopt a serve sidecar left running by an earlier app run.
     pub fn startup(&self) -> ServeStatus {
-        let status = self.serve.attach();
-        self.show_serve(status.clone());
-        status
+        self.serve.attach_reported(|status| self.show_serve(status))
     }
 
     /// Send the window a serve status (`serve://status`) and remember it for the watcher.
-    fn show_serve(&self, status: ServeStatus) {
+    /// Called with the supervisor's state locked ([`ServeSupervisor::start_reported`] and the
+    /// like), as the watcher's reports are.
+    fn show_serve(&self, status: &ServeStatus) {
         show_serve(&self.serve_shown, self.events.as_ref(), status, true);
     }
 
@@ -824,8 +826,7 @@ impl Core {
         self.clear_pending_clipboard();
         self.store.clear();
         self.terminals.close_all();
-        let status = self.serve.stop();
-        self.show_serve(status);
+        self.serve.stop_reported(|status| self.show_serve(status));
     }
 
     /// The early run of every pending 60 s clear: the clipboard is emptied if it still holds
@@ -951,18 +952,17 @@ impl Core {
 
     fn start_serve(&self) -> Result<ServeStatus, AppError> {
         let settings = self.settings_get()?;
-        let status = self.serve.start(&ServeConfig {
-            port: settings.gateway_port,
-            team_listen: settings.team_listen,
-        })?;
-        self.show_serve(status.clone());
-        Ok(status)
+        self.serve.start_reported(
+            &ServeConfig {
+                port: settings.gateway_port,
+                team_listen: settings.team_listen,
+            },
+            |status| self.show_serve(status),
+        )
     }
 
     pub fn serve_stop(&self) -> ServeStatus {
-        let status = self.serve.stop();
-        self.show_serve(status.clone());
-        status
+        self.serve.stop_reported(|status| self.show_serve(status))
     }
 
     pub fn serve_status(&self) -> ServeStatus {
@@ -1171,6 +1171,7 @@ impl Core {
         if input.cli_program.is_empty() {
             return Err(AppError::invalid_input("cli_program_required"));
         }
+        check_ssh_program(&input.cli_program)?;
         let mut args = AdminArgs::command(&["connection", "create-ssh"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1201,6 +1202,7 @@ impl Core {
         if input.cli_program.is_empty() {
             return Err(AppError::invalid_input("cli_program_required"));
         }
+        check_ssh_program(&input.cli_program)?;
         let args = AdminArgs::command(&["connection", "update"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1916,6 +1918,23 @@ fn require_passphrase(pass: &SecretString) -> Result<(), AppError> {
     }
 }
 
+/// An SSH connection's ssh is an absolute path to an executable file on this machine, as the
+/// agent's `exec` will look for it; otherwise `cli_program_not_found`, before the CLI runs.
+/// Once given the path cannot be changed, so a typo would cost the connection its name and
+/// its grants. In a team environment the path also applies on the other devices, which this
+/// check cannot see.
+fn check_ssh_program(program: &str) -> Result<(), AppError> {
+    let path = Path::new(program);
+    let executable = path.is_absolute()
+        && path.is_file()
+        && nix::unistd::access(path, nix::unistd::AccessFlags::X_OK).is_ok();
+    if executable {
+        Ok(())
+    } else {
+        Err(AppError::invalid_input("cli_program_not_found"))
+    }
+}
+
 /// Length and strength rules for a passphrase chosen at `vault_init`.
 fn check_passphrase(
     pass: &SecretString,
@@ -1945,33 +1964,36 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Send a serve status to the window and remember it as `shown`. A start, stop or startup
 /// always sends its result (`always`); the watcher sends only what differs from what the
-/// window was last told.
+/// window was last told. Every caller holds the supervisor's state locked, so `shown` and the
+/// events follow the order of the supervisor's looks.
 fn show_serve(
     shown: &Mutex<ServeStatus>,
     events: &dyn EventSink,
-    status: ServeStatus,
+    status: &ServeStatus,
     always: bool,
 ) {
     let mut last = lock(shown);
-    if always || *last != status {
+    if always || *last != *status {
         *last = status.clone();
-        events.emit(CoreEvent::ServeStatus(status));
+        events.emit(CoreEvent::ServeStatus(status.clone()));
     }
 }
 
 /// The sidecar watch (docs/desktop-app.md §4.2): every `every`, look at the sidecar without
 /// waiting for a start or stop in progress, and tell the window when it no longer matches
 /// what the window was last told, so a sidecar that exited on its own (or was killed) shows
-/// as stopped without waiting for the window to ask. Comparing under the supervisor's lock
-/// means a stale look never overrides a newer start or stop; a start that reports a sidecar
-/// which died right after is corrected on the next look. Ends once the core is gone.
+/// as stopped without waiting for the window to ask. Starts, stops and the startup report
+/// under the supervisor's lock too, so a look never comes between one of them and its
+/// report: a stale look never overrides a newer start or stop, and a start is never reported
+/// after a newer look found its sidecar gone. Ends once the core is gone. Without this thread
+/// (the system refused it) the window learns only when it asks, and the core says so.
 fn watch_serve(
     serve: Weak<ServeSupervisor>,
     shown: Arc<Mutex<ServeStatus>>,
     events: Arc<dyn EventSink>,
     every: Duration,
 ) {
-    let _ = thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name("serve-watch".into())
         .spawn(move || {
             loop {
@@ -1979,9 +2001,16 @@ fn watch_serve(
                 let Some(serve) = serve.upgrade() else {
                     return;
                 };
-                serve.watch(|status| show_serve(&shown, events.as_ref(), status, false));
+                serve.watch(|status| show_serve(&shown, events.as_ref(), &status, false));
             }
         });
+    if let Err(e) = spawned {
+        eprintln!(
+            "zeropw: serve watch did not start ({:?}): the window learns that serve stopped \
+             only when it asks",
+            e.kind()
+        );
+    }
 }
 
 fn digest(text: &str) -> [u8; 32] {

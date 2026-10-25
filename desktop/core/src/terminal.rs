@@ -5,6 +5,13 @@
 //!   bundled binaries' folder. The token is never typed into the PTY, so it is in neither the
 //!   screen nor the shell history. It lives in the environment of the shell and of everything
 //!   started from it, so closing the terminal stops all of those (below).
+//! - A login shell's startup files (macOS's `/etc/zprofile`, a `.zprofile` that puts Homebrew
+//!   first) rebuild `PATH` after that. For zsh, the macOS default, `ZDOTDIR` points at the
+//!   app's own startup files ([`TerminalManager::with_zsh_dir`]), as VS Code's shell
+//!   integration does: each runs the user's file of the same name, and the last ones put the
+//!   bundle folder first again and give `ZDOTDIR` back to the user. Other shells keep the
+//!   order their startup files leave, which is why the suggested commands name the bundled
+//!   binaries by absolute path.
 //! - The rest of the environment is an allowlist taken from the app process (`HOME`, `USER`,
 //!   locale, …); anything else, including any `ZEROPW_*` variable, is dropped.
 //! - Suggested commands are returned for the UI to place at the prompt; nothing runs until the
@@ -38,8 +45,10 @@
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
+use std::fs::{self, DirBuilder};
 use std::io::{self, PipeReader, PipeWriter, Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -56,12 +65,16 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::AppError;
 use crate::onetime::random_ref;
-use crate::paths::AGENT_BIN;
+use crate::paths::{AGENT_BIN, write_private_atomic};
 use crate::secret::SecretString;
 
 pub const GATEWAY_URL_VAR: &str = "ZEROPW_GATEWAY_URL";
 pub const CALLER_TOKEN_VAR: &str = "ZEROPW_CALLER_TOKEN";
 pub const NO_PROXY_VALUE: &str = "127.0.0.1,localhost";
+/// The bundle folder, for the app's zsh startup files; gone once they have run.
+pub const TERMINAL_BIN_VAR: &str = "ZEROPW_TERMINAL_BIN";
+/// The `ZDOTDIR` the app had, for the app's zsh startup files; gone once they have run.
+pub const USER_ZDOTDIR_VAR: &str = "ZEROPW_USER_ZDOTDIR";
 const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 /// Sessions kept in the registry, alive or exited.
 const MAX_TERMINALS: usize = 8;
@@ -272,6 +285,126 @@ where
     env.push(("no_proxy".into(), NO_PROXY_VALUE.into()));
     env.push(("NO_PROXY".into(), NO_PROXY_VALUE.into()));
     env
+}
+
+/// The startup files zsh reads from `ZDOTDIR`, in order.
+const ZSH_STARTUP_FILES: [&str; 4] = [".zshenv", ".zprofile", ".zshrc", ".zlogin"];
+
+const ZSH_HEADER: &str = "\
+# Written by ZeroPW for its in-app terminal (docs/desktop-app.md §4.4), again whenever one
+# opens. The app points ZDOTDIR here, so zsh reads its startup files from this folder. Each
+# runs your own file of the same name with ZDOTDIR as you have it; the last one puts the app's
+# folder first on PATH and gives ZDOTDIR back to you.
+";
+
+/// Note this folder, and keep the helper variables to these files: the programs the shell
+/// and the user's files start do not get them.
+const ZSH_START: &str = r#"ZEROPW_ZDOTDIR=$ZDOTDIR
+if (( ${+ZEROPW_TERMINAL_BIN} )); then
+  builtin typeset +x ZEROPW_TERMINAL_BIN
+fi
+if (( ${+ZEROPW_USER_ZDOTDIR} )); then
+  builtin typeset +x ZEROPW_USER_ZDOTDIR
+fi
+"#;
+
+/// Run the user's own startup file `@FILE@` with `ZDOTDIR` as the user has it (unset when
+/// they have none), note the user's `ZDOTDIR` afterwards (a `.zshenv` often sets it), then
+/// point zsh back here for its next file. Top level, not a function, so that the user's
+/// `typeset` stays global.
+const ZSH_USER_FILE: &str = r#"if (( ${+ZEROPW_USER_ZDOTDIR} )); then
+  ZDOTDIR=$ZEROPW_USER_ZDOTDIR
+else
+  builtin unset ZDOTDIR
+fi
+if [[ ${ZDOTDIR:-$HOME} != "$ZEROPW_ZDOTDIR" && -f ${ZDOTDIR:-$HOME}/@FILE@ && -r ${ZDOTDIR:-$HOME}/@FILE@ ]]; then
+  builtin source "${ZDOTDIR:-$HOME}/@FILE@"
+fi
+if (( ${+ZDOTDIR} )); then
+  ZEROPW_USER_ZDOTDIR=$ZDOTDIR
+else
+  builtin unset ZEROPW_USER_ZDOTDIR
+fi
+ZDOTDIR=$ZEROPW_ZDOTDIR
+"#;
+
+/// The system zshrc (macOS's `/etc/zshrc`) saw this folder as ZDOTDIR; history goes where
+/// the user's own ZDOTDIR (or HOME) would have put it.
+const ZSH_HISTORY: &str = r#"if [[ ${HISTFILE-} == "$ZEROPW_ZDOTDIR/.zsh_history" ]]; then
+  HISTFILE=${ZEROPW_USER_ZDOTDIR:-$HOME}/.zsh_history
+fi
+"#;
+
+/// The bundle folder first on PATH, once.
+const ZSH_PATH_FIRST: &str = r#"if [[ -n ${ZEROPW_TERMINAL_BIN-} ]]; then
+  ZEROPW_PATH=$ZEROPW_TERMINAL_BIN
+  for ZEROPW_DIR in ${PATH:+"${(@s.:.)PATH}"}; do
+    [[ $ZEROPW_DIR == "$ZEROPW_TERMINAL_BIN" ]] || ZEROPW_PATH+=:$ZEROPW_DIR
+  done
+  PATH=$ZEROPW_PATH
+fi
+"#;
+
+/// `ZDOTDIR` back to the user for the session (and the shells started from it), and the
+/// helper variables gone.
+const ZSH_FINISH: &str = r#"if (( ${+ZEROPW_USER_ZDOTDIR} )); then
+  ZDOTDIR=$ZEROPW_USER_ZDOTDIR
+else
+  builtin unset ZDOTDIR
+fi
+builtin unset ZEROPW_USER_ZDOTDIR ZEROPW_TERMINAL_BIN ZEROPW_ZDOTDIR ZEROPW_PATH ZEROPW_DIR
+"#;
+
+/// One of the app's zsh startup files. The last file zsh reads puts the bundle folder first
+/// and finishes: `.zlogin` for a login shell (the app's), `.zshrc` for any other interactive
+/// shell, or an earlier one when the user's file turned `RCS` off, after which zsh reads no
+/// more startup files.
+fn zsh_startup_file(name: &str) -> String {
+    let mut text = String::from(ZSH_HEADER);
+    match name {
+        ".zshenv" => text.push_str(ZSH_START),
+        ".zshrc" => text.push_str(ZSH_HISTORY),
+        _ => {}
+    }
+    text.push_str(&ZSH_USER_FILE.replace("@FILE@", name));
+    let last = match name {
+        ".zlogin" => None,
+        ".zshrc" => Some("! -o login || ! -o rcs"),
+        _ => Some("! -o rcs"),
+    };
+    match last {
+        None => {
+            text.push_str(ZSH_PATH_FIRST);
+            text.push_str(ZSH_FINISH);
+        }
+        Some(condition) => {
+            text.push_str(&format!("if [[ {condition} ]]; then\n"));
+            for line in ZSH_PATH_FIRST.lines().chain(ZSH_FINISH.lines()) {
+                text.push_str("  ");
+                text.push_str(line);
+                text.push('\n');
+            }
+            text.push_str("fi\n");
+        }
+    }
+    text
+}
+
+/// Write the app's zsh startup files into `dir` (0700, files 0600). A file already as it
+/// should be is only made private again.
+fn write_zsh_startup(dir: &Path) -> io::Result<()> {
+    DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    for name in ZSH_STARTUP_FILES {
+        let text = zsh_startup_file(name);
+        let path = dir.join(name);
+        if fs::read(&path).is_ok_and(|old| old == text.as_bytes()) {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        } else {
+            write_private_atomic(&path, text.as_bytes())?;
+        }
+    }
+    Ok(())
 }
 
 /// A macOS short account name the `sudo -u` suggestion may name.
@@ -616,6 +749,12 @@ pub struct TerminalManager {
     ring_bytes: usize,
     sessions: Mutex<HashMap<String, Session>>,
     next_seq: AtomicU64,
+    /// Where the app's zsh startup files go ([`Self::with_zsh_dir`]).
+    zsh_dir: Option<PathBuf>,
+    /// Held while those files are written, so two opens never write them at once.
+    zsh_write: Mutex<()>,
+    /// The environment the shell's is built from, instead of the app's own (tests).
+    parent_env: Option<Vec<(OsString, OsString)>>,
 }
 
 impl TerminalManager {
@@ -630,6 +769,63 @@ impl TerminalManager {
             ring_bytes,
             sessions: Mutex::new(HashMap::new()),
             next_seq: AtomicU64::new(0),
+            zsh_dir: None,
+            zsh_write: Mutex::new(()),
+            parent_env: None,
+        }
+    }
+
+    /// When the shell is zsh, write the app's startup files into `dir` (an app-private folder,
+    /// 0700) and point `ZDOTDIR` at them, so that the bundle folder is first on `PATH` once
+    /// the user's own startup files have run. Without it, or when the files cannot be
+    /// written, zsh starts like any other shell.
+    pub fn with_zsh_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.zsh_dir = Some(dir.into());
+        self
+    }
+
+    /// Build the shell's environment from `env` instead of the app's own (tests: a synthetic
+    /// `HOME` and `SHELL`). Never reachable from IPC input.
+    pub fn with_parent_env(mut self, env: Vec<(OsString, OsString)>) -> Self {
+        self.parent_env = Some(env);
+        self
+    }
+
+    /// zsh only: point `ZDOTDIR` at the app's startup files (module docs), with the bundle
+    /// folder and the user's own `ZDOTDIR`, if the app had one, for them to use. Only folder
+    /// names go into the files and the environment.
+    fn use_zsh_startup(
+        &self,
+        cmd: &mut CommandBuilder,
+        parent: &[(OsString, OsString)],
+        bin_dir: &Path,
+    ) {
+        let Some(dir) = &self.zsh_dir else {
+            return;
+        };
+        let shell = match &self.program {
+            TerminalProgram::LoginShell => PathBuf::from(cmd.get_shell()),
+            TerminalProgram::Program { path, .. } => path.clone(),
+        };
+        if shell.file_name() != Some(OsStr::new("zsh")) {
+            return;
+        }
+        let written = {
+            let _guard = self.zsh_write.lock().unwrap_or_else(|e| e.into_inner());
+            write_zsh_startup(dir)
+        };
+        if written.is_err() {
+            return;
+        }
+        cmd.env("ZDOTDIR", dir);
+        cmd.env(TERMINAL_BIN_VAR, bin_dir);
+        let user_zdotdir = parent
+            .iter()
+            .find(|(key, _)| key == "ZDOTDIR")
+            .map(|(_, value)| value)
+            .filter(|value| !value.is_empty() && Path::new(value) != dir.as_path());
+        if let Some(user_zdotdir) = user_zdotdir {
+            cmd.env(USER_ZDOTDIR_VAR, user_zdotdir);
         }
     }
 
@@ -688,11 +884,21 @@ impl TerminalManager {
                 cmd
             }
         };
+        let parent: Vec<(OsString, OsString)> = match &self.parent_env {
+            Some(env) => env.clone(),
+            None => std::env::vars_os().collect(),
+        };
         cmd.env_clear();
-        for (key, value) in build_env(std::env::vars_os(), req) {
+        for (key, value) in build_env(parent.iter().cloned(), req) {
             cmd.env(key, value);
         }
-        if let Some(home) = crate::paths::home_dir().filter(|h| h.is_dir()) {
+        self.use_zsh_startup(&mut cmd, &parent, req.bin_dir);
+        let home = parent
+            .iter()
+            .find(|(key, value)| key == "HOME" && !value.is_empty())
+            .map(|(_, value)| PathBuf::from(value))
+            .or_else(crate::paths::home_dir);
+        if let Some(home) = home.filter(|h| h.is_dir()) {
             cmd.cwd(home);
         }
         let child = pair
