@@ -42,6 +42,18 @@ const REASONS = [...new Set([
   ...all(tools, /Error::(?:unsupported|state)\("([a-z_]+)"\)/g),
 ])];
 
+// The events the administrator's CLI records with the caller `admin`: its record helpers and
+// refusals (rust/src/admin_cli.rs) and the team commands (rust/src/team/membership.rs `audit`).
+const adminSources = import.meta.glob(['../../rust/src/admin_cli.rs', '../../rust/src/team/membership.rs'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const adminCli = Object.entries(adminSources).find(([k]) => k.endsWith('/admin_cli.rs'))?.[1] ?? '';
+const membership = Object.entries(adminSources).find(([k]) => k.endsWith('/membership.rs'))?.[1] ?? '';
+const ADMIN_WRITTEN = [...new Set([
+  ...all(adminCli, /admin_record(?:_for)?\(\s*&?ctx,\s*"([a-z_]+)"/g),
+  ...all(adminCli, /refuse_cli_env\([^;]*?,\s*"([a-z_]+)"\)/g),
+  ...all(adminCli + membership, /\.record\(\s*"([a-z_]+)",\s*RecordArgs \{\s*caller: Some\("admin"\)/g),
+  ...all(membership, /\baudit\(\s*ctx,\s*"([a-z_]+)"/g),
+])];
+
 describe('records and alerts in plain words', () => {
   it('reads the CLI source it follows', () => {
     expect(EVENTS.length).toBeGreaterThan(60);
@@ -90,6 +102,33 @@ describe('records and alerts in plain words', () => {
     expect(denied).toEqual({ ts: 't', title: '인증 실패', meta: ['관리자', '거절', '관리 비밀번호 틀림'], raw: [] });
     const reveal = recordView({ ts: 't', alert: 'secret_reveal', caller: 'admin', connection: null, event: 'secret_reveal', reason: null, detail: 'administrator revealed a single secret version' }, 'alert');
     expect(reveal).toEqual({ ts: 't', title: '관리자가 키를 봤어요', meta: ['관리자'], raw: [] });
+  });
+
+  // pr69-frontend-records-a11y-1: an agent may be named `admin`, and its relay requests, signings
+  // and denials carry that name as the caller; they were said to be the administrator's
+  it('calls the caller admin the administrator only on records the administrator writes', () => {
+    expect(ADMIN_WRITTEN).toEqual(expect.arrayContaining(['principal_create', 'grant_revoke', 'connection_create', 'auth_failed', 'team_join']));
+    for (const event of ADMIN_WRITTEN) {
+      const reason = event === 'auth_failed' ? 'admin_reauth_failed' : null;
+      expect(recordView({ ts: 't', event, caller: 'admin', result: 'ok', reason }, 'audit').meta[0], event).toBe('관리자');
+    }
+    // every other event is an agent's (the relay, the signer, its commands) or has no caller;
+    // the reveal is the administrator's alone
+    for (const event of EVENTS.filter((e) => !ADMIN_WRITTEN.includes(e) && e !== 'secret_reveal')) {
+      expect(recordView({ ts: 't', event, caller: 'admin', result: 'ok' }, 'audit').meta[0], event).toBe('admin');
+    }
+    expect(recordView({ ts: 't', event: 'http_relay', caller: 'admin', connection: 'example-api', result: 'denied', reason: 'grant_revoked' }, 'audit').meta)
+      .toEqual(['admin', 'example-api', '거절', '회수한 권한']);
+    expect(recordView({
+      ts: 't', alert: 'revoked_use_attempt', caller: 'admin', connection: 'example-api', event: 'http_relay', reason: 'grant_revoked',
+      detail: 'use attempted under a revoked, stale, or stopped grant',
+    }, 'alert').meta).toEqual(['admin', 'example-api', 'API 중계', '회수한 권한']);
+    // a disabled agent's token is refused under the agent's id (rust/src/server.rs), the
+    // administrator's password under `admin`
+    expect(recordView({ ts: 't', event: 'auth_failed', caller: 'admin', kind: 'caller_token', result: 'denied', reason: 'principal_disabled' }, 'audit').meta[0]).toBe('admin');
+    const denials = (reason: string) => recordView({ ts: 't', alert: 'repeated_denials', caller: 'admin', event: 'auth_failed', reason, detail: '5 denials within 60s' }, 'alert');
+    expect(denials('principal_disabled').meta[0]).toBe('admin');
+    expect(denials('admin_reauth_failed').meta[0]).toBe('관리자');
   });
 
   it('keeps the agent and connection names as they are and adds the event behind an alert', () => {

@@ -3,7 +3,8 @@
 // every event in rust/src/audit.rs `EVENTS`, every alert `maybe_alert` writes, every result, and
 // the reasons the relay, the SSH signer and an agent's commands record (denials, failed checks,
 // near-exposures) with the most common others. The agent and connection
-// names stay as they are. Anything else (a code missing here, the CLI's English `detail`, the
+// names stay as they are; the caller `admin` is called the administrator only on a record the
+// administrator's CLI writes, since an agent may be named `admin` too. Anything else (a code missing here, the CLI's English `detail`, the
 // other fields) stays visible as the core wrote it, on a secondary `key=value` line. Records
 // never contain values (rust/src/audit.rs); this reads no field the lists did not show before.
 
@@ -111,6 +112,27 @@ const REASON: Record<string, CopyKey | null> = {
 
 const SCOPE: Record<string, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
 
+/** The events the administrator's CLI records with the caller `admin` (rust/src/admin_cli.rs,
+ *  rust/src/team/membership.rs), and the reveal, which only the administrator can do. The relay,
+ *  the SSH signer, an agent's commands and the server's token check write the agent's own id as
+ *  the caller, and an agent may be named `admin` (rust/src/projects.rs `validate_name`), so on
+ *  their events `admin` is a name. */
+const ADMIN_EVENTS = new Set([
+  'project_create', 'principal_create', 'principal_disable', 'secret_put', 'secret_import', 'secret_reveal',
+  'connection_create', 'connection_update', 'connection_disable', 'connection_switch_credential',
+  'grant_create', 'grant_revoke', 'grant_regrant', 'stop_all', 'resume', 'approval_grant', 'rotation', 'restore_ack',
+  'auth_failed', 'team_share', 'team_invite_create', 'team_invite_revoke', 'team_join', 'team_member_remove',
+  'team_dek_rotate', 'team_fact_apply',
+]);
+/** An `auth_failed` the administrator's password checks write; the server's token check writes
+ *  one with a caller only for a disabled agent (`principal_disabled`, rust/src/server.rs). */
+const ADMIN_AUTH = new Set(['admin_reauth_failed', 'admin_reauth_stale', 'passphrase_missing', 'recovery_passphrase_invalid']);
+
+/** Whether the record says the administrator acted, not an agent named `admin`. */
+const byAdmin = (rec: AuditRecord): boolean =>
+  rec.caller === 'admin' && typeof rec.event === 'string' && ADMIN_EVENTS.has(rec.event)
+  && (rec.event !== 'auth_failed' || (typeof rec.reason === 'string' && ADMIN_AUTH.has(rec.reason)));
+
 /** The fixed English `detail` of the alerts rust/src/audit.rs writes: the alert and its reason
  *  already say it. */
 const KNOWN_DETAIL = new Set([
@@ -178,7 +200,7 @@ export function recordView(rec: AuditRecord, kind: 'audit' | 'alert'): RecordVie
   }
 
   const caller = valueText(rec.caller);
-  if (caller) meta.push(caller === 'admin' ? t('log.admin') : caller);
+  if (caller) meta.push(byAdmin(rec) ? t('log.admin') : caller);
   const conn = valueText(rec.connection);
   if (conn) meta.push(conn);
 
