@@ -311,7 +311,9 @@ fi
 /// Run the user's own startup file `@FILE@` with `ZDOTDIR` as the user has it (unset when
 /// they have none), note the user's `ZDOTDIR` afterwards (a `.zshenv` often sets it), then
 /// point zsh back here for its next file. Top level, not a function, so that the user's
-/// `typeset` stays global.
+/// `typeset` stays global. Inside the user's file `$0` is that file's path, not `-zsh`
+/// (`FUNCTION_ARGZERO`); turning the option off around the `source` would also change `$0`
+/// for every script and function the file runs, so it stays on (docs/desktop-app.md §4.4).
 const ZSH_USER_FILE: &str = r#"if (( ${+ZEROPW_USER_ZDOTDIR} )); then
   ZDOTDIR=$ZEROPW_USER_ZDOTDIR
 else
