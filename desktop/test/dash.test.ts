@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../src/ipc/contract';
+import { t } from '../src/copy';
 import {
-  blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  addressChoices, blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
   newRecordCount, nextMethodState, olderVersionCount, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
-  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
 
@@ -318,6 +319,35 @@ describe('team helpers', () => {
     expect(interfaceLabel({ ip: '100.64.1.7', name: 'utun4', kind: 'vpn' })).toBe('100.64.1.7 · VPN');
     expect(interfaceLabel({ ip: '10.0.0.2', name: 'bridge0', kind: 'other' })).toBe('10.0.0.2 · bridge0');
   });
+  const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' as const };
+  const LAN = { name: 'en0', ip: '192.168.0.145', kind: 'lan' as const };
+
+  // desktop E2E F16: a saved 127.0.0.1 (not in the list) showed as the LAN address but stayed saved
+  it('offers a saved address that is not in the list, marked, so the picker shows what is saved', () => {
+    const choices = addressChoices([LAN], '127.0.0.1');
+    expect(choices).toEqual([{ value: '127.0.0.1', label: `127.0.0.1 · ${t('set.listen.unlisted')}` }, { value: LAN.ip, label: '192.168.0.145 · LAN' }]);
+    // a listed address, or none picked yet: only the list
+    expect(addressChoices([VPN, LAN], LAN.ip).map((c) => c.value)).toEqual([VPN.ip, LAN.ip]);
+    expect(addressChoices([VPN, LAN], '')).toHaveLength(2);
+    expect(addressChoices([], '10.0.0.9').map((c) => c.value)).toEqual(['10.0.0.9']);
+    // whatever is picked is one of the options, so choosing another changes it
+    for (const [list, cur] of [[[LAN], '127.0.0.1'], [[VPN, LAN], VPN.ip], [[], '10.0.0.9']] as const) {
+      expect(addressChoices(list, cur).some((c) => c.value === cur)).toBe(true);
+    }
+  });
+
+  // desktop E2E F13: emptying the port field refilled it with the saved port
+  it('fills the settings fields from the saved settings once and keeps them as the user left them', () => {
+    const saved = { gateway_port: 47380, team_listen: '127.0.0.1:47421' };
+    const first = settingsFields(null, saved, [VPN, LAN]);
+    expect(first).toEqual({ port: '47380', ip: '127.0.0.1', tport: '47421' });
+    expect(settingsFields({ ...first, port: '' }, saved, [VPN, LAN])).toEqual({ ...first, port: '' });
+    expect(settingsFields({ ...first, port: '473', tport: '' }, { gateway_port: 48000, team_listen: null }, [LAN])).toEqual({ ...first, port: '473', tport: '' });
+    // without a saved address the picker starts on the likeliest one, and an empty pick takes one later
+    expect(settingsFields(null, { gateway_port: 47380, team_listen: null }, [LAN, VPN])).toEqual({ port: '47380', ip: VPN.ip, tport: '47420' });
+    expect(settingsFields({ port: '', ip: '', tport: '9' }, { gateway_port: 47380, team_listen: null }, [LAN])).toEqual({ port: '', ip: LAN.ip, tport: '9' });
+  });
+
   it('picks a VPN address first for other-device access, then the LAN', () => {
     expect(defaultListenIp([{ ip: '192.168.0.12', kind: 'lan' }, { ip: '100.64.1.7', kind: 'vpn' }])).toBe('100.64.1.7');
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }, { ip: '192.168.0.12', kind: 'lan' }])).toBe('192.168.0.12');

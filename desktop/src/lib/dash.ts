@@ -2,7 +2,8 @@
 // value-free text for records. The core re-checks every input; these only decide what the UI
 // marks as ready and which inline error it shows. Nothing here ever handles a secret value.
 
-import type { AuditRecord, ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../ipc/contract';
+import { t } from '../copy';
+import type { AuditRecord, ConnectionView, Control, Grant, NetInterface, Project, SecretView, ServeStatus, Settings, TeamEnvironment } from '../ipc/contract';
 import { hostPort } from './format';
 import { isValidName } from './validators';
 
@@ -395,6 +396,30 @@ export function defaultListenIp(interfaces: readonly { ip: string; kind: string 
 export const interfaceLabel = (i: { ip: string; name: string; kind: string }): string =>
   `${i.ip} · ${i.kind === 'vpn' ? 'VPN' : i.kind === 'lan' ? 'LAN' : i.name}`;
 export const MIN_GATEWAY_PORT = 1024;
+
+/** The address picker's choices: this device's addresses, and first `current` when it is not one
+ *  of them (a saved address a VPN or DHCP change took away, or one the list leaves out such as
+ *  loopback), marked so. A <select> whose value matches no option shows the first option, so
+ *  without it the picker would show one address while the app saves another (desktop E2E F16). */
+export function addressChoices(interfaces: readonly NetInterface[], current: string): Array<{ value: string; label: string }> {
+  const out = interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }));
+  if (current && !interfaces.some((i) => i.ip === current)) out.unshift({ value: current, label: `${current} · ${t('set.listen.unlisted')}` });
+  return out;
+}
+
+/** The settings page's fields: the relay port, and the address and port for other devices. */
+export interface SettingsFields { port: string; ip: string; tport: string }
+
+/** The fields after the saved settings (re)load: filled from them the first time only. Later
+ *  loads (after a save, on focus) keep what is in the fields, an emptied field included, so a
+ *  field is never refilled under the user's typing (desktop E2E F13); only an address still
+ *  unpicked takes one. The saved address is kept even when it is not in `interfaces`. */
+export function settingsFields(prev: SettingsFields | null, s: Settings, interfaces: readonly NetInterface[]): SettingsFields {
+  const listen = parseListen(s.team_listen);
+  const ip = listen?.ip ?? defaultListenIp(interfaces);
+  if (prev) return prev.ip || !ip ? prev : { ...prev, ip };
+  return { port: String(s.gateway_port), ip, tport: String(listen?.port ?? DEFAULT_TEAM_PORT) };
+}
 
 export const msLeft = (expiresAt: string, now: number): number => {
   const t = Date.parse(expiresAt);

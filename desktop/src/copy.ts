@@ -548,6 +548,7 @@ export const COPY = {
   'set.port.err': '1024부터 65535까지 넣어 주세요',
   'set.save': '저장',
   'set.listen.iface': '이 기기 주소',
+  'set.listen.unlisted': '지금 목록에 없음',
   'set.listen.port.err': '주소와 포트를 확인해 주세요',
   'set.listen.change': '주소 바꾸기',
   'set.listen.off': '끄기',

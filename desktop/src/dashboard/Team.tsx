@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, defaultListenIp, envKey, interfaceLabel, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs } from '../lib/dash';
+import { addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
@@ -341,7 +341,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
               <span className="st">{listen ? `${listen.ip}:${listen.port}` : t('inv.pre1.off')}</span></div>
             <div className="pb">
               <div className="inline">
-                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
+                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip)}
                   onChange={(v) => { setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
                 <TextField id="inv-port" label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
                   error={errs.port ? t(errs.port) : null} onChange={(v) => { setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
