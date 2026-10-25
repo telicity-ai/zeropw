@@ -778,7 +778,8 @@ impl TerminalManager {
     /// When the shell is zsh, write the app's startup files into `dir` (an app-private folder,
     /// 0700) and point `ZDOTDIR` at them, so that the bundle folder is first on `PATH` once
     /// the user's own startup files have run. Without it, or when the files cannot be
-    /// written, zsh starts like any other shell.
+    /// written, zsh starts like any other shell; in the second case the core says so on
+    /// stderr.
     pub fn with_zsh_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.zsh_dir = Some(dir.into());
         self
@@ -814,7 +815,13 @@ impl TerminalManager {
             let _guard = self.zsh_write.lock().unwrap_or_else(|e| e.into_inner());
             write_zsh_startup(dir)
         };
-        if written.is_err() {
+        if let Err(e) = written {
+            eprintln!(
+                "zeropw: the terminal's zsh startup files could not be written ({:?}): zsh \
+                 starts without them, and its own startup files may put another folder before \
+                 the bundle folder on PATH",
+                e.kind()
+            );
             return;
         }
         cmd.env("ZDOTDIR", dir);

@@ -440,9 +440,13 @@ fn zsh_with_an_unwritable_startup_folder(root: &Path) -> String {
     text
 }
 
+/// Where `unwritable_zsh_startup_child` sets up its terminal.
+const UNWRITABLE_CHILD_VAR: &str = "ZEROPW_UNWRITABLE_ZSH_CHILD";
+
 /// When the app's zsh startup files cannot be written, zsh still starts, as any other shell:
 /// its own startup files run as zsh reads them, so the bundle folder is no longer first, and
-/// nothing of the app's (ZDOTDIR, helper variables) is in its environment.
+/// nothing of the app's (ZDOTDIR, helper variables) is in its environment. The core says so
+/// on stderr, naming no folder and no value.
 #[test]
 fn zsh_starts_without_the_app_startup_files_when_they_cannot_be_written() {
     let root = tempfile::tempdir().unwrap();
@@ -458,6 +462,44 @@ fn zsh_starts_without_the_app_startup_files_when_they_cannot_be_written() {
     assert_eq!(printed(&text, "X"), "000");
     assert!(!root.path().join("app/zsh").exists());
     assert!(!text.contains(TOKEN), "token printed: {text}");
+
+    // The test harness keeps a test's own stderr, so the note is read from a child run of
+    // this test binary.
+    let child_root = tempfile::tempdir().unwrap();
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "unwritable_zsh_startup_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(UNWRITABLE_CHILD_VAR, child_root.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&child.stderr);
+    assert!(child.status.success(), "{stderr}");
+    let notes: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("zeropw: "))
+        .collect();
+    assert_eq!(notes.len(), 1, "{stderr}");
+    assert!(
+        notes[0].starts_with("zeropw: the terminal's zsh startup files could not be written ("),
+        "{stderr}"
+    );
+    assert!(!notes[0].contains('/'), "a path in {stderr}");
+    for value in [&*child_root.path().to_string_lossy(), TOKEN, "127.0.0.1"] {
+        assert!(!stderr.contains(value), "{value} in {stderr}");
+    }
+}
+
+/// Runs only as the child of
+/// `zsh_starts_without_the_app_startup_files_when_they_cannot_be_written`.
+#[test]
+fn unwritable_zsh_startup_child() {
+    if let Some(root) = std::env::var_os(UNWRITABLE_CHILD_VAR) {
+        zsh_with_an_unwritable_startup_folder(Path::new(&root));
+    }
 }
 
 /// Run `f` on another thread; fail the test (instead of hanging it) if it takes longer than
