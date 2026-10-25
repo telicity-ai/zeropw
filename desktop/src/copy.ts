@@ -765,7 +765,7 @@ export const COPY = {
   'log.ev.approval_request': '승인 요청',
   'log.ev.approval_grant': '요청 승인',
   'log.ev.approval_consume': '승인한 요청 실행',
-  'log.ev.handle_issue': '명령에 쓸 임시 값 발급',
+  'log.ev.handle_issue': '키 대신 쓸 임시 값 발급',
   'log.ev.tools_list_connections': '연결 목록 보기',
   'log.ev.tools_request': 'API 요청',
   'log.ev.tools_exec': '명령 실행',
