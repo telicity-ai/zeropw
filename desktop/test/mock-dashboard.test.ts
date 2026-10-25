@@ -565,15 +565,35 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     expect(await call('control_get')).toMatchObject({ stopped: true, incident_open: true });
   });
 
+  // pr3-incident-3: the mock restores the archived control as rust/src/vault.rs `restore` does,
+  // so these fail when the current incident is not kept
   it('keeps an open incident through a restore of an older backup (rust/src/vault.rs restore)', async () => {
     ready();
-    await call('backup_create');
-    await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    await call('backup_create');                                 // no incident yet
+    const inc = await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
     await call('backup_restore', { admin_passphrase: PASS });
     await call('restore_ack', { admin_passphrase: PASS });
     expect((await call('control_get')).incident_open).toBe(true);
+    expect((await call('incident_list')).incidents.find((i) => i.id === inc.id)?.status).toBe('open');
     const e = await rejection(call('resume', { admin_passphrase: PASS }));
     expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
+    // and the incident can still be closed, which lifts what it held
+    await call('incident_close', { id: inc.id, admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(false);
+  });
+
+  it('does not bring back an incident closed since the backup, but does bring back its stop', async () => {
+    ready();
+    const inc = await call('incident_declare', { scope: 'all', admin_passphrase: PASS });   // stops everything
+    await call('backup_create');                                 // archived while open and stopped
+    await call('incident_close', { id: inc.id, admin_passphrase: PASS });
+    await call('resume', { admin_passphrase: PASS });
+    expect(await call('control_get')).toMatchObject({ stopped: false, incident_open: false });
+    await call('backup_restore', { admin_passphrase: PASS });
+    // the archived pointer is ignored; the archived stop is restored and needs resuming
+    expect(await call('control_get')).toEqual({ stopped: true, restore_pending: true, incident_open: false });
+    await call('restore_ack', { admin_passphrase: PASS });
+    expect(await call('resume', { admin_passphrase: PASS })).toMatchObject({ stopped: false, incident_open: false });
   });
 
   // pr3-incident-1: a file left open while the core's pointer names no incident (a restore by an

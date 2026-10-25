@@ -249,6 +249,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   /** Which device key file is current (`recover` makes a new one), and which made the newest backup. */
   let deviceKey = 0;
   let lastBackupKey = 0;
+  /** The control document the newest backup archived (rust/src/vault.rs `BACKUP_DOCS`: control is
+   *  in the archive, the incidents are not). */
+  let backupControl: Control = { stopped: false, restore_pending: false, incident_open: false };
   let secureView = false;
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
@@ -1029,6 +1032,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     backup_create: async () => {
       needInit(); await wait(500);
       lastBackupKey = deviceKey;
+      backupControl = { ...control };
       record({ ts: iso(), event: 'backup' });
       return { path: '~/Desktop/zeropw-backup.zpwb', created_at: iso() };
     },
@@ -1037,7 +1041,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(admin_passphrase);
       // the archive's data key is wrapped under the device key that made it (rust/src/vault.rs)
       if (lastBackupKey !== deviceKey) throw fail('StateError', 'backup_kms_mismatch');
-      setControl({ ...control, restore_pending: true });
+      // rust/src/vault.rs restore: the archived control comes back, except that a stop in force now
+      // stays and the open incident is the current one; the incidents themselves are untouched
+      setControl({ stopped: control.stopped || backupControl.stopped, incident_open: control.incident_open, restore_pending: true });
       record({ ts: iso(), event: 'restore' });
       return { restored: true, restore_pending: true };
     },
