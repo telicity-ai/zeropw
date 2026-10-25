@@ -342,9 +342,11 @@ function VersionsSheet({ open, id, onClose, onAction, onReveal, onReplace }: {
                     <>
                       <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.reveal.aria', { id: `${s.id} ${String(ver)}` })} onClick={() => onReveal(s.id, ver)}>{t('keys.reveal')}</button>
                       {x.status === 'staged' && (
-                        <button className="btn btn-text btn-sm" type="button" onClick={() => onAction('retire', s.id, ver)}>{t('keys.retire')}</button>
+                        <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.retire.aria', { id: s.id, n: String(ver) })}
+                          onClick={() => onAction('retire', s.id, ver)}>{t('keys.retire')}</button>
                       )}
-                      <button className="btn btn-text btn-sm danger" type="button" onClick={() => onAction('revoke', s.id, ver)}>{t('keys.revoke')}</button>
+                      <button className="btn btn-text btn-sm danger" type="button" aria-label={t('keys.revoke.aria', { id: s.id, n: String(ver) })}
+                        onClick={() => onAction('revoke', s.id, ver)}>{t('keys.revoke')}</button>
                     </>
                   )}
                 </Row>

@@ -132,7 +132,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
                     <li key={g.id}>
                       <span className="mono">{g.connection}</span>
                       <span className="sub-meta">{grantText(g)}</span>
-                      <button className="btn btn-text btn-sm" type="button" aria-label={t('grant.revoke.aria', { conn: g.connection })}
+                      <button className="btn btn-text btn-sm" type="button" aria-label={t('grant.revoke.aria', { agent: p.id, conn: g.connection })}
                         onClick={() => sheets.open({ kind: 'revoke', grant: g })}>{t('grant.revoke')}</button>
                     </li>
                   ))}
@@ -159,6 +159,7 @@ export function AgentsPage({ intent, onIntent }: { intent?: Intent; onIntent(): 
             <Row key={x.terminal_id} dot={x.alive ? 'live' : 'idle'} mono name={x.principal}
               tag={x.alive ? undefined : <Tag>{t('term.dead')}</Tag>} meta={metaLine(x.as_user ? `${t('agent.where.other')} · ${x.as_user}` : t('agent.where.same'))}>
               <button className="btn btn-ghost btn-sm" type="button" aria-expanded={shown} aria-controls={TERM_DOM}
+                aria-label={t(shown ? 'term.hide.aria' : 'term.attach.aria', { name: x.principal })}
                 onClick={() => (shown ? setView(null) : showTerminal({ key: `attach-${x.terminal_id}`, name: x.principal, source: { kind: 'attach', terminalId: x.terminal_id }, terminalId: x.terminal_id }))}>
                 {t(shown ? 'term.hide' : 'term.attach')}
               </button>
