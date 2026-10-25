@@ -14,7 +14,7 @@ use common::{Events, Fixture, arc_events, free_port, health_server, wait_until};
 use nix::sys::signal::{Signal, kill, killpg};
 use nix::unistd::Pid;
 use serde_json::Value;
-use zeropw_desktop_core::serve::{ServeConfig, ServeStatus, ServeSupervisor};
+use zeropw_desktop_core::serve::{ServeConfig, ServeStatus, ServeSupervisor, WATCH_PS_EVERY};
 use zeropw_desktop_core::{Core, CoreConfig, Settings};
 
 fn supervisor(fx: &Fixture, grace: Duration) -> ServeSupervisor {
@@ -414,12 +414,55 @@ fn the_core_reports_an_adopted_sidecar_that_died() {
     assert_eq!(statuses().len(), 1);
 
     // Unreaped, the sidecar stays a zombie of this test process (the earlier run's
-    // supervisor is its parent); the adopting core counts that as gone too.
+    // supervisor is its parent); the adopting core counts that as gone too, at its next look
+    // that runs `ps` (at most WATCH_PS_EVERY looks of 100 ms away).
     kill_sidecar(pid);
-    assert!(wait_until(Duration::from_secs(5), || statuses().len() == 2));
+    assert!(wait_until(Duration::from_secs(10), || statuses().len() == 2));
     assert!(!running(&statuses()[1]));
     assert!(!core.serve_status().running);
     assert!(!first.status().running);
+}
+
+/// A process that has exited but was not reaped: it still answers a signal.
+fn zombie(pid: u32) -> bool {
+    kill(Pid::from_raw(pid as i32), None).is_ok() && gone(pid)
+}
+
+/// docs/desktop-app.md §4.2: the watch looks at an adopted sidecar with a signal alone and
+/// runs `ps` only every WATCH_PS_EVERY looks, instead of forking `ps` on every look for the
+/// life of the app. A zombie still answers the signal, so the `ps` look is the one that sees
+/// it gone; `status` runs `ps` every time.
+#[test]
+fn the_watch_runs_ps_on_an_adopted_sidecar_only_every_few_looks() {
+    let fx = Fixture::new();
+    let config = ServeConfig {
+        port: health_server(),
+        team_listen: None,
+    };
+    let first = supervisor(&fx, Duration::from_secs(2));
+    let adopter = supervisor(&fx, Duration::from_secs(2));
+    let every = WATCH_PS_EVERY as usize;
+    assert!(every > 1);
+    for watched in [true, false] {
+        let pid = first.start(&config).unwrap().pid.unwrap();
+        assert_eq!(adopter.attach().pid, Some(pid));
+        // `first` is the parent and does not reap it until it looks again.
+        kill_sidecar(pid);
+        assert!(wait_until(Duration::from_secs(5), || zombie(pid)));
+        if watched {
+            let looks: Vec<bool> = (0..every)
+                .map(|_| adopter.watch(|status| status.running).unwrap())
+                .collect();
+            let mut expected = vec![true; every - 1];
+            expected.push(false);
+            assert_eq!(looks, expected);
+            assert_eq!(adopter.watch(|status| status.running), Some(false));
+        } else {
+            assert!(!adopter.status().running);
+        }
+        assert!(!fx.paths.serve_pid_file().exists());
+        assert!(!first.status().running);
+    }
 }
 
 /// The watch's look from another thread: `None` while the supervisor's state is locked.
