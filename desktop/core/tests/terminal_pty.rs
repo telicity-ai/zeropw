@@ -219,13 +219,36 @@ fn write_files(dir: &Path, files: &[(&str, &str)]) {
     }
 }
 
+/// The environment the app hands the shell: HOME, SHELL and a short PATH, all synthetic.
+fn parent_env(home: &Path, shell: &Path) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    vec![
+        ("HOME".into(), home.into()),
+        ("SHELL".into(), shell.into()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("USER".into(), "zpw-synthetic".into()),
+    ]
+}
+
+/// Typed at the zsh prompt: PATH, the user's marks, ZDOTDIR in the shell and as the programs
+/// it starts see it, the history file, which helper variables are left, and what a program
+/// the user's `.zshenv` started saw of them.
+const ZSH_PROBE: &str = concat!(
+    r#"print -r -- "$((6*7))P=$PATH"; print -r -- "$((6*7))M=${ZPW_MARKS-}"; "#,
+    r#"print -r -- "$((6*7))Z=${ZDOTDIR-none}"; print -r -- "$((6*7))H=${HISTFILE-none}"; "#,
+    r#"print -r -- "$((6*7))E=$(/bin/sh -c 'echo "${ZDOTDIR-none}"')"; "#,
+    r#"print -r -- "$((6*7))X=${+ZEROPW_TERMINAL_BIN}${+ZEROPW_USER_ZDOTDIR}${+ZEROPW_ZDOTDIR}"; "#,
+    r#"print -r -- "$((6*7))C=${ZPW_CHILD-unset}"; "#,
+    "exit\n"
+);
+
 /// Desktop E2E F5: the login shell's startup files (macOS's /etc/zprofile, a `.zprofile` that
 /// puts Homebrew first) rebuilt PATH after the app had put the bundle folder first, so
 /// `zeropw-agent` ran another build. For zsh the app's own startup files run the user's and
 /// then put the bundle folder first again, once; ZDOTDIR, history and the rest stay as the
 /// user's files set them, and no helper variable is left behind, also when the user's
-/// `.zshenv` stops zsh reading further files (`unsetopt rcs`). A program the user's files
-/// start never sees the helpers. Another shell is left alone.
+/// `.zshenv` stops zsh reading further files (`unsetopt rcs`) and when the app itself was
+/// given a ZDOTDIR. A program the user's files start never sees the helpers. Another shell is
+/// left alone.
 #[test]
 fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -237,7 +260,7 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     let bin_text = bin.to_string_lossy().into_owned();
     let zsh_dir = dir.path().join("app/zsh");
     // What a program started from the user's `.zshenv` sees of the helpers.
-    let child = "ZPW_CHILD=$(/bin/sh -c 'echo \"${ZEROPW_TERMINAL_BIN-none}\"')\n";
+    let child = "ZPW_CHILD=$(/bin/sh -c 'echo \"${ZEROPW_TERMINAL_BIN-none},${ZEROPW_USER_ZDOTDIR-none}\"')\n";
 
     // Startup files in HOME, the most common setup.
     let plain = dir.path().join("home plain");
@@ -287,33 +310,49 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
             ),
         ],
     );
-    let parent = |home: &Path, shell: &Path| {
-        vec![
-            ("HOME".into(), home.into()),
-            ("SHELL".into(), shell.into()),
-            ("PATH".into(), "/usr/bin:/bin".into()),
-            ("USER".into(), "zpw-synthetic".into()),
-        ]
-    };
-    let probe = concat!(
-        r#"print -r -- "$((6*7))P=$PATH"; print -r -- "$((6*7))M=${ZPW_MARKS-}"; "#,
-        r#"print -r -- "$((6*7))Z=${ZDOTDIR-none}"; print -r -- "$((6*7))H=${HISTFILE-none}"; "#,
-        r#"print -r -- "$((6*7))X=${+ZEROPW_TERMINAL_BIN}${+ZEROPW_USER_ZDOTDIR}${+ZEROPW_ZDOTDIR}"; "#,
-        r#"print -r -- "$((6*7))C=${ZPW_CHILD-unset}"; "#,
-        "exit\n"
+    // ZDOTDIR already in the app's environment (set for the login session, not by a
+    // `.zshenv`): every user file is read from there, the `.zshenv` too, none from HOME.
+    let session = dir.path().join("home-session");
+    let session_zdotdir = session.join(".config/zsh");
+    write_files(
+        &session,
+        &[
+            (".zshenv", "ZPW_MARKS=home-env\n"),
+            (".zprofile", "ZPW_MARKS+=,home-profile\n"),
+            (".config/zsh/.zshenv", &format!("ZPW_MARKS=env\n{child}")),
+            (
+                ".config/zsh/.zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
+            ),
+            (".config/zsh/.zshrc", "ZPW_MARKS+=,rc\n"),
+            (".config/zsh/.zlogin", "ZPW_MARKS+=,login\n"),
+        ],
+    );
+    let (xdg_z, session_z, app_z) = (
+        xdg_zdotdir.to_string_lossy(),
+        session_zdotdir.to_string_lossy(),
+        zsh_dir.to_string_lossy(),
     );
 
     let all = "env,profile,rc,login";
-    for (home, zdotdir, marks, brew) in [
-        (&plain, "none".to_owned(), all, true),
-        (&xdg, xdg_zdotdir.to_string_lossy().into_owned(), all, true),
-        (&norcs, "none".to_owned(), "env", false),
+    for (home, app_zdotdir, zdotdir, marks, brew) in [
+        (&plain, None, "none", all, true),
+        (&xdg, None, &*xdg_z, all, true),
+        (&norcs, None, "none", "env", false),
+        (&session, Some(&*session_z), &*session_z, all, true),
+        // An empty ZDOTDIR, or the app's own folder, is no ZDOTDIR of the user's.
+        (&plain, Some(""), "none", all, true),
+        (&plain, Some(&*app_z), "none", all, true),
     ] {
+        let mut env = parent_env(home, &zsh);
+        if let Some(value) = app_zdotdir {
+            env.push(("ZDOTDIR".into(), value.into()));
+        }
         let manager = TerminalManager::new(TerminalProgram::LoginShell)
             .with_zsh_dir(&zsh_dir)
-            .with_parent_env(parent(home, &zsh));
+            .with_parent_env(env);
         let (id, out, exit) = open(&manager, &bin);
-        manager.write(&id, probe).unwrap();
+        manager.write(&id, ZSH_PROBE).unwrap();
         let code = exit.recv_timeout(Duration::from_secs(20));
         let text = out.lock().unwrap().clone();
         assert_eq!(code, Ok(Some(0)), "{text}");
@@ -325,13 +364,14 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
         assert_eq!(dirs.contains(&"/synthetic/brew/bin"), brew, "{path}");
         assert_eq!(printed(&text, "M"), marks);
         assert_eq!(printed(&text, "Z"), zdotdir);
+        assert_eq!(printed(&text, "E"), zdotdir);
         let history = printed(&text, "H");
         assert!(
             !Path::new(&history).starts_with(&zsh_dir),
             "history in the app's folder: {history}"
         );
         assert_eq!(printed(&text, "X"), "000");
-        assert_eq!(printed(&text, "C"), "none");
+        assert_eq!(printed(&text, "C"), "none,none");
         assert!(!text.contains(TOKEN), "token printed: {text}");
     }
 
@@ -356,7 +396,7 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     // Another shell gets neither ZDOTDIR nor the helper variables.
     let sh = TerminalManager::new(TerminalProgram::LoginShell)
         .with_zsh_dir(&zsh_dir)
-        .with_parent_env(parent(&plain, Path::new("/bin/sh")));
+        .with_parent_env(parent_env(&plain, Path::new("/bin/sh")));
     let (id, out, exit) = open(&sh, &bin);
     sh.write(
         &id,
@@ -367,6 +407,57 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     let text = out.lock().unwrap().clone();
     assert_eq!(code, Ok(Some(0)), "{text}");
     assert_eq!(printed(&text, "Z"), "none none");
+}
+
+/// zsh as a login shell in a terminal whose app startup folder, under `root`, cannot be
+/// created (the place of its parent folder is taken by a file); what the probe printed.
+fn zsh_with_an_unwritable_startup_folder(root: &Path) -> String {
+    let bin = root.join("bundle");
+    std::fs::create_dir_all(&bin).unwrap();
+    let taken = root.join("app");
+    std::fs::write(&taken, "synthetic").unwrap();
+    let home = root.join("home");
+    write_files(
+        &home,
+        &[
+            (".zshenv", "ZPW_MARKS=env\n"),
+            (
+                ".zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
+            ),
+            (".zshrc", "ZPW_MARKS+=,rc\n"),
+            (".zlogin", "ZPW_MARKS+=,login\n"),
+        ],
+    );
+    let manager = TerminalManager::new(TerminalProgram::LoginShell)
+        .with_zsh_dir(taken.join("zsh"))
+        .with_parent_env(parent_env(&home, &zsh()));
+    let (id, out, exit) = open(&manager, &bin);
+    manager.write(&id, ZSH_PROBE).unwrap();
+    let code = exit.recv_timeout(Duration::from_secs(20));
+    let text = out.lock().unwrap().clone();
+    assert_eq!(code, Ok(Some(0)), "{text}");
+    text
+}
+
+/// When the app's zsh startup files cannot be written, zsh still starts, as any other shell:
+/// its own startup files run as zsh reads them, so the bundle folder is no longer first, and
+/// nothing of the app's (ZDOTDIR, helper variables) is in its environment.
+#[test]
+fn zsh_starts_without_the_app_startup_files_when_they_cannot_be_written() {
+    let root = tempfile::tempdir().unwrap();
+    let text = zsh_with_an_unwritable_startup_folder(root.path());
+    let path = printed(&text, "P");
+    let dirs: Vec<&str> = path.split(':').collect();
+    assert_eq!(dirs[0], "/synthetic/brew/bin", "{path}");
+    let bin = root.path().join("bundle");
+    assert!(dirs.iter().any(|d| Path::new(d) == bin), "{path}");
+    assert_eq!(printed(&text, "M"), "env,profile,rc,login");
+    assert_eq!(printed(&text, "Z"), "none");
+    assert_eq!(printed(&text, "E"), "none");
+    assert_eq!(printed(&text, "X"), "000");
+    assert!(!root.path().join("app/zsh").exists());
+    assert!(!text.contains(TOKEN), "token printed: {text}");
 }
 
 /// Run `f` on another thread; fail the test (instead of hanging it) if it takes longer than
