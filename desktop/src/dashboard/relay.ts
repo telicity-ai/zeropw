@@ -5,7 +5,8 @@
 
 import type { CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { ServeStatus } from '../ipc/contract';
+import type { ServeStatus, Settings } from '../ipc/contract';
+import { DEFAULT_GATEWAY_PORT } from '../lib/dash';
 import { listenFailureLines, relayError } from '../lib/reasons';
 
 /** Stop the relay if it runs, then start it, so a changed port or team address takes effect. */
@@ -91,6 +92,24 @@ export function listenErrorLines(e: unknown): CopyLine[] {
 /** Why the relay is left off after turning on other-device access failed, or null when it runs. */
 export function relayLeftOff(e: unknown): unknown {
   return e instanceof ListenError && !e.relayBack ? e.relayError : null;
+}
+
+/** The saved settings, or `corrupt` when the core refuses the settings file as damaged
+ *  (`settings_corrupt`): it never resets the file on its own (desktop/core/src/settings.rs), so the
+ *  settings page offers to. Any other failure throws. */
+export async function readSettings(): Promise<{ settings: Settings; corrupt: false } | { settings: null; corrupt: true }> {
+  try {
+    return { settings: await call('settings_get'), corrupt: false };
+  } catch (e) {
+    if (toIpcError(e).reason === 'settings_corrupt') return { settings: null, corrupt: true };
+    throw e;
+  }
+}
+
+/** Write the default settings over a damaged file (`settings_set` does not read the old one):
+ *  the default relay port and other-device access off. Restarting the relay is the caller's. */
+export function resetSettings(): Promise<Settings> {
+  return call('settings_set', { gateway_port: DEFAULT_GATEWAY_PORT, team_listen: null });
 }
 
 /** Turn other-device access off and restart the relay without it. */

@@ -45,6 +45,9 @@ export interface MockSeed {
   /** With `initialized`: an SSH connection the app made before it sent an ssh (`cli: null`),
    *  with a grant for agent-1. */
   sshWithoutCli?: boolean;
+  /** The settings file is damaged (desktop/core/src/settings.rs): reading it, and so starting the
+   *  relay, fails with `settings_corrupt` until `settings_set` writes over it. */
+  settingsCorrupt?: boolean;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -241,6 +244,11 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
   let settings: Settings = { gateway_port: 47380, team_listen: seed.teamListen ?? null };
+  let settingsCorrupt = seed.settingsCorrupt ?? false;
+  const readSettings = (): Settings => {
+    if (settingsCorrupt) throw fail('StateError', 'settings_corrupt');
+    return settings;
+  };
   const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' } as const;
   const LAN = { name: 'en0', ip: '192.168.0.12', kind: 'lan' } as const;
   const interfaces = () => (seed.vpnDown ? [LAN] : [VPN, LAN]).map((i) => ({ ...i }));
@@ -254,6 +262,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (p !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
   };
   const startServe = () => {
+    // the core reads the settings before it starts the sidecar (desktop/core/src/commands.rs `start_serve`)
+    readSettings();
     // a sidecar that exits before it prints a reason gets the core's generic code
     if (relayExits > 0) { relayExits -= 1; throw fail('Unavailable', 'serve_exited'); }
     // the sidecar opens other-device access before the gateway, so an address this machine does
@@ -1161,14 +1171,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     secret_import_preview: (input) => importRun(input, null),
     secret_import: (input) => importRun(input, { selected: input.selected, update: input.update }),
-    settings_get: () => ({ ...settings }),
+    settings_get: () => ({ ...readSettings() }),
     settings_set: (next) => {
       if (!Number.isInteger(next.gateway_port) || next.gateway_port < 1024 || next.gateway_port > 65535) throw fail('InvalidInput', 'invalid_port', 'gateway_port');
       if (next.team_listen !== null) {
         const l = parseListen(next.team_listen);
         if (!l || l.ip === '0.0.0.0' || l.ip === '255.255.255.255' || l.port === 0) throw fail('InvalidInput', 'invalid_listen', 'team_listen');
       }
+      // written over the old file without reading it
       settings = { gateway_port: next.gateway_port, team_listen: next.team_listen };
+      settingsCorrupt = false;
       return { ...settings };
     },
     net_interfaces: () => interfaces(),

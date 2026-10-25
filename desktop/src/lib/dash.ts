@@ -396,6 +396,8 @@ export function defaultListenIp(interfaces: readonly { ip: string; kind: string 
 export const interfaceLabel = (i: { ip: string; name: string; kind: string }): string =>
   `${i.ip} · ${i.kind === 'vpn' ? 'VPN' : i.kind === 'lan' ? 'LAN' : i.name}`;
 export const MIN_GATEWAY_PORT = 1024;
+/** The relay port a fresh app uses (desktop/core/src/settings.rs `DEFAULT_GATEWAY_PORT`). */
+export const DEFAULT_GATEWAY_PORT = 47380;
 
 /** The address picker's choices: this device's addresses, and first `current` when it is not one
  *  of them (a saved address a VPN or DHCP change took away, or one the list leaves out such as

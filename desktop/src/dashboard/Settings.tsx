@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { NetInterface } from '../ipc/contract';
-import { addressChoices, MIN_GATEWAY_PORT, parseListen, parsePort, settingsFields, type SettingsFields } from '../lib/dash';
+import { addressChoices, DEFAULT_GATEWAY_PORT, MIN_GATEWAY_PORT, parseListen, parsePort, settingsFields, type SettingsFields } from '../lib/dash';
 import { restoreErrorKey } from '../lib/reasons';
 import { useApp } from '../ui/context';
 import { SelectField, TextField } from '../ui/fields';
@@ -10,26 +10,30 @@ import { Callout } from '../ui/form';
 import { ConfirmSheet } from './Confirm';
 import { useClearOnClose, useDash, useIntent, useLoad, useSheets, type Intent } from './context';
 import { Empty, SectionHead } from './parts';
-import { listenErrorLines, relayLeftOff, restartRelay, turnOnListen } from './relay';
+import { listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
-type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' };
+type SetSheet = { kind: 'restore' } | { kind: 'ack' } | { kind: 'recover' } | { kind: 'reset' };
 const CANCELLED = new Set(['file_dialog_cancelled']);
 
 /** Settings: the relay port, this device's address for other devices, backup, restore and
  *  replacing the device key with the recovery code. Files are picked in native dialogs owned by
- *  the core. The sidebar sends the user here to acknowledge a restore (`ack-restore`). */
+ *  the core. The sidebar sends the user here to acknowledge a restore (`ack-restore`). A settings
+ *  file the core refuses as damaged is never reset on its own: the page says so and offers to
+ *  write the defaults over it, after a confirmation. */
 export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent(): void }) {
   const { tick, bump, control, serve, relay } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
-    const [s, i] = await Promise.all([call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { settings: s, interfaces: i };
+    const [s, i] = await Promise.all([readSettings(), call('net_interfaces').catch(() => [] as NetInterface[])]);
+    return { ...s, interfaces: i };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<SetSheet>();
   const s = load.data?.settings ?? null;
+  const corrupt = load.data?.corrupt === true;
+  const unread = t(corrupt ? 'set.corrupt' : load.failed ? 'error.load' : 'boot.loading');
   const ifaces = load.data?.interfaces ?? [];
   const listen = parseListen(s?.team_listen);
   useIntent(intent, onIntent, (i) => {
@@ -117,7 +121,14 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
     <>
       <SectionHead title={t('set.relay')} />
       <div className="glass pad">
-        {!s ? <Empty text={load.failed ? t('error.load') : t('boot.loading')} /> : (
+        {!s ? (
+          corrupt ? (
+            <Callout kind="info" className="flush">
+              {t('set.corrupt')}{' '}
+              <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'reset' })}>{t('set.reset')}</button>
+            </Callout>
+          ) : <Empty text={unread} />
+        ) : (
           <div className="inline">
             <TextField id="set-port" label={t('set.port')} hint={t('set.port.hint')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5}
               error={portErr ? t(portErr) : null} onChange={(v) => { setField('port', v); setPortErr(null); }} />
@@ -128,7 +139,7 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
 
       <SectionHead title={t('inv.pre1')} />
       <div className="glass pad">
-        {!s ? <Empty text={load.failed ? t('error.load') : t('boot.loading')} /> : (
+        {!s ? <Empty text={unread} /> : (
           <>
             <div className={'share-state' + (listen ? ' on' : '')} role="status">
               <span className="px" aria-hidden="true" />
@@ -183,6 +194,14 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
           const out = await call('restore_ack', { admin_passphrase: pass });
           // restore-ack lifts only the restore hold; a global stop stays until it is resumed
           toast(t(out.stopped === true ? 'toast.ack.stopped' : 'toast.ack.done'), out.stopped === true ? 'warn' : 'info'); sheets.close(); bump();
+        }} />
+      <ConfirmSheet key={sheets.key('reset')} id="sheet-settings-reset" open={sheets.isOpen('reset')} title={t('set.reset')}
+        lead={t('set.reset.sub', { port: DEFAULT_GATEWAY_PORT })} confirmLabel={t('set.reset')} info={t('set.reset.note')} onClose={sheets.close}
+        run={async () => {
+          await resetSettings();
+          sheets.close();
+          setFields(null);
+          await restart('toast.set.reset');
         }} />
       <RecoverSheet key={sheets.key('recover')} open={sheets.isOpen('recover')} onClose={sheets.close} onDone={() => { sheets.close(); setNeedBackup(true); bump(); }} />
     </>

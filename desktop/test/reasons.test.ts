@@ -63,6 +63,9 @@ describe('relay start failures', () => {
     expect(relayError('serve_spawn_failed')).toEqual({ key: 'relay.err.other', reason: 'serve_spawn_failed' });
     expect(relayError('<b>not a code</b>').reason).toBe('unknown');
     for (const r of ['serve_exited', 'serve_start_timeout', 'admin_binary_missing', 'invalid_port', 'invalid_listen', 'listen_failed', 'x']) expect(hasCopy(relayError(r).key)).toBe(true);
+    // a damaged settings file (desktop/core/src/settings.rs) is said in words and points at the fix
+    expect(relayError('settings_corrupt').key).toBe('relay.err.settings');
+    expect(COPY['relay.err.settings']).toContain('기본값으로 되돌려');
   });
 
   it('tells a busy gateway port from a team address by the setting the core names (desktop/core/src/serve.rs listen_setting)', () => {

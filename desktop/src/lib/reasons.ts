@@ -47,9 +47,12 @@ export const isTeamListenReason = (reason: string): boolean => TEAM_LISTEN.has(r
 /** `serve_start` failures (desktop/core/src/serve.rs). `serve_exited` is the generic code for a
  *  sidecar that exited without saying why. When the sidecar could not open an address the core
  *  passes its reason on with `detail` naming the setting: `gateway_port` (`listen_failed`) or
- *  `team_listen`. Unknown codes are shown as they are. */
+ *  `team_listen`. A settings file the core cannot read as settings (`settings_corrupt`) stops the
+ *  start before the sidecar runs (desktop/core/src/settings.rs). Unknown codes are shown as they
+ *  are. */
 const RELAY: Record<string, CopyKey> = {
   serve_exited: 'relay.err.exited',
+  settings_corrupt: 'relay.err.settings',
   listen_failed: 'relay.err.portBusy',
   serve_start_timeout: 'relay.err.timeout',
   admin_binary_missing: 'relay.err.missing',

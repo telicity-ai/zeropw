@@ -55,7 +55,10 @@ function seedFromLocation(): MockSeed {
   if (typeof location === 'undefined') return {};
   const q = new URLSearchParams(location.search);
   const ready = q.get('state') === 'ready';
-  return { initialized: ready, latency: 1, activity: ready || q.has('activity'), sshWithoutCli: q.has('ssh-without-cli') };
+  return {
+    initialized: ready, latency: 1, activity: ready || q.has('activity'), sshWithoutCli: q.has('ssh-without-cli'),
+    settingsCorrupt: q.has('settings-corrupt'),
+  };
 }
 
 /** The mock backend in use outside Tauri (created on first use). */

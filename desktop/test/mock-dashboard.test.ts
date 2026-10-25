@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { COPY, t, tLines } from '../src/copy';
-import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListen } from '../src/dashboard/relay';
+import { ListenError, listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOffListen, turnOnListen } from '../src/dashboard/relay';
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
@@ -362,6 +362,26 @@ describe('settings and window protection', () => {
     await call('serve_stop');
     const s = await call('serve_start');
     expect(s).toMatchObject({ running: true, url: 'http://127.0.0.1:48000', team_listen: '100.64.1.7:47420' });
+  });
+
+  // desktop E2E F18: a damaged settings file left the relay off with its raw reason, and nothing
+  // in the app could write over it
+  it('says a damaged settings file is damaged and writes the defaults over it, then the relay starts', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, settingsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await rejection(call('serve_start'));
+    expect([e.error, e.reason]).toEqual(['StateError', 'settings_corrupt']);
+    const shown = relayError(e.reason, e.detail);
+    expect(shown.key).toBe('relay.err.settings');
+    expect(t(shown.key, { reason: shown.reason })).not.toContain('settings_corrupt');
+    expect(await readSettings()).toEqual({ settings: null, corrupt: true });
+    expect(await resetSettings()).toEqual({ gateway_port: 47380, team_listen: null });
+    expect(await readSettings()).toEqual({ settings: { gateway_port: 47380, team_listen: null }, corrupt: false });
+    expect(await restartRelay()).toMatchObject({ running: true, url: 'http://127.0.0.1:47380' });
+    // any other failure to read the settings is not offered a reset
+    b.failNext('settings_get', { error: 'IoError', reason: 'settings_unreadable' });
+    expect((await rejection(readSettings())).reason).toBe('settings_unreadable');
   });
 
   it('turns window protection on before a hold is ready and keeps it while any holder needs it', async () => {
